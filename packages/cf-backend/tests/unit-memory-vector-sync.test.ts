@@ -218,7 +218,9 @@ describe('backfillMemoryVectors — one-time embed of pre-existing chunks', () =
     setSystemTime(new Date(start));
 
     try {
-      await backfillMemoryVectors(store, config, vectorStore, 1);
+      // Rejects rather than resolving: a caller that cannot tell a failed page
+      // from a finished one cannot record it.
+      await expect(backfillMemoryVectors(store, config, vectorStore, 1)).rejects.toThrow('vectorize down');
       expect(config.get('memory_vector_backfill_done')).toBeNull();
       expect(config.get('memory_vector_backfill_cursor')).toBeNull();
 

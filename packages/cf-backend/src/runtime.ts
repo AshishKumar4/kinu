@@ -226,34 +226,26 @@ function userDOStubFor(env: Env, actor: ActorRuntimeIdentity): RuntimeUserDOClie
 }
 
 /** The owner's whole egress vault, secret-free. Empty when the workspace is
- *  unclaimed or the UserDO cannot be reached: an unreadable vault must narrow
- *  what the container may spend, never widen it. */
+ *  unclaimed. An unreadable vault REJECTS: the sandbox handle memoizes the
+ *  configuration this feeds, so an empty answer would strip every injectable
+ *  secret for the handle's life, where a rejection is retried by the next
+ *  container operation (`adaptCloudflareSandbox`). */
 async function listOwnerEgressVault(
   env: Env, actor: ActorRuntimeIdentity,
 ): Promise<EgressSecretBinding[]> {
-  try {
-    const userId = actor.ownerUserId();
+  const userId = actor.ownerUserId();
 
-    if (!userId) return [];
-    // The stub is USED, never COPIED. `Object.assign` transfers own enumerable
-    // properties, and a JSRPC stub's methods live behind a Proxy rather than on
-    // the object, so copying one yields `{}` and every call on it is undefined.
-    // Measured on production as `vaultView.listEgressSecrets is not a function`,
-    // which this `catch` then swallowed into an empty vault — so the container
-    // silently lost every injectable secret. The narrow interface still limits
-    // what this call site may reach; it is the copy that was wrong, not the type.
-    const vault: EgressVaultClient = env.UserDO.get(env.UserDO.idFromName(userId));
+  if (!userId) return [];
+  // The stub is USED, never COPIED. `Object.assign` transfers own enumerable
+  // properties, and a JSRPC stub's methods live behind a Proxy rather than on
+  // the object, so copying one yields `{}` and every call on it is undefined.
+  // Measured on production as `vaultView.listEgressSecrets is not a function`,
+  // which a `catch` here then swallowed into an empty vault — so the container
+  // silently lost every injectable secret. The narrow interface still limits
+  // what this call site may reach; it is the copy that was wrong, not the type.
+  const vault: EgressVaultClient = env.UserDO.get(env.UserDO.idFromName(userId));
 
-    return [...await vault.listEgressSecrets(await ownerCaller(env))];
-  } catch (err) {
-    diagnostics.failure('egress.vault_unreadable', toKinuError({
-      doing: "reading the owner's egress vault",
-      cause: err,
-      otherwise: 'unavailable',
-    }), { workspace: actor.workspaceName });
-
-    return [];
-  }
+  return [...await vault.listEgressSecrets(await ownerCaller(env))];
 }
 
 interface EgressVaultClient {

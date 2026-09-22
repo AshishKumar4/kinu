@@ -1,35 +1,12 @@
 /**
- * EvolutionEngine — the four timescales of self-evolution, inside the agent
- * loop. After every step, turn and session, and periodically at the lifetime
- * level, the engine reflects, discovers patterns, and evolves.
+ * EvolutionEngine: self-evolution at four timescales (docs/EVOLUTION.md).
  *
- * Architecture reference: docs/EVOLUTION.md.
- *
- * Timescale 0 — In-episode (the step clock): the craft ledger and the
- *   execution-recovery findings, written synchronously with no model call.
- *
- * Timescale 1 — Turn-level (reviewTurn, Hermes-style forked review):
- *   When user message N+1 arrives IN THE SAME CONVERSATION, turn N is graded
- *   from the user's actual follow-up (accepted / corrected / frustrated). A
- *   turn no follow-up can grade — a programmatic wake, or a one-shot
- *   `kinu exec` whose next invocation is an unrelated task — records no
- *   outcome: an honest absence, never a constant, and never an `accepted`
- *   inferred from the fact that something else happened next.
- *   The outcome populates turn.feedback, drives craft EMA, gates reflection
- *   (corrected/frustrated turns warrant it; accepted turns extract patterns),
- *   and lands in the durable turn_outcomes ledger that GEPA eval splits,
- *   scaffold base-selection priors, and the replay harness read.
- *
- * Timescale 2 — Session-level (onSessionComplete):
- *   Reflect on patterns when the window carries real negative signal —
- *   accepted streaks skip the reflection. The every-N-turns cadence lives in
- *   ONE place — AgentOrchestrator (recordTurn), over the durable window this
- *   engine owns (session-window.ts), so it survives process/instance death.
- *
- * Timescale 3 — Lifetime-level (every N closed session windows):
- *   CraftStore consolidation → MCTS exploration. The replay eval is NOT on
- *   this cadence: it re-executes the same ledger GEPA's seed scoring already
- *   re-executes, for a curve no decision reads. It runs on demand instead.
+ * 0 In-episode: craft ledger and execution-recovery findings, no model call.
+ * 1 Turn: turn N is graded from user message N+1 in the same conversation. A turn
+ *   no follow-up can grade records no outcome, never an inferred `accepted`.
+ * 2 Session: reflect when a closed window carries negative signal. The every-N-turns
+ *   cadence lives only in AgentOrchestrator over the durable window (session-window.ts).
+ * 3 Lifetime: craft consolidation and MCTS exploration. Replay eval is on demand only.
  */
 
 import type { ShadowTrialPlan, ShadowTrialQueueOutcome } from './types';
@@ -117,17 +94,12 @@ import type { AgentConfigStore } from '../config/store';
 import type { WorkspaceActor } from '../identity/workspace-actors';
 import { diagnostics, toKinuError, KinuError } from '../obs/index';
 
-/** The archive context handed to the proposal prompt: which version the
- *  proposal branches from + the variants it may cite as stepping stones. */
+/** The version a proposal branches from and the variants it may cite. */
 export interface ProposalArchiveContext {
   base: EvolutionBaseSelection;
   entries: ReadonlyArray<ScaffoldArchiveEntry>;
-  /** Real user-outcome record per version (accepted/negative counts) — shown
-   *  alongside the shadow record when present. */
   realRates?: ReadonlyMap<number, { accepted: number; negative: number }>;
-  /** Why each refused version was refused (scaffold/archive.ts
-   *  listRejectedProposals) — Weng's negative-result preservation, so a
-   *  proposal can see what has already failed to work and why. */
+  /** Why each refused version was refused, so a proposal can see what already failed. */
   rejections?: ReadonlyMap<number, string>;
 }
 
@@ -160,22 +132,10 @@ function renderArchiveBlock(archive: ProposalArchiveContext): string {
 }
 
 /**
- * The scaffold-proposal prompt — documents the REAL sandbox contract
- * (scaffold/executor.ts): the host runtime never crosses the sandbox
- * boundary, so all host interaction goes through the `host.*` bridge, and
- * both `run(rt, task)` parameters receive the task string. Exported so
- * tests can assert a proposal written against these instructions survives
- * the executor's smoke path. When archive context is given, the prompt shows
- * the variant archive so proposals can cite stepping stones (DGM-style).
- *
- * The handbook (evolution/scaffold-handbook.ts) is prepended beside the host
- * d.ts: the Harness Handbook result is that an agent editing its own harness
- * plans better and cheaper from a behaviour→site map than from raw source.
- *
- * When mined pathologies are supplied, the prompt shows them and requires the
- * proposal to name the one it targets — Self-Harness's mine-weaknesses step,
- * typed. With none mined there is nothing to name, so the requirement is
- * absent rather than answered with a guess.
+ * The scaffold-proposal prompt, documenting the real sandbox contract
+ * (scaffold/executor.ts): host interaction goes only through the `host.*` bridge,
+ * and both `run(rt, task)` parameters receive the task string. When pathologies are
+ * mined, the proposal must name the one it targets; with none, the requirement is absent.
  */
 export function buildScaffoldProposalPrompt(
   baseScaffold: string,
@@ -214,28 +174,12 @@ export function buildScaffoldProposalPrompt(
   );
 }
 
-/**
- * The one sentence a corrected, frustrated or errored turn leaves behind.
- *
- * Bounded for the same reason the advisor note is (ADVISOR_NOTE_MAX_CHARS): the
- * answer is stored as a lesson row and reaches later turns through the
- * corroborated derived view once a user verdict backs it. An unbounded
- * paragraph there costs context on every future turn, forever, and "one
- * sentence" without a number is a request a model is free to interpret.
- */
+/** Bounded because the lesson reaches every later turn once corroborated. */
 const TURN_REFLECTION_MAX_CHARS = 240;
 
 /**
- * The turn-reflection prompt. Module-private and read by its suite through the
- * call it renders for (unit-evolution.test.ts captures `llm.complete`), because
- * an export nothing outside this file imports is an export the wired gate is
- * right to refuse.
- *
- * The good/bad pair is the load-bearing part. Asked for "what should be done
- * differently", a model writes about the incident it was shown ("should have been
- * more careful with the rotation"), which is unreadable to the session that
- * actually gets the lesson — it has the sentence and none of the evidence. The
- * contrast asks for a trigger and an action instead.
+ * The good/bad pair asks for a trigger and an action; otherwise a model writes about
+ * the incident, which the session receiving the lesson cannot use.
  */
 function buildTurnReflectionPrompt(input: {
   turn: CompletedTurn;
@@ -268,23 +212,17 @@ function buildTurnReflectionPrompt(input: {
   );
 }
 
-/** The tombstone scope recording that ONE turn's review has committed its two
- *  durable writes — the `turn_outcomes` row and the craft EMA move. Distinct from
- *  `turn_review`, which records that the whole review ran: the writes land in the
- *  middle of a chain of governed model calls, and a budget refusal after them is
- *  a decision to retry the REST, not the writes. */
+/** Tombstone scope for one turn's two durable grading writes (`turn_outcomes` row
+ *  and craft EMA). Distinct from `turn_review`: a refusal after these writes retries
+ *  the rest, not the writes. */
 const TURN_GRADED_SCOPE = 'turn_graded';
 
-/** Where the review's LATER append-only writes record themselves — the
- * reflection lesson and the extracted pattern, each behind its own model call.
- * Separate from the grading pair because they land later and a refusal between
- * them must resume rather than repeat. */
+/** Tombstone scope for the review's later writes (reflection lesson, extracted
+ * pattern), so a refusal between them resumes rather than repeats. */
 const TURN_REVIEW_STEP_SCOPE = 'turn_review_step';
 
-/** The outcome IS the signal, priced by where the verdict came from. An
- *  abandoned turn (only ever an existing ledger row) that errored is the one
- *  case the error decides; a clean abandonment stays neutral. An ungraded turn
- *  is priced only when it errored — otherwise there is nothing to price. */
+/** An errored abandonment is the one case the error decides; a clean one stays
+ *  neutral. Ungraded turns are priced only when they errored. */
 function turnQuality(outcome: TurnOutcome | null, source: TurnOutcomeSource, hadError: boolean): number | null {
   if (outcome === null) return hadError ? 0.1 : null;
 
@@ -295,27 +233,17 @@ function turnQuality(outcome: TurnOutcome | null, source: TurnOutcomeSource, had
 
 export class EvolutionEngine {
   private readonly rt: AgentRuntime;
-  /** The canonical session store: lifetime search trajectories are recorded
-   *  there, in their own transcript session, beside the chat. */
   private readonly history: SessionHistory;
   private readonly config: EvolutionConfig;
   private readonly listeners: EvolutionListener[] = [];
-  /** Operator-tuned actor_config (MCTS overrides for lifetime evolution) —
-   *  also the home of the durable closed-window count the lifetime timescale
-   *  paces itself by. */
+  /** Also holds the durable closed-window count the lifetime timescale paces by. */
   private readonly agentConfig: AgentConfigStore;
-  /** Every completed turn still owed evolution work: its open-window
-   *  membership and its typed review obligation, one row per turn.
-   *  AgentOrchestrator owns the cadence policy; the engine owns the ledger,
-   *  as it does for outcomes, lessons and replays. */
+  /** Every completed turn still owed evolution work, one row per turn.
+     *  AgentOrchestrator owns the cadence; the engine owns the ledger. */
   readonly sessionWindow: CompletedTurnStore;
-  /** The crafted-tool ledger the IN-EPISODE loop writes through (the step
-   *  clock, orchestrator/craft-cycle.ts). Same division of labour as the
-   *  window above: the orchestrator decides when an observation is taken, the
-   *  engine owns the ledger it lands in — so both timescales score crafted
-   *  tools through one table and one policy. */
+  /** The crafted-tool ledger the step clock writes through, so both timescales
+     *  score crafted tools through one table. */
   readonly craftLedger: CraftLedger;
-  /** Hosted actors keep the step clock without joining the turn window. */
   readonly recordsTurns: boolean;
   private recoveryPending = true;
 
@@ -332,9 +260,7 @@ export class EvolutionEngine {
     this.recordsTurns = this.config.enabled && actor.kind === 'main';
     this.craftLedger = createCraftLedger({ craftStore: rt.craftStore, sql: rt.storage.sql });
 
-    // The engine owns the outcome + lessons + replay + completed-turn +
-    // refinement ledgers — created here so both backends (and tests) get them
-    // without per-backend schema wiring.
+    // Created here so every backend gets the engine's ledgers without schema wiring.
     initTurnOutcomeTables(rt.storage.execRaw);
     initReplayTables(rt.storage.execRaw);
     this.agentConfig = rt.actor.config;
@@ -343,7 +269,6 @@ export class EvolutionEngine {
     initRefinementTables(rt.storage.execRaw);
   }
 
-  /** Called only by a driver starting work, never by acquisition or inspection. */
   recoverInterruptedWork(): void {
     if (!this.recoveryPending) return;
     this.sessionWindow.resetStaleClaims();
@@ -351,41 +276,19 @@ export class EvolutionEngine {
   }
 
   /**
-   * The model the MECHANICAL calls run on — outcome classification, pathology
-   * labels, the one-sentence turn reflection, the session reflection, and
-   * pattern extraction. Short, schema-constrained jobs the chat vendor's small
-   * tier does as well as its flagship, routed through `MODEL_ROUTE_POLICY.fast`
-   * to the account's `fast` tier. Falls back to
-   * the chat model when the vendor has no smaller tier, which is what every
-   * backend did before this existed.
-   *
-   * Deliberately NOT used for the scaffold proposal: that call authors the
-   * agent's own control loop, is rare, and already runs at high reasoning
-   * effort — it is the one place in this file where paying for the better
-   * model is the point.
-   */
+     * The fast tier for mechanical calls (classification, pathology labels,
+     * reflections, pattern extraction); falls back to the chat model. The scaffold
+     * proposal deliberately stays on the chat model.
+     */
   private get fastLlm(): LLM {
     return this.rt.fastLlm ?? this.rt.llm;
   }
 
   /**
-   * The mechanical tier, bounded by the mission that caused the work.
-   *
-   * A turn review is spend the user never asked for and never sees: three fast
-   * completions fired after the answer, on a lane the turn accumulator has
-   * already closed. Under a declared mission that spend is the mission's, so it
-   * goes through the SAME `govern` seam the swarm's model calls do — one
-   * enforcement path, one ledger, one refusal.
-   *
-   * The labels come off the TURN, never off the governor's active scope. A
-   * deferred review runs in another process at another time, where the active
-   * scope is either empty or some later turn's, and debiting a mission for work
-   * it did not cause is worse than not debiting at all.
-   *
-   * An unlabelled turn gets the bare model: `govern` returns the `LLM` unwrapped
-   * for an empty scope, so an ordinary session issues no query and cannot be
-   * refused.
-   */
+     * The fast tier governed by the turn's own mission labels, never the governor's
+     * active scope: a deferred review runs elsewhere, and debiting the wrong mission
+     * is worse than none. An unlabelled turn gets the bare model.
+     */
   private reviewLlm(turn: CompletedTurn): LLM {
     const labels = turn.missionLabels ?? [];
 
@@ -394,30 +297,22 @@ export class EvolutionEngine {
       : this.config.governor?.govern(this.fastLlm, labels) ?? this.fastLlm;
   }
 
-  /** Run `body` as one durable unit through the backend's transaction seam,
-   *  or inline where the backend supplies none (a synchronous run is already
-   *  atomic inside a Durable Object). */
+  /** Inline where the backend supplies no transaction seam (a synchronous run is
+     *  already atomic inside a Durable Object). */
   private commit(body: () => void): void {
     (this.config.transaction ?? ((run: () => void) => { run(); }))(body);
   }
 
-  /** The operator's automatic-learning switch; recordsTurns also requires a root. */
   get enabled(): boolean {
     return this.config.enabled;
   }
 
-  /** Subscribe to evolution events (for CLI/UI display) */
   onEvent(listener: EvolutionListener): void {
     this.listeners.push(listener);
   }
 
   private emit(event: EvolutionEvent): void {
-    // evolution_events is created by initWorkspaceSchema on every backend
-    // (conformance/manifest.ts lists it EVERYWHERE), so a failed INSERT is a
-    // real fault and is NOT swallowed. A production catch accommodating a
-    // test-only "may not exist yet" condition is exactly how an unwritable
-    // evolution stream stays invisible while the listeners below keep reporting
-    // the event as delivered.
+    // evolution_events exists on every backend, so a failed INSERT is a real fault.
     void this.rt.storage.sql`INSERT INTO evolution_events (actor_id, type, message, data, created_at)
       VALUES (${this.rt.actor.actorId}, ${event.type}, ${event.message},
               ${event.data ? JSON.stringify(event.data) : null}, ${Date.now()})`;
@@ -427,25 +322,13 @@ export class EvolutionEngine {
     }
   }
 
-  // ── Timescale 0: In-episode (the step clock) ────────────────────
-
   /**
-   * The step clock's knowledge observation: an execution recovery the
-   * orchestrator's failure ledger saw mid-episode (a failure streak broken by
-   * a changed call that ran clean — evolution/recovery.ts, where its worth
-   * and its ceiling are stated). Synchronous, no model call: one lessons row,
-   * so it rides neither evolution lane and ticks inside a single long
-   * autonomous turn, exactly like the craft ledger above. Provisional forever
-   * by construction (bound to no turn), which keeps machine-observed prose
-   * out of MEMORY.md; its one consumer is the dynamic-context injection that
-   * carries the newest findings for the rest of the episode.
-   */
+     * Records an execution recovery the step clock observed (evolution/recovery.ts).
+     * One lessons row, no model call. Bound to no turn, so it stays provisional forever.
+     */
   recordRecovery(finding: RecoveryFinding): void {
     if (!this.config.enabled) return;
 
-    // The lessons ledger is part of the shared workspace schema; there is no
-    // "bare runtime" without it, and returning early on a failed write made a
-    // recovery the step clock genuinely observed indistinguishable from none.
     if (!recordRecoveryFinding(this.rt.storage.sql, this.rt.actor, finding)) return;
     this.emit({
       type: 'reflection',
@@ -454,29 +337,11 @@ export class EvolutionEngine {
   }
 
   /**
-   * The advisor's own row on the audit stream, and the window it dedupes
-   * against.
-   *
-   * Both live here because `emit` is the one writer of `evolution_events`
-   * that also reaches the engine's listeners; the scaffold proposal, the
-   * misevolution veto and the backends' own rows write the table directly and
-   * reach no listener. The advisor could have opened its own table for its
-   * dedupe window; the window it needs is "what have I already said to this
-   * workspace", and that is a read of the stream the note lands on either way.
-   *
-   * A note reaches this door for one of three reasons: the owner's floor put it
-   * below the conversation, the completion gate held the boundary, or the owner
-   * wants a record of a note the agent was also told. All three are the same
-   * row, because a reader of the Changelog cares what the advisor said, not
-   * which of those it was.
-   *
-   * The row carries the note's CLASS and the id of the turn it graded, which is
-   * what turns it from prose into evidence: `advisorNegatives` resolves that id
-   * through the transcript to reach the conversation the note is about, and
-   * `buildOutcomeEvalSplit` draws the result as a scoring instance. Neither the
-   * message nor the response is copied here — the transcript already holds
-   * them, and a second copy is a second thing to keep true.
-   */
+     * The advisor's row on the audit stream. Lives here because `emit` is the one
+     * `evolution_events` writer that also reaches the engine's listeners. The row
+     * carries the note's class and graded turn id; `advisorNegatives` resolves it
+     * through the transcript, so neither message nor response is copied here.
+     */
   recordAdvisorNote(note: AdvisorNote, turnId?: string): void {
     const data: AdvisorRowData = {
       severity: note.severity, class: note.class, turnId: turnId ?? null,
@@ -485,8 +350,7 @@ export class EvolutionEngine {
     this.emit({ type: ADVISOR_EVENT_TYPE, message: note.note, data });
   }
 
-  /** The normalised text of the last `limit` advisor notes, newest first — the
-   *  dedupe window {@link judgeNote} compares a fresh note against. */
+  /** Normalised text of the last `limit` advisor notes, newest first. */
   recentAdvisorNotes(limit = ADVISOR_DEDUPE_WINDOW): readonly string[] {
     const rows = this.rt.storage.sql<{ message: string }>`
       SELECT message FROM evolution_events
@@ -497,15 +361,9 @@ export class EvolutionEngine {
   }
 
   /**
-   * Has this turn's review already landed on the audit stream?
-   *
-   * The idempotency guard for a re-entered advisor lane. A lane evicted AFTER
-   * `recordAdvisorNote` but before its fiber row was released is offered to
-   * recovery again, and re-running the review would write a second note about
-   * one turn and speak it twice. The note row is the only durable evidence that
-   * the review completed, so it is what the guard reads — the same row a scorer
-   * joins back to the conversation, by the same `turnId`.
-   */
+     * Idempotency guard for a re-entered advisor lane: the note row is the only
+     * durable evidence that the review completed.
+     */
   hasAdvisorNoteForTurn(turnId: string): boolean {
     const rows = this.rt.storage.sql<{ n: number }>`
       SELECT COUNT(*) AS n FROM evolution_events
@@ -515,23 +373,13 @@ export class EvolutionEngine {
     return (rows[0]?.n ?? 0) > 0;
   }
 
-  // ── Timescale 1: Turn-level (outcome-driven forked review) ──────
-
   /**
-   * Grade turn N from the user's follow-up and run turn-level evolution on
-   * the result. `followup` is the NEXT user message; null means no
-   * conversational follow-up can grade this turn — a programmatic turn (the
-   * reactor and job wakes carry no user verdict) or a one-shot invocation
-   * (`kinu exec`, where the next prompt is a different task, written by a
-   * caller who never saw this answer) — and the turn records no outcome at all.
-   *
-   * One signal pipeline: explicit thumbs (recorded before the follow-up)
-   * beat the classifier; trivial turns (greetings) skip the LLM call; a
-   * classifier failure records nothing rather than guessing. An absent
-   * outcome is not a neutral one: `turn.hadError` still drives quality and a
-   * provisional reflection below, which is the only machine signal a turn
-   * nobody graded actually carries.
-   */
+     * Grade turn N from the user's follow-up and run turn-level evolution. `followup`
+     * null means no conversational follow-up can grade the turn (programmatic wakes,
+     * `kinu exec`). Explicit thumbs beat the classifier; trivial turns skip it; a
+     * classifier failure records nothing. `turn.hadError` still drives quality and a
+     * provisional reflection.
+     */
   async reviewTurn(turn: CompletedTurn, followup: string | null): Promise<void> {
     if (!this.config.enabled) return;
 
@@ -539,31 +387,16 @@ export class EvolutionEngine {
     let source: TurnOutcomeSource = 'classifier';
     let confidence = 1;
     let evidence = '';
-    // An Alternate Takes pick already wrote this turn's ledger row — adopt it
-    // for the downstream evolution (EMA, lessons, patterns) without letting
-    // the classifier overwrite the explicit preference.
+    // An Alternate Takes pick already wrote the ledger row; adopt it without letting
+    // the classifier overwrite it.
     let preRecorded = false;
 
-    // The review's DURABLE half, keyed on the turn it grades.
-    //
-    // A review is a chain of governed model calls with two append-only writes in
-    // the middle of it, so an eviction — or a mission budget declining a LATER
-    // call — leaves the writes committed and the review owed. The lease alone
-    // could not tell those apart, and a retry appended the outcome and moved the
-    // craft EMAs a second time. The key names the writes rather than the attempt.
-    //
-    // An EMPTY id is not an identity: every such turn would share one key, and
-    // the second would read the first's grading as its own.
+    // Keyed on the turn so a retry after eviction or a later refusal does not repeat
+    // the grading writes. An empty id is not an identity.
     const gradedKey = turn.turnId === undefined || turn.turnId === '' ? null : turn.turnId;
 
-    // Asked BEFORE the classifier, not after it. The verdict is already on
-    // record, so re-deriving it spends another governed model call that can
-    // itself be refused — leaving the still-owed suffix no closer to running.
-    //
-    // The TOMBSTONE is the resumption signal, not the row it usually accompanies:
-    // an errored turn nobody graded writes the tombstone and no `turn_outcomes`
-    // row at all, and reading the absent row as "not resumed" made every retry
-    // announce that turn's completion again.
+    // Checked before the classifier so a resumed review spends no model call. The
+    // tombstone, not the row, is the signal: an ungraded errored turn writes no row.
     const graded = gradedKey !== null
       && effectAlreadyDone(this.rt.storage.sql, this.rt.actor, TURN_GRADED_SCOPE, gradedKey);
 
@@ -579,8 +412,7 @@ export class EvolutionEngine {
     const pickedOutcome = graded || explicit ? null : takePickOutcome(this.rt.storage.sql, this.rt.actor, turn.turnId);
 
     if (graded) {
-      // Resumed. The verdict above is the one the ledger holds, and the suffix
-      // below is what is still owed.
+      // Resumed: the suffix below is what is still owed.
     } else if (explicit) {
       outcome = explicit === 'positive' ? 'accepted' : 'corrected';
       source = 'explicit';
@@ -602,11 +434,7 @@ export class EvolutionEngine {
       confidence = c.confidence;
       evidence = c.evidence;
     } else {
-      // No follow-up can grade this turn, so no USER signal exists — but the
-      // environment may still have returned a verdict on what the turn did.
-      // That is the only evidence a headless run produces, and reading it is
-      // what makes the headless channel symmetric: before this, a turn that
-      // errored fed a punishment and a turn that worked fed nothing at all.
+      // No user signal, but the environment may still have a verdict on what the turn did.
       const verdict = executionVerdict(turn);
 
       if (verdict) {
@@ -615,38 +443,22 @@ export class EvolutionEngine {
         evidence = verdict === 'succeeded'
           ? 'every tool call this turn ran completed'
           : 'the turn ended in an error';
-        // The observation is certain — the runtime reported it. That the
-        // observation stands in for a verdict is what `source: 'execution'`
-        // and the narrower EXECUTION_QUALITY band already say; saying it a
-        // third time here would just double-discount the same caveat.
+        // `source: 'execution'` and EXECUTION_QUALITY already discount the proxy.
         confidence = 1;
       }
-      // With no tool work either, the turn stays ungraded. It is NOT written
-      // as 'abandoned': a conversational follow-up may still be coming, and
-      // everything that reads the ledger already discounts abandonment —
-      // alignmentConvergence counts it as ungraded and buildOutcomeEvalSplit
-      // ignores it — so writing it would only pull the crafted-tool EMA toward
-      // a neutral 0.5 on evidence nobody has. The ungraded turn is still
-      // RECORDED, as the `turn_complete` event below with `graded: false`;
-      // what it is not is counted as a success.
+      // Not written as 'abandoned': a follow-up may still come, and the neutral 0.5
+      // would pull the craft EMA on no evidence. It is still announced with `graded: false`.
     }
 
-    // Pure, and computed BEFORE the writes so all of them fit in one commit.
+    // Computed before the writes so all of them fit in one commit.
     const quality = turnQuality(outcome, source, turn.hadError);
 
-    // Craft EMA — real-outcome observations on the crafted tools this turn used,
-    // as the in-episode craft clock observed them. Crafted tools are
-    // codemode-only, so they are never IN the set "every tool name that is not
-    // built in": deriving the EMA from that set writes it against MCP and
-    // extension tools and nothing else.
+    // Crafted tools are codemode-only, so they come from the turn record, not from
+    // the non-builtin tool names.
     const craftedToolNames = turn.craftedToolsUsed ?? [];
 
-    // `source`/`confidence` describe a verdict, so they are null on an
-    // ungraded turn rather than reporting the classifier default as if a
-    // classification had happened.
-    // Announced ONCE, on the pass that graded it, and LAST inside the commit
-    // below: the announcement is an append-only row like the writes it follows,
-    // and putting it between them made a death there replay both.
+    // `source`/`confidence` describe a verdict, so they are null on an ungraded turn.
+    // Announced once, last inside the commit, so a death cannot replay the writes.
     const announce = (): void => { if (!graded) this.emit({
       type: 'turn_complete',
       message: `Turn outcome: ${outcome ?? 'ungraded (no follow-up)'}` +
@@ -661,16 +473,8 @@ export class EvolutionEngine {
       },
     }); };
 
-    // ONE COMMIT for everything this grading pass makes durable: the verdict
-    // row, the cumulative craft scores, the tombstone that records both, and the
-    // announcement.
-    //
-    // A synchronous run is atomic inside a Durable Object and is NOT atomic
-    // against a process kill, which is the whole difference between the two
-    // backends. Split across statements, a CLI death after the verdict but
-    // before the marker made the retry append a second verdict and move the EMA
-    // twice; a death after the marker but before the announcement lost the
-    // `turn_complete` event for good.
+    // One commit for the verdict row, craft scores, tombstone and announcement: a
+    // synchronous run is atomic inside a Durable Object but not against a CLI kill.
     this.commit(() => {
       if (outcome && !graded && !preRecorded) {
         recordTurnOutcome(this.rt.storage.sql, this.rt.actor, {
@@ -681,14 +485,12 @@ export class EvolutionEngine {
           assistantResponse: turn.assistantResponse,
           followup,
           scaffoldVersion: getCurrentScaffoldVersion(this.rt.storage.sql, this.rt.actor),
-          // The classifier's one-sentence reason, or the execution verdict's
-          // observation — stored so the ledger can say WHY, not just count.
+          // The classifier's reason or the execution verdict's observation.
           evidence,
         });
       }
 
-      // A failed EMA write is not "non-fatal": it is the crafted-tool score
-      // silently not moving, which is the retirement signal going quiet.
+      // A failed EMA write silences the retirement signal, so it is not swallowed.
       if (quality !== null && craftedToolNames.length > 0 && !graded) {
         updateCraftScores(this.rt.storage.sql, craftedToolNames, quality);
       }
@@ -704,41 +506,26 @@ export class EvolutionEngine {
 
 
     if (quality === null) {
-      // Nothing to learn from — programmatic and clean — so the announcement
-      // above is this review's whole output, and the marker records it here.
-      // Everything the marker normally covers is BELOW this return, which is why
-      // it is written now rather than shared with the path that has writes to
-      // stay adjacent to.
+      // Programmatic and clean: the announcement is the whole output, so the marker
+      // is written here.
       return;
     }
 
 
     const negative = isNegativeOutcome(outcome);
-    // A negative verdict from a PERSON corroborates the provisional lessons
-    // waiting on this turn (an earlier error reflection, a session reflection)
-    // and lands them in MEMORY.md. The environment's verdict deliberately does
-    // not: corroboration is the gate that keeps self-scored prose out of
-    // durable memory until something outside the model backs it, and "the turn
-    // hit an error" is not a reader confirming the lesson drawn from it. It
-    // still warrants the reflection below, provisionally — exactly as an
-    // errored ungraded turn always did.
+    // Only a person's negative verdict corroborates provisional lessons; an error is
+    // not a reader confirming the lesson, though it still warrants a provisional reflection.
     const corroborated = negative && isUserVerdictSource(source);
 
     if (corroborated) this.corroborateLessons(turn.turnId);
 
-    // Imported experience rides this turn's verdict: accepted adopts it into
-    // this workspace's own stores, anything else discards it. Only a user
-    // verdict settles it — adopting another workspace's craft because a local
-    // command exited zero is not the corroboration that trust boundary asks for.
+    // Only a user verdict settles imported experience: a command exiting zero is not
+    // the corroboration that trust boundary requires.
     if (isUserVerdictSource(source)) await this.settleImports(turn.turnId, outcome);
 
-    // Reflection is warranted by negative signal of any provenance — or by an
-    // error on a turn nobody graded at all, which stays provisional until a
-    // user outcome corroborates it.
+    // Negative signal of any provenance, or an error on an ungraded turn.
     if (negative || ((outcome === 'abandoned' || outcome === null) && turn.hadError)) {
-      // The lesson is an append-only INSERT behind a model call, so its own
-      // tombstone is what stops a retry from writing a second copy of one
-      // reflection. Recorded adjacent to the write, as the grading pair is.
+      // The lesson's own tombstone stops a retry from writing a second copy.
       const reflectionKey = gradedKey === null ? null : `${gradedKey}:reflection`;
 
       if (reflectionKey === null
@@ -752,8 +539,7 @@ export class EvolutionEngine {
           status: corroborated ? 'corroborated' : 'provisional',
         } satisfies Parameters<typeof recordLesson>[2];
 
-        // KEYED, so the insert and its tombstone need not be atomic: a death
-        // between them replays into the same row rather than a second lesson.
+        // Keyed, so a death between insert and tombstone replays into the same row.
         recordLesson(
           this.rt.storage.sql, this.rt.actor,
           reflectionKey === null ? lesson : { ...lesson, key: reflectionKey },
@@ -768,9 +554,7 @@ export class EvolutionEngine {
     }
 
     if (promotesProcedure({ outcome, source, toolCalls: turn.toolCalls.length })) {
-      // Same shape, same reason: extraction upserts a crafted tool and appends a
-      // discovery event. The key travels INTO the body so the marker lands beside
-      // those writes rather than after the await that returns from them.
+      // The key travels into the body so the marker lands beside the writes.
       const patternKey = gradedKey === null ? null : `${gradedKey}:pattern`;
 
       if (patternKey === null
@@ -781,21 +565,10 @@ export class EvolutionEngine {
   }
 
   /**
-   * Defer this turn's review to the next host that can afford it, instead of
-   * running it now.
-   *
-   * The one-shot exit path (see evolution/session-window.ts for the measurement
-   * that put it there). Everything `reviewTurn` would have received is written
-   * durably — the snapshotted turn and the follow-up that grades it — so the
-   * drain replays the same call with the same inputs rather than re-deriving
-   * them from a workspace that has moved on. With `storedRowId`, the turn is
-   * ALREADY the claimed row in `completed_turns` (taken by
-   * `claimPendingReview`), so that row itself becomes the owed review instead
-   * of a second copy of it.
-   *
-   * Returns the queue's answer, so the caller can state a refusal rather than
-   * report a deferral that did not happen.
-   */
+     * Durably queue this turn's review with its snapshotted inputs, for the one-shot
+     * exit path. With `storedRowId`, the already-claimed `completed_turns` row becomes
+     * the owed review. Returns the queue's answer so a refusal can be stated.
+     */
   deferTurnReview(
     turn: CompletedTurn,
     followup: string | null,
@@ -821,39 +594,22 @@ export class EvolutionEngine {
   }
 
   /**
-   * Run ONE stored turn's review on the INLINE lane — the interactive host's
-   * detached path after `claimPendingReview` — and settle the row's obligation
-   * only once the review actually ran. A review that throws leaves the row
-   * `claimed`; the engine's activation recovery re-queues it for the next
-   * host, which is exactly the loss the old destructive take could not repair.
-   */
+     * Run one claimed turn's review inline and settle the row only once it ran. A
+     * throw leaves the row `claimed` for activation recovery.
+     */
   async runStoredTurnReview(rowId: string, turn: CompletedTurn, followup: string | null): Promise<void> {
     await this.reviewTurn(turn, followup);
-    // Adjacent to the side effects it records, and BEFORE the lease is
-    // settled: a crash between these two statements is the only remaining
-    // window, and it is one synchronous step wide.
+    // Before the lease settles, leaving a one-step crash window.
     this.sessionWindow.recordReviewRan(rowId);
     this.sessionWindow.settleReview(rowId);
   }
 
   /**
-   * Run the reviews a one-shot host deferred, through the SAME `reviewTurn`
-   * path an inline review takes — so the `turn_outcomes` row, the craft EMA,
-   * the lesson and the extracted pattern land exactly as they would have.
-   *
-   * Bounded at {@link MAX_TURN_REVIEWS_PER_OPEN} per call: this runs at session
-   * open, ahead of the turn the host was opened for, so an accumulated backlog
-   * must not become that turn's latency. What is not drained stays queued.
-   *
-   * A row is retired only once its review has RUN. A review that throws leaves
-   * its row for the next open rather than consuming it for work that failed —
-   * the same carry-forward rule the session window applies to a host that died
-   * mid-pass. Two of those throws are not faults and are named instead of
-   * logged: an undecodable row is refused by the reader and retired there
-   * (never reviewed as a default), and a mission over its cap is refused by the
-   * governor and left queued. Both come back in `refused`, each carrying the
-   * disposition its reason states.
-   */
+     * Drain deferred reviews through `reviewTurn`, at most
+     * {@link MAX_TURN_REVIEWS_PER_OPEN} per call so a backlog does not delay the
+     * turn being opened. A row is retired only once its review ran. Undecodable rows
+     * and missions over cap come back in `refused` with their disposition.
+     */
   async runDeferredTurnReviews(): Promise<DeferredReviewDrain> {
     if (!this.config.enabled) return { reviewed: 0, refused: [] };
     this.recoverInterruptedWork();
@@ -865,11 +621,8 @@ export class EvolutionEngine {
       try {
         await this.reviewTurn(row.turn, row.followup);
       } catch (err) {
-        // The governor declining a call is a decision, not a failure. The row
-        // goes back to the queue exactly as it was: the turn is sound, the
-        // mission is simply spent, and a raised cap makes this review runnable
-        // again. Any other throw releases it too — the review did not run, so
-        // the obligation is not settled and nothing is tombstoned.
+        // A governor refusal is a decision: the row goes back unchanged. Any other throw
+        // also releases it untombstoned.
         if (err instanceof MissionBudgetExhausted) {
           refused.push({ id: row.id, reason: 'budget' });
         } else {
@@ -884,10 +637,7 @@ export class EvolutionEngine {
         continue;
       }
 
-      // Immediately after the review resolves and BEFORE the lease settles, so
-      // the append/EMA side effects and the record that they happened are
-      // adjacent. A crash between them is the only remaining window, and it is
-      // one synchronous step wide.
+      // Before the lease settles, leaving a one-step crash window.
       this.sessionWindow.recordReviewRan(row.id);
       this.sessionWindow.settleReview(row.id);
       reviewed++;
@@ -897,17 +647,11 @@ export class EvolutionEngine {
   }
 
   /**
-   * Explicit thumbs arrived for a completed message (the chat UI's
-   * setTurnFeedback path). Upserts the same turn_outcomes ledger the
-   * classifier writes — explicit signal overrides — and lets a negative
-   * verdict corroborate provisional lessons tied to that turn.
-   */
+     * Explicit thumbs from setTurnFeedback. Upserts the turn_outcomes ledger
+     * (explicit overrides the classifier); a negative corroborates provisional lessons.
+     */
   async applyExplicitFeedback(messageId: string, feedback: 'positive' | 'negative'): Promise<void> {
-    // The conversation store belongs to the shared workspace schema, so a
-    // failed read is a fault. The old catch recorded the verdict anyway with
-    // empty texts — a ledger row that reads as a graded turn whose request and
-    // response were blank, which is what every downstream eval then trained
-    // against.
+    // A failed read is a fault: a row with blank texts would poison downstream evals.
     const pair = await conversationTurnPair(this.history.transcript(CHAT_SESSION_ID), messageId);
     recordTurnOutcome(this.rt.storage.sql, this.rt.actor, {
       turnId: messageId,
@@ -924,58 +668,36 @@ export class EvolutionEngine {
     if (feedback === 'negative') this.corroborateLessons(messageId);
   }
 
-  /** An Alternate Takes pick landed (the ledger row is already written by
-   *  recordTakePick) — a correction corroborates provisional lessons exactly
-   *  like an explicit thumbs-down. */
+  /** The ledger row is already written by recordTakePick; a correction
+     *  corroborates provisional lessons like a thumbs-down. */
   applyTakePick(turnId: string | null, outcome: 'accepted' | 'corrected'): void {
     if (outcome === 'corrected' && turnId) this.corroborateLessons(turnId);
   }
 
-  /** Explicit thumbs recorded for this turn's message, if any.
-   *
-   *  turn_feedback is cf-backend-owned and genuinely absent on the CLI, where
-   *  operator feedback arrives through the web surface only
-   *  (conformance/manifest.ts). So the absence is ASKED about rather than
-   *  discovered by exception: a catch here could not tell "this backend has no
-   *  feedback table" from "the query failed", and reported both as no thumbs. */
+  /** turn_feedback is cf-backend-only (conformance/manifest.ts), so its absence is
+     *  checked explicitly rather than inferred from an exception. */
   private readExplicitFeedback(turnId?: string): 'positive' | 'negative' | null {
     if (!turnId || !tableExists(this.rt.storage.sql, 'turn_feedback')) return null;
 
-    // Scoped, because `turn_feedback` is keyed `(actor_id, message_id)` and a
-    // message id is minted per actor: a bare `message_id` read returns whichever
-    // sibling's row a `LIMIT 1` reaches first, and the verdict it returns feeds
-    // this actor's crafted-tool EMA re-score.
+    // Scoped: message ids are minted per actor, so an unscoped read can return a sibling's row.
     return this.rt.storage.sql<{ feedback: 'positive' | 'negative' }>`
       SELECT feedback FROM turn_feedback
       WHERE actor_id = ${this.rt.actor.actorId} AND message_id = ${turnId} LIMIT 1`[0]?.feedback ?? null;
   }
 
-  /** Corroborate the provisional lessons tied to this turn. A row-status
-   *  change only: the lesson stays in the ledger it was written to, and every
-   *  reader (`renderRecentLessons`, `listLessons`, the
-   *  experience library) derives from that status — no copy goes to
-   *  MEMORY.md, so nothing can hide a lesson its row still holds. */
+  /** A row-status change only; readers derive from that status. */
   private corroborateLessons(turnId?: string): void {
     if (!turnId) return;
     corroborateLessonsForTurn(this.rt.storage.sql, this.rt.actor, turnId);
   }
   /**
-   * Settle the experience this workspace imported from the owner's other
-   * workspaces against the verdict of a turn it has just graded.
-   *
-   * Imports are staged, never adopted, so this is the only path by which
-   * another workspace's craft, lesson or fact becomes part of THIS one — and it
-   * runs on the same real-outcome signal that corroborates a lesson. An
-   * ungraded turn settles nothing: the imports keep waiting for a turn that
-   * carries a verdict.
-   */
+     * The only path by which another workspace's imported experience joins this one,
+     * settled by a graded turn's verdict. An ungraded turn settles nothing.
+     */
   private async settleImports(turnId: string | undefined, outcome: TurnOutcome | null): Promise<void> {
     if (!turnId || outcome === null || outcome === 'abandoned') return;
-    // imported_experience is created by initWorkspaceSchema on every root, so a
-    // failure here is a real fault and is not caught: a catch wide enough to
-    // absorb "the ledger may not exist in minimal runtimes" also absorbs a
-    // failed ADOPTION, leaving the import staged forever with the turn recorded
-    // as having settled it.
+    // Not caught: a wide catch would also absorb a failed adoption and leave the
+    // import staged forever.
     bindPendingImports(this.rt.storage.sql, this.rt.actor, turnId);
 
     const settled = await settleImportsForTurn(
@@ -1000,45 +722,31 @@ export class EvolutionEngine {
     });
   }
 
-  // ── Timescale 2: Session-level (end of conversation or every N turns) ──
-
   /**
-   * Called by AgentOrchestrator (the single home of the every-N-turns
-   * cadence) when a session window closes. Reflects on patterns when the
-   * window carries real negative signal — accepted streaks lower the
-   * cadence by skipping the reflection entirely.
-   */
+     * Called by AgentOrchestrator when a session window closes. Reflects only when the
+     * window carries negative signal.
+     */
   async onSessionComplete(session: CompletedSession): Promise<void> {
     if (!this.config.enabled) return;
 
     const windowsClosed = this.agentConfig.countClosedTurnWindow();
 
-    // Reflect on the turn window (skip trivially short windows).
     if (session.turns.length >= 3 && this.sessionWarrantsReflection(session)) {
       await this.onSessionReflection(session, windowsClosed);
     }
 
-    // Check if lifetime evolution is due
     if (windowsClosed % this.config.lifetimeEvolutionInterval === 0) {
       await this.onLifetimeEvolution();
     }
 
-    // The session-end changelog digest: assemble what the window changed
-    // (including anything the reflection/evolution above just landed) and
-    // emit it through the normal event stream — the CLI prints it live, the
-    // web timeline carries it. Pure read over the ledgers; never blocks.
+    // Session-end changelog digest over the ledgers; never blocks.
     this.emitChangelogDigest(session.startedAt);
   }
 
-  // ── The promotion gate's shadow rollout, both halves ────────────
-
   /**
-   * The turn-bound half: record a completed turn as evidence the promotion
-   * gate may draw on. ONE row and no inference — the candidate rollout it pays
-   * for runs on the cadence lane below. `plan` is the sampling decision the
-   * caller made when the turn ended (`shadowTrialPlan`), so a replay records
-   * the same trial the first attempt decided on.
-   */
+     * Record a completed turn as shadow evidence: one row, no inference. `plan` is
+     * the caller's sampling decision (`shadowTrialPlan`), so a replay records the same trial.
+     */
   queueShadowTrial(
     turn: CompletedTurn, context: readonly ModelMessage[], plan: ShadowTrialPlan,
   ): ShadowTrialQueueOutcome {
@@ -1052,24 +760,11 @@ export class EvolutionEngine {
   }
 
   /**
-   * The expensive half, on the lane that can afford it: run whatever trials
-   * the turns queued for the pending scaffold.
-   *
-   * Due whenever a capable host asks — NOT on the session-reflection window,
-   * which is a different clock. Gating it there would leave a candidate
-   * unresolved through every window that never closed, and `maybeEvolveScaffold`
-   * refuses to propose while one is pending, so the whole loop would stall on
-   * it. AgentOrchestrator calls this at the head of its cadence pass, before
-   * the window pass that may want to propose.
-   *
-   * Absorbs its own failures: a trial that cannot be scored must not stop the
-   * pass it rides on. Gated on `enabled` like every other entry point here,
-   * and with the queue above for the same reason: a `--no-auto-evolve` run
-   * records no evolution state and spends no evolution compute. Nothing stalls
-   * on that — such a run proposes nothing to stall over, and the queue is
-   * durable, so a candidate an earlier run left pending is resolved by the next
-   * evolution-enabled host.
-   */
+     * Run queued trials for the pending scaffold. Due whenever a capable host asks,
+     * not on the session window: `maybeEvolveScaffold` refuses to propose while one is
+     * pending, so gating it there would stall the loop. Absorbs its own failures.
+     * Gated on `enabled`; the queue is durable for the next enabled host.
+     */
   async runDueShadowTrials(): Promise<void> {
     if (!this.config.enabled || !this.config.shadowTrialRunner) return;
 
@@ -1083,7 +778,6 @@ export class EvolutionEngine {
     }
   }
 
-  /** Emit one "what I changed about myself" line for the closed window. */
   private emitChangelogDigest(since: number): void {
     const entries = buildChangelog(this.rt.storage.sql, this.rt.actor, { since, limit: 20 });
 
@@ -1099,10 +793,7 @@ export class EvolutionEngine {
     });
   }
 
-  /** Real signal that something in the window went wrong: an error, a
-   *  negative feedback mark (reviewTurn populates turn.feedback), or a
-   *  recorded corrected/frustrated outcome. All-accepted windows return
-   *  false — nothing warrants reflection. */
+  /** An error, negative feedback, or a recorded corrected/frustrated outcome. */
   private sessionWarrantsReflection(session: CompletedSession): boolean {
     if (session.turns.some(t => t.hadError || t.feedback === 'negative')) return true;
     const turnIds = session.turns.map(t => t.turnId).filter((id): id is string => id !== undefined && id !== '');
@@ -1110,14 +801,10 @@ export class EvolutionEngine {
     return hasNegativeOutcome(this.rt.storage.sql, this.rt.actor, turnIds);
   }
 
-  /** Session-level reflection: patterns, what worked, what didn't. The
-   *  reflection prose is self-scored, so it enters the corroborated-lesson
-   *  surface only when a recorded outcome already backs the window; otherwise
-   *  it waits in the lessons ledger as provisional until one corroborates it. */
+  /** Self-scored prose enters corroborated lessons only when a recorded outcome
+     *  already backs the window; otherwise it stays provisional. */
   private async onSessionReflection(session: CompletedSession, windowsClosed: number): Promise<void> {
-    // The reflection input is the ledger's newest CORROBORATED lessons, which
-    // own their status there. Every recent-lesson reader uses those rows, so a
-    // memory file's headings or contents cannot decide which lessons qualify.
+    // Input is the ledger's corroborated lessons, not a memory file's contents.
     const recentLessons = renderRecentLessons(this.rt.storage.sql, this.rt.actor, 5);
 
     if (!recentLessons.trim()) return;
@@ -1140,14 +827,12 @@ export class EvolutionEngine {
 
     this.emit({ type: 'reflection', message: `Session reflection${corroborated ? '' : ' [provisional]'}: ${reflection.slice(0, 100)}...` });
 
-    // Propose scaffold mutation after enough closed windows with clear patterns
     if (windowsClosed >= 3) {
       await this.maybeEvolveScaffold(reflection);
     }
   }
 
-  /** The live file IS the current version's content; only an archived stepping
-   *  stone needs the versioned-backup read (v0 has no backup). */
+  /** Only an archived stepping stone needs the versioned-backup read (v0 has no backup). */
   private async readBaseScaffold(base: EvolutionBaseSelection | null, currentScaffold: string): Promise<string | null> {
     if (base === null) return null;
 
@@ -1156,22 +841,14 @@ export class EvolutionEngine {
     return readScaffoldVersion(this.rt, base.version);
   }
 
-  /** Propose a scaffold improvement based on session patterns.
-   *
-   *  A rejected proposal is a RETURNED value (`result.ok === false`), not an
-   *  exception, so nothing here is wrapped in a catch: a blanket one would
-   *  never see a failed validation and would swallow every real fault on the
-   *  path — the archive read, the versioned-backup read, both model calls and
-   *  the scaffold write. An evolution that never proposed anything would then
-   *  report the same silence as one that proposed nothing worth taking. */
+  /** A rejected proposal is a returned value, so nothing here is wrapped in a catch
+     *  that would also swallow real faults. */
   private async maybeEvolveScaffold(reflection: string): Promise<void> {
     const scaffoldExists = await this.rt.identity.scaffold.exists();
 
     if (!scaffoldExists) return;
 
-    // Skip if a scaffold proposal is already in flight. Consecutive windows
-    // would otherwise orphan earlier pending versions. The current proposal
-    // must settle before another begins.
+    // One proposal in flight at a time; consecutive windows would orphan pending versions.
     const pending = this.rt.storage.sql<{ version: number }>`
       SELECT version FROM scaffold_versions
       WHERE actor_id = ${this.rt.actor.actorId} AND status = 'pending' LIMIT 1
@@ -1190,13 +867,8 @@ export class EvolutionEngine {
 
     if (!currentScaffold || currentScaffold.length < 50) return;
 
-    // DGM archive branching: mostly evolve the live current, with a
-    // configurable exploration share drawn from archived stepping stones
-    // (policy + justification in scaffold/archive.ts selectEvolutionBase).
-    // Selection weights blend the shadow record with how each version's
-    // turns ACTUALLY landed with the user (turn_outcomes) — the real-outcome
-    // prior the shadow judge alone can't supply — and are then aggregated
-    // over each candidate's descendant lineage (clade-metaproductivity).
+    // DGM archive branching (scaffold/archive.ts selectEvolutionBase), weighted by
+    // shadow record and real turn outcomes, aggregated over descendant lineage.
     const archive = listScaffoldArchive(this.rt.storage.sql, this.rt.actor, 12);
     const realRates = realOutcomeScaffoldRates(this.rt.storage.sql, this.rt.actor);
 
@@ -1206,9 +878,7 @@ export class EvolutionEngine {
 
     const baseCode = await this.readBaseScaffold(base, currentScaffold);
 
-    // What keeps going wrong, as named cells the proposal can target. The
-    // cells are deterministic (evolution/pathology.ts); the model only gets
-    // to phrase their titles, and only after they exist.
+    // Cells are deterministic (evolution/pathology.ts); the model only phrases titles.
     const pathologies = await labelPathologyClusters(this.fastLlm, clusterPathologies(
       listTurnOutcomes(this.rt.storage.sql, this.rt.actor, { limit: 60, outcomes: NEGATIVE_TURN_OUTCOMES }),
     ));
@@ -1227,7 +897,6 @@ export class EvolutionEngine {
       ),
     );
 
-    // Only attempt mutation if the LLM produced something that looks like a scaffold
     if (!proposed.includes('async function* run')) return;
 
     const code = stripMarkdownFences(proposed);
@@ -1244,8 +913,7 @@ export class EvolutionEngine {
     );
 
     if (!result.ok) return;
-    // The same parse modifyScaffold stamped the row with, over the same
-    // code — the event and the row cannot disagree about what was targeted.
+    // The same parse modifyScaffold stamped the row with, so event and row agree.
     const targeted = parsePathologyTag(code);
     this.emit({
       type: 'scaffold_proposed',
@@ -1254,12 +922,7 @@ export class EvolutionEngine {
     });
   }
 
-  // ── Timescale 3: Lifetime-level (periodic background evolution) ──
-
-  /**
-   * Run a full MCTS evolution cycle. Happens automatically every N conversations.
-   * Also callable manually via `kinu evolve`.
-   */
+  /** Full MCTS evolution cycle; automatic every N windows, or via `kinu evolve`. */
   async onLifetimeEvolution(session?: SessionWriter): Promise<void> {
     const rt = this.rt;
 
@@ -1271,30 +934,20 @@ export class EvolutionEngine {
       message: `Starting evolution cycle (budget=${this.config.lifetimeMCTSBudget})...`,
     });
 
-    // No replay eval here. It re-executes a 20-turn sample of the SAME
-    // `turn_outcomes` ledger, on the SAME cadence, that GEPA's seed scoring
-    // already re-executes to measure the current config on its val split — one
-    // re-execution bill paid twice for two points on a curve, and the curve is
-    // read by inspection RPCs only (listReplayEvals): no decision anywhere
-    // consumes it. It stays available on demand (`runReplayEval`, the CLI and
-    // DO RPCs) so the number can still be asked for; what the cycle does NOT do
-    // is spend twenty full completions on it unasked.
+    // No replay eval here: GEPA's seed scoring already re-executes the same ledger,
+    // and no decision reads the replay curve. It stays available via `runReplayEval`.
 
-    // CraftStore consolidation
     await periodicCraftConsolidation(this.rt);
     this.emit({ type: 'consolidation', message: 'CraftStore consolidation complete' });
 
-    // No writer supplied → the DURABLE one. An in-memory mirror lost a branch's
-    // ancestry the moment the process exited or the Durable Object was evicted,
-    // which is exactly what a resumed search re-enters needing.
+    // Default to the durable writer: a resumed search needs the branch ancestry.
     const writer = session ?? createDurableMctsSession(this.history);
 
     const task = `Given my purpose: "${purpose}", identify one specific improvement ` +
       `to be more effective. Consider: new tools, knowledge gaps, workflow improvements.`;
 
     try {
-      // Operator MCTS overrides apply here too; the iteration budget stays
-      // the lifetime-specific cadence cap (its own knob), not mcts_iterations.
+      // The iteration budget stays the lifetime cadence cap, not mcts_iterations.
       const overrides = this.agentConfig.getMctsOverrides();
 
       const result = await runMCTS(this.rt, writer, task, {
@@ -1322,60 +975,39 @@ export class EvolutionEngine {
   }
 
   /**
-   * Replay eval — re-run a sample of outcome-labeled turns against the
-   * CURRENT config (the backend's replayTaskRunner: scaffold + prompt +
-   * tools) and score against the recorded outcome. The system's loss curve,
-   * persisted to replay_evals. No-op when the backend supplies no runner or
-   * no labeled turns exist yet.
-   *
-   * ON DEMAND ONLY — the CLI and DO RPCs. It is deliberately off the lifetime
-   * cadence: twenty full re-executions of the same `turn_outcomes` sample that
-   * GEPA's seed scoring already re-executes, for a series read by inspection
-   * surfaces and by no decision in the system.
-   */
+     * Re-run a sample of outcome-labeled turns against the current config and score
+     * against the recorded outcome, persisted to replay_evals. On demand only. Null
+     * without a runner or labeled turns. A failed re-run or verdict scores 0.
+     */
   async runReplayEval(sampleSize?: number): Promise<ReplayEvalSummary | null> {
     const runTask = this.config.replayTaskRunner;
 
     if (!runTask) return null;
 
-    try {
-      const summary = await runReplayEval({
-        sql: this.rt.storage.sql,
-        actor: this.rt.actor,
-        judge: this.rt.judgeModel ?? this.rt.llm,
-        runTask,
-        sampleSize,
-        scaffoldVersion: getCurrentScaffoldVersion(this.rt.storage.sql, this.rt.actor),
+    const summary = await runReplayEval({
+      sql: this.rt.storage.sql,
+      actor: this.rt.actor,
+      judge: this.rt.judgeModel ?? this.rt.llm,
+      runTask,
+      sampleSize,
+      scaffoldVersion: getCurrentScaffoldVersion(this.rt.storage.sql, this.rt.actor),
+    });
+
+    if (summary) {
+      this.emit({
+        type: 'replay_eval',
+        message: `Replay eval: loss ${formatScoreInterval(lossInterval(summary.interval))} ` +
+          `over ${summary.sampleSize} labeled turns ` +
+          `(${summary.acceptedCount} accepted / ${summary.negativeCount} corrected)`,
+        data: summary,
       });
-
-      if (summary) {
-        this.emit({
-          type: 'replay_eval',
-          message: `Replay eval: loss ${formatScoreInterval(lossInterval(summary.interval))} ` +
-            `over ${summary.sampleSize} labeled turns ` +
-            `(${summary.acceptedCount} accepted / ${summary.negativeCount} corrected)`,
-          data: summary,
-        });
-      }
-
-      return summary;
-    } catch (err) {
-      const message = renderThrownChain({ cause: err });
-      this.emit({ type: 'replay_eval', message: `Replay eval failed: ${message}` });
-
-      return null;
     }
+
+    return summary;
   }
 
-  // ── Internal helpers ────────────────────────────────────────────
-
-  /** Generate a reflection on a turn that went wrong. The user's follow-up
-   *  (the correction) is the strongest available context when present.
-   *
-   *  The answer is bounded here rather than rejected, for the reason the advisor
-   *  note is (advisor/review.ts): a model that answers longer than it was asked
-   *  is the ordinary case, and this sentence is appended verbatim to durable
-   *  memory on corroboration. */
+  /** The user's correction is the strongest context when present. The answer is
+     *  truncated rather than rejected (as in advisor/review.ts). */
   private async generateTurnReflection(
     turn: CompletedTurn, outcome: TurnOutcome | null, quality: number, followup: string | null,
   ): Promise<string> {
@@ -1386,16 +1018,11 @@ export class EvolutionEngine {
     return raw.trim().slice(0, TURN_REFLECTION_MAX_CHARS);
   }
 
-  /** Extract a successful tool usage pattern into a reusable crafted tool.
-   *  Pure-lookup calls (memory.search, fact.recall) are skipped — they read
-   *  state but encode no reusable pattern.
-   */
+  /** Pure-lookup calls are skipped: they encode no reusable pattern. */
   private async extractPattern(
     turn: CompletedTurn,
     quality: number,
-    /** Where this extraction records that it happened, or null for a turn with no
-     *  durable identity. Written next to the upsert below rather than by the
-     *  caller, so no await separates the crafted tool from the record of it. */
+    /** Written next to the upsert so no await separates the tool from its record. */
     patternKey: string | null,
   ): Promise<void> {
     const meaningfulCalls = turn.toolCalls.filter(tc => !isPureLookupCall(tc));
@@ -1406,14 +1033,8 @@ export class EvolutionEngine {
       .map(tc => `${tc.name}(${evidenceWindow(JSON.stringify(tc.args), EVIDENCE_BUDGETS.patternToolCall)}) → ${evidenceWindow(JSON.stringify(tc.result), EVIDENCE_BUDGETS.patternToolCall)}`)
       .join('\n');
 
-    // Ask the LLM to generalize into a reusable function
-    // The ANSWER, recorded before it is applied.
-    //
-    // The upsert below is keyed by tool name, so applying twice adopts one tool —
-    // but only if the answer is the same both times, and a model asked again can
-    // name the pattern differently. Persisting the generation first makes the
-    // replay apply what the first attempt decided instead of deciding again, and
-    // makes the second model call unnecessary rather than merely harmless.
+    // The answer is persisted before it is applied, so a replay applies what was
+    // decided instead of asking the model again.
     const recorded = patternKey === null
       ? undefined
       : this.rt.storage.sql<{ answer: string }>`
@@ -1429,16 +1050,13 @@ export class EvolutionEngine {
       jsonObjectOnlyInstruction(),
     );
 
-    // Unusable model output is the one thing skipped here. The old catch also
-    // absorbed every upsertCraftedTool failure — a compile or storage fault on
-    // an accepted pattern read exactly like the model having produced nothing.
+    // Only unusable model output is skipped; upsert faults propagate.
     const json = tolerate(() => extractJsonObject(generalized), 'malformed-input');
 
     if (json === undefined) return;
     const parsed = v.safeParse(GeneralizedToolSchema, json);
 
-    // Shape only — whether the code is usable is decided by upsertCraftedTool,
-    // which compiles it the way the runtime will before storing anything.
+    // Shape only; upsertCraftedTool compiles the code before storing it.
     if (!parsed.success || !parsed.output.name || !parsed.output.code) return;
 
     if (patternKey !== null && recorded === undefined) {
@@ -1456,11 +1074,8 @@ export class EvolutionEngine {
       score: quality,
     });
 
-    // ONE COMMIT for the discovery event, the marker and the retirement of the
-    // stored answer. Separately, a kill between the event and the marker
-    // appended the same discovery twice, and a kill between the marker and the
-    // delete orphaned the answer row for good — every later review reads the
-    // marker and skips extraction, so nothing ever reaches the delete again.
+    // One commit for the discovery event, marker and answer retirement, so a kill
+    // cannot duplicate the event or orphan the answer row.
     this.commit(() => {
       if (acceptance.accepted) {
         this.emit({
@@ -1471,7 +1086,6 @@ export class EvolutionEngine {
 
       if (patternKey !== null) {
         recordEffectDone(this.rt.storage.sql, this.rt.actor, { scope: TURN_REVIEW_STEP_SCOPE, key: patternKey });
-        // Only needed while the marker is absent.
         void this.rt.storage.sql`DELETE FROM pattern_extractions
           WHERE actor_id = ${this.rt.actor.actorId} AND effect_key = ${patternKey}`;
       }

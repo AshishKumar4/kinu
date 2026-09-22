@@ -1,9 +1,4 @@
-// Bench report shapes + the acceptance rule. Pure — no LLM, no IO.
-//
-// Two reports: the paired variant comparison (B1) and the stateful-vs-stateless
-// gain (Tier 3). Both are built from machine-computed outcomes and both are
-// designed to be able to say "nothing here" — a harness that can only produce
-// good news measures nothing.
+// Bench report shapes and the acceptance rule. Pure: no LLM, no IO.
 import { fnv1a64 } from '../utils/fnv1a';
 import { computeGain, fmtPp, pairedBinaryComparison } from './stats';
 import type { BootstrapOptions, GainStats, PairedBinaryStats, PairedOutcome } from './stats';
@@ -16,16 +11,12 @@ export interface BenchRunConfig {
   seed: number;
   variantA: string;
   variantB: string;
-  /** Attempts per task per variant. */
   repeats: number;
-  /** Digest of the whole task corpus — both splits. */
+  /** Digest of both splits. */
   manifestHash: string;
 }
 
-/** Two runs are comparable only when this matches. Budget is part of it, so a
- *  variant cannot win by quietly being given a bigger compute envelope; repeats
- *  are part of it for the same reason — pass^k at k=3 and k=1 are different
- *  measurements and averaging noise away changes what the number means. */
+/** Two runs are comparable only when this matches; budget and repeats are included. */
 export function benchConfigHash(config: BenchRunConfig): string {
   return fnv1a64(JSON.stringify([
     config.corpus, config.budget.wallClockMs, config.budget.maxTokens,
@@ -35,38 +26,28 @@ export function benchConfigHash(config: BenchRunConfig): string {
 
 export interface BenchCaseScore {
   taskId: string;
-  /** Repeats run per variant on this task. */
   attempts: number;
   passesA: number;
   passesB: number;
-  /** Mean per attempt, so the number stays on the same scale as the budget. */
+  /** Per-attempt mean, on the budget's scale. */
   durationMsA: number;
   durationMsB: number;
-  /** Mean tokens per attempt. null means at least one attempt carried no token
-   *  measurement at all — an unmeasured attempt summed as zero is exactly what
-   *  made a variant whose meter broke look cheap. Same rule as `modelCallsA`:
-   *  never rendered as zero. */
+  /** null when any attempt was unmeasured; never rendered as zero. */
   tokensA: number | null;
   tokensB: number | null;
-  /** Mean observed inference calls per attempt. null means call evidence was
-   *  absent for at least one attempt; it must never be rendered as zero. */
+  /** null when any attempt lacked call evidence; never rendered as zero. */
   modelCallsA: number | null;
   modelCallsB: number | null;
-  /** Largest working set either variant reached on this task — the number the
-   *  context-discipline candidates are supposed to move. null when at least one
-   *  attempt carried no measurement of it. */
+  /** Largest working set either variant reached; null when any attempt was unmeasured. */
   peakPromptTokensA: number | null;
   peakPromptTokensB: number | null;
-  /** First breach seen across the repeats, or null when none breached. */
   breachA: BudgetBreach | null;
   breachB: BudgetBreach | null;
-  /** First error seen across the repeats. */
   errorA?: string;
   errorB?: string;
 }
 
-/** Repeats disagreed under at least one variant: the task is unstable, and an
- *  unstable task averaged into a pass rate is a finding being hidden. */
+/** Repeats disagreed under at least one variant; surfaced, not averaged away. */
 export function caseIsUnstable(c: BenchCaseScore): boolean {
   const unstable = (passes: number) => passes > 0 && passes < c.attempts;
 
@@ -76,8 +57,7 @@ export function caseIsUnstable(c: BenchCaseScore): boolean {
 export interface DevSplitReport {
   tasks: number;
   stats: PairedBinaryStats;
-  /** Per-task detail, permitted here and ONLY here: the dev split is the one
-   *  adaptation may look at. */
+  /** Per-task detail only here: the dev split is the one adaptation may see. */
   cases: BenchCaseScore[];
 }
 
@@ -87,10 +67,9 @@ export interface BenchReport {
   config: BenchRunConfig;
   configHash: string;
   dev: DevSplitReport;
-  /** Aggregates only, by construction. null when the seal was not opened. */
+  /** Aggregates only. null when the seal was not opened. */
   sealed: SealedScorecard | null;
-  /** How many times this seal has been opened, ever, per the ledger. High
-   *  counts mean the held-out set has been peeked at and is losing its value. */
+  /** Lifetime opens per the ledger; high counts mean the held-out set is spent. */
   sealAccessOrdinal: number | null;
   budgetBreaches: number;
   decision: BenchDecision;
@@ -100,32 +79,19 @@ export interface BenchReport {
 export interface BenchDecision {
   accept: boolean;
   reason: string;
-  /** Present when the result is significant but the design is underpowered for
-   *  effects that size. The finding stands; the magnitude is probably inflated. */
+  /** Significant but underpowered: the finding stands, the magnitude is likely inflated. */
   caveat?: string;
 }
 
-/** Rejection by default. A variant is kept only when the HELD-OUT number
- *  improves and an exact paired test says so. Anything else — no seal, a
- *  dev-only win, a split too small to produce evidence at all — is a rejection.
- *
- *  Power deliberately does NOT gate acceptance. The exact test is correctly
- *  sized at any n, so a significant result is a significant result; what low
- *  power costs is the effect ESTIMATE, which gets exaggerated. That is a caveat
- *  on the magnitude, not grounds to discard the finding — and gating on the
- *  normal-approximation MDE would be unsatisfiable on small corpora, where the
- *  threshold can exceed the 100pp an effect can physically reach. */
+/** Rejection by default: kept only when the held-out number improves under an
+ *  exact paired test. Power does not gate acceptance; it only caveats magnitude. */
 export function decideBenchOutcome(sealed: SealedScorecard | null): BenchDecision {
   if (!sealed) return { accept: false, reason: 'no held-out measurement — dev-split results alone never justify keeping a variant' };
   const s = sealed.stats;
 
   if (s.pairs === 0) return { accept: false, reason: 'held-out split was empty' };
 
-  // "Never disagreed" comes first because it is the more specific diagnosis of
-  // the same fact: with no differing pair the floor is 1, so the rule below
-  // fires too and says "the split has only N tasks", which names the wrong
-  // quantity. The task count is an upper bound on what can decide; the differing
-  // pairs are what decides.
+  // Checked first: with no differing pair the floor rule would blame the task count.
   if (s.discordant === 0) return { accept: false, reason: `variants never disagreed on ${s.pairs} held-out tasks — no evidence either way` };
 
   if (!s.canReachSignificance) {
@@ -148,7 +114,6 @@ export function decideBenchOutcome(sealed: SealedScorecard | null): BenchDecisio
 export interface BuildBenchReportInput {
   runId: string;
   config: BenchRunConfig;
-  /** Attempts on the dev split, both variants. */
   devAttempts: readonly AttemptOutcome[];
   sealed: SealedScorecard | null;
   sealAccessOrdinal: number | null;
@@ -156,9 +121,7 @@ export interface BuildBenchReportInput {
   bootstrap?: BootstrapOptions;
 }
 
-/** Per-attempt figures collapsed to one row. Mean rather than total for the
- *  cost fields, so a k=3 row is read against the same per-attempt budget a k=1
- *  row is. */
+/** Cost fields are per-attempt means, so rows compare across k. */
 function foldRepeats(attempts: readonly AttemptOutcome[]) {
   const n = attempts.length;
   const error = attempts.find((x) => x.error)?.error;
@@ -169,16 +132,14 @@ function foldRepeats(attempts: readonly AttemptOutcome[]) {
   return {
     passes: attempts.filter((x) => x.passed).length,
     durationMs: Math.round(attempts.reduce((s, x) => s + x.durationMs, 0) / n),
-    // One unmeasured repeat makes the row's cost unknown, not smaller — the
-    // all-or-nothing rule the model-call fold below has always used.
+    // One unmeasured repeat makes the row's cost unknown, not smaller.
     tokens: tokens.every((count) => count !== undefined)
       ? Math.round(tokens.reduce((sum, count) => sum + count, 0) / n)
       : null,
     modelCalls: calls.every((count) => count !== undefined)
       ? calls.reduce((sum, count) => sum + count, 0) / n
       : null,
-    // A peak is a maximum, not a mean: averaging peaks across repeats would
-    // report a working set no attempt ever actually reached.
+    // A maximum, not a mean: averaged peaks describe no real attempt.
     peakPromptTokens: peaks.every((peak) => peak !== undefined)
       ? peaks.reduce((m, peak) => Math.max(m, peak), 0)
       : null,
@@ -221,8 +182,7 @@ export function buildBenchReport(input: BuildBenchReportInput): BenchReport {
       throw new Error(`unpaired task ${taskId}: expected ${config.repeats} attempt(s) per variant, got ${a.length} and ${b.length} — a paired design cannot drop half a pair`);
     }
 
-    // Repeat order is the pairing order for pass^k and flakiness alike; sorting
-    // makes a report byte-identical whatever order the runner emitted in.
+    // Sorted so the report is byte-identical regardless of runner order.
     const byRepeat = (x: AttemptOutcome, y: AttemptOutcome) => x.repeat - y.repeat;
     a.sort(byRepeat);
     b.sort(byRepeat);
@@ -285,9 +245,6 @@ export function renderBenchSummary(report: BenchReport): string {
   const unstable = dev.cases.filter(caseIsUnstable);
 
   if (unstable.length > 0) {
-    // Surfaced rather than averaged into the pass rate: a task whose repeats
-    // disagree is reporting instability, and instability read as a score is how
-    // a marginal result becomes an artifact.
     lines.push(`UNSTABLE on dev (repeats disagreed): ${unstable.length}/${dev.tasks} task(s)`);
 
     for (const c of unstable) lines.push(`  ${renderCase(c)}`);
@@ -325,15 +282,8 @@ function renderCase(c: BenchCaseScore): string {
     (caseIsUnstable(c) ? '  ~unstable' : '');
 }
 
-/** Cost next to the effect, because a variant that wins by spending twice as
- *  much has not won the same thing. Two different numbers on purpose: mean
- *  tokens per task is what an attempt costs, peak prompt tokens is how big its
- *  working set got — and a context-discipline change is supposed to move the
- *  second without moving the first. The peak is a maximum over tasks; averaging
- *  peaks would report a working set nothing ever reached. Both read 0 for the
- *  deterministic controls, which make no model call and report that as measured
- *  zero; `unreported` is reserved for a task some attempt left unmeasured, since
- *  a missing measurement averaged in as zero is how an arm comes to look cheap. */
+/** Mean tokens (cost) and peak prompt tokens (working set) are separate on purpose.
+ *  `unreported` marks a task some attempt left unmeasured. */
 function renderCost(cases: readonly BenchCaseScore[]): string {
   if (cases.length === 0) return '  cost: no attempts';
 
@@ -374,9 +324,7 @@ function renderPairedStats(s: PairedBinaryStats): string {
       `  95% CI [${fmtPp(s.ci.lo)}, ${fmtPp(s.ci.hi)}]`,
     `  pass^${s.repeats} A=${pct(s.passAllA)}  B=${pct(s.passAllB)}  effect=${fmtPp(s.effectAll)}` +
       (s.repeats === 1 ? '  (identical to pass@1 at 1 repeat)' : `  — solved in all ${s.repeats} attempts`),
-    // Named for what it actually is at each k: at one attempt per task the sign
-    // test over discordant tasks IS exact McNemar; above it, it is the same
-    // exact test on task-level rate differences.
+    // Exact McNemar at one attempt per task; the exact sign test above it.
     `  ${s.repeats === 1 ? 'McNemar exact' : 'exact sign test over tasks'} p=${s.pValue.toFixed(4)}` +
       `  (b=${s.onlyA} favour A, c=${s.onlyB} favour B, ${s.discordant}/${s.pairs} discordant tasks)`,
     `  detectable at this n: ${fmtPp(s.mde)}  resolution=${s.resolutionRatio.toFixed(2)}x` +
@@ -396,7 +344,6 @@ function pct(x: number): string {
 
 export interface GainTaskScore {
   taskId: string;
-  /** Position in the sequence — the learning curve's x axis. */
   index: number;
   stateful: number;
   stateless: number;
@@ -407,27 +354,23 @@ export interface GainReport {
   runId: string;
   config: BenchRunConfig;
   configHash: string;
-  /** Task order, identical for both arms. */
   sequence: string[];
   perTask: GainTaskScore[];
   cost: GainCostSummary;
   stats: GainStats;
-  /** Published reference points, so a number is read against something. */
   calibration: string;
   headline: string;
 }
 
 export interface GainArmCostSummary {
   attempts: number;
-  /** null means at least one attempt carried no token measurement. An arm is
-   *  compared against the other arm's spend, so one unmeasured attempt summed as
-   *  zero would hand this arm a discount it never earned. */
+  /** null when any attempt was unmeasured. */
   totalTokens: number | null;
   meanTokens: number | null;
-  /** null means at least one attempt did not report call evidence. */
+  /** null when any attempt lacked call evidence. */
   totalModelCalls: number | null;
   meanModelCalls: number | null;
-  /** null when at least one attempt carried no working-set measurement. */
+  /** null when any attempt lacked a working-set measurement. */
   peakPromptTokens: number | null;
   budgetBreaches: number;
   errors: number;
@@ -438,10 +381,6 @@ export interface GainCostSummary {
   stateful: GainArmCostSummary;
 }
 
-/** CL-Bench's leaderboard, for honest expectation-setting: the leader reaches
- *  22.3% normalized reward and 25.4% gain, and purpose-built memory systems
- *  there lose to naive in-context learning. A gain near zero is a normal,
- *  reportable outcome — not a harness bug. */
 export const GAIN_CALIBRATION =
   'CL-Bench reference: leader 22.3% normalized reward / 25.4% gain; dedicated memory systems there underperform naive in-context learning. Near-zero gain is a real result.';
 
@@ -579,8 +518,6 @@ export function renderGainSummary(report: GainReport): string {
   return lines.join('\n');
 }
 
-/** A cost figure that may not have been measured. `unreported` rather than a
- *  number, because the whole point of the null is that no digit is honest here. */
 function formatMeasured(value: number | null, digits: number): string {
   return value === null ? 'unreported' : value.toFixed(digits);
 }

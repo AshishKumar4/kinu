@@ -1,101 +1,21 @@
 /**
- * The LLM panel that re-judges the turns the owner already judged — and the
- * pre-registered bar it has to clear before anything may lean on it.
+ * A two-judge cross-family LLM panel that re-judges the owner's hand-labeled
+ * turns, and the pre-registered bar it must clear before recalibrations may be
+ * drawn by the panel with a human audit slice.
  *
- * calibration.ts buys an error profile for the turn-outcome classifier with
- * ~100 hand labels. That is expensive and it goes stale: the classifier's model
- * changes, the scaffold changes, and a profile measured against last quarter's
- * behaviour says nothing about this quarter's. Re-labeling by hand every time
- * is the honest answer and also the one that does not happen.
+ * Judges see exactly `renderLabelingEvidence`, never another rater's verdict.
+ * Unanimous or nothing: a split is `unclear`, with no tie-break. κ and error
+ * profiles come from ppi.ts (`designWeightedKappa`, `resampledAccuracy`).
  *
- * So: run two independent cross-family judges (providers/judge-model.ts,
- * `selectEnsembleJudges`) blind over the SAME turns the human labeled, and
- * measure how well the panel tracks them. If it tracks them, later
- * recalibrations can be drawn by the panel with a human audit slice over part
- * of it. If it does not, this module says so and the owner keeps labeling.
- * The point is that the answer is measured before it is relied on.
+ * Stand-in bar, all on lower 95% bounds (`STAND_IN_THRESHOLDS`): κ(human ↔
+ * ensemble) clears the kappa bar; the panel's κ with the human is at least the
+ * classifier's over the same turns; negative-class sensitivity and specificity
+ * clear theirs, which bounds the Rogan–Gladen denominator q̂₁ + q̂₀ − 1.
  *
- * Four things are load-bearing.
+ * Landis & Koch (Biometrics 33:159, 1977) put "substantial" agreement at 0.61 and up.
  *
- *  - **The panel is blind, in the same way the human file is.** Judges see
- *    exactly `renderLabelingEvidence` — the same clipped user message, answer
- *    and follow-up the owner read — and never the classifier's verdict, never
- *    the human's, and never each other's. Any of those would make the panel
- *    agree for reasons that are not the turn.
- *
- *  - **Unanimous or nothing.** Each judge answers alone; agreement is the
- *    ensemble's verdict and a split is `unclear`. There is no tie-break and
- *    deliberately no third judge: a majority vote would convert the panel's
- *    admissions of ignorance into confident answers, and those admissions are
- *    the only reason a two-model panel is worth more than one model.
- *
- *  - **The numbers come from the calibration estimator, not a second one.**
- *    κ is `designWeightedKappa` and the panel's error profile is
- *    `resampledAccuracy` — ppi.ts's own functions, its design weighting, its
- *    point estimate. What changes is only which rater is being scored, and
- *    that the panel's interval is resampled rather than closed-form, because
- *    the panel's verdict varies inside a stratum the closed form assumes it is
- *    constant in. That is measured, not asserted — see `resampledAccuracy`.
- *
- *  - **The bar is stated here, in advance, and not moved.** Thresholds written
- *    after seeing the numbers are not thresholds.
- *
- * ── The pre-registered stand-in bar ──────────────────────────────
- *
- * All three conditions must hold. Each is on a LOWER interval bound, not a
- * point estimate, so a panel judged on 30 turns cannot pass by luck.
- *
- *  1. **κ(human ↔ ensemble) lower 95% bound ≥ 0.60.** Landis & Koch (Biometrics
- *     33:159, 1977) put "substantial" agreement at 0.61 and up. Requiring the
- *     lower bound to clear 0.60 means the data must RULE OUT the panel being
- *     merely moderate, rather than merely be compatible with it being good.
- *
- *  2. **κ(human ↔ ensemble) ≥ κ(human ↔ classifier), on the same turns.** This
- *     is the condition that actually matters and it is not a quality bar, it is
- *     a coherence one. The panel's only job would be to measure the classifier
- *     against the truth. If the panel is no closer to the human than the
- *     classifier already is, then calibrating the classifier against the panel
- *     measures one flawed rater with another equally flawed one, and reports
- *     the difference as an error profile. Both κ are computed over exactly the
- *     turns the panel covered, so the comparison is like for like.
- *
- *  3. **Ensemble sensitivity lower bound ≥ 0.70 AND specificity lower bound
- *     ≥ 0.90, on the negative class** (`corrected`/`frustrated` — what every
- *     rate downstream is really about). These two numbers are what a stand-in
- *     labeler would hand to ppi.ts, and there they appear as the Rogan–Gladen
- *     denominator q̂₁ + q̂₀ − 1. At (0.70, 0.90) that denominator is 0.60, so a
- *     corrected rate drawn through the panel is inflated by at most 1/0.6 ≈
- *     1.67× relative to a perfect labeler — a factor that leaves the interval
- *     readable. Loosen either bound much and the denominator heads for zero,
- *     where ppi.ts's own `uninformative_classifier` gate refuses the number
- *     anyway. The asymmetry between the two is prevalence: negatives are ~15%
- *     of the ledger, so at 0.90 specificity the false positives are already
- *     comparable in count to the true ones, and specificity is the bound that
- *     has to be tight.
- *
- * The bar errs toward more hand-labeling, and by how much is MEASURED rather
- * than hoped: over 200 simulated calibration sets per regime, on a 3,000-row
- * ledger with 15% negatives (`unit-ensemble.test.ts` pins it),
- *
- *   - a panel whose TRUE profile is below the bar passes it 0% of the time, at
- *     both 100 and 300 labels. It does not certify bad panels;
- *   - a panel sitting exactly ON the floor (0.70/0.90) also passes 0% of the
- *     time, because clearing a lower BOUND means beating the threshold by
- *     roughly an interval half-width. At 100 labels a true 0.95/0.99 panel
- *     passes 56% of the time; at 300 labels a true 0.85/0.97 one passes 75%
- *     and a 0.90/0.98 one 97%.
- *
- * That asymmetry is deliberate and is the whole posture: the cost of refusing a
- * good panel is that the owner labels another hundred turns, and the cost of
- * accepting a bad one is every downstream rate quietly acquiring an error
- * nobody measured. It also says how to answer a panel that is genuinely good
- * and keeps being refused — label MORE turns, which tightens the intervals it
- * is judged on. Never a lower bar.
- *
- * Below the bar the report says the panel cannot stand in, and that is the end
- * of it — there is no partial-credit mode and nothing switches on automatically
- * when it passes either. What passing buys is the owner's permission to draw
- * the next calibration set with the panel and audit a slice of it by hand.
+ * The bar errs toward more hand-labeling; answer refusals with more labels,
+ * never a lower bar. Passing enables nothing automatically.
  */
 
 import * as v from 'valibot';
@@ -118,38 +38,20 @@ import {
   type AccuracyStratum, type ClassifierAccuracy, type GoldStratum, type KappaEstimate,
 } from './ppi';
 
-/** The pre-registered bar, in one place. Changing a number here changes what
- *  "the panel qualifies" means, so it is a decision, not a tuning knob — see
- *  the module note for what each one is derived from. */
+/** The pre-registered bar; changing it redefines "the panel qualifies". */
 export const STAND_IN_THRESHOLDS = {
-  /** Lower 95% bound on κ(human ↔ ensemble). */
   kappa: 0.6,
-  /** Lower 95% bound on the panel's negative-class sensitivity. */
   sensitivity: 0.7,
-  /** Lower 95% bound on the panel's negative-class specificity. */
   specificity: 0.9,
 } as const;
 
-// ── Asking one judge ─────────────────────────────────────────────
-
-/** One member of the panel. `llm` is the seam: production passes a model-backed
- *  completion LLM, tests pass a scripted one, and nothing here knows which. */
 export interface EnsembleJudge {
-  /** `<provider>/<modelId>` — the row's provenance and the report's key. */
+  /** `<provider>/<modelId>`. */
   spec: string;
   llm: LLM;
 }
 
-/**
- * The blind judging prompt for one turn.
- *
- * Everything the judge sees of the turn comes from `renderLabelingEvidence`,
- * which is also the only thing the human file shows — so the two raters being
- * compared are answering from identical evidence, by construction rather than
- * by matching two copies of the same formatting. The verdict definitions are
- * the human file's own sentences for the same reason. Nothing in this function
- * has access to the classifier's verdict, the human's, or another judge's.
- */
+/** The blind judging prompt: the human file's evidence and label definitions. */
 export function buildEnsembleJudgePrompt(item: LabelingItem): string {
   return (
     'You are auditing how one turn of a conversation landed. A user made a ' +
@@ -168,8 +70,7 @@ export function buildEnsembleJudgePrompt(item: LabelingItem): string {
 
 const VerdictSchema = v.object({ verdict: v.picklist(OUTCOME_LABELS) });
 
-/** The panel verdict a model gave, or null when it answered without one — a
- *  hole in the measurement the caller counts, never an abstention. */
+/** Null for an unusable answer: a hole the caller counts, not an abstention. */
 function parseVerdict(raw: string): OutcomeLabel | null {
   const answer = tolerate(() => extractJsonObject(raw), 'malformed-input');
   const parsed = v.safeParse(VerdictSchema, answer);
@@ -177,27 +78,18 @@ function parseVerdict(raw: string): OutcomeLabel | null {
   return parsed.success ? parsed.output.verdict : null;
 }
 
-// ── Running the panel ────────────────────────────────────────────
-
-/** Why the panel cannot be run or read. Reported instead of a number. */
 export interface EnsembleGap {
   kind:
-    /** No classifier-graded turns at all. */
     | 'no_population'
-    /** Nothing hand-labeled, so there is nothing to check the panel against. */
     | 'no_gold_labels'
-    /** The owner marked every turn the panel covered `unclear`, so none of them
-     *  can score anybody. */
     | 'no_usable_labels'
-    /** Fewer than two distinct vendor families available to judge with. */
+    /** Fewer than two distinct vendor families. */
     | 'too_few_judges'
-    /** The panel has not judged the hand-labeled turns yet. */
     | 'not_run';
-  /** The judges that were available, for 'too_few_judges'. */
+  /** Available judges, for 'too_few_judges'. */
   judges: string[];
 }
 
-/** One honest sentence per gap, naming the step that closes it. */
 export function describeEnsembleGap(gap: EnsembleGap): string {
   switch (gap.kind) {
     case 'no_population':
@@ -218,9 +110,7 @@ export function describeEnsembleGap(gap: EnsembleGap): string {
 }
 
 export interface EnsembleRun {
-  /** Verdicts stored, per judge. */
   judged: Array<{ model: string; stored: number; failed: number }>;
-  /** Turns put to the panel this run. */
   turns: number;
   /** Verdicts already on file from an earlier run, so not paid for again. */
   alreadyJudged: number;
@@ -230,7 +120,6 @@ export type EnsembleRunResult =
   | { run: EnsembleRun; gap: null }
   | { run: null; gap: EnsembleGap };
 
-/** Hand-labeled turns still in the ledger, as the blind items a rater sees. */
 function goldLabeledItems(
   universe: ReadonlyArray<UniverseRow>, sql: SqlExecutor, actor: ActorHandle,
 ): LabelingItem[] {
@@ -240,15 +129,8 @@ function goldLabeledItems(
 }
 
 /**
- * The panel, in the two stages it really has.
- *
- * Choosing WHICH models judge is free — a spec is a string. Turning a spec into
- * a judge resolves a model, which reaches the signed-in session and the stored
- * provider keys. Collapsing the two put that credential requirement ahead of
- * both free preconditions below, so `kinu label ensemble` answered "Not
- * authenticated" to a workspace whose real missing step was hand labels, and to
- * a one-model panel that could never have run at all. The order is decided here,
- * once, for every backend.
+ * Choosing specs is free; resolving a judge needs credentials. Kept separate
+ * so free preconditions (labels, two vendors) are reported before auth.
  */
 export interface EnsemblePanel {
   specs(): Promise<readonly string[]>;
@@ -256,22 +138,9 @@ export interface EnsemblePanel {
 }
 
 /**
- * Put every hand-labeled turn to every judge, and store what comes back.
- *
- * Turns a judge has already answered are skipped, and each verdict is written
- * the moment it lands rather than in a batch at the end, so a pass that is
- * interrupted — a rate limit, an evicted Durable Object, a closed device —
- * keeps every model call it already paid for and the next run tops up from
- * there. At two judges over a hundred turns that is two hundred calls; losing
- * them to a retry is the difference between an affordable command and one
- * nobody runs twice.
- *
- * A judge that answers unusably on a turn simply has no row for it; that turn
- * then has no unanimous panel verdict and drops out of the report, counted
- * rather than quietly treated as an abstention — an unreadable answer is not
- * the same finding as a disagreement. A failed CALL is neither: it propagates,
- * so a rate limit stops the run instead of being recorded as a hundred
- * unusable answers, and the next run resumes from the rows already stored.
+ * Put every hand-labeled turn to every judge. Already-answered turns are
+ * skipped and each verdict is stored as it lands, so an interrupted run keeps
+ * what it paid for. Unusable answers are counted; a failed call propagates.
  */
 export async function runEnsemble(
   sql: SqlExecutor,
@@ -279,10 +148,7 @@ export async function runEnsemble(
   panel: EnsemblePanel,
   opts: { now?: number } = {},
 ): Promise<EnsembleRunResult> {
-  // Prerequisites in the order the owner would fix them: a ledger, then labels
-  // to score the panel against, then models to be the panel. A deployment
-  // missing all three should be told about the labels first — that is the step
-  // the whole flow is about, and the one that is free to check.
+  // Report gaps in fix order: ledger, labels, then models.
   const universe = calibrationUniverse(sql, actor);
 
   if (universe.length === 0) return { run: null, gap: { kind: 'no_population', judges: [] } };
@@ -329,10 +195,8 @@ export async function runEnsemble(
   return { run: { judged, turns: items.length, alreadyJudged }, gap: null };
 }
 
-/** One judge's blind verdict on one turn, or null when it answered unusably.
- *  Exported because the behavioural corpus (behavior-labels.ts) scores the same
- *  panel over different turns, and a second copy of "ask, parse" would be a
- *  second place for the prompt and the parse to drift apart. */
+/** One judge's blind verdict on one turn, or null when unusable. Shared with
+ *  behavior-labels.ts so prompt and parse cannot drift. */
 export async function askEnsembleJudge(
   judge: EnsembleJudge,
   item: LabelingItem,
@@ -340,98 +204,64 @@ export async function askEnsembleJudge(
   return parseVerdict(await judge.llm.complete(buildEnsembleJudgePrompt(item)));
 }
 
-/** The panel's verdict for one turn: what every judge said, or `unclear` when
- *  they did not all say the same thing. Null only for an empty panel, which has
- *  no verdict to give. A judge MISSING an answer is the caller's business —
- *  that is a hole in the measurement, not an abstention. */
+/** Unanimous verdict, else `unclear`; null only for an empty panel. */
 export function panelVerdict(perJudge: ReadonlyArray<OutcomeLabel>): OutcomeLabel | null {
   if (perJudge.length === 0) return null;
 
   return perJudge.every((label) => label === perJudge[0]) ? perJudge[0] : 'unclear';
 }
 
-// ── The report ───────────────────────────────────────────────────
-
-/** One turn every rater has an opinion about — the unit every number in the
- *  report is computed over. */
 export interface ComparedTurn {
-  /** The classifier's verdict — and the stratum the turn was sampled from. */
+  /** Also the stratum the turn was sampled from. */
   predicted: TurnOutcome;
-  /** The owner's verdict. `unclear` gold labels are excluded upstream: they are
-   *  not ground truth, so they cannot score anybody. */
+  /** `unclear` gold labels are excluded upstream. */
   human: TurnOutcome;
   ensemble: OutcomeLabel;
-  /** Each judge's own verdict, in the report's model order, for the per-member
-   *  agreement. Always complete — a turn any judge missed is not compared. */
+  /** In report model order; complete, since turns any judge missed are skipped. */
   perJudge: ReadonlyArray<OutcomeLabel>;
 }
 
 export interface EnsembleMember {
   model: string;
-  /** Turns this judge returned a usable verdict for. */
   labeled: number;
-  /** This judge alone against the owner, over the compared turns. */
   kappa: KappaEstimate | null;
 }
 
 export interface StandInCondition {
-  /** The pre-registered condition, in the words of the module note. */
   name: string;
   met: boolean;
-  /** What the data actually said, whether or not it cleared the bar. */
   detail: string;
 }
 
 export interface EnsembleReport {
   members: EnsembleMember[];
-  /** Hand-labeled turns still in the ledger. */
   gold: number;
-  /** Of those, turns every judge answered — the panel's coverage. */
+  /** Turns every judge answered. */
   covered: number;
-  /** Of the covered turns, how many the judges split on. */
   split: number;
-  /** Turns every number below is computed over: covered, minus the ones the
-   *  owner marked `unclear`. */
+  /** Covered minus owner-`unclear` turns; every number below is over these. */
   compared: number;
-  /** Cohen's κ per rater pair, all over the compared turns so they can be read
-   *  against each other. */
   kappa: {
     humanEnsemble: KappaEstimate | null;
     humanClassifier: KappaEstimate | null;
     ensembleClassifier: KappaEstimate | null;
   };
-  /** The panel's verdict against the owner's, cell by cell. */
   confusion: Array<{ ensemble: OutcomeLabel; human: TurnOutcome; count: number }>;
-  /** The panel's error profile on the negative class, through the same
-   *  estimator the classifier's own profile comes from. */
   accuracy: ClassifierAccuracy | null;
-  /** Whether the panel cleared the pre-registered bar, condition by condition. */
   standIn: { qualified: boolean; conditions: StandInCondition[] } | null;
-  /** Null when everything above is populated; otherwise why it is not. */
+  /** Null when everything above is populated. */
   gap: EnsembleGap | null;
 }
 
-/** A panel label counts as the event when it is one of the negative outcomes.
- *  `unclear` therefore counts as "did not flag it" — the conservative reading,
- *  and the right one: a stand-in labeler that abstains on a bad turn has failed
- *  to catch it, exactly as if it had called the turn fine. Exported so the
- *  behavioural corpus scores its raters on the same convention. */
+/** `unclear` counts as not flagging: an abstaining stand-in missed the bad turn. */
 export function flagsNegative(label: OutcomeLabel): boolean {
   return label !== 'unclear' && isNegativeOutcome(label);
 }
 
 /**
- * The panel's draws, per sampling stratum, for `resampledAccuracy`.
- *
- * The sample was stratified on the CLASSIFIER's verdict, so that — not the
- * panel's — is the stratum a draw belongs to and the unit the bootstrap
- * resamples within. A stratum with population but no compared turns is emitted
- * empty, so the profile reports its `unlabeled_strata` gap by name instead of
- * silently dropping that stratum's weight out of the denominator.
- *
- * Exported so the simulation in `unit-ensemble.test.ts` can measure the
- * resulting intervals against a known truth rather than assert them in prose.
- * Nothing else builds these.
+ * Panel draws per classifier-verdict stratum (the sampling design). Strata with
+ * population but no compared turns are emitted empty so `unlabeled_strata` is
+ * reported rather than their weight silently dropped.
  */
 export function panelStrata(
   compared: ReadonlyArray<ComparedTurn>,
@@ -446,8 +276,6 @@ export function panelStrata(
   }));
 }
 
-/** The κ strata for one rater pair: the sampling design (classifier verdict,
- *  weighted by its ledger population) carrying one verdict pair per draw. */
 function kappaStrata(
   compared: ReadonlyArray<ComparedTurn>,
   populations: ReadonlyMap<TurnOutcome, number>,
@@ -461,12 +289,8 @@ function kappaStrata(
 }
 
 /**
- * Everything the panel's pass established, and whether it clears the bar.
- *
- * Every number is computed over the turns all three raters covered, so the two
- * κ that condition 2 compares are about the same turns. That makes this κ for
- * the classifier a different number from the calibration report's, which uses
- * every gold label — the report says which turns it speaks for.
+ * All numbers are over turns all three raters covered, so the classifier κ here
+ * differs from the calibration report's (which uses every gold label).
  */
 export function ensembleReport(sql: SqlExecutor, actor: ActorHandle): EnsembleReport {
   const universe = calibrationUniverse(sql, actor);
@@ -476,8 +300,7 @@ export function ensembleReport(sql: SqlExecutor, actor: ActorHandle): EnsembleRe
 
   const models = [...new Set(rows.map((row) => row.model))].sort();
 
-  /** Verdicts on turns the ledger still holds — a judge's rows about turns that
-   *  have since aged out inform nothing and are not counted as coverage. */
+  /** Only turns the ledger still holds count as coverage. */
   const labeledBy = (model: string): number =>
     rows.filter((row) => row.model === model && byId.has(row.outcomeId)).length;
 
@@ -520,8 +343,7 @@ export function ensembleReport(sql: SqlExecutor, actor: ActorHandle): EnsembleRe
     const perJudge = models.map((model) => answered?.get(model))
       .filter((answer): answer is OutcomeLabel => answer !== undefined);
 
-    // A judge with no answer for this turn leaves a hole; the panel has no
-    // verdict for it and it is not counted as covered.
+    // A judge with no answer leaves the panel without a verdict for this turn.
     if (perJudge.length < models.length) continue;
     const verdict = panelVerdict(perJudge);
 
@@ -561,8 +383,7 @@ export function ensembleReport(sql: SqlExecutor, actor: ActorHandle): EnsembleRe
     members: models.map((model, i) => ({
       model,
       labeled: labeledBy(model),
-      // Each judge alone against the owner, over the same compared turns as the
-      // panel — so a member that beats the panel it belongs to is visible.
+      // Same compared turns as the panel, so a member beating the panel is visible.
       kappa: designWeightedKappa(kappaStrata(
         compared, populations, (r) => ({ a: r.perJudge[i], b: r.human }),
       )),
@@ -583,9 +404,7 @@ export function ensembleReport(sql: SqlExecutor, actor: ActorHandle): EnsembleRe
   };
 }
 
-/** The panel block, printed wherever the calibration report is. An unrun or
- *  uncalibrated panel says which step is missing in one line and stops — the
- *  same honest-nulls rule the calibration report follows. */
+/** An unrun or uncalibrated panel prints its missing step in one line. */
 export function renderEnsembleReport(report: EnsembleReport): string {
   const lines = ['Judge panel — two cross-family models over the turns you labeled, blind'];
 
@@ -640,8 +459,7 @@ export function renderEnsembleReport(report: EnsembleReport): string {
   return lines.join('\n');
 }
 
-/** The pre-registered bar, applied. Every condition reports what it saw, so a
- *  failing panel says how far off it is rather than just "no". */
+/** Each condition reports what it saw, so a failure shows how far off it is. */
 function standInVerdict(
   kappa: EnsembleReport['kappa'],
   accuracy: ClassifierAccuracy | null,

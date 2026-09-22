@@ -180,7 +180,7 @@ describe('CloudflareVectorStore', () => {
     expect(records.has('x')).toBe(false);
   });
 
-  test('search failures degrade gracefully (available flips false, returns [])', async () => {
+  test('a failed search rejects and trips the cooldown, never answering an empty corpus', async () => {
     const failingIndex: VectorizeIndex = {
       async insert() { return {}; },
       async upsert() { return {}; },
@@ -191,8 +191,7 @@ describe('CloudflareVectorStore', () => {
 
     const store = createCloudflareVectorStore({ index: failingIndex, embedder: constEmbedder });
     expect(store.available).toBe(true);
-    const hits = await store.search('anything');
-    expect(hits).toEqual([]);
+    await expect(store.search('anything')).rejects.toThrow('vectorize down');
     expect(store.available).toBe(false);
   });
 
@@ -242,7 +241,7 @@ describe('CloudflareVectorStore', () => {
     setSystemTime(new Date(start));
 
     try {
-      await store.search('anything');
+      await expect(store.search('anything')).rejects.toThrow('vectorize down');
       expect(store.available).toBe(false);
       // A latch here disabled semantic WRITES too, so everything indexed after
       // one transient error was lost rather than merely unsearchable.

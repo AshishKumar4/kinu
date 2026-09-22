@@ -18,7 +18,8 @@
 import { sha256Hex } from '../../safety/argument-digest';
 import type { VFS } from '../../types/primitives';
 import { EVENT_BRIEF_MAX_CHARS } from './visibility';
-import { diagnostics, toKinuError } from '../../obs/index';
+import { diagnostics, renderCauseChain, toKinuError } from '../../obs/index';
+import { ensureDir } from '../../utils/vfs-helpers';
 
 /** Workspace VFS directory spilled event content is offloaded to. */
 export const EVENT_CONTENT_DIR = '.kinu/event-content';
@@ -28,37 +29,32 @@ export function eventContentPath(content: string): string {
   return `${EVENT_CONTENT_DIR}/${sha256Hex(content, 24)}.txt`;
 }
 
+/** Where an oversize body's full text went, or why it went nowhere. */
+export type SpilledContent =
+  | { readonly path: string; readonly unsaved?: never }
+  | { readonly unsaved: string; readonly path?: never };
+
 /**
- * Offload `content` when it exceeds what a brief can carry, returning the
- * readable path. Returns null when the content fits the brief (nothing was
- * truncated, so a reference would be noise) or when the write failed — the
- * brief stays honest either way, exactly as the tool-result clamp does.
+ * Offload `content` when it exceeds what a brief can carry. Null when the
+ * content fits the brief: nothing was truncated, so a reference would be
+ * noise. A write that fails does not stop the delivery: `unsaved` carries why
+ * the rest cannot be read back, and the brief states it.
  */
-export async function spillEventContent(vfs: VFS, content: string): Promise<string | null> {
+export async function spillEventContent(vfs: VFS, content: string): Promise<SpilledContent | null> {
   if (content.length <= EVENT_BRIEF_MAX_CHARS) return null;
   const path = eventContentPath(content);
 
   try {
     if (!(await vfs.exists(path))) {
-      try {
-        await vfs.mkdir(EVENT_CONTENT_DIR, { recursive: true });
-      } catch (err) {
-        const msg = err instanceof Error ? err.message.toLowerCase() : '';
-
-        if (!msg.includes('exist')) throw err;
-      }
-
+      await ensureDir(vfs, EVENT_CONTENT_DIR);
       await vfs.writeFile(path, content);
     }
 
-    return path;
+    return { path };
   } catch (err) {
-    diagnostics.failure(
-      'event.content_spill_failed',
-      toKinuError({ doing: 'spill oversized event content to the workspace', cause: err, otherwise: 'io' }),
-      { path },
-    );
+    const failure = toKinuError({ doing: 'spill oversized event content to the workspace', cause: err, otherwise: 'io' });
+    diagnostics.failure('event.content_spill_failed', failure, { path });
 
-    return null;
+    return { unsaved: renderCauseChain(failure) };
   }
 }

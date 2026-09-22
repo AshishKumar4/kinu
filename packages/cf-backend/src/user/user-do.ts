@@ -93,6 +93,7 @@ import {
   type EgressSecretBinding,
   JsonObjectSchema,
   decodeJsonValue,
+  parseJsonValue,
   autoTitleMayReplace,
   type NameOrigin,
 } from '@kinu.run/core';
@@ -661,6 +662,9 @@ export interface CredentialSummary {
   createdAt: number;
   updatedAt: number;
 }
+
+/** What one OAuth refresh established; see `UserDO.refreshOAuthCredential`. */
+type OAuthRefresh = OAuthCredential | 'revoked' | { readonly failed: KinuError };
 
 export interface CodexStatus {
   connected: boolean;
@@ -4106,7 +4110,9 @@ export class UserDO extends Agent<Env> {
     return `${this.ctx.id.toString()}:${key}`;
   }
 
-  /** Internal read of the raw credential. */
+  /** Internal read of the raw credential. Null when none is stored. A stored
+   *  row that does not open or decode REJECTS: "not connected" and "connected
+   *  but unreadable" need different remedies, so the caller must tell them apart. */
   private async readCredential(key: string): Promise<Credential | null> {
     await this.rewrapCredentials();
     const row = this.sqlx<{ value: string }>(`SELECT value FROM user_credentials WHERE key = ?`, key)[0];
@@ -4116,27 +4122,16 @@ export class UserDO extends Agent<Env> {
 
     try { plaintext = await (await this.cipher()).open(this.credentialAad(key), row.value); }
     catch (err) {
-      diagnostics.failure('credential.unreadable', toKinuError({
-        doing: 'opening a stored credential',
-        cause: err,
-        otherwise: 'bad_input',
-      }), { credentialKey: key });
-
-      return null;
+      throw toKinuError({ doing: `opening the stored credential ${key}`, cause: err, otherwise: 'bad_input' });
     }
 
-    // Parsed outside the catch above on purpose: a JSON error message quotes
-    // the input it choked on, and that input is the decrypted secret.
-    try { return validateCredential({ value: JSON.parse(plaintext) }); }
-    catch {
-      diagnostics.failure(
-        'credential.malformed',
-        new KinuError('bad_input', 'a stored credential did not decode as JSON'),
-        { credentialKey: key },
-      );
+    // Through `tolerate`, never a caught parse error: a JSON error message
+    // quotes the text it choked on, and that text is the decrypted secret.
+    const decoded = tolerate(() => parseJsonValue(plaintext), 'malformed-input');
 
-      return null;
-    }
+    if (decoded === undefined) throw new KinuError('bad_input', `the stored credential ${key} did not decode as JSON`);
+
+    return validateCredential({ value: decoded });
   }
 
   /** Seal a credential for storage. Asynchronous and writes NOTHING, so that
@@ -4369,6 +4364,8 @@ export class UserDO extends Agent<Env> {
     return headers === null ? null : (await this.cipher()).seal(this.mcpHeadersAad(serverId), headers);
   }
 
+  /** Stored headers that do not open REJECT: sent without them, the request
+   *  would reach the server unauthenticated and read as a server wanting a login. */
   private async openMcpHeaders(serverId: string, stored: string | null): Promise<string | null> {
     await this.rewrapCredentials();
 
@@ -4376,13 +4373,7 @@ export class UserDO extends Agent<Env> {
 
     try { return await (await this.cipher()).open(this.mcpHeadersAad(serverId), stored); }
     catch (err) {
-      diagnostics.failure('mcp.stored_headers_unreadable', toKinuError({
-        doing: "opening an MCP server's stored headers",
-        cause: err,
-        otherwise: 'bad_input',
-      }), { serverId });
-
-      return null;
+      throw toKinuError({ doing: `opening the stored headers of MCP server ${serverId}`, cause: err, otherwise: 'bad_input' });
     }
   }
 
@@ -4506,10 +4497,10 @@ export class UserDO extends Agent<Env> {
 
         if (refreshed === 'revoked') return null;
 
-        if (refreshed) cred = refreshed;
-        // If refresh failed we keep using the old (possibly-expired) creds —
-        // the caller may still succeed, and if not it gets 401 and a clear
-        // signal that re-auth is needed.
+        // A failed refresh keeps the old (possibly-expired) creds: the caller
+        // may still succeed, and if not it gets 401 and a clear signal that
+        // re-auth is needed.
+        if (!('failed' in refreshed)) cred = refreshed;
       }
     }
 
@@ -4522,7 +4513,7 @@ export class UserDO extends Agent<Env> {
 
         if (refreshed === 'revoked') return null;
 
-        if (refreshed) cred = refreshed;
+        if (!('failed' in refreshed)) cred = refreshed;
       }
     }
 
@@ -4558,7 +4549,8 @@ export class UserDO extends Agent<Env> {
   }
 
   /** Fresh (refreshed-if-expiring) access token + account id for management
-   *  API calls. Null when no usable Cloudflare credential is stored. */
+   *  API calls. Null when no usable Cloudflare credential is stored; rejects
+   *  when the login is there and its refresh failed. */
   private async cloudflareAPICredential(): Promise<{ accessToken: string; accountId: string } | null> {
     const stored = await this.readCredential(CLOUDFLARE_OAUTH_CRED_KEY);
 
@@ -4568,7 +4560,9 @@ export class UserDO extends Agent<Env> {
     if (isCloudflareCredentialExpiring(cred)) {
       const refreshed = await this.refreshCloudflareInternal(cred);
 
-      if (refreshed === 'revoked' || !refreshed) return null;
+      if (refreshed === 'revoked') return null;
+
+      if ('failed' in refreshed) throw refreshed.failed;
       cred = refreshed;
     }
 
@@ -4579,7 +4573,9 @@ export class UserDO extends Agent<Env> {
 
   /** The user's AI Gateways + current selection. Zero-friction rule: exactly
    *  one gateway and nothing selected → select it (persisted). Never throws —
-   *  discovery failures surface in `error` so login can call this inline. */
+   *  a login that cannot be used (unreadable, or its refresh failed) and a
+   *  failed discovery surface in `error` beside `connected: true`, so login can
+   *  call this inline. */
   async listAIGateways(caller: UserCaller): Promise<{
     connected: boolean;
     selectedId: string | null;
@@ -4588,11 +4584,11 @@ export class UserDO extends Agent<Env> {
   }> {
     await this.requireTier(caller, 'ai_gateway.admin');
     let selectedId = this.selectedAIGatewayId();
-    const api = await this.cloudflareAPICredential();
-
-    if (!api) return { connected: false, selectedId, gateways: [], error: null };
 
     try {
+      const api = await this.cloudflareAPICredential();
+
+      if (!api) return { connected: false, selectedId, gateways: [], error: null };
       const gateways = await fetchCloudflareAIGateways(api.accountId, api.accessToken);
 
       if (!selectedId && gateways.length === 1) {
@@ -4658,21 +4654,22 @@ export class UserDO extends Agent<Env> {
   /** Rotate a stored OAuth credential. Returns the rotated credential;
    *  `'revoked'` when the issuer rejected the refresh token outright
    *  (`invalid_grant`) or the owner disconnected while the refresh was in the
-   *  air; null on a transient failure, the current credential staying in
-   *  place. Every write carries the revision fence: a login the owner
-   *  completed during the round trip is never demoted by its predecessor's
-   *  rejection. */
+   *  air; `{ failed }` when the issuer could not be asked, the current
+   *  credential staying in place. Every write carries the revision fence: a
+   *  login the owner completed during the round trip is never demoted by its
+   *  predecessor's rejection, and a write that fails rejects. */
   private async refreshOAuthCredential(
     key: typeof CLOUDFLARE_OAUTH_CRED_KEY | typeof CODEX_CRED_KEY,
     rotate: () => Promise<OAuthCredential>,
     onRevoked: (revision: number) => Promise<void>,
-  ): Promise<OAuthCredential | 'revoked' | null> {
+  ): Promise<OAuthRefresh> {
     const revision = this.credentialRevision(key);
     const codex = key === CODEX_CRED_KEY;
     const doing = codex ? 'refreshing the Codex credential' : 'refreshing the Cloudflare credential';
+    let rotated: OAuthCredential;
 
     try {
-      return await this.commitRefreshedCredential(key, await rotate(), revision);
+      rotated = await rotate();
     } catch (err) {
       if (err instanceof OAuthTokenError && err.revoked) {
         const failure = toKinuError({ doing, cause: err, otherwise: 'denied' });
@@ -4689,13 +4686,15 @@ export class UserDO extends Agent<Env> {
       if (codex) diagnostics.failure('credential.codex_refresh_failed', failure);
       else diagnostics.failure('credential.cloudflare_refresh_failed', failure);
 
-      return null;
+      return { failed: failure };
     }
+
+    return await this.commitRefreshedCredential(key, rotated, revision);
   }
 
   /** The Cloudflare token still serves the management APIs after a rejected
    *  refresh, so only the dead refresh token is stripped. */
-  private refreshCloudflareInternal(current: OAuthCredential): Promise<OAuthCredential | 'revoked' | null> {
+  private refreshCloudflareInternal(current: OAuthCredential): Promise<OAuthRefresh> {
     return this.refreshOAuthCredential(
       CLOUDFLARE_OAUTH_CRED_KEY,
       () => refreshCloudflareCredential(this.env, current),
@@ -4709,7 +4708,7 @@ export class UserDO extends Agent<Env> {
   /** Nothing but model calls reads the Codex credential, so a rejected
    *  refresh deletes the row: the credential stops counting as connected and
    *  the connect CTA resurfaces. */
-  private refreshCodexInternal(current: OAuthCredential & { refreshToken: string }): Promise<OAuthCredential | 'revoked' | null> {
+  private refreshCodexInternal(current: OAuthCredential & { refreshToken: string }): Promise<OAuthRefresh> {
     return this.refreshOAuthCredential(
       CODEX_CRED_KEY,
       async () => {

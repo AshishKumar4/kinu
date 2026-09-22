@@ -1,18 +1,7 @@
 /**
- * Turn-outcome signal — the ONE pipeline that grades a completed turn from
- * what the user actually did next (Hermes-style per-turn forked review,
- * audit R3 / competitive borrow #1).
- *
- * When user message N+1 arrives, turn N is classified from the follow-up:
- *   accepted   — the user moved on or built on the answer
- *   corrected  — the user re-asked, fixed, or contradicted the answer
- *   frustrated — the user expressed explicit dissatisfaction
- *   abandoned  — the session ended / topic dropped with no follow-up
- *
- * Everything downstream (turn.feedback, evolution gating, craft EMA, GEPA
- * train/val splits, scaffold base-selection priors, lesson corroboration,
- * the replay-eval harness) reads from the durable `turn_outcomes` ledger
- * this module owns. No second classifier exists anywhere else.
+ * The one pipeline that grades a completed turn from what the user did next, and
+ * the durable `turn_outcomes` ledger every downstream consumer reads. No second
+ * classifier exists anywhere else.
  */
 
 import * as v from 'valibot';
@@ -44,29 +33,25 @@ export {
 
 const NEGATIVE_TURN_OUTCOME_SET: ReadonlySet<TurnOutcome> = new Set(NEGATIVE_TURN_OUTCOMES);
 
-/** The event every rate downstream is really about: a turn the user had to
- *  correct, or was unhappy with. K_align's numerator, the craft-retirement
- *  signal, and the GEPA split's optimization target are all this predicate. */
+/** The event every downstream rate is about: K_align's numerator, craft retirement,
+ *  and the GEPA split's target. */
 export function isNegativeOutcome(outcome: TurnOutcome | null): boolean {
   return outcome !== null && NEGATIVE_TURN_OUTCOME_SET.has(outcome);
 }
 
-/** Sources that carry a HUMAN's opinion of the turn. The complement is
- *  `execution` — real evidence about what happened, silent about whether the
- *  user wanted it. */
+/** Sources carrying a human's opinion. `execution` is evidence of what ran, silent
+ *  about whether the user wanted it. */
 export function isUserVerdictSource(source: TurnOutcomeSource): boolean {
   return source !== 'execution';
 }
 
-/** Single source for the explicit-feedback → turn-quality mapping. Used by
- *  the outcome pipeline AND the async setTurnFeedback re-scoring path
- *  (cf-backend), so the 0.9/0.2 constants can't drift between them. */
+/** Shared with the async setTurnFeedback re-scoring path (cf-backend) so the
+ *  constants cannot drift. */
 export function feedbackToQuality(feedback: 'positive' | 'negative'): number {
   return feedback === 'positive' ? 0.9 : 0.2;
 }
 
-/** Outcome → the CompletedTurn.feedback value it populates. Abandoned turns
- *  carry no user signal either way, so feedback stays null. */
+/** Abandoned turns carry no user signal, so feedback stays null. */
 export function outcomeToFeedback(outcome: TurnOutcome): 'positive' | 'negative' | null {
   if (outcome === 'accepted') return 'positive';
 
@@ -75,20 +60,11 @@ export function outcomeToFeedback(outcome: TurnOutcome): 'positive' | 'negative'
   return 'negative';
 }
 
-/** What an execution-grounded verdict is worth, against the 0.5 neutral.
- *
- *  Strictly inside the poles a USER verdict reaches (0.9 / 0.2): the
- *  environment reporting that the agent's own actions ran is real evidence and
- *  is not someone saying the work was right, so a run of green turns can never
- *  move a crafted tool's score as far as one person actually approving it —
- *  and a run of failures can never sink it as far as one person complaining. */
+/** Strictly inside the user-verdict poles (0.9 / 0.2): tool runs are evidence, not
+ *  approval, so they never move a score as far as one person's verdict. */
 const EXECUTION_QUALITY = { accepted: 0.7, negative: 0.3 } as const;
 
-/** Outcome → turn quality. Accepted/corrected reuse the explicit-feedback
- *  constants (one mapping); frustration is the strongest negative signal;
- *  abandonment is neutral (no signal, not a verdict). An execution-sourced
- *  row is scored on its own, narrower band — it is a proxy, and is priced
- *  as one. */
+/** Abandonment is neutral; execution-sourced rows use their own narrower band. */
 export function outcomeQuality(outcome: TurnOutcome, source: TurnOutcomeSource = 'classifier'): number {
   if (outcome === 'abandoned') return 0.5;
 
@@ -101,18 +77,14 @@ export function outcomeQuality(outcome: TurnOutcome, source: TurnOutcomeSource =
   return feedbackToQuality(outcome === 'accepted' ? 'positive' : 'negative');
 }
 
-// ── Trivial-turn pre-filter ──────────────────────────────────────
-
 const TRIVIAL_MESSAGE = new RegExp(
   '^\\s*(hi|hiya|hey|hello|yo|sup|thanks?|thank you|thx|ty|ok(ay)?|k|kk|cool|nice|great|awesome|perfect|' +
   'good (morning|afternoon|evening|night)|gm|gn|bye|goodbye|see ya|cya|lol|haha)[\\s!.…]*$',
   'i',
 );
 
-/** Greetings/acknowledgements don't warrant an outcome-classification LLM
- *  call — there is nothing to accept or correct. A turn is trivial when it
- *  ran no tools AND the user message is a stock pleasantry (or too short to
- *  be a real request). */
+/** A turn is trivial when it ran no tools and the user message is a stock
+ *  pleasantry or too short to be a real request. */
 export function isTrivialTurn(turn: Pick<CompletedTurn, 'userMessage' | 'toolCalls'>): boolean {
   if (turn.toolCalls.length > 0) return false;
   const msg = turn.userMessage.trim();
@@ -122,60 +94,28 @@ export function isTrivialTurn(turn: Pick<CompletedTurn, 'userMessage' | 'toolCal
   return msg.length < 12 && !msg.includes('?');
 }
 
-// ── The execution-grounded verdict (no LLM, no user) ─────────────
-
-/** Calls that only READ state. They prove nothing about whether the turn's
- *  work landed, so a turn made of them alone has no execution verdict — and a
- *  pattern extracted from them encodes nothing reusable, which is why the
- *  extractor skips them too. One definition, both readers.
- *
- *  Turn records carry `fact` as well as `memory` for the same read, and a
- *  recall under either name must score the same, so both are recognised. */
+/** Read-only calls prove nothing about whether the turn's work landed; the
+ *  pattern extractor skips them too. `fact` and `memory` name the same recall. */
 export function isPureLookupCall(call: Pick<ToolCallRecord, 'name' | 'args'>): boolean {
   if (call.name === 'memory') return call.args.action === 'search' || call.args.action === 'recall';
 
   return call.name === 'fact' && call.args.action === 'recall';
 }
 
-/** What the environment reported about a turn: it ran, or it did not. */
 export type ExecutionVerdict = 'succeeded' | 'failed';
 
 /**
- * The ENVIRONMENT's verdict on a turn — the only evidence available for the
- * turns no user will ever grade (a one-shot `kinu exec`, a reactor or job
- * wake). Deterministic: no model is asked, and nothing the model WROTE is read.
+ * The environment's verdict on a turn, for turns no user will grade (`kinu exec`,
+ * reactor or job wakes). Deterministic; nothing the model wrote is read.
  *
- * The evidence is the tool-execution record the turn already carries, read
- * SYMMETRICALLY: consulted only when it says "something broke", a headless
- * ledger could record that a turn went wrong and never that one went right, and
- * every downstream estimate (craft EMA and retirement, GEPA's split, the
- * archive's real-outcome priors) would inherit that pessimism.
- *
- *   • no non-lookup tool call → null. The turn never acted on the world, so
- *     the world returned no verdict, and an ungraded turn is recorded as
- *     ungraded rather than as a success.
- *   • the transport or the stream died (`hadError`) → 'failed'.
- *   • the turn's LAST acting call came back a failure → 'failed'.
+ *   • no non-lookup tool call → null (ungraded, not a success).
+ *   • `hadError` → 'failed'.
+ *   • the last acting call failed → 'failed'.
  *   • otherwise → 'succeeded'.
  *
- * Invocation outcomes are recorded before rendering. Neither command stdout nor
- * a program's returned JSON is evidence of success or failure. Historical calls
- * without this evidence stay unmeasured.
- *
- * The LAST acting call decides, not any of them, because an intermediate
- * failure the turn went on to fix is the system working: run the suite, see it
- * red, edit, run it green. Grading that turn `corrected` would punish a
- * successful repair, which is the same mistake in the opposite direction (and
- * the recovery clock in recovery.ts already reads a broken failure streak the
- * same way).
- *
- * It remains a PROXY, priced as one (EXECUTION_QUALITY) and sourced as one
- * (`source: 'execution'`): it says the agent's own actions against the world
- * completed, not that the task was solved the way the user wanted. Its worth is
- * that the model cannot write it — it is produced by the tools and the runtime,
- * so no amount of confident prose moves it. Where a task carries its own
- * verification command, running that command IS how ground truth enters this
- * record, which is the whole reason the last call has to be read honestly.
+ * The last call decides so a failure the turn went on to fix is not punished.
+ * Neither stdout nor returned JSON counts as evidence. It remains a proxy, priced
+ * by EXECUTION_QUALITY and sourced as `execution`.
  */
 export function executionVerdict(
   turn: Pick<CompletedTurn, 'hadError' | 'toolCalls'>,
@@ -192,45 +132,22 @@ export function executionVerdict(
   return last.outcome.success ? 'succeeded' : 'failed';
 }
 
-/** The ledger outcome an execution verdict records as. */
 export function executionVerdictOutcome(verdict: ExecutionVerdict): TurnOutcome {
   return verdict === 'succeeded' ? 'accepted' : 'corrected';
 }
 
 /**
- * Whether this graded turn may mint a REUSABLE PROCEDURE.
- *
- * Promotion needs a grade, not a green light from the runtime. An execution
- * verdict says the turn's last acting call completed, and a file that read
- * cleanly and a command that exits zero with the wrong answer both report
- * `succeeded` — while extraction publishes a crafted tool whose EMA then
- * decides what later turns are offered. So a proxy may price the turn and feed
- * its own health band, and it may not teach the workspace a workflow.
- *
- * CATEGORICAL WHERE NOBODY GRADES, and stated rather than softened. The
- * classifier runs only on a follow-up, and `explicit`/`take_pick` are user
- * acts, so a headless turn — `kinu exec`, a reactor, a job wake — has exactly
- * one available source and it is this one. Discovery there is therefore OFF,
- * not merely rarer, and it stays off until a source exists that grades the
- * WORK: no member of {@link TURN_OUTCOME_SOURCES} does today. Minting a
- * workflow from "it ran" is the failure this prevents, and an absent lesson
- * costs less than a confident wrong one.
- *
- * Execution stays symmetric everywhere it is honest: the ledger row, the
- * quality band and the negative reflection all still read it. The source test
- * is {@link isUserVerdictSource} — the same question the effective-verdict
- * precedence asks — rather than a second spelling of it here.
+ * Whether this graded turn may mint a reusable procedure. Only a user-verdict source
+ * qualifies: "it ran" does not grade the work, so headless turns never mint one.
+ * Execution verdicts still feed the ledger, quality band and negative reflection.
  */
 export function promotesProcedure(graded: {
   readonly outcome: TurnOutcome | null;
   readonly source: TurnOutcomeSource;
-  /** How many tool calls the turn made. Nothing to generalise from zero. */
   readonly toolCalls: number;
 }): boolean {
   return graded.outcome === 'accepted' && isUserVerdictSource(graded.source) && graded.toolCalls > 0;
 }
-
-// ── The classifier (one cheap LLM call per non-trivial turn) ─────
 
 export interface OutcomeClassification {
   outcome: Exclude<TurnOutcome, 'abandoned'>;
@@ -245,21 +162,9 @@ const OutcomeClassificationSchema = v.object({
 });
 
 /**
- * The classifier's prompt.
- *
- * Each outcome definition carries a one-line worked example, and the terse-reply
- * block under them teaches the boundary this verdict is actually wrong on: a flat
- * "no" and an exasperated "again?!" are the same length and are different rows in
- * the ledger. Everything downstream counts these judgements rather than what
- * happened — "if the classifier misses a third of the corrections, all of those
- * numbers are wrong by an unknown amount in an unknown direction"
- * (docs/EVOLUTION.md) — so the boundary is shown by contrast instead of left to be
- * inferred from three one-line definitions by a model that reads them literally.
- *
- * `confidence` is named as the home for a follow-up that settles nothing. Without
- * that, a model asked for one of three labels answers with one of three labels,
- * and the calibration profile (calibration.ts) measures a rater that never admits
- * doubt — which is the one thing its estimator cannot correct for.
+ * The classifier's prompt. Worked examples and the terse-reply block teach the
+ * boundary this verdict is wrong on. `confidence` is the home for a follow-up that
+ * settles nothing; a rater that never admits doubt is uncorrectable by calibration.ts.
  */
 export function buildOutcomeClassifierPrompt(input: {
   userMessage: string;
@@ -296,12 +201,8 @@ export function buildOutcomeClassifierPrompt(input: {
   );
 }
 
-/** Classify turn N's outcome from the user's follow-up — one small LLM call.
- *
- *  Returns null for exactly one thing: model output with no usable JSON verdict
- *  in it. A transport failure is NOT that and propagates — "the model answered
- *  something we cannot read" and "we never reached the model" are different
- *  facts, and the caller records the first as a deliberately ungraded turn. */
+/** Returns null only for model output with no usable JSON verdict, which the
+ *  caller records as ungraded. Transport failures propagate. */
 export async function classifyTurnOutcome(
   llm: LLM,
   input: { userMessage: string; assistantResponse: string; followup: string },
@@ -325,8 +226,6 @@ export async function classifyTurnOutcome(
   };
 }
 
-// ── The durable outcome ledger ───────────────────────────────────
-
 const TURN_OUTCOMES_DDL = `(
     actor_id TEXT NOT NULL,
     id TEXT NOT NULL,
@@ -346,15 +245,10 @@ const TURN_OUTCOMES_DDL = `(
 
 export function initTurnOutcomeTables(execRaw: RawSqlExec): void {
   execRaw(`CREATE TABLE IF NOT EXISTS turn_outcomes ${TURN_OUTCOMES_DDL}`);
-  // Lessons ledger — reflection prose with provenance. Self-scored lessons
-  // (no real user signal behind them) stay 'provisional' and OUT of the
-  // derived view until a real negative outcome on one of their turns
-  // corroborates them (the audit's net-negative-lessons fix).
-  // The generated pattern, held between the model call that produced it and the
-  // crafted tool it becomes. Same shape and same reason as `sleep_time_updates`:
-  // the answer is expensive and the application is not atomic with it, so a
-  // replay applies what was DECIDED rather than asking a model that may decide
-  // differently. Retired as soon as its tombstone lands.
+  // Self-scored lessons stay 'provisional' and out of the derived view until a real
+  // negative outcome on one of their turns corroborates them.
+  // The generated pattern, held so a replay applies what was decided rather than
+  // re-asking a model. Retired once its tombstone lands.
   execRaw(`CREATE TABLE IF NOT EXISTS pattern_extractions (
     actor_id   TEXT NOT NULL,
     effect_key TEXT NOT NULL,
@@ -363,10 +257,7 @@ export function initTurnOutcomeTables(execRaw: RawSqlExec): void {
     PRIMARY KEY (actor_id, effect_key)
   )`);
   execRaw(`CREATE TABLE IF NOT EXISTS lessons ${LESSONS_DDL}`);
-  // Gold labels — turns a HUMAN judged directly, the calibration set that
-  // measures how far the classifier's verdicts are from the truth
-  // (calibration.ts). Append-only: a re-label inserts a new row and the newest
-  // wins, so nothing a human spent attention on is overwritten in place.
+  // Gold labels from a human (calibration.ts). Append-only; the newest label wins.
   execRaw(`CREATE TABLE IF NOT EXISTS outcome_labels (
     actor_id TEXT NOT NULL,
     id TEXT NOT NULL,
@@ -376,10 +267,8 @@ export function initTurnOutcomeTables(execRaw: RawSqlExec): void {
     created_at INTEGER NOT NULL,
     PRIMARY KEY (actor_id, id)
   )`);
-  // The same verdicts from LLM judges instead of the human — one row per model
-  // per turn (evolution/ensemble.ts). Kept beside the gold labels rather than
-  // in them so a model's opinion can never be counted as ground truth by a
-  // query that forgot to filter; append-only for the same reason as above.
+  // LLM judge verdicts (ensemble.ts), kept apart from gold labels so a model's
+  // opinion can never be counted as ground truth.
   execRaw(`CREATE TABLE IF NOT EXISTS outcome_ensemble_labels (
     actor_id TEXT NOT NULL,
     id TEXT NOT NULL,
@@ -389,9 +278,7 @@ export function initTurnOutcomeTables(execRaw: RawSqlExec): void {
     created_at INTEGER NOT NULL,
     PRIMARY KEY (actor_id, id)
   )`);
-  // Every read here is one actor's, and the effective-verdict window partitions
-  // by turn before it orders — so the owner leads each index, or the window
-  // scans every sibling's ledger to find this actor's rows.
+  // The effective-verdict window partitions by turn per actor, so the owner leads each index.
   execRaw(`CREATE INDEX IF NOT EXISTS idx_turn_outcomes_actor
              ON turn_outcomes(actor_id, created_at DESC, id DESC)`);
   execRaw(`CREATE INDEX IF NOT EXISTS idx_turn_outcomes_actor_turn
@@ -412,7 +299,6 @@ export interface OutcomeLabelRow {
   createdAt: number;
 }
 
-/** Append a labeling pass. Returns how many rows were written. */
 export function recordOutcomeLabels(sql: SqlExecutor, actor: ActorHandle, input: {
   labeler: string;
   labels: ReadonlyArray<{ outcomeId: string; label: OutcomeLabel }>;
@@ -440,9 +326,8 @@ function toOutcomeLabelRow(r: RawOutcomeLabelRow): OutcomeLabelRow {
   };
 }
 
-/** Every stored label, newest first. Unbounded when `limit` is omitted: the
- *  gold set is the whole basis of every corrected number, and a window that
- *  silently dropped the oldest labels would drop the turns they speak for. */
+/** Unbounded when `limit` is omitted: the gold set is the basis of every
+ *  corrected number. */
 export function listOutcomeLabels(sql: SqlExecutor, actor: ActorHandle, limit?: number): OutcomeLabelRow[] {
   actor.assertCurrent();
 
@@ -456,8 +341,7 @@ export function listOutcomeLabels(sql: SqlExecutor, actor: ActorHandle, limit?: 
   return rows.map(toOutcomeLabelRow);
 }
 
-/** The label that counts for each turn: the most recent one. Append-only
- *  storage makes a correction a new row, so "newest wins" is the whole read. */
+/** The label that counts for each turn: the most recent one. */
 export function goldLabels(sql: SqlExecutor, actor: ActorHandle): Map<string, OutcomeLabelRow> {
   const latest = new Map<string, OutcomeLabelRow>();
 
@@ -477,7 +361,6 @@ export interface EnsembleLabelRow {
   createdAt: number;
 }
 
-/** Append one model's pass over a set of turns. */
 export function recordEnsembleLabels(sql: SqlExecutor, actor: ActorHandle, input: {
   model: string;
   labels: ReadonlyArray<{ outcomeId: string; label: OutcomeLabel }>;
@@ -494,8 +377,7 @@ export function recordEnsembleLabels(sql: SqlExecutor, actor: ActorHandle, input
   return input.labels.length;
 }
 
-/** The verdict that counts for each (turn, model): the most recent one. Same
- *  "append-only, newest wins" read as `goldLabels`. */
+/** The verdict that counts for each (turn, model): the most recent one. */
 export function ensembleLabels(sql: SqlExecutor, actor: ActorHandle): EnsembleLabelRow[] {
   actor.assertCurrent();
 
@@ -532,17 +414,9 @@ export interface RecordTurnOutcomeInput {
   now?: number;
 }
 
-/** Record one observation of a turn's outcome. APPEND-ONLY: a second verdict
- *  on the same turn inserts another row and never touches prior ones, because
- *  each observation is evidence calibration labels address by id — deleting or
- *  rewriting the classifier's row orphaned every human/ensemble label spent on
- *  it and erased exactly the data calibration exists to measure.
- *
- *  Readers never see both rows as verdicts: `listTurnOutcomes` (and everything
- *  built on it) resolves one EFFECTIVE outcome per turn by source precedence.
- *  Texts are windowed to keep rows bounded — and this is the ceiling for
- *  everything downstream, since the GEPA eval instances and the replay judge
- *  both read these rows and can never see more than was stored. */
+/** Append-only: calibration labels address observations by id, so rows are never
+ *  rewritten. Readers resolve one effective outcome per turn by source precedence.
+ *  Texts are windowed; downstream GEPA and replay can never see more than stored. */
 export function recordTurnOutcome(
   sql: SqlExecutor, actor: ActorHandle, input: RecordTurnOutcomeInput,
 ): string {
@@ -579,31 +453,10 @@ function toOutcomeRow(r: RawOutcomeRow): TurnOutcomeRow {
   };
 }
 
-/** Recorded outcomes resolved to ONE EFFECTIVE verdict per turn, newest first,
- *  optionally filtered by outcome kinds.
- *
- *  The ledger is append-only (every observation stays, because calibration
- *  labels address rows by id), so a raw read would show both a classifier's
- *  guess and the explicit thumb that later overruled it — double-counting the
- *  turn in every rate and split downstream. This read picks, per identified
- *  turn, the observation that wins {@link TURN_OUTCOME_SOURCE_PRECEDENCE},
- *  recency breaking ties within a source. Unidentified observations (no
- *  `turn_id` — possible only for turns that predate ids) each stand alone.
- *
- *  The filter is applied to the EFFECTIVE verdicts, so `limit` bounds the rows
- *  actually wanted without silently dropping the rare outcomes
- *  (`corrected`/`frustrated` — the only ones the optimizer learns from).
- *
- *  A NEGATIVE `limit` is unbounded — the same sentinel
- *  `selectEffectiveTurnOutcomes` already speaks internally. A caller that must
- *  filter the rows itself before cutting them (evolution debt excludes the turns
- *  a refinement already took) cannot use a window: the rows it wants may sit
- *  behind any number of rows it does not.
- *
- *  `turnIds` narrows to a NAMED trajectory rather than a window: a refinement
- *  reviews the turns its request captured, which may be older than any limit
- *  would reach. Filtered here on the effective verdicts, exactly as
- *  `hasNegativeOutcome` does, so the precedence rule stays in one place. */
+/** One effective verdict per turn, newest first, by
+ *  {@link TURN_OUTCOME_SOURCE_PRECEDENCE} with recency breaking ties. Turns without
+ *  `turn_id` each stand alone. The filter applies to effective verdicts before
+ *  `limit`; a negative `limit` is unbounded. `turnIds` narrows to a named trajectory. */
 export function listTurnOutcomes(
   sql: SqlExecutor,
   actor: ActorHandle,
@@ -625,13 +478,9 @@ export function listTurnOutcomes(
     .slice(0, opts.limit ?? wanted.size);
 }
 
-/** One effective-verdict read over the append-only ledger, shared by every
- *  operational consumer (rates, splits, gates). The CASE ranks sources by
- *  {@link TURN_OUTCOME_SOURCE_PRECEDENCE}, bound member by member because the
- *  tagged-template executor binds values, never SQL text. A fixed four-slot IN
- *  list expresses every outcome filter with the same fixed-arity binding;
- *  unused slots bind '' — a value the CHECK constraint forbids, so it matches
- *  nothing. */
+/** Sources are bound member by member because the tagged-template executor binds
+ *  values, never SQL text. Unused IN slots bind '', which the CHECK constraint
+ *  forbids, so they match nothing. */
 function selectEffectiveTurnOutcomes(
   sql: SqlExecutor,
   actor: ActorHandle,
@@ -665,8 +514,7 @@ function selectEffectiveTurnOutcomes(
   return ranked.map(toOutcomeRow);
 }
 
-/** The outcome an Alternate Takes pick already recorded for this turn, if
- *  any — the follow-up classifier must not overwrite that explicit signal. */
+/** The follow-up classifier must not overwrite an Alternate Takes pick. */
 export function takePickOutcome(
   sql: SqlExecutor, actor: ActorHandle, turnId: string | null | undefined,
 ): TurnOutcome | null {
@@ -681,16 +529,9 @@ export function takePickOutcome(
 }
 
 /**
- * The verdict a turn's review already RECORDED, for a retry resuming its
- * suffix.
- *
- * A review is a chain of governed model calls, so a retry after a refusal
- * re-classifies — and a classifier that answers differently the second time
- * would run corroboration, import settlement, reflection and pattern extraction
- * against a verdict the ledger does not hold. The recorded row is the verdict.
- * Ranked by the same {@link TURN_OUTCOME_SOURCE_PRECEDENCE} as
- * `selectEffectiveTurnOutcomes`, so this reads the answer the rest of the
- * system reads.
+ * The verdict a turn's review already recorded, so a retry does not re-classify
+ * and act on a verdict the ledger does not hold. Same precedence as
+ * `selectEffectiveTurnOutcomes`.
  */
 export function recordedTurnVerdict(
   sql: SqlExecutor, actor: ActorHandle, turnId: string | null | undefined,
@@ -710,10 +551,8 @@ export function recordedTurnVerdict(
   return rows[0] ?? null;
 }
 
-/** True when any of the given turn ids has an EFFECTIVE corrected/frustrated
- *  outcome — the session-reflection gate's real-signal check. Effective, not
- *  raw: an old classifier `corrected` that a later explicit thumb overruled
- *  must not keep a turn flagged negative forever. */
+/** Effective, not raw: a classifier `corrected` overruled by an explicit thumb
+ *  must not keep a turn flagged negative. */
 export function hasNegativeOutcome(
   sql: SqlExecutor, actor: ActorHandle, turnIds: ReadonlyArray<string>,
 ): boolean {
@@ -724,18 +563,13 @@ export function hasNegativeOutcome(
     .some((r) => r.turnId !== null && wanted.has(r.turnId));
 }
 
-// ── Real-outcome scaffold rates (route into R2's archive priors) ─
-
 export interface RealOutcomeRate {
   accepted: number;
   negative: number;
 }
 
-/** Per-scaffold-version real-outcome record: how turns SERVED by each version
- *  actually landed with the user. The component R2's shadow win-rates lack.
- *  Counts EFFECTIVE verdicts only — one observation per turn, so a turn the
- *  user explicitly accepted after a classifier `corrected` is counted once,
- *  on their word. */
+/** How turns served by each scaffold version landed with the user, counting
+ *  effective verdicts only. */
 export function realOutcomeScaffoldRates(
   sql: SqlExecutor, actor: ActorHandle,
 ): Map<number, RealOutcomeRate> {
@@ -753,11 +587,8 @@ export function realOutcomeScaffoldRates(
   return rates;
 }
 
-/** Blend real user outcomes into the archive's shadow-eval win-rates for
- *  branch-base selection: wins/decisive pools with accepted/(accepted+negative),
- *  and real exposure counts toward trials (damping the novelty bonus for
- *  well-exercised versions). Pure — consumes R2's archive API, returns new
- *  entries, never mutates. */
+/** Blends real outcomes into archive win-rates and trials for branch-base
+ *  selection. Pure; never mutates. */
 export function blendRealOutcomeRates(
   archive: ReadonlyArray<ScaffoldArchiveEntry>,
   rates: ReadonlyMap<number, RealOutcomeRate>,
@@ -777,38 +608,22 @@ export function blendRealOutcomeRates(
   });
 }
 
-// ── GEPA train/val split (upstream gepa-ai/gepa eval discipline) ─
-
-/** What the outcome-aware GEPA metric judges a candidate against. */
 export interface OutcomeEvalExpectation {
   outcome: TurnOutcome;
-  /** The response the user saw — the regression reference for accepted turns. */
   recordedResponse: string;
-  /** The complaint the candidate must already address: the user's follow-up on a
-   *  ledger-drawn negative, the advisor's note on an advisor-drawn one. */
+  /** The user's follow-up on a ledger-drawn negative, the advisor's note on an
+     *  advisor-drawn one. */
   followup: string | null;
-  /** WHO complained, so the scoring prompt can say it truthfully.
-   *
-   *  The ledger's own `source` column already separates who graded a turn from
-   *  what the verdict was; this is that distinction on the eval side. A metric
-   *  that told a judge "the user had to correct it" about a turn no user ever saw
-   *  would be teaching the judge a fact the record does not hold. */
+  /** Who complained, so the scoring prompt does not tell a judge a user corrected a
+     *  turn no user saw. */
   critic: 'user' | 'advisor';
 }
 
 export type OutcomeEvalInstance = EvalInstance<string, OutcomeEvalExpectation>;
 
 /**
- * How a scoring prompt names a negative instance's complaint.
- *
- * One table for every scorer. The scaffold metric scores a fresh rollout, the
- * replay judge scores a fresh response, and the section metric scores a
- * counterfactual about wording. They differ in what they ask and not in who
- * said the turn went wrong, and two copies of that sentence is one copy that
- * eventually says something else.
- *
- * The `user` wording is the sentence the prompts already carried, to the byte:
- * a ledger-drawn instance scores exactly as it did before advisor notes existed.
+ * How every scorer names a negative instance's complaint. The `user` wording is the
+ * sentence the prompts carried before advisor notes existed, byte for byte.
  */
 export const CRITIC_PROSE = {
   user: { verdict: 'the user had to correct it', complaint: "User's correction" },
@@ -821,28 +636,21 @@ export const CRITIC_PROSE = {
 >;
 
 /**
- * The 1.0 / 0.0 sentence a scorer states for each kind of recorded outcome.
- *
- * Each scorer names its own subject here (a fresh response, a candidate
- * wording). Everything else in the criterion, the critic's framing and the
- * windowed evidence, comes from {@link renderOutcomeCriterion}, so three prompts
- * cannot drift on what the record holds.
+ * The 1.0 / 0.0 sentence a scorer states for each recorded outcome. The rest of
+ * the criterion comes from {@link renderOutcomeCriterion}.
  */
 export interface OutcomeScoringRule {
   readonly accepted: string;
   readonly failed: string;
 }
 
-/** The rule for a scorer that compares a FRESH response with the recorded
- *  one: the scaffold metric's rollout and the replay judge's re-run. */
+/** For scorers comparing a fresh response with the recorded one. */
 export const FRESH_RESPONSE_RULE: OutcomeScoringRule = {
   accepted: 'Score 1.0 when the new response is at least as good, 0.0 when it regresses.',
   failed: 'Score 1.0 when the new response already addresses the correction, 0.0 when it '
     + 'repeats the failure.',
 };
 
-/** The criterion block of a scoring prompt: what the record says about the
- *  turn, who said it, and the windowed evidence behind it. */
 export function renderOutcomeCriterion(
   expected: OutcomeEvalExpectation | undefined,
   rule: OutcomeScoringRule,
@@ -859,18 +667,13 @@ export function renderOutcomeCriterion(
     + `${critic.complaint}:\n${evidenceWindow(expected?.followup ?? '(not recorded)', EVIDENCE_BUDGETS.replayCorrection)}`;
 }
 
-/** Why a split cannot support an out-of-sample winner selection. */
 export type OutcomeSplitDegeneracy =
-  /** Nothing is graded yet — there is nothing to optimize or to score on. */
   | 'no_labeled_turns'
-  /** Only accepted turns exist: no failure to fix, so `train` is empty and a
-   *  run would select on regression guards alone. */
+  /** Only accepted turns exist, so `train` is empty. */
   | 'no_negatives'
-  /** Exactly one failure exists: it has to be trained on, so nothing unseen
-   *  remains to score improvement against. */
+  /** The single failure must be trained on, leaving nothing unseen to score. */
   | 'no_held_out_negatives';
 
-/** One honest sentence per degeneracy — what it costs the selection. */
 export function describeSplitDegeneracy(degeneracy: OutcomeSplitDegeneracy): string {
   switch (degeneracy) {
     case 'no_labeled_turns':
@@ -884,39 +687,19 @@ export function describeSplitDegeneracy(degeneracy: OutcomeSplitDegeneracy): str
 }
 
 export interface OutcomeEvalSplit {
-  /** Reflection minibatch source — the corrected/frustrated turns the
-   *  optimizer must fix. Shares no instance with `val`. */
+  /** Corrected/frustrated turns the optimizer must fix. Shares no instance with `val`. */
   train: OutcomeEvalInstance[];
-  /** Scoring set (Pareto/winner selection): failures HELD OUT of `train`
-   *  PLUS the accepted turns the optimizer must not regress. */
+  /** Failures held out of `train` plus accepted turns the optimizer must not regress. */
   val: OutcomeEvalInstance[];
-  /** Failures in `val` the optimizer never trained on. Selection is only
-   *  evidence of improvement when this is > 0. */
+  /** Selection is evidence of improvement only when this is > 0. */
   heldOutNegatives: number;
-  /** null when the split supports an out-of-sample selection; otherwise why
-   *  it does not — the caller must not read the winner as trustworthy. */
+  /** Non-null means the caller must not trust the winner. */
   degeneracy: OutcomeSplitDegeneracy | null;
 }
 
-// ── Lessons ledger (provisional → corroborated) ──────────────────
-
-/** Where a lesson came from, in the ledger's canonical order — the one list
- *  the table's CHECK constraint derives from:
- *    turn_reflection     — the one-sentence reflection on a turn that went
- *                          wrong (engine.reviewTurn).
- *    session_reflection  — the window-close reflection over recent lessons.
- *    execution_recovery  — the step clock's machine observation: a failure
- *                          streak broken by a changed call that ran clean
- *                          (evolution/recovery.ts). Bound to no turn, so the
- *                          corroboration gate structurally never admits it.
- *    import              — an experience imported from another workspace,
- *                          adopted only on this workspace's own accepted-turn
- *                          verdict; born corroborated on that evidence.
- *
- *  Corroboration lives ONLY in the row's status. Nothing is ever copied into
- *  MEMORY.md, and every reader that wants recent lessons reads them here
- *  (`renderRecentLessons`, `listLessons`) — so a workspace reset
- *  can never hide a lesson its corroborated row still holds. */
+/** Lesson sources in canonical order; the table's CHECK constraint derives from
+ *  this list. `execution_recovery` is bound to no turn, so it is never corroborated;
+ *  `import` is born corroborated. Corroboration lives only in the row's status. */
 export const LESSON_SOURCES = [
   'turn_reflection', 'session_reflection', 'execution_recovery', 'import',
 ] as const;
@@ -925,9 +708,8 @@ export type LessonSource = (typeof LESSON_SOURCES)[number];
 
 export type LessonStatus = 'provisional' | 'corroborated';
 
-/** The lessons DDL, with its CHECK derived from the source list — referenced
- *  by `initTurnOutcomeTables` (declared above; function bodies evaluate after
- *  module init, so the order is safe). */
+/** Referenced by `initTurnOutcomeTables` above; function bodies evaluate after
+ *  module init. */
 const LESSONS_DDL = `(
     actor_id TEXT NOT NULL,
     id TEXT NOT NULL,
@@ -957,14 +739,9 @@ export function recordLesson(sql: SqlExecutor, actor: ActorHandle, input: {
   status: LessonStatus;
   now?: number;
   /**
-   * The STABLE identity of the work that produced this lesson, for a caller that
-   * owes it once.
-   *
-   * A fresh id makes every retry a new row: a reflection whose tombstone had not
-   * landed, or an import promoted twice across an interruption, each appended a
-   * second copy that later prompts then wove in. Keyed, the retry writes the row
-   * it already wrote. Absent for a caller with nothing to replay it.
-   */
+     * Stable identity of the producing work, so a retry rewrites the same row
+     * instead of appending a duplicate.
+     */
   key?: string;
 }): string {
   actor.assertCurrent();
@@ -984,10 +761,7 @@ interface RawLessonRow {
 }
 
 function toLessonRow(r: RawLessonRow): LessonRow {
-  // turn_ids is written by recordLesson as JSON.stringify(string[]), so a row
-  // that does not parse is corruption — not a lesson tied to no turn. Reading
-  // it as untied left it permanently un-corroboratable, which is the one thing
-  // that keeps a lesson out of MEMORY.md forever.
+  // A row that does not parse is corruption, not a lesson tied to no turn.
   const turnIds = v.parse(v.array(v.string()), parseJsonValue(r.turn_ids));
 
   return {
@@ -1014,7 +788,6 @@ export function listLessons(
   return rows.map(toLessonRow);
 }
 
-/** One lesson by id, or null. */
 export function getLesson(sql: SqlExecutor, actor: ActorHandle, id: string): LessonRow | null {
   actor.assertCurrent();
 
@@ -1024,20 +797,14 @@ export function getLesson(sql: SqlExecutor, actor: ActorHandle, id: string): Les
   return rows[0] ? toLessonRow(rows[0]) : null;
 }
 
-/**
- * The newest corroborated lessons as one prose block — what a turn's dynamic
- * context weaves in place of the MEMORY.md copies this module stopped writing.
- * Derived from the ledger, so it is exactly what corroboration admits, no more.
- */
+/** The newest corroborated lessons as one prose block for a turn's dynamic context. */
 export function renderRecentLessons(sql: SqlExecutor, actor: ActorHandle, limit = 5): string {
   return listLessons(sql, actor, { status: 'corroborated', limit })
     .map((lesson) => lesson.text)
     .join('\n');
 }
 
-/** A real negative outcome landed on `turnId`: flip every provisional lesson
- *  tied to that turn to corroborated. Corroboration is a row-status change
- *  only — nothing is appended to MEMORY.md; readers derive from these rows. */
+/** Flip every provisional lesson tied to `turnId` to corroborated. */
 export function corroborateLessonsForTurn(
   sql: SqlExecutor, actor: ActorHandle, turnId: string, now = nowMs(),
 ): LessonRow[] {

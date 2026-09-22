@@ -52,6 +52,7 @@ const proxiedCredentialsSchema = v.object({
   credentials: v.optional(v.array(v.object({
     key: v.string(),
     baseURL: v.optional(v.string()),
+    failure: v.optional(v.string()),
   })), []),
 });
 
@@ -397,6 +398,8 @@ export function createLocalModelResolver(opts: LocalModelResolverConfig): LocalM
       if (local) return local;
       const remote = (await proxied?.load())?.byKey.get(key);
 
+      if (remote?.failure !== undefined) throw new Error(remote.failure);
+
       return remote ? proxyAuthResolution(key, remote.baseURL) : null;
     },
     async hasCredential(key) {
@@ -408,8 +411,12 @@ export function createLocalModelResolver(opts: LocalModelResolverConfig): LocalM
       const remote = await proxied?.load();
 
       if (!remote) return false;
+      const listed = remote.byKey.get(key);
 
-      if (remote.byKey.has(key)) return true;
+      // Connected but unreadable is that provider's failure, never an absence.
+      if (listed?.failure !== undefined) throw new Error(listed.failure);
+
+      if (listed) return true;
 
       // Never listed successfully — "not connected" would be a guess, and a
       // provider reported unavailable for the wrong reason is worse than one
@@ -622,9 +629,10 @@ function createCloudModelMenu(cloud: LocalCloudSession, fetchImpl?: typeof fetch
 }
 
 /** The credentials the worker will front for this machine: keys only, plus the
- *  base URL for the ones whose endpoint is part of the credential. */
+ *  base URL for the ones whose endpoint is part of the credential, or the
+ *  failure for one the account holds and could not read. */
 interface ProxiedCredentials {
-  byKey: Map<string, { baseURL?: string }>;
+  byKey: Map<string, { baseURL?: string; failure?: string }>;
   /** Set only while no listing has ever succeeded — once one has, a later
    *  failure serves the last good answer instead of unlearning the account's
    *  providers over a transient network blip. */
@@ -690,11 +698,13 @@ function createProxyCredentialSource(
 
       if (!res.ok) throw new Error(`the Kinu provider proxy returned HTTP ${res.status}`);
       const body = v.parse(proxiedCredentialsSchema, await res.json());
-      const byKey = new Map<string, { baseURL?: string }>();
+      const byKey = new Map<string, { baseURL?: string; failure?: string }>();
 
-      for (const { key, baseURL } of body.credentials) {
+      for (const { key, baseURL, failure } of body.credentials) {
         if (!key) continue;
-        byKey.set(key, baseURL ? { baseURL } : {});
+
+        if (failure !== undefined) byKey.set(key, { failure });
+        else byKey.set(key, baseURL ? { baseURL } : {});
       }
 
       const value: ProxiedCredentials = { byKey, error: null };

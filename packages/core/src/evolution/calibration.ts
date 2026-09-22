@@ -1,38 +1,10 @@
 /**
- * The calibration set — how it is drawn, how it is put in front of a human,
- * how their verdicts come back, and what those verdicts buy.
+ * The calibration set: a stratified, blind, append-only sample of hand labels
+ * that ppi.ts turns into corrected classifier numbers.
  *
- * The turn-outcome classifier (outcomes.ts) labels every non-trivial turn, and
- * those labels gate craft retirement, scaffold promotion, GEPA train/val
- * splits and K_align. Until a human has checked a sample of them, the error
- * profile behind all of that is unmeasured — and an unmeasured judge is the
- * failure mode a self-evolving system is least able to notice, because it
- * grades its own homework with the same instrument it is trying to improve.
- *
- * This module closes that with ~100 hand labels. It draws them, presents them,
- * stores them, and hands them to ppi.ts, which turns them into corrected
- * numbers with honest intervals. Three design choices are load-bearing:
- *
- *  - **The draw is stratified on the classifier's verdict.** A uniform sample
- *    of a ledger that is ~85% "accepted" would spend ~85 of 100 labels
- *    confirming the easy case and leave the rare verdicts — the ones every
- *    downstream decision actually turns on — measured by a handful of rows.
- *
- *  - **The labeling file is BLIND.** It shows the turn, the answer and the
- *    user's follow-up, and never the classifier's verdict. Pre-filling the
- *    classifier's guess would make the file faster to fill in and would also
- *    destroy the measurement: the human would be anchored on the number under
- *    test, and sensitivity would come back flattered by exactly the amount
- *    that matters. Speed comes from the format instead — one keystroke per
- *    turn, verdict line first in each block.
- *
- *  - **Labels are append-only.** A re-label adds a row; the newest wins.
- *    Nothing that a human spent attention on is ever overwritten in place.
- *
- * The estimate is only valid if the draw is representative WITHIN each
- * stratum, so the draw is systematic over the ledger in time order: it spreads
- * evenly across the whole history rather than clustering in whichever era
- * happens to sort first.
+ * The draw is stratified on the classifier's verdict so rare verdicts get labels,
+ * and systematic in time order within each stratum. The labeling file never shows
+ * the classifier's verdict: showing it would anchor the human on the number under test.
  */
 
 import type { SqlExecutor } from '../types/primitives';
@@ -48,9 +20,7 @@ import {
   type PredictionStratum,
 } from './ppi';
 
-/** One keystroke per verdict — the whole labeling flow's speed budget. The
- *  file's key legend and its parser both read this list, so a key can never
- *  be offered without being accepted back. */
+/** The file's key legend and its parser both read this list. */
 const LABEL_KEYS: ReadonlyArray<readonly [string, OutcomeLabel]> = [
   ['a', 'accepted'],
   ['c', 'corrected'],
@@ -59,9 +29,7 @@ const LABEL_KEYS: ReadonlyArray<readonly [string, OutcomeLabel]> = [
   ['?', 'unclear'],
 ];
 
-/** What each verdict means, in the words a human deciding between them needs.
- *  The ensemble judges (ensemble.ts) are given these same sentences verbatim —
- *  two raters answering differently-worded questions would not be comparable. */
+/** ensemble.ts gives its judges these same sentences; differently-worded questions would not be comparable. */
 export const OUTCOME_LABEL_HELP = {
   accepted: 'the user moved on, or built on the answer',
   corrected: 'the user re-asked, fixed it, or contradicted it',
@@ -70,9 +38,6 @@ export const OUTCOME_LABEL_HELP = {
   unclear: 'you genuinely cannot tell from what is here',
 } satisfies Record<OutcomeLabel, string>;
 
-// ── The calibration universe ─────────────────────────────────────
-
-/** One row of the population the classifier's error profile is about. */
 export interface UniverseRow {
   id: string;
   predicted: TurnOutcome;
@@ -84,19 +49,9 @@ export interface UniverseRow {
 }
 
 /**
- * The turns a calibration set speaks for: those the CLASSIFIER graded.
- *
- * Rows sourced from explicit thumbs or an Alternate Takes pick are already
- * ground truth and have no error to measure; `session_end` abandonment is a
- * mechanical rule, not a judgement. Including any of them would dilute the
- * measured error profile toward zero and quietly overstate the classifier.
- *
- * Ordered by time so a systematic draw over this list is spread across the
- * agent's whole history.
- *
- * Exported because it is the ONE definition of that population: the sample, the
- * report and the ensemble check (ensemble.ts) must all speak for the same rows
- * or their numbers are about different things.
+ * The turns the classifier graded. Thumbs, Alternate Takes picks and `session_end`
+ * rows have no classifier error and would dilute the profile. Time-ordered.
+ * The one definition of the population for sample, report and ensemble.ts.
  */
 export function calibrationUniverse(sql: SqlExecutor, actor: ActorHandle): UniverseRow[] {
   actor.assertCurrent();
@@ -116,30 +71,16 @@ export function calibrationUniverse(sql: SqlExecutor, actor: ActorHandle): Unive
     }));
 }
 
-// ── Drawing the sample ───────────────────────────────────────────
-
-/** Labels to draw when the caller does not say. Enough for the classifier's
- *  error profile to be worth reading, few enough to hand-label in one sitting. */
 export const DEFAULT_LABEL_BUDGET = 100;
 
 /** Share of the budget spread evenly across verdicts before the rest goes
- *  proportional. Measured, not guessed: over 800 simulated calibration sets on
- *  a three-verdict ledger, a 50/50 split beat a fully even allocation by ~18%
- *  on RMSE and ~20% on interval width at the same 100 labels, while still
- *  giving the rarest verdict ~18 of them. Fully even starves the majority
- *  verdict, which carries most of the weight and therefore most of the
- *  variance; fully proportional leaves the rare verdicts with two or three
- *  labels and nothing to say about them. (`unit-calibration.test.ts` pins the
- *  properties, not the constant.) */
+ *  proportional. Fully even starves the majority verdict; fully proportional
+ *  leaves rare verdicts with two or three labels. */
 const EVEN_BUDGET_SHARE = 0.5;
 
 /**
- * Split a label budget across the verdicts the classifier used.
- *
- * Half spread evenly so every verdict is really measured, half proportional to
- * how much of the ledger each verdict covers so the majority one is not
- * starved. A verdict that cannot supply its quota gives the remainder back,
- * and it is redistributed to whichever verdicts still have rows left.
+ * Half the budget spread evenly across verdicts, half proportional to ledger share.
+ * A verdict that cannot fill its quota gives the remainder back for redistribution.
  */
 export function allocateLabelBudget(sizes: ReadonlyArray<number>, budget: number): number[] {
   const total = sizes.reduce((n, s) => n + s, 0);
@@ -148,9 +89,7 @@ export function allocateLabelBudget(sizes: ReadonlyArray<number>, budget: number
 
   const even = Math.floor((budget * EVEN_BUDGET_SHARE) / sizes.length);
   const proportional = budget - even * sizes.length;
-  // Largest remainder for the proportional half: rounding each share
-  // independently can overshoot the budget, and a quota nobody asked for is
-  // as wrong as one that goes missing.
+  // Largest remainder: rounding shares independently can overshoot the budget.
   const shares = sizes.map((size) => (proportional * size) / total);
   const quotas = shares.map((share) => even + Math.floor(share));
   let unassigned = proportional - shares.reduce((n, share) => n + Math.floor(share), 0);
@@ -167,7 +106,6 @@ export function allocateLabelBudget(sizes: ReadonlyArray<number>, budget: number
 
   for (let i = 0; i < quotas.length; i++) quotas[i] = Math.min(quotas[i], sizes[i]);
 
-  // Give away whatever the caps left over, until nobody has headroom.
   let spare = budget - quotas.reduce((n, q) => n + q, 0);
 
   while (spare > 0) {
@@ -186,10 +124,8 @@ export function allocateLabelBudget(sizes: ReadonlyArray<number>, budget: number
   return quotas;
 }
 
-/** One turn as it reaches a human: everything needed to judge it, nothing that
- *  would anchor the judgement. */
+/** Everything needed to judge the turn, nothing that would anchor the judgement. */
 export interface LabelingItem {
-  /** The `turn_outcomes` row this verdict is about. */
   outcomeId: string;
   userMessage: string;
   assistantResponse: string;
@@ -197,8 +133,6 @@ export interface LabelingItem {
   createdAt: number;
 }
 
-/** A ledger row as a rater sees it: everything needed to judge the turn,
- *  nothing that would anchor the judgement. */
 export function labelingItem(row: UniverseRow): LabelingItem {
   return {
     outcomeId: row.id,
@@ -209,14 +143,10 @@ export function labelingItem(row: UniverseRow): LabelingItem {
   };
 }
 
-/** Fixed so the same draw always renders in the same order — a re-export of
- *  an unchanged ledger is byte-identical, which makes a file easy to diff and
- *  a bug easy to reproduce. */
+/** Fixed so re-exporting an unchanged ledger is byte-identical. */
 const SHUFFLE_SEED = 1;
 
-/** Deterministic shuffle so the file's order carries no information about
- *  which stratum an item came from — a run of three "corrected" turns in a row
- *  would be a hint, and the file is meant to be blind. */
+/** Hides which stratum an item came from; the file is meant to be blind. */
 function shuffled<T>(items: ReadonlyArray<T>, seed: number): T[] {
   const out = [...items];
   const random = seededRandom(seed);
@@ -229,8 +159,7 @@ function shuffled<T>(items: ReadonlyArray<T>, seed: number): T[] {
   return out;
 }
 
-/** A systematic draw of `n` from a list already in time order: evenly spaced,
- *  so the sample spans the whole range instead of a corner of it. */
+/** Evenly spaced draw over a time-ordered list. */
 function spread<T>(rows: ReadonlyArray<T>, n: number): T[] {
   const take = Math.min(n, rows.length);
 
@@ -238,11 +167,8 @@ function spread<T>(rows: ReadonlyArray<T>, n: number): T[] {
 }
 
 /**
- * Draw the next calibration set: stratified across the classifier's verdicts,
- * spread across time within each verdict, and shuffled for presentation.
- *
- * Turns that already carry a gold label are excluded, so running this again
- * tops the set up rather than re-asking questions already answered.
+ * Draw the next calibration set. Turns already carrying a gold label are excluded,
+ * so a re-run tops the set up.
  */
 export function sampleForLabeling(
   sql: SqlExecutor, actor: ActorHandle, opts: { size?: number } = {},
@@ -272,11 +198,7 @@ export function sampleForLabeling(
   return shuffled(drawn, SHUFFLE_SEED).map(labelingItem);
 }
 
-// ── The labeling file ────────────────────────────────────────────
-
-/** How much of each field the file shows. The follow-up gets the most room
- *  because it is the evidence that decides the verdict; the answer only needs
- *  to be recognisable. Sized so ~100 turns is a 30–45 minute read. */
+/** Characters shown per field; the follow-up decides the verdict so it gets the most room. */
 const SHOWN = { user: 400, response: 500, followup: 700 } as const;
 
 function clip(text: string, limit: number): string {
@@ -290,11 +212,8 @@ const BLOCK_HEADER = /^###\s+\d+\s*\/\s*\d+\s+(\S+)\s*$/;
 const VERDICT_LINE = /^verdict:\s*(\S*)\s*$/;
 
 /**
- * The evidence one turn is judged from — and the ONLY thing any rater sees of
- * it. The human file and the ensemble judges (ensemble.ts) both render through
- * here, so the two cannot end up judging from different amounts of the turn,
- * and neither can be shown the classifier's verdict by accident: nothing in
- * this function has access to one.
+ * The only thing any rater sees of a turn. The human file and ensemble.ts both
+ * render here, and nothing here has access to the classifier's verdict.
  */
 export function renderLabelingEvidence(item: LabelingItem): string {
   return [
@@ -309,7 +228,6 @@ export function renderLabelingEvidence(item: LabelingItem): string {
   ].join('\n');
 }
 
-/** Render a drawn calibration set as the file a human fills in. */
 export function renderLabelingFile(items: ReadonlyArray<LabelingItem>): string {
   const lines = [
     `# Kinu outcome calibration — ${items.length} turn${items.length === 1 ? '' : 's'}`,
@@ -346,19 +264,14 @@ export function renderLabelingFile(items: ReadonlyArray<LabelingItem>): string {
 
 export interface ParsedLabelFile {
   labels: Array<{ outcomeId: string; label: OutcomeLabel }>;
-  /** Turns present in the file with no verdict written. */
   skipped: number;
-  /** Everything wrong with the file. A non-empty list must block the write. */
+  /** A non-empty list must block the write. */
   errors: string[];
 }
 
 /**
- * Read a filled-in labeling file. Purely syntactic — whether an id exists in
- * the ledger is the ingest's business, not the parser's.
- *
- * Every problem is collected rather than thrown on, so one typo in a file
- * representing half an hour of attention reports as one fixable line instead
- * of losing the pass.
+ * Purely syntactic; id existence is the ingest's business. Every problem is
+ * collected rather than thrown, so one typo does not lose the pass.
  */
 export function parseLabelingFile(text: string): ParsedLabelFile {
   const byKey = new Map<string, OutcomeLabel>(LABEL_KEYS.map(([key, label]) => [key, label]));
@@ -412,27 +325,15 @@ export function parseLabelingFile(text: string): ParsedLabelFile {
   return { labels, skipped: verdicts - labels.length, errors };
 }
 
-// ── Taking the verdicts back ─────────────────────────────────────
-
 export interface LabelIngestResult {
-  /** Verdicts written to the ledger. */
   stored: number;
-  /** Verdicts whose turn is not in the calibration universe — a turn since
-   *  removed, or an id from some other agent's file. Reported, not stored. */
+  /** Ids not in the calibration universe. Reported, not stored. */
   unknown: string[];
-  /** Of the stored verdicts, how many disagreed with the classifier. The one
-   *  number worth seeing the moment a labeling pass lands. */
+  /** Of the stored verdicts, how many disagreed with the classifier. */
   disagreements: number;
 }
 
-/**
- * Validate a parsed labeling pass against the ledger and store what belongs.
- *
- * Ids the ledger does not know are skipped rather than fatal: a turn can
- * legitimately have aged out between drawing a file and filling it in, and
- * losing an entire pass over one stale row would be the wrong trade for
- * something that costs a human half an hour.
- */
+/** Unknown ids are skipped rather than fatal: a turn can age out between drawing and filling in a file. */
 export function ingestOutcomeLabels(
   sql: SqlExecutor,
   actor: ActorHandle,
@@ -454,65 +355,44 @@ export function ingestOutcomeLabels(
   };
 }
 
-// ── The report ───────────────────────────────────────────────────
-
-/** One classifier verdict, what the ledger holds of it, and what the gold
- *  labels found it to really be. */
 export interface CalibrationStratum {
   predicted: TurnOutcome;
-  /** Classifier-graded ledger rows carrying this verdict. */
   population: number;
   /** Usable gold labels drawn from them (`unclear` excluded). */
   labeled: number;
-  /** How the labeler actually judged those, by outcome. */
   actual: Array<{ outcome: TurnOutcome; count: number }>;
 }
 
-/** The corrected correction rate for one scaffold version's turns. */
 export interface CalibratedSegment {
   scaffoldVersion: number | null;
   /** Classifier-graded turns this version served, and how many it called
-   *  corrected or frustrated. */
+     *  corrected or frustrated. */
   observed: { events: number; population: number };
-  /** Null when the ledger has no calibration behind it — see the report's gap. */
   rate: CorrectedRate | null;
 }
 
 export interface CalibrationReport {
-  /** Classifier-graded turns the profile speaks for. */
   universe: number;
-  /** Usable gold labels. */
   labeled: number;
-  /** Labels the human marked `unclear`; recorded, then excluded from every
-   *  number below. Excluding them assumes they are no more likely to be one
-   *  outcome than another, which is worth watching if the count grows. */
+  /** Recorded, then excluded from every number below, assuming unclear labels are not biased toward one outcome. */
   unclear: number;
-  /** Labels whose turn is no longer in the ledger, so they inform nothing. */
+  /** Labels whose turn is no longer in the ledger. */
   orphaned: number;
   labelers: string[];
   lastLabeledAt: number | null;
   strata: CalibrationStratum[];
-  /** The classifier's measured error profile, or null with the gap below. */
   accuracy: ClassifierAccuracy | null;
   kappa: KappaEstimate | null;
-  /** K_align's correction rate over the classifier-graded ledger, corrected. */
   overall: CorrectedRate | null;
-  /** The same, per scaffold version, oldest first. */
   segments: CalibratedSegment[];
   /** Null when everything above is populated; otherwise why it is not. */
   gap: CalibrationGap | null;
 }
 
 /**
- * Everything the gold labels establish about the classifier, and everything
- * they correct downstream.
- *
- * The per-version denominators here are the CLASSIFIER-graded turns of each
- * version — deliberately narrower than K_align's own denominator, which also
- * counts turns carrying explicit user verdicts. Those need no correcting, and
- * folding them in would mean applying an error profile to rows that have no
- * error. The two rates therefore answer slightly different questions and are
- * rendered side by side rather than one replacing the other.
+ * Per-version denominators are classifier-graded turns only, narrower than
+ * K_align's own denominator, which also counts explicit user verdicts that have
+ * no error to correct. Both rates are rendered side by side.
  */
 export function calibrationReport(sql: SqlExecutor, actor: ActorHandle): CalibrationReport {
   const universe = calibrationUniverse(sql, actor);
@@ -523,7 +403,6 @@ export function calibrationReport(sql: SqlExecutor, actor: ActorHandle): Calibra
   let orphaned = 0;
   const labelers = new Set<string>();
   let lastLabeledAt: number | null = null;
-  /** predicted verdict → the labeler's verdicts for it. */
   const judged = new Map<TurnOutcome, TurnOutcome[]>();
 
   for (const label of gold.values()) {
@@ -618,7 +497,6 @@ export function calibrationReport(sql: SqlExecutor, actor: ActorHandle): Calibra
   };
 }
 
-/** What the classifier reported per scaffold version, oldest first. */
 function segmentObservations(universe: ReadonlyArray<UniverseRow>): Array<Omit<CalibratedSegment, 'rate'>> {
   const byVersion = new Map<number | null, UniverseRow[]>();
 
@@ -641,7 +519,6 @@ function segmentObservations(universe: ReadonlyArray<UniverseRow>): Array<Omit<C
     .map(({ scaffoldVersion, observed }) => ({ scaffoldVersion, observed }));
 }
 
-/** Per 100 turns, the unit K_align is read in. */
 function per100(value: number): string {
   return (value * 100).toFixed(1);
 }
@@ -652,9 +529,7 @@ function renderRate(rate: CorrectedRate): string {
     ` — the classifier said ${per100(rate.raw)}, off by ${rate.bias >= 0 ? '+' : ''}${per100(rate.bias)}`;
 }
 
-/** The corrected block, printed wherever a corrected number would appear. When
- *  there are no labels it says so in one line and stops — the number is not
- *  approximated, defaulted, or quietly omitted. */
+/** With no labels, says so in one line: the number is never approximated or defaulted. */
 export function renderCalibrationReport(report: CalibrationReport): string {
   const lines = [
     'Judge calibration — the turn-outcome classifier, measured against hand labels',
@@ -678,8 +553,7 @@ export function renderCalibrationReport(report: CalibrationReport): string {
       (report.orphaned > 0 ? `, ${report.orphaned} orphaned` : '') +
       ` over ${report.universe} classifier-graded turns` +
       (report.labelers.length > 0 ? ` — by ${report.labelers.join(', ')}` : '') +
-      // Judge drift is a distinct hypothesis from judge bias: a profile
-      // measured against an older model says nothing about the current one.
+      // A profile measured against an older model says nothing about the current one.
       (report.lastLabeledAt === null ? '' : `, last on ${new Date(report.lastLabeledAt).toISOString().slice(0, 10)}`),
     `  Sensitivity: ${formatScoreInterval(report.accuracy.sensitivity)}` +
       `   Specificity: ${formatScoreInterval(report.accuracy.specificity)}`,

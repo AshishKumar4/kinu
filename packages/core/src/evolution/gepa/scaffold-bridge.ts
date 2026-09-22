@@ -1,21 +1,7 @@
 /**
- * GEPA → scaffold bridge.
- *
- * Glues the GEPA optimiser to the existing scaffold pipeline so a GEPA run
- * produces a real pending version. Flow:
- *
- *   1. Read current scaffold (or use caller-supplied seed).
- *   2. Run GEPA with scaffold-aware constraints (SCAFFOLD_REQUIRED_SIGNATURE +
- *      SCAFFOLD_FORBIDDEN_PATTERNS from scaffold/safety-patterns.ts, the same
- *      patterns modifyScaffold gates on).
- *   3. If `winner.source !== seed AND winner.aggregateScore > seed.aggregateScore`,
- *      hand off to `modifyScaffold` — the winner enters `scaffold_versions`
- *      with status='pending' and the existing shadow eval + promotion
- *      pipeline takes over.
- *
- * No behavioural promotion happens here — `applyPromotionDecision` is still
- * the only path that touches the live `scaffold/agent.js`. GEPA is a
- * proposal generator.
+ * GEPA → scaffold bridge: runs GEPA under the same safety patterns `modifyScaffold`
+ * gates on, and hands a strictly better winner to `modifyScaffold` as a pending
+ * version. `applyPromotionDecision` remains the only path to the live scaffold.
  */
 
 import type { AgentRuntime } from '../../types/agent-runtime';
@@ -29,49 +15,33 @@ import type {
   EvalInstance, GepaConfig, GepaMetric, GepaResult, ReflectionLM, GepaProgressHooks,
 } from './types';
 
-/** Maximum scaffold source size — keeps candidate explosion bounded.
- *  Aligned with Hermes-Self-Evolution's ≤15KB skill size cap (skills and
- *  scaffolds serve similar "loaded every turn" cost profiles). */
 const SCAFFOLD_MAX_BYTES = 15 * 1024;
 
 export interface RunScaffoldGepaOpts<I = unknown, E = unknown> extends GepaProgressHooks {
   rt: AgentRuntime;
   evalSet: ReadonlyArray<EvalInstance<I, E>>;
-  /** Reflection-minibatch source (the outcome-labeled negatives to fix).
-   *  Defaults to evalSet — see GepaConfig.trainSet. */
+  /** Reflection-minibatch source; defaults to evalSet. */
   trainSet?: ReadonlyArray<EvalInstance<I, E>>;
   metric: GepaMetric<I, E>;
   reflectionLm: ReflectionLM;
-  /** Defaults to the current scaffold's source. */
   seed?: string;
   budget?: GepaConfig<I, E>['budget'];
   parentSelection?: GepaConfig<I, E>['parentSelection'];
   random?: () => number;
-  /**
-   * If provided, override the rationale string passed to `modifyScaffold`.
-   * Default: `"GEPA-optimised scaffold (aggregate ${score})"`.
-   * Must be ≥ scaffold.minRationaleLength (50 chars) per modifyScaffold gate 1.
-   */
+  /** Must be ≥ scaffold.minRationaleLength (modifyScaffold gate 1). */
   rationale?: string;
 }
 
 export interface RunScaffoldGepaResult {
-  /** The raw GEPA output — winner + Pareto front + history. */
   gepa: GepaResult;
-  /** The winner's eval-set score with its 95% interval. Read the two
-   *  intervals against each other before believing the winner is better. */
+  /** Compare both intervals before believing the winner is better. */
   winnerScore: ScoreInterval;
-  /** The seed's eval-set score with its 95% interval. */
   seedScore: ScoreInterval;
-  /** Whether the winner was handed off to modifyScaffold. */
   proposed: boolean;
-  /** If proposed, the new scaffold version number; null otherwise. */
   pendingVersion: number | null;
-  /** Why we didn't propose (when applicable). */
   skipReason?:
     | 'winner_equals_seed'
     | 'modify_gate_rejected';
-  /** If modifyScaffold rejected, the gate + error. */
   modifyError?: { stage: number; error: string };
 }
 
@@ -103,17 +73,12 @@ export async function runScaffoldGepa<I = unknown, E = unknown>(
   const seedScore = scoreInterval([...(gepa.history[0]?.scores.values() ?? [])]);
   const scores = { winnerScore, seedScore };
 
-  // `bestAggregate` breaks ties by `createdAt` (older wins) and the seed is
-  // always the oldest, so any candidate strictly tied or below the seed's
-  // aggregate yields `winner === seed`. We only ever reach modifyScaffold
-  // when GEPA found a strictly-better candidate.
+  // Ties go to the older candidate and the seed is oldest, so reaching modifyScaffold means a strictly better aggregate.
   if (winner.source === seed) {
     return { gepa, ...scores, proposed: false, pendingVersion: null, skipReason: 'winner_equals_seed' };
   }
 
-  // The default rationale is always well over modifyScaffold's 50-char gate-1
-  // minimum, so no padding is needed. It carries the intervals so whoever
-  // reads the promotion decision later sees how thin the evidence was.
+  // Carries the intervals so the promotion reader sees how thin the evidence was.
   const rationale = opts.rationale ??
     `GEPA-optimised scaffold — aggregate ${formatScoreInterval(winnerScore, 3)} ` +
     `over ${gepa.history.length - 1} mutations (seed: ${formatScoreInterval(seedScore, 3)}).`;

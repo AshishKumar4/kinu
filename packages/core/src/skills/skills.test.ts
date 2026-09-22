@@ -1,29 +1,7 @@
 /**
- * Skills module — behavior tests through the public surface.
- *
- * Asserts the contract the orchestrator + prompt depend on:
- *   - SKILL.md round-trips through parse → stringify → parse.
- *   - Front-matter validation rejects what the LLM might accidentally generate.
- *   - Discovery has ONE total order, independent of readdir order, and holds no
- *     body: it yields headers plus where each body is and what it would cost.
- *   - Active-skill resolution orders explicit > keyword > always_active, with a
- *     name tiebreak inside each tier.
- *   - The admission spends the model-window allocation (stepContextLimit over
- *     the resolved window and its answer reserve), the index first and the
- *     bodies after, and whatever it cannot fit stays reachable.
- *   - The ambient index (renderSkillsIndexSection) and the active-set render
- *     (renderActiveSkillsSection) print what the admission decided; neither
- *     takes a budget of its own.
- *
- * No `skills` tool and no `skills.*` codemode namespace: read/create/edit/
- * delete are ordinary VFS operations, already reachable via
- * workspace.readFile/writeFile/readdir/exec inside eval — a
- * dedicated CRUD dispatcher would have been a second path to the same bytes.
- *
- * No mocking of internal helpers — uses an in-memory SkillsVfs that is the same
- * shape the workspace filesystem exposes, and which records what it was asked
- * for, so "no body was read" is an observation rather than a claim. Built-in
- * skills come from BUILTIN_SKILLS, not stubs.
+ * Skills behaviour through the public surface. There is no `skills` tool: CRUD is
+ * ordinary VFS operations. The in-memory SkillsVfs records every call, so "no body
+ * was read" is observed, not claimed.
  */
 
 import { describe, expect, test } from 'bun:test';
@@ -44,15 +22,10 @@ import { makeVfsError } from '../vfs/errno';
 import type { InstructionTrustResolver } from '../safety/instruction-trust';
 import { createRecordingLogger, setDiagnosticsSink } from '../obs/index';
 
-// ── In-memory SkillsVfs fixture ──────────────────────────────────
-
-/** Every path the VFS was asked for, in order. The `readFile` list is what
- *  proves a body was — or was not — fetched. */
+/** The `readFile` list proves whether a body was fetched. */
 interface VfsCalls { readFile: string[]; stat: string[]; readdir: string[] }
 
-/** `readdir` is a required FUNCTION FIELD here, not the optional method the
- *  port declares: this fixture always lists, and a test that swaps the lister
- *  out holds the one it replaced. */
+/** `readdir` is a required field so a test that swaps the lister holds the one it replaced. */
 interface MemoryVfs extends SkillsVfs { calls: VfsCalls; readdir: (path: string) => Promise<string[]> }
 
 function memoryVfs(
@@ -91,7 +64,7 @@ function memoryVfs(
 
       for (const k of files.keys()) {
         if (!k.startsWith(prefix)) continue;
-        // A nested path lists as its first segment — the folder — once.
+        // A nested path lists as its first segment once.
         const head = k.slice(prefix.length).split('/')[0];
 
         if (!out.includes(head)) out.push(head);
@@ -104,16 +77,14 @@ function memoryVfs(
   };
 }
 
-/** A window with room to spare. "Generous" here is a window, never a char count
- *  — there is no cap left to turn up. */
+/** A roomy window; there is no char cap to turn up. */
 const ROOMY_TOKENS = stepContextLimit({ contextWindow: 200_000, modelOutputLimit: 8_000 });
 
 function skillFile(name: string, body: string): string {
   return `---\nname: ${name}\ndescription: desc ${name}\n---\n${body}`;
 }
 
-/** A discovered skill: header plus where its body is. `chars` is what admitting
- *  that body would cost, which is all the admission needs to decide. */
+/** `chars` is what admitting the body would cost. */
 function fakeSkill(name: string, opts: Partial<ActiveSkill> = {}): DiscoveredSkill {
   const body = opts.body ?? 'body';
 
@@ -131,17 +102,12 @@ function fakeSkill(name: string, opts: Partial<ActiveSkill> = {}): DiscoveredSki
   };
 }
 
-/** The owner's answer for every body admitted below. These tests are about
- *  what the allocation pays for and what the system tier renders, so they stand
- *  on an approval rather than re-deciding one per call. */
+/** These tests stand on an approval rather than re-deciding one per call. */
 const APPROVED: InstructionTrustResolver = () => 'approved';
 
-/** An active skill whose body the admission paid for. */
 function activeSkill(name: string, opts: Partial<ActiveSkill> = {}): ActiveSkill {
   return { ...fakeSkill(name, opts), trust: 'approved', body: opts.body ?? 'body' };
 }
-
-// ── parser ───────────────────────────────────────────────────────
 
 describe('parseSkillFile', () => {
   test('parses a minimal valid SKILL.md', () => {
@@ -193,10 +159,8 @@ body
   });
 
   test('accepts the Agent Skills spec\'s space-separated `allowed-tools` string', () => {
-    // agentskills.io/specification's own example value: ONE scalar string of
-    // space-separated tools, not a YAML list. Treating the whole string as a
-    // single pattern (the bug this guards) produces a pattern that matches no
-    // real tool name, collapsing the restricted surface to nothing.
+    // agentskills.io example: one space-separated string, not a YAML list. Read as a
+    // single pattern it matches no tool, collapsing the surface to nothing.
     const r = parseSkillFile(`---
 name: a
 description: x
@@ -318,8 +282,7 @@ body
     expect(r.skill.auto_activate).toBe(false);
   });
 
-  // Stated or absent, `user-invocable` is one rule: only a real `false` closes
-  // the skill to `/skill-name`.
+  // Only a real `false` closes the skill to `/skill-name`.
   for (const c of [
     { name: 'parses user-invocable: false', frontmatter: 'name: ops-only\ndescription: x\nuser-invocable: false', invocable: false },
     { name: 'defaults user_invocable to true', frontmatter: 'name: normal\ndescription: x', invocable: true },
@@ -453,8 +416,6 @@ body
   });
 });
 
-// ── explicit invocations ─────────────────────────────────────────
-
 describe('extractExplicitInvocations', () => {
   test('finds /skill-name tokens at start of message', () => {
     expect(extractExplicitInvocations('/audit-implementation please')).toEqual(['audit-implementation']);
@@ -478,8 +439,6 @@ describe('extractExplicitInvocations', () => {
     expect(extractExplicitInvocations('no slashes here')).toEqual([]);
   });
 });
-
-// ── active resolution ────────────────────────────────────────────
 
 describe('resolveActiveSkills', () => {
   test('explicit invocation activates', () => {
@@ -627,8 +586,6 @@ describe('resolveActiveSkills', () => {
   });
 });
 
-// ── render + tool gating ─────────────────────────────────────────
-
 describe('renderActiveSkillsSection + tool gating', () => {
   test('returns empty string for empty active set', () => {
     expect(renderActiveSkillsSection({ active: [], reasons: [] }, 'system')).toBe('');
@@ -671,8 +628,7 @@ describe('renderActiveSkillsSection + tool gating', () => {
   test('a deferred body renders its header, its cost and a pointer — never half a workflow', () => {
     const deferred: ActiveSkill = {
       ...fakeSkill('giant', { bodyRef: { kind: 'file', path: `${SKILLS_DIR}/giant.md`, chars: 50_000 } }),
-      // The only trust an unread file body can have: there are no bytes to
-      // approve, so its pointer is reference material.
+      // An unread body has no bytes to approve, so its pointer is reference material.
       trust: 'unverified',
       body: null,
     };
@@ -735,8 +691,7 @@ describe('renderSkillsIndexSection', () => {
     }, ROOMY_TOKENS));
 
     expect(out).toContain('## Skills');
-    // File descriptions are agent-writable bytes. The system index names a
-    // validated filename but never embeds that prose before owner approval.
+    // Descriptions are agent-writable; the system index never embeds them before approval.
     expect(out).toContain('**alpha** (workspace skill; contents are reference material until the owner approves them)');
     expect(out).toContain('**zeta** (workspace skill; contents are reference material until the owner approves them)');
     expect(out.indexOf('alpha')).toBeLessThan(out.indexOf('zeta'));
@@ -761,15 +716,14 @@ describe('renderSkillsIndexSection', () => {
     const skills = Array.from({ length: 50 }, (_, i) =>
       fakeSkill(`skill-${String(i).padStart(2, '0')}`, { description: 'd'.repeat(150) }));
 
-    // A small window is the only way to squeeze the index now — there is no char
-    // cap left to turn down.
+    // A small window is the only way to squeeze the index.
     const index = admitSkillsIndex({ skills, unread: [], omitted: 0 },
       stepContextLimit({ contextWindow: 2_000, modelOutputLimit: 1_000 }));
 
     const out = renderSkillsIndexSection(index);
     expect(out).toMatch(/… and \d+ more skills? this turn's skills allocation did not reach/);
     expect(out).toContain(`workspace.readdir("${SKILLS_DIR}")`);
-    // At least one entry survives, and the omitted count is honest (not "0").
+    // At least one entry survives, and the omitted count is honest.
     const shown = (out.match(/^- \*\*/gm) ?? []).length;
     expect(shown).toBeGreaterThan(0);
     expect(shown).toBeLessThan(skills.length);
@@ -792,8 +746,6 @@ describe('unionAllowedTools', () => {
     expect(unionAllowedTools([a, b])).toEqual(['agents', 'memory', 'run']);
   });
 });
-
-// ── discover ─────────────────────────────────────────────────────
 
 describe('discoverSkills', () => {
   test('a shared Drive skill is discovered in folder form and the workspace wins a name clash', async () => {
@@ -845,7 +797,7 @@ describe('discoverSkills', () => {
     expect(names).toContain('audit-implementation');
 
     for (const b of BUILTIN_SKILLS) expect(names).toContain(b.name);
-    // A built-in body is already in memory, so nothing was read for it.
+    // A built-in body is already in memory.
     expect(v.calls.readFile).toEqual([]);
   });
 
@@ -973,10 +925,7 @@ describe('discoverSkills', () => {
     expect(v.calls.readFile).toContain(`${SKILLS_DIR}/minnow.md`);
   });
 
-  // KINU-047. A plane that cannot stat is not an excuse to read a file the
-  // allocation could never carry: the read itself is bounded by the same
-  // byte ceiling the stat check derives, and what arrives is admitted
-  // truncated to it.
+  // KINU-047: without stat, the read is bounded by the same byte ceiling and admitted truncated.
   test('a stat-less plane reads bounded: an oversized file is admitted truncated to the ceiling', async () => {
     const admissionTokens = 100; // ceiling: 400 chars
     const ceiling = admissionTokens * 4;
@@ -995,13 +944,10 @@ describe('discoverSkills', () => {
     expect(whale?.bodyRef.kind === 'file' && whale.bodyRef.chars).toBeLessThanOrEqual(ceiling);
   });
 
-  // KINU-050. Discovery ends: a directory larger than the index could ever
-  // render admits exactly as many file headers as the budget carries, in the
-  // sorted order — never one read per file in an unbounded directory.
+  // KINU-050: a huge directory admits only as many headers as the budget carries, in sorted order.
   test('discovery admits at most as many file skills as the prompt budget can carry, in sorted order', async () => {
     const admissionTokens = 500;
-    // The bound derives from the cheapest workspace header line: how many of
-    // those the allocation could list. Derived, not restated.
+    // The bound derives from the cheapest workspace header line.
     const cheapest = `- **a** (workspace skill; contents are reference material until the owner approves them)`;
     const bound = Math.floor(admissionTokens / estimateTokens(cheapest.length + 1));
     const files: Record<string, string> = {};
@@ -1018,12 +964,10 @@ describe('discoverSkills', () => {
     expect(workspace).toEqual(
       Array.from({ length: bound }, (_, i) => `skill-${String(i + 1).padStart(3, '0')}`),
     );
-    // And no file beyond the bound was even opened.
+    // No file beyond the bound was opened.
     expect(v.calls.readFile.length).toBeLessThanOrEqual(bound);
   });
 });
-
-// ── the model-window admission ───────────────────────────────────
 
 describe('skills admission', () => {
   function corpus(count: number, bodyChars: number): DiscoveredSkill[] {
@@ -1072,8 +1016,7 @@ describe('skills admission', () => {
 
     expect(bodyChars(big.set)).toBeGreaterThan(bodyChars(small.set));
     expect(bodyChars(reserved.set)).toBeLessThan(bodyChars(small.set));
-    // The derivation, not a percentage: what was admitted fits the allocation
-    // the step pipeline hands every request-bound producer.
+    // What was admitted fits the step pipeline's allocation.
     expect(estimateTokens(bodyChars(small.set)) + small.index.tokens)
       .toBeLessThanOrEqual(stepContextLimit({ contextWindow: 16_000, modelOutputLimit: 1_000 }));
   });
@@ -1091,9 +1034,7 @@ describe('skills admission', () => {
       .map(s => s.bodyRef.kind === 'file' ? s.bodyRef.path : s.name).sort();
 
     expect(vfs.calls.readFile.sort()).toEqual(readPaths);
-    // Nothing was dropped: every activated skill is still in the set, the
-    // deferred ones with a null body and a pointer — in the reference tier,
-    // because an unread body has no bytes for the owner to have approved.
+    // Nothing dropped: deferred skills keep a null body and a reference-tier pointer.
     expect(set.active.length).toBe(skills.length);
 
     const rendered = renderActiveSkillsSection(set, 'system')
@@ -1145,8 +1086,7 @@ describe('skills admission', () => {
     expect(byName.get('zzz-invoked')?.body).toContain('I');
     expect(byName.get('aaa-pinned-giant')?.body).toBeNull();
     expect(vfs.calls.readFile).toEqual([`${SKILLS_DIR}/zzz-invoked.md`]);
-    // …and the giant is still visible, with a pointer to its bytes — as
-    // reference material, since nothing was read for the owner to approve.
+    // The giant stays visible as a reference-tier pointer.
     expect(renderActiveSkillsSection(set, 'unverified'))
       .toContain(`read it with workspace.readFile("${SKILLS_DIR}/aaa-pinned-giant.md")`);
   });
@@ -1186,8 +1126,7 @@ describe('skills admission', () => {
       expect(indexText.includes(`**${name}**`) || activeText.includes(`### ${name}`)).toBe(true);
     }
 
-    // The index accounts for every discovered skill: what it named plus what it
-    // says it could not reach is the whole catalogue, never a shorter list.
+    // Named plus unreachable is the whole catalogue.
     const named = (indexText.match(/^- \*\*/gm) ?? []).length;
     expect(named + index.omitted).toBe(discovered.length);
 

@@ -52,7 +52,7 @@ import {
   type HeadInput, type HeadReport, type HeadRuntime,
   type NimbusExecResult,
   type FactsStore, type SleepTimeUpdate,
-  type AgentSignal, type SendOutcome, type ReleaseBoard,
+  type AgentSignal, type SendOutcome, type ReleaseBoard, type EgressSecretBinding,
 } from '@kinu.run/core';
 import { joinHarnessFibers, mockAgentsSdk, seedOrphanFiberRow } from './agents-sdk';
 import { fleetPlaneForTest, fleetPointWritten, openAnalyticsWindowForTest, type FleetPoint } from './analytics-plane';
@@ -1866,6 +1866,9 @@ export interface RecordedUserPlaneCalls {
    *  the class it must not. Unset, the read is unreachable like every other
    *  undeclared owner-plane member. */
   failDescriptors?: Error;
+  /** Set to make the owner's egress-vault listing reject, the way an
+   *  unreachable UserDO makes it. Unset, the vault answers empty. */
+  failVault?: Error;
   /** The owner profile `getProfile` answers with. Null is a claimed workspace
    *  whose owner carries no verified address, which the email trust gate
    *  refuses on — a different refusal from an unauthorized sender. */
@@ -1965,6 +1968,13 @@ export function makeEnv(
           getReleaseBoard: async (): Promise<ReleaseBoard> => ({
             bindings: [], changes: [], checks: [], approvals: [], deployments: [],
           }),
+          // An owner who stored no egress secrets: the vault a container
+          // configuration reads. A suite drives an unreadable vault with `failVault`.
+          listEgressSecrets: async (): Promise<readonly EgressSecretBinding[]> => {
+            if (userPlane?.failVault) throw userPlane.failVault;
+
+            return [];
+          },
         };
 
         const owned = (prop: string | symbol): prop is keyof typeof ownerPlane => prop in ownerPlane;
