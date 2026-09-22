@@ -1,21 +1,4 @@
-/**
- * The scaffold's host bridges — how an evolved scaffold reaches the model, the
- * agent's tool surface, and its own conversation from inside the codemode
- * sandbox. One implementation for both backends:
- *
- *   createScaffoldLLMStream   host.llmStream — tool NAMES cross the sandbox
- *                             boundary; the host resolves them against the
- *                             live surface and runs a genuine multi-step loop.
- *   createScaffoldCallTool    host.callTool — dispatch into the live surface
- *                             by name; a throw becomes `{ error }` (the shape
- *                             buildHostProvider guarantees).
- *   createScaffoldHistory     host.history — a read-only, budgeted view of the
- *                             conversation the scaffold is the inference loop
- *                             for. Without it a scaffold has one string
- *                             (`task`) and a prepared default stream, and
- *                             cannot see, let alone navigate, the context it
- *                             is supposed to be managing.
- */
+/** Host bridges (llmStream, callTool, history) an evolved scaffold uses from the codemode sandbox. */
 
 import { safeValidateTypes } from '@ai-sdk/provider-utils';
 import type { LanguageModel, ModelMessage, ToolSet } from 'ai';
@@ -48,15 +31,10 @@ export interface ScaffoldBridgeOpts extends ScaffoldRunControl {
   model: LanguageModel;
   spec?: string;
   modelContext?: ChatOptions['modelContext'];
-  /** The live tool surface, resolved per call so mid-turn rebuilds land. */
+  /** Resolved per call so mid-turn rebuilds land. */
   tools: () => ToolSet;
-  /** Shared chat options and the existing pre-step extension hook. */
   streamOptions?: Pick<ChatOptions, 'providerOptions' | 'onStep' | 'stopWhen'> & Pick<KinuExtension, 'prepareStep'>;
-  /** Where this loop reports what it cost, and as whose spend — `scaffold` for a
-   *  live or candidate scaffold driving its own inference. One field, both
-   *  halves, like every other seam that hands its result to more than one kind of
-   *  caller, so a scaffold's spend is attributed to something. Absent means it is
-   *  attributed to nothing. */
+  /** Absent means the scaffold's spend is attributed to nothing. */
   spend?: ModelCallSpend;
 }
 
@@ -144,27 +122,19 @@ async function* streamScaffoldChat(
   }
 }
 
-/** Messages per page when the scaffold names no limit, and the ceiling it
- *  cannot exceed. A scaffold that wants the whole conversation pages for it,
- *  which is the point — navigation, not ingestion. */
+/** Page size, defaulted and capped: the scaffold pages rather than ingests. */
 export const SCAFFOLD_HISTORY_DEFAULT_LIMIT = 20;
 
 export const SCAFFOLD_HISTORY_MAX_LIMIT = 100;
 
-/** Characters of one message, defaulted and capped. */
 export const SCAFFOLD_HISTORY_DEFAULT_MESSAGE_CHARS = 1_000;
 
 export const SCAFFOLD_HISTORY_MAX_MESSAGE_CHARS = 8_000;
 
-/** Ceiling on a whole page, whatever the per-message budget allows. Without it
- *  `{ limit: 100, maxChars: 8000 }` would hand 800k characters back across the
- *  sandbox boundary — a read surface that can flood the caller is not budgeted. */
+/** Page ceiling whatever the per-message budget allows. */
 export const SCAFFOLD_HISTORY_MAX_PAGE_CHARS = 40_000;
 
-/** One message as text: prose verbatim, tool traffic named rather than dumped.
- *  A scaffold navigating its history needs to know a tool ran and roughly what
- *  it returned; the full result is a `workspace.readFile` away when it is
- *  spilled and a re-read away when it is not. */
+/** Prose verbatim; tool traffic named rather than dumped. */
 function renderMessage(message: ModelMessage): string {
   const content = message.content;
 
@@ -180,8 +150,6 @@ function renderMessage(message: ModelMessage): string {
       case 'tool-result':
         return `[tool-result ${part.toolName} ${safeJson({ value: part.output })}]`;
 
-      // Media and approval traffic are named, never dumped: a scaffold reading
-      // its history needs to know the part was there, not to carry its bytes.
       case 'file':
       case 'image':
       case 'tool-approval-request':
@@ -196,22 +164,12 @@ function safeJson(input: { value: unknown }): string {
   try {
     return JSON.stringify(input.value) ?? 'null';
   } catch (error) {
-    // The clamp precedent: `String()` on a cyclic object is "[object Object]" — the one
-    // string that carries nothing at all — so the reason takes its place.
+    // `String()` on a cyclic object carries nothing; the reason replaces it.
     return `unserializable host history part: ${renderThrownChain({ cause: error })}`;
   }
 }
 
-/**
- * `host.history` — read-only, budgeted, and the same on both backends. The
- * source is whatever that backend calls the model-visible message list (the
- * CLI session's own array; the DO's prepared turn options), so the scaffold
- * reads exactly the stream it is the inference loop for.
- *
- * Read-only is structural: this returns plain data, and no writer is bridged.
- * Budgeted is structural too — every query is clamped, and a page stops at a
- * total-character ceiling regardless of what was asked for.
- */
+/** `host.history`: read-only and budgeted by construction; every query is clamped. */
 export function createScaffoldHistory(
   source: () => Promise<readonly ModelMessage[]>,
 ): ScaffoldHistoryReader {
@@ -249,10 +207,7 @@ export function createScaffoldHistory(
         role: message.role,
         chars: rendered.length,
         text,
-        // Against the BUDGET, not against the rendered length: a window carries
-        // an omission marker, so a message a little over budget comes back
-        // longer than it started and `text.length < rendered.length` would call
-        // it whole.
+        // Against the budget: a window's omission marker can make `text` longer than `rendered`.
         truncated: rendered.length > maxChars,
       });
     }
@@ -263,35 +218,13 @@ export function createScaffoldHistory(
 
 export function createScaffoldCallTool(
   tools: () => ToolSet,
-  /**
-   * The RECOVERABLE identity this rollout runs under, when it has one.
-   *
-   * A queued shadow trial can be re-driven after an interruption, and its
-   * candidate reaches the live tool surface — so a wall-clock call id gave every
-   * replay fresh ids and the tool-effect claim could not tell a re-drive from a
-   * first run. Scoped, the ids are `<scope>#0`, `<scope>#1` … in dispatch order,
-   * which is what lets the claim dedupe them.
-   *
-   * Absent for a rollout with no durable identity (a live preview, a GEPA
-   * candidate): nothing will re-drive those, so there is nothing to dedupe
-   * against and inventing a scope would be a lie about recoverability.
-   *
-   * The ids line up only as far as the rollout is deterministic. A candidate
-   * whose model answers differently makes different calls, and the claim then
-   * sees genuinely different work — which is the honest reading, not a
-   * mis-dedupe.
-   */
+  /** Recoverable rollout identity; scoped ids `<scope>#<seq>` let the tool-effect claim dedupe a re-drive. */
   callScope?: string,
   signal?: AbortSignal,
   assertActive?: () => void,
 ): NonNullable<ScaffoldRunOptions['callTool']> {
   let seq = 0;
-  // Scope-less rollouts have no durable identity to re-drive them, so their
-  // ids only need to be unique — never reused. A wall-clock id was neither:
-  // two calls inside one millisecond shared it, and the tool-effect claim
-  // then replayed the first call's stored result for the second. The counter
-  // keeps two calls on one wrapper apart; the nonce keeps two wrappers
-  // apart. Scoped ids stay `<scope>#<seq>` so a re-drive still dedupes.
+  // Scope-less ids must be unique: the counter separates calls, the nonce separates wrappers.
   const nonce = nanoid();
   const control = { signal, assertActive };
 

@@ -12,10 +12,7 @@ interface StreamPart {
   readonly number: number;
   readonly kind: string;
   opened: boolean;
-  /** Deltas taken in but not yet written, and how many: one statement per
-   *  window (`COALESCE_DELTAS` or `COALESCE_BYTES`), not per token. Written
-   *  ahead of the part's next non-delta update, or dropped by the step's seal,
-   *  which writes the final text whole. */
+  /** Written ahead of the part's next non-delta update, or dropped by the step's seal, which writes the final text whole. */
   buffered: string;
   bufferedDeltas: number;
   bufferedBytes: number;
@@ -23,27 +20,20 @@ interface StreamPart {
   startMetadata: JsonObject | null;
 }
 
-/** A streamed part's deltas reach its row in windows. Each statement runs on
- *  the Durable Object's storage, and a reasoning model streams tokens by the
- *  ten-thousand (D23 measured one statement per token as the CPU of one
- *  turn). A window is small enough that a cut turn keeps all but its last
- *  second of words. */
+/** Deltas reach the row in windows, not per token (D23). */
 const COALESCE_DELTAS = 64;
 
-/** UTF-8 bytes of the window, what the row takes; not UTF-16 units. */
+/** UTF-8 bytes, what the row takes; not UTF-16 units. */
 const COALESCE_BYTES = 4096;
 
 const utf8 = new TextEncoder();
 
-/** A settled tool's output as the part records it: a string stays text, anything else is JSON. */
 function toolOutput(output: { readonly value: unknown }): JsonObject {
   if (v.is(v.string(), output.value)) return { type: 'text', value: output.value };
 
   return { type: 'json', value: projectJsonValue(output) };
 }
 
-/** Provider metadata as the part records it: projected to JSON once, and the
- *  projection of a record is an object. */
 function metadataObject(metadata: ProviderMetadata): JsonObject {
   const projected = projectJsonValue({ value: metadata });
 
@@ -52,20 +42,7 @@ function metadataObject(metadata: ProviderMetadata): JsonObject {
   return projected;
 }
 
-/**
- * The name a streamed part and a final part are the SAME part under.
- *
- * A tool call and its result carry their own identity, so those pair on the
- * call id. Nothing else does: a native `text` or `reasoning` part is anonymous
- * once the stream's part id is spent, so the pairing is the kind plus the
- * ordinal within that kind — the second reasoning block of the stream is the
- * second reasoning block of the final message.
- *
- * NEVER the array index, which is what this replaces. A provider that reorders
- * its final message, or settles on a message missing a part it streamed, is
- * reporting a disagreement about ORDER or CONTENTS; read positionally it read
- * as a type mismatch and threw the whole turn's seal away.
- */
+/** Tool parts pair on the call id; text and reasoning pair on kind plus ordinal, never array index. */
 function partIdentity(kind: string, native: JsonObject, ordinals: Map<string, number>): string {
   const callId = v.safeParse(v.string(), native.toolCallId);
 
@@ -76,19 +53,14 @@ function partIdentity(kind: string, native: JsonObject, ordinals: Map<string, nu
   return `${kind}#${ordinal}`;
 }
 
-/** Whether a streamed part witnessed anything: a text-bearing kind needs
- *  words, and every other kind is the fact itself. An empty reasoning part a
- *  provider opened and never wrote into is not evidence of thinking. */
+/** An empty reasoning part is not evidence of thinking. */
 function streamedContent(part: StoredPart): boolean {
   if (part.kind !== 'text' && part.kind !== 'reasoning') return true;
 
   return v.is(v.string(), part.value.text) && part.value.text.length > 0;
 }
 
-/** Lifecycle evidence and input assembly: stream parts that are not
- *  model-message parts, so the durable record never holds one. A new part
- *  kind must be placed here or given an arm; the switch's exhaustiveness
- *  check names it otherwise. */
+/** Stream parts that never enter the durable record. A new kind must be placed here or given an arm. */
 type LifecyclePart = Extract<TextStreamPart<ToolSet>, { type:
   | 'start'
   | 'finish-step'
@@ -111,8 +83,6 @@ function isLifecyclePart(part: TextStreamPart<ToolSet>): part is LifecyclePart {
   return LIFECYCLE_PARTS.has(part.type);
 }
 
-/** The disagreement between what a provider streamed and the message it
- *  settled on, as one line of evidence. */
 const STREAM_DIVERGED = 'session.stream_final_diverged';
 
 interface StreamContainer {
@@ -120,24 +90,19 @@ interface StreamContainer {
   readonly role: 'assistant' | 'tool';
   readonly slot: number;
   reference: MessageReference | null;
-  /** Model-facing: joins the working context when it seals. A render-only
-   *  container never does. */
+  /** Joins the working context when it seals; a render-only container never does. */
   readonly working: boolean;
   sealed: boolean;
   readonly parts: Map<string, StreamPart>;
 }
 
-/** One update to a streamed part. */
 interface PublishedPart {
   readonly container: StreamContainer;
-  /** Identifies the part within its container across the updates that build it. */
   readonly key: string;
-  /** The native part without its text; what the part's row opens with. */
   readonly descriptor: JsonObject;
-  /** Text this update carries, or null when it carries none. */
   readonly delta: string | null;
   readonly providerMetadata?: ProviderMetadata;
-  /** The part's last update: the window flushes and the row is ended. */
+  /** The window flushes and the row is ended. */
   readonly end?: boolean;
 }
 
@@ -147,11 +112,7 @@ export class SessionStream {
   private step = 0;
   private completedMessageCount = 0;
   private nativeProducer = false;
-  /** The writers this stream is fed from — the SDK pipeline's parts and step
-   *  finishes, the turn loop's events, the turn's settle — run one at a time
-   *  in arrival order. Two of them reached one container's seal together when
-   *  a consumer failed mid-stream while the step was still finishing: each
-   *  had read `sealed` false before the other's await returned. */
+  /** Writers run one at a time in arrival order, so two cannot reach one container's seal together. */
   private queue: Promise<void> = Promise.resolve();
   private readonly calls = new Map<string, { messageId: string; part: number }>();
   private sourceOrder = 0;
@@ -180,8 +141,7 @@ export class SessionStream {
 
   private exclusive<T>(op: () => Promise<T>): Promise<T> {
     const run = this.queue.then(op);
-    // The next writer waits for this one to settle either way; a failure is
-    // the caller's, delivered through `run`, and never poisons the queue.
+    // A failure is the caller's, delivered through `run`, and never poisons the queue.
     this.queue = Promise.allSettled([run]).then(() => undefined);
 
     return run;
@@ -318,9 +278,7 @@ export class SessionStream {
     return { id: `${this.requestId}:${this.nativeProducer ? slot : this.step * 3 + slot}`, role, slot, reference: null, working: slot !== 2, sealed: false, parts: new Map() };
   }
 
-  /** Every container of the step seals before the next step's replace it:
-   *  a step the model ended without a final message for a container it
-   *  streamed into (a cancelled reasoning step) still commits what it holds. */
+  /** A container streamed into without a final message still commits what it holds. */
   private async nextStep(): Promise<void> {
     for (const container of [this.assistant, this.tool, this.ui]) await this.sealOpen(container);
     this.step += 1;
@@ -383,12 +341,7 @@ export class SessionStream {
     if (kind === 'tool-call' && callId.success) this.calls.set(callId.output, { messageId: container.id, part: part.number });
   }
 
-  /** The text this update writes. A plain delta on an open text part joins
-   *  the window and writes nothing until the window is full; anything else
-   *  the part records — its end, its metadata — writes what the window holds
-   *  first, in the same statement. A window ending in a high surrogate holds
-   *  that unit back for the next one: the row takes the window as one UTF-8
-   *  string, and half a pair has no encoding. */
+  /** Plain deltas on an open text part join the window; anything else flushes it first. A trailing high surrogate is held back. */
   private window(part: StreamPart, delta: string | null, joins: boolean, end: boolean): string | null {
     let pending = delta;
 
@@ -422,7 +375,6 @@ export class SessionStream {
     return pending !== null && !part.opened ? '' : null;
   }
 
-  /** One transaction under the turn's epoch fence. */
   private fenced<T>(write: () => T): T {
     return this.history.atomic(() => {
       this.history.assertEpoch(this.turnId, this.epoch);
@@ -431,9 +383,7 @@ export class SessionStream {
     });
   }
 
-  /** The container's message row, open. It joins the working context only
-   *  when it seals: a context revision names immutable content, never a
-   *  message a stream is still extending. */
+  /** Joins the working context only when sealed: a revision names immutable content. */
   private openContainer(container: StreamContainer, write?: () => void): void {
     this.fenced(() => {
       container.reference = this.history.messages.open(container.role, container.id, container.working ? 'output' : 'render', { requestId: this.requestId, slot: this.nativeProducer ? container.slot : this.step * 3 + container.slot });
@@ -441,8 +391,7 @@ export class SessionStream {
     });
   }
 
-  /** ONE revision per sealed model-facing message: the seal and the
-   *  membership land in the same transaction under the epoch fence. */
+  /** One revision per sealed model-facing message, in the same transaction under the epoch fence. */
   private sealContainer(container: StreamContainer, content: PreparedContent, envelope?: JsonObject): void {
     if (!container.working) {
       this.fenced(() => this.history.messages.seal(container.id, content, envelope));
@@ -477,10 +426,7 @@ export class SessionStream {
 
       if (container.reference === null && finalParts.length === 0) continue;
 
-      // The turn settled this container before its step finished: a consumer
-      // failed, or the turn was cut, with the final message still in flight.
-      // What streamed is the record, as `settle` says, and a message the
-      // turn no longer runs on has no source to bind.
+      // Settled before its step finished: what streamed is the record, with no source to bind.
       if (container.sealed) continue;
       const parts = await this.reconcile(container, finalParts);
       const sealed = await this.history.messages.prepareContent(parts);
@@ -493,18 +439,7 @@ export class SessionStream {
     this.completedMessageCount = cumulative.length;
   }
 
-  /**
-   * The container's sealed parts: the provider's final message RECONCILED with
-   * the stream that produced it, paired by {@link partIdentity}.
-   *
-   * The final message decides ORDER and CONTENT for every part it carries —
-   * that is the message the provider settled on and the one it must read back.
-   * A part the stream witnessed with content and the final message left out is
-   * kept, at the place the stream put it: the client watched it arrive, so
-   * dropping it makes the transcript disagree with what was on screen, which is
-   * how a turn's reasoning vanished on reload. Either disagreement is recorded
-   * as {@link STREAM_DIVERGED} and neither is a throw.
-   */
+  /** Paired by {@link partIdentity}: the final message decides order and content; a streamed part it omits is kept in place. Disagreement is {@link STREAM_DIVERGED}, never a throw. */
   private async reconcile(container: StreamContainer, finalParts: readonly JsonObject[]): Promise<StoredPart[]> {
     const streamed = container.reference === null ? [] : await this.openParts(container) ?? [];
     const witnessed = new Map<string, StoredPart>();
@@ -572,9 +507,7 @@ export class SessionStream {
     });
   }
 
-  /** What the container's stream rows hold right now, its in-memory windows
-   *  written down first: the last second of words belongs to the seal that
-   *  reads them. Null once the message is sealed and its rows are gone. */
+  /** In-memory windows are written first. Null once sealed. */
   private async openParts(container: StreamContainer): Promise<readonly StoredPart[] | null> {
     for (const part of container.parts.values()) {
       if (part.buffered.length === 0) continue;
@@ -588,9 +521,6 @@ export class SessionStream {
     return this.history.messages.openParts(container.id);
   }
 
-  /** A container the step did not seal from a final message seals from what
-   *  its stream holds, buffered tail included: the render-only container
-   *  every step, and every container of a step or turn that ended early. */
   private async sealOpen(container: StreamContainer): Promise<void> {
     if (container.reference === null || container.sealed) return;
     const parts = await this.openParts(container);
@@ -604,7 +534,6 @@ export class SessionStream {
     this.sealContainer(container, await this.history.messages.prepareContent(parts));
   }
 
-  /** The turn ended, however it ended: what streamed is sealed as it stands. */
   settle(): Promise<void> {
     return this.exclusive(async () => {
       if (!this.history.epochCurrent(this.turnId, this.epoch)) return;

@@ -106,9 +106,7 @@ export class ActorClaimStore {
       return admitted;
     });
 
-    // Only once this admission holds the turn: a message a reset activation
-    // left open under the epoch it superseded seals as it stands. An
-    // admission refused above seals nothing.
+    // Seal messages left open under a superseded epoch only after this admission holds the turn.
     await this.history.sealAbandoned();
 
     return claim;
