@@ -5,9 +5,10 @@ import {
   summarizeDeviceAction,
   type JsonValue,
 } from '@kinu.run/core';
-import { handleUserRequest } from '../src/user/routes';
+import { handleUserRequest, type UserRoutesEnv } from '../src/user/routes';
+import { bootstrappedProfile, unreachableNamespace, userAccount } from './helpers/bindings';
 import type { AuthIdentity } from '../src/auth/session';
-import type { UserCaller } from '@kinu.run/core';
+import type { DeviceTier, UserCaller } from '@kinu.run/core';
 import * as v from 'valibot';
 
 describe('device consent prompt data', () => {
@@ -68,30 +69,28 @@ function deviceRoutesSetup() {
   const tiers = new Map<string, string>();
   const calls: Array<{ deviceId: string; tier: string }> = [];
 
-  const stub = {
-    async ensureProfile() {},
+  const stub = userAccount({
+    async ensureProfile(_caller: UserCaller, email: string) { return bootstrappedProfile(email); },
     async listDeviceConsents(_caller: UserCaller) {
       return [{ agentName: 'jarvis', deviceId: 'dev-1', policy: 'allow', lastMethod: null, lastSummary: null }];
     },
-    async setDeviceTier(_caller: UserCaller, deviceId: string, tier: string) {
+    async setDeviceTier(_caller: UserCaller, deviceId: string, tier: DeviceTier) {
       calls.push({ deviceId, tier });
 
-      if (deviceId !== 'dev-1') return { ok: false };
+      if (deviceId !== 'dev-1') return { ok: false as const };
       tiers.set(deviceId, tier);
 
-      return { ok: true };
+      return { ok: true as const };
     },
-  };
-
-  const partialEnv: Partial<Env> = {};
-  Object.assign(partialEnv, {
-    UserDO: { idFromName: (name: string) => name, get: () => stub },
-    CREDENTIAL_ENCRYPTION_KEY: TEST_CREDENTIAL_ENCRYPTION_KEY,
   });
-  // SAFETY: The constructed environment provides exactly UserDO.idFromName,
-  // UserDO.get, and CREDENTIAL_ENCRYPTION_KEY, all constructed immediately
-  // above; no other Env binding is reachable on these request paths.
-  const env = partialEnv as Env;
+
+  const env: UserRoutesEnv<string> = {
+    UserDO: { idFromName: (name) => name, get: () => stub },
+    CREDENTIAL_ENCRYPTION_KEY: TEST_CREDENTIAL_ENCRYPTION_KEY,
+    // No device route fans a credential change out, so no workspace object is
+    // addressed on these paths.
+    OrchestratorAgent: unreachableNamespace('OrchestratorAgent'),
+  };
 
   const call = (path: string, method: string, body?: JsonValue) =>
     handleUserRequest(new Request(`https://kinu.example.com/api/user${path}`, {

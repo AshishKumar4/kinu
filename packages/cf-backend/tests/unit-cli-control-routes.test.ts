@@ -3,7 +3,7 @@ import { describe, expect, test } from 'bun:test';
 import {
   handleCliRequest, type CliAgentTarget, type CliRoutesAuthority, type CliRoutesEnv,
 } from '../src/cli/routes';
-import { cliAccount, cliWorkspace, unreachableAssets, unreachableKv } from './helpers/bindings';
+import { cliAccount, workspaceObject, unreachableAssets, unreachableKv } from './helpers/bindings';
 import type { ObjectNamespace } from '../src/bindings';
 import { PRIVATE_NO_STORE } from '@kinu.run/core';
 import { JsonValueSchema, type JsonObject, type JsonValue } from '@kinu.run/core';
@@ -84,7 +84,7 @@ function setupEnv(opts: { tokenMintedAt?: number } = {}) {
     },
   });
 
-  const agent = cliWorkspace({
+  const agent = workspaceObject({
     async claimOwner(userId: string) {
       calls.push(`claim:${userId}`);
 
@@ -347,7 +347,7 @@ describe('CLI control routes', () => {
   });
 
   test('a throwing method surfaces as a 400 with its message', async () => {
-    const workspace = cliWorkspace({
+    const workspace = workspaceObject({
       async claimOwner() { return { owner: USER_ID, capabilityHash: 'sha-existing' }; },
       async createTimerTrigger() { throw new Error('Timer trigger requires cron or atMs'); },
     });
@@ -362,7 +362,7 @@ describe('CLI control routes', () => {
 
 describe('shared ownership claim status mapping', () => {
   function envWithClaimFailure(message: string) {
-    const workspace = cliWorkspace({ claimOwner: () => { throw new Error(message); } });
+    const workspace = workspaceObject({ claimOwner: () => { throw new Error(message); } });
 
     return testEnv(tokenHolderUserDO(), { idFromName: (n) => n, get: () => workspace });
   }

@@ -11,6 +11,7 @@
 import type { KvStore } from '@kinu.run/agent-utils';
 import type { UserProfile } from '../../src/user/user-do';
 import type { CliAgentTarget, CliRoutesAuthority, CliRoutesEnv } from '../../src/cli/routes';
+import type { UserRoutesAuthority } from '../../src/user/routes';
 import type { AssetFetcher } from '@kinu.run/core';
 import type { ObjectNamespace } from '../../src/bindings';
 
@@ -106,11 +107,12 @@ export function cliAccount<Built extends Partial<CliRoutesAuthority>>(built: Bui
   };
 }
 
-/** The workspace object the CLI plane addresses, with the birth sequence and
+/** The workspace object a Worker route addresses, with the birth sequence and
  *  the credential notice refusing unless the case built them. The dispatch
  *  surface is the request's own choice of name, so a case supplies exactly the
- *  methods it drives. */
-export function cliWorkspace<Built extends Partial<CliAgentTarget>>(built: Built): CliAgentTarget & Built {
+ *  methods it drives. Typed at the CLI plane's reach, which is the widest of
+ *  the two planes that address one. */
+export function workspaceObject<Built extends Partial<CliAgentTarget>>(built: Built): CliAgentTarget & Built {
   const refuse = (member: string) => unreached('OrchestratorAgent', member);
 
   return {
@@ -126,6 +128,66 @@ export function cliWorkspace<Built extends Partial<CliAgentTarget>>(built: Built
     reportFacetModelCall: refuse('reportFacetModelCall'),
     onCredentialsChanged: refuse('onCredentialsChanged'),
     createDurableWebhook: refuse('createDurableWebhook'),
+    ...built,
+  };
+}
+
+/**
+ * The account object as `/api/user/*` declares it, with every call this case
+ * did not build refusing.
+ *
+ * One dispatcher holds one stub for every route family the plane answers, so a
+ * case that drives the credential routes still has to say what the device,
+ * config, codex and MCP families would do. Refusals say it.
+ */
+export function userAccount<Built extends Partial<UserRoutesAuthority>>(
+  built: Built,
+): UserRoutesAuthority & Built {
+  const refuse = (member: string) => unreached('UserDO', member);
+
+  return {
+    ensureProfile: refuse('ensureProfile'),
+    getProfile: refuse('getProfile'),
+    getProfileCatalog: refuse('getProfileCatalog'),
+    putProfileCatalog: refuse('putProfileCatalog'),
+    userMcp_warmConnections: refuse('userMcp_warmConnections'),
+    userMcp_list: refuse('userMcp_list'),
+    userMcp_presets: refuse('userMcp_presets'),
+    userMcp_add: refuse('userMcp_add'),
+    userMcp_remove: refuse('userMcp_remove'),
+    userMcp_update: refuse('userMcp_update'),
+    userMcp_handleOAuthCallback: refuse('userMcp_handleOAuthCallback'),
+    listWorkspaces: refuse('listWorkspaces'),
+    listActiveWorkspaces: refuse('listActiveWorkspaces'),
+    touchWorkspace: refuse('touchWorkspace'),
+    registerWorkspace: refuse('registerWorkspace'),
+    removeWorkspace: refuse('removeWorkspace'),
+    releaseWorkspaceReservation: refuse('releaseWorkspaceReservation'),
+    ensureWorkspaceCapability: refuse('ensureWorkspaceCapability'),
+    listDevices: refuse('listDevices'),
+    acknowledgeUnstoppedDevice: refuse('acknowledgeUnstoppedDevice'),
+    revokeDevice: refuse('revokeDevice'),
+    renameDevice: refuse('renameDevice'),
+    listDeviceConsents: refuse('listDeviceConsents'),
+    setDeviceTier: refuse('setDeviceTier'),
+    revokeDeviceConsent: refuse('revokeDeviceConsent'),
+    listCredentials: refuse('listCredentials'),
+    setCredential: refuse('setCredential'),
+    deleteCredential: refuse('deleteCredential'),
+    getAuthHeaders: refuse('getAuthHeaders'),
+    getCredentialBaseURL: refuse('getCredentialBaseURL'),
+    getCodexStatus: refuse('getCodexStatus'),
+    disconnectCodex: refuse('disconnectCodex'),
+    startCodexDeviceFlow: refuse('startCodexDeviceFlow'),
+    pollCodexDeviceFlow: refuse('pollCodexDeviceFlow'),
+    listConfig: refuse('listConfig'),
+    getConfig: refuse('getConfig'),
+    setConfig: refuse('setConfig'),
+    listConnectedProviders: refuse('listConnectedProviders'),
+    listCloudflareAccounts: refuse('listCloudflareAccounts'),
+    selectCloudflareAccount: refuse('selectCloudflareAccount'),
+    listAIGateways: refuse('listAIGateways'),
+    selectAIGateway: refuse('selectAIGateway'),
     ...built,
   };
 }

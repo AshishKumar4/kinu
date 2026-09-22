@@ -13,7 +13,7 @@ import { TEST_CREDENTIAL_ENCRYPTION_KEY } from './helpers/user-do';
 import { describe, expect, test } from 'bun:test';
 import { handleCliRequest, type CliRoutesEnv } from '../src/cli/routes';
 import type { CredentialSummary } from '../src/user/user-do';
-import { cliAccount, cliWorkspace, unreachableAssets, unreachableKv } from './helpers/bindings';
+import { cliAccount, workspaceObject, unreachableAssets, unreachableKv } from './helpers/bindings';
 import type { JsonValue } from '@kinu.run/core';
 import type { UserCaller } from '@kinu.run/core';
 import * as v from 'valibot';
@@ -79,7 +79,7 @@ function setupEnv() {
     UserDO: { idFromName: (n) => n, get: () => userDO },
     OrchestratorAgent: {
       idFromName: (n) => n,
-      get: (name) => cliWorkspace({
+      get: (name) => workspaceObject({
         async onCredentialsChanged() {
           notified.push(name);
 

@@ -4,7 +4,7 @@
 import { TEST_CREDENTIAL_ENCRYPTION_KEY } from './helpers/user-do';
 import { describe, expect, test } from 'bun:test';
 import { handleCliRequest, type CliRoutesEnv } from '../src/cli/routes';
-import { cliAccount, cliWorkspace, unreachableAssets, unreachableKv } from './helpers/bindings';
+import { cliAccount, workspaceObject, unreachableAssets, unreachableKv } from './helpers/bindings';
 import { PRIVATE_NO_STORE } from '@kinu.run/core';
 import type { JsonValue } from '@kinu.run/core';
 import type { AccessTokenScope, UserCaller } from '@kinu.run/core';
@@ -141,7 +141,7 @@ function setupEnv(opts: { sessionMintedAt?: number } = {}) {
     },
   });
 
-  const agent = cliWorkspace({
+  const agent = workspaceObject({
     async claimOwner(userId: string) {
       return { owner: userId, capabilityHash: 'sha-existing' };
     },
