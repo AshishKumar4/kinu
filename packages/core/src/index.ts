@@ -430,6 +430,7 @@ export {
   initImportedExperienceTable,
   listImportedExperience,
   listPublishable,
+  parseExperiencePayload,
   type ExperienceEntry,
   type ExperienceKind,
   type ExperienceLibraryStore,
