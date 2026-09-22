@@ -233,7 +233,7 @@ const SHARED_TRANSPORTS = {
   submitPlanEdits: '.submit',
   getActivePlanReview: '.active',
   savePlanReviewAnnotations: '.saveAnnotations',
-  decidePlanReview: 'planHandoffTurn',
+  decidePlanReview: '.decideAndHandOff',
   turnWorkMode: 'workModeUnderReview',
   pickAlternateTake: 'pickAlternateTake',
   proposeCurriculumTasks: 'proposeCurriculumTasks',
