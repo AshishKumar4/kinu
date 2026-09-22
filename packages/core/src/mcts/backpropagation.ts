@@ -36,7 +36,8 @@ export function backpropagate(
   reward: number,
 ): void {
   // Clamp reward to [0, 1] — out-of-range values break UCT and convergence
-  reward = Math.max(0, Math.min(1, reward));
+  const clamped = Math.max(0, Math.min(1, reward));
+
   void sql`
     WITH RECURSIVE ancestors(id, depth) AS (
       SELECT id, 0 FROM search_nodes
@@ -50,7 +51,7 @@ export function backpropagate(
     UPDATE search_nodes
     SET
       visits = visits + 1,
-      value  = (value * visits + ${reward}) / (visits + 1)
+      value  = (value * visits + ${clamped}) / (visits + 1)
     WHERE actor_id = ${actor.actorId} AND id IN (SELECT id FROM ancestors)
   `;
 }

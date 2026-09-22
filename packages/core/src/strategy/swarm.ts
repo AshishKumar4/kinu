@@ -787,12 +787,15 @@ export function resolveSwarm(input: SwarmInput): ResolvedSwarm | SwarmRefusal {
   }
 
   const config = merged;
+  // A name trimmed to nothing is no name: it must not reach the ledger as an
+  // empty label a reader cannot tell from an absent one.
+  const name = input.name?.trim() ?? '';
 
   return {
     preset: input.preset,
     from: input.preset === 'custom' ? input.from ?? null : null,
     label: input.label?.trim() ?? null,
-    name: input.name?.trim() || null,
+    name: name === '' ? null : name,
     config,
     settle: settleOf(config),
     caps: {

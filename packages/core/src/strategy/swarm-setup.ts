@@ -1106,9 +1106,10 @@ export function seedResumedSearch(input: {
     // THE SAME RANK EXPRESSION THE LOOP USES, over the same arms: a verified candidate
     // ranks on its RAW measurement and a judged one on the ensemble's median, and a
     // sealed candidate ranks on nothing at all.
-    const rank = outcome?.kind === 'scored'
-      ? outcome.measurement.value
-      : outcome?.kind === 'judged' ? outcome.score : null;
+    let rank: number | null = null;
+
+    if (outcome?.kind === 'scored') rank = outcome.measurement.value;
+    else if (outcome?.kind === 'judged') rank = outcome.score;
 
     if (rank !== null && (bestValue === null || isBetter(rank, bestValue, rankDirection))) {
       best = candidate;

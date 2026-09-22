@@ -352,11 +352,16 @@ export async function decideRefinementRoute(
     // state worth deleting.
     if (await vfs.exists(staged)) await vfs.unlink(staged);
 
-    return patch(deps, request, input.routeIndex, {
-      ...route,
-      disposition: 'rejected',
-      reason: `you rejected these bytes; the staged file is deleted and nothing was written to ${route.target}`,
-    }, `rejected — ${route.target} was never created`);
+    return patch(deps, {
+      request,
+      routeIndex: input.routeIndex,
+      next: {
+        ...route,
+        disposition: 'rejected',
+        reason: `you rejected these bytes; the staged file is deleted and nothing was written to ${route.target}`,
+      },
+      detail: `rejected — ${route.target} was never created`,
+    });
   }
 
   const source = await readStagedSkill(deps, request, route);
@@ -389,21 +394,29 @@ export async function decideRefinementRoute(
 
   if (!promoted.ok) return { ok: false, error: promoted.error };
 
-  return patch(deps, request, input.routeIndex, {
-    ...route,
-    disposition: 'applied',
-    reason: `you approved digest ${route.digest}; ${route.target} is now trusted instructions`,
-  }, `approved — ${route.target} is now trusted instructions`);
+  return patch(deps, {
+    request,
+    routeIndex: input.routeIndex,
+    next: {
+      ...route,
+      disposition: 'applied',
+      reason: `you approved digest ${route.digest}; ${route.target} is now trusted instructions`,
+    },
+    detail: `approved — ${route.target} is now trusted instructions`,
+  });
+}
+
+interface RoutePatch {
+  readonly request: RefinementRequest;
+  readonly routeIndex: number;
+  readonly next: RefinementRoute;
+  /** What the owner is told the decision did. */
+  readonly detail: string;
 }
 
 /** Rewrite one route on the row, in place, without moving the stage. */
-function patch(
-  deps: RefinementDeps,
-  request: RefinementRequest,
-  routeIndex: number,
-  next: RefinementRoute,
-  detail: string,
-): RefinementDecisionResult {
+function patch(deps: RefinementDeps, input: RoutePatch): RefinementDecisionResult {
+  const { request, routeIndex, next, detail } = input;
   const store = createRefinementStore(deps.control.sql, deps.control.rt.actor);
   const routes = request.routes.map((existing, index) => index === routeIndex ? next : existing);
 

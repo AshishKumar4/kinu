@@ -52,11 +52,11 @@ export function deriveStop(input: {
 }): SwarmSettleReport['stop'] {
   const { aborted, missionSpent, lost, remainingBudget, frontierOpen } = input;
 
-  return aborted
-    ? 'aborted'
-    : missionSpent || lost > 0 || (remainingBudget <= 0 && frontierOpen)
-      ? 'budget'
-      : 'settled';
+  if (aborted) return 'aborted';
+
+  if (missionSpent || lost > 0 || (remainingBudget <= 0 && frontierOpen)) return 'budget';
+
+  return 'settled';
 }
 
 /** WHAT THE SEAL COST, IN CELLS. The disclosure *The publication seal* requires is
@@ -266,7 +266,7 @@ export async function settleRun(input: {
 // instead would refuse the winner on every multi-candidate run. Those rules bite when a
 // member's diff comes from a private home, which is *Isolation*'s to deliver.
 if (ctx) {
-  const policy = mergePolicyOf(resolved.settle);
+  const mergePolicy = mergePolicyOf(resolved.settle);
   const readOrigin = originReader(ctx.vfs);
 
   const members = best && verifier
@@ -286,7 +286,7 @@ if (ctx) {
     })]
     : [];
 
-  await mergeBack({ policy, members, settled: levelFanIn.landedIds() }, {
+  await mergeBack({ policy: mergePolicy, members, settled: levelFanIn.landedIds() }, {
     log,
     preset: resolved.preset,
     readOrigin,

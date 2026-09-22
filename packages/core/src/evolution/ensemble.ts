@@ -518,7 +518,7 @@ export function ensembleReport(sql: SqlExecutor, actor: ActorHandle): EnsembleRe
     const answered = byTurn.get(id);
 
     const perJudge = models.map((model) => answered?.get(model))
-      .filter((v): v is OutcomeLabel => v !== undefined);
+      .filter((answer): answer is OutcomeLabel => answer !== undefined);
 
     // A judge with no answer for this turn leaves a hole; the panel has no
     // verdict for it and it is not counted as covered.

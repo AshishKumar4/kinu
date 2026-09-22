@@ -383,7 +383,7 @@ async function plan(
     }
 
     if (!claim.held()) return null;
-    routes.push(await route(deps, { edit, request, reviewed }));
+    routes.push(await routeEdit(deps, { edit, request, reviewed }));
 
     // Persisted AFTER EACH route, not once at the end: a crash between two
     // owner writes must leave the completed ones recorded, or the resumed pass
@@ -651,7 +651,7 @@ function renderReviewedTurn(row: TurnOutcomeRow, index: number): string {
  * refinement row and the owner's row can never disagree about what a proposal
  * became.
  */
-async function route(
+async function routeEdit(
   deps: RefinementDeps,
   input: {
     edit: RefinementEdit;
@@ -854,6 +854,18 @@ async function routePromptSection(
 
 // ── Settlement ───────────────────────────────────────────────────────────────
 
+/** "Applied" means at least one artifact IS in effect — a promoted proposal or
+ *  a fact the user's own words earned. A request that wrote a preference and
+ *  then lost its section trial has still changed the agent, so calling it
+ *  rolled_back would be a lie about the fact that is live. */
+function settledStage(landed: number, undone: number): RefinementStage {
+  if (landed > 0) return 'applied';
+
+  if (undone > 0) return 'rolled_back';
+
+  return 'refused';
+}
+
 /**
  * Read the owners for a verdict on a request whose routes have all been made.
  *
@@ -938,13 +950,7 @@ async function settleRoutes(
     return refinementRequestView(store.get(request.id) ?? request);
   }
 
-  // "Applied" means at least one artifact IS in effect — a promoted proposal or
-  // a fact the user's own words earned. A request that wrote a preference and
-  // then lost its section trial has still changed the agent, so calling it
-  // rolled_back would be a lie about the fact that is live.
-  const landed = promoted + alreadyApplied;
-  const undone = rolledBack + rejected;
-  const stage: RefinementStage = landed > 0 ? 'applied' : undone > 0 ? 'rolled_back' : 'refused';
+  const stage = settledStage(promoted + alreadyApplied, rolledBack + rejected);
   const parts: string[] = [];
 
   if (promoted > 0) {

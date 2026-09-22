@@ -274,16 +274,16 @@ export function recordBranchTakeSet(
       VALUES
         (${actor.actorId}, ${id}, ${input.turnId}, ${input.sessionId},
          ${input.task.slice(0, 500)}, ${'branch'},
-         ${candidates[0]!.nodeId}, ${null}, ${JSON.stringify(candidates)},
+         ${candidates[0].nodeId}, ${null}, ${JSON.stringify(candidates)},
          ${settlementKey}, ${now}, ${null})`;
 
   // Same synchronous pass as the insert: the tombstone is what answers the
   // replay once this row has been retired.
-  if (settlementKey !== null) recordEffectDone(sql, actor, BRANCH_SCOPE, settlementKey, now);
+  if (settlementKey !== null) recordEffectDone(sql, actor, { scope: BRANCH_SCOPE, key: settlementKey }, now);
 
   return {
     id, turnId: input.turnId, sessionId: input.sessionId, task: input.task.slice(0, 500),
-    source: 'branch', winnerNodeId: candidates[0]!.nodeId, chosenNodeId: null,
+    source: 'branch', winnerNodeId: candidates[0].nodeId, chosenNodeId: null,
     candidates, createdAt: now, pickedAt: null,
   };
 }
@@ -383,10 +383,20 @@ interface RawTakeRow {
   created_at: number; picked_at: number | null;
 }
 
+/** The stored column is free text; anything this read does not recognise is an
+ *  MCTS set, which is what every row predating the other two sources is. */
+function readTakeSource(stored: string | null): AlternateTakeSource {
+  if (stored === 'branch') return 'branch';
+
+  if (stored === 'heads') return 'heads';
+
+  return 'mcts';
+}
+
 function toTakeSet(r: RawTakeRow): AlternateTakeSet {
   return {
     id: r.id, turnId: r.turn_id, sessionId: r.session_id, task: r.task,
-    source: r.source === 'branch' ? 'branch' : r.source === 'heads' ? 'heads' : 'mcts',
+    source: readTakeSource(r.source),
     winnerNodeId: r.winner_node_id, chosenNodeId: r.chosen_node_id,
     candidates: v.parse(AlternateTakeCandidatesSchema, JSON.parse(r.candidates)),
     createdAt: r.created_at, pickedAt: r.picked_at,
@@ -508,17 +518,27 @@ export function takeEvidence(candidate: AlternateTakeCandidate): string {
   return `score ${candidate.score.toFixed(2)} · ${candidate.visits} visit${candidate.visits === 1 ? '' : 's'} · depth ${candidate.depth}`;
 }
 
+/** How the continuation prompt opens: each source produced its alternatives a
+ *  different way, and the agent is being told which comparison the user made. */
+function takeFraming(source: AlternateTakeSource, task: string): string {
+  if (source === 'branch') {
+    return `While you answered, the user redirected with "${task}" and that redirect ran `
+      + `as a parallel branch. Comparing both answers, the user picked the branch's:`;
+  }
+
+  if (source === 'heads') {
+    return `While exploring "${task}" you fanned out into parallel reasoning heads, `
+      + `and the user compared their findings and picked a different head's answer than the one you merged to:`;
+  }
+
+  return `While exploring "${task}" you surfaced several near-tied approaches, `
+    + `and the user compared them and picked a different take than the one you answered with:`;
+}
+
 /** The gentle programmatic turn asking the agent to continue with the chosen
  *  approach — single source for both backends' continuation enqueue. */
 export function buildTakeContinuationPrompt(set: AlternateTakeSet, chosen: AlternateTakeCandidate): string {
-  const framing = set.source === 'branch'
-    ? `While you answered, the user redirected with "${evidenceWindow(set.task, EVIDENCE_BUDGETS.taskEcho)}" and that redirect ran ` +
-      `as a parallel branch. Comparing both answers, the user picked the branch's:`
-    : set.source === 'heads'
-    ? `While exploring "${evidenceWindow(set.task, EVIDENCE_BUDGETS.taskEcho)}" you fanned out into parallel reasoning heads, ` +
-      `and the user compared their findings and picked a different head's answer than the one you merged to:`
-    : `While exploring "${evidenceWindow(set.task, EVIDENCE_BUDGETS.taskEcho)}" you surfaced several near-tied approaches, ` +
-      `and the user compared them and picked a different take than the one you answered with:`;
+  const framing = takeFraming(set.source, evidenceWindow(set.task, EVIDENCE_BUDGETS.taskEcho));
 
   return (
     `${framing}\n\n` +

@@ -78,7 +78,7 @@ export function selectFrontierNode(
 
   switch (input.policy) {
     case 'uct':
-      return selectNode(sql, actor, rootId, input.explorationWeight, maxDepth);
+      return selectNode(sql, actor, rootId, { explorationWeight: input.explorationWeight, maxDepth });
     case 'best-first':
       return bestUnexpanded(sql, actor, rootId, maxDepth);
     case 'none':

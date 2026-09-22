@@ -92,7 +92,7 @@ describe('findComplementaryPair', () => {
     // Every pair the sweep drew is genuinely complementary on the recorded
     // scores: each side wins somewhere, which is what makes it a merge candidate
     // rather than a dominated pair.
-    expect([...wins.entries()].sort()).toEqual([
+    expect([...wins.entries()].sort(([keyA], [keyB]) => keyA.localeCompare(keyB))).toEqual([
       ['ab', 'i1|i2'],
       ['ac', 'i1|i2,i3'],
       ['bc', 'i2|i1,i3'],

@@ -387,7 +387,7 @@ export async function judgeChild(input: {
  * row -> terminal state or ancestor reward -> best candidate. The runner owns level
  * ordering; this module owns what one settled child changes.
  */
-export async function scoreExpansion(input: {
+interface ScoreExpansionInput {
   readonly expansion: Expansion;
   readonly siblings: readonly Expansion[];
   readonly measures: boolean;
@@ -417,36 +417,54 @@ export async function scoreExpansion(input: {
     bestValue: number | null;
     readonly ensembles: number[];
   };
-}): Promise<Refusal | null> {
+}
+
+/** The four scoring paths, in the order a child is eligible for them: an
+ *  expansion that never finished is not scored at all, a Pareto run measures its
+ *  axes, a measured objective verifies against its baseline, and anything left
+ *  is judged. A child eligible for none is unscored, which is not a fault. */
+async function scoreOutcome(input: ScoreExpansionInput) {
+  const { expansion, pareto, measures, verifier, ctx, measured, baseline, judgeSamples } = input;
+
+  if (expansion.incomplete !== null) {
+    return { kind: 'incomplete' as const, detail: expansion.incomplete.detail };
+  }
+
+  if (pareto !== null) return measureParetoChild({ pareto, artifact: expansion.artifact });
+
+  if (measures && verifier && ctx && measured && baseline !== null) {
+    return measureChild({
+      ctx, verifier, witnessVerifier: input.witnessVerifier, measured, baseline,
+      artifact: expansion.artifact,
+    });
+  }
+
+  if (judgeSamples === null) return null;
+
+  const { rt, mode, resolved, siblings, languages } = input;
+
+  return judgeChild({
+    rt, mode, samples: judgeSamples, task: resolved.task,
+    minEnsemble: isTreeAdvance(resolved.config.advance.kind)
+      ? JUDGE_MARGINALISATION_MIN
+      : 1,
+    answer: expansion.answer,
+    siblings: siblings.map((other) => other.answer),
+    siblingsProducedCode: siblings.some(
+      (other) => readProposalCode(other.answer, languages)?.kind === 'runnable',
+    ),
+  });
+}
+
+export async function scoreExpansion(input: ScoreExpansionInput): Promise<Refusal | null> {
   const {
-    expansion, siblings, measures, verifier, witnessVerifier, pareto, ctx, measured, baseline,
-    judgeSamples, resolved, rt, mode, languages, sql, rootId, candidates, spentBy,
+    expansion, measures, pareto, measured, resolved, rt, sql, rootId, candidates, spentBy,
     nodes, log, searchLedger, ledgerEpoch, rankDirection, state,
   } = input;
 
   let { publication, best, bestValue } = state;
 
-  const outcome = expansion.incomplete !== null
-    ? { kind: 'incomplete' as const, detail: expansion.incomplete.detail }
-    : pareto !== null
-      ? await measureParetoChild({ pareto, artifact: expansion.artifact })
-      : measures && verifier && ctx && measured && baseline !== null
-        ? await measureChild({
-            ctx, verifier, witnessVerifier, measured, baseline, artifact: expansion.artifact,
-          })
-        : judgeSamples !== null
-          ? await judgeChild({
-            rt, mode, samples: judgeSamples, task: resolved.task,
-            minEnsemble: isTreeAdvance(resolved.config.advance.kind)
-              ? JUDGE_MARGINALISATION_MIN
-              : 1,
-            answer: expansion.answer,
-            siblings: siblings.map((other) => other.answer),
-            siblingsProducedCode: siblings.some(
-              (other) => readProposalCode(other.answer, languages)?.kind === 'runnable',
-            ),
-          })
-          : null;
+  const outcome = await scoreOutcome(input);
 
   if (outcome?.kind === 'instrument-faulted') {
     searchLedger.fail(rootId, ledgerEpoch, Date.now());
@@ -542,9 +560,10 @@ export async function scoreExpansion(input: {
       WHERE actor_id = ${rt.actor.actorId} AND id = ${expansion.id}`;
   }
 
-  const rank = outcome?.kind === 'scored'
-    ? outcome.measurement.value
-    : outcome?.kind === 'judged' ? outcome.score : null;
+  let rank: number | null = null;
+
+  if (outcome?.kind === 'scored') rank = outcome.measurement.value;
+  else if (outcome?.kind === 'judged') rank = outcome.score;
 
   if (rank !== null && (bestValue === null || isBetter(rank, bestValue, rankDirection))) {
     best = candidate;

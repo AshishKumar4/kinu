@@ -22,14 +22,24 @@ import { EVIDENCE_BUDGETS, evidenceWindow } from '../prompts/evidence-window';
 import { isoDate } from '../utils/date';
 import type { WorkMode } from '../types/turn';
 
+export interface ConvergeOptions {
+  /** The acceptance floor a winner must clear. */
+  readonly minAcceptable?: number;
+  /** The near-tie window the takes ledger records rivals within. */
+  readonly takesEpsilon?: number;
+  readonly mode?: WorkMode;
+}
+
 export async function converge(
   rt: AgentRuntime,
   session: SessionWriter,
   rootId: string,
-  minAcceptable: number = DEFAULT_CONFIG.mcts.minAcceptableScore,
-  takesEpsilon: number = DEFAULT_CONFIG.mcts.takesEpsilon,
-  mode: WorkMode = 'build',
+  opts: ConvergeOptions = {},
 ): Promise<ConvergenceResult> {
+  const minAcceptable = opts.minAcceptable ?? DEFAULT_CONFIG.mcts.minAcceptableScore;
+  const takesEpsilon = opts.takesEpsilon ?? DEFAULT_CONFIG.mcts.takesEpsilon;
+  const mode = opts.mode ?? 'build';
+
   const population = rt.storage.sql<SearchNode>`
     SELECT * FROM search_nodes
     WHERE actor_id = ${rt.actor.actorId} AND root_id = ${rootId}

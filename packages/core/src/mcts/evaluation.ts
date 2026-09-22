@@ -158,6 +158,18 @@ export interface BranchEvaluation {
   judgeSamplesUsed: number;
 }
 
+/** What the run says about the generated checks: the count when it kept one,
+ *  otherwise the bare fact that assertions were generated at all. */
+function checkTally(passedChecks: number | undefined, totalChecks: number | undefined, generated: boolean): string {
+  if (totalChecks !== undefined && passedChecks !== undefined) {
+    return ` and passed ${passedChecks} of ${totalChecks} generated checks`;
+  }
+
+  if (generated) return ' against generated assertions';
+
+  return '';
+}
+
 /**
  * The environment's reply to a branch's proposal, in one sentence — or null
  * when the branch never reached the environment (prose, plan mode, a language
@@ -175,9 +187,7 @@ export function executionObservation(execution: BranchEvaluation['execution']): 
   if (!execution) return null;
   const { passedChecks, totalChecks } = execution;
 
-  const tally = totalChecks !== undefined && passedChecks !== undefined
-    ? ` and passed ${passedChecks} of ${totalChecks} generated checks`
-    : execution.assertionsGenerated ? ' against generated assertions' : '';
+  const tally = checkTally(passedChecks, totalChecks, execution.assertionsGenerated);
 
   if (execution.passed) return `the proposed code ran${tally || ''} and PASSED.`;
 
@@ -248,7 +258,7 @@ async function codeFailedToParse(
   if (!execution.assertionsGenerated) return true;
   const bare = await runForVerdict(executor, code, [], language);
 
-  return !bare.passed && !!bare.error && isParseFailure(bare.error);
+  return !bare.passed && bare.error !== undefined && isParseFailure(bare.error);
 }
 
 /** How an evaluation's LLM-call budget divides between check generation and the
@@ -532,6 +542,17 @@ export async function runForVerdict(
   return verdict;
 }
 
+/** The run's verdict as the judge reads it, or nothing when the code never ran. */
+function executionEvidence(execution: BranchEvaluation['execution']): string {
+  if (!execution) return '';
+
+  if (execution.passed) return '\nExecution evidence: the candidate\'s code was run and PASSED.\n';
+
+  const why = evidenceWindow(execution.error ?? 'unknown error', EVIDENCE_BUDGETS.judgeExecutionError);
+
+  return `\nExecution evidence: the candidate's code was run and FAILED: ${why}\n`;
+}
+
 function buildJudgePrompt(
   task: string,
   trajectory: string,
@@ -544,11 +565,7 @@ function buildJudgePrompt(
     .map((s, i) => `${i + 1}. ${evidenceWindow(s, EVIDENCE_BUDGETS.judgeSibling)}`)
     .join('\n');
 
-  const executionBlock = execution
-    ? execution.passed
-      ? '\nExecution evidence: the candidate\'s code was run and PASSED.\n'
-      : `\nExecution evidence: the candidate's code was run and FAILED: ${evidenceWindow(execution.error ?? 'unknown error', EVIDENCE_BUDGETS.judgeExecutionError)}\n`
-    : '';
+  const executionBlock = executionEvidence(execution);
 
   return `You are scoring ONE candidate approach produced during a tree search over competing approaches.
 
@@ -594,5 +611,5 @@ export function median(values: number[]): number {
   const sorted = [...values].sort((a, b) => a - b);
   const mid = Math.floor(sorted.length / 2);
 
-  return sorted.length % 2 === 1 ? sorted[mid]! : (sorted[mid - 1]! + sorted[mid]!) / 2;
+  return sorted.length % 2 === 1 ? sorted[mid] : (sorted[mid - 1] + sorted[mid]) / 2;
 }

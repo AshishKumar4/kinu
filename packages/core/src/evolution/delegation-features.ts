@@ -234,7 +234,7 @@ const EXPLORATION_ACTIONS = { swarm: true } satisfies Record<string, true>;
 /** Whether an action read off a stored row is in one of the tables above. The
  *  action is `string | null` off the wire, so the lookup narrows rather than
  *  indexing a known-key record with an unknown key. */
-function hasKey<Table extends object>(table: Table, action: string | null): boolean {
+function hasKey(table: Record<string, true>, action: string | null): boolean {
   return action !== null && action in table;
 }
 

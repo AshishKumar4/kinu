@@ -427,6 +427,19 @@ export interface CellSeek {
  *  the SAME query rather than two that must agree. */
 const NO_LIMIT = -1;
 
+/** What a records read asks for, beyond the handle that scopes it. */
+export interface RecordQuery {
+  /** Which end of the value order is "best" — it inverts the ORDER BY. */
+  readonly direction: ObjectiveDirection;
+  readonly limit: number;
+}
+
+/** {@link RecordQuery} plus the page position, for the one read that pages. */
+export interface CellQuery extends RecordQuery {
+  /** The last row of the previous page, or null for the first. */
+  readonly seek: CellSeek | null;
+}
+
 /**
  * Every row under one comparable set, best FIRST — ONE query, however it is scoped.
  *
@@ -446,12 +459,12 @@ export function recordsUnder(
   sql: SqlExecutor,
   actor: ActorHandle,
   handle: RecordObjectiveHandle,
-  direction: ObjectiveDirection,
-  limit: number,
+  query: RecordQuery,
 ): readonly ExplorationRecord[] {
   actor.assertCurrent();
   const actorId = actor.actorId;
   const { objectiveId, floorDigest } = handle;
+  const { direction, limit } = query;
 
   const rows = direction === 'minimise'
     ? sql<Row>`SELECT * FROM exploration_records
@@ -481,13 +494,12 @@ export function recordsInCell(
   sql: SqlExecutor,
   actor: ActorHandle,
   handle: RecordCellHandle,
-  direction: ObjectiveDirection,
-  seek: CellSeek | null,
-  limit: number,
+  query: CellQuery,
 ): readonly ExplorationRecord[] {
   actor.assertCurrent();
   const actorId = actor.actorId;
   const { objectiveId, floorDigest, descriptor } = handle;
+  const { direction, seek, limit } = query;
   const from = seek === null ? 0 : 1;
   const value = seek?.value ?? 0;
   const at = seek?.firstRecordedAt ?? 0;
@@ -575,7 +587,7 @@ export function describeObjective(
 export function recordsFor(
   sql: SqlExecutor, actor: ActorHandle, scope: RecordScope,
 ): readonly ExplorationRecord[] {
-  return recordsUnder(sql, actor, recordHandleOf(scope), scope.identity.direction, NO_LIMIT);
+  return recordsUnder(sql, actor, recordHandleOf(scope), { direction: scope.identity.direction, limit: NO_LIMIT });
 }
 
 /** This cell's incumbent, or null when the cell is empty — the head of the cell's own
@@ -585,7 +597,7 @@ export function bestInCell(
 ): ExplorationRecord | null {
   const handle = { ...recordHandleOf(scope), descriptor: scope.descriptor };
 
-  return recordsInCell(sql, actor, handle, scope.identity.direction, null, 1)[0] ?? null;
+  return recordsInCell(sql, actor, handle, { direction: scope.identity.direction, seek: null, limit: 1 })[0] ?? null;
 }
 
 /**
@@ -617,7 +629,7 @@ export function cellOccupants(
 ): readonly ExplorationRecord[] {
   const handle = { ...recordHandleOf(scope), descriptor: scope.descriptor };
 
-  return recordsInCell(sql, actor, handle, scope.identity.direction, null, NO_LIMIT);
+  return recordsInCell(sql, actor, handle, { direction: scope.identity.direction, seek: null, limit: NO_LIMIT });
 }
 
 /**

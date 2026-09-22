@@ -157,6 +157,14 @@ interface Row {
   iteration: number; budget: number; status: string; epoch: number;
 }
 
+/** What one MCTS loop pass has reached, as {@link MctsSearchStore.checkpoint}
+ *  writes it: where the loop is, what it has left, and when it said so. */
+export interface SearchProgress {
+  readonly iteration: number;
+  readonly budget: number;
+  readonly now: number;
+}
+
 /** One search run's ledger row — the checkpoint metadata, without the live
  *  config blob. What "how many searches has this workspace run, and how did
  *  each end" reads. */
@@ -267,9 +275,10 @@ export class MctsSearchStore {
    *
    *  A swarm does NOT call this: its progress is derived from its tree
    *  ({@link ResumableSwarm}), so its only live-row write is {@link touch}. */
-  checkpoint(rootId: string, epoch: number, iteration: number, budget: number, now: number): void {
+  checkpoint(rootId: string, epoch: number, progress: SearchProgress): void {
     this.actor.assertCurrent();
-    void this.sql`UPDATE mcts_search_runs SET iteration=${iteration}, budget=${budget}, updated_at=${now}
+    void this.sql`UPDATE mcts_search_runs
+      SET iteration=${progress.iteration}, budget=${progress.budget}, updated_at=${progress.now}
       WHERE actor_id=${this.actorId} AND root_id=${rootId} AND status='running' AND epoch=${epoch}`;
   }
 
@@ -440,7 +449,7 @@ export class MctsSearchStore {
   readSwarmProfile(rootId: string): SwarmProfileSnapshot | null {
     const stored = this.readStoredSwarmConfig(rootId);
 
-    return stored?.profile === undefined ? null : validateSwarmProfileSnapshot(stored.profile);
+    return stored?.profile === undefined ? null : validateSwarmProfileSnapshot({ value: stored.profile });
   }
 
   readSwarmOriginContext(rootId: string): readonly ModelMessage[] | null {
@@ -457,11 +466,7 @@ export class MctsSearchStore {
    *  `unit:'thought'` search journals no heads, so the journal read alone
    *  cannot see it. */
   hasRunningSwarms(): boolean {
-    this.actor.assertCurrent();
-
-    return this.sql<{ present: number }>`
-      SELECT 1 AS present FROM mcts_search_runs
-      WHERE actor_id=${this.actorId} AND status='running' AND engine='swarm' LIMIT 1`.length > 0;
+    return this.hasRunning('swarm');
   }
 
   /** Whether ANY search of THIS actor still claims a live executor, whichever
@@ -470,11 +475,20 @@ export class MctsSearchStore {
    *  unsettled MCTS row exactly as it is by an unsettled swarm row, and a
    *  swarm-only read would let a live tree search be treated as finished. */
   hasRunningSearches(): boolean {
+    return this.hasRunning(null);
+  }
+
+  /** One LIMIT-1 existence probe over this actor's unsettled runs. `engine`
+   *  narrows to one engine's rows, null asks about every engine; the only index
+   *  here is (actor_id, status, task, updated_at), so the engine filter is a row
+   *  test either way and binding it costs nothing a literal would not. */
+  private hasRunning(engine: 'swarm' | null): boolean {
     this.actor.assertCurrent();
 
     return this.sql<{ present: number }>`
       SELECT 1 AS present FROM mcts_search_runs
-      WHERE actor_id=${this.actorId} AND status='running' LIMIT 1`.length > 0;
+      WHERE actor_id=${this.actorId} AND status='running'
+        AND (${engine} IS NULL OR engine=${engine}) LIMIT 1`.length > 0;
   }
 
   runningSwarmRoots(createdBefore: number): readonly string[] {
@@ -588,18 +602,20 @@ export class MctsSearchStore {
 
     if (!r) return null;
 
-    if (r.engine === 'swarm') {
-      const children = this.childrenOf(r.root_id);
+    const progress = r.engine === 'swarm'
+      ? this.swarmProgress(r.root_id, r.config_json)
+      : { iteration: r.iteration, budget: r.budget };
 
-      return {
-        status: readStatus(r.status),
-        iteration: children,
-        budget: Math.max(0, this.storedBudget(r.root_id, r.config_json) - children),
-        epoch: r.epoch,
-      };
-    }
+    return { status: readStatus(r.status), ...progress, epoch: r.epoch };
+  }
 
-    return { status: readStatus(r.status), iteration: r.iteration, budget: r.budget, epoch: r.epoch };
+  /** A swarm's progress IS its tree: the children expanded so far stand in for
+   *  the iteration count, and what is left of the budget its `begin` froze is
+   *  that budget minus them. */
+  private swarmProgress(rootId: string, configJson: string) {
+    const children = this.childrenOf(rootId);
+
+    return { iteration: children, budget: Math.max(0, this.storedBudget(rootId, configJson) - children) };
   }
 
 
@@ -620,15 +636,17 @@ export class MctsSearchStore {
 
     return rows.map((r) => {
       const swarm = r.engine === 'swarm';
-      const children = swarm ? this.childrenOf(r.root_id) : null;
+
+      const progress = swarm
+        ? this.swarmProgress(r.root_id, r.config_json)
+        : { iteration: r.iteration, budget: r.budget };
 
       return {
         rootId: r.root_id,
         task: r.task,
         engine: swarm ? 'swarm' : 'mcts',
         status: readStatus(r.status),
-        iteration: swarm ? children! : r.iteration,
-        budget: swarm ? Math.max(0, this.storedBudget(r.root_id, r.config_json) - children!) : r.budget,
+        ...progress,
         epoch: r.epoch,
         createdAt: r.created_at,
         updatedAt: r.updated_at,

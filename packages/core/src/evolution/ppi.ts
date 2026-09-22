@@ -585,12 +585,12 @@ export function designWeightedKappa(
   const samples: number[] = [];
 
   for (let i = 0; i < iterations; i++) {
-    const resampled = drawn.map((s) => ({
+    const resampledStrata = drawn.map((s) => ({
       ...s,
       draws: s.draws.map(() => s.draws[Math.floor(random() * s.draws.length)]),
     }));
 
-    const draw = kappaPoint(resampled, population);
+    const draw = kappaPoint(resampledStrata, population);
 
     if (draw !== null) samples.push(draw);
   }
