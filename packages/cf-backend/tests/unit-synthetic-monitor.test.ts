@@ -243,11 +243,11 @@ describe('alert fatigue', () => {
     expect(first.alerting).toEqual(['downloads']);
     expect(first.emails).toBe(1);
     expect(l.sent).toHaveLength(1);
-    expect(l.sent[0]!.subject).toContain('downloads is failing');
-    expect(l.sent[0]!.text).toContain('checksum mismatch');
+    expect(l.sent[0].subject).toContain('downloads is failing');
+    expect(l.sent[0].text).toContain('checksum mismatch');
     // The alert says what a user hits, and what to do about it.
-    expect(l.sent[0]!.text).toContain('kinu update');
-    expect(l.sent[0]!.text).toContain('scripts/deploy.sh');
+    expect(l.sent[0].text).toContain('kinu update');
+    expect(l.sent[0].text).toContain('scripts/deploy.sh');
 
     // Nine more ticks over the next two hours: still broken, still one email.
     for (let tick = 1; tick <= 9; tick++) {
@@ -263,8 +263,8 @@ describe('alert fatigue', () => {
     expect(recovered.recovered).toEqual(['downloads']);
     expect(recovered.emails).toBe(1);
     expect(l.sent).toHaveLength(2);
-    expect(l.sent[1]!.subject).toContain('downloads recovered');
-    expect(l.sent[1]!.text).toContain('3 hours');
+    expect(l.sent[1].subject).toContain('downloads recovered');
+    expect(l.sent[1].text).toContain('3 hours');
     expect(listIncidents(l.sql)).toEqual([]);
 
     // A passing check with no open incident is silent.
@@ -279,7 +279,7 @@ describe('alert fatigue', () => {
       { probe: 'login', ok: false, detail: 'no provider' },
     ]);
     expect(l.sent).toHaveLength(1);
-    expect(l.sent[0]!.subject).toContain('2 checks are failing');
+    expect(l.sent[0].subject).toContain('2 checks are failing');
 
     const later = await recordProbeRun(l.deps(900_000), [
       { probe: 'downloads', ok: false, detail: 'checksum mismatch' },
@@ -289,7 +289,7 @@ describe('alert fatigue', () => {
 
     expect(later.alerting).toEqual(['health']);
     expect(l.sent).toHaveLength(2);
-    expect(l.sent[1]!.subject).toContain('health is failing');
+    expect(l.sent[1].subject).toContain('health is failing');
   });
 
   test('a failing check whose detail changes does not re-alert', async () => {
@@ -297,7 +297,7 @@ describe('alert fatigue', () => {
     await recordProbeRun(l.deps(1_000), [{ probe: 'health', ok: false, detail: 'HTTP 500' }]);
     await recordProbeRun(l.deps(900_000), [{ probe: 'health', ok: false, detail: 'HTTP 502' }]);
     expect(l.sent).toHaveLength(1);
-    expect(listIncidents(l.sql)[0]!.detail).toBe('HTTP 502');
+    expect(listIncidents(l.sql)[0].detail).toBe('HTTP 502');
   });
 
   test('an alert whose send fails is retried, and still lands only once', async () => {

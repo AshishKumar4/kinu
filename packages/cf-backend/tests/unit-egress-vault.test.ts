@@ -56,7 +56,7 @@ describe('the vault stores a secret without ever handing it back', () => {
   test('the stored column is sealed, not plaintext', async () => {
     const deps = await vault();
     await putEgressSecret(deps, STRIPE);
-    const stored = String(deps.sql.exec(`SELECT secret FROM user_egress_secrets`).toArray()[0]!.secret);
+    const stored = String(deps.sql.exec(`SELECT secret FROM user_egress_secrets`).toArray()[0].secret);
     expect(stored.startsWith('pce1.')).toBe(true);
     expect(stored).not.toContain(SECRET);
   });
@@ -64,7 +64,7 @@ describe('the vault stores a secret without ever handing it back', () => {
   test('a secret sealed for one binding cannot be opened as another', async () => {
     const deps = await vault();
     await putEgressSecret(deps, STRIPE);
-    const stored = String(deps.sql.exec(`SELECT secret FROM user_egress_secrets`).toArray()[0]!.secret);
+    const stored = String(deps.sql.exec(`SELECT secret FROM user_egress_secrets`).toArray()[0].secret);
     await expect(deps.cipher.open(deps.aad('some-other-binding'), stored))
       .rejects.toThrow('Record "test-user-do:egress:some-other-binding" failed to decrypt');
   });
@@ -84,7 +84,7 @@ describe('add, rotate, revoke', () => {
     );
 
     expect(resolved.kind).toBe('forward');
-    expect(resolved.kind === 'forward' && resolved.substitutions[0]!.secret).toBe('sk_live_rotated_value_here');
+    expect(resolved.kind === 'forward' && resolved.substitutions[0].secret).toBe('sk_live_rotated_value_here');
   });
 
   test('revoke reports whether anything went away', async () => {
@@ -139,7 +139,7 @@ describe('destination is re-checked on every request', () => {
     );
 
     expect(allowed.kind).toBe('forward');
-    expect(allowed.kind === 'forward' && allowed.substitutions[0]!.secret).toBe(SECRET);
+    expect(allowed.kind === 'forward' && allowed.substitutions[0].secret).toBe(SECRET);
 
     const denied = await resolveEgressInjection(
       deps, { host: 'attacker.test', url: 'https://attacker.test/collect', headers }, [binding],
@@ -174,7 +174,7 @@ describe('key rotation', () => {
 
     const rotated: EgressVaultDeps = { sql: deps.sql, cipher: next, aad: deps.aad };
     expect(await rewrapEgressSecrets(rotated)).toBe(true);
-    const stored = String(deps.sql.exec(`SELECT secret FROM user_egress_secrets`).toArray()[0]!.secret);
+    const stored = String(deps.sql.exec(`SELECT secret FROM user_egress_secrets`).toArray()[0].secret);
     expect(stored.startsWith(`pce1.${next.keyId}.`)).toBe(true);
     expect(await next.open(deps.aad('stripe'), stored)).toBe(SECRET);
   });

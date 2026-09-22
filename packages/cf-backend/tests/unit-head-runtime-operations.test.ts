@@ -123,10 +123,10 @@ describe('createHeadRuntime — the merge call carries the operation sink', () =
 
     expect(merge.narrative).toContain('Unified');
     expect(operations.map((e) => e.phase)).toEqual(['start', 'end']);
-    expect(operations[0]!.operationId).toBe(operations[1]!.operationId);
+    expect(operations[0].operationId).toBe(operations[1].operationId);
     expect(operations.every((e) => e.source === 'judge' && e.op === 'generate_json')).toBe(true);
-    expect(operations[1]!.outcome).toBe('ok');
-    expect(operations[1]!.usage).toEqual({ input: 41, output: 7 });
+    expect(operations[1].outcome).toBe('ok');
+    expect(operations[1].usage).toEqual({ input: 41, output: 7 });
     // The cost report rides the same call, unchanged.
     expect(reports).toEqual([{
       source: 'judge', usage: { input: 41, output: 7 }, modelId: 'mock-model-id',
@@ -141,8 +141,8 @@ describe('createHeadRuntime — the merge call carries the operation sink', () =
     // The provider answered and was billed; the parse refusal is the
     // controller's fallback path, not this frame's failure.
     expect(operations.map((e) => e.phase)).toEqual(['start', 'end']);
-    expect(operations[1]!.outcome).toBe('ok');
-    expect(operations[1]!.usage).toEqual({ input: 41, output: 7 });
+    expect(operations[1].outcome).toBe('ok');
+    expect(operations[1].usage).toEqual({ input: 41, output: 7 });
     expect(reports).toHaveLength(1);
   });
 

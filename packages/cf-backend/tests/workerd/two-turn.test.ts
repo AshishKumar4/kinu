@@ -181,8 +181,8 @@ describe('two real turns over the HTTP model seam', () => {
     // (the held call died with the object; the probe reads only the calls
     // the restarted object makes).
     expect(calls).toHaveLength(1);
-    expect(realUsers(calls[0]!)).toHaveLength(2);
-    expect(realUsers(calls[0]!)[1]).toBe('QUEUE-B\n\nQUEUE-C');
+    expect(realUsers(calls[0])).toHaveLength(2);
+    expect(realUsers(calls[0])[1]).toBe('QUEUE-B\n\nQUEUE-C');
 
     // Each admitted send landed exactly once under its own id — the
     // reservation survived the reset, the replay re-bound it rather than

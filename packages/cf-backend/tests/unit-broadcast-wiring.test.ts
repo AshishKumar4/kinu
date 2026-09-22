@@ -57,7 +57,7 @@ function callArgument(text: string, open: number): string {
   let depth = 0;
 
   for (let i = open; i < text.length; i++) {
-    const c = text[i]!;
+    const c = text[i];
 
     if (c === '(' || c === '[' || c === '{') depth++;
     else if (c === ')' || c === ']' || c === '}') {

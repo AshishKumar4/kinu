@@ -114,7 +114,7 @@ function directFetch(answer: (run: RecordedRun) => BindingAnswer, retry: RateLim
 
   // SAFETY: this constructed fixture provides `Ai.run`, and the adapter under
   // test calls no other member of the binding.
-  return { fetch: createDirectWorkersAIFetch(ai as Ai, retry), runs };
+  return { fetch: createDirectWorkersAIFetch(ai, retry), runs };
 }
 
 function chatBody(extra: JsonObject = {}): string {
@@ -334,10 +334,10 @@ describe('direct Workers AI binding — incremental streaming', () => {
     // First-byte evidence, carrying no prompt and no credential.
     const ttft = logger.emitted.filter((line) => line.event === 'workers_ai.direct_stream_first_byte');
     expect(ttft).toHaveLength(1);
-    expect(Object.keys(ttft[0]!.fields).sort()).toEqual(['bytes', 'model', 'ms']);
-    expect(ttft[0]!.fields.model).toBe(MODEL);
-    expect(Number.isInteger(ttft[0]!.fields.ms)).toBe(true);
-    expect(ttft[0]!.fields.bytes).toBe(sse({ response: 'first' }).length);
+    expect(Object.keys(ttft[0].fields).sort()).toEqual(['bytes', 'model', 'ms']);
+    expect(ttft[0].fields.model).toBe(MODEL);
+    expect(Number.isInteger(ttft[0].fields.ms)).toBe(true);
+    expect(ttft[0].fields.bytes).toBe(sse({ response: 'first' }).length);
     expect(JSON.stringify(logger.emitted)).not.toContain(PROMPT);
   });
 

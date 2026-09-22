@@ -872,7 +872,7 @@ describe('the descriptor surface', () => {
     seedMcpTools('srv1', [{ name: 'quiet', description: '', inputSchema: { type: 'object' } }]);
     const surface = await readSurface(h, await testOwner());
     expect(surface.descriptors).toHaveLength(1);
-    expect('description' in surface.descriptors[0]!).toBe(false);
+    expect('description' in surface.descriptors[0]).toBe(false);
     h.close();
   });
 

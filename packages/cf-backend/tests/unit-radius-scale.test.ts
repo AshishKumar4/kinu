@@ -46,7 +46,7 @@ function globalDeclarations(): Map<string, string> {
   const out = new Map<string, string>();
 
   for (const [, name, value] of scope.matchAll(/(--[a-z0-9-]+)\s*:\s*([^;{}]+);/gi)) {
-    out.set(name!, value!.trim());
+    out.set(name, value.trim());
   }
 
   return out;
@@ -68,7 +68,7 @@ function resolve(token: string, seen: string[] = []): { ok: true; value: string 
   const raw = DECLARED.get(token);
 
   if (raw === undefined) return { ok: false, at: token };
-  const refs = [...raw.matchAll(/var\(\s*(--[a-z0-9-]+)/gi)].map((m) => m[1]!);
+  const refs = [...raw.matchAll(/var\(\s*(--[a-z0-9-]+)/gi)].map((m) => m[1]);
 
   if (refs.length === 0) {
     return LENGTH.test(raw) ? { ok: true, value: raw } : { ok: false, at: `${token} → non-length ${raw}` };
@@ -119,7 +119,7 @@ describe('radius scale', () => {
     const unresolved: string[] = [];
 
     for (const [, token] of NO_COMMENTS.matchAll(/border-radius:\s*var\(\s*(--[a-z0-9-]+)/gi)) {
-      const res = resolve(token!);
+      const res = resolve(token);
 
       if (!res.ok) unresolved.push(`${token}: unresolved at ${res.at}`);
     }

@@ -138,7 +138,7 @@ describe('a re-created runner instance', () => {
     expect(first.headers.get('x-slate-runner')).toBeNull();
     // SAFETY: `PING_APP` above is the fixture this test file constructs —
     // its fetch answers `Response.json({ message: 'pong' })` on /ping.
-    expect(await first.json() as { message: string }).toEqual({ message: 'pong' });
+    expect(await first.json<{ message: string }>()).toEqual({ message: 'pong' });
     expect(slateStarts()).toBe(base + 1);
 
     const second = await runner.fetch(get('/ping'));

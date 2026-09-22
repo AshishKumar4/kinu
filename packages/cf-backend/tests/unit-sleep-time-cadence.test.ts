@@ -68,7 +68,7 @@ describe('the turn-count trigger', () => {
 
     await settle(harness, 3);
     expect(prompts).toHaveLength(1);
-    const prompt = prompts[0]!;
+    const prompt = prompts[0];
 
     for (const turn of ['ask-1', 'ask-2', 'ask-3']) expect(prompt).toContain(turn);
     expect(prompt.indexOf('ask-1')).toBeLessThan(prompt.indexOf('ask-3'));
@@ -85,7 +85,7 @@ describe('the turn-count trigger', () => {
 
     for (let n = 1; n <= 6; n++) await settle(harness, n);
     expect(prompts).toHaveLength(2);
-    const second = prompts[1]!;
+    const second = prompts[1];
 
     for (const turn of ['ask-4', 'ask-5', 'ask-6']) expect(second).toContain(turn);
 

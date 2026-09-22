@@ -664,7 +664,7 @@ describe('Bun runtime resolution is one source of truth', () => {
       ['1.4.0-canary.20260101', '1004000'],
       ['2.0.13', '2000013'],
     ]) {
-      const run = spawnSync('bash', ['-c', script, 'kinu', version!], { encoding: 'utf8' });
+      const run = spawnSync('bash', ['-c', script, 'kinu', version], { encoding: 'utf8' });
       expect(run.status, `${version}: ${run.stderr}`).toBe(0);
       expect(run.stdout.trim()).toBe(key);
     }

@@ -85,7 +85,7 @@ describe('explorationForkTree — a running swarm', () => {
 
   test('a running node carries no score and no rollout count', () => {
     const tree = explorationForkTree({ tree: [rootRow()], head: journal([head('n1', 'running')]) });
-    const node = tree!.children[0]!;
+    const node = tree!.children[0];
     expect(node.status).toBe('running');
     // The lie the incident's "0%" root told. A node that has reported nothing
     // has earned no number, and null is how this view spells that.
@@ -123,7 +123,7 @@ describe('explorationForkTree — a running swarm', () => {
 
     const parent = tree!.children.find((child) => child.id === 'n1')!;
     expect(parent.children.map((child) => child.id)).toEqual(['n1a']);
-    expect(parent.children[0]!.depth).toBe(2);
+    expect(parent.children[0].depth).toBe(2);
   });
 
   test('a node whose parent is not in either half still reaches the canvas', () => {
@@ -135,7 +135,7 @@ describe('explorationForkTree — a running swarm', () => {
     });
 
     expect(vertices(tree)).toHaveLength(2);
-    expect(tree!.children[0]!.id).toBe('orphan');
+    expect(tree!.children[0].id).toBe('orphan');
   });
 
   test('a run with journalled nodes and no tree at all still folds', () => {
@@ -213,7 +213,7 @@ describe('explorationForkTree — the run as production held it', () => {
     const finished = tree!.children.filter((child) => child.status === 'open');
     expect(finished.map((child) => child.id).sort())
       .toEqual(['cbf7hl3o5n0r52j716zeh', 'q5ghadns41o1shnpl3vfh']);
-    expect(finished[0]!.observation).toContain('mcp.ts:229');
+    expect(finished[0].observation).toContain('mcp.ts:229');
   });
 
   test('the dead rows are drawn dead — six aborted and two errored, none of them live', () => {

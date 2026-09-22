@@ -27,7 +27,7 @@ function fakeUserDOStub(
 
   return userCredentialSource({
     getAuthHeaders: async (key: string) => creds[key] ?? null,
-    hasCredential: async (key: string) => !!creds[key],
+    hasCredential: async (key: string) => Boolean(creds[key]),
     listCredentials: async () => list,
     getCredentialBaseURL: async (key: string) => baseURLs[key] ?? null,
   });

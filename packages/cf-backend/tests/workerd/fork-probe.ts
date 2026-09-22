@@ -535,7 +535,7 @@ export class ForkSourceProbeDO extends DurableObject<Cloudflare.Env> {
 function corruptFrame(frame: ForkFrame, how: ForkCorruption): ForkFrame {
   if (frame.kind !== 'file') throw new Error(`frame ${frame.seq} is a ${frame.kind} frame, not a file frame`);
   const bytes = frame.bytes.slice();
-  bytes[0] = bytes[0]! ^ 0xff;
+  bytes[0] = bytes[0] ^ 0xff;
 
   return how === 'frame' ? { ...frame, bytes } : sealForkFrame({ ...frame, bytes });
 }

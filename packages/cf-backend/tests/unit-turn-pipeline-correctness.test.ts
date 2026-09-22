@@ -797,7 +797,7 @@ describe('turn-pipeline correctness wiring', () => {
     // authority, text flattened, edges intact.
     const page = await harness.agent.getChatHistoryPage({ limit: 10 });
     expect(page.items.map((entry) => entry.id)).toEqual(['u-live', 'a-live']);
-    expect(page.items[1]!.content).toBe('partial answer');
+    expect(page.items[1].content).toBe('partial answer');
   });
 
   test('an ABORTED turn is still recorded as evidence', async () => {
@@ -827,7 +827,7 @@ describe('turn-pipeline correctness wiring', () => {
     ).all();
 
     expect(recorded, 'an aborted turn left no evidence row').toHaveLength(1);
-    expect(recorded[0]!.turn).toContain('partial');
+    expect(recorded[0].turn).toContain('partial');
   });
 
   // The credit decision, behaviourally, on this backend. Core's

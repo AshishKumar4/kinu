@@ -161,10 +161,10 @@ describe('the secret reaches the upstream and comes back scrubbed', () => {
 
       expect(response.status).toBe(200);
       expect(upstream.seen).toHaveLength(1);
-      expect(upstream.seen[0]!.headers.get('authorization')).toBe(`Bearer ${SECRET}`);
+      expect(upstream.seen[0].headers.get('authorization')).toBe(`Bearer ${SECRET}`);
       // Redirects must not be followed: the default would replay the injected
       // credential against whatever host the upstream names.
-      expect(upstream.seen[0]!.redirect).toBe('manual');
+      expect(upstream.seen[0].redirect).toBe('manual');
     } finally { upstream.restore(); }
   });
 
@@ -227,8 +227,8 @@ describe('the secret reaches the upstream and comes back scrubbed', () => {
         fakeEnv(() => ({ kind: 'forward', substitutions: [] })),
         PARAMS,
       );
-      expect(upstream.seen[0]!.url).toBe('https://example.com/');
-      expect(upstream.seen[0]!.headers.get('authorization')).toBeNull();
+      expect(upstream.seen[0].url).toBe('https://example.com/');
+      expect(upstream.seen[0].headers.get('authorization')).toBeNull();
     } finally { upstream.restore(); }
   });
 });
@@ -376,7 +376,7 @@ describe('reachability of the container event channel', () => {
   // adding a call here without allowlisting it must fail.
   test('every OrchestratorAgent method the egress layer calls is on the RPC surface', () => {
     const handler = read('src/egress/outbound.ts');
-    const called = [...handler.matchAll(/\bagent\.(\w+)\(/g)].map(([, name]) => name!);
+    const called = [...handler.matchAll(/\bagent\.(\w+)\(/g)].map(([, name]) => name);
     expect(called.length).toBeGreaterThan(0);
     expect([...new Set(called)].filter((name) => !ORCHESTRATOR_RPC_SURFACE.includes(name))).toEqual([]);
   });
@@ -501,7 +501,7 @@ describe('one User-Agent for everything a container sends', () => {
         fakeEnv(() => ({ kind: 'forward', substitutions: [] })),
         PARAMS,
       );
-      expect(upstream.seen[0]!.headers.get('user-agent')).toBe(`${KINU_USER_AGENT} curl/8.5.0`);
+      expect(upstream.seen[0].headers.get('user-agent')).toBe(`${KINU_USER_AGENT} curl/8.5.0`);
     } finally { upstream.restore(); }
   });
 
@@ -516,7 +516,7 @@ describe('one User-Agent for everything a container sends', () => {
         fakeEnv(() => ({ kind: 'forward', substitutions: [{ placeholder: PLACEHOLDER, secret: SECRET }] })),
         PARAMS,
       );
-      expect(upstream.seen[0]!.headers.get('user-agent')).toBe(`${KINU_USER_AGENT} curl/8.5.0`);
+      expect(upstream.seen[0].headers.get('user-agent')).toBe(`${KINU_USER_AGENT} curl/8.5.0`);
     } finally { upstream.restore(); }
   });
 
@@ -529,7 +529,7 @@ describe('one User-Agent for everything a container sends', () => {
         fakeEnv(() => ({ kind: 'forward', substitutions: [] })),
         PARAMS,
       );
-      expect(upstream.seen[0]!.headers.get('user-agent')).toBe(KINU_USER_AGENT);
+      expect(upstream.seen[0].headers.get('user-agent')).toBe(KINU_USER_AGENT);
     } finally { upstream.restore(); }
   });
 
@@ -571,7 +571,7 @@ describe('the forwarded body is the container\'s own, not a copy of it', () => {
       await handleContainerEgress(
         inbound, fakeEnv(() => ({ kind: 'forward', substitutions: [] })), PARAMS,
       );
-      expect(upstream.seen[0]!.body).toBe(body);
+      expect(upstream.seen[0].body).toBe(body);
     } finally { upstream.restore(); }
   });
 
@@ -608,11 +608,11 @@ describe('a throw at the boundary becomes a classified answer', () => {
     expect(body).toContain('api.stripe.com');
 
     expect(emitted).toHaveLength(1);
-    expect(emitted[0]!.event).toBe('egress.authority_unreachable');
-    expect(emitted[0]!.code).toBe('unavailable');
+    expect(emitted[0].event).toBe('egress.authority_unreachable');
+    expect(emitted[0].code).toBe('unavailable');
     // The chain is retained, both what we were doing and what threw.
-    expect(emitted[0]!.cause).toContain('asking the owner vault');
-    expect(emitted[0]!.cause).toContain('durable object reset');
+    expect(emitted[0].cause).toContain('asking the owner vault');
+    expect(emitted[0].cause).toContain('durable object reset');
   });
 
   test('a deadline on the vault is 504, not 503 — the two imply different retries', async () => {
@@ -641,8 +641,8 @@ describe('a throw at the boundary becomes a classified answer', () => {
       expect(response?.status).toBe(502);
       expect(await response!.text()).toContain('example.com');
       expect(emitted).toHaveLength(1);
-      expect(emitted[0]!.event).toBe('egress.upstream_failed');
-      expect(emitted[0]!.cause).toContain('connection refused');
+      expect(emitted[0].event).toBe('egress.upstream_failed');
+      expect(emitted[0].cause).toContain('connection refused');
     } finally { upstream.restore(); }
   });
 
@@ -667,10 +667,10 @@ describe('a throw at the boundary becomes a classified answer', () => {
 
       expect(response?.status).toBe(502);
       expect(await response!.text()).not.toContain(SECRET);
-      expect(emitted[0]!.cause).not.toContain(SECRET);
+      expect(emitted[0].cause).not.toContain(SECRET);
       // Scrubbed, not deleted: the placeholder the container already holds is
       // what an operator correlates the failure with.
-      expect(emitted[0]!.cause).toContain(PLACEHOLDER);
+      expect(emitted[0].cause).toContain(PLACEHOLDER);
     } finally { upstream.restore(); }
   });
 
@@ -690,8 +690,8 @@ describe('a throw at the boundary becomes a classified answer', () => {
     expect(response?.status).toBe(503);
     // The container has to know the event is NOT recorded, or it drops it.
     expect(await response!.text()).toContain('send it again');
-    expect(emitted[0]!.event).toBe('egress.event_channel_unreachable');
-    expect(emitted[0]!.cause).toContain('object evicted mid-write');
+    expect(emitted[0].event).toBe('egress.event_channel_unreachable');
+    expect(emitted[0].cause).toContain('object evicted mid-write');
   });
 });
 
@@ -742,12 +742,12 @@ describe('private destinations are refused at the one place requests leave', () 
       );
     });
 
-    expect(emitted[0]!.event).toBe('egress.private_destination');
-    expect(emitted[0]!.code).toBe('denied');
+    expect(emitted[0].event).toBe('egress.private_destination');
+    expect(emitted[0].code).toBe('denied');
     // Host only — no path, no query in the diagnostic — and the seam named, so
     // one event name carries one shape across the three enforcement points of
     // the shared classifier (see unit-codemode-egress.test.ts).
-    expect(emitted[0]!.fields).toEqual({ host: '169.254.169.254', seam: 'container' });
+    expect(emitted[0].fields).toEqual({ host: '169.254.169.254', seam: 'container' });
   });
 
   test('the public control still succeeds end to end', async () => {
@@ -787,7 +787,7 @@ describe('every redirect hop is judged, not trusted', () => {
       expect(first.status).toBe(302);
       // The request left with redirect manual, so the hop's next request is
       // the CONTAINER's, and it re-enters the handler.
-      expect(hop.seen[0]!.redirect).toBe('manual');
+      expect(hop.seen[0].redirect).toBe('manual');
     } finally { hop.restore(); }
   });
 

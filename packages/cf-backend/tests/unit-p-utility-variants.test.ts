@@ -44,7 +44,7 @@ function sourceFiles(dir: string): string[] {
 
 /** `p-*` classes declared with `@utility`, i.e. the ones variants work on. */
 const asUtility: ReadonlySet<string> = new Set(
-  [...CSS.matchAll(/@utility\s+(p-[a-z0-9-]+)/gi)].map((m) => m[1]!),
+  [...CSS.matchAll(/@utility\s+(p-[a-z0-9-]+)/gi)].map((m) => m[1]),
 );
 
 /** Every `variant:p-name` written in the app, mapped to where it appears. */
@@ -57,10 +57,10 @@ function variantUses(): Map<string, string[]> {
     for (const [, , name] of text.matchAll(
       /(?<![-\w])(hover|focus|focus-within|focus-visible|active|disabled|group-hover|aria-pressed):(p-[a-z0-9-]+)/g,
     )) {
-      const at = uses.get(name!) ?? [];
+      const at = uses.get(name) ?? [];
 
       if (!at.includes(file)) at.push(file);
-      uses.set(name!, at);
+      uses.set(name, at);
     }
   }
 
@@ -71,7 +71,7 @@ describe('p-* utility variants', () => {
   test('every variant-prefixed p-* class is declared as an @utility', () => {
     const dead = [...variantUses()]
       .filter(([name]) => !asUtility.has(name))
-      .map(([name, files]) => `${name} (${files.length} file(s), e.g. ${files[0]!.slice(SRC.length + 1)})`);
+      .map(([name, files]) => `${name} (${files.length} file(s), e.g. ${files[0].slice(SRC.length + 1)})`);
 
     expect(dead).toEqual([]);
   });

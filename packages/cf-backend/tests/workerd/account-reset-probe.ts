@@ -64,7 +64,7 @@ export class AccountResetProbeDO extends UserDO {
     // production class declares; the plain fetch pick first is the narrowing
     // slate-durability-probe applies for the same TS2589 reason.
     const raw: Pick<Fetcher, 'fetch'> = await getAgentByName<ProbeEnv, ProductionOrchestrator>(
-      this.env.OrchestratorAgent as DurableObjectNamespace<ProductionOrchestrator>, workspace,
+      this.env.OrchestratorAgent, workspace,
     );
 
     // SAFETY: `raw` is the stub for the bound production class, which declares

@@ -627,7 +627,7 @@ abstract class Middle extends ThirdPartyBase {
 const callableRegistry = new WeakMap<object, string>();
 
 class Leaf extends Middle {
-  #secret = 'hidden';
+  readonly #secret = 'hidden';
   constructor() {
     super();
     callableRegistry.set(this.markedCallable, 'metadata');

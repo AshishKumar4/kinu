@@ -43,8 +43,8 @@ describe('alternate-takes view logic', () => {
   });
 
   test('evidence line carries score, visits, and depth', () => {
-    expect(takeEvidence(makeSet().candidates[0]!)).toBe('score 0.90 · 3 visits · depth 1');
-    expect(takeEvidence(makeSet().candidates[1]!)).toBe('score 0.85 · 1 visit · depth 2');
+    expect(takeEvidence(makeSet().candidates[0])).toBe('score 0.90 · 3 visits · depth 1');
+    expect(takeEvidence(makeSet().candidates[1])).toBe('score 0.85 · 1 visit · depth 2');
   });
 
   test('branch-sourced candidates are labeled by their split side, not a fabricated score', () => {

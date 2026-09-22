@@ -295,8 +295,8 @@ describe('drained event parsing', () => {
     expect(batch.text.startsWith('2 events arrived while you were idle')).toBe(true);
     expect(parsed).toHaveLength(2);
     expect(parsed.map((e) => e.variant)).toEqual(['webhook', 'email']);
-    expect(parsed[1]!.source).toBe('email (ops@example.com)');
-    expect(parsed[1]!.brief).toBe('"Deploy failed": exit 1');
+    expect(parsed[1].source).toBe('email (ops@example.com)');
+    expect(parsed[1].brief).toBe('"Deploy failed": exit 1');
   });
 
   test('a peer ask is flagged as awaiting a reply, and the hint stays out of the brief', () => {
@@ -311,10 +311,10 @@ describe('drained event parsing', () => {
     })])!;
 
     const [parsed] = parseDrainedEvents(batch.text);
-    expect(parsed!.replyExpected).toBe(true);
-    expect(parsed!.source).toBe('peer agent (atlas)');
-    expect(parsed!.brief).toBe('schema: "which shape?"');
-    expect(parsed!.brief).not.toContain('peers(');
+    expect(parsed.replyExpected).toBe(true);
+    expect(parsed.source).toBe('peer agent (atlas)');
+    expect(parsed.brief).toBe('schema: "which shape?"');
+    expect(parsed.brief).not.toContain('peers(');
   });
 
   test('a colon inside the source label does not swallow the brief', () => {
@@ -347,7 +347,7 @@ describe('drained event parsing', () => {
     })])!;
 
     const [parsed] = parseDrainedEvents(batch.text);
-    expect(parsed!.brief).toBe('completed: Report line one.\nReport line two.');
+    expect(parsed.brief).toBe('completed: Report line one.\nReport line two.');
   });
 
   test('text that is not a drain listing yields nothing to fabricate a card from', () => {
@@ -410,7 +410,7 @@ describe('the card lifecycle', () => {
   test('cards keep arrival order and are bounded', () => {
     const many = apply(Array.from({ length: 60 }, (_, i) => opened(`s${i}`)));
     expect(many).toHaveLength(50);
-    expect(many[0]!.id).toBe('s10');
+    expect(many[0].id).toBe('s10');
     expect(many.at(-1)!.id).toBe('s59');
   });
 

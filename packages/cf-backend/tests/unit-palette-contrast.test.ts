@@ -48,7 +48,7 @@ function parse(css: string): Rgb {
   const hex = css.match(/^#([0-9a-f]{6})$/i);
 
   if (hex) {
-    const n = parseInt(hex[1]!, 16);
+    const n = parseInt(hex[1], 16);
 
     return { r: (n >> 16) & 255, g: (n >> 8) & 255, b: n & 255, a: 1 };
   }
@@ -56,9 +56,9 @@ function parse(css: string): Rgb {
   const rgb = css.match(/^rgba?\(([^)]+)\)$/i);
 
   if (rgb) {
-    const [r, g, b, a] = rgb[1]!.split(',').map((v) => Number(v.trim()));
+    const [r, g, b, a] = rgb[1].split(',').map((v) => Number(v.trim()));
 
-    return { r: r!, g: g!, b: b!, a: a ?? 1 };
+    return { r: r, g: g, b: b, a: a ?? 1 };
   }
 
   throw new Error(`palette token is not a hex or rgb() literal: ${css}`);
@@ -87,7 +87,7 @@ function block(css: string, selector: string) {
   }
 
   return Object.fromEntries(
-    [...css.slice(open, i).matchAll(/(--c-[a-z0-9-]+)\s*:\s*([^;]+);/g)].map((m) => [m[1]!, m[2]!.trim()]),
+    [...css.slice(open, i).matchAll(/(--c-[a-z0-9-]+)\s*:\s*([^;]+);/g)].map((m) => [m[1], m[2].trim()]),
   );
 }
 
@@ -103,7 +103,7 @@ function palette(blocks: readonly string[]) {
   for (const [k, v] of Object.entries(merged)) {
     const ref = v.match(/^var\((--c-[a-z0-9-]+)\)$/);
 
-    if (ref) merged[k] = merged[ref[1]!]!;
+    if (ref) merged[k] = merged[ref[1]]!;
   }
 
   return merged;
@@ -152,7 +152,7 @@ describe('palette contrast', () => {
 
       test('every text role meets AA on every surface', () => {
         const failures = TEXT_ROLES.flatMap((role) =>
-          SURFACES.map((surface) => ({ role, surface, ratio: +contrast(p[role]!, p[surface]!).toFixed(2) }))
+          SURFACES.map((surface) => ({ role, surface, ratio: Number(contrast(p[role], p[surface]).toFixed(2)) }))
             .filter((r) => r.ratio < AA));
 
         // Reported as rows so a failure names the exact pair and its number.
@@ -161,7 +161,7 @@ describe('palette contrast', () => {
 
       test('every filled control carries legible ink', () => {
         const failures = FILLS
-          .map(([ink, fill, what]) => ({ what, ratio: +contrast(p[ink]!, p[fill]!).toFixed(2) }))
+          .map(([ink, fill, what]) => ({ what, ratio: Number(contrast(p[ink], p[fill]).toFixed(2)) }))
           .filter((r) => r.ratio < AA);
 
         expect(failures).toEqual([]);
@@ -170,10 +170,10 @@ describe('palette contrast', () => {
       test('status text stays legible on its own tint', () => {
         const failures = (['success', 'warning', 'danger', 'info'] as const)
           .map((s) => {
-            const tinted = over(parse(p[`--c-${s}-tint`]!), parse(p['--c-bg']!));
+            const tinted = over(parse(p[`--c-${s}-tint`]), parse(p['--c-bg']));
             const css = `rgb(${tinted.r},${tinted.g},${tinted.b})`;
 
-            return { badge: s, ratio: +contrast(p[`--c-${s}`]!, css).toFixed(2) };
+            return { badge: s, ratio: Number(contrast(p[`--c-${s}`], css).toFixed(2)) };
           })
           .filter((r) => r.ratio < AA);
 

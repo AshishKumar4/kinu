@@ -133,7 +133,7 @@ describe('kinu inspect list reads', () => {
   test('the events read keeps its ten-field projection on each row', async () => {
     const rows = await orchestratorWithOneEvent().listRecentEvents();
     expect(rows).toHaveLength(1);
-    expect(Object.keys(rows[0]!).sort()).toEqual([...EVENT_ROW_FIELDS]);
+    expect(Object.keys(rows[0]).sort()).toEqual([...EVENT_ROW_FIELDS]);
     expect(rows[0]).toMatchObject({ variant: 'chat', ingress: 'chat_ws', received_at: SEEDED_AT });
   });
 });

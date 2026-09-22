@@ -320,7 +320,7 @@ describe('a merge is a tree of depth 1', () => {
     }));
 
     expect(tree.status).toBe('running');
-    expect(tree.children[0]!.status).toBe('running');
+    expect(tree.children[0].status).toBe('running');
   });
 
   test('the merge narrative rides on the root, where the root is what is selected', () => {

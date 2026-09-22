@@ -528,7 +528,7 @@ export class HarnessOrchestratorAgent extends OrchestratorAgent {
   }
   /** Told each lease the loop hands a preparation: the turn's ids and its
    *  abort signal, which a suite that stops the turn reads the cause off. */
-  private _leaseObservers: Array<(lease: ActorTurnLease) => void> = [];
+  private readonly _leaseObservers: Array<(lease: ActorTurnLease) => void> = [];
   harnessObserveLease(observe: (lease: ActorTurnLease) => void): void { this._leaseObservers.push(observe); }
   protected override async prepareTurn(item: ChatTurnInput, lease: ActorTurnLease): Promise<PreparedTurn> {
     for (const observe of this._leaseObservers) observe(lease);
@@ -1007,7 +1007,7 @@ export class HarnessOrchestratorAgent extends OrchestratorAgent {
    *  order — a thrown admission, a refusal, a durable status — the outcomes a
    *  producer's retry policy is pinned on. Exhausted, the loop's own admission
    *  answers again. Every admission asked, scripted or not, is recorded. */
-  private _scriptedAdmissions: Array<() => Promise<EnqueueTurnResult>> = [];
+  private readonly _scriptedAdmissions: Array<() => Promise<EnqueueTurnResult>> = [];
   readonly harnessAdmissionsAsked: ProgrammaticTurn[] = [];
   harnessScriptAdmissions(answers: Array<() => Promise<EnqueueTurnResult>>): void {
     this._scriptedAdmissions.push(...answers);

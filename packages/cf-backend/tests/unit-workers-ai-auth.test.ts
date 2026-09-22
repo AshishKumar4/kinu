@@ -49,7 +49,7 @@ test('configured effort reaches the native Workers AI binding through its SDK tr
   } };
 
   // SAFETY: this constructed fixture provides Ai.run, and the adapter calls no other member of the binding.
-  const fetch = createDirectWorkersAIFetch(binding as Ai);
+  const fetch = createDirectWorkersAIFetch(binding);
 
   const model = createChatModel({ kind: 'openai-compat', name: 'workers-ai',
     modelId: '@cf/moonshotai/kimi-k2.6', baseURL: 'https://fixture.invalid/v1', headers: {}, fetch });
@@ -141,7 +141,7 @@ describe('Workers AI credential refresh', () => {
     const stub = userCredentialSource({
       getAuthHeaders: async (key: string, opts?: { forceRefresh?: boolean }) => {
         if (key !== 'cloudflare.oauth') return null;
-        authCalls.push(!!opts?.forceRefresh);
+        authCalls.push(Boolean(opts?.forceRefresh));
 
         return { authorization: opts?.forceRefresh ? 'Bearer cf-fresh' : 'Bearer cf-stale' };
       },

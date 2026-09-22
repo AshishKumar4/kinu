@@ -9,7 +9,7 @@ type Probe = DurableObjectStub<SlateShareProbeRpc>;
 
 const subject = (name: string): Probe =>
   // SAFETY: the binding is the probe worker's own class; the Rpc interface is its exact surface.
-  env.SLATE_SHARE_PROBE.get(env.SLATE_SHARE_PROBE.idFromName(name)) as Probe;
+  env.SLATE_SHARE_PROBE.get(env.SLATE_SHARE_PROBE.idFromName(name));
 
 const ShareCreated = v.object({ share: LiveShareRecordSchema, url: v.nullable(v.string()) });
 

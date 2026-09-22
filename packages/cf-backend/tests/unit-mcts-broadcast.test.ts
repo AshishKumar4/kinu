@@ -105,9 +105,9 @@ describe('broadcastMctsProgress', () => {
     harness.agent.broadcastMctsProgress('new-root', 'explore', 1, 5);
 
     expect(sent.length).toBe(1);
-    expect(sent[0]!.type).toBe('mcts-progress');
-    expect(sent[0]!.rootId).toBe('new-root');
-    expect(sent[0]!.nodes.map((n) => n.id)).toEqual(['new-root']);
+    expect(sent[0].type).toBe('mcts-progress');
+    expect(sent[0].rootId).toBe('new-root');
+    expect(sent[0].nodes.map((n) => n.id)).toEqual(['new-root']);
   });
 
   test('carries proposal text and a running journal node before settlement', async () => {
@@ -171,13 +171,13 @@ describe('broadcastMctsProgress', () => {
     seedNode(harness, { id: 'branch', root: 'root', parent: 'root', depth: 1, at: 1_200 });
     harness.agent.broadcastMctsProgress('root', 'evaluate', 1, 3);
     expect(sent.length).toBe(2);
-    expect(sent[1]!.nodes.map((n) => n.id)).toEqual(['root', 'branch']);
+    expect(sent[1].nodes.map((n) => n.id)).toEqual(['root', 'branch']);
 
     // Backpropagation changes visits without adding a node — still a change.
     harness.db.prepare(`UPDATE search_nodes SET visits = 4 WHERE id = 'root'`).run();
     harness.agent.broadcastMctsProgress('root', 'iteration-complete', 1, 2);
     expect(sent.length).toBe(3);
-    expect(sent[2]!.nodeCount).toBe(2);
+    expect(sent[2].nodeCount).toBe(2);
   });
 
   /**
@@ -227,10 +227,10 @@ describe('broadcastMctsProgress', () => {
     ]);
 
     expect(sent.map(({ isolateGen }) => isolateGen)).toEqual([
-      sent[0]!.isolateGen,
-      sent[0]!.isolateGen,
-      sent[0]!.isolateGen,
-      sent[0]!.isolateGen,
+      sent[0].isolateGen,
+      sent[0].isolateGen,
+      sent[0].isolateGen,
+      sent[0].isolateGen,
     ]);
   });
 
@@ -255,8 +255,8 @@ describe('broadcastMctsProgress', () => {
     seedNode(harness, { id: 'a1', root: 'a', parent: 'a', depth: 1, at: 3_000 });
     harness.agent.broadcastMctsProgress('a', 'evaluate', 1, 4);
     expect(sent.length).toBe(3);
-    expect(sent[2]!.rootId).toBe('a');
-    expect(sent[2]!.nodes.map((n) => n.id)).toEqual(['a', 'a1']);
+    expect(sent[2].rootId).toBe('a');
+    expect(sent[2].nodes.map((n) => n.id)).toEqual(['a', 'a1']);
   });
 
   test('a search with no nodes yet broadcasts nothing rather than an empty tree', () => {

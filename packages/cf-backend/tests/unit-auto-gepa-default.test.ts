@@ -40,12 +40,12 @@ describe('auto-GEPA default activation', () => {
 
     const notes = evolutionNotes(db);
     expect(notes).toHaveLength(1);
-    expect(notes[0]!.type).toBe('reflection');
+    expect(notes[0].type).toBe('reflection');
     // The note has to name the override and the way back out, or it documents
     // nothing a reader of the evolution stream could act on.
-    expect(notes[0]!.message).toContain(`every ${DEFAULT_AUTO_GEPA_EVERY_N_TURNS} turns`);
-    expect(notes[0]!.message).toContain('superseded by this default');
-    expect(notes[0]!.message).toContain('setAutoGepa(0)');
+    expect(notes[0].message).toContain(`every ${DEFAULT_AUTO_GEPA_EVERY_N_TURNS} turns`);
+    expect(notes[0].message).toContain('superseded by this default');
+    expect(notes[0].message).toContain('setAutoGepa(0)');
   });
 
   test('the note is written once, not once per turn', async () => {

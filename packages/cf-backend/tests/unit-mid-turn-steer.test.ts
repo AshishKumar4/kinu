@@ -123,8 +123,8 @@ describe('a message typed while the agent is working', () => {
     const admitted = (await h.agent.harnessTranscript.history()).filter((message) => message.role === 'user');
     expect(admitted).toHaveLength(1);
     expect(admitted[0]?.parts).toEqual([{ type: 'text', text: 'nothing is running' }]);
-    expect(turnAuthor(admitted[0]!)).toBe('operator');
-    expect(h.db.query('SELECT work_mode FROM actor_turn_claims WHERE turn_id = ?').get(admitted[0]!.id)).toEqual({ work_mode: 'build' });
+    expect(turnAuthor(admitted[0])).toBe('operator');
+    expect(h.db.query('SELECT work_mode FROM actor_turn_claims WHERE turn_id = ?').get(admitted[0].id)).toEqual({ work_mode: 'build' });
     expect(h.db.query<{ c: number }, []>('SELECT count(*) AS c FROM pending_steers').get()!.c).toBe(0);
 
     // Nothing was buffered for a step boundary: the next turn's steps carry no
@@ -140,8 +140,8 @@ describe('a message typed while the agent is working', () => {
     const h = steerHarness();
     await h.agent.harnessChatLoop.send('tighten the rollout plan first', { mode: 'plan' });
     const admitted = (await h.agent.harnessTranscript.history()).filter((message) => message.role === 'user');
-    expect(turnAuthor(admitted[0]!)).toBe('operator');
-    expect(h.db.query('SELECT work_mode FROM actor_turn_claims WHERE turn_id = ?').get(admitted[0]!.id)).toEqual({ work_mode: 'plan' });
+    expect(turnAuthor(admitted[0])).toBe('operator');
+    expect(h.db.query('SELECT work_mode FROM actor_turn_claims WHERE turn_id = ?').get(admitted[0].id)).toEqual({ work_mode: 'plan' });
   });
 
   test('a refused enqueue rejects rather than reporting the words placed', async () => {
@@ -180,7 +180,7 @@ describe('a message typed while the agent is working', () => {
     expect(landed.map((f) => f.status)).toEqual(['queued', 'landed']);
     // Same id through both announcements, so a surface tracking one steer never
     // renders it twice under two names.
-    expect(landed[1]!.steerId).toBe(landed[0]!.steerId);
+    expect(landed[1].steerId).toBe(landed[0].steerId);
   });
 
   test('a steer that names a skill the turn does not carry brings its body to the next step', async () => {
@@ -238,7 +238,7 @@ describe('a message typed while the agent is working', () => {
     // which is how the operator's words ended up drawn under twenty steps of
     // work that preceded them.
     expect((await h.appended()).map((row) => JSON.parse(JSON.stringify(row)))).toEqual([{
-      id: steerFrames(h.frames)[0]!.steerId,
+      id: steerFrames(h.frames)[0].steerId,
       role: 'user',
       parts: [{ type: 'text', text: 'also check staging' }],
       metadata: { kinuSteer: true, kinuSteerAtStep: 4 },
