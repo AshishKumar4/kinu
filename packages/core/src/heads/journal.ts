@@ -24,9 +24,10 @@ import * as v from 'valibot';
 import type { SqlExecutor } from '../types/primitives';
 import type { ActorHandle } from '../identity/actor-handle';
 import type {
-  HeadId, HeadInput, HeadReport, HeadStep, HeadStepToolCall, Evidence, Decision, ArtifactRef,
-  HeadFileChange, HeadFileChangeSet, MergeResult, MergeStrategy, HeadRunView, HeadRunHeadView,
+  HeadId, HeadInput, HeadReport, HeadStep, Evidence,
+  HeadFileChangeSet, MergeResult, MergeStrategy, HeadRunView, HeadRunHeadView,
 } from './types';
+import { DecisionSchema } from './merge-schema';
 import { headProducedFindings } from './head-summary';
 import { USAGE_FIELDS, type Usage } from '../usage';
 import { HEAD_USAGE_COLUMNS, type StoredHeadUsage } from './schema';
@@ -42,18 +43,38 @@ export interface StepTotals {
 
 const EvidenceKindSchema = v.picklist(['tool_output', 'fact', 'citation', 'artifact']);
 
-/** JSON array column → array (head_journal/head_steps). This module is what
- *  writes those columns, so a malformed or non-array blob is corruption: it
- *  propagates rather than reading back as "this head recorded nothing". */
-function parseArray<T>(json: string | null): T[] {
-  if (!json) return [];
-  const parsed = JSON.parse(json);
+/** One recorded tool call of a head step, as `head_steps.tool_calls_json` holds it. */
+const ToolCallSchema = v.object({
+  toolCallId: v.optional(v.string()),
+  name: v.string(),
+  input: v.optional(v.unknown()),
+  output: v.optional(v.unknown()),
+});
 
-  if (!Array.isArray(parsed)) {
-    throw new Error(`head journal JSON column is not an array: ${json.slice(0, 120)}`);
-  }
+/** One changed file, as `head_journal.file_changes_json` holds it. */
+const FileChangeSchema = v.object({
+  path: v.string(),
+  status: v.picklist(['added', 'removed', 'changed']),
+  added: v.number(),
+  removed: v.number(),
+  binary: v.optional(v.boolean()),
+});
 
-  return parsed;
+/** One artifact a head pointed at, as `head_journal.artifacts_json` holds it. */
+const ArtifactRefSchema = v.object({
+  kind: v.picklist(['file', 'port', 'memory', 'note']),
+  ref: v.string(),
+  description: v.optional(v.string()),
+});
+
+/** A JSON array column, read back through the shape this module wrote it in.
+ *  This module is the column's only writer, so a blob of any other shape is
+ *  corruption: it propagates, named, rather than reading back as "this head
+ *  recorded nothing" or as fields a type only claimed. */
+function parseArray<Item extends v.GenericSchema>(item: Item, json: string | null): v.InferOutput<Item>[] {
+  if (json === null || json === '') return [];
+
+  return v.parse(v.array(item), JSON.parse(json));
 }
 
 /** A run's status when its root kept no row of its own: still running while any
@@ -77,7 +98,7 @@ function stepOf(row: StepRow): HeadStep {
   return {
     text: row.text ?? '',
     reasoning: row.reasoning ?? undefined,
-    toolCalls: parseArray<HeadStepToolCall>(row.tool_calls_json),
+    toolCalls: parseArray(ToolCallSchema, row.tool_calls_json),
   };
 }
 
@@ -134,7 +155,7 @@ function headViewOf(row: HeadViewRow): HeadRunHeadView {
     summary: row.summary, errorMessage: row.error_message,
     usage: storedUsage(row), wallClockMs: row.wall_clock_ms,
     spawnedAt: row.spawned_at, lastStepAt: row.last_step_at,
-    decisions: parseArray<Decision>(row.decisions_json)
+    decisions: parseArray(DecisionSchema, row.decisions_json)
       .map((d) => ({ question: d.question, choice: d.choice, rationale: d.rationale })),
   };
 }
@@ -947,7 +968,7 @@ export class HeadJournal {
     return this.sql<{ id: string; file_changes_json: string | null }>`
       SELECT id, file_changes_json FROM head_journal
       WHERE actor_id = ${this.actorId} AND root_id = ${rootId} ORDER BY depth, spawned_at`
-      .map((r) => ({ id: r.id, changes: parseArray<HeadFileChange>(r.file_changes_json) }))
+      .map((r) => ({ id: r.id, changes: parseArray(FileChangeSchema, r.file_changes_json) }))
       .filter((set) => set.changes.length > 0);
   }
 
@@ -984,10 +1005,10 @@ export class HeadJournal {
 
     return {
       mergedNarrative: r.merged_narrative,
-      selectedDecisions: r.selected_decisions_json ? JSON.parse(r.selected_decisions_json) : [],
-      unresolvedQuestions: r.unresolved_questions_json ? JSON.parse(r.unresolved_questions_json) : [],
-      recommendations: r.recommendations_json ? JSON.parse(r.recommendations_json) : [],
-      blindSpots: r.blind_spots_json ? JSON.parse(r.blind_spots_json) : [],
+      selectedDecisions: parseArray(DecisionSchema, r.selected_decisions_json),
+      unresolvedQuestions: parseArray(v.string(), r.unresolved_questions_json),
+      recommendations: parseArray(v.string(), r.recommendations_json),
+      blindSpots: parseArray(v.string(), r.blind_spots_json),
       evidenceAggregate: evidence,
       headIds: ids,
       // Per-head grounded scores are a live-run signal, not persisted as columns;
@@ -1024,8 +1045,8 @@ export class HeadJournal {
         // nothing beyond what the recorded arrays below already show.
         status: row.status === 'completed' ? 'completed' : 'aborted',
         evidence: this.readEvidence(id),
-        decisions: parseArray<Decision>(row.decisions_json),
-        artifactRefs: parseArray<ArtifactRef>(row.artifacts_json),
+        decisions: parseArray(DecisionSchema, row.decisions_json),
+        artifactRefs: parseArray(ArtifactRefSchema, row.artifacts_json),
       });
     }).length;
   }
