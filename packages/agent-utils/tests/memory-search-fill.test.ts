@@ -28,7 +28,7 @@ describe("MemoryStore.search fills an underfull strict page", () => {
 		await store.indexFile("memory/none.md", "kubernetes ingress question");
 
 		const hits = store.search("wrangler staging", 5);
-		expect(hits[0]!.path).toBe("memory/both.md");
+		expect(hits[0].path).toBe("memory/both.md");
 		expect(hits.map((h) => h.path).slice(1).sort())
 			.toEqual(["memory/one.md", "memory/two.md"]);
 		// The chunk sharing no term is not admitted just because capacity is free.
@@ -45,7 +45,7 @@ describe("MemoryStore.search fills an underfull strict page", () => {
 
 		const hits = store.search("alpha beta", 3);
 		expect(hits.length).toBe(3);
-		expect(hits[0]!.path).toBe("memory/strict.md");
+		expect(hits[0].path).toBe("memory/strict.md");
 	});
 
 	test("a chunk already held as a strict hit is not repeated", async () => {

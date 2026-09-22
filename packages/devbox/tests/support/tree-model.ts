@@ -143,7 +143,7 @@ export function paintedSegments(content: FileContent): LogicalLayout {
   const claims: Claim[] = [];
 
   for (let i = content.runs.length - 1; i >= 0; i--) {
-    const run = content.runs[i]!;
+    const run = content.runs[i];
     const start = Math.min(Math.max(run.offset, 0), content.size);
     const end = Math.min(run.offset + run.bytes.byteLength, content.size);
 
@@ -310,8 +310,8 @@ export function fidelityTree(seedValue = 11): NodeEntry[] {
   ];
 
   // The two hardlink names must carry ONE metadata row, as one inode does.
-  const linkMetadata = entries[4]!.metadata;
-  entries[5] = { ...entries[5]!, metadata: linkMetadata };
+  const linkMetadata = entries[4].metadata;
+  entries[5] = { ...entries[5], metadata: linkMetadata };
 
   return sortedByPath(entries);
 }
@@ -760,7 +760,7 @@ export class LiveTree {
     const inodes = moved.map((path) => this.#paths.get(path)!);
 
     for (const path of moved) this.#paths.delete(path);
-    moved.forEach((path, index) => this.#place(`${to}${path.slice(from.length)}`, inodes[index]!));
+    moved.forEach((path, index) => this.#place(`${to}${path.slice(from.length)}`, inodes[index]));
   }
 
   /** The inode number of the node at `path`, as the daemon indexes it: given

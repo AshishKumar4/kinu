@@ -365,7 +365,7 @@ export function parseDeltaBaseStat(stdout: string, paths: readonly string[]): Ma
 
   const out = new Map<string, DeltaBaseFact | null>();
   paths.forEach((path, at) => {
-    const line = lines[at]!;
+    const line = lines[at];
 
     if (line === 'ABSENT') {
       out.set(path, null);
@@ -563,7 +563,7 @@ export function planDeltaPublication(input: DeltaPlanInput): DeltaPlan {
   files.sort((a, b) => (a.p < b.p ? -1 : 1));
   deleted.sort();
   treplace.sort();
-  links.sort((a, b) => (a[0]! < b[0]! ? -1 : 1));
+  links.sort((a, b) => (a[0] < b[0] ? -1 : 1));
 
   return { manifest: { v: 2, files, dirs, deleted, treplace, links }, chunks, indexes };
 }
@@ -660,7 +660,7 @@ export function buildDeltaStageOps(plan: DeltaPlan, layout: DeltaStageLayout): s
   const ops = ['# devbox-stage-v1', `mkdir -p ${shellPath(treeDir)} ${shellPath(chunkDir)}`, ...directoryOps(plan.manifest, treeDir)];
   const linkFirst = new Map<string, string>();
 
-  for (const group of plan.manifest.links) for (const rest of group.slice(1)) linkFirst.set(rest, group[0]!);
+  for (const group of plan.manifest.links) for (const rest of group.slice(1)) linkFirst.set(rest, group[0]);
 
   for (const file of plan.manifest.files) {
     if (file.kind !== 'whole') continue;

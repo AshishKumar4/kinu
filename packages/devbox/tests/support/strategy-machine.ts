@@ -804,11 +804,11 @@ export class ContainerDisk {
       if (row.kind !== 'file') return base;
       const runs = (row.runs ?? []).map(([offset, body]) => ({ offset, bytes: base64ToBytes(body) }));
       const size = row.size ?? 0;
-      const dense = runs.length === 1 && runs[0]!.offset === 0 && runs[0]!.bytes.byteLength === size;
+      const dense = runs.length === 1 && runs[0].offset === 0 && runs[0].bytes.byteLength === size;
 
       return {
         ...base,
-        content: dense ? { kind: 'dense', bytes: runs[0]!.bytes } : { kind: 'sparse', size, runs },
+        content: dense ? { kind: 'dense', bytes: runs[0].bytes } : { kind: 'sparse', size, runs },
       };
     });
 
@@ -1425,10 +1425,10 @@ function checkpointCommand(
   const squash = /mksquashfs '(?<source>[^']+)' '(?<archive>[^']+)'/.exec(command)?.groups;
 
   if (squash !== undefined) {
-    const archive = disk.pack(squash.source!);
+    const archive = disk.pack(squash.source);
 
     try {
-      disk.writeFile(squash.archive!, archive);
+      disk.writeFile(squash.archive, archive);
     } catch (error) {
       // mksquashfs on a full disk: a non-zero rc on stdout, its own words on
       // stderr, exactly as the real command reports it.
@@ -1452,7 +1452,7 @@ function checkpointCommand(
     .exec(command)?.groups;
 
   if (published !== undefined) {
-    const landed = publish(published.archive!, published.mounted!);
+    const landed = publish(published.archive, published.mounted);
 
     // `<exit> <bytes>` on stdout either way, exactly as the real command
     // reports it: dd's own failure is a non-zero code there, not a thrown
@@ -1460,7 +1460,7 @@ function checkpointCommand(
     if (landed === undefined) {
       return {
         stdout: '1 0',
-        stderr: `dd: can't open '${published.archive!}': No such file or directory`,
+        stderr: `dd: can't open '${published.archive}': No such file or directory`,
         exitCode: 0,
       };
     }
@@ -1477,7 +1477,7 @@ function checkpointCommand(
     .exec(command)?.groups;
 
   if (egress !== undefined) {
-    const landed = publishEgress(egress.archive!, egress.url!);
+    const landed = publishEgress(egress.archive, egress.url);
 
     if (landed !== undefined && 'refused' in landed) {
       return { stdout: '1 ', stderr: landed.refused, exitCode: 0 };
@@ -1486,7 +1486,7 @@ function checkpointCommand(
     if (landed === undefined) {
       return {
         stdout: '2 ',
-        stderr: `no archive at ${egress.archive!}`,
+        stderr: `no archive at ${egress.archive}`,
         exitCode: 0,
       };
     }
@@ -1545,17 +1545,17 @@ function mountCommand(command: string, disk: ContainerDisk, deaths: DeathWatch):
   const layer = /squashfuse '(?<archive>[^']+)' '(?<point>[^']+)'/.exec(command)?.groups;
 
   if (layer !== undefined) {
-    const bytes = disk.readFile(layer.archive!);
+    const bytes = disk.readFile(layer.archive);
 
-    if (bytes === undefined) return shellFail(`bad mount point: ${layer.archive!} is absent`);
+    if (bytes === undefined) return shellFail(`bad mount point: ${layer.archive} is absent`);
 
     try {
-      disk.unpack(bytes, layer.point!);
+      disk.unpack(bytes, layer.point);
     } catch (error) {
       return shellFail(`squashfuse: ${error instanceof Error ? error.message : String(error)}`);
     }
 
-    disk.mount(layer.point!, { source: layer.archive!, fstype: 'fuse.squashfuse', options: 'ro' });
+    disk.mount(layer.point, { source: layer.archive, fstype: 'fuse.squashfuse', options: 'ro' });
     // The layer is mounted on the container when the isolate may go.
     deaths.reset('attach:after-layer-mount');
 
@@ -1566,9 +1566,9 @@ function mountCommand(command: string, disk: ContainerDisk, deaths: DeathWatch):
     .exec(command)?.groups;
 
   if (overlay !== undefined) {
-    disk.mountOverlay(unquote(overlay.dir!), {
-      lowers: overlay.lowers!.split(':').map(unquote),
-      upper: unquote(overlay.upper!),
+    disk.mountOverlay(unquote(overlay.dir), {
+      lowers: overlay.lowers.split(':').map(unquote),
+      upper: unquote(overlay.upper),
     });
     deaths.reset('attach:after-overlay');
 
@@ -1662,7 +1662,7 @@ function chainExec(
     const seed = /^cp -a '(?<lower>[^']+)\/\.' '(?<upper>[^']+)\//.exec(command)?.groups;
 
     if (seed !== undefined) {
-      disk.copyTree(seed.lower!, seed.upper!);
+      disk.copyTree(seed.lower, seed.upper);
 
       return ok();
     }
@@ -1892,7 +1892,7 @@ function snapshotChainArm(): ConformanceArm {
       // directory under which the first whole file's path is found.
       const whole = manifest.output.files.filter((file) => file.kind === 'whole');
       const rows = this.disk.snapshot(mountPoint);
-      const first = whole[0] === undefined ? undefined : rows.find((row) => row.kind === 'file' && row.path.endsWith(`/${whole[0]!.p}`));
+      const first = whole[0] === undefined ? undefined : rows.find((row) => row.kind === 'file' && row.path.endsWith(`/${whole[0].p}`));
 
       if (whole[0] === undefined || first === undefined) return 0;
       const sideRelative = first.path.slice(0, first.path.length - whole[0].p.length - 1);

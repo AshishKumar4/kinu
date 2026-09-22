@@ -206,9 +206,9 @@ function realShell(command: string): ShellReply {
  *  subshell-scoped `set -e`. The session-shell model refuses the unscoped
  *  form, and every chain run through the fake goes through that model. */
 function batch(ops: readonly string[]): string {
-  requireSessionShellAccepts([ops[0]!, '(', 'set -e', ...ops.slice(1), ')'].join('\n'));
+  requireSessionShellAccepts([ops[0], '(', 'set -e', ...ops.slice(1), ')'].join('\n'));
 
-  return [ops[0]!, '(', 'set -e', ...ops.slice(1), ')'].join('\n');
+  return [ops[0], '(', 'set -e', ...ops.slice(1), ')'].join('\n');
 }
 
 /** Two trees compared, less what the running user decides rather than the
@@ -349,7 +349,7 @@ describe('the delta shell against bash', () => {
     expect(byBash.exitCode).toBe(0);
     expect(byDisk.exitCode).toBe(0);
     const packed = readReal(real.pkg);
-    const first = plan.manifest.files[0]!.p;
+    const first = plan.manifest.files[0].p;
     const carriedUnder = packed.find((entry) => entry.kind === 'file' && entry.path.endsWith(`/${first}`))!.path.slice(0, -first.length);
     const marker = `${real.pkg}/${carriedUnder}opaque/.wh..wh..opq`;
     expect(lstatSync(marker).uid).toBe(uid);

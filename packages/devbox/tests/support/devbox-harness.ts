@@ -723,7 +723,7 @@ export class FakeSandbox {
    *  later commands are allowed to stand in. */
   #recordDirectories(command: string): void {
     for (const made of command.matchAll(/mkdir -p ((?:'[^']+'\s*)+)/g)) {
-      for (const quoted of made[1]!.matchAll(/'([^']+)'/g)) this.directories.add(quoted[1]!);
+      for (const quoted of made[1].matchAll(/'([^']+)'/g)) this.directories.add(quoted[1]);
     }
   }
 

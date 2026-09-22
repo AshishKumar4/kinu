@@ -67,7 +67,7 @@ export function fakeMossaic(): FakeMossaic {
       const names = new Set<string>();
 
       for (const key of [...files.keys(), ...symlinks.keys(), ...dirs]) {
-        if (key !== p && key.startsWith(prefix)) names.add(key.slice(prefix.length).split('/')[0]!);
+        if (key !== p && key.startsWith(prefix)) names.add(key.slice(prefix.length).split('/')[0]);
       }
 
       return [...names].map((name) => {

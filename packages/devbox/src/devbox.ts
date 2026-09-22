@@ -62,7 +62,6 @@ import {
   normalizeChainState,
   snapshotChainStorage,
   type ChainState,
-  type ChangeStatus,
   type SnapshotChainPorts,
 } from './snapshot-chain';
 import {
@@ -3519,11 +3518,7 @@ export class Devbox<Env = unknown> extends Sandbox<Env> {
         if (since !== undefined) options.since = since;
         const checked = await this.checkChanges(dir, options);
 
-        // SAFETY: `ChangeStatus` is declared as this package's copy of the SDK's
-        // own `CheckChangesResult.status` union, and the two are the same three
-        // members. Re-declaring it rather than importing keeps the strategy
-        // free of an SDK type it would otherwise need in its port signature.
-        return { status: checked.status as ChangeStatus, version: checked.version };
+        return { status: checked.status, version: checked.version };
       },
       exec: async (command) => await this.#rawExec(command, DEVBOX_RUNTIME_DIR),
       stamp: (phase) => this.#stampPhase(phase),

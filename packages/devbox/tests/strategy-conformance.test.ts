@@ -428,7 +428,7 @@ for (const [name, open] of armEntries) {
       // nothing below and pass while doing it.
       expect(declared.length).toBeGreaterThan(0);
 
-      const target = declared[0]!;
+      const target = declared[0];
       arm.durable.corrupt(target.key, 'flip');
 
       arm.replaceContainer();
@@ -468,7 +468,7 @@ for (const [name, open] of armEntries) {
 
       // The last seam before the pointer swap: the operation is begun and its
       // payload is somewhere, but nothing has been promoted.
-      const seam = arm.commitSeams[Math.max(0, arm.commitSeams.length - 3)]!;
+      const seam = arm.commitSeams[Math.max(0, arm.commitSeams.length - 3)];
       arm.dieAt(seam);
       await thrownBy(async () => { await commit(arm, NEW); });
 
@@ -718,7 +718,7 @@ const CELLS: readonly Cell[] = [
       // never do is let the old boot's late finalize move the head, or serve
       // after a wake anything but what it served before it. The new boot's
       // own commit must be in that tree, or the race lost a committed write.
-      if (!served.includes(JSON.stringify(Object.entries(THIRD)[0]![1]))) problems.push(`the new boot's commit is absent from the tree it served: ${served}`);
+      if (!served.includes(JSON.stringify(Object.entries(THIRD)[0][1]))) problems.push(`the new boot's commit is absent from the tree it served: ${served}`);
       const afterWake = await wake(arm);
 
       if (afterWake.kind !== 'attached') problems.push(`wake answered ${afterWake.kind}`);
@@ -1051,8 +1051,8 @@ const CELLS: readonly Cell[] = [
       // THE ONLY ASSERTION: the deterministic shape, never the wall clock. A
       // 64 KiB backup and a restore cost the same counted work at 1,000 files
       // and at 10,000 — the same ratio rule cell 6.12 uses.
-      const middle = rows[1]!;
-      const large = rows[2]!;
+      const middle = rows[1];
+      const large = rows[2];
       const problems: string[] = [];
 
       if (large.restoreOps !== middle.restoreOps) {
@@ -1175,8 +1175,8 @@ const CELLS: readonly Cell[] = [
       }
 
       const problems: string[] = [];
-      const small = samples[0]!;
-      const large = samples[1]!;
+      const small = samples[0];
+      const large = samples[1];
 
       for (const [name, field, tolerance] of [
         ['publication bytes', 'publicationBytes', 0.1],
@@ -1344,7 +1344,7 @@ describe('red direction — every new cell fails against a deliberately broken a
       value: async () => {
         const declared = await arm.declaredPayload();
 
-        if (declared.length > 0) arm.durable.delete(declared[0]!.key);
+        if (declared.length > 0) arm.durable.delete(declared[0].key);
 
         return declared;
       },

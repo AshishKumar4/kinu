@@ -1053,7 +1053,7 @@ function chainShell(exec: ContainerExec, root: string) {
       // because a probe could not parse would lose more than a full disk.
       if (!Number.isFinite(need) || !Number.isFinite(free)) return null;
 
-      if (free! >= need!) return null;
+      if (free >= need) return null;
 
       return `staging ${sourceDir} needs up to ${need} bytes and ${stageDir} has ${free} free.`;
     },

@@ -45,7 +45,7 @@ describe("MemoryStore.search ranking", () => {
 		const weakHit = hits.find((h) => h.path === "memory/weak.md");
 		expect(strongHit).toBeDefined();
 		expect(weakHit).toBeDefined();
-		expect(hits[0]!.path).toBe("memory/strong.md");
+		expect(hits[0].path).toBe("memory/strong.md");
 		expect(strongHit!.score).toBeGreaterThan(weakHit!.score);
 	});
 });

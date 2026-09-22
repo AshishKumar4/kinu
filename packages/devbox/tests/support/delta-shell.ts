@@ -241,45 +241,45 @@ class DeltaShell {
 
     let m: RegExpExecArray | null;
 
-    if ((m = OP.probe.exec(line)) !== null) return this.#probe(unquote(m[1]!), m[2]!);
+    if ((m = OP.probe.exec(line)) !== null) return this.#probe(unquote(m[1]), m[2]);
 
-    if ((m = OP.whiteout.exec(line)) !== null) return this.#whiteout(unquote(m[1]!));
+    if ((m = OP.whiteout.exec(line)) !== null) return this.#whiteout(unquote(m[1]));
 
-    if ((m = OP.basestat.exec(line)) !== null) return this.#basestat(unquote(m[1]!));
+    if ((m = OP.basestat.exec(line)) !== null) return this.#basestat(unquote(m[1]));
 
     if (OP.haveSplit.test(line)) return 0;
 
-    if ((m = OP.mkdir.exec(line)) !== null) return this.#mkdir(m[1]!);
+    if ((m = OP.mkdir.exec(line)) !== null) return this.#mkdir(m[1]);
 
-    if ((m = OP.split.exec(line)) !== null) return this.#split(Number(m[1]), unquote(m[2]!), unquote(m[3]!));
+    if ((m = OP.split.exec(line)) !== null) return this.#split(Number(m[1]), unquote(m[2]), unquote(m[3]));
 
-    if ((m = OP.say.exec(line)) !== null) return this.#say(`${m[1]!}\n`);
+    if ((m = OP.say.exec(line)) !== null) return this.#say(`${m[1]}\n`);
 
-    if ((m = OP.sha256sum.exec(line)) !== null) return this.#sha256sum(unquote(m[1]!));
+    if ((m = OP.sha256sum.exec(line)) !== null) return this.#sha256sum(unquote(m[1]));
 
-    if ((m = OP.rmrf.exec(line)) !== null) return this.#rmrf(unquote(m[1]!));
+    if ((m = OP.rmrf.exec(line)) !== null) return this.#rmrf(unquote(m[1]));
 
-    if ((m = OP.ifBase.exec(line)) !== null) return this.#ifBase(unquote(m[1]!), m[2]!, Number(m[3]));
+    if ((m = OP.ifBase.exec(line)) !== null) return this.#ifBase(unquote(m[1]), m[2], Number(m[3]));
 
-    if ((m = OP.chown.exec(line)) !== null) return this.#chown(Number(m[1]), Number(m[2]), unquote(m[3]!));
+    if ((m = OP.chown.exec(line)) !== null) return this.#chown(Number(m[1]), Number(m[2]), unquote(m[3]));
 
-    if ((m = OP.chmod.exec(line)) !== null) return this.#chmod(Number.parseInt(m[1]!, 8), unquote(m[2]!));
+    if ((m = OP.chmod.exec(line)) !== null) return this.#chmod(Number.parseInt(m[1], 8), unquote(m[2]));
 
-    if ((m = OP.ln.exec(line)) !== null) return this.#ln(unquote(m[1]!), unquote(m[2]!));
+    if ((m = OP.ln.exec(line)) !== null) return this.#ln(unquote(m[1]), unquote(m[2]));
 
-    if ((m = OP.cpa.exec(line)) !== null) return this.#cpa(unquote(m[1]!), unquote(m[2]!));
+    if ((m = OP.cpa.exec(line)) !== null) return this.#cpa(unquote(m[1]), unquote(m[2]));
 
-    if ((m = OP.cpOrEmpty.exec(line)) !== null) return this.#cpOrEmpty(unquote(m[1]!), unquote(m[2]!));
+    if ((m = OP.cpOrEmpty.exec(line)) !== null) return this.#cpOrEmpty(unquote(m[1]), unquote(m[2]));
 
     if ((m = OP.dd.exec(line)) !== null) {
-      return this.#dd(m[2] === undefined ? unquote(m[1]!) : null, unquote(m[3]!), Number(m[4]), m[5] === 'skip', Number(m[6]));
+      return this.#dd(m[2] === undefined ? unquote(m[1]) : null, unquote(m[3]), Number(m[4]), m[5] === 'skip', Number(m[6]));
     }
 
-    if ((m = OP.truncate.exec(line)) !== null) return this.#truncate(Number(m[1]), unquote(m[2]!));
+    if ((m = OP.truncate.exec(line)) !== null) return this.#truncate(Number(m[1]), unquote(m[2]));
 
-    if ((m = OP.manifest.exec(line)) !== null) return this.#manifest(unquote(m[1]!), unquote(m[2]!));
+    if ((m = OP.manifest.exec(line)) !== null) return this.#manifest(unquote(m[1]), unquote(m[2]));
 
-    if ((m = OP.cat.exec(line)) !== null) return this.#cat(unquote(m[1]!));
+    if ((m = OP.cat.exec(line)) !== null) return this.#cat(unquote(m[1]));
 
     if ((m = OP.mknod.exec(line)) !== null) {
       const path = m[1];
@@ -335,7 +335,7 @@ class DeltaShell {
   // ── facts ────────────────────────────────────────────────────────────────
 
   #probe(upper: string, prunes: string): number {
-    const pruned = [...prunes.matchAll(OP.prune)].map((m) => pathPattern(unquote(m[1]!)));
+    const pruned = [...prunes.matchAll(OP.prune)].map((m) => pathPattern(unquote(m[1])));
     const tree = this.disk.trees.get(upper);
 
     if (tree === undefined) return this.#say('1 ');
@@ -464,7 +464,7 @@ class DeltaShell {
 
   #mkdir(words: string): number {
     for (const m of words.matchAll(new RegExp(Q, 'g'))) {
-      const path = unquote(m[1]!);
+      const path = unquote(m[1]);
 
       if (`${path}/`.includes(`/${DELTA_DIR}/`) || this.disk.writable(path) !== undefined) {
         const { tree, relative } = this.#dest(path);
