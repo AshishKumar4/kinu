@@ -20,7 +20,7 @@ const UpdateBuildSchema: v.GenericSchema<UpdateBuild> = v.object({
 });
 
 /** `GET /api/health`: the stamp is under `build`, not top-level. */
-export const HealthAnswerSchema = v.object({ build: v.nullable(UpdateBuildSchema) });
+export const HealthAnswerSchema = v.object({ build: v.nullable(UpdateBuildSchema), versionId: v.nullish(v.string()) });
 
 /** `reason` is shown instead of the install button. */
 export interface UpdateOffer {

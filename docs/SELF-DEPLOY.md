@@ -132,9 +132,14 @@ straight to disk.
    address; create KV, the R2 buckets, the Vectorize index with the geometry
    `release.json` states, the AI Gateway, the Access app and policy; seed the
    runtime cache; mint the secrets; upload the Worker version with the
-   bindings and migrations from `release.json`; bind the address;
-   smoke-check `/api/health` for the release's own version and sha; store the
-   refresh token and the deployment record as secrets on the new Worker.
+   bindings and migrations from `release.json`; bind the address and deploy
+   the new version at 0% beside the one serving; smoke-check `/api/health`
+   through a version override, for the new version's id and the release's own
+   version and sha; send the new version all traffic; store the refresh token
+   and the deployment record as secrets on the new Worker. The override is
+   there because Cloudflare makes no Version URL for a Worker that implements
+   a Durable Object. A first deployment has no previous version, so its upload
+   serves at once.
 7. **Done.** The page shows the address, the sign-in email, and the connect
    command for the user's computer, with the curl already pointing at their
    instance.
@@ -145,11 +150,14 @@ The deployment owns its lifecycle. Its Updates page reads
 `/downloads/release.json` from its channel (kinu.run), shows the current and
 available versions, and updates when the owner clicks. An update is the same
 plan run from inside the deployment with its own token, ending in the same
-smoke check. The address step points the deployment at the new version before
-the smoke check runs, so a failed check reports the failure and leaves the
-new version serving. Not built: a second channel (`edge`), updates on a
-schedule, and rolling the deployment pointer back when the smoke check fails.
-The daemon and CLI self-update already cover devices.
+smoke check. The new version takes no traffic until it passes that check, so
+a failed check leaves the previous version serving, and a retry checks the
+new version again. The rotated refresh token stays in the update's Durable
+Object, which the one-hour vault expiry does not clear, until the handover
+writes it into the Worker after the new version serves: Cloudflare refuses a
+secret write while the latest version is not the deployed one. Not built: a
+second channel (`edge`) and updates on a schedule. The daemon and CLI
+self-update already cover devices.
 
 ## The local door
 
@@ -185,7 +193,7 @@ Cloudflare door. No user repository and no Workers Builds.
 2. **Built 2026-09-18.** The core flow in `packages/core/src/deploy/`: the
    plan of idempotent steps, typed inputs, the tar reader, PKCE, the run key,
    and the runner over a ledger port. Proved against a fake Cloudflare in
-   `packages/core/tests/unit-deploy-flow.test.ts` (23 tests).
+   `packages/core/tests/unit-deploy-flow.test.ts` (25 tests).
 3. **Built 2026-09-18.** The door: `DeployRunDO` (one object per run, the step
    ledger in its SQLite, the tokens in its KV side under `secret.`), the public
    `/api/deploy/*` routes gated by a 192-bit run key compared against a stored
@@ -279,8 +287,9 @@ Cloudflare door. No user repository and no Workers Builds.
    by listing (`kinu-logs/wave4-0917/selfdeploy/measure-*.log`).
 
    So nothing downstream of Vectorize has been measured: no upload, no
-   deployment pointer, no `/api/health` answer from a deployment this flow
-   made, and neither of the two version-upload premises in
-   `packages/core/src/deploy/steps.ts` (`migrations` only on the first upload,
-   `keep_bindings` carrying the live secrets). The next run needs one
-   credential that can reach Vectorize; nothing else was missing.
+   deployment, no `/api/health` answer from a deployment this flow made, and
+   none of the premises in `packages/core/src/deploy/steps.ts` (`migrations`
+   only on the first upload, `keep_bindings` carrying the live secrets, a
+   deployment taking a version at 0%, a version override reaching it). The
+   next run needs one credential that can reach Vectorize; nothing else was
+   missing.

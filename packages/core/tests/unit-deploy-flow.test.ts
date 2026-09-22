@@ -87,6 +87,16 @@ function bodyText(body: JsonObject, key: string): string {
   return v.parse(v.nullish(v.string(), ''), body[key]);
 }
 
+/** One deployment as the Workers API carries it: which versions take what share of traffic. */
+const DeployedVersionsSchema = v.array(v.object({ version_id: v.string(), percentage: v.number() }));
+
+type DeployedVersions = v.InferOutput<typeof DeployedVersionsSchema>;
+
+/** The prior version a Worker already serves when a run begins, and the build it answers with. */
+const PRIOR_VERSION = 'version-0';
+
+const PRIOR_BUILD: UpdateBuild = { version: '0.3.9+old0000', sha: 'old0000', builtAt: '2026-09-10T10:00:00.000Z' };
+
 class FakeCloudflare implements CloudflareTransport {
   readonly calls: Recorded[] = [];
 
@@ -106,12 +116,48 @@ class FakeCloudflare implements CloudflareTransport {
 
   scriptExists = false;
 
-  refuseOnce: { path: string; status: number; code: number; message: string } | null = null;
+  /** Every version id this account holds. */
+  readonly versions: string[] = [];
+
+  /** Oldest first; the last one is the deployment serving traffic. */
+  readonly deployments: DeployedVersions[] = [];
+
+  /** The new deployment has not reached the location that answers, so an override is not applied and
+   *  the request goes to the serving version (Cloudflare's version-overrides doc). */
+  overridesLag = false;
+
+  private uploads = 0;
+
+  refuseOnce: { method?: string; path: string; status: number; code: number; message: string } | null = null;
+
+  /** A Worker a previous run left serving `version`. */
+  serveExisting(version: string): void {
+    this.scriptExists = true;
+    this.versions.push(version);
+    this.deployments.push([{ version_id: version, percentage: 100 }]);
+  }
+
+  /** The version a request that names no override reaches. */
+  serving(): string {
+    const live = this.deployments.at(-1) ?? [];
+
+    return live.reduce((best, entry) => (entry.percentage > best.percentage ? entry : best), { version_id: '', percentage: -1 })
+      .version_id;
+  }
+
+  /** The version a request with these headers reaches: the override's, when it is in the live deployment. */
+  answering(headers: Readonly<Record<string, string>> | undefined): string {
+    const override = new Headers(headers).get('cloudflare-workers-version-overrides') ?? '';
+    const named = /^kinu="(.+)"$/u.exec(override)?.[1];
+    const live = this.overridesLag ? [] : this.deployments.at(-1) ?? [];
+
+    return live.find((entry) => entry.version_id === named)?.version_id ?? this.serving();
+  }
 
   async request(call: CloudflareCall): Promise<CloudflareHttpResponse> {
     this.calls.push({ method: call.method, path: call.path, body: call.body, bearer: undefined });
 
-    const refusal = this.refusalFor(call.path);
+    const refusal = this.refusalFor(call.method, call.path);
 
     if (refusal !== null) return refusal;
 
@@ -132,6 +178,8 @@ class FakeCloudflare implements CloudflareTransport {
       };
     }
 
+    if (call.path.endsWith('/deployments')) return this.deploymentsCall(call);
+
     return { status: 200, body: { success: true, errors: [], result: this.answer(call) } };
   }
 
@@ -145,7 +193,7 @@ class FakeCloudflare implements CloudflareTransport {
       bearer: upload.bearer,
     });
 
-    const refusal = this.refusalFor(upload.path);
+    const refusal = this.refusalFor(upload.method, upload.path);
 
     if (refusal !== null) return refusal;
 
@@ -160,20 +208,55 @@ class FakeCloudflare implements CloudflareTransport {
     }
 
     this.scriptExists = true;
+    this.uploads += 1;
+    const version = `version-${String(this.uploads)}`;
 
-    return { status: 200, body: { success: true, errors: [], result: { id: 'version-1' } } };
+    this.versions.push(version);
+
+    // A first upload deploys what it carried and answers with the script, whose id is its name.
+    if (upload.method === 'PUT') {
+      this.deployments.push([{ version_id: version, percentage: 100 }]);
+
+      return { status: 200, body: { success: true, errors: [], result: { id: INPUTS.instanceName } } };
+    }
+
+    return { status: 200, body: { success: true, errors: [], result: { id: version } } };
   }
 
-  private refusalFor(path: string): CloudflareHttpResponse | null {
+  private refusalFor(method: string, path: string): CloudflareHttpResponse | null {
     const refusal = this.refuseOnce;
 
-    if (refusal === null || !path.startsWith(refusal.path)) return null;
+    if (refusal === null || !path.startsWith(refusal.path) || (refusal.method ?? method) !== method) return null;
     this.refuseOnce = null;
 
     return {
       status: refusal.status,
       body: { success: false, errors: [{ code: refusal.code, message: refusal.message }], result: null },
     };
+  }
+
+  private deploymentsCall(call: CloudflareCall): CloudflareHttpResponse {
+    if (call.method === 'GET') {
+      // Newest first: the reference lists the deployment serving traffic first.
+      const listed = [...this.deployments].reverse().map((versions) => ({ versions: versions.map((entry) => ({ ...entry })) }));
+
+      return { status: 200, body: { success: true, errors: [], result: { deployments: listed } } };
+    }
+
+    const versions = v.parse(DeployedVersionsSchema, call.body?.versions);
+    // The reference types `version_id` as the id of a version the Worker holds.
+    const unknown = versions.find((entry) => !this.versions.includes(entry.version_id));
+
+    if (unknown !== undefined) {
+      return {
+        status: 400,
+        body: { success: false, errors: [{ code: 10_000, message: `no version ${unknown.version_id}` }], result: null },
+      };
+    }
+
+    this.deployments.push(versions);
+
+    return { status: 200, body: { success: true, errors: [], result: { id: `deployment-${String(this.deployments.length)}` } } };
   }
 
   private answer(call: CloudflareCall): JsonValue {
@@ -235,8 +318,6 @@ class FakeCloudflare implements CloudflareTransport {
     if (path.endsWith('/workers/subdomain')) return { subdomain: 'acme' };
 
     if (path.endsWith('/subdomain')) return { enabled: true };
-
-    if (path.endsWith('/deployments')) return { id: 'deployment-1' };
 
     if (path.endsWith('/secrets')) {
       this.secrets.set(bodyText(body, 'name'), bodyText(body, 'text'));
@@ -378,18 +459,22 @@ let vault: MemoryVault;
 
 let progress: DeployProgress[];
 
+/** What an uploaded version answers; the prior version answers 200 with `PRIOR_BUILD`. */
 let health: number;
 
 let updating = false;
 
 let served: UpdateBuild;
 
-const healthFetch: HttpGet = async (url) => {
+const healthFetch: HttpGet = async (url, headers) => {
   if (!url.endsWith('/api/health')) throw new Error(`unexpected fetch ${url}`);
 
-  // The stamp under `build` (core/src/http/health-route.ts).
-  return new Response(JSON.stringify({ ok: true, build: served }), {
-    status: health,
+  const version = cloudflare.answering(headers);
+  const prior = version === PRIOR_VERSION;
+
+  // The stamp under `build`, beside the id of the version that answered (core/src/http/health-route.ts).
+  return new Response(JSON.stringify({ ok: true, build: prior ? PRIOR_BUILD : served, versionId: version }), {
+    status: prior ? 200 : health,
     headers: { 'content-type': 'application/json' },
   });
 };
@@ -803,6 +888,7 @@ describe('the workerd configuration for a local instance', () => {
 describe('what the address and smoke steps check', () => {
   test('a refused deployment pointer fails the address step', async () => {
     cloudflare.refuseOnce = {
+      method: 'POST',
       path: `/accounts/${INPUTS.accountId}/workers/scripts/kinu/deployments`,
       status: 403,
       code: 10_026,
@@ -816,7 +902,7 @@ describe('what the address and smoke steps check', () => {
     expect(rows.find((row) => row.id === 'smoke')?.state).toBe('pending');
   });
 
-  test('a smoke check that finds the previous build still serving fails', async () => {
+  test('a smoke check answered with another build fails', async () => {
     served = { version: '0.3.9+old0000', sha: 'old0000', builtAt: MANIFEST.builtAt };
 
     const rows = await run();
@@ -830,18 +916,46 @@ describe('what the address and smoke steps check', () => {
 
   test('an update mints no root secret and keeps the running version\'s', async () => {
     updating = true;
-    cloudflare.scriptExists = true;
+    cloudflare.serveExisting(PRIOR_VERSION);
 
     const rows = await run();
     const upload = cloudflare.calls.find((call) => call.path.endsWith('/versions'));
     const bindings = uploadedBindings(upload);
 
     expect(rows.every((row) => row.state === 'done')).toBe(true);
+    expect(cloudflare.serving()).toBe('version-1');
     expect(rows.find((row) => row.id === 'secrets')?.detail).toContain('kept from the running version');
     // `keep_bindings` keeps the live keys; a fresh entry here would destroy them.
     expect(await vault.read('CREDENTIAL_ENCRYPTION_KEY')).toBeNull();
     expect(bindings.map((binding) => binding.name)).not.toContain('CREDENTIAL_ENCRYPTION_KEY');
     expect(upload?.body?.keep_bindings).toEqual(['secret_text', 'secret_key']);
     expect(upload?.body?.migrations).toBeUndefined();
+  });
+
+  test('a failed smoke leaves the version that was serving in front of all traffic', async () => {
+    updating = true;
+    cloudflare.serveExisting(PRIOR_VERSION);
+    health = 503;
+
+    const rows = await run();
+
+    expect(rows.find((row) => row.id === 'smoke')?.state).toBe('failed');
+    expect(cloudflare.serving()).toBe(PRIOR_VERSION);
+    expect(cloudflare.secrets.has(DEPLOYMENT_RECORD_SECRET)).toBe(false);
+  });
+
+  test('a smoke answered by the serving version fails, though that version carries the same build', async () => {
+    await run();
+    ledger = new ArrayLedger();
+    await vault.write(REFRESH_TOKEN_KEY, 'refresh-token-value');
+    await vault.write(DEPLOY_CLIENT_ID_KEY, 'deploy-client-id');
+    cloudflare.overridesLag = true;
+
+    const rows = await run();
+    const smoke = rows.find((row) => row.id === 'smoke');
+
+    expect(smoke?.state).toBe('failed');
+    expect(smoke?.failure?.detail).toContain('version-1');
+    expect(cloudflare.serving()).toBe('version-1');
   });
 });

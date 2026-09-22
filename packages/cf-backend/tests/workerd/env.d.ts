@@ -197,6 +197,7 @@ interface DeployFakeControlRpc extends Rpc.WorkerEntrypointBranded {
   releaseStall(): Promise<void>;
   weigh(weight: DeployFakeWeight): Promise<void>;
   expireGrant(expiresIn: number): Promise<void>;
+  existing(): Promise<void>;
 }
 
 interface UpdatesSession {
