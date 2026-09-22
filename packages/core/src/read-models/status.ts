@@ -137,6 +137,8 @@ export async function getChatHistoryPage(
 
     if (row.metadata !== undefined) entry.metadata = row.metadata;
 
+    if (row.unavailable === true) entry.unavailable = true;
+
     return [entry];
   }).reverse());
 }

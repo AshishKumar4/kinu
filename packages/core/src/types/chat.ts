@@ -11,6 +11,9 @@ export const ChatHistoryEntrySchema = v.object({
   createdAt: v.union([v.string(), v.number()]),
   /** Author and event markers must survive paging as well as live delivery. */
   metadata: v.optional(JsonObjectSchema),
+  /** The row exists and its content cannot be read by this reader: spilled to
+   *  a file its actor no longer has a bound plane for. Drawn as unavailable. */
+  unavailable: v.optional(v.literal(true)),
 });
 
 export type ChatHistoryEntry = v.InferOutput<typeof ChatHistoryEntrySchema>;
