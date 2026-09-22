@@ -24,7 +24,13 @@ const StringAttachmentReference = v.object({ $sessionStringAttachment: v.object(
 const AttachmentReference = v.object({ $sessionAttachment: v.object({ path: v.string(), digest: v.string(), bytes: v.number(), buffer: v.optional(v.boolean()) }) });
 
 export class SessionPayloadReader {
-  constructor(private readonly readableFiles: () => Promise<Pick<VFS, 'readFile'>>) {}
+  /** `null` is a reader with no file plane: a spilled payload is unreadable
+   *  through it, so a caller asks {@link readsFiles} before reading one. */
+  constructor(private readonly readableFiles: (() => Promise<Pick<VFS, 'readFile'>>) | null) {}
+
+  get readsFiles(): boolean {
+    return this.readableFiles !== null;
+  }
 
   async read(payload: SessionPayload): Promise<JsonValue> {
     if (payload.json !== null) return v.parse(JsonValueSchema, JSON.parse(payload.json));
@@ -62,6 +68,7 @@ export class SessionPayloadReader {
   }
 
   protected async readBytes(path: string, digest: string): Promise<Uint8Array> {
+    if (this.readableFiles === null) throw new KinuError('unavailable', `session payload ${path} is spilled to a file this reader has no plane for`);
     const stored = await (await this.readableFiles()).readFile(path);
     const bytes = v.is(v.string(), stored) ? new TextEncoder().encode(stored) : stored;
 

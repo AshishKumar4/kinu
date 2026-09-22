@@ -18,8 +18,8 @@ import {
 } from "agents";
 import {
   TierIdSchema, inspectSubordinateStorage, writeActivityLog, backgroundJobNotice,
-  actorConnectionTag, actorFromConnectionTags, hostedActorRoute,
-  type SubordinateInspectionAuthority,
+  actorConnectionTag, actorFromConnectionTags, hostedActorRoute, actorReadHandle, readSessionTranscript,
+  type SubordinateInspectionAuthority, type SessionTranscriptReader,
 } from '@kinu.run/core';
 import type { SubordinateInspectionRequest, SubordinateInspectionResult } from '@kinu.run/core';
 import type { SubordinateActivityEvent } from '@kinu.run/core';
@@ -1057,34 +1057,36 @@ export abstract class ActorAgent extends Agent<Env> {
     return subordinateDelegatesOf(this.subordinateRoster.list());
   }
 
+  /**
+   * One roster row as a chat surface draws it: its lifecycle from the roster,
+   * its title and role from the child's own config.
+   *
+   * The config is read through the presence-fenced handle keyed on the
+   * reference the roster holds, not by resolving the name: a kept dismissal
+   * releases the name and keeps the rows, so a name lookup refused every
+   * dismissed row and drew it with its slug and no role.
+   */
   protected async subordinateView(name: string): Promise<SubordinateView> {
     const entry = this.subordinateRoster.get(name);
 
     if (entry === null) throw new Error(`Subordinate "${name}" is not in the roster`);
+    const reference = entry.actorReference;
 
-    try {
-      // The child's OWN config rows, read through the host's binder rather than
-      // fetched over a stub: `getSubordinateSnapshot` was an RPC because the
-      // display name and the role lived in the child's private database, and
-      // they are `actor_id`-scoped rows in this one now.
-      const child = this.actorHost().bindStores(
-        this.actorDirectoryStore().apply(actorReferenceOf(this.actorHandle()), [], { action: 'resolve', name }).reference,
-      );
+    if (reference === null) {
+      // Admitted and not yet born: its seed is the only descriptor it has.
+      const seed = entry.birth?.seed;
 
-      return {
-        ...entry,
-        displayName: child.stores.config.getDisplayName() ?? entry.name,
-        role: child.stores.config.getRoleSelection(),
-      };
-    } catch (error) {
-      diagnostics.failure('subordinate.descriptor_unavailable', toKinuError({
-        doing: 'reading a subordinate descriptor from its agent config',
-        cause: error,
-        otherwise: 'unavailable',
-      }), { subordinate: name });
+      if (seed === undefined) throw new KinuError('io', `Subordinate "${name}" has neither an actor nor a birth.`);
 
-      return { ...entry, displayName: name, role: 'Unavailable' };
+      return { ...entry, actorId: null, displayName: seed.displayName, role: seed.role };
     }
+
+    const record = this.actorDirectoryStore().retained(reference.actorId);
+
+    if (record === null) throw new KinuError('missing', `Subordinate "${name}" names an actor this workspace does not hold.`);
+    const config = actorReadHandle(this.boundSql, record).config;
+
+    return { ...entry, actorId: reference.actorId, displayName: config.getDisplayName() ?? entry.name, role: config.getRoleSelection() };
   }
 
   protected async subordinateViews(): Promise<SubordinateView[]> {
@@ -5025,47 +5027,48 @@ export abstract class ActorAgent extends Agent<Env> {
 
   /**
    * One page of ONE chat: the caller's own by default, or the chat of the
-   * hosted actor a pane names.
+   * subordinate a pane names.
    *
-   * A pane addresses its own actor by the id its snapshot already carries
-   * (`SubordinateSnapshot.actorId`); the root's pane names none and reads this
-   * actor's conversation. Before the parameter existed every caller was
-   * answered from `actorHandle()`, so an actor pane's scroll-up paged the
-   * WORKSPACE's rows into a helper's chat — the same leak the pane's live
-   * transcript had, one surface later.
+   * A pane addresses its actor by id: a live pane by the one its snapshot
+   * carries (`SubordinateSnapshot.actorId`), a dismissed one by its roster
+   * row's (`SubordinateRosterEntry.actorId`); the root's pane names none and
+   * reads this actor's conversation. Before the parameter existed every caller
+   * was answered from `actorHandle()`, so an actor pane's scroll-up paged the
+   * WORKSPACE's rows into a helper's chat.
    */
   @callable()
   async getChatHistoryPage(request?: PageRequest & { actor?: string }): Promise<Page<ChatHistoryEntry>> {
     this.ensureSchema();
     const { actor, ...page } = request ?? {};
 
-    const transcript = actor === undefined ? this.chatTranscript : this.transcriptFor(this.hostedChatActor(actor));
-
-    return getChatHistoryPage(transcript, page);
+    return getChatHistoryPage(actor === undefined ? this.chatTranscript : this.subordinateChat(actor), page);
   }
 
   /**
-   * The actor behind a pane's id, refused when this workspace hosts no chat
-   * under it.
+   * The chat behind a pane's actor id, refused unless it names a subordinate
+   * this actor hired.
    *
-   * The DIRECTORY answers, because the id it issued is what the pane holds: it
-   * refuses an actor this workspace never registered or has retired, and the
-   * two further checks are the ones `resolveHostedActorRoute` makes of the
-   * socket serving the same chat — a child of THIS actor, of the one kind
-   * whose pane has a conversation. The page itself then comes off the
-   * transcript that actor's own chat wire serves (`CHAT_SESSION_ID`, through
-   * the canonical read model), not a reader of this RPC's own.
+   * The DIRECTORY answers, because the id it issued is what the pane holds: an
+   * id it never registered is `missing`, and anything but a child of THIS
+   * actor of the one kind whose pane has a conversation is `denied`. A live
+   * child reads the transcript its own chat wire serves. A kept dismissal
+   * retires the actor and keeps its rows, and nothing binds a retired actor,
+   * so it reads under the presence-fenced handle and no file plane: an entry
+   * spilled to its private home pages as unavailable, in its place.
    */
-  private hostedChatActor(actorId: string): ActorHandle {
+  private subordinateChat(actorId: string): SessionTranscriptReader {
     const directory = this.actorDirectoryStore();
-    const handle = directory.open(actorId);
-    const record = directory.describe(handle);
+    const record = directory.retained(actorId);
+
+    if (record === null) throw new KinuError('missing', 'The actor is not registered in this workspace.');
 
     if (record.parentActorId !== this.actorHandle().actorId || record.kind !== 'subordinate') {
       throw new KinuError('denied', 'The actor id does not name a chat this workspace hosts.');
     }
 
-    return handle;
+    if (record.retiringAt === null && record.deletedAt === null) return this.transcriptFor(directory.open(actorId));
+
+    return readSessionTranscript(this.boundSql, actorReadHandle(this.boundSql, record), CHAT_SESSION_ID, null);
   }
 
   /** The agent's stored model spec. The UI preselects a menu entry with it; the
