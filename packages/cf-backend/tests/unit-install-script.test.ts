@@ -24,6 +24,7 @@ import { describe, expect, test } from 'bun:test';
 import { tolerate } from '@kinu.run/core/obs';
 import * as v from 'valibot';
 import { handleCliRequest } from '../src/cli/routes';
+import { staticRouteCliEnv } from './helpers/bindings';
 import { buildCliInstallCommand } from '@kinu.run/core';
 import { bunResolutionShell } from '@kinu.run/core';
 import { CLI_DIST_PATHS, RELEASE_SIGNING_PUBLIC_KEY, generateReleaseSigningKey, signRelease } from '@kinu.run/core';
@@ -58,10 +59,7 @@ const PtyResultSchema = v.object({
 });
 
 async function installScript(): Promise<string> {
-  const partialEnv: Partial<Env> = {};
-  // SAFETY: handleCliRequest returns from its /install.sh branch before reading env, and this request fixes that pathname.
-  const env = partialEnv as Env;
-  const response = await handleCliRequest(new Request(`${ORIGIN}/install.sh`), env);
+  const response = await handleCliRequest(new Request(`${ORIGIN}/install.sh`), staticRouteCliEnv());
 
   if (!response) throw new Error('/install.sh was not handled');
   expect(response.status).toBe(200);
@@ -70,10 +68,7 @@ async function installScript(): Promise<string> {
 }
 
 async function launcherScript(): Promise<string> {
-  const partialEnv: Partial<Env> = {};
-  // SAFETY: handleCliRequest returns from its /downloads/kinu branch before reading env, and this request fixes that pathname.
-  const env = partialEnv as Env;
-  const response = await handleCliRequest(new Request(`${ORIGIN}/downloads/kinu`), env);
+  const response = await handleCliRequest(new Request(`${ORIGIN}/downloads/kinu`), staticRouteCliEnv());
 
   if (!response) throw new Error('/downloads/kinu was not handled');
   expect(response.status).toBe(200);

@@ -10,7 +10,11 @@ import {
 } from '../src/cli/auth-store';
 import { makeKv } from './helpers/kv';
 import { RateLimitError } from '../src/cli/auth-store';
-import { handleCliRequest } from '../src/cli/routes';
+import { handleCliRequest, type CliRoutesAuthority, type CliRoutesEnv } from '../src/cli/routes';
+import {
+  bootstrappedProfile, cliAccount, unreachableAssets, unreachableNamespace,
+} from './helpers/bindings';
+import type { ObjectNamespace } from '../src/bindings';
 import type { KvStore } from '@kinu.run/agent-utils';
 import type { UserCaller } from '@kinu.run/core';
 import { sha256Hex } from '@kinu.run/core';
@@ -18,24 +22,16 @@ import * as v from 'valibot';
 
 const ErrorResponseSchema = v.object({ error: v.string() });
 
-interface TestNamespace<Stub> {
-  idFromName(name: string): string;
-  get(): Stub;
-}
-
-interface CliAuthTestBindings<Stub> {
-  AUTH_KV: KvStore;
-  UserDO: TestNamespace<Stub>;
-  CREDENTIAL_ENCRYPTION_KEY: string;
-}
-
-function testEnv<Stub>(bindings: CliAuthTestBindings<Stub>): Env {
-  const env: Partial<Env> = {};
-  Object.assign(env, bindings);
-
-  // SAFETY: CLI auth reads exactly the constructed KV namespace, UserDO
-  // namespace, and credential key; every reachable binding is present.
-  return env as Env;
+/** The plane's env around one KV and one account object. Device-code sign-in
+ *  reaches neither the published assets nor a workspace object. */
+function testEnv(AUTH_KV: KvStore, UserDO: ObjectNamespace<string, CliRoutesAuthority>): CliRoutesEnv<string> {
+  return {
+    AUTH_KV,
+    UserDO,
+    CREDENTIAL_ENCRYPTION_KEY: TEST_CREDENTIAL_ENCRYPTION_KEY,
+    ASSETS: unreachableAssets(),
+    OrchestratorAgent: unreachableNamespace('OrchestratorAgent'),
+  };
 }
 
 function handled(response: Response | null): Response {
@@ -49,8 +45,8 @@ function setupEnv() {
   const minted: string[] = [];
   const claimed: string[] = [];
 
-  const userDO = {
-    async ensureProfile() {},
+  const userDO = cliAccount({
+    async ensureProfile(_caller: UserCaller, email: string) { return bootstrappedProfile(email); },
     async mintCliToken(_caller: UserCaller, userId: string, authorizationHash: string, label?: string) {
       // The real UserDO makes a second mint against one approval impossible
       // with a unique index (unit-user-authority-races.test.ts drives that
@@ -68,24 +64,19 @@ function setupEnv() {
 
       return { token, tokenHash: 'hash', expiresAt: Date.now() + 60_000 };
     },
-  };
+  });
 
   return {
     kv,
     minted,
     claimed,
-    env: testEnv({
-      AUTH_KV: kv,
-      UserDO: {
-        idFromName(name: string) { return name; },
-        get() { return userDO; },
-      }, CREDENTIAL_ENCRYPTION_KEY: TEST_CREDENTIAL_ENCRYPTION_KEY }),
+    env: testEnv(kv, { idFromName: (name) => name, get: () => userDO }),
   };
 }
 
 /** Every case here starts an auth on the origin it also approves from, so the
  *  two origins move together and only the device and client vary. */
-function startAuth(env: Env, origin: string, deviceName: string, clientKey = '127.0.0.1') {
+function startAuth(env: CliRoutesEnv<string>, origin: string, deviceName: string, clientKey = '127.0.0.1') {
   return startCliAuth(env, { origin, approvalOrigin: origin, deviceName, clientKey });
 }
 
@@ -224,11 +215,7 @@ describe('CLI auth approval replay', () => {
 
 describe('CLI auth error propagation', () => {
   test('startCliAuth surfaces real store failures instead of retrying as collisions', async () => {
-    const env = testEnv({
-      AUTH_KV: brokenKv(),
-      UserDO: { idFromName: (n: string) => n, get: () => ({}) },
-      CREDENTIAL_ENCRYPTION_KEY: TEST_CREDENTIAL_ENCRYPTION_KEY,
-    });
+    const env = testEnv(brokenKv(), unreachableNamespace('UserDO'));
 
     await expect(startAuth(env, 'https://o.example', 't'))
       .rejects.toThrow(/namespace unavailable/i);
@@ -278,11 +265,7 @@ describe('CLI auth route status mapping', () => {
   });
 
   test('infra failure during start → 500, not 429', async () => {
-    const env = testEnv({
-      AUTH_KV: brokenKv(),
-      UserDO: { idFromName: (n: string) => n, get: () => ({}) },
-      CREDENTIAL_ENCRYPTION_KEY: TEST_CREDENTIAL_ENCRYPTION_KEY,
-    });
+    const env = testEnv(brokenKv(), unreachableNamespace('UserDO'));
 
     const res = handled(await handleCliRequest(startRequest(), env));
     expect(res.status).toBe(500);
@@ -310,11 +293,7 @@ describe('the CLI session inventory', () => {
     const device = await harness.userDO.mintCliToken(owner, USER_ID, 'a'.repeat(64), 'device');
     const lost = await harness.userDO.mintCliToken(owner, USER_ID, 'b'.repeat(64), 'the machine that is gone');
 
-    const env = testEnv({
-      AUTH_KV: makeKv(),
-      UserDO: { idFromName: () => USER_ID, get: () => harness.userDO },
-      CREDENTIAL_ENCRYPTION_KEY: TEST_CREDENTIAL_ENCRYPTION_KEY,
-    });
+    const env = testEnv(makeKv(), { idFromName: () => USER_ID, get: () => harness.userDO });
 
     return { harness, owner, env, device, lost };
   }

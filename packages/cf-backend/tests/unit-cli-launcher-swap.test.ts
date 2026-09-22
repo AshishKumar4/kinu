@@ -14,11 +14,12 @@ import { join } from 'node:path';
 import { describe, expect, test } from 'bun:test';
 import { scratchDir } from '@kinu.run/test-utils';
 import { handleCliRequest } from '../src/cli/routes';
+import { staticRouteCliEnv } from './helpers/bindings';
 
 async function launcherScript(): Promise<string> {
-  const env: Partial<Env> = {};
-  // SAFETY: the launcher route returns before reading any Worker binding.
-  const shim = await handleCliRequest(new Request('https://kinu.example.com/downloads/kinu'), env as Env);
+  const shim = await handleCliRequest(
+    new Request('https://kinu.example.com/downloads/kinu'), staticRouteCliEnv(),
+  );
 
   if (!shim) throw new Error('the launcher route answered nothing');
 

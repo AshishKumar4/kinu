@@ -10,7 +10,7 @@
  */
 import type { KvStore } from '@kinu.run/agent-utils';
 import type { UserProfile } from '../../src/user/user-do';
-import type { CliAgentTarget, CliRoutesAuthority } from '../../src/cli/routes';
+import type { CliAgentTarget, CliRoutesAuthority, CliRoutesEnv } from '../../src/cli/routes';
 import type { AssetFetcher } from '@kinu.run/core';
 import type { ObjectNamespace } from '../../src/bindings';
 
@@ -39,6 +39,18 @@ export function unreachableAssets(): AssetFetcher {
  *  returns it: the account exists, has no onboarding stamp and owns nothing. */
 export function bootstrappedProfile(email: string, displayName: string | null = null): UserProfile {
   return { email, displayName, createdAt: 1, lastSeenAt: 1, onboardedAt: null, workspaceCount: 0 };
+}
+
+/** The CLI plane's env with nothing in it but refusals: what a public static
+ *  route — the install page, the installer, the launcher — is answered from,
+ *  since each returns before reading a binding. */
+export function staticRouteCliEnv(): CliRoutesEnv<string> {
+  return {
+    AUTH_KV: unreachableKv('AUTH_KV'),
+    ASSETS: unreachableAssets(),
+    UserDO: unreachableNamespace('UserDO'),
+    OrchestratorAgent: unreachableNamespace('OrchestratorAgent'),
+  };
 }
 
 /** Name one member of an object binding that this case does not reach. The

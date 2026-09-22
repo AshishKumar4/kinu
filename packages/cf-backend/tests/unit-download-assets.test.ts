@@ -14,8 +14,9 @@ import { TEST_CREDENTIAL_ENCRYPTION_KEY } from './helpers/user-do';
 import { describe, expect, test } from 'bun:test';
 import * as v from 'valibot';
 import { BUILTIN_TOOLS, NAMED_SWARM_PRESETS, SWARM_PRESETS } from '@kinu.run/core';
-import { handleCliRequest } from '../src/cli/routes';
-import { handleHealthRequest } from '@kinu.run/core';
+import { handleCliRequest, type CliRoutesEnv } from '../src/cli/routes';
+import { unreachableKv, unreachableNamespace } from './helpers/bindings';
+import { handleHealthRequest, type AssetFetcher } from '@kinu.run/core';
 import { CLI_DIST_PATHS } from '@kinu.run/core';
 
 const ORIGIN = 'https://kinu.example.com';
@@ -49,21 +50,21 @@ function requiredResponse(response: Response | null): Response {
   return response;
 }
 
-function testEnv(assets: Pick<Env['ASSETS'], 'fetch'>): Env {
-  const partialEnv: Partial<Env> = {
+/** The CLI plane around one published-asset store. A download answers from
+ *  ASSETS alone, so the objects and the device-code KV are refusals here. */
+function testEnv(ASSETS: AssetFetcher): CliRoutesEnv<string> {
+  return {
+    ASSETS,
     CREDENTIAL_ENCRYPTION_KEY: TEST_CREDENTIAL_ENCRYPTION_KEY,
+    AUTH_KV: unreachableKv('AUTH_KV'),
+    UserDO: unreachableNamespace('UserDO'),
+    OrchestratorAgent: unreachableNamespace('OrchestratorAgent'),
   };
-
-  // SAFETY: The CLI and health asset paths call only ASSETS.fetch, which this fixture constructs.
-  partialEnv.ASSETS = assets as Env['ASSETS'];
-
-  // SAFETY: These route tests provide every Env binding their exercised paths read.
-  return partialEnv as Env;
 }
 
 /** An ASSETS binding that publishes `files` and answers everything else the
  *  way the real single-page-application fallback does. */
-function envWithAssets(files: ReadonlyMap<string, PublishedAsset>): Env {
+function envWithAssets(files: ReadonlyMap<string, PublishedAsset>): CliRoutesEnv<string> {
   return testEnv({
     async fetch(request: Request): Promise<Response> {
       const { pathname } = new URL(request.url);

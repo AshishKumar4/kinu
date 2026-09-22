@@ -18,10 +18,7 @@ import { handleCliRequest } from '../src/cli/routes';
 import { escapeHtml } from '@kinu.run/core';
 import { sanitizeReturnTo } from '../src/auth/store';
 import { handleAuthRequest, type AuthRoutesAuthority, type AuthRoutesEnv } from '../src/auth/routes';
-import type { CliRoutesEnv } from '../src/cli/routes';
-import {
-  bootstrappedProfile, unreachableAssets, unreachableKv, unreachableNamespace,
-} from './helpers/bindings';
+import { bootstrappedProfile, staticRouteCliEnv } from './helpers/bindings';
 import { OAUTH_STATE_COOKIE_NAME } from '../src/auth/session';
 import { makeKv } from './helpers/kv';
 import { TEST_CREDENTIAL_ENCRYPTION_KEY } from './helpers/user-do';
@@ -37,14 +34,9 @@ function source(path: string): string {
 }
 
 /** These public static routes answer before reading a Worker binding, so every
- *  binding the CLI plane declares is built here as a refusal: the first reach
- *  names itself and fails the test. */
-const PUBLIC_ROUTE_ENV: CliRoutesEnv<string> = {
-  AUTH_KV: unreachableKv('AUTH_KV'),
-  ASSETS: unreachableAssets(),
-  UserDO: unreachableNamespace('UserDO'),
-  OrchestratorAgent: unreachableNamespace('OrchestratorAgent'),
-};
+ *  binding the CLI plane declares refuses here: the first reach names itself
+ *  and fails the test. */
+const PUBLIC_ROUTE_ENV = staticRouteCliEnv();
 
 /** The accounts listing the OAuth attachment reads, and the check that it asked
  *  the accounts endpoint rather than some other Cloudflare API for it. */
