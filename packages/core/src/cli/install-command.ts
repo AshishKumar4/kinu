@@ -11,13 +11,8 @@ export function normalizeCliOrigin(origin: string): string {
   return origin.replace(/\/+$/, '');
 }
 
-/** The one command every surface hands a user. The script owns PATH activation
- *  and prints the export line itself when the calling shell cannot see `kinu`
- *  yet, so nothing here wraps it in an environment prefix or a second command.
- *
- *  The interpreter is `bash`, not `sh`: the script sets `pipefail`, which dash
- *  gained only in 0.5.12, and the launcher it installs traps `RETURN`, which
- *  dash rejects outright. */
+/** The script owns PATH activation, so no env prefix or second command here.
+ *  `bash`, not `sh`: the script needs `pipefail` and a `RETURN` trap, which dash lacks. */
 export function buildCliInstallCommand(options: CliInstallCommandOptions): string {
   const origin = normalizeCliOrigin(options.origin);
   const args: string[] = [];

@@ -1,16 +1,9 @@
-// Eval corpus loader — JSONL format. One EvalCase per line.
-//
-// Standard shape:
-//   {"id": "math-001", "task": "What is 17 * 23?", "reference": "391",
-//    "tags": ["math", "trivial"]}
+// JSONL, one EvalCase per line; `#` lines are comments.
 import * as v from 'valibot';
 import { EvalBudgetSchema, type EvalCase } from './types';
 import { JsonObjectSchema } from '../utils/json';
 
-// `v.object` STRIPS keys it does not declare rather than rejecting them, so a
-// field missing from this schema is not a loud error — it silently vanishes
-// between the JSONL and the case. Every field EvalCase carries must therefore
-// appear here.
+// Strict so an undeclared field fails loudly instead of vanishing; list every EvalCase field.
 const CaseSchema = v.strictObject({
   id: v.pipe(v.string(), v.minLength(1)),
   task: v.pipe(v.string(), v.minLength(1)),

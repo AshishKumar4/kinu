@@ -1,17 +1,10 @@
-// Scoreboard report + regression gate over runEvalPair results. Pure — no LLM,
-// no IO. Turns raw EvalResult[] into a persistable/renderable report and applies
-// a committed quality floor so CI can fail on a regression. Shared by the eval
-// script (scripts/eval.ts) and any surface that renders a benchmark run.
+// Pure scoreboard report and CI regression gate over runEvalPair results.
 import { summarizeEval } from './types';
 import type { EvalResult, EvalSummary } from './types';
 
-/** Committed quality floor for the CI benchmark gate and the quality panel's
- *  reference line — the single source of truth both share. Calibrate after the
- *  first real run against production models; the eval script can override it
- *  per-invocation via --min-score / EVAL_MIN_SCORE. */
+/** Shared by the CI gate and the quality panel; overridable per run via --min-score / EVAL_MIN_SCORE. */
 export const DEFAULT_QUALITY_THRESHOLD = 0.5;
 
-/** One case's outcome, flattened from an EvalResult for reporting/rendering. */
 export interface EvalCaseScore {
   caseId: string;
   winner: 'a' | 'b' | 'tie';
@@ -41,16 +34,13 @@ export interface EvalReport {
   modelB?: string;
   corpus?: string;
   summary: EvalSummary;
-  /** The headline number the CI gate floors: mean judge score of the
-   *  candidate strategy (B). Baseline (A) is summary.avgScoreA. */
+  /** Candidate (B) mean judge score; the number the CI gate floors. */
   aggregateScore: number;
-  /** aggregateScore − baseline; positive when the candidate beats the baseline. */
   regressionDelta: number;
   cases: EvalCaseScore[];
 }
 
-/** Flatten runEvalPair output into a structured, serializable report.
- *  Strategy B is the candidate / system-under-test; A is the baseline. */
+/** B is the candidate under test; A is the baseline. */
 export function buildEvalReport(results: EvalResult[], meta: EvalReportMeta): EvalReport {
   const summary = summarizeEval(results);
 
@@ -62,8 +52,7 @@ export function buildEvalReport(results: EvalResult[], meta: EvalReportMeta): Ev
     rationale: r.verdict.rationale,
     durationMsA: r.runA.durationMs,
     durationMsB: r.runB.durationMs,
-    // A run that failed with nothing to say carries no error at all: the field
-    // is read as "did this side fail", and an empty string answers yes.
+    // Empty error means no error: consumers read the field as "did this side fail".
     errorA: r.runA.error === '' ? undefined : r.runA.error,
     errorB: r.runB.error === '' ? undefined : r.runB.error,
   }));
@@ -89,10 +78,7 @@ export interface GateResult {
   reason: string;
 }
 
-/** CI quality floor: the candidate's aggregate judge score must clear the
- *  committed threshold. A run with zero cases fails — an empty corpus proves
- *  nothing and must not silently pass the gate. Neither does a run whose
- *  strategies errored. */
+/** Fails on zero cases or any errored case, since neither is a measurement. */
 export function evaluateGate(report: EvalReport, threshold: number): GateResult {
   const score = report.aggregateScore;
 
@@ -100,10 +86,7 @@ export function evaluateGate(report: EvalReport, threshold: number): GateResult 
     return { pass: false, aggregateScore: score, threshold, reason: 'no eval cases ran — nothing to gate on' };
   }
 
-  // A case whose strategy errored produced no answer, so the judge scored the
-  // absence of one — typically as a tie at 0.5. With a corpus of those the
-  // aggregate lands exactly on a 0.5 floor and passes, which is how a run where
-  // every single model call failed returned a green gate.
+  // Errored runs get judged as ties near 0.5, which would pass a 0.5 floor.
   const errored = report.cases.filter((c) => c.errorA !== undefined || c.errorB !== undefined).length;
 
   if (errored > 0) {
@@ -127,7 +110,6 @@ export function evaluateGate(report: EvalReport, threshold: number): GateResult 
   };
 }
 
-/** Compact human summary of a benchmark run for stdout / CI logs. */
 export function renderEvalSummary(report: EvalReport, gate?: GateResult): string {
   const s = report.summary;
   const lines: string[] = [];

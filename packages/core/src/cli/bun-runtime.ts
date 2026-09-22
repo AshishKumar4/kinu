@@ -1,46 +1,10 @@
-/**
- * ONE Bun resolution, inlined by both the served installer and the launcher
- * that installer writes.
- *
- * Two independent resolutions contradict each other. Nothing persists
- * `$HOME/.bun/bin` to any profile — only `$KINU_HOME/bin` is appended — so an
- * installer that runs `command -v bun`, installs Bun on a miss, does
- * `export PATH="$HOME/.bun/bin:$PATH"` **in its own process**, re-checks there
- * and prints "Kinu CLI is ready." hands the next shell a launcher that
- * re-derives Bun from whatever ambient PATH it happens to have, misses the same
- * Bun sitting on disk and answers "Bun is required." One runtime, two
- * resolutions, and the install transcript says the opposite of the first
- * command the user typed.
- *
- * So there is one resolution and both scripts inline this text. Its candidate
- * order is fixed and PATH-independent, which is what makes the launcher reach
- * the binary the installer verified without any recorded state between them:
- * Kinu's own managed install is tried first, at an absolute path the installer
- * controls, and only then whatever Bun the user already has.
- *
- * Presence is not the question either — compatibility is. Accepting any `bun`
- * on PATH lets a Bun too old for this tree pass the gate and fail later inside
- * `bun install` with a message about neither Bun nor Kinu. The check reads the
- * candidate's own `--version`.
- *
- * There is no second runtime to fall back to: the CLI imports `bun:sqlite` and
- * `Bun.stdin` (packages/cli/src/config.ts, commands/run.ts), so an
- * unresolvable Bun is a hard stop that names the one command that fixes it.
- */
+// One PATH-independent Bun resolution, inlined by both the installer and its launcher so they cannot disagree.
+// The CLI needs `bun:sqlite` and `Bun.stdin`, so an unresolvable or too-old Bun is a hard stop.
 
-/**
- * The approved Bun. `tests/unit-install-script.test.ts` reads it back out of
- * the rendered resolution and asserts it equals the repository's own
- * `packageManager` pin: two spellings of one version is how a shipped
- * installer drifts from the tree it installs.
- */
+/** `tests/unit-install-script.test.ts` asserts this equals the repo's `packageManager` pin. */
 const KINU_BUN_VERSION = '1.4.0';
 
-/**
- * A `major.minor.patch` version as one comparable integer. Anything that is not
- * three dot-separated numbers is not comparable, and the shell half treats that
- * as incompatible rather than guessing.
- */
+/** Non-`major.minor.patch` input is not comparable; the shell half treats it as incompatible. */
 function bunVersionKey(version: string): number {
   const parts = /^(\d+)\.(\d+)\.(\d+)/.exec(version);
 
@@ -49,13 +13,10 @@ function bunVersionKey(version: string): number {
   return Number(parts[1]) * 1_000_000 + Number(parts[2]) * 1_000 + Number(parts[3]);
 }
 
-/** Where the installer puts the Bun it installs, relative to `$KINU_HOME`. */
+/** Relative to `$KINU_HOME`. */
 const KINU_MANAGED_BUN_SUBPATH = 'runtime/bin/bun';
 
-/**
- * The shared resolution, as shell. Requires `$KINU_HOME` to be set already and
- * leaves the resolved absolute path in `$KINU_BUN`.
- */
+/** Requires `$KINU_HOME`; leaves the resolved absolute path in `$KINU_BUN`. */
 export function bunResolutionShell(): string {
   return `KINU_BUN_VERSION="${KINU_BUN_VERSION}"
 KINU_BUN_MIN_KEY=${bunVersionKey(KINU_BUN_VERSION)}
@@ -104,16 +65,8 @@ kinu_resolve_bun() {
 `;
 }
 
-/**
- * Which prebuilt CLI artifact this machine takes, as shell. Requires
- * `$KINU_ORIGIN` to be set already and leaves the download URL in
- * `$TARBALL_URL`.
- *
- * The names it produces are `CLI_DIST_PLATFORMS` in lib/deployed-assets.ts,
- * and `tests/unit-install-script.test.ts` asserts the two sets are equal. A
- * `uname` pair with no published artifact stops here and says so, because the
- * alternative is a 404 body unpacked as a tarball.
- */
+/** Requires `$KINU_ORIGIN`; leaves `$TARBALL_URL`. Names must equal `CLI_DIST_PLATFORMS` in lib/deployed-assets.ts
+ *  (asserted by tests/unit-install-script.test.ts); an unpublished `uname` pair stops here instead of fetching a 404. */
 export function cliPlatformShell(): string {
   return `case "$(uname -s)" in
   Darwin) KINU_OS=darwin ;;

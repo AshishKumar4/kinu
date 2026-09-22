@@ -10,10 +10,7 @@ export function clipText(value: string, max: number): string {
   return `${value.slice(0, max - 1)}…`;
 }
 
-/** An agent's shown name everywhere the TUI renders one. An agent is born
- *  with its slug's codename, so a blank label is a row from before codenames
- *  and shows the pair it would have been born with (the web's rule too,
- *  `agentTitle` in SubordinateTabs.tsx). */
+/** Blank label means a pre-codename row: show the codename its slug would get (same rule as web `agentTitle`). */
 export function agentDisplayLabel(entry: { name: string; label: string }): string {
   return entry.label.trim() || codenameFor(entry.name);
 }

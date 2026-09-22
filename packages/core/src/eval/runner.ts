@@ -1,6 +1,4 @@
-// Eval runner — drives N cases × 2 strategies, asks a judge LLM for verdicts,
-// returns aggregated EvalSummary. Stateless — caller owns persistence (writes
-// to eval_results table or whatever the host wants).
+// Stateless: caller owns persistence.
 import type { ExplorationStrategy, StrategyContext } from './strategy';
 import type { EvalCase, EvalRun, JudgeFn, EvalResult } from './types';
 import { renderThrownChain } from '../obs/index';
@@ -9,7 +7,7 @@ export interface RunEvalPairOpts {
   cases: EvalCase[];
   strategyA: ExplorationStrategy;
   strategyB: ExplorationStrategy;
-  /** Built fresh per-case so each arm gets its own rt/model. */
+  /** Called per case so each arm gets its own rt/model. */
   buildContext: (caseInput: EvalCase) => StrategyContext;
   judge: JudgeFn;
 }
@@ -20,8 +18,7 @@ export async function runEvalPair(opts: RunEvalPairOpts): Promise<EvalResult[]> 
   for (const c of opts.cases) {
     const runA = await runOne(opts.strategyA, c, opts.buildContext);
     const runB = await runOne(opts.strategyB, c, opts.buildContext);
-    // A judge failure is a failed measurement, not a tie. It propagates so the
-    // caller cannot build a report or pass a gate on scores nobody produced.
+    // A judge failure propagates: a failed measurement is not a tie.
     const verdict = await opts.judge(c, runA, runB);
     out.push({
       caseId: c.id,

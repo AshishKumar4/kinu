@@ -11,7 +11,6 @@ export interface MarkdownFencedBlock {
   readonly code: string;
 }
 
-/** Parse Markdown fences without assigning any execution semantics to the tag. */
 export function markdownFencedBlocks(text: string): MarkdownFencedBlock[] {
   return [...text.matchAll(/```([^\n`]*)\n([\s\S]*?)```/g)].map((match) => ({
     tag: (match[1] ?? '').trim().split(/\s+/)[0]?.toLowerCase() || null,
@@ -70,36 +69,18 @@ function extractBalancedJson(text: string, open: '{' | '[', close: '}' | ']'): s
   throw new SyntaxError(`unterminated JSON ${open === '{' ? 'object' : 'array'} in model output`);
 }
 
-/**
- * Generate a schema-validated object from a model.
- *
- * ai-SDK v6 `generateObject` drives object generation through a synthetic tool
- * call and reads `toolCall.input`; some Workers AI models, including Kimi,
- * do not reliably emit that tool, so the SDK dereferences `.input` on an
- * undefined call and throws "Cannot read properties of undefined (reading
- * 'input')". So this asks for JSON via plain `generateText`, extracts the
- * object, and validates it against the same schema — which works on every
- * provider.
- *
- * Throws on malformed output or schema mismatch; callers handle the failure
- * (the heads merge falls back to per-head summaries, the GEPA metric to a
- * neutral score).
- */
+/** Uses plain `generateText` + extraction because `generateObject`'s synthetic tool call fails on some
+ *  Workers AI models (Kimi). Throws on malformed output or schema mismatch. */
 export async function generateJson<TOutput>(opts: {
   model: LanguageModel;
   schema: v.GenericSchema<unknown, TOutput>;
   prompt: string;
   providerOptions?: Parameters<typeof generateText>[0]['providerOptions'];
-  /** Where this call is reported, and as whose spend. Four producers share this
-   *  one seam — the scaffold JSON judge, both head-merge paths and the GEPA
-   *  metric — so the label travels with the sink and is never assumed here.
-   *  Absent means this producer's spend is attributed to nothing. */
+  /** Four producers share this seam, so the label travels with the sink; absent means unattributed. */
   spend?: ModelCallSpend;
 }): Promise<TOutput> {
   const spend = opts.spend;
-  // Opened before the request: this substrate carries the judge lanes, and a
-  // judge killed mid-call would otherwise leave the ledger with no trace of the
-  // grading it was in the middle of.
+  // Opened before the request so a judge killed mid-call still leaves a ledger trace.
   const operation = beginModelOperation(spend, 'generate_json');
   let result;
 
@@ -114,12 +95,7 @@ export async function generateJson<TOutput>(opts: {
     throw err;
   }
 
-  // Before the extract-and-validate, and outside it: the call COMPLETED and was
-  // billed whether or not its output turns out to be JSON this schema accepts,
-  // and every caller handles that throw by falling back to something cheaper —
-  // so a report placed after it would drop exactly the spend of a bad model. The
-  // operation ends here for the same reason: the OPERATION succeeded, and what
-  // the output turned out to be is the caller's verdict, not this seam's.
+  // Reported before validation: the call was billed even if its output fails the schema.
   const usage = normalizeUsage(result.totalUsage);
   const modelId = result.response.modelId;
   operation.completed({ usage, modelId });

@@ -1,30 +1,18 @@
-/**
- * Branch wire protocol — the whole parent/child envelope in one place.
- *
- * Both ends import this module. One spelling names each method and each
- * envelope, and both sides parse what they receive against it.
- */
+// Branch wire protocol; both ends parse against these schemas.
 import { BranchExplorationSchema, BranchReflectionSchema } from '../mcts/engine';
 import * as v from 'valibot';
 
-/** The one call that asks a branch for a candidate approach. */
 export const BRANCH_EXPLORE = 'explore' as const;
 
-/** The one call that asks a branch what its attempt taught. */
 export const BRANCH_REFLECT = 'reflect' as const;
 
-/** The first reply a worker sends, before any call is answered. */
+/** Sent before any call is answered. */
 export const BRANCH_READY = 'ready' as const;
 
-/** The call methods, as the picklist source for the error reply. */
 export const BRANCH_METHODS = [BRANCH_EXPLORE, BRANCH_REFLECT] as const;
 
-/**
- * Parent to worker. Every call carries its own id, and the worker echoes it
- * back, so two overlapping same-method calls settle on their own replies.
- * The explore args carry no tools: the worker reads crafted tools from the
- * parent database instead.
- */
+/** Replies echo the call id so overlapping same-method calls settle correctly.
+ *  Explore args carry no tools: the worker reads crafted tools from the parent DB. */
 export const BranchCallSchema = v.variant('method', [
   v.object({
     method: v.literal(BRANCH_EXPLORE),
@@ -43,10 +31,7 @@ export const BranchCallSchema = v.variant('method', [
   }),
 ]);
 
-/**
- * Worker to parent: the ready announcement, a result for the call with that
- * id, or an error for it. A reply that carries neither does not parse.
- */
+/** A reply carrying neither result nor error does not parse. */
 export const BranchReplySchema = v.union([
   v.object({ method: v.literal(BRANCH_READY) }),
   v.object({ method: v.literal(BRANCH_EXPLORE), id: v.number(), result: BranchExplorationSchema }),
@@ -54,10 +39,7 @@ export const BranchReplySchema = v.union([
   v.object({ method: v.picklist(BRANCH_METHODS), id: v.number(), error: v.string() }),
 ]);
 
-/**
- * The most a malformed call still tells: which pending wait it was meant for.
- * The worker answers that id with the parse failure.
- */
+/** A malformed call's id, so the worker can answer that wait with the parse failure. */
 export const BranchCallAttributionSchema = v.looseObject({
   id: v.number(),
   method: v.picklist(BRANCH_METHODS),
@@ -69,5 +51,5 @@ export type BranchReply = v.InferOutput<typeof BranchReplySchema>;
 
 export type BranchMethod = BranchCall['method'];
 
-/** A reply that answers a call. The ready announcement is not one. */
+/** Excludes the ready announcement. */
 export type BranchCallReply = Exclude<BranchReply, { method: typeof BRANCH_READY }>;

@@ -1,14 +1,5 @@
-// Voyager-style automatic curriculum + Absolute Zero learnability filter.
-//
-// Voyager (NeurIPS 2023, arXiv:2305.16291): an LLM proposes the next task
-// based on current capabilities + world state, scaling difficulty automatically.
-// Absolute Zero (NeurIPS 2025 Spotlight, arXiv:2505.03335): pick tasks at the
-// "barely succeeds" sweet spot (success rate ~0.3–0.7) — too-easy doesn't
-// teach, too-hard doesn't either.
-//
-// In Kinu: read the CraftStore + recent turn outcomes, ask an LLM to
-// propose 3–5 next tasks, filter by predicted-learnability, persist as
-// `proposed_tasks`. The user (or an autonomous loop) picks one and runs it.
+// Voyager-style curriculum (arXiv:2305.16291) plus an Absolute Zero (arXiv:2505.03335) learnability
+// filter: keep tasks at the "barely succeeds" sweet spot (success rate ~0.3–0.7).
 
 import * as v from 'valibot';
 import type { AgentRuntime } from '../types/agent-runtime';
@@ -29,9 +20,8 @@ const ProposedTaskStatusSchema = v.picklist(PROPOSED_TASK_STATUSES);
 export interface CurriculumProposerOpts {
   rt: AgentRuntime;
   judge: LLM;
-  /** [low, high] for predicted-success filter. Default [0.3, 0.7]. */
+  /** Predicted-success filter. Default [0.3, 0.7]. */
   learnabilityWindow?: [number, number];
-  /** Max tasks to propose per call. Default 5. */
   count?: number;
 }
 
@@ -89,14 +79,8 @@ function collectContext(rt: AgentRuntime, takeOutcomes = 20): CurriculumContext 
       FROM crafted_tools
       ORDER BY uses DESC NULLS LAST, name`;
 
-  // The durable outcome ledger (evolution/outcomes.ts) — the one record of how
-  // turns landed. Read straight, with no catch turning `no such table` into an
-  // empty list: a swallowed schema error leaves the curriculum proposing from
-  // crafted skills alone while its prompt says "(no recent turns)", which
-  // nothing can tell apart from a genuinely fresh workspace.
-  // Abandoned turns carry no verdict (evolution/outcomes.ts scores them neutral),
-  // so they stay out of the prompt: listing one as a failure teaches the judge
-  // that a dropped topic was a task done badly.
+  // No catch: a missing table must not read as a fresh workspace. Abandoned turns carry
+  // no verdict, so listing them as failures would mislead the judge.
   rt.actor.assertCurrent();
 
   const recent = rt.storage.sql<{ user_message: string; outcome: TurnOutcome }>`
@@ -196,7 +180,6 @@ export async function proposeNextTasks(opts: CurriculumProposerOpts): Promise<Pr
     status: 'pending' as const,
   }));
 
-  // Persist for the UI / autonomous loop to consume.
   opts.rt.actor.assertCurrent();
 
   for (const p of proposals) {
@@ -228,9 +211,7 @@ export function listProposedTasks(rt: AgentRuntime, status?: ProposedTask['statu
           FROM proposed_tasks WHERE actor_id = ${rt.actor.actorId}
           ORDER BY proposed_at DESC, id DESC LIMIT 50`;
 
-  // These are our OWN rows: a status outside the picklist, or skills JSON that
-  // will not parse, is corruption in the workspace database — not a row to
-  // drop quietly, which is what made a truncated write look like a short list.
+  // Our own rows: a bad status or skills JSON is corruption and throws rather than being dropped.
   return rows.map((row) => ({
     id: row.id,
     task: row.task,

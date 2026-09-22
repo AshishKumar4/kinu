@@ -1,38 +1,5 @@
-/**
- * How much of a turn the evolution loop is allowed to see, and which part.
- *
- * Every reader in the loop — the shadow judge, the GEPA reflector, the turn
- * outcome classifier, the replay judge — reads through this one policy. A
- * per-reader `slice(0, n)` is not a cost bound, it is a blind spot with a
- * shape: a turn whose payoff lands at step 9 of 12 — which is what a
- * long-horizon win looks like — is invisible to a judge reading its first
- * 2,500 characters, so the fitness function cannot select for the thing it is
- * supposed to select for.
- *
- * One policy, two properties:
- *
- *   1. Head AND tail. `evidenceWindow` keeps both ends and says how much it
- *      dropped, so a conclusion survives the budget. The split is even, unlike
- *      clampToolResult's 70/30 — a tool result's head carries the command echo
- *      and its tail the error, while a judged trajectory carries its framing at
- *      the start and its outcome at the end, and the outcome is the thing being
- *      judged.
- *
- *   2. One table. The budgets below are the single source, and they are
- *      ordered: a reader's budget is never larger than the budget the text was
- *      STORED at, because reading further than the row goes buys nothing.
- *      Unordered per-reader numbers have no such relation — that is how a
- *      replay judge comes to ask for 3,000 characters of a response the ledger
- *      had already cut to 4,000, for reasons nobody had written down.
- *
- * What this deliberately does not touch: the judge protocols themselves, the
- * promotion thresholds, the sampling rates. Only how much evidence reaches an
- * unchanged reader. That is still not free — DEFAULT_SHADOW_CONFIG's decisive
- * yield and tie rate were Monte-Carlo-calibrated against a head-only evidence
- * slice (scripts/shadow-veto-monte-carlo.ts), and richer evidence moves both — so
- * the calibration is due a re-run against these budgets, and the promotion
- * rule is byte-unchanged until it has been.
- */
+// Head-and-tail evidence policy every evolution-loop reader shares. DEFAULT_SHADOW_CONFIG was calibrated on
+// head-only slices (scripts/shadow-veto-monte-carlo.ts); re-run it before changing the promotion rule.
 
 import type { ToolSet, TypedToolResult } from 'ai';
 import * as v from 'valibot';
@@ -41,15 +8,10 @@ import { EVIDENCE_BUDGETS } from '../types/evidence';
 
 export { EVIDENCE_BUDGETS } from '../types/evidence';
 
-/** Even split: the framing is at the start, the outcome at the end, and a
- *  judge is scoring the outcome. */
+/** Even split: the framing is at the start and the judged outcome at the end. */
 const HEAD_FRACTION = 0.5;
 
-/**
- * Bound `text` to roughly `maxChars`, keeping both ends and naming what was
- * dropped. Within budget the text passes through byte-identical, so nothing
- * short is ever marked up.
- */
+/** Keeps both ends and names what was dropped; text within budget passes through byte-identical. */
 export function evidenceWindow(text: string, maxChars: number): string {
   if (maxChars <= 0) throw new Error(`evidence budget must be positive, got ${maxChars}`);
 
@@ -61,13 +23,7 @@ export function evidenceWindow(text: string, maxChars: number): string {
   return `${text.slice(0, headLen)}\n[... ${omitted} chars omitted from the middle ...]\n${text.slice(-tailLen)}`;
 }
 
-/**
-
-/** A tool result as prose: a string passes through, an absent value is empty,
- *  anything else serializes to its JSON content. The model receives the real
- *  object through the message history; this rendering is for the trajectory,
- *  the trace and the fallback summary, so a structured result must show its
- *  content and never `String({...})`'s "[object Object]". */
+/** Renders a tool result for trajectory/trace/fallback; objects serialize as JSON, never "[object Object]". */
 export function renderToolResult(raw: TypedToolResult<ToolSet>['output']): string {
   const text = v.safeParse(v.string(), raw);
 
@@ -81,11 +37,7 @@ export function renderToolResult(raw: TypedToolResult<ToolSet>['output']): strin
   }
 }
 
-/**
- * The turn text when a turn ends on tool calls with no prose. The streaming
- * chat path and the generateText collector both call it, so a tool-only turn
- * reads the same either way.
- */
+/** Turn text when a turn ends on tool calls with no prose; shared by streaming and generateText paths. */
 export function synthesizeToolFallback(
   steps: ReadonlyArray<{
     readonly toolResults: ReadonlyArray<{
