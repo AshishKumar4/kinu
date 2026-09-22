@@ -1,13 +1,6 @@
 /**
- * Alternate Takes — near-tied MCTS terminal candidates surfaced to the user
- * as comparable "takes", whose pick becomes a real preference signal.
- *
- * Capture happens at convergence time (converge() calls
- * captureAlternateTakes BEFORE closing the tree, while near-tied siblings
- * are still distinguishable from mid-search prunes). The pick lands in the
- * R3 outcome ledger (turn_outcomes, source 'take_pick') and re-points the
- * convergence record in search_nodes when the user prefers a sibling —
- * the ledger write is the point; the carousel is just the surface.
+ * Alternate takes: near-tied MCTS terminal candidates offered to the user, whose pick is recorded
+ * in turn_outcomes (source 'take_pick'). converge() captures them before closing the tree.
  */
 
 import * as v from 'valibot';
@@ -24,34 +17,22 @@ import { nanoid } from '../utils/nanoid';
 import { nowMs } from '../utils/date';
 import { EVIDENCE_BUDGETS, evidenceWindow } from '../prompts/evidence-window';
 
-/** One branch settlement's take set. A branch's terminal effect can be replayed
- *  after the set persisted but before the disposition was recorded, and this
- *  table has no natural conflict to catch that: every set id is a fresh
- *  `take-${nanoid()}`. */
+/** One branch settlement's take set; set ids are fresh, so replays are caught by settlement key. */
 const BRANCH_SCOPE = 'branch_take';
 
-/** Most candidates a take set carries (including the winner). Two near-tied
- *  alternatives are a meaningful choice; ten are noise. */
+/** Most candidates a take set carries, including the winner. */
 const MAX_TAKE_CANDIDATES = 4;
 
-/** Where a take set came from: near-tied MCTS convergence rivals, a mid-turn
- *  Steer-as-Branch redirect run as a parallel head, or the comparable reports of
- *  an agents-fork fan-out. ONE pipeline — the comparison +
- *  pick→ledger flow is identical for all three (synthetic-id sources skip the
- *  search_nodes re-point; only 'mcts' has real nodes to move). */
+/** Where a take set came from. Only 'mcts' has real search_nodes to re-point on pick. */
 export type AlternateTakeSource = 'mcts' | 'branch' | 'heads';
 
 export interface AlternateTakeCandidate {
   nodeId: string;
-  /** The branch's proposal text (search_nodes.observation). */
   text: string;
-  /** Execution-grounded branch value in [0,1] — the score evidence. */
   score: number;
   visits: number;
   depth: number;
-  /** Branch-sourced sets only: which side of the split this candidate is —
-   *  the live turn's answer or the branched redirect's. MCTS candidates carry
-   *  real node scores instead. */
+  /** Branch-sourced sets only: the live turn's answer or the branched redirect's. */
   origin?: 'live' | 'branch';
 }
 
@@ -66,22 +47,17 @@ const AlternateTakeCandidatesSchema: v.GenericSchema<AlternateTakeCandidate[]> =
 
 export interface AlternateTakeSet {
   id: string;
-  /** The turn whose answer these takes competed for — claimed at turn end. */
   turnId: string | null;
   sessionId: string | null;
   task: string;
   source: AlternateTakeSource;
-  /** The node currently serving as the converged answer (re-pointed on pick). */
   winnerNodeId: string;
   chosenNodeId: string | null;
-  /** Winner first, then near-tied siblings by descending score. */
   candidates: AlternateTakeCandidate[];
   createdAt: number;
   pickedAt: number | null;
 }
 
-/** What a pick changed: the ledger outcome it recorded and whether the
- *  answer node moved (a sibling pick re-points the convergence record). */
 export interface TakePickRecord {
   outcome: 'accepted' | 'corrected';
   changedAnswer: boolean;
@@ -89,8 +65,6 @@ export interface TakePickRecord {
   set: AlternateTakeSet;
 }
 
-/** The backend pick result surfaces consume: the record plus whether a
- *  continuation turn was queued for a changed answer. */
 export interface TakePickOutcome extends TakePickRecord {
   continuationQueued: boolean;
 }
@@ -111,12 +85,8 @@ export function initAlternateTakesTable(execRaw: RawSqlExec): void {
     picked_at INTEGER,
     PRIMARY KEY (actor_id, id)
   )`);
-  // UNIQUE so the invariant is the database's rather than the caller's: a
-  // replayed settlement that got past the tombstone read would fail here instead
-  // of adding a second set for one branch. SQLite treats NULLs as distinct, so
-  // every unkeyed set is unaffected. Keyed by OWNER first: a settlement key is
-  // a branch's identity within its own actor, and a table-wide index would let
-  // one actor's branch settlement collide with a sibling's.
+  // Unique so a replayed settlement fails instead of adding a second set; NULL keys stay distinct.
+  // Keyed by owner first so one actor's settlement cannot collide with another's.
   execRaw(`CREATE UNIQUE INDEX IF NOT EXISTS idx_alternate_takes_settlement
       ON alternate_takes(actor_id, settlement_key)`);
   execRaw(`CREATE INDEX IF NOT EXISTS idx_alternate_takes_actor
@@ -124,7 +94,6 @@ export function initAlternateTakesTable(execRaw: RawSqlExec): void {
   initEffectTombstoneTable(execRaw);
 }
 
-/** Node ids on the path from `node` up to the root (inclusive of `node`). */
 function ancestorPath(byId: ReadonlyMap<string, SearchNode>, nodeId: string): Set<string> {
   const path = new Set<string>();
   let current = byId.get(nodeId);
@@ -138,13 +107,9 @@ function ancestorPath(byId: ReadonlyMap<string, SearchNode>, nodeId: string): Se
 }
 
 /**
- * The winner's near-tied rivals among `nodes`, highest value first. A rival
- * qualifies when its value is within `epsilon` of the winner's AND it is a
- * genuinely different approach: not the root, not on the winner's own
- * ancestor/descendant path, and not a textual duplicate. Caps at
- * MAX_TAKE_CANDIDATES-1. Pure — shared by Alternate-Takes capture and the
- * test-based convergence tie-break (DO-NOW #3), so both reason over the SAME
- * near-tie population.
+ * The winner's near-tied rivals, highest value first: within `epsilon`, not the root, off the
+ * winner's own path, not textual duplicates; capped at MAX_TAKE_CANDIDATES-1. Shared by takes
+ * capture and the convergence tie-break so both use one near-tie population.
  */
 export function findNearTiedRivals(
   nodes: readonly SearchNode[],
@@ -161,7 +126,6 @@ export function findNearTiedRivals(
 
       if (n.value < winner.value - epsilon) return false;
 
-      // Same-path nodes are refinements of the winner's approach, not rivals.
       if (winnerPath.has(n.id) || ancestorPath(byId, n.id).has(winner.id)) return false;
       const text = n.observation.trim();
 
@@ -174,12 +138,7 @@ export function findNearTiedRivals(
     .slice(0, MAX_TAKE_CANDIDATES - 1);
 }
 
-/**
- * Capture the winner's near-tied rivals as an alternate-takes set. Reads the
- * same population converge() decided over — this search's tree, status
- * terminal/open, read BEFORE the tree close prunes the siblings. Returns the
- * new set id, or null when no real choice exists (fewer than 2 candidates).
- */
+/** Capture near-tied rivals before the tree close prunes them; null when fewer than 2 candidates. */
 export function captureAlternateTakes(
   sql: SqlExecutor,
   actor: ActorHandle,
@@ -218,12 +177,8 @@ export function captureAlternateTakes(
 }
 
 /**
- * Persist a Steer-as-Branch pair as an alternate-takes set, already claimed
- * against the live turn: candidate A is the answer the live turn gave (the
- * winner until the user says otherwise), candidate B the branched redirect's
- * answer. The synthetic node ids never touch search_nodes — recordTakePick
- * skips the convergence re-point for branch-sourced sets. Returns null when
- * the two answers are textually identical (no real choice to offer).
+ * Persist a Steer-as-Branch pair as a take set already claimed against the live turn: A is the
+ * live answer, B the redirect's. Synthetic ids never touch search_nodes; null when texts match.
  */
 export function recordBranchTakeSet(
   sql: SqlExecutor,
@@ -231,12 +186,7 @@ export function recordBranchTakeSet(
   input: {
     task: string; turnId: string; sessionId: string;
     liveText: string; branchText: string; now?: number;
-    /** The branch's durable identity, for a caller whose settlement can be
-     *  replayed. Every set id here is a fresh `take-${nanoid()}`, so without a
-     *  key a replay after the set persisted but before the disposition was
-     *  recorded inserts a SECOND set for one branch and broadcasts a different
-     *  take-set id. With one, the replay returns the set the first attempt
-     *  wrote. */
+    /** The branch's durable identity; a replay with the same key returns the set the first attempt wrote. */
     settlementKey?: string;
   },
 ): AlternateTakeSet | null {
@@ -250,8 +200,7 @@ export function recordBranchTakeSet(
 
     if (stored) return toTakeSet(stored);
 
-    // The key is recorded but its row is gone. The set existed; re-minting one
-    // is exactly the duplicate the key exists to prevent.
+    // The key is recorded but its row is gone; re-minting would be the duplicate the key prevents.
     if (effectAlreadyDone(sql, actor, BRANCH_SCOPE, settlementKey)) return null;
   }
 
@@ -277,8 +226,6 @@ export function recordBranchTakeSet(
          ${candidates[0].nodeId}, ${null}, ${JSON.stringify(candidates)},
          ${settlementKey}, ${now}, ${null})`;
 
-  // Same synchronous pass as the insert: the tombstone is what answers the
-  // replay once this row has been retired.
   if (settlementKey !== null) recordEffectDone(sql, actor, { scope: BRANCH_SCOPE, key: settlementKey }, now);
 
   return {
@@ -288,24 +235,15 @@ export function recordBranchTakeSet(
   };
 }
 
-/** Attach the take sets captured during the just-finished turn (MCTS runs
- *  mid-turn, before the assistant message id exists) to that turn's id.
- *  The claim is scoped to this turn's window: stale unclaimed sets left by a
- *  turn that never claimed (aborted/errored, or completed without a message
- *  id) are purged instead of misattributed into the preference ledger.
- *  Returns how many sets were claimed. */
+/** Attach take sets captured during the just-finished turn to its id; stale unclaimed sets from
+ *  earlier turns are purged, not misattributed. Returns how many sets were claimed. */
 export function claimAlternateTakesForTurn(
   sql: SqlExecutor,
   actor: ActorHandle,
   input: {
     turnId: string; sessionId: string; startedAt: number;
-    /** The takes this turn actually competed against, read when the turn settled.
-     *
-     *  Named rather than re-selected, because this call is REPLAYABLE: a retry
-     *  arriving after a later turn has captured its own unclaimed takes would
-     *  otherwise claim that turn's rows for this one. Absent keeps the live
-     *  behaviour — select whatever is unclaimed now — for a caller whose claim
-     *  nothing can replay. */
+    /** The takes this turn competed against. Named because the claim is replayable: a retry must not
+     *  claim a later turn's rows. Absent selects whatever is unclaimed now. */
     takeIds?: readonly string[];
   },
 ): number {
@@ -315,8 +253,6 @@ export function claimAlternateTakesForTurn(
     WHERE actor_id = ${actorId} AND turn_id IS NULL AND created_at < ${input.startedAt}`;
 
   if (input.takeIds === undefined) {
-    // One guarded statement: only rows still unclaimed move, and RETURNING
-    // counts exactly the rows this call claimed.
     const claimed = sql<{ id: string }>`UPDATE alternate_takes
         SET turn_id = ${input.turnId}, session_id = ${input.sessionId}
         WHERE actor_id = ${actorId} AND turn_id IS NULL RETURNING id`;
@@ -327,9 +263,6 @@ export function claimAlternateTakesForTurn(
   let claimed = 0;
 
   for (const id of input.takeIds) {
-    // Guarded on STILL being unclaimed: a recorded id another turn already
-    // claimed, or that never existed, claims nothing here. RETURNING counts
-    // only the row this call actually moved.
     const moved = sql<{ id: string }>`UPDATE alternate_takes
         SET turn_id = ${input.turnId}, session_id = ${input.sessionId}
         WHERE actor_id = ${actorId} AND id = ${id} AND turn_id IS NULL RETURNING id`;
@@ -340,8 +273,7 @@ export function claimAlternateTakesForTurn(
   return claimed;
 }
 
-/** The unclaimed takes as they stand right now — what a REPLAYABLE claim records
- *  so its retry acts on the set the turn actually competed against. */
+/** The unclaimed takes right now, recorded so a replayable claim's retry acts on the same set. */
 export function unclaimedAlternateTakeIds(sql: SqlExecutor, actor: ActorHandle): string[] {
   actor.assertCurrent();
 
@@ -350,15 +282,11 @@ export function unclaimedAlternateTakeIds(sql: SqlExecutor, actor: ActorHandle):
     .map((row) => row.id);
 }
 
-/** Drop unclaimed take sets when a turn settles without an id to claim them
- *  with (aborted, errored, or no assistant message) — they competed for an
- *  answer that no longer exists, so the next turn must not inherit them. */
+/** Drop unclaimed take sets when a turn settles without an id to claim them with. */
 export function purgeUnclaimedAlternateTakes(
   sql: SqlExecutor,
   actor: ActorHandle,
-  /** The takes this turn competed against. Named for the same reason the claim
-   *  names them: an unqualified purge on a replay deletes a LATER turn's
-   *  captures. */
+  /** Named so a replayed purge cannot delete a later turn's captures. */
   takeIds?: readonly string[],
 ): void {
   actor.assertCurrent();
@@ -383,8 +311,6 @@ interface RawTakeRow {
   created_at: number; picked_at: number | null;
 }
 
-/** The stored column is free text; anything this read does not recognise is an
- *  MCTS set, which is what every row predating the other two sources is. */
 function readTakeSource(stored: string | null): AlternateTakeSource {
   if (stored === 'branch') return 'branch';
 
@@ -403,7 +329,6 @@ function toTakeSet(r: RawTakeRow): AlternateTakeSet {
   };
 }
 
-/** Recent take sets, newest first. */
 export function listAlternateTakeSets(
   sql: SqlExecutor, actor: ActorHandle, opts: { limit?: number } = {},
 ): AlternateTakeSet[] {
@@ -420,14 +345,8 @@ export function latestAlternateTakeSet(sql: SqlExecutor, actor: ActorHandle): Al
 }
 
 /**
- * Record the user's pick — THE preference signal:
- *  - marks the set picked (re-pickable; the latest pick wins),
- *  - re-points the convergence record when a sibling beat the answered
- *    winner (chosen → terminal, previous winner → pruned),
- *  - writes the turn_outcomes row (source 'take_pick', confidence 1):
- *    'accepted' when the answered winner was confirmed, 'corrected' when a
- *    sibling was preferred — with the chosen text as the correction
- *    follow-up, so GEPA/EMA/scaffold-prior routes consume it unchanged.
+ * Record the user's pick: marks the set picked (latest wins), re-points the convergence record
+ * when a sibling beat the winner, and writes turn_outcomes ('accepted' or 'corrected').
  */
 export async function recordTakePick(
   sql: SqlExecutor,
@@ -449,11 +368,9 @@ export async function recordTakePick(
   const now = input.now ?? nowMs();
   const changedAnswer = chosen.nodeId !== set.winnerNodeId;
 
-  // Branch-sourced candidates are synthetic (live answer vs head answer) —
-  // there is no convergence record in search_nodes to re-point.
+  // Branch-sourced candidates are synthetic; there is no convergence record to re-point.
   if (changedAnswer && set.source === 'mcts') {
-    // One statement: a crash between two updates could leave the previous
-    // winner pruned while the chosen sibling is still open — neither terminal.
+    // One statement, so a crash cannot leave neither node terminal.
     void sql`UPDATE search_nodes SET status = CASE
         WHEN id = ${set.winnerNodeId} THEN 'pruned'
         WHEN id = ${chosen.nodeId} THEN 'terminal'
@@ -465,8 +382,6 @@ export async function recordTakePick(
       SET chosen_node_id = ${chosen.nodeId}, winner_node_id = ${chosen.nodeId}, picked_at = ${now}
       WHERE actor_id = ${actor.actorId} AND id = ${set.id}`;
 
-  // The conversation context behind the ledger row — same lookup the
-  // explicit-thumbs path uses, through the canonical conversation store.
   let userMessage = set.task;
   let assistantResponse = '';
 
@@ -489,7 +404,6 @@ export async function recordTakePick(
     source: 'take_pick',
     userMessage,
     assistantResponse,
-    // A sibling pick IS the correction: the candidate the user actually wanted.
     followup: changedAnswer ? chosen.text : null,
     scaffoldVersion: input.scaffoldVersion ?? null,
     evidence: changedAnswer
@@ -506,10 +420,6 @@ export async function recordTakePick(
   };
 }
 
-/** One-line score evidence under a take's text — the shared presentation
- *  helper for every surface (web chip, TUI overlay, classic listing).
- *  Branch-sourced candidates have no node scores; their evidence is which
- *  side of the split they are. */
 export function takeEvidence(candidate: AlternateTakeCandidate): string {
   if (candidate.origin === 'live') return "the live turn's answer";
 
@@ -518,8 +428,6 @@ export function takeEvidence(candidate: AlternateTakeCandidate): string {
   return `score ${candidate.score.toFixed(2)} · ${candidate.visits} visit${candidate.visits === 1 ? '' : 's'} · depth ${candidate.depth}`;
 }
 
-/** How the continuation prompt opens: each source produced its alternatives a
- *  different way, and the agent is being told which comparison the user made. */
 function takeFraming(source: AlternateTakeSource, task: string): string {
   if (source === 'branch') {
     return `While you answered, the user redirected with "${task}" and that redirect ran `
@@ -535,8 +443,6 @@ function takeFraming(source: AlternateTakeSource, task: string): string {
     + `and the user compared them and picked a different take than the one you answered with:`;
 }
 
-/** The gentle programmatic turn asking the agent to continue with the chosen
- *  approach — single source for both backends' continuation enqueue. */
 export function buildTakeContinuationPrompt(set: AlternateTakeSet, chosen: AlternateTakeCandidate): string {
   const framing = takeFraming(set.source, evidenceWindow(set.task, EVIDENCE_BUDGETS.taskEcho));
 

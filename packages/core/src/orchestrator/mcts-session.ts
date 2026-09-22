@@ -1,12 +1,4 @@
-/**
- * The MCTS SessionWriter over the canonical transcript, in its own session.
- *
- * Source of truth is the transcript, not an in-memory array: after a DO
- * eviction or a CLI process exit, a resumed search re-enters with a fresh
- * session, and getHistory(leafId) must still reconstruct a branch's ancestry
- * from the persisted entries so resumed branches keep their context. Both
- * backends share this durable writer through the one session store.
- */
+/** MCTS SessionWriter over the durable transcript, so a resumed search can rebuild branch ancestry. */
 
 import type { SessionWriter, SessionMessage } from '../mcts/record-node';
 import type { SessionHistory } from '../session/history';

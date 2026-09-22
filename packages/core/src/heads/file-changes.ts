@@ -1,35 +1,7 @@
 /**
- * What a head did to the filesystem — the per-head change set a parent reads
- * back out of a split.
- *
- * A fork writes into its parent's workspace, so a child's changes already land
- * where the parent can read them; what was missing was anyone saying which of
- * them were whose. Diffing the shared workspace once the split ends cannot
- * answer that: sibling heads run concurrently against the same files, so an
- * end-of-split diff smears every head's work into one pile and attributes all of
- * it to whoever is asked.
- *
- * So attribution happens where a head's own write lands, not where the work
- * ends. This observer wraps THAT head's canonical workspace file view
- * (`observeWrites`) — which is what
- * makes the attribution exact whatever a sibling is doing at the same moment.
- *
- * What it therefore covers, and what it does not: every write and delete a head
- * makes through the workspace VFS — `workspace.writeFile` and the `file` tool.
- * It does NOT cover files changed by a shell command the head ran
- * (`workspace.exec 'sed -i …'`, `run device …`): that plane reports an exit code,
- * not a file list, and recovering one would mean diffing a directory siblings
- * are writing to at the same time — the smear this design exists to avoid. Those
- * changes are real, and they are left unattributed rather than attributed to a
- * guess. ANY SURFACE THAT RENDERS THIS SET MUST SAY SO — a change list that
- * reads as complete when it is not is the defect the gap creates. A constant
- * held that sentence for the one renderer that existed (the `ExplorationStrategy`
- * heads adapter); that renderer was deleted for having no caller, and the
- * sentence lives here, next to the reason, rather than as an exported string
- * nothing renders.
- *
- * Actor-private control state is stored beneath `.kinu` and is not part of
- * the head tool surface.
+ * Per-head file changes, attributed where the head's own write lands (`observeWrites`), so concurrent
+ * siblings cannot smear into it. Covers VFS writes and deletes only, not shell-command changes: any
+ * surface that renders this set must say so. Actor-private state under `.kinu` is not part of it.
  */
 
 import { diffLines, type FileStatus } from '../vfs/diff';
@@ -42,19 +14,10 @@ interface Touched {
   baseline: string | null;
   current: string | null;
   binary: boolean;
-  /** Why the content this head first found is unknown, when it is. */
   unread: 'directory' | 'unreadable' | null;
 }
 
-/**
- * One head's accumulated file changes. Wrapped around that head's canonical
- * workspace view (`observeWrites`) and read once its report is assembled.
- *
- * Net, not per-write: a path is diffed against what it held when this head FIRST
- * touched it, so a head that rewrote a file five times reports the one change a
- * reviewer would see, and a head that wrote a file back to its original contents
- * reports nothing for it.
- */
+/** Net, not per-write: each path is diffed against what it held when this head first touched it. */
 export class HeadFileChanges implements WriteObserver {
   private readonly touched = new Map<string, Touched>();
 
@@ -82,15 +45,12 @@ export class HeadFileChanges implements WriteObserver {
     });
   }
 
-  /** The change set, sorted by path. Files whose content came back to where it
-   *  started are omitted — nothing changed there. */
+  /** Sorted by path; files whose content returned to the start are omitted. */
   snapshot(): HeadFileChange[] {
     const out: HeadFileChange[] = [];
 
     for (const [path, t] of this.touched) {
-      // First: an unknown baseline is a change whatever it held, never a
-      // create-then-delete that nets to nothing. The path existed (it was
-      // stat-ed), so it was changed or removed, and its lines are not counted.
+      // An unknown baseline is always a change (the path was stat-ed), and its lines are not counted.
       if (t.unread !== null) {
         const status = t.current === null ? 'removed' : 'changed';
         out.push(t.unread === 'directory'
@@ -116,9 +76,6 @@ export class HeadFileChanges implements WriteObserver {
   }
 }
 
-/** Which side of the change has no file: absent at the baseline the head found is
- *  an add, absent now is a delete, and a path present on both sides is a change
- *  whatever its contents did in between. */
 function changeStatus(touched: Touched): FileStatus {
   if (touched.baseline === null) return 'added';
 
@@ -127,19 +84,14 @@ function changeStatus(touched: Touched): FileStatus {
   return 'changed';
 }
 
-/** A trailing newline ENDS the last line rather than starting a phantom empty
- *  one — the same convention the turn file ledger counts by, and the one that
- *  makes a new 3-line file read as +3 instead of +4. */
+/** A trailing newline ends the last line, matching the turn file ledger (a new 3-line file is +3). */
 function withoutFinalNewline(content: string | null): string {
   if (content === null) return '';
 
   return content.endsWith('\n') ? content.slice(0, -1) : content;
 }
 
-/** Content as LINE-COUNTABLE text, or the fact that it is not. A non-string payload is
- *  never decoded into lines: an image has no line count, and inventing one would put a
- *  number in a review that means nothing. The empty text beside `binary: true` is what
- *  makes the counts zero; `textPayload` owns the parse and this owns that mapping. */
+/** A non-string payload is never decoded into lines; `binary: true` with empty text makes the counts zero. */
 function asText(value: string | Uint8Array | null) {
   const payload = textPayload(value);
 

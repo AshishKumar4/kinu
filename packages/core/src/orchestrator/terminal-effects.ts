@@ -1,61 +1,8 @@
 /**
- * Every side effect one settled turn owes, and what each of them has already
- * done.
- *
- * A turn's answer causes a SEQUENCE: the alternate-takes claim, the craft-usage
- * row, the reply an answered event batch owes, the steer branches, the extension
- * turn-end and the evolution recording, then the between-turn model lanes
- * (sleep-time compute, auto-title, auto-GEPA). That sequence had ONE durable
- * marker for all of it — a single claim taken at the top and settled at the
- * bottom — and one marker cannot say WHICH of those happened. An isolate that
- * died three effects in left a row indistinguishable from one that died at the
- * first, so the only two answers available on the next activation were "run
- * everything again" (announce one answer twice, pay for the model lanes twice)
- * and "run nothing" (drop the reply somebody is waiting on).
- *
- * This table is the third answer: one row per effect, carrying the input that
- * effect needs, so a later activation replays exactly what is still owed.
- *
- * THE WHOLE SEQUENCE IS CLAIMED BEFORE ANY OF IT RUNS. That is what makes the
- * remaining work a SUFFIX rather than a guess: an interruption at effect three
- * leaves effects three through eight pending with their inputs already written,
- * and the recovery runs them in the declared order. Claiming each effect just
- * before its own side effect would have left the ones after the crash with no
- * row at all — indistinguishable from effects that were never owed.
- *
- * EVERY EFFECT IS REPLAYABLE, and that is a requirement ON THE EFFECT rather
- * than a question the ledger asks. The alternative — letting an effect declare
- * itself unreplayable and having the recovery decline its owed row — closes the
- * outer transition while the work is still owed, which is the exact loss this
- * table exists to prevent. So the author of an effect makes the boundary it
- * touches idempotent or keyed (a keyed send, an upsert, an append under a stable
- * id), and an owed row is simply run again.
- *
- * Three things each row establishes, and every one of them is load-bearing:
- *
- *   • A VERSIONED key. The recorded input is only meaningful under the shape the
- *     effect expected when it was written, so the version is part of the key
- *     rather than a column. A row whose stored key does not match the key this
- *     build computes for the same name and scope is BLOCKED: its input speaks a
- *     contract this build does not have, and running it under the current parser
- *     would execute the wrong semantics.
- *   • The INPUT, and nothing else. A replay reads storage, never RAM, so an
- *     effect whose input cannot be written down cannot be replayed and must say
- *     so instead of pretending. The forward path runs from the DECODED recording
- *     rather than from the live value, which is what makes that structural: an
- *     input too poor to reconstruct the call fails on the turn that wrote it.
- *   • A DISPOSITION, and a SCHEDULE. `completed` is the only terminal one.
- *     `pending` is owed and will be attempted again once `next_attempt_at`
- *     passes. `blocked` is owed and cannot be attempted BY THIS BUILD. Nothing
- *     is ever abandoned: a failing attempt buys a longer wait, never a smaller
- *     obligation.
- *
- * The outer terminal transition (`TerminalTransitions.end`) settles only when
- * this table holds no owed row for the sequence. That ordering is the
- * whole guarantee: while one effect is still owed the transition stays
- * interrupted, so the next activation is handed the suffix rather than told the
- * turn was done. Convergence comes from the backoff and the durable wake
- * `scheduleRetry` arms — never from giving up.
+ * One durable row per side effect a settled turn owes, all claimed before any runs, so an interruption
+ * leaves a replayable suffix. Every effect must be idempotent or keyed. Rows carry a versioned key
+ * (mismatch: blocked), the recorded input, and a disposition plus schedule; nothing is abandoned.
+ * `TerminalTransitions.end` settles only when no row is owed.
  */
 import * as v from 'valibot';
 import { modelMessageSchema, type ModelMessage } from 'ai';
@@ -80,108 +27,50 @@ import { diagnostics, renderThrownChain, toKinuError } from '../obs/index';
 import { OVERFLOW_RETRY_EVENT, OVERFLOW_RETRY_TEXT } from '../turn-failure';
 import { TASK_REMINDER_EVENT, taskReminderIdempotencyKey } from '../tasks/reminder';
 
-/**
- * The driver's verdict on how a turn ended, as a recorded effect input reads it
- * back.
- *
- * The picklist is core's own {@link RUN_END_REASONS}, so a row written by another
- * activation cannot carry a fourth word this build would then have to guess at.
- * Here rather than in each actor: both the workspace root and the subordinate
- * record the same verdict for the same effect.
- */
+/** The picklist is {@link RUN_END_REASONS}, so a stored row cannot carry an unknown word. */
 export const RunEndReasonSchema = v.picklist(RUN_END_REASONS);
 
-/**
- * A turn's response messages as a replayed extension emit reads them back.
- *
- * The AI SDK's own `modelMessageSchema` is the predicate, exactly as core's event
- * recorder narrows a stored message with: a hand-written copy of its part unions
- * would be a second answer to what a model message is.
- */
+/** Narrowed by the AI SDK's own `modelMessageSchema`, not a hand-written copy. */
 const ModelMessagesSchema: v.GenericSchema<ModelMessage[]> = v.array(
   v.custom<ModelMessage>((value) => modelMessageSchema.safeParse(value).success),
 );
 
 
-/** The conversational continuity a recorded turn ran under. Recorded rather than
- *  re-read: a fresh actor defaults to `conversation`, so a replay of an
- *  independent task would park it awaiting a follow-up that cannot come. */
+/** Recorded rather than re-read: a fresh actor defaults to `conversation`. */
 const TurnContinuitySchema: v.GenericSchema<TurnContinuity> = v.union([
   v.literal('conversation'), v.literal('independent_task'),
 ]);
 
-/**
- * The key version. Bumped when what an effect RECORDS changes meaning — not
- * when its implementation changes.
- *
- * In the key rather than in a column so that the version travels with the row's
- * identity: a build reading a row whose key it could not have written knows,
- * from the key alone, that the input belongs to a different contract. That row
- * is blocked by {@link TerminalEffectLedger}, not parsed hopefully.
- */
+/** Bumped when what an effect records changes meaning, not its implementation. */
 export const TERMINAL_EFFECT_KEY_VERSION = 'v1';
 
-/**
- * The scope an effect body may KEY its own inner work on, or undefined.
- *
- * An empty scope is what an assistant response whose row was never written
- * carries. It is not an identity: every such response would share it, so the
- * second would read the first's tombstones as its own work already done. Such a
- * sequence runs unledgered, and its bodies must key nothing.
- */
+/** An empty scope is not an identity: such a sequence runs unledgered and its bodies key nothing. */
 export function keyedScope(scope: string): string | undefined {
   return scope === '' ? undefined : scope;
 }
 
-/**
- * The first wait after a failed attempt, and the ceiling every later wait grows
- * toward.
- *
- * Five seconds because the common failure is a peer that is restarting, and a
- * shorter wait would spend activations on a boundary that cannot yet answer.
- * Ten minutes because the uncommon failure is an outage measured in hours, and a
- * wake every ten minutes keeps the obligation visible at a cost that does not
- * scale with the outage. There is no attempt limit: a bound on attempts is a
- * bound on how much work may be lost, and this table exists to make that bound
- * zero.
- */
+/** No attempt limit: a bound on attempts is a bound on lost work. */
 export const TERMINAL_EFFECT_RETRY_BASE_MS = 5_000;
 
 export const TERMINAL_EFFECT_RETRY_CEILING_MS = 600_000;
 
-/** How long after its `attempts`-th failure an owed effect waits: 5s, 10s, 20s
- *  … doubling to the ten-minute ceiling and staying there. */
+/** Doubling from the base delay to the ceiling. */
 export function terminalEffectBackoffMs(attempts: number): number {
   const grown = TERMINAL_EFFECT_RETRY_BASE_MS * 2 ** Math.max(0, attempts - 1);
 
   return Math.min(grown, TERMINAL_EFFECT_RETRY_CEILING_MS);
 }
 
-/** Every effect a settled turn can owe, across every actor. The union is the
- *  schema: a row naming anything else was written by a build this one is not,
- *  and is blocked. Which of them an actor actually owes is that actor's
- *  {@link TerminalEffectTable}. */
+/** A row naming anything else is blocked; each actor's {@link TerminalEffectTable} picks its subset. */
 const TERMINAL_EFFECT_NAMES = [
   'takes', 'craft_usage', 'event_reply', 'branches',
-  // The mechanical completion gate. Its armed/fired state lives in RAM, so the
-  // ledger row is the only thing that survives a restart saying whether the one
-  // confirming turn it enqueues has already been enqueued.
+  // Its armed state lives in RAM, so this row alone records whether the confirming turn was enqueued.
   'completion_gate',
-  // The settle spine, as five separately claimed boundaries rather than one
-  // compound effect. One row for all five loses the remaining suffix to a crash
-  // after the extension turn-end but before the window append, with nothing able
-  // to tell which half had happened. Each of these is keyed on the turn's own
-  // durable identity and is idempotent at its own boundary.
-  //
-  // `overflow_retry` and `output_continuation` are the two follow-up turns a
-  // settled turn can owe, and they are mutually exclusive by construction: the
-  // first answers a turn that FAILED on a context-length refusal, the second a
-  // turn that COMPLETED at the provider's output limit with more to say.
+  // Five separately claimed boundaries, each idempotent and keyed on the turn. `overflow_retry` and
+  // `output_continuation` are mutually exclusive.
   'turn_end_extensions', 'overflow_retry', 'output_continuation', 'task_reminder',
   'turn_record', 'event_drain', 'improvement_lanes',
-  // Its own row rather than a part of the improvement lanes: a queue that is
-  // full is a legitimate refusal, and the lanes' own model calls must not be
-  // held behind it — nor repeated when it is retried.
+  // Its own row: a full queue is a legitimate refusal, and the lanes' model calls must not wait on it.
   'shadow_trial',
   'sleep_time', 'auto_title', 'auto_gepa',
   'parent_report',
@@ -192,57 +81,24 @@ export type TerminalEffectName = (typeof TERMINAL_EFFECT_NAMES)[number];
 const TerminalEffectNameSchema = v.picklist(TERMINAL_EFFECT_NAMES);
 
 
-/**
- * The disposition of one row. `completed` is the only terminal one.
- *
- * `blocked` means this build cannot attempt the row — an unsupported key
- * version, or an effect name it does not implement. It is STILL OWED: it gates
- * the outer transition and it is reported. It closes nothing. A blocked row is a
- * DEPLOY-SHAPE problem — a rollback, a half-finished rollout, a row written by a
- * build that is no longer running — and a human resolves it by deploying a build
- * that has the effect. That is precisely why it must stay visible instead of
- * converging to success: the ledger cannot fix the deploy, and pretending the
- * work happened would delete the only evidence that it did not.
- */
+/** `blocked` (unknown key version or effect) is still owed and reported: a deploy-shape problem a human resolves. */
 export type TerminalEffectStatus = 'pending' | 'completed' | 'blocked';
 
-/** What running one effect established. `owed` is the honest middle: the effect
- *  ran, reported that it is not finished (a reply channel still open), and left
- *  its row owed so a later activation carries it. */
+/** `owed`: the effect ran, reported unfinished, and stays owed. */
 export type TerminalEffectOutcome =
   | { readonly status: 'completed'; readonly detail?: string }
-  /** `held`: a live carrier in this process already owns the work (a queued
-   *  or running confirming turn), so this run was a look, not an attempt. The
-   *  ledger keeps the attempt count and the base delay instead of doubling the
-   *  row's backoff for every sweep that lands while that carrier runs. */
+  /** `held`: a live carrier already owns the work; the backoff is not doubled. */
   | { readonly status: 'owed'; readonly detail: string; readonly held?: boolean };
 
-/**
- * One effect, with its own input type erased behind a parse.
- *
- * Built through {@link terminalEffect} so the table can be a homogeneous record
- * while each entry keeps its real input type inside: the schema is closed over
- * by the function that needs it, so nothing casts and nothing widens.
- */
+/** Built through {@link terminalEffect} so each entry keeps its real input type without casts. */
 export interface TerminalEffect {
-  /** Run it against a recorded input. Called for a first attempt and for a
-   *  replay alike — the effect's own boundary is what distinguishes them, which
-   *  is why that boundary must be idempotent or keyed. */
+  /** First attempt and replay alike, which is why the boundary must be idempotent or keyed. */
   readonly run: (input: JsonValue, scope: string) => Promise<TerminalEffectOutcome>;
 }
 
-/**
- * The effects one actor's terminal sequence can owe.
- *
- * Partial because the sequence belongs to the ACTOR: a workspace root owes
- * alternate takes and event replies, a subordinate owes neither, and an entry
- * nobody declared must not exist as an empty shell that silently succeeds. A row
- * whose effect this actor does not implement is blocked by name, exactly like a
- * row from a build this one is not.
- */
+/** Partial: an undeclared entry must not exist as a silently succeeding shell; its rows are blocked by name. */
 export type TerminalEffectTable = Readonly<Partial<Record<TerminalEffectName, TerminalEffect>>>;
 
-/** Declare one effect from its input schema and its body. */
 export function terminalEffect<I>(spec: {
   readonly input: v.GenericSchema<unknown, I>;
   readonly run: (input: I, scope: string) => Promise<TerminalEffectOutcome> | TerminalEffectOutcome;
@@ -250,28 +106,14 @@ export function terminalEffect<I>(spec: {
   return { run: async (raw, scope) => await spec.run(v.parse(spec.input, raw), scope) };
 }
 
-/**
- * The loop an owed follow-up turn is queued on: core's ChatSession, on both
- * backends. `announcementOnDisk` is the backend's durable answer (the
- * transcript row, over Durable Object storage on cf and over the session
- * database on the CLI); a queued turn is only RAM until it says yes.
- */
+/** `announcementOnDisk` is the backend's durable answer; a queued turn is only RAM until it says yes. */
 export interface OwedTurnQueue {
   announcementOnDisk(identity: string): boolean;
   announcementInFlight(identity: string): boolean;
   appendOwedTurn(turn: { readonly text: string; readonly idempotencyKey: string; readonly event: string }): void;
 }
 
-/**
- * The one durable body for an effect whose whole job is to owe ONE follow-up
- * turn: OWED UNTIL DURABLE.
- *
- * The row completes only once the turn's own durable row exists, which a
- * replay reads. Until then it queues the turn once, under this response's key,
- * and stays owed: a process that dies before its pump reaches the turn, or a
- * pump that refuses it at dequeue, loses a RAM item and never the row. The key
- * is per signal, so two follow-ups of one response never share a message id.
- */
+/** Owed until the follow-up turn's own durable row exists; queued once per response key. */
 function owedTurnTerminalEffect<I>(queue: () => OwedTurnQueue, spec: {
   readonly input: v.GenericSchema<unknown, I>;
   readonly event: string;
@@ -296,7 +138,6 @@ function owedTurnTerminalEffect<I>(queue: () => OwedTurnQueue, spec: {
   });
 }
 
-/** The one durable body both backends use for a context-overflow retry. */
 export function overflowRetryTerminalEffect(queue: () => OwedTurnQueue): TerminalEffect {
   return owedTurnTerminalEffect(queue, {
     input: v.object({}), event: OVERFLOW_RETRY_EVENT, text: () => OVERFLOW_RETRY_TEXT,
@@ -304,18 +145,7 @@ export function overflowRetryTerminalEffect(queue: () => OwedTurnQueue): Termina
   });
 }
 
-/**
- * The durable body for the ONE continuation a cloud turn cut at the provider's
- * output limit earns.
- *
- * `runChat` continues such a turn inside itself, in the same provider call
- * sequence. Think's loop cannot: it re-issues a request only while a step ended
- * with tool calls whose outputs all landed, and no hook can extend it past a
- * `length` finish. So the continuation is the next turn, and it rides this
- * ledger for the same reason the overflow retry does: a truncated answer whose
- * continuation died with the isolate is a turn published as complete with the
- * work after it never done.
- */
+/** Think's loop cannot extend past a `length` finish, so the continuation is the next turn, owed durably. */
 export function outputLimitContinuationTerminalEffect(queue: () => OwedTurnQueue): TerminalEffect {
   return owedTurnTerminalEffect(queue, {
     input: v.object({}), event: OUTPUT_CONTINUATION_EVENT, text: () => OUTPUT_CONTINUATION_TEXT,
@@ -323,12 +153,7 @@ export function outputLimitContinuationTerminalEffect(queue: () => OwedTurnQueue
   });
 }
 
-/**
- * The durable body for the reminder a turn owes when it settled while its task
- * list still held open items. The text is a RECORDED input: the roster froze it
- * when the list was read at commit, so a replay announces what the turn was
- * owed, not what the list happens to show when the row re-runs.
- */
+/** The text is a recorded input: a replay announces what the turn was owed. */
 export function taskReminderTerminalEffect(queue: () => OwedTurnQueue): TerminalEffect {
   return owedTurnTerminalEffect(queue, {
     input: v.object({ text: v.string() }), event: TASK_REMINDER_EVENT, text: ({ text }) => text,
@@ -336,13 +161,7 @@ export function taskReminderTerminalEffect(queue: () => OwedTurnQueue): Terminal
   });
 }
 
-/**
- * The alternate-takes claim a settled turn owes.
- *
- * A turn the captures can be attributed to claims them; one whose answer is
- * not there purges them, so the next turn never inherits captures that competed
- * for an answer that does not exist.
- */
+/** Claim or purge captures so the next turn never inherits them. */
 export function takesTerminalEffect(deps: {
   readonly sql: SqlExecutor;
   readonly actor: ActorHandle;
@@ -368,26 +187,15 @@ export function takesTerminalEffect(deps: {
 }
 
 /**
- * ONE steer branch, AWAITED, settled into the takes pipeline.
- *
- * With a live handle the branch settles through it. Without one — the head
- * died with the process or isolate that owned it — the HEAD JOURNAL is the only
- * record, and the check is not "is the head still running": a head reaches
- * `completed` when its REPORT lands, which is before any take set exists, so
- * the row's own disposition is the settlement marker. The journal is asked for
- * the HEAD's id (`branchHeadId`), never the branch run's: read by the run id it
- * found nothing and reported that as completed, dropping the comparison on
- * every interruption between the report and the settle.
- *
- * The branch id is the settlement key on the LIVE path too. Keyed only on
- * replay, the live write and the recovery write would be two take sets.
+ * One steer branch, awaited. Without a live handle the head journal is the record, asked by `branchHeadId`
+ * (not the run id), and the row's disposition is the settlement marker. The branch id keys both paths.
  */
 export function branchesTerminalEffect(deps: {
   readonly sql: SqlExecutor;
   readonly actor: ActorHandle;
   readonly sessionId: string;
   readonly broadcast: (event: BranchStatusEvent) => void;
-  /** The branches launched against in-flight turns; a settled one is removed. */
+  /** A settled branch is removed. */
   readonly pending: PendingBranch[];
   readonly journal: Pick<HeadJournal, 'readHeadView'>;
 }): TerminalEffect {
@@ -440,17 +248,7 @@ export function branchesTerminalEffect(deps: {
   });
 }
 
-/**
- * The evolution recording a settled turn owes.
- *
- * The window append is idempotent on the assistant message's own durable
- * identity, so a replay leaves ONE window row and counts the session cadence
- * once. Continuity, mode and the evolution gate come off the ROW, never off
- * state a fresh process would default: a turn produced with auto-evolution on
- * and recovered under `--no-auto-evolve` was otherwise marked completed with no
- * window row, and one produced under the flag was recorded by whichever later
- * host had evolution on. A plan turn records nothing, live or replayed.
- */
+/** The window append is idempotent on the message's identity. Continuity, mode and the evolution gate come off the row. A plan turn records nothing. */
 export function turnRecordTerminalEffect(
   orch: Pick<AgentOrchestrator, 'recordTurn' | 'recordedTurn'>,
 ): TerminalEffect {
@@ -465,8 +263,7 @@ export function turnRecordTerminalEffect(
         return { status: 'completed', detail: 'a plan turn records no evolution state' };
       }
 
-      // Unkeyed for an empty id: every such response would share one key, and
-      // the second would read the first's append as its own.
+      // Unkeyed for an empty id: every such response would share one key.
       const recordedId = keyedScope(messageId);
       orch.recordTurn(
         orch.recordedTurn(status, v.parse(CompletedTurnSchema, turn)),
@@ -483,12 +280,7 @@ export function turnRecordTerminalEffect(
   });
 }
 
-/**
- * The reactor drain a settled turn owes. Idempotent by construction: the drain
- * selects only PENDING, unbound rows. RETHROWING, because the drain absorbs its
- * own failures for ambient callers that have nothing owed to retry them — this
- * row does, and `completed` over a half-bound batch strands the assignment.
- */
+/** Idempotent (PENDING, unbound rows only). Rethrows: `completed` over a half-bound batch strands the assignment. */
 export function eventDrainTerminalEffect(
   orch: Pick<AgentOrchestrator, 'drainPendingEvents'>,
 ): TerminalEffect {
@@ -502,17 +294,7 @@ export function eventDrainTerminalEffect(
   });
 }
 
-/**
- * The shadow trial a sampled turn owes — its OWN row, because its disposition
- * differs from the improvement lanes beside it: a full queue is a refusal a
- * later drain clears, so the trial stays owed while nothing else waits on it.
- *
- * A REFUSAL is not a deferral. `not_sampled` means there is nothing to queue
- * and never will be for this turn — a session with evolution off answers it
- * forever, and an owed row for it would hold the outer claim open across every
- * later start — so the obligation is discharged. Only a full queue or a failed
- * insert is worth coming back for, and both clear on their own.
- */
+/** Its own row: a full queue stays owed; `not_sampled` discharges the obligation. */
 export function shadowTrialTerminalEffect(
   engine: Pick<EvolutionEngine, 'queueShadowTrial'>,
 ): TerminalEffect {
@@ -541,35 +323,16 @@ export function shadowTrialTerminalEffect(
   });
 }
 
-/**
- * One effect of one sequence, as the caller declares it.
- *
- * `lane` is about the TURN QUEUE and nothing else. `onChatResponse` runs inside
- * it, so an effect that makes an SMTP round trip, waits on a branch head, or
- * spends a model call would hold the next message behind this turn's
- * housekeeping. Those are `detached`: started in declared order, joined before
- * the outer transition may settle. The lane is a caller-side property and is not
- * stored — a recovery runs off an alarm with no queue to block, and awaits
- * everything.
- */
+/** `lane` concerns the turn queue only: `detached` effects start in order and join before the outer transition settles. Not stored; recovery awaits everything. */
 export interface OwedEffect {
   readonly name: TerminalEffectName;
-  /** The subject, when a sequence owes several of one kind: one row per answered
-   *  delivery, one per assistant response. Empty when the turn owes exactly one. */
+  /** One row per answered delivery or assistant response; empty when the turn owes exactly one. */
   readonly scope: string;
   readonly input: JsonValue;
   readonly lane: 'inline' | 'detached';
 }
 
-/**
- * A deterministic interruption, standing in for the isolate dying at an exact
- * point in the sequence.
- *
- * NEVER caught by the per-effect handler, and that is the point: an eviction
- * does not resume the sequence it interrupted, so a fault the ledger absorbed
- * would prove nothing about what an eviction leaves behind. It travels out of
- * the whole terminal sequence exactly as a platform interruption does.
- */
+/** A deterministic interruption. Never caught by the per-effect handler: it must leave the sequence as an eviction would. */
 export class TerminalEffectInterrupt extends Error {
   constructor(phase: TerminalEffectPhase, name: TerminalEffectName, scope: string) {
     super(`terminal effect ${name}${scope === '' ? '' : `:${scope}`} interrupted ${phase} its side effect`);
@@ -577,9 +340,7 @@ export class TerminalEffectInterrupt extends Error {
   }
 }
 
-/** The two points an interruption can land on, and the only two that matter:
- *  before the side effect (nothing happened) and after it (it happened, and
- *  nothing recorded that it did). */
+/** Before the side effect, or after it with nothing recorded. */
 export type TerminalEffectPhase = 'before' | 'after';
 
 /** Armed only by a test, to cut the sequence at a named point. */
@@ -587,11 +348,7 @@ export type TerminalEffectFault = (
   phase: TerminalEffectPhase, name: TerminalEffectName, scope: string,
 ) => void;
 
-/**
- * `status` carries no CHECK. The column has exactly one writer — this module —
- * and its values come from the closed {@link TerminalEffectStatus} union, so
- * the constraint would guard against a writer that does not exist.
- */
+/** No CHECK on `status`: this module is its only writer, over a closed union. */
 export function initTerminalEffectTable(execRaw: RawSqlExec): void {
   execRaw(`CREATE TABLE IF NOT EXISTS terminal_effects (
     actor_id        TEXT NOT NULL,
@@ -610,15 +367,11 @@ export function initTerminalEffectTable(execRaw: RawSqlExec): void {
     settled_at      INTEGER,
     PRIMARY KEY (actor_id, sequence_id, effect_key)
   )`);
-  // Covers every owed read there is: one sequence's suffix, the set of sequences
-  // still owing anything, and the earliest instant any of them is next due. One
-  // index because those three questions differ only in how much of the same
-  // ordering they consume.
+  // One index covers the suffix read, the owing-sequence set and the earliest due instant.
   execRaw(`CREATE INDEX IF NOT EXISTS idx_terminal_effects_owed
     ON terminal_effects (actor_id, sequence_id, status, seq, next_attempt_at)`);
 }
 
-/** The versioned identity of one effect within one sequence. */
 export function terminalEffectKey(name: TerminalEffectName, scope: string): string {
   return scope === ''
     ? `${TERMINAL_EFFECT_KEY_VERSION}:${name}`
@@ -637,16 +390,11 @@ interface OwedEffectRow {
   next_attempt_at: number;
 }
 
-/** What a stored row dispatches to, once this build has looked at it. Both arms
- *  carry `name`, because whether a build KNOWS the name and whether it can RUN
- *  the row are separate questions: an unimplemented effect and a stale key
- *  version are both blocked under a name that parsed perfectly well, and a
- *  reporter that lost the name would describe them as anonymous. */
+/** Both arms carry `name`: a known name can still be blocked (unimplemented effect, stale key version). */
 type ResolvedTarget =
   | { readonly kind: 'runnable'; readonly name: TerminalEffectName; readonly effect: TerminalEffect }
   | { readonly kind: 'blocked'; readonly name: TerminalEffectName | null; readonly reason: string };
 
-/** One stored obligation with its dispatch decision made. */
 interface PendingRow {
   readonly key: string;
   readonly rawName: string;
@@ -656,18 +404,12 @@ interface PendingRow {
   readonly status: TerminalEffectStatus;
   readonly attempts: number;
   readonly nextAttemptAt: number;
-  /** PERSISTED, because a replay must schedule the way the forward path did.
-   *  Read off the row and not re-derived: recovery has no caller to ask, and
-   *  walking a roster serially lets a detached reply that hangs block the
-   *  recording behind it — work the live path had already committed. */
+  /** Persisted and read off the row: recovery has no caller to ask. */
   readonly lane: 'inline' | 'detached';
   readonly target: ResolvedTarget;
 }
 
-/** One owed row, as a reporter reads it back. `name` is null when the stored
- *  name is not one this build knows; `blocked` carries the reason whenever this
- *  build cannot attempt the row at all, including a key-version mismatch under a
- *  name it does know. */
+/** `name` is null for an unknown name; `blocked` holds the reason, including a key-version mismatch. */
 export interface OwedTerminalEffect {
   readonly key: string;
   readonly name: TerminalEffectName | null;
@@ -682,87 +424,34 @@ export interface OwedTerminalEffect {
 }
 
 export interface TerminalSequenceRun {
-  /** Resolves when every detached effect has recorded a disposition. The outer
-   *  transition may not settle before this. */
+  /** The outer transition may not settle before this. */
   readonly reported: Promise<void>;
 }
 
-/**
- * The ledger: claim the sequence, run it, record each effect's disposition, and
- * replay what an interruption left owed.
- *
- * One object rather than a bag of functions because the POLICY is what it owns —
- * the read-then-insert claim, the dispatch decision, the retry schedule, the
- * disposition write. Callers name their effects and hand over inputs; they
- * decide none of that.
- */
+/** Owns the policy: claim, dispatch decision, retry schedule, disposition write. */
 export class TerminalEffectLedger {
   private readonly actorId: string;
 
   constructor(private readonly deps: {
     readonly sql: SqlExecutor;
-    /**
-     * The actor whose turn owes these effects.
-     *
-     * A sequence id is a turn id and a scope is that turn's own, so two actors
-     * of one workspace present colliding rows — and `pendingSequences`,
-     * `nextRetryAt` and `prune` are all sweeps, which over a shared table would
-     * make one actor's recovery run a sibling's owed reply. `assertCurrent()`
-     * runs before every statement so a retired actor stops claiming here at the
-     * instant it stops being an actor.
-     */
+    /** Sequence ids collide across actors and the sweeps would cross them; `assertCurrent()` runs before every statement. */
     readonly actor: ActorHandle;
     readonly effects: TerminalEffectTable;
-    /** The clock every disposition is stamped with. A dep so a test can freeze
-     *  it and read back the row it wrote by value. */
     readonly now: () => number;
     /** Read per call: a test arms the fault after the ledger exists. */
     readonly fault?: () => TerminalEffectFault | null;
-    /** Commit the claim and its whole roster as ONE unit. Identity is honest
-     *  inside a Durable Object, where a synchronous run cannot be interrupted
-     *  between statements; a process that CAN die there must supply a real
-     *  transaction or recovery reads a prefix as the whole roster. */
+    /** Claim and roster as one unit. Identity is honest where a synchronous run cannot be interrupted; otherwise supply a real transaction. */
     readonly transaction?: <T>(body: () => T) => T;
-    /**
-     * Arm a durable wake at this instant, because rows are still owed.
-     *
-     * Called after every pass that leaves anything owed. Without it the retry
-     * schedule is a hope that some unrelated event reactivates the object, and
-     * an idle workspace would hold an undelivered reply forever. An instant in
-     * the past means a row is due now and the wake should fire as soon as the
-     * platform allows.
-     */
+    /** Called after every pass that leaves anything owed; a past instant means due now. */
     readonly scheduleRetry: (atMs: number) => Promise<void>;
   }) {
     this.actorId = deps.actor.actorId;
   }
 
   /**
-   * Claim a whole sequence, then run it in order.
-   *
-   * The claims land FIRST, in one synchronous pass with no await in it — which
-   * is what makes them atomic inside a Durable Object, and what makes every
-   * effect after an interruption a row somebody can replay. Within each claim
-   * the read comes before the insert for the reason core's tool-effect claim
-   * documents: an insert alone cannot tell "I just claimed this" from "somebody
-   * claimed it and died", and the prior read is the only observation that
-   * separates them.
-   *
-   * Each effect then runs from the DECODED RECORDING, never from the live value
-   * the caller passed. An owed row's own recording wins over a fresh input: that
-   * is what the first attempt committed to, and a replay that substituted the
-   * current activation's view would finish a different piece of work than the
-   * one that was claimed.
-   *
-   * A row that already existed is routed exactly as {@link replayOwed} routes
-   * it, through the same resolve and the same schedule. A duplicate callback is
-   * not a licence to re-run a boundary the ledger has deliberately deferred.
-   *
-   * Resolves once the INLINE effects have run. `reported` resolves when the
-   * detached ones have all recorded a disposition, and it rejects on exactly one
-   * thing: an injected interruption. Every real failure is recorded on its own
-   * row and left owed, so in production the join never rejects and the outer
-   * transition closes on a complete suffix or not at all.
+   * Claims land first, synchronously, read before insert. Each effect runs from the decoded recording,
+   * never the live value; an existing row routes as {@link replayOwed} routes it. `reported` rejects only
+   * on an injected interruption; real failures stay owed on their rows.
    */
   async run(sequenceId: string, owed: readonly OwedEffect[]): Promise<TerminalSequenceRun> {
     this.claim(sequenceId, owed);
@@ -770,17 +459,7 @@ export class TerminalEffectLedger {
     return await this.drive(sequenceId);
   }
 
-  /**
-   * Write this roster's rows synchronously, without issuing effects.
-   *
-   * Separated from {@link drive} so a caller can put the outer transition's own
-   * claim in the same commit: the rows and the claim that gates them are one
-   * durable fact, and a process that dies between them leaves an open claim with
-   * no roster — which a recovery reads as a finished turn and closes over.
-   *
-   * No transaction of its own for the same reason. The caller supplies the
-   * boundary because the caller knows what else belongs inside it.
-   */
+  /** Separate from {@link drive} so the caller can commit the outer claim in the same unit; no transaction of its own. */
   claim(sequenceId: string, owed: readonly OwedEffect[]): void {
     this.deps.actor.assertCurrent();
     const now = this.deps.now();
@@ -788,11 +467,8 @@ export class TerminalEffectLedger {
     for (const [index, effect] of owed.entries()) {
       const key = terminalEffectKey(effect.name, effect.scope);
 
-      // Looked up by NAME AND SCOPE, not by the key this build would compute.
-      // A row written under an older key version names the same obligation, and
-      // a forward path that missed it would insert a second row and dispatch the
-      // effect while recovery, reading the stored row, would block it on the
-      // version mismatch — one piece of work routed two different ways.
+      // Looked up by name and scope, not by the computed key, so an older-version row is not duplicated and
+      // routed two ways.
       const existing = this.deps.sql<{ effect_key: string }>`
         SELECT effect_key FROM terminal_effects
         WHERE actor_id = ${this.actorId} AND sequence_id = ${sequenceId}
@@ -810,38 +486,27 @@ export class TerminalEffectLedger {
     }
   }
 
-  /** Run a claimed roster: arm, inline pass, then the detached tail. */
   async drive(sequenceId: string): Promise<TerminalSequenceRun> {
     const claimed = this.pending(sequenceId);
-    // ARMED HERE, before the first attempt. The rows now exist, so a recovery
-    // for them must exist too: an eviction inside the inline pass would otherwise
-    // leave a claimed suffix with no wake and no fiber behind it, and a
-    // subordinate — whose activation runs no reconcile of its own — could owe its
-    // parent report indefinitely. One early wake that finds nothing to do is the
-    // harmless failure; a suffix nothing retries is not.
+    // Armed before the first attempt: an eviction in the inline pass must still leave a wake.
     await this.armWake();
 
     for (const row of claimed) {
       if (row.lane === 'inline') await this.attempt(sequenceId, row);
     }
 
-    // Started only now, so an inline effect the queue waits on cannot be
-    // overtaken by a detached one it precedes.
+    // Started only now, so an inline effect cannot be overtaken by a detached one it precedes.
     const detached = claimed
       .filter((row) => row.lane === 'detached')
       .map(async (row) => await this.attempt(sequenceId, row));
 
     return {
-      // Re-armed after the join, from what is LEFT: the arm before the inline
-      // pass covered the claimed suffix, and this one collapses the wake onto
-      // the earliest row still owed once the sequence has run.
+      // Re-armed from what is left once the sequence has run.
       reported: Promise.all(detached).then(() => this.armWake()),
     };
   }
 
-  /** What this sequence still owes, in declared order — every non-terminal row,
-   *  whether or not it is due yet. A row not yet due is still owed, and still
-   *  gates the outer transition. */
+  /** Rows not yet due are still owed and still gate the outer transition. */
   owed(sequenceId: string): OwedTerminalEffect[] {
     return this.pending(sequenceId).map((row) => ({
       key: row.key,
@@ -857,22 +522,13 @@ export class TerminalEffectLedger {
     }));
   }
 
-  /**
-   * Finish what one interrupted sequence still owes, from storage.
-   *
-   * Every input comes off its row, so this runs on an activation that has
-   * hydrated nothing. Rows whose `next_attempt_at` has not passed are left
-   * alone — still owed, still gating — and the wake armed at the end brings the
-   * activation back for them.
-   */
+  /** Every input comes off its row; not-yet-due rows are left for the armed wake. */
   async replayOwed(sequenceId: string): Promise<void> {
     const run = await this.drive(sequenceId);
     await run.reported;
   }
 
-  /** Every sequence with an owed row, the most overdue first. The recovery
-   *  sweep's one question on a cold activation, asked without knowing which
-   *  sequences exist. */
+  /** Most overdue first. */
   pendingSequences(): readonly string[] {
     this.deps.actor.assertCurrent();
 
@@ -883,16 +539,9 @@ export class TerminalEffectLedger {
       .map((row) => row.sequence_id);
   }
 
-  /** The earliest instant any owed row is next attemptable, or null when nothing
-   *  is owed. An instant already past means a row is due now. */
+  /** Null when nothing is owed; a past instant means due now. */
   nextRetryAt(
-    /** Sequences a live activation is already running.
-     *
-     *  Their rows are pending because the effect has not finished YET, so waking
-     *  on the overdue instant re-armed one second ahead on every tick for the
-     *  whole of a multi-minute model lane. They are DEFERRED rather than dropped:
-     *  the activation running them can die at any moment, and a sequence with no
-     *  wake behind it is one nothing comes back for. */
+    /** Deferred, not dropped: the live activation running them can still die. */
     inFlight: ReadonlySet<string> = new Set(),
   ): number | null {
     this.deps.actor.assertCurrent();
@@ -914,20 +563,13 @@ export class TerminalEffectLedger {
     return earliest;
   }
 
-  /**
-   * Drop this sequence's COMPLETED rows once its outer transition has settled.
-   *
-   * Blocked rows are kept, and so are pending ones. A blocked row is work a
-   * deploy still owes; a ledger that deleted it would leave a diagnostic line as
-   * the only trace of something a turn was supposed to do.
-   */
+  /** Blocked and pending rows are kept: they are still owed. */
   prune(sequenceId: string): void {
     this.deps.actor.assertCurrent();
     void this.deps.sql`DELETE FROM terminal_effects
       WHERE actor_id = ${this.actorId} AND sequence_id = ${sequenceId} AND status = 'completed'`;
   }
 
-  /** Every non-terminal row of one sequence, with its dispatch decision made. */
   private pending(sequenceId: string): PendingRow[] {
     this.deps.actor.assertCurrent();
 
@@ -950,16 +592,7 @@ export class TerminalEffectLedger {
       } satisfies PendingRow));
   }
 
-  /**
-   * Decide, from a stored row alone, what this build may do with it.
-   *
-   * The one place that decision is made, so a duplicate forward call and a cold
-   * recovery cannot disagree about a row. Three ways to be blocked, and the key
-   * check is the one that is easy to miss: a known NAME says nothing about the
-   * INPUT CONTRACT. After a rollback or a version bump the stored key was
-   * written under a different version of the same name, and handing its input to
-   * the current parser runs the wrong semantics under the right label.
-   */
+  /** The one place the dispatch decision is made. A known name says nothing about the input contract: the key version is checked too. */
   private resolve(rawName: string, scope: string, key: string): ResolvedTarget {
     const parsed = v.safeParse(TerminalEffectNameSchema, rawName);
 
@@ -977,8 +610,7 @@ export class TerminalEffectLedger {
     }
 
     if (terminalEffectKey(parsed.output, scope) !== key) {
-      // A stored key has always carried a version prefix, so an absent one is
-      // itself the mismatch and names itself in the reason.
+      // Stored keys always carry a version prefix, so an absent one is itself the mismatch.
       const cut = key.indexOf(':');
 
       return {
@@ -992,25 +624,14 @@ export class TerminalEffectLedger {
     return { kind: 'runnable', name: parsed.output, effect };
   }
 
-  /**
-   * One attempt at one effect — the whole of the exactly-once boundary.
-   *
-   * The try/catch spans exactly this effect and nothing else. A sequence-wide
-   * catch makes failures unattributable: one throw ends every effect after it,
-   * and the marker says only that the turn has not finished. Here a failure
-   * leaves THIS row owed with its classified reason, and the effects beside it
-   * are untouched.
-   */
+  /** The try/catch spans exactly this effect, so a failure leaves only this row owed. */
   private async attempt(sequenceId: string, row: PendingRow): Promise<void> {
-    // The stored schedule governs every attempt, including a freshly recorded
-    // row, whose initial nextAttemptAt makes it due immediately.
+    // The stored schedule governs every attempt, including a fresh row (due immediately).
     this.deps.actor.assertCurrent();
 
     if (row.nextAttemptAt > this.deps.now()) return;
     const attempts = row.attempts + 1;
-    // Armed BEFORE the side effect, not after it. An eviction mid-effect never
-    // comes back to write anything, so a schedule pushed afterwards would leave
-    // an eviction loop retrying with no backoff at all.
+    // Armed before the side effect: an eviction mid-effect never writes a later schedule.
     void this.deps.sql`UPDATE terminal_effects
       SET attempts = ${attempts}, next_attempt_at = ${this.deps.now() + terminalEffectBackoffMs(attempts)}
       WHERE actor_id = ${this.actorId} AND sequence_id = ${sequenceId}
@@ -1041,8 +662,7 @@ export class TerminalEffectLedger {
         cause: err,
         otherwise: 'unavailable',
       }), { sequence: sequenceId, effect: row.key, attempts });
-      // Owed, never abandoned: the row keeps its input and the wake armed above
-      // brings an activation back for it.
+      // Owed, never abandoned.
       this.record(sequenceId, row.key, 'pending', `failed: ${renderThrownChain({ cause: err })}`);
 
       return;
@@ -1069,10 +689,7 @@ export class TerminalEffectLedger {
         AND effect_key = ${row.key} AND status != 'completed'`;
   }
 
-  /** Write a non-terminal disposition. Guarded on the row not being completed:
-   *  `completed` is the one irreversible answer, and a later pass must never
-   *  reopen it — while `pending` and `blocked` may legitimately replace each
-   *  other as a deploy changes what this build can attempt. */
+  /** `completed` is irreversible; `pending` and `blocked` may replace each other. */
   private record(
     sequenceId: string, key: string, status: 'pending' | 'blocked', outcome: string,
   ): void {
@@ -1083,7 +700,6 @@ export class TerminalEffectLedger {
         AND effect_key = ${key} AND status != 'completed'`;
   }
 
-  /** Arm the durable wake for the earliest owed row, if anything is still owed. */
   private async armWake(): Promise<void> {
     const at = this.nextRetryAt();
 

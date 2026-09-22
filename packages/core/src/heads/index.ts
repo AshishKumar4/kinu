@@ -1,7 +1,3 @@
-/**
- * Branching heads — public surface.
- */
-
 export type {
   HeadId,
   HeadBudget,

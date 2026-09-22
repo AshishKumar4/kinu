@@ -1,53 +1,8 @@
 /**
- * The ONE seam through which a swarm node gets a place to work and an identity
- * to work as — the sixth of a node's six properties.
- *
- * Specified by docs/EXPLORATION.md — "Isolation" and "Node identity".
- *
- * IT EXISTS ON BOTH BACKENDS. A node's home is a real directory in the ONE
- * global view, owned by the node's own uid and moded `0o755`, its scratch is
- * `/tmp/node-<id>` at `0o700`, and BOTH the way a node runs commands and the
- * way its file tools read and write are credentialed as that uid — so the
- * boundary is uid/gid/mode on real inodes rather than convention, and it holds
- * whichever way a node reaches the tree. `facetHomeProvisioner` is the
- * implementation and `vfs/agent-home.ts` is the layout it provisions against.
- * The backend supplies it keyed on the node ACTOR's storage key
- * (`cli-backend/src/local-session.ts`'s `provisionNodeHome`), never on a raw
- * node id: a node is its own actor, and its home has to follow the
- * identity the directory issued rather than the id the search minted.
- *
- * Why permissions inside one filesystem and not a filesystem each: the
- * regression at `cf-backend/tests/unit-head-fork.test.ts:4-8` was a subagent
- * handed a freshly-created EMPTY filesystem, so an agent asked to research a
- * codebase the user had cloned could see none of it. Isolation without a read
- * window is a regression. One view with per-agent ownership cannot reproduce
- * it, because there is no second filesystem to be empty — the read window is
- * not a feature added back, it is the absence of a second tree.
- *
- * WHY BOTH PLANES, and what it cost. A file plane pinned to the session user
- * refuses a node's writes INSIDE ITS OWN HOME — measured `EACCES` on
- * `/home/node-aX9` — because the home belongs to the node and the plane did
- * not. One tree reached by two identities was the bug. In this isolate the
- * credentialed plane is `SqliteVFS.as(cred)` and the credentialed shell is a
- * second `Shell` over the SAME filesystem (`vfs/nimbus-workspace.ts`
- * `asAgent`). On a Nimbus session handle the plane is `files.as(cred)` — the
- * session's pid-less file RPCs bound to the node's credential
- * (`execution/nimbus.ts`, `nimbusSessionFiles`) — same session, same bytes,
- * one identity.
- *
- * `shared-origin-plane` is neither a confession nor the hosted backend's state.
- * It is what a runtime with no provisioner honestly is: a harness runtime, or a
- * head runtime built without a workspace host. The value is REPORTED rather than
- * hidden, because the grading consequence is real
- * — you cannot grade a node on what it changed when every node changed the same
- * tree, so a shared-plane run is graded on the candidate the node REPORTS,
- * never on a diff of the workspace.
- *
- * A malformed credential is INVISIBLE at the substrate — Nimbus's `isVfsCred`
- * guard falls through to the session user rather than refusing — which is
- * precisely why this seam returns the substrate's own type rather than a
- * structural copy of it, and why the shared plane spells its absence as a
- * VARIANT rather than as three optional fields a caller could half-read.
+ * The seam through which a swarm node gets a place to work and an identity to
+ * work as. Spec: docs/EXPLORATION.md "Isolation" and "Node identity".
+ * The backend keys provisioning on the node actor's storage key, never a raw node id.
+ * A shared-plane run is graded on the candidate the node reports, never on a workspace diff.
  */
 
 import type { VfsCred } from '@nimbus-sh/core/runtime/os-contracts.js';
@@ -62,97 +17,54 @@ import {
   type TmpConfiner,
 } from '../vfs/agent-home';
 
-/**
- * Whether a node actually got a boundary.
- *
- * Two values and no third, because the honest answer today is one of exactly
- * two things and "partially isolated" is not a state anything could act on.
- */
+/** Whether a node actually got a boundary. */
 export type NodeIsolation = 'shared-origin-plane' | 'private-home';
 
 /**
- * A node's own place to work, as the search hands it to the node's runtime.
- *
- * A UNION rather than one shape with optional members, because the two states
- * are not the same object with holes in it: a provisioned node has a home, a
- * scratch directory AND an identity, and an unprovisioned one has none of the
- * three. Spelling that as three optionals let a caller read `home` while
- * ignoring `cred` — which is how a node ends up addressed as private and
- * running as the origin.
+ * A node's own place to work. A union, not optionals: a provisioned node has
+ * home, tmp and cred together; reading `home` while ignoring `cred` must be impossible.
  */
 export type NodeWorkspace =
   | {
     readonly isolation: 'private-home';
-    /** Where this node's own writes belong, owned by {@link cred}'s uid. */
     readonly home: string;
-    /** This node's scratch, `0o700` and its own — where `TMPDIR` points. */
+    /** Scratch, `0o700`; `TMPDIR` points here. */
     readonly tmp: string;
-    /** The identity this node's commands AND its file tools act as. Both, or
-     *  the boundary holds on one plane and not the other. */
+    /** Both the node's commands and its file tools act as this identity. */
     readonly cred: VfsCred;
   }
   | {
     readonly isolation: 'shared-origin-plane';
-    /** The origin's own working directory — i.e. no boundary, said out loud. */
+    /** The origin's own working directory: no boundary. */
     readonly home: string;
     readonly tmp: undefined;
-    /**
-     * The session user, as the substrate already resolves it: its own
-     * `options.cred ?? inheritedCred` falls through to the session identity, so
-     * an unprovisioned node runs precisely as the origin does rather than as
-     * something new and untested.
-     */
+    /** The session user: an unprovisioned node runs exactly as the origin does. */
     readonly cred: undefined;
   };
 
-/** Which node is asking. Identity comes from the engine's own row — a node
- *  states neither its id nor its depth, per *Node identity*, so neither is an
- *  argument a caller could get wrong. */
+/** Identity comes from the engine's own row; a node states neither its id nor its depth. */
 export interface NodeIdentity {
   readonly nodeId: string;
   readonly rootId: string;
   readonly depth: number;
 }
 
-/**
- * A backend's home provisioner: the half only a host can do, because `chown`
- * needs uid 0.
- *
- * Still a seam rather than a direct call, because the three things it needs — a
- * uid-0 view, the principal registry, and durable SQL — are all host-owned, and
- * core stays clear of how a given backend obtained them.
- */
+/** A backend's home provisioner; host-only because `chown` needs uid 0. */
 export type NodeWorkspaceProvisioner = (node: NodeIdentity) => Promise<NodeWorkspace>;
 
-/** What a host must hand over for a node to get a real home. */
 export interface NodeHomeHost {
   /** The uid-0 view — `SqliteVFS.as(CRED_KERNEL)`. */
   readonly root: HomeRootVfs;
-  /** The principal registry that scopes `/tmp`, i.e. the `SqliteVFS` itself. */
+  /** The principal registry that scopes `/tmp`. */
   readonly confiner: TmpConfiner;
-  /** Durable storage for the uid allocation, so a home outlives its activation. */
+  /** Durable uid allocation, so a home outlives its activation. */
   readonly sql: SqlDatabase;
 }
 
 /**
- * The real provisioner for any facet kind: a private home and a private `/tmp`
- * per agent name, in this isolate.
- *
- * One function for subordinates, heads and swarm nodes, because the boundary
- * is one thing — uid/gid/mode on real inodes plus a confined `/tmp` — and a
- * second implementation per kind is how two backends started disagreeing
- * about the same directory. The caller names the agent with its kind's
- * function (`subordinateAgentName`, `headAgentName` — a swarm node's actor is
- * a head, so its home lives in the `head-` namespace too), so the namespace
- * stays disjoint by construction.
- *
- * Synchronous underneath and `async` only to satisfy the seam — every substrate
- * call here returns `void`. The host may arrive as a promise, because a
- * filesystem that lives in this isolate BOOTS: a caller that had to resolve
- * the three members up front would either serialise its own startup on that
- * boot or wire nothing. Awaited per agent and therefore resolved once, exactly
- * as `createWorkspace`'s own `booting` is — and `await` on a plain host is a
- * no-op, so a host that already has all three passes one.
+ * The real provisioner for every facet kind: a private home and private `/tmp`
+ * per agent name. The caller names the agent with its kind's function
+ * (`subordinateAgentName`, `headAgentName`) so namespaces stay disjoint.
  */
 export function facetHomeProvisioner(
   host: NodeHomeHost | Promise<NodeHomeHost>,
@@ -163,20 +75,14 @@ export function facetHomeProvisioner(
     authorize?.();
     const identity = agentIdentity(sql, agentName);
     const home = provisionAgentHome(root, agentName, identity);
-    // The bare `/tmp` rewrite as well as the directory, because a command that
-    // hardcodes `/tmp/x` is a command this isolate can still keep private.
+    // Also rewrite bare `/tmp`, so a command that hardcodes `/tmp/x` stays private.
     const tmp = confineAgentTmp(confiner, agentName, identity);
 
     return { home, tmp, cred: agentCred(identity), isolation: 'private-home' };
   };
 }
 
-/**
- * The real releaser, over the same three members: the home and the tmp gone,
- * the `/tmp` rewrite dropped, the uid row kept. One function for every facet
- * kind for the provisioner's reason, and the caller names the agent the same
- * way it did at provision.
- */
+/** The real releaser: home and tmp removed, `/tmp` rewrite dropped, uid row kept. */
 export function facetHomeReleaser(
   host: NodeHomeHost | Promise<NodeHomeHost>,
 ): (agentName: string) => Promise<void> {
@@ -187,14 +93,8 @@ export function facetHomeReleaser(
 }
 
 /**
- * The node's workspace: from the host's provisioner when it has one, and from
- * the shared-plane fallback when the host has no credentialled filesystem.
- *
- * ONE function, so there is exactly one place a test can prove a node was told
- * the truth about its own boundary. The fallback is reached only where there is
- * no uid-0 view to provision against, and it is reported rather than disguised
- * as a home — an invented directory would be a boundary a node believes in and
- * does not have, which is worse than no boundary at all.
+ * The node's workspace: from the host's provisioner, else the shared-plane
+ * fallback, which is reported rather than disguised as a home.
  */
 export async function nodeWorkspace(
   node: NodeIdentity,
@@ -205,9 +105,7 @@ export async function nodeWorkspace(
   return { home: '.', tmp: undefined, cred: undefined, isolation: 'shared-origin-plane' };
 }
 
-/** What a node is TOLD about its own boundary, in the words its prompt uses.
- *  Stated because a node that believes it has a private home will happily write
- *  a scratch file at a path its sibling is about to overwrite. */
+/** What a node is told about its own boundary, in its prompt's words. */
 export function isolationDisclosure(isolation: NodeIsolation, home: string): string {
   return isolation === 'private-home'
     ? `Your own working directory is ${home}. It is yours: no other node in this search can write it.`

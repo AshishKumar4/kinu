@@ -1,83 +1,17 @@
 /**
- * Grounded branch evaluation — the production MCTS scorer.
- *
- * Called from the engine's EVALUATE phase (mcts/engine.ts) for every branch
- * on every backend: CF Facets, the CF inline fallback, and CLI forked
- * branches all flow through here. There is deliberately no per-backend
- * evaluate — branches explore, the engine scores.
- *
- * Two layers, combined so execution dominates:
- *
- * 1. EXECUTION GROUNDING — when the branch produced code, it is actually run
- *    through the threaded executor (optionally extended with judge-generated
- *    assertions that exercise it against the task). Pass/fail picks the score
- *    band: a branch whose code fails can never outscore one whose code runs.
- *      pass  → [0.60, 1.00]   fail → [0.05, 0.30]
- * 2. JUDGE ENSEMBLE — k independent judge samples (median-aggregated,
- *    parse-failure-robust: a sample that fails to parse is dropped, never
- *    counted as 0) place the branch within its band. The judge scores against
- *    the TASK and relative to sibling proposals, not absolute vibes.
- *    Prose-only branches are judge-only at reduced confidence:
- *      prose → [0.00, 0.75]
- *
- * ── BAND TABLE (WP-A5) ──────────────────────────────────────────────
- *   outcome                           multiplier·judge      range
- *   code ran & PASSED                 0.60 + 0.40·j         [0.60, 1.00]
- *   code ran & FAILED                 0.05 + 0.25·j         [0.05, 0.30]
- *   code did not PARSE                0.05 (no judge)        0.05
- *   code in an UNRUNNABLE language    0.30·j                [0.00, 0.30]
- *   prose only (no sibling code)      0.75·j                [0.00, 0.75]
- *   prose only (a sibling HAS code)   0.30·j                [0.00, 0.30]
- *
- * The parse row is the evaluation cascade, kept to its cheapest honest form:
- * a branch whose code the engine could not even parse has DECIDED its own
- * verdict, and no judge opinion can move it inside the fail band — so the
- * ensemble's k calls are spent on nothing. Skipping them lands the branch on
- * the band floor, which is the exact score the "no judge sample survived"
- * path already assigns, so this changes no score outside the branches whose
- * spend it skips. Everything that parses — including code that ran and threw
- * — is judged exactly as before, because there the judge's placement inside
- * the band is real information.
- *
- * The last prose row closes the loophole: without it a branch that dodged code
- * (prose, cap 0.75) outscored one that attempted code and FAILED (cap 0.30),
- * rewarding non-attempts. When any sibling in the expansion produced code, a
- * prose-only branch is capped at the FAIL ceiling (0.30) — it cannot beat a
- * failed executable sibling by declining to compete on execution.
- * Unsupported fenced code is a distinct, named outcome. It is capped at the
- * same ceiling because it was not executed and therefore cannot outrank a
- * verified pass.
- *
- * The downstream thresholds are pinned to these band boundaries (see
- * config.ts): craftExtractionThreshold 0.80 = pass-band midpoint (executed +
- * ≥median judge; unreachable by any prose branch); minAcceptableScore 0.30 =
- * FAIL ceiling (a converged answer must clear the fail/dodge band);
- * reflectionThreshold 0.35 = FAIL ceiling + thin margin (every fail-band node
- * earns a lesson); pruneThreshold 0.25 sits inside the fail band.
- *
- * The judge is the cross-model rt.judgeModel when configured; falling back to
- * the explorer model is the DOCUMENTED fallback (self-enhancement bias per
- * LLM-as-Judge arXiv:2306.05685), not a hidden default. If every judge sample
- * fails, the branch gets its band floor (0 for prose) — infrastructure
- * failure must look bad, never neutral (see engine.ts EVALUATE).
- *
- * Research grounding: model self-selection plateaus ~55% vs 99% oracle
- * (arXiv:2602.18998); verifier quality, not search, is the bottleneck
- * (Koh et al. arXiv:2407.01476).
+ * Grounded branch evaluation: the one MCTS scorer, called from the engine's EVALUATE phase on every backend.
+ * Execution picks the band, the judge ensemble (median, unparsed samples dropped) places within it.
+ * Band table (WP-A5):
+ *   code passed 0.60 + 0.40·j; code failed 0.05 + 0.25·j; code did not parse 0.05 (no judge);
+ *   unrunnable language 0.30·j; prose 0.75·j, or 0.30·j when a sibling has code.
+ * Thresholds in config.ts are pinned to these band boundaries.
+ * All judge samples failing yields the band floor: infrastructure failure must look bad, never neutral.
+ * Model self-selection plateaus ~55% vs 99% oracle (arXiv:2602.18998); verifier quality,
+ * not search, is the bottleneck (Koh et al. arXiv:2407.01476).
  */
 
-/** Wall clock on a SINGLE judge completion.
- *
- * Judge calls carry NO elapsed deadline (owner ruling, 2026-08: none on LLM
- * calls). Each sample is awaited to settlement, however long the provider
- * takes; the search's durable background fiber is the work's owner and there
- * is no clock above it to race. What bounds spend is the CALL COUNT
- * (`judgeCallBudget`), which is a resource budget, not a clock.
- */
+/** No elapsed deadline on judge calls (owner ruling, 2026-08); spend is bounded by call count. */
 
-/** Score bands. Execution verdicts dominate: fail ceiling < pass floor, and
- *  prose confidence is capped below a passing branch with a median judge.
- *  See the BAND TABLE in the module header. */
 const PASS_FLOOR = 0.6;
 
 const PASS_SPAN = 0.4;
@@ -86,8 +20,7 @@ const FAIL_FLOOR = 0.05;
 
 const FAIL_SPAN = 0.25;
 
-/** Top of the fail band (0.30): a code branch that ran and failed can score no
- *  higher, and neither may a prose branch when siblings actually attempted code. */
+/** Top of the fail band; also the cap for prose when siblings attempted code. */
 const FAIL_CEIL = FAIL_FLOOR + FAIL_SPAN;
 
 const PROSE_CONFIDENCE = 0.75;
@@ -103,40 +36,25 @@ import { DEFAULT_CONFIG } from '../config';
 
 export interface EvaluateBranchOptions {
   task: string;
-  /** The branch proposal. Its fenced code is parsed centrally against the executor. */
   trajectory: string;
-  /** Sibling proposals from the same expansion — judged relative to these. */
   siblings?: readonly string[];
-  /** True when any sibling in this expansion produced runnable code. Caps a
-   *  prose-only branch at the FAIL ceiling so declining to attempt code cannot
-   *  beat a sibling that attempted it and failed (WP-A5 band loophole). */
+  /** True when any sibling produced runnable code; caps prose-only branches at the fail ceiling (WP-A5). */
   siblingsProducedCode?: boolean;
-  /** Plan mode uses judge-only scoring and must never invoke the executor. */
   executionPolicy?: 'grounded' | 'judge-only';
   executor: Executor;
-  /** Cross-model judge. Omitted → explorer judges (documented fallback). */
+  /** Cross-model judge; omitted means the explorer judges (arXiv:2306.05685 self-enhancement bias). */
   judge?: LLM;
   explorer: LLM;
-  /** REQUESTED judge ensemble size (median-aggregated). Default 3. Not what the
-   *  branch necessarily gets: `maxLLMCalls` clamps it, and the realised size
-   *  comes back as `judgeSamplesAttempted`. See {@link judgeCallBudget}. */
+  /** Requested judge ensemble size; `maxLLMCalls` may clamp it (see {@link judgeCallBudget}). */
   judgeSamples?: number;
-  /** Per-evaluation LLM-call budget: check generation + judge samples, sharing
-   *  ONE pool. The operator's spend dial — see
-   *  DEFAULT_CONFIG.mcts.maxEvalLLMCalls — and the ceiling on `judgeSamples`. */
+  /** Per-evaluation LLM-call pool shared by check generation and judge samples. */
   maxLLMCalls?: number;
 }
 
 export interface BranchEvaluation {
-  /** [0..1] — what the engine backpropagates. */
   score: number;
-  /** How the score was grounded. */
   grounding: EvaluationGrounding;
-  /** Execution verdict when grounding === 'execution'. `passedChecks` /
-   *  `totalChecks` are present only when a check suite was generated and run —
-   *  absent means no fraction was measured, which is not the same claim as a
-   *  fraction of zero, so the caller falls back to the judge for position
-   *  inside the band. */
+  /** Execution verdict. `passedChecks`/`totalChecks` absent means no fraction was measured, not zero. */
   execution?: {
     passed: boolean;
     passedChecks?: number;
@@ -144,22 +62,12 @@ export interface BranchEvaluation {
     error?: string;
     assertionsGenerated: boolean;
   };
-  /** Present when the branch offered code this executor cannot run. */
   unrunnableLanguage?: string;
-  /** The ensemble size actually SAMPLED — the caller's request after the
-   *  per-evaluation call budget clamped it (see {@link judgeEnsembleSize}).
-   *  Zero only when the cascade short-circuited before the ensemble was
-   *  reached, which is why it sits beside the next field: `judgeSamplesUsed: 0`
-   *  with a non-zero `judgeSamplesAttempted` is an ensemble that answered
-   *  nothing usable, and "never asked" is not the same fact as "asked and got
-   *  nothing back". */
+  /** Judge samples actually requested after the budget clamp; zero only when the cascade short-circuited. */
   judgeSamplesAttempted: number;
-  /** Judge samples that parsed successfully, out of those attempted. */
   judgeSamplesUsed: number;
 }
 
-/** What the run says about the generated checks: the count when it kept one,
- *  otherwise the bare fact that assertions were generated at all. */
 function checkTally(passedChecks: number | undefined, totalChecks: number | undefined, generated: boolean): string {
   if (totalChecks !== undefined && passedChecks !== undefined) {
     return ` and passed ${passedChecks} of ${totalChecks} generated checks`;
@@ -171,17 +79,8 @@ function checkTally(passedChecks: number | undefined, totalChecks: number | unde
 }
 
 /**
- * The environment's reply to a branch's proposal, in one sentence — or null
- * when the branch never reached the environment (prose, plan mode, a language
- * this executor cannot run).
- *
- * LATS's expansion step is `action → environment → observation`, and the
- * observation is fed BACK: §5.2 runs each candidate solution against a
- * generated assert suite and adds "successful and failed tests and compiler
- * output ... to the context as an observation". This verdict was already
- * computed to pick the score band; rendering it is what lets the engine put it
- * where the paper puts it — into the trajectory a child expansion inherits and
- * into the post-mortem a failed branch writes — for no extra model call.
+ * The environment's one-sentence reply to a proposal, or null when it never ran; fed back into the
+ * child's trajectory and the post-mortem as LATS §5.2 does.
  */
 export function executionObservation(execution: BranchEvaluation['execution']): string | null {
   if (!execution) return null;
@@ -200,10 +99,7 @@ export function executionObservation(execution: BranchEvaluation['execution']): 
     : `the proposed code ran and FAILED: ${error}`;
 }
 
-/** The measured share of generated checks a branch's code satisfied, or null
- *  when no suite ran. This is LATS's backpropagated numerator
- *  (`passed_test_count / len(tests)`, programming/mcts.py) and the only
- *  within-band signal here that is not a model's opinion. */
+/** Measured share of generated checks passed, or null when no suite ran (LATS's backpropagated numerator). */
 export function checkFraction(execution: BranchEvaluation['execution']): number | null {
   const total = execution?.totalChecks;
   const passed = execution?.passedChecks;
@@ -213,10 +109,7 @@ export function checkFraction(execution: BranchEvaluation['execution']): number 
   return passed / total;
 }
 
-/** Engine messages for source that never became a program. The signatures are
- *  JavaScript-engine phrases; `syntaxerror` also covers interpreters that name
- *  their parse failures that way. Anything unrecognised deliberately falls
- *  through to judging instead of inventing a parse verdict. */
+/** JavaScript-engine parse-failure phrases; anything unrecognised falls through to judging. */
 const PARSE_FAILURE_SIGNATURES = [
   'syntaxerror',
   'unexpected token',
@@ -230,7 +123,6 @@ const PARSE_FAILURE_SIGNATURES = [
   'missing } after',
 ] as const;
 
-/** True when an execution error says the source did not parse. */
 export function isParseFailure(error: string): boolean {
   const text = error.toLowerCase();
 
@@ -238,14 +130,8 @@ export function isParseFailure(error: string): boolean {
 }
 
 /**
- * Cascade stage 0's verdict: did THIS BRANCH's code fail to parse?
- *
- * The judge-written assertion harness shares the branch's parse unit, so a bad
- * assertion snippet fails the whole run with a parse error that is not the
- * branch's fault. When assertions were appended, the code is re-run alone to
- * attribute the failure before the branch is charged with it — one extra
- * sandbox call, only ever on the already-failing path, and never on the path
- * where the branch keeps its judge ensemble.
+ * Cascade stage 0: did this branch's own code fail to parse? With appended assertions the code is
+ * re-run alone so a bad assertion's parse error is not charged to the branch.
  */
 async function codeFailedToParse(
   executor: Executor,
@@ -261,41 +147,18 @@ async function codeFailedToParse(
   return !bare.passed && bare.error !== undefined && isParseFailure(bare.error);
 }
 
-/** How an evaluation's LLM-call budget divides between check generation and the
- *  judge ensemble. */
 export interface JudgeCallBudget {
-  /** Samples the ensemble is actually asked for — the caller's REQUEST after the
-   *  budget clamped it. */
   readonly ensemble: number;
-  /** True when one call goes to generating the check suite before the ensemble. */
   readonly generatesChecks: boolean;
 }
 
 /**
- * Split one evaluation's LLM-call budget — and with it, decide the judge
- * ensemble a branch actually gets.
- *
- * `judgeSamples` and `maxEvalLLMCalls` are not independent knobs. The second is
- * the WHOLE per-evaluation budget, and on a code-bearing branch one of those
- * calls buys the generated check suite, so the ensemble is bounded by what is
- * left. A budget of 1 buys no suite: an unjudged branch is worse than an
- * unchecked one.
- *
- * On shipped defaults (judgeSamples 3, maxEvalLLMCalls 4) a code branch realises
- * `min(3, 4 - 1) = 3` and a prose branch `min(3, 4) = 3` — the clamp already
- * sits flush against the default request, so it binds the instant the request
- * rises. A caller asking for 20 is answered by 3, and until this function
- * existed that happened with no field anywhere carrying the 3.
- *
- * Exported because three seams must agree on the split: the evaluator, which
- * spends the calls; the engine, which discloses the realised ensemble on the
- * run; and the run read model, which states it without re-running the search.
+ * Split one evaluation's LLM-call budget and decide the realised judge ensemble. A code branch spends
+ * one call on the check suite; a budget of 1 buys no suite. Shared by evaluator, engine and read model.
  */
 export function judgeCallBudget(opts: {
   judgeSamples: number;
   maxLLMCalls: number;
-  /** True when the branch offers code this executor can run, so its evaluation
-   *  spends a call on check generation before the ensemble. */
   offersRunnableCode: boolean;
 }): JudgeCallBudget {
   const budget = Math.max(1, opts.maxLLMCalls);
@@ -312,8 +175,7 @@ export async function evaluateWithMultiModelJudging(
 ): Promise<BranchEvaluation> {
   const trajectory = opts.trajectory.trim();
 
-  // A branch that produced nothing (failed exploration) is dead — spend no
-  // judge calls on it.
+  // A branch that produced nothing is dead; spend no judge calls on it.
   if (trajectory.length === 0) {
     return { score: 0, grounding: 'judge', judgeSamplesAttempted: 0, judgeSamplesUsed: 0 };
   }
@@ -326,15 +188,12 @@ export async function evaluateWithMultiModelJudging(
     ? null
     : readProposalCode(trajectory, opts.executor.languages);
 
-  // Decided before a call is spent, and reported on every return below, so the
-  // clamp cannot bind in silence.
   const { ensemble: k, generatesChecks } = judgeCallBudget({
     judgeSamples: opts.judgeSamples ?? defaults.judgeSamples,
     maxLLMCalls,
     offersRunnableCode: proposal?.kind === 'runnable',
   });
 
-  // Layer 1: execution grounding.
   let execution: BranchEvaluation['execution'];
 
   if (proposal?.kind === 'runnable') {
@@ -347,8 +206,7 @@ export async function evaluateWithMultiModelJudging(
 
     execution = await runForVerdict(opts.executor, code, checks, language);
 
-    // Cascade stage 0: source that never parsed has decided its own verdict.
-    // Spend no judge calls placing it inside a band it cannot leave.
+    // Cascade stage 0: unparsed source has decided its verdict; skip the judge.
     if (await codeFailedToParse(opts.executor, execution, code, language)) {
       return {
         score: FAIL_FLOOR, grounding: 'execution', execution,
@@ -357,7 +215,6 @@ export async function evaluateWithMultiModelJudging(
     }
   }
 
-  // Layer 2: judge ensemble (median, parse-failure-robust).
   const prompt = buildJudgePrompt(opts.task, trajectory, opts.siblings ?? [], execution);
 
   const samples = await Promise.all(
@@ -368,16 +225,8 @@ export async function evaluateWithMultiModelJudging(
   const judgeScore = parsed.length > 0 ? median(parsed) : null;
 
   if (execution) {
-    // Inside the fail band the MEASURED share of checks that held positions the
-    // branch, and the judge is not consulted for it. That share is LATS's
-    // backpropagated reward, and it is the difference between a search with a
-    // gradient and one without: score every failing branch at
-    // FAIL_FLOOR + FAIL_SPAN·judge and "three of four aspects correct" and
-    // "nothing works" are separated only by judge noise — which is the binary
-    // reward this repo already measured degenerates a search toward best-of-n
-    // (test-utils/src/eval-outcome.ts). The judge still positions inside the
-    // PASS band, where the fraction is 1 by construction and carries nothing,
-    // and inside the fail band only when no suite ran.
+    // In the fail band the measured check share positions the branch, not the judge; the judge places
+    // within the pass band, and within the fail band only when no suite ran (test-utils/src/eval-outcome.ts).
     const fraction = checkFraction(execution);
 
     const score = execution.passed
@@ -400,9 +249,7 @@ export async function evaluateWithMultiModelJudging(
     };
   }
 
-  // Prose-only: reduced confidence, and capped at the FAIL ceiling when a
-  // sibling actually attempted code (WP-A5) — dodging execution must not
-  // outscore attempting-and-failing.
+  // Prose-only: reduced confidence, capped at the fail ceiling when a sibling attempted code (WP-A5).
   const proseCap = opts.siblingsProducedCode ? FAIL_CEIL : PROSE_CONFIDENCE;
 
   return {
@@ -413,34 +260,12 @@ export async function evaluateWithMultiModelJudging(
   };
 }
 
-/**
- * How many independent checks the judge is asked for.
- *
- * Four, matching LATS's programming setup ("we set the number of generated
- * tests at 4", §5.2). Each check costs one executor call and no model call, so
- * this bounds sandbox round-trips per branch, not spend.
- */
+/** Independent checks requested per branch, matching LATS §5.2; bounds executor calls, not spend. */
 export const MAX_GENERATED_CHECKS = 4;
 
 /**
- * Ask the judge model for INDEPENDENT checks that exercise the code against the
- * task — one fence per check, so each can be run and scored on its own.
- *
- * Independence is the whole point. A single blob throws on its first failing
- * assertion, which makes every partial success indistinguishable from total
- * failure and leaves a judge as the only within-band signal. Separate checks
- * give a MEASURED fraction, which is what LATS backpropagates
- * (`passed_test_count / len(tests)`) and what this repo's own outcome contract
- * demands: a pass/fail bit gives a search nothing to climb
- * (test-utils/src/eval-outcome.ts).
- *
- * Empty when the judge declines, emits no usable fence, or answers
- * UNVERIFIABLE — generation is best-effort, never a hard dependency. A judge
- * that FAILS is a fault and propagates: a branch must not be run bare because
- * the provider is broken.
- *
- * Exported so the convergence tie-break (mcts/test-selection.ts) generates ONE
- * suite reused across the near-tied candidates.
+ * Ask the judge for independent checks, one fence each, so a measured pass fraction exists. Empty when
+ * the judge declines or answers UNVERIFIABLE; a failing judge call propagates. Shared with test-selection.ts.
  */
 export async function generateAssertionSuite(
   judge: LLM,
@@ -482,22 +307,8 @@ UNVERIFIABLE`;
 }
 
 /**
- * Run the branch's code against each generated check SEPARATELY and report how
- * many held.
- *
- * One execution per check rather than one execution of all of them: appended
- * together, the first throw hides every later check, so "one of four aspects is
- * wrong" and "nothing works" produce the identical observation. Executor calls
- * cost no tokens, so the fraction is bought with sandbox round-trips.
- *
- * With no checks the run is bare — syntax and runtime errors are still grounded,
- * but there is no fraction and the caller falls back to the judge for position
- * inside the band.
- *
- * Executors surface thrown errors and non-zero interpreter exits through
- * ExecuteResult.error; a throwing executor counts as a failed run, consistent
- * with "failures never look neutral". Known limit: a top-level `return` inside
- * the proposed code skips the appended check.
+ * Run the branch's code against each check separately and count passes. With no checks the run is bare.
+ * A throwing executor counts as failed. Known limit: a top-level `return` skips the appended check.
  */
 export async function runForVerdict(
   executor: Executor,
@@ -534,15 +345,11 @@ export async function runForVerdict(
     assertionsGenerated: true,
   };
 
-  // The first failure, not a join: the judge prompt and the child's inherited
-  // observation both want one legible cause, and four copies of the same
-  // TypeError is what a whole-suite join produces when the code is simply broken.
   if (failures[0] !== undefined) verdict.error = failures[0];
 
   return verdict;
 }
 
-/** The run's verdict as the judge reads it, or nothing when the code never ran. */
 function executionEvidence(execution: BranchEvaluation['execution']): string {
   if (!execution) return '';
 
@@ -587,11 +394,7 @@ ${jsonObjectOnlyInstruction()}`;
 
 const JudgeScoreSchema = v.object({ score: v.union([v.number(), v.string()]) });
 
-/** One judge sample. A sample whose text is not a score object is DROPPED
- *  (null), never scored 0 — a single flaky parse must not crater the ensemble
- *  median. The call itself is awaited to settlement with no elapsed bound; a
- *  judge that FAILS is a fault and propagates: the engine reports it as
- *  branch-failed. */
+/** One judge sample; unparseable text is dropped (null), never scored 0. A failed call propagates. */
 async function sampleJudgeScore(judge: LLM, prompt: string): Promise<number | null> {
   const text = await judge.complete(prompt);
   const json = tolerate(() => extractJsonObject(text), 'malformed-input');
@@ -605,8 +408,7 @@ async function sampleJudgeScore(judge: LLM, prompt: string): Promise<number | nu
   return Number.isFinite(score) ? Math.min(1, Math.max(0, score)) : null;
 }
 
-/** Median of a non-empty list. Shared with the heads k-sample merge
- *  (heads/controller.ts) so both ensembles aggregate identically. */
+/** Median of a non-empty list; shared with heads/controller.ts so both ensembles aggregate identically. */
 export function median(values: number[]): number {
   const sorted = [...values].sort((a, b) => a - b);
   const mid = Math.floor(sorted.length / 2);

@@ -1,55 +1,12 @@
-// AgentOrchestrator — the backend-agnostic per-turn agent logic both backends
-// share. It owns the per-turn accounting (TurnAccumulator), the session-level
-// evolution cadence, and the event→turn reactor — parameterized over the
-// EvolutionEngine + EventLog (from AgentRuntime's storage) and a BackendHost.
+// Backend-agnostic per-turn agent logic: turn accounting, evolution cadence, and the event→turn reactor.
 //
-// Both backend sessions delegate their loop hooks here. Platform sockets,
-// durable fibers and the control plane stay in the adapters.
-//
-// ── The evolution exit contract ──────────────────────────────────────────
-//
-// Evolution never blocks a turn mid-flight: every dispatch is detached. But a
-// process that exits kills whatever it detached, so `end()` has to decide what
-// to wait for. Two lanes, with different answers — plus the IN-EPISODE clock,
-// which is in neither because it makes no model call: the craft loop (`craft`,
-// orchestrator/craft-cycle.ts) and the recovery findings (`recordRecovery`,
-// evolution/recovery.ts) each write one synchronous row as a tool call
-// settles, so there is nothing to detach and nothing to join. That clock is
-// the only evolution that ticks inside a single long autonomous turn.
-//
-//   TURN LANE — the outcome review (classifier → reflection/extraction/lesson).
-//     Seconds to minutes. `settleEvolution()` JOINS this lane with no elapsed
-//     bound: a host that runs it is a host that can afford it, and evolution
-//     work is never abandoned by the clock (owner ruling, 2026-08).
-//     A `oneShot` host does not run it at all. Joining it was the largest item
-//     on that process's exit tail — 64.9s of `evolution.settled
-//     waitedOn:"Turn review"` against a 27.4s turn (TB2.1, 2026-08-20) — so the
-//     turn writes one durable row (evolution/session-window.ts) carrying exactly
-//     `reviewTurn`'s two inputs, and the next host that can afford the work
-//     drains it through the SAME code path at session open
-//     (`runDeferredTurnReviews`). Deferred, never dropped: same call, same
-//     inputs, same `turn_outcomes` row, on somebody else's wall clock.
-//
-//   CADENCE LANE — the whole session/lifetime chain (queued scaffold trials →
-//     session reflection → scaffold proposal → replay eval → craft
-//     consolidation → lifetime MCTS). Minutes to tens of minutes.
-//     `settleEvolution()` does NOT join it. It is only ever STARTED by a host
-//     that can afford to finish it: a long-lived CLI session, the Durable
-//     Object (which holds itself open with keepAlive), or the local scheduler
-//     daemon. A `oneShot` host — one `kinu exec` process per task — never
-//     starts it at all, so it can never land on that process's wall clock.
-//     The scaffold shadow trial is here, not on the turn lane: a candidate
-//     rollout is a whole extra turn plus two judge calls, and charging that to
-//     the process that just answered the user is what "resolving the promotion
-//     gate inline" meant. The turn writes one queue row (scaffold/shadow.ts)
-//     and is done; the queue is durable, so a host that exits first loses
-//     nothing but time.
-//
-// What makes deferral safe is that the session window is DURABLE and is now
-// closed only AFTER the pass it fed settles (`CompletedTurnStore.claim`). A
-// process that dies mid-pass leaves its turns in the window, and the next host
-// that can afford the work picks up the same turns. Nothing is lost by not
-// waiting — which is exactly what the durable window is for.
+// Evolution exit contract. Every dispatch is detached; `end()` decides what to wait for.
+//   Turn lane (outcome review): `settleEvolution()` joins it with no elapsed bound (owner ruling, 2026-08).
+//     A `oneShot` host defers it as a durable row drained by `runDeferredTurnReviews` at the next session open.
+//   Cadence lane (session/lifetime chain, incl. scaffold shadow trials): never joined; only started by a host
+//     that can afford to finish it. Safe because the session window closes only after its pass settles
+//     (`CompletedTurnStore.claim`).
+// The in-episode clock (`craft`, `recordRecovery`) writes synchronous rows and needs no join.
 
 import type { ModelMessage } from 'ai';
 import { TurnAccumulator, type TurnSinks } from './turn-accumulator';
@@ -78,28 +35,12 @@ import type { JsonObject } from '../utils/json';
 import { diagnostics, toKinuError } from '../obs/index';
 
 /**
- * Whether an arriving user message is a genuine conversational follow-up —
- * the user read the previous answer and then replied — or an independent task
- * invocation that merely happens to be the next thing this workspace saw.
- *
- * `kinu exec` / `kinu run` are one process per task: the process that
- * streamed the previous answer has already exited, and the next invocation's
- * prompt was written without seeing it. Grading a turn from such a prompt is
- * what made EVERY headless turn read as `accepted` — the classifier counts
- * "asked something new that presumes it worked" as acceptance, so an unrelated
- * next task fabricated a positive label. Silence is not success.
- *
- * A one-shot host never parks its own turns awaiting a follow-up at all (see
- * `recordTurn`); this type still exists because a turn parked by an EARLIER
- * conversational host can be picked up by a later one-shot process, and that
- * process must not read its own task prompt as the reply.
+ * Whether an arriving user message is a genuine follow-up or an independent task invocation.
+ * An independent task prompt must never grade the previous turn as accepted.
  */
 export type TurnContinuity = 'conversation' | 'independent_task';
 
-/** Turns between session-level evolution passes — the cadence the durable
- *  window is measured against. Not an option: nothing a host can read (config
- *  key, flag, profile field) chooses it, so a per-host knob would be a second
- *  copy of this number and nothing more. */
+/** Turns between session-level evolution passes; deliberately not a host option. */
 const DEFAULT_SESSION_REFLECTION_INTERVAL = 5;
 
 export interface AgentOrchestratorDeps {
@@ -123,58 +64,27 @@ export interface AgentOrchestratorDeps {
     | 'hasAdvisorNoteForTurn'
   >;
   eventLog: EventLog;
-  /** Per-turn accounting side-effects (activity log, durable run-event recorder). */
   sinks?: TurnSinks;
-  /** The actor's mission budget governor. Absent = this backend wires no
-   *  governor at all; present-but-unscoped is the normal uncapped turn. */
+  /** Absent: no governor wired. Present-but-unscoped is the normal uncapped turn. */
   budget?: MissionGovernor;
-  /** This host runs ONE task turn and exits (`kinu exec` / `kinu run`),
-   *  so it cannot finish the cadence lane and never STARTS it — see the exit
-   *  contract above. Its window stays open and the local scheduler daemon runs
-   *  the pass. Purely about what this PROCESS can afford; whether a turn can be
-   *  graded from a follow-up is a separate, per-turn question (TurnContinuity),
-   *  because the Durable Object can afford the pass for a one-shot request. */
+  /** This process runs one task turn and exits, so it never starts the cadence lane (see exit contract).
+   *  Independent of {@link TurnContinuity}. */
   oneShot?: boolean;
   /**
-   * The continual-refinement lane, as ONE step this cadence drives.
-   *
-   * A thunk rather than the lane's deps, because those deps are per-backend
-   * objects (a control plane, a facts store, a temporary-agent port, an
-   * approval authority) and this orchestrator has no business holding any of
-   * them. What it owns is WHEN: the same off-turn pass that drains the
-   * promotion gate's trials, so a refinement never lengthens a user's turn and
-   * both backends reach the lane through one drive site rather than two that
-   * eventually disagree.
-   *
-   * Absent = this host drives no refinement lane. The requests stay durable and
-   * the next host that wires one picks them up.
+   * The continual-refinement lane, driven off-turn beside the shadow-trial drain so it never lengthens a turn.
+   * Absent: requests stay durable for the next host that wires one.
    */
   refinementLane?: () => Promise<void>;
 }
 
 export class AgentOrchestrator {
-  /** Per-turn accounting — tool calls, steps, token usage, errors. */
   readonly acc: TurnAccumulator;
-  /** The ONE way anything reaches the agent — the user's messages, hub
-   *  drains, background-job wakes, overflow retries, take picks, MCP tasks —
-   *  at the ONE time anything reaches it: its next step. Producers state
-   *  intent only. */
   readonly inbox: Inbox;
-  /** Per-turn mechanical steering — repeat, repeated failure, no progress.
-   *  Observed through {@link turnExtension} and handed to closeTurnRun for the
-   *  durable `turn_steering` rows. */
+  /** Per-turn mechanical steering; feeds the durable `turn_steering` rows. */
   readonly steering = new TurnSteering();
-  /** The IN-EPISODE evolution clock: crafted tools scored by execution as the
-   *  episode runs, off the same tool-result hook the steering rides. The only
-   *  evolution timescale that ticks inside one long autonomous turn. */
   readonly craft: CraftCycle;
-  /** The orchestrator's per-turn extension, registered on the turn's
-   *  ExtensionHost by both backends: the steering object's and the craft
-   *  cycle's observation hooks (the craft cycle needs only the result, which
-   *  carries its call's own args), plus the ONE mid-turn inbox drain every
-   *  producer feeds. The steer is decided against the step being prepared and
-   *  handed straight to it, so it rides the step it was decided on and dies
-   *  with it. */
+  /** Registered on each turn's ExtensionHost by both backends. The steer is decided against the step being
+   *  prepared and handed straight to it, so it dies with that step. */
   readonly turnExtension: KinuExtension = {
     name: 'kinu.inbox',
     onToolCall: (ctx) => this.steering.onToolCall(ctx),
@@ -185,52 +95,31 @@ export class AgentOrchestrator {
       if (recovery && this.observeRecoveries) this.recordRecovery(recovery);
     },
     prepareStep: (ctx: PrepareStepContext): Promise<ModelMessage[] | undefined> => {
-      // The turn's file ledger is the other half of the progress trigger's
-      // evidence — what a codemode program actually changed, which no
-      // tool-call signature can show. Both live on this object, per turn.
+      // The file ledger shows what a codemode program changed, which no tool-call signature can.
       const steer = this.steering.steerFor(ctx, this.acc.files.progress);
 
       return this.inbox.prepareStep(ctx, steer ? [steer] : []);
     },
   };
-  /** The turn's execution recoveries — failure streaks the steering ledger saw
-   *  broken by a changed call that ran clean (evolution/recovery.ts). Recorded
-   *  through the engine at the MOMENT of observation, because an episode can
-   *  outlive this instance (DO eviction, continuation turns) and a finding
-   *  held for turn end dies with the process that held it; collected here only
-   *  for the turn's `execution_recovery` run event. */
+  /** Recorded through the engine at observation time, since an episode can outlive this instance;
+   *  collected here only for the turn's `execution_recovery` run event. */
   private turnRecoveries: RecoveryFinding[] = [];
-  /** Decided once per turn, exactly like the craft cycle's reset: a
-   *  `--no-auto-evolve` run records no evolution state, and a recovery finding
-   *  is evolution state. */
+  /** Decided once per turn: a `--no-auto-evolve` run records no recovery findings. */
   private observeRecoveries = false;
   private turnEvolutionEnabled = false;
   private activeWorkMode: WorkMode = 'build';
-  /** The live turn's mission scope, captured in beginTurn for the budget. */
   private activeMissions: readonly string[] = [];
   private readonly reflectionInterval = DEFAULT_SESSION_REFLECTION_INTERVAL;
-  /** Debounces ingress-triggered drains so an event burst → ONE turn. */
   private readonly drains: DrainScheduler;
-  /** TURN LANE: turn-level evolution this instance dispatched and has not yet
-   *  settled, by label. Detached so it never blocks a turn; tracked so a
-   *  process about to exit can join it (settleEvolution, with no elapsed
-   *  bound). */
+  /** Turn lane: dispatched, unsettled turn-level evolution, joined by settleEvolution. */
   private readonly inFlight = new Map<Promise<void>, string>();
-  /** CADENCE LANE: the session-evolution pass this instance is running, or
-   *  null. At most one at a time — a second would re-run the same window,
-   *  because `claim()` retires nothing until the pass settles. */
+  /** Cadence lane latch: at most one pass, since `claim()` retires nothing until the pass settles. */
   private sessionEvolution: Promise<void> | null = null;
-  /** CADENCE LANE: every pass dispatched at turn end. This is an observer, not
-   *  the claim latch above: a no-op pass must never hide a window that fills
-   *  while it runs, but its rejection still needs a process owner. It is
-   *  deliberately not joined by `settleEvolution`; its rows are durable and a
-   *  one-shot host must not inherit a lifetime cycle's clock. */
+  /** Cadence lane observer, not a latch: a no-op pass must not hide a window that fills meanwhile.
+   *  Deliberately not joined by `settleEvolution`. */
   private cadencePasses: Promise<void> = Promise.resolve();
-  /** CADENCE LANE: the promotion gate's trial drain, or null. Its own latch,
-   *  separate from the window pass: two drains would run the same queued
-   *  trials twice and record each verdict twice, and folding it into the
-   *  window's latch would let a no-op drain hide a window that had just
-   *  filled. */
+  /** Cadence lane: trial-drain latch, separate from the window pass so trials never run twice
+   *  and a no-op drain never hides a filled window. */
   private shadowTrials: Promise<void> | null = null;
 
   constructor(private readonly deps: AgentOrchestratorDeps, steers?: UserSteerDeps) {
@@ -244,35 +133,22 @@ export class AgentOrchestrator {
     );
   }
 
-  /** The window and the turn awaiting its review — durable, because neither
-   *  backend's instance outlives them (`kinu exec` is one process per turn;
-   *  a Durable Object is evicted between requests). */
+  /** Durable: neither backend's instance outlives the window. */
   private get window() {
     return this.deps.engine.sessionWindow;
   }
 
-  /** Turns buffered in the open evolution window — the turn index stamped on
-   *  run events. Zero while auto-evolution is off: nothing is buffered then,
-   *  because a turn that feeds no evolution leaves no evolution state. */
+  /** Turns buffered in the open window; zero while auto-evolution is off. */
   get sessionTurnIndex(): number {
     return this.window.size();
   }
 
-  /** Reset per-turn accounting at the start of a turn, from the turn's own
-   *  metadata: the mission scope its model calls and spawns debit (absent on
-   *  the chat path and every unbudgeted wake — those turns are uncapped), and
-   *  the card of the signal that started it, whose "shown to the agent" moment
-   *  is exactly here. `continuation` marks a turn that continues the previous
-   *  one (Think auto-continue / recovery): its signals ride in again rather
-   *  than being dropped as answered. */
+  /** Reset per-turn accounting from the turn's metadata. `continuation` re-admits the previous turn's signals. */
   beginTurn(now: number, metadata?: JsonObject, continuation = false): void {
     this.deps.engine.recoverInterruptedWork();
     this.acc.reset(now);
     this.steering.reset();
-    // Decided once, here, for the whole turn: a `--no-auto-evolve` run records
-    // no evolution state at all, and a crafted tool's execution score is
-    // evolution state — so a bench arm with evolution off measures the
-    // in-episode loop's absence along with the rest of it.
+    // Decided once per turn: with evolution off, crafted-tool scoring is off too.
     const workMode = workModeForTurnMetadata(metadata);
     this.activeWorkMode = workMode;
     this.activeMissions = readMissionLabels(metadata);
@@ -285,8 +161,7 @@ export class AgentOrchestrator {
     this.deps.budget?.activate(this.activeMissions);
   }
 
-  /** Role resolution can further restrict a Build request after accounting opens.
-   * Disable resource-changing improvement lanes without resetting that turn's accounting. */
+  /** Restrict a Build turn to plan after accounting opens: closes improvement lanes without resetting accounting. */
   restrictTurnWorkMode(mode: WorkMode): void {
     if (mode !== 'plan' || this.activeWorkMode === 'plan') return;
     this.activeWorkMode = 'plan';
@@ -295,16 +170,12 @@ export class AgentOrchestrator {
     this.observeRecoveries = false;
   }
 
-  /** One recovery observed: hand it to the engine's ledger now (durable
-   *  mid-episode) and keep it for the turn's run event. */
   private recordRecovery(finding: RecoveryFinding): void {
     this.turnRecoveries.push(finding);
     this.deps.engine.recordRecovery(finding);
   }
 
-  /** The turn's in-episode recovery record, or null when no streak broke — no
-   *  row, `turn_end` being the denominator, exactly as the steering and craft
-   *  records read. */
+  /** Null when no streak broke, so no row is written. */
   recoverySnapshot(): ExecutionRecoveryRecord | null {
     if (this.turnRecoveries.length === 0) return null;
 
@@ -315,22 +186,8 @@ export class AgentOrchestrator {
   }
 
   /**
-   * A new USER message arrived. Dispatch the detached outcome review
-   * (engine.reviewTurn: trivial pre-filter, one cheap LLM classification,
-   * turn_outcomes row + downstream evolution). Backends call this at user-turn
-   * start; programmatic turns must not.
-   *
-   * `continuity` is required, and every caller must answer it honestly,
-   * because it decides whether the message is EVIDENCE. Only a
-   * `'conversation'` follow-up is a verdict on the previous turn. An
-   * `'independent_task'` message still triggers the review — an error on the
-   * previous turn is real machine signal and still earns a provisional lesson
-   * — but with NO follow-up, which is the engine's "no user signal exists"
-   * path: no `turn_outcomes` row is written at all. Honest absence, never a
-   * fabricated `accepted`.
-   *
-   * The previous turn may have been completed by an earlier process — that is
-   * the whole point of the durable window.
+   * A new user message arrived: dispatch the previous turn's detached outcome review. Programmatic turns must
+   * not call this. Only a `'conversation'` message counts as follow-up evidence; otherwise no follow-up is passed.
    */
   observeUserTurn(userText: string, continuity: TurnContinuity): void {
     if (!this.turnEvolutionEnabled) return;
@@ -342,33 +199,9 @@ export class AgentOrchestrator {
   }
 
   /**
-   * Buffer the turn in the durable window, fire session evolution when the
-   * window reaches the interval, and review immediately every turn that has no
-   * conversational follow-up coming. All detached — never blocks the loop.
-   * Does NOT drain events (the backend calls drainPendingEvents() separately so
-   * it controls ordering vs its own platform-specific post-turn work).
-   *
-   * Turn-level evolution is outcome-driven, and this is the ONE place that
-   * decides where each turn's verdict can come from:
-   *   • a `'conversation'` user turn waits for the user's next message;
-   *   • a programmatic turn (reactor / job wake) has no user behind it;
-   *   • an `'independent_task'` turn has no follow-up either — the next
-   *     `kinu exec` invocation is a different task written by a caller who
-   *     never saw this answer.
-   * The last two are reviewed here and now, on the execution signal the turn
-   * itself carries (errors, tool outcomes), and are never parked awaiting a
-   * "follow-up" that would be a different task's prompt.
-   *
-   * With auto-evolution off nothing is recorded at all: no window row, no
-   * review, no cadence. That is what the flag says, and it is what keeps a
-   * `--no-auto-evolve` run from leaving state for some later evolution-enabled
-   * host (the scheduler daemon, a chat session) to evolve on its behalf.
-   *
-   * `opts.id` names the durable identity of the turn being recorded, for a
-   * backend that OWES this recording and may therefore run it again: with it,
-   * the window append is idempotent and a replay leaves one row and one
-   * cadence tick instead of two. A host whose recording nothing can replay
-   * passes none.
+   * Buffer the turn in the durable window, run due session evolution, and queue a review for any turn with no
+   * conversational follow-up coming. Detached; does not drain events. Records nothing with auto-evolution off.
+   * `opts.id` makes the append idempotent for a backend that may replay this recording.
    */
   recordTurn(
     turn: CompletedTurn,
@@ -376,59 +209,33 @@ export class AgentOrchestrator {
     opts?: {
       readonly id?: string;
       readonly recordedAt?: number;
-      /** Whether the PRODUCING session recorded evolution state. Supplied by a
-       *  caller replaying a recorded turn, and it replaces the ambient gate:
-       *  that gate is this session's, and a recovery's is not the one the turn
-       *  ran under. Same shape as `improvementLanesOpen(status, workMode)` —
-       *  recorded values in, no ambient read. */
+      /** The producing session's evolution gate, replacing the ambient one when replaying a recorded turn. */
       readonly enabled?: boolean;
     },
   ): void {
-    // The RECORDED gate wins when there is one. `turnEvolutionEnabled` is this
-    // session's, set at `beginTurn` from its own engine and mode, and a recovery
-    // is not the session the turn ran under: a turn produced with evolution on
-    // was silently dropped by a host that had it off, and one produced under
-    // `--no-auto-evolve` was written into a window it never earned.
+    // The recorded gate wins: a recovery is not the session the turn ran under.
     if (!(opts?.enabled ?? (this.turnEvolutionEnabled && this.deps.engine.recordsTurns))) return;
     const scoped = this.scopeTurn(turn);
     const awaitsFollowup = turn.origin !== 'programmatic' && continuity === 'conversation';
 
-    // An independent task's arrival proves the parked turn's follow-up can
-    // never come — this prompt was written without reading the answer it
-    // waits on. Its review is still owed, so it demotes to the queue. A
-    // programmatic turn proves nothing about the conversation and leaves the
-    // park alone, and a conversational arrival already claimed the pending
-    // review through observeUserTurn.
+    // An independent task proves the parked follow-up will never come; its review demotes to the queue.
     if (continuity === 'independent_task') {
-      // Bounded by WHEN this turn ended, not by when the recording ran. A replay
-      // arriving after a newer conversational turn parked its review would
-      // otherwise demote a review that did not exist when the task finished.
+      // Bounded by when this turn ended, so a late replay cannot demote a newer parked review.
       this.window.expireAwaitingReviews(
         opts?.recordedAt === undefined ? undefined : { before: opts.recordedAt },
       );
     }
 
-    // The append CARRIES the obligation: a turn with no follow-up coming is
-    // inserted already `queued`, and the durable queued-review lane
-    // (`settleEvolution` → `takeQueuedReviews`, with `resetStaleClaims` for a
-    // dead claimer) is what runs it. NOTHING DISPATCHES INLINE HERE: a dispatch
-    // after this insert loses the review to an eviction between the two, and
-    // runs it twice when the recording is replayed. One durable write, one
-    // claimant.
+    // The append carries the review obligation; never dispatch inline here, or an eviction loses it and a
+    // replay runs it twice.
     const appendOpts = { awaitsFollowup, id: opts?.id };
     this.window.append(
       scoped,
       opts?.recordedAt === undefined ? appendOpts : { ...appendOpts, now: opts.recordedAt },
     );
 
-    // Promptness on TOP of durability, never instead of it. The obligation is
-    // already on the row, so this drain is a liveness choice: it runs the review
-    // now instead of at the next session open, and a crash costs only the
-    // promptness. The queue's own claim is what keeps it exactly-once, so a
-    // replay of the recording cannot run the review twice.
-    //
-    // A one-shot host is about to exit — it must not open work it cannot finish.
-    // The window keeps the turns; the next capable host runs the pass.
+    // Promptness on top of durability; the queue's claim keeps it exactly-once.
+    // A one-shot host must not open work it cannot finish.
     if (!this.deps.oneShot) {
       if (!awaitsFollowup) {
         this.detach(this.deps.engine.runDeferredTurnReviews().then(() => undefined), 'Turn review');
@@ -451,55 +258,22 @@ export class AgentOrchestrator {
   }
 
   /**
-   * Stamp the mission the turn ran under, so its review debits that mission
-   * wherever and whenever the review actually runs.
-   *
-   * Read here because here is the last moment the answer is knowable: the
-   * governor's active scope belongs to the turn that just ended, and the next
-   * `beginTurn` replaces it. A review dispatched at the next user message, or
-   * drained by a different process a day later, has no way back to it.
-   *
-   * An unscoped turn is returned untouched — no field, no empty array. Absent
-   * means ungoverned, and a review must never invent a label.
+   * Stamp the turn's mission scope now, the last moment it is knowable (the next `beginTurn` replaces it).
+   * An unscoped turn is returned untouched: absent means ungoverned.
    */
   private scopeTurn(turn: CompletedTurn): CompletedTurn {
-    // A turn that already carries labels keeps them: a REPLAY hands back the
-    // scope captured when the turn ended, and this activation's governor — which
-    // has no active scope at all on a cold start — must not overwrite it with
-    // nothing.
+    // A replay already carries the scope captured at turn end; a cold-start governor must not overwrite it.
     if (turn.missionLabels !== undefined) return turn;
     const labels = this.deps.budget?.scope ?? [];
 
     return labels.length === 0 ? turn : { ...turn, missionLabels: [...labels] };
   }
 
-  /**
-   * The turn with its mission scope stamped, for a caller that must RECORD the
-   * turn now and replay the recording later.
-   *
-   * Read here because here is the last moment the answer is knowable: the
-   * governor's active scope belongs to the turn that just ended, and the next
-   * `beginTurn` replaces it. A recording replayed a day later by another process
-   * has no way back to it, so it has to travel on the turn.
-   */
   scopedTurn(turn: CompletedTurn): CompletedTurn {
     return this.scopeTurn(turn);
   }
 
-  /**
-   * The TURN LANE's one decision point: run this review now, or defer it.
-   *
-   * An interactive session and the Durable Object detach it and join it at
-   * exit — they outlive the call, so paying for it inline costs nobody
-   * anything. A one-shot host cannot: it is about to exit, so `settleEvolution`
-   * would charge the whole classifier→reflection→extraction chain to the
-   * process that has already answered the user. It writes one durable row
-   * instead and the next host that can afford the work runs it, which is
-   * exactly what the cadence lane's shadow-trial queue already does.
-   *
-   * The mode is structural: `deps.oneShot`, fixed at construction from the
-   * host's InvocationSurface, never inferred inside the review path.
-   */
+  /** Turn-lane decision point: a `oneShot` host defers the review as a durable row; others detach and join at exit. */
   private dispatchReview(turn: CompletedTurn, followup: string | null, storedRowId?: string): void {
     if (this.deps.oneShot) {
       this.deps.engine.deferTurnReview(turn, followup, { storedRowId });
@@ -511,18 +285,8 @@ export class AgentOrchestrator {
   }
 
   /**
-   * Run the reviews one-shot hosts deferred — the re-driver, called at session
-   * open by the hosts that can afford the work (the interactive client's
-   * connect, the scheduler daemon's tick), alongside the interrupted-job
-   * recovery that runs there for the same reason.
-   *
-   * A one-shot host does NOT re-drive: draining at its startup would move the
-   * cost from one task's exit to the next task's start, which is not a saving.
-   * That is what the queue's own ceiling is for — see
-   * MAX_QUEUED_TURN_REVIEWS.
-   *
-   * Never rejects: the engine absorbs each review's failure and leaves that
-   * row for the next open.
+   * Re-drive reviews one-shot hosts deferred, at session open on hosts that can afford it. One-shot hosts do not
+   * re-drive (see MAX_QUEUED_TURN_REVIEWS). Never rejects.
    */
   async runDeferredTurnReviews(): Promise<DeferredReviewDrain> {
     if (this.deps.oneShot) return { reviewed: 0, refused: [] };
@@ -531,21 +295,9 @@ export class AgentOrchestrator {
   }
 
   /**
-   * The CADENCE LANE: the promotion gate's queued shadow trials, then the
-   * session/lifetime evolution chain when the durable window has reached the
-   * interval — closing the window only once that chain has settled, so a host
-   * that dies mid-pass carries the same turns forward instead of consuming
-   * them for nothing.
-   *
-   * Returns the running pass, so the hosts that OWN this work — the Durable
-   * Object under keepAlive, a long-lived CLI session, and the local scheduler
-   * daemon — can await it. `recordTurn` ignores the result: the pass runs
-   * alongside the live conversation, never in front of it. Never rejects.
-   *
-   * The window is claimed BEFORE any await. `claim()` does not mark its rows —
-   * they are retired only by `settle()`, once the pass has actually run — so
-   * the one thing keeping a second pass off the same window is taking it in a
-   * single event-loop tick, exactly as the event drain takes its batch.
+   * Cadence lane: shadow trials, then the session/lifetime chain once the window reaches the interval.
+   * The window is closed only after the chain settles. Never rejects. The window is claimed before any await:
+   * `claim()` marks nothing, so a single tick is what keeps a second pass off it.
    */
   runDueSessionEvolution(): Promise<void> {
     this.deps.engine.recoverInterruptedWork();
@@ -558,8 +310,7 @@ export class AgentOrchestrator {
 
     let pass = this.runCadencePass(claimed);
 
-    // Only a pass that CLAIMED a window latches. A drain-only pass must not,
-    // or it would hide a window that filled while it ran.
+    // Only a pass that claimed a window latches, or it would hide a window that filled while it ran.
     if (claimed) {
       pass = pass.finally(() => { this.sessionEvolution = null; });
       this.sessionEvolution = pass;
@@ -569,14 +320,8 @@ export class AgentOrchestrator {
   }
 
   /**
-   * The pass itself. Trials first, because the window pass may want to propose
-   * a new scaffold and the engine refuses to while one is still pending.
-   *
-   * The refinement lane runs LAST, and after `claimed.settle()` is not an
-   * option: it is driven whether or not a window was claimed, because its
-   * trigger is durable evolution debt rather than this session's window, and a
-   * host that reaches the cadence with nothing claimed is exactly the host that
-   * can afford it.
+   * Trials first: the engine refuses to propose a scaffold while one is pending. The refinement lane runs last,
+   * whether or not a window was claimed; its trigger is durable debt.
    */
   private async runCadencePass(claimed: ClaimedWindow | null): Promise<void> {
     await this.drainDueShadowTrials();
@@ -596,19 +341,14 @@ export class AgentOrchestrator {
         );
       }
 
-      // Settled either way: retrying the same window forever on a persistent
-      // failure would be a livelock, and every step of the chain already absorbs
-      // its own errors. Carry-forward is for a host that DIED, which never
-      // reaches here at all.
+      // Settled either way: retrying a persistently failing window would livelock. Carry-forward is for a dead host.
       claimed.settle();
     }
 
     await this.drainRefinementLane();
   }
 
-  /** The refinement lane, at most one step at a time. Its own failure is
-   *  absorbed here for the same reason the session pass's is: the request rows
-   *  are durable, so a failed step is a step the next cadence re-drives. */
+  /** At most one step; failures are absorbed since the request rows are durable. */
   private async drainRefinementLane(): Promise<void> {
     const lane = this.deps.refinementLane;
 
@@ -624,7 +364,6 @@ export class AgentOrchestrator {
     }
   }
 
-  /** The promotion gate's queued trials, at most one drain at a time. */
   private drainDueShadowTrials(): Promise<void> {
     if (this.shadowTrials) return this.shadowTrials;
 
@@ -637,28 +376,16 @@ export class AgentOrchestrator {
   }
 
   /**
-   * Wait for the TURN LANE this instance dispatched — the outcome review and
-   * the sampled shadow eval — with NO elapsed bound. Evolution makes LLM calls
-   * that outlive a turn, so a process about to exit must wait or the work is
-   * simply killed, which is what makes a headless run produce no evolution at
-   * all. A host that joins is a host that chose to run the lane; abandoning
-   * honest work because it takes long would only relabel the exit-tail
-   * defect. Work still in flight when this returns never happens: there is no
-   * such path here.
-   *
-   * The cadence lane is deliberately NOT joined here (see the exit contract in
-   * the module header). Neither window needs flushing: both are durable.
+   * Join the turn lane with no elapsed bound; unjoined work is killed at process exit.
+   * The cadence lane is deliberately not joined (see module header).
    */
   async settleEvolution(): Promise<void> {
     const started = Date.now();
-    // Named on the SUCCESS path too: an exit tail is silent exactly when it is
-    // slow, and 100-600s of unattributed post-answer wall has been chased
-    // across environments twice (TB2.1, 2026-08-20).
+    // Named on the success path too: a slow exit tail is otherwise silent.
     const waitedOn = [...new Set(this.inFlight.values())];
 
     while (this.inFlight.size > 0) {
-      // A lap over one snapshot; work dispatched by settled work lands in the
-      // map during the await and is joined by the next lap.
+      // Work dispatched during the await is joined by the next lap.
       await Promise.all(this.inFlight.keys());
     }
 
@@ -669,13 +396,7 @@ export class AgentOrchestrator {
     }
   }
 
-  /**
-   * Register post-turn evolution work the backend owns but this orchestrator
-   * must still join — the sampled scaffold shadow eval is the one case. It is
-   * detached like the rest (never blocks the loop) and joins the TURN LANE, so
-   * a process that exits right after a turn does not kill the evaluation that
-   * would have resolved a pending scaffold.
-   */
+  /** Join backend-owned post-turn evolution (the sampled scaffold shadow eval) to the turn lane. */
   track(work: Promise<void>, label: string): void {
     this.detach(work, label);
   }
@@ -698,31 +419,18 @@ export class AgentOrchestrator {
     this.inFlight.set(tracked, label);
   }
 
-  /** The backend's activity line — the durable trace a loop decision is
-   *  written to beside its diagnostics event, when the backend keeps one. */
   logActivity(event: string, detail?: string): void {
     this.deps.sinks?.logActivity?.(event, detail);
   }
 
-  /**
-   * Ingress trigger: a fresh external event was admitted (webhook, email,
-   * peer message, timer). Debounced (~250ms fixed window) so a burst drains
-   * into ONE turn — the post-turn drain path stays immediate (the settled
-   * turn's own `event_drain` row) because it is already serialized behind a
-   * just-finished turn and coalesced everything that arrived during it.
-   */
+  /** Ingress trigger: debounced so a burst drains into one turn. The post-turn drain stays immediate. */
   scheduleDrain(): void {
     this.drains.schedule();
-    // …and the wake that outlives this activation. The debounce above is an
-    // in-memory timer: it coalesces a burst, and it dies with the process. A
-    // pending reaction is durable, so the promise to look at it again has to be
-    // too — every caller of this method reaches both halves, which is why the
-    // second one lives here rather than at the five ingress sites.
+    // The debounce dies with the process; a pending reaction also needs the durable wake.
     this.reconcileDurableWake();
   }
 
-  /** Ask the host to re-derive its durable wake. Absent on a host whose next
-   *  wake is its own next start (see BackendHost.reconcileDurableWake). */
+  /** Absent on a host whose next wake is its own next start (see BackendHost.reconcileDurableWake). */
   private reconcileDurableWake(): void {
     try {
       this.deps.host.reconcileDurableWake?.();
@@ -735,20 +443,8 @@ export class AgentOrchestrator {
   }
 
   /**
-   * Compensation: a signal the host refused puts its events back.
-   *
-   * The re-arm is the load-bearing half. Unbinding returns the rows to the
-   * pending pool, and the pool is only ever read by a drain — so a
-   * compensation that stopped at the unbind handed the workspace back work it
-   * had scheduled nothing to do. That is the shape the audit found: pending,
-   * durable, and unreachable until some unrelated ingress happened along.
-   *
-   * The DURABLE wake, and deliberately not `scheduleDrain`. A host refuses a
-   * signal turn because a newer turn pre-empted it, and that turn's own
-   * post-turn drain is what picks these rows up next. Re-entering the 250ms
-   * debounce here would retry against the same refusal four times a second for
-   * as long as it lasted; the alarm chain retries on its own cadence and
-   * collapses onto one row, so it converges without spinning.
+   * Compensation: put a refused signal's events back, then re-arm, or pending rows are unreachable.
+   * Uses the durable wake, not `scheduleDrain`: the debounce would spin against the same pre-emption.
    */
   private returnEventsToPending(ids: readonly string[]): void {
     for (const id of ids) {
@@ -767,27 +463,12 @@ export class AgentOrchestrator {
   }
 
   /**
-   * The reactor: bind the selected pending events to a synthetic turn
-   * (markConsumed — synchronous, so atomic w.r.t. the event loop; a concurrent
-   * drain sees them already consumed), then hand the batch to signal delivery
-   * as ONE 'now' signal. Whether it splices into a live turn's next step or
-   * queues as its own programmatic turn is the seam's decision, not this
-   * caller's; either way the events stay bound to `replyTurnId`, so
-   * reply-channel dispatch (email_thread → outbound reply) finds them by the
-   * same id. A signal that cannot be delivered puts its events back. The woken
-   * turn's own post-turn drain re-checks, so this self-terminates once the
-   * external backlog is empty. No-op when nothing is pending.
-   *
-   * The user's card for the drain comes from delivery itself (the seam's
-   * `signal_card` broadcast), so it is the same card whichever way the batch
-   * landed — this caller neither knows nor announces the outcome.
+   * The reactor: bind pending events to a synthetic turn (markConsumed is synchronous, so a concurrent drain
+   * sees them consumed), then send the batch as one signal bound to `replyTurnId`. An undelivered signal
+   * puts its events back. No-op when nothing is pending.
    */
   async drainPendingEvents(
-    /** Whether a selection or binding failure REACHES the caller. A durable
-     *  effect that owes this drain needs it to: a swallowed failure leaves events
-     *  pending, or a batch half-bound, while the row that owed the drain reports
-     *  done and is pruned. Ambient callers (an ingress nudge, a debounced wake)
-     *  keep the absorbing behaviour — there is nothing owed to retry them. */
+    /** Rethrow selection/binding failures: a durable effect that owes this drain must not report done. */
     opts?: { readonly rethrow?: boolean },
   ): Promise<void> {
     let batch: ReturnType<typeof buildDrainBatch>;
@@ -805,11 +486,7 @@ export class AgentOrchestrator {
         bound.push(id);
       }
     } catch (err) {
-      // UNBOUND, back to the pending pool. A binding that failed partway left the
-      // prefix owned by a turn that never ran: the retry then drained only the
-      // suffix and reported done, and the prefix was stranded with no signal and
-      // no wake. Unbinding is the reverse of the only write that happened, and it
-      // is what makes the retry see the whole batch again.
+      // Unbind the prefix so the retry sees the whole batch; otherwise it strands with no signal or wake.
       for (const id of bound) {
         try {
           this.deps.eventLog.unbind(id);
@@ -849,19 +526,8 @@ export class AgentOrchestrator {
       text: batch.text,
       stepText: batch.midTurnText,
       replyTurnId: turnId,
-      // The drain's own durable identity, offered as the admission key.
-      //
-      // `markConsumed` above bound these rows to `turnId` before this object
-      // existed, so the fact is already on disk — which is exactly what an
-      // idempotency key has to be. Naming it here is what routes the queued
-      // half through a host's DURABLE admission ledger (on cf, Think's
-      // submission table: a UNIQUE key, an atomic pending→running claim, and a
-      // startup drain) instead of an in-memory turn queue that an eviction
-      // takes with it. Nothing new is persisted to make that true.
-      //
-      // A re-delivery of the same drain therefore lands on the row the first one
-      // wrote rather than beside it, so at-least-once delivery of one batch is
-      // one turn.
+      // The rows are already bound to `turnId`, so it routes the queued half through the host's durable
+      // admission ledger; a re-delivery of the same drain collapses to one turn.
       idempotencyKey: turnId,
       compensate: () => this.returnEventsToPending(ids),
       metadata,
@@ -870,60 +536,18 @@ export class AgentOrchestrator {
     await this.inbox.send(signal);
   }
 
-  // THE SETTLE SPINE IS THE TERMINAL ROSTER, and it is not here.
-  //
-  // A settle that runs as one call cannot record which half of itself an eviction
-  // interrupted, so no such call exists. `declareTerminalRoster`
-  // (orchestrator/terminal-roster.ts) owns that sequence — `turn_end_extensions`,
-  // `turn_record`, `event_drain`, `improvement_lanes`, in that order, each a
-  // separately claimed row — and every backend drives it through
-  // `TerminalTransitions.settle`.
-  //
-  // What lives here is what those rows ASK: {@link recordTurn} for the
-  // recording itself, {@link drainPendingEvents} for the reactor, and the two
-  // pure rules below. They are public precisely because a backend claiming the
-  // sub-effects separately has to ask each question without running a settle,
-  // and asking twice is how two backends drift.
+  // The settle spine is `declareTerminalRoster` (orchestrator/terminal-roster.ts). The pure rules below are
+  // public so a backend claiming the sub-effects separately asks them without re-spelling them.
 
-  /**
-   * Whether the COMPLETED-only improvement lanes — shadow trial, advisor
-   * review, auto-title — may run after a turn that ended this way.
-   *
-   * A completed BUILD turn opens them; every other combination closes them. A
-   * cut or aborted turn has no subject to replay or review, and plan
-   * deliberation belongs in neither evidence set. The mode comes from
-   * `beginTurn`, so this is the same derivation the recording gate uses.
-   *
-   * PURE and public, because a backend that claims the settle's sub-effects
-   * separately has to ask the question without re-running the settle to be
-   * told the answer. The condition therefore exists once: a backend spelling
-   * it for itself is how one side queues shadow trials for turns that FAILED
-   * while the other does not.
-   */
+  /** Completed-only improvement lanes (shadow trial, advisor review, auto-title) open only after a completed build turn. */
   improvementLanesOpen(status: RunEndReason, workMode?: WorkMode): boolean {
-    // `workMode` is for a REPLAY: a backend re-driving a recorded turn on a fresh
-    // activation has the mode on its row and must not be answered against this
-    // activation's live one, which defaults to build. Absent means "ask the live
-    // turn", which is what every in-turn caller wants.
+    // `workMode` is for a replay on a fresh activation; absent means the live turn.
     return status === 'completed' && (workMode ?? this.activeWorkMode) !== 'plan';
   }
 
   /**
-   * The turn as the driver's verdict witnesses it — what `recordTurn` should be
-   * given for a turn that ended this way.
-   *
-   * A turn can throw outside the accumulator's view — that is why one backend
-   * sets `acc.hadError` by hand in its catch — so on the `'error'` arm
-   * the status is the more reliable witness. An ABORT is deliberately left
-   * alone: the user pressing Stop did not make the agent fail, and stamping
-   * their turn as an error would feed the outcome classifier a negative label
-   * nothing earned, which is the fabricated signal this codebase refuses
-   * everywhere else.
-   *
-   * PURE and public for the same reason as `improvementLanesOpen`: the backend
-   * that claims the recording as its own durable effect records the turn from
-   * inside that row's body, and this rule must not be spelled a second time
-   * there.
+   * The turn to record for this verdict: `'error'` forces `hadError` (a throw can escape the accumulator);
+   * an abort is deliberately not an error.
    */
   recordedTurn(status: RunEndReason, turn: CompletedTurn): CompletedTurn {
     return status === 'error' && !turn.hadError ? { ...turn, hadError: true } : turn;

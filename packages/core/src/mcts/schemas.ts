@@ -1,25 +1,9 @@
 /**
- * MCTS SQL schemas — the DDL for the search tree.
- * Architecture reference: docs/MCTS.md — "search_nodes Table".
- *
- * BUG-1 FIX: value defaults to 0, NOT 0.5.
+ * MCTS SQL schemas: the one definition of search_nodes. Reference: docs/MCTS.md "search_nodes Table".
+ * `value` defaults to 0, not 0.5.
  * Formal spec: MCTS/Backpropagation.lean:initial_in_range (a fresh node starts in range).
- *
- * `root_id` names the search run a node belongs to. Selection, pruning and
- * convergence are scoped by it, so a tree left behind by an interrupted or
- * failed search can never be selected into — or won by — a later one.
- *
- * This is the ONE definition of search_nodes. The unified workspace
- * initializer (identity/schema.ts) calls this rather than carrying a copy.
- *
- * ACTOR-SCOPED, in the primary key. One physical database holds every logical
- * actor of a workspace, a node id is minted per search, and selection walks
- * `parent_id` to `id` — so without the owner in the key one actor's tree could
- * be selected into by another's search. The self-referencing FOREIGN KEY on
- * `parent_id` is gone with the single-column key: a composite reference would
- * have to name `(actor_id, parent_id)`, and the edge it enforced is already
- * enforced by the writer, which only ever parents a node on one it just read
- * from this actor's rows.
+ * Selection, pruning and convergence scope by `root_id`; `actor_id` is in the primary key
+ * because one database holds every actor's trees.
  */
 
 import type { RawSqlExec } from '../types/primitives';

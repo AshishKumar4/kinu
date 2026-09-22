@@ -1,18 +1,6 @@
 /**
- * The head merge's model/effort/spend policy, proven in the one place that
- * decides it.
- *
- * Both backends bind the resolved `judge` route at the deep tier's own effort
- * and report the call as `judge` spend. Resolving these independently could run
- * the session chat model at a hardcoded `'low'` while labelling it deep-tier
- * grading, making unlike work indistinguishable in the ledger.
- *
- * So the assertions here are the policy, and each backend's suite proves only
- * that it calls this and supplies nothing else. The fixture is shared
- * (`@kinu.run/test-utils`, `mergePolicyProfile`) so all three suites route
- * against ONE catalog whose `default` and `deep` tiers disagree on both axes —
- * under a catalog where they agree, a routed merge and a merge that took
- * whatever it was handed are indistinguishable.
+ * The head merge's model/effort/spend policy: the resolved `judge` route at the deep tier's effort,
+ * billed as `judge`. `mergePolicyProfile` makes the `default` and `deep` tiers differ on both axes.
  */
 
 import { describe, expect, test } from 'bun:test';
@@ -29,9 +17,7 @@ import type { ResolvedTurnProfile } from '../src/profiles/resolve';
 const GOOD_MERGE =
   '{"narrative":"Unified: both heads agree.","selected_decisions":[],"unresolved_questions":[],"recommendations":["ship it"]}';
 
-/** A scripted model that also records the prompt it was handed, because the
- *  JSON-only instruction is part of what a caller inherits by riding this
- *  policy — the hand-rolled local merge did not append it. */
+/** Records the prompt, since the JSON-only instruction is part of the policy. */
 function scriptedModel(text: string, prompts: string[]): MockLanguageModelV3 {
   return new MockLanguageModelV3({
     doGenerate: async (options) => {
@@ -88,8 +74,7 @@ describe('the head merge resolves one route, one effort, one spend label', () =>
       tier: 'deep',
       source: MERGE_POLICY_SPEND_SOURCE,
     }]);
-    // The turn's own model is the thing a merge must never silently run on, and
-    // the fixture's tiers differ so this is a real discrimination.
+    // The turn's own model must never be used; the fixture's tiers differ.
     expect(asked[0]?.spec).not.toBe(MERGE_POLICY_CHAT_MODEL);
   });
 
@@ -98,8 +83,7 @@ describe('the head merge resolves one route, one effort, one spend label', () =>
 
     await mergeLLM('merging the findings', MergeOutputSchema);
 
-    // One literal produces both, so a merge cannot be attributed to a producer
-    // whose route it did not take.
+    // One literal for both, so attribution matches the route taken.
     expect(reports.map((r) => r.source)).toEqual([MERGE_POLICY_SPEND_SOURCE]);
     expect(reports[0]?.usage).toEqual({ input: 11, output: 3 });
   });
@@ -120,9 +104,6 @@ describe('the head merge resolves one route, one effort, one spend label', () =>
 
     await mergeLLM('merging the findings', MergeOutputSchema);
 
-    // The local merge hand-rolled `generateText` + `extractJsonObject` and never
-    // sent this, so the same schema was enforced against a model that had not
-    // been told to answer with JSON.
     expect(prompts[0]).toContain('merging the findings');
     expect(prompts[0]?.toLowerCase()).toContain('json');
   });
@@ -134,8 +115,7 @@ describe('the head merge resolves one route, one effort, one spend label', () =>
 
     await expect(mergeLLM('merging the findings', MergeOutputSchema)).rejects.toThrow('no JSON object in model output');
 
-    // The call COMPLETED and was billed; rejecting its output is the
-    // controller's fallback path, not this frame's failure.
+    // The call completed and was billed; rejecting output is the controller's fallback.
     expect(reports).toHaveLength(1);
     expect(operations.map((e) => e.phase)).toEqual(['start', 'end']);
     expect(operations[1]?.outcome).toBe('ok');
@@ -166,9 +146,7 @@ describe('the binder is the whole of a backend\'s say', () => {
 
     await expect(mergeLLM('merging the findings', MergeOutputSchema))
       .rejects.toThrow('the account profile could not be read');
-    // Nothing bound, nothing billed, no operation opened: the route comes FIRST,
-    // so a merge that cannot be routed is not a merge on some other model. A
-    // silent fallback here is exactly the drift this module removes.
+    // Routing comes first: an unroutable merge does not fall back to another model.
     expect(asked).toEqual([]);
     expect(reports).toEqual([]);
     expect(operations).toEqual([]);

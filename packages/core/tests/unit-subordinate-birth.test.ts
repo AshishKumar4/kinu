@@ -15,14 +15,12 @@ function setup() {
   createTestActor(database.sql, database.execRaw, 'workspace', 'main');
   const directory = new WorkspaceActorDirectory(database.sql, { workspaceId: 'workspace', ownerUserId: '' });
   const main = directory.main();
-  // The roster is the PARENT's: a subordinate name is chosen by the actor that
-  // hired it, so two actors of one workspace really do hire the same 'reader'.
+  // The roster is the parent's, so two actors of one workspace can hire the same 'reader'.
   const roster = new SubordinateRosterStore(makeSqlExec(database.db), main);
   roster.ensureSchema();
   const child = createTestSql();
   initEventsHubTables(makeSqlExec(child.db));
-  // The subordinate's OWN inbox, over the subordinate's own database — the
-  // admitted task is the child's to drain, never the parent's.
+  // The admitted task is the child's to drain, never the parent's.
   const childActor = createTestActors(child.sql, child.execRaw).main;
   const events = new EventLog(makeSqlExec(child.db), childActor);
   let interruptSeed = false;

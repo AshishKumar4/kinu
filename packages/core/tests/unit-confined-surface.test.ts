@@ -1,10 +1,5 @@
-// Confined surfaces finish `eval` over the finished set, and only it.
-//
-// A head's function-form `codemodeTool` runs after the `allowedTools` filter, so
-// `tools.*` declares exactly the tools the head holds. A node's proposal tool
-// merges after the finish, so the sandbox never declares it while the node
-// still proposes through it. These arms pin both orderings through the public
-// builders, plus the direct form that no other arm executes to a result.
+// Confined surfaces finish `eval` over the finished set only: a head's function-form `codemodeTool`
+// runs after the `allowedTools` filter; a node's proposal tool merges after the finish.
 import { describe, expect, test } from 'bun:test';
 import { jsonSchema, tool, type ToolSet } from 'ai';
 import type { LanguageModelV3Content } from '@ai-sdk/provider';
@@ -27,7 +22,6 @@ interface SurfaceStep {
   proposed: boolean;
 }
 
-/** What the model answers at each stage of the confined surface's handshake. */
 function contentFor(step: SurfaceStep): LanguageModelV3Content[] {
   if (step.reported) return [{ type: 'text', text: 'Done.' }];
 
@@ -177,7 +171,6 @@ describe('node proposal merges after the eval finish', () => {
       return sandboxEntry('fn-ran');
     };
 
-    // Proposes once, then reports the grant it was told about.
     const model = scriptedTurnModel({
       modelId: 'fake-proposer',
       doGenerate: ({ prompt }) => {
@@ -222,9 +215,7 @@ describe('node proposal merges after the eval finish', () => {
     };
 
     const deps: NodeAgentDeps = {
-      // One seat for this node, over the caller's own database — `rt` is not a
-      // node dep, because a shared handle would give every node of a wave one
-      // actor.
+      // One seat per node: a shared `rt` would give every node of a wave one actor.
       hostNode: hostedSeatsOver({ rt, db }).hostNode,
       model,
       journal,
@@ -235,11 +226,9 @@ describe('node proposal merges after the eval finish', () => {
 
     const run = await runNodeAgent(input, deps);
     expect(run.report.status).toBe('completed');
-    // The sandbox declarations predate the proposal tool.
     const names: readonly string[] = seen ?? [];
     expect(names.length).toBeGreaterThan(0);
     expect(names).toContain('eval');
-    // And the proposal still landed: the grant the tool returned is the run's.
     expect(run.granted?.kind).toBe('granted');
 
     if (run.granted?.kind === 'granted') expect(run.granted.nodeIds).toEqual(['c1', 'c2']);

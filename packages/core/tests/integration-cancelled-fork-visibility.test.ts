@@ -1,17 +1,6 @@
-// A cancelled fork must stop being reported as running — end to end, over the
-// real stores, the real signal seam, and the real per-step ledger.
-//
-// The defect this locks: `head_journal.status` had exactly ONE writer that
-// cleared 'running' (HeadJournal.recordReport, the happy path). An operator
-// cancel settled the fork's background job and a process exit killed its
-// executor, but nothing ever wrote the head rows — so `listLive()`'s
-// running-head predicate stayed true forever, and every model step carried
-//
-//   ## Delegates working for you
-//   - <root> (search) — 4 of 4 nodes running: <rationale>
-//
-// while `background_jobs` said `cancelled by operator`. The agent was not
-// reasoning from a stale transcript; the runtime was asserting the falsehood.
+// A cancelled fork must stop being reported as running, end to end over the real stores,
+// signal seam and per-step ledger: an operator cancel writes only the job registry, so the
+// head journal must be reconciled or the roster keeps claiming the heads run.
 import { describe, test, expect } from 'bun:test';
 import * as v from 'valibot';
 import { Database } from 'bun:sqlite';
@@ -38,24 +27,15 @@ const ROOT = 'root-research';
 
 const RATIONALE = 'four angles on the research question';
 
-/** The run the fork was dispatched from — the one carrying its `head_split`. */
 const RUN = 'run-dispatched-the-fork';
 
 /**
- * How long before the reconciling activation the dead one spawned these heads.
- *
- * Load-bearing rather than cosmetic. `abandonRunning` retires heads spawned BEFORE the
- * activation doing the sweep — that bound is what stops a resume's own heads from being
- * retired by a reconciliation running beside it — so a fixture that spawns its heads at
- * `Date.now()` is asserting the impossible: an activation cannot spawn a head after the
- * activation that reconciles it has started. The whole point of the scenario is that
- * these heads outlived the process that owned them.
+ * `abandonRunning` retires only heads spawned before the reconciling activation, so the
+ * fixture's heads must predate it.
  */
 const SPAWNED_A_MINUTE_EARLIER_MS = 60_000;
 
-/** The workspace as it stood when the operator cancelled: a detached 4-head
- *  fork, journalled by the real controller's writes, by a process that has since
- *  exited. */
+/** A detached fork journalled by a process that has since exited, then operator-cancelled. */
 function workspace() {
   const db = new Database(':memory:');
   const sql = makeSql(db);
@@ -83,16 +63,12 @@ function workspace() {
     });
   }
 
-  // The operator cancel, as `kinu stop` / the repair path writes it: the job
-  // registry only. Nothing reaches the heads, because the process that owned
-  // them is gone.
+  // The operator cancel writes the job registry only.
   jobs.cancel('bgjob-fork', 0, now + 1_000);
 
   return { db, journal, jobs };
 }
 
-/** The dynamic-context block the NEXT model step would carry, assembled from
- *  the same sources both backends read (actor-agent.ts / local-session.ts). */
 function nextStepBlock(w: ReturnType<typeof workspace>): string | null {
   return renderDynamicContextBlock(agentDynamicContext({
     factsBlock: undefined, memoryTail: undefined, recoveryFindings: [], executors: [],
@@ -103,8 +79,7 @@ function nextStepBlock(w: ReturnType<typeof workspace>): string | null {
   }));
 }
 
-/** An idle agent: `deliver` therefore routes through enqueueTurn, which is what
- *  "the agent learns at its next step" means when no turn is running. */
+/** No turn running, so `deliver` routes through enqueueTurn. */
 function idleAgent() {
   const enqueued: ProgrammaticTurn[] = [];
 
@@ -126,12 +101,10 @@ describe('an operator-cancelled fork is not reported as running', () => {
   test('the two stores disagreed, and the disagreement is what the model read', () => {
     const w = workspace();
 
-    // The registry is right.
     expect(w.jobs.get('bgjob-fork')?.status).toBe('cancelled');
     expect(w.jobs.get('bgjob-fork')?.error).toBe('cancelled by operator');
     expect(w.jobs.listRunning()).toEqual({ items: [], total: 0 });
 
-    // The journal is wrong, and the roster it feeds says so out loud.
     expect(w.journal.listLive()).toEqual({
       items: [{ rootId: ROOT, rationale: RATIONALE, running: HEADS, total: HEADS }],
       total: 1,
@@ -149,12 +122,8 @@ describe('an operator-cancelled fork is not reported as running', () => {
       { rootId: ROOT, rationale: RATIONALE, abandoned: HEADS, total: HEADS },
     ]);
     expect(w.journal.listLive()).toEqual({ items: [], total: 0 });
-    // Nothing left to say: the roster is the only plane this workspace had.
     expect(nextStepBlock(w)).toBeNull();
-    // And the run stops reading as in-flight on the Exploration surface, which
-    // infers run status from its heads. ('partial' — heads finished, no merge
-    // synthesis — is that surface's own wording; the invariant here is only
-    // that it is no longer 'running'.)
+    // The Exploration surface infers run status from heads; it must no longer read 'running'.
     expect(w.journal.readRun(ROOT)?.status).not.toBe('running');
 
     for (const head of w.journal.readTree(ROOT)) {
@@ -170,8 +139,7 @@ describe('an operator-cancelled fork is not reported as running', () => {
 
     await reconcileInterruptedForks({ journal: w.journal, inbox: agent.inbox });
 
-    // A fork vanishing from the roster retracts nothing: the agent had already
-    // read that it was in flight. It gets a turn, not a silence.
+    // A fork vanishing from the roster retracts nothing the agent already read; it gets a turn.
     expect(agent.enqueued).toHaveLength(1);
     const turn = agent.enqueued[0];
     expect(turn.metadata?.kinuEvent).toBe(FORK_INTERRUPTED_SIGNAL);
@@ -183,18 +151,8 @@ describe('an operator-cancelled fork is not reported as running', () => {
   });
 
   /**
-   * The agent is told, and so is the ledger.
-   *
-   * `head_split` goes into `run_events` at fork dispatch and `head_merge` when
-   * the split settles. That pair is what the Timeline renders (read-models/
-   * timeline.ts) and, per heads/controller.ts, "the only durable trace a fork
-   * ran at all". An interrupted fork reached the first and never the second, so
-   * its run kept a "Heads split" span nothing ever closed — in that ledger it is
-   * indistinguishable from a fork still in flight, forever.
-   *
-   * Which is this module's own argument, applied to the second ledger: a state
-   * ledger that goes quiet does not retract anything. The roster got its
-   * retraction; `run_events` did not.
+   * `head_split` without a closing row leaves the Timeline showing the fork in flight forever,
+   * so reconciliation closes the split in `run_events`.
    */
   test('the fork run that died is closed in the run-event ledger, not left mid-split', async () => {
     const w = workspace();
@@ -202,12 +160,9 @@ describe('an operator-cancelled fork is not reported as running', () => {
     const sql = makeSql(w.db);
     const recorder = new RunEventRecorder(sql, testActorHandle(sql));
 
-    // The dispatching turn, as the ledger records a split.
     recorder.emit(RUN, {
       type: 'head_split', rootId: ROOT, headIds: ['h1', 'h2', 'h3', 'h4'], rationale: RATIONALE,
     });
-    // …and that run ended with the process. The fork outlived it, which is the
-    // whole situation: nothing was ever going to append to this run again.
     recorder.emit(RUN, { type: 'run_end', reason: 'done' });
 
     await reconcileInterruptedForks({
@@ -228,31 +183,19 @@ describe('an operator-cancelled fork is not reported as running', () => {
     const sql = makeSql(w.db);
     const recorder = new RunEventRecorder(sql, testActorHandle(sql));
 
-    // No `head_split` row: a benchmark trial, or a fork dispatched before the
-    // ledger existed. There is no run to close, and guessing one would put a
-    // fork's death on an unrelated turn's timeline.
+    // No `head_split` row: guessing a run would put the fork's death on an unrelated timeline.
     await reconcileInterruptedForks({
       journal: w.journal, inbox: idleAgent().inbox, runEvents: recorder,
     });
 
     expect(recorder.read(RUN)).toEqual([]);
-    // The journal is still settled — the ledger is an additional record, never
-    // a precondition for retiring a stale head.
+    // The ledger is additional, never a precondition for retiring a stale head.
     expect(w.journal.listLive()).toEqual({ items: [], total: 0 });
   });
 
   /**
-   * A KILLED TURN LEAVES ITS RUN OPEN, and that is the durable face of the
-   * owner's "why will it not give up its turn".
-   *
-   * A run is closed by `closeTurnRun`, which runs in the turn's own frame. Nothing
-   * writes a terminal row when the platform destroys that frame, so the ledger
-   * cannot tell a turn that is running from one that was killed. Measured on the
-   * owner's workspace: six `run_start` rows against three `run_end`, and the
-   * missing ones include the turn that dispatched the search.
-   *
-   * Same start-of-life argument as the journal: this activation is executing none
-   * of these, so each was left by an earlier one.
+   * A killed turn leaves its run open: `closeTurnRun` runs in the turn's own frame, so nothing
+   * writes a terminal row when that frame is destroyed.
    */
   test('a run a dead activation left open is closed, and a live one is not touched', async () => {
     const w = workspace();
@@ -260,19 +203,15 @@ describe('an operator-cancelled fork is not reported as running', () => {
     const sql = makeSql(w.db);
     const recorder = new RunEventRecorder(sql, testActorHandle(sql));
 
-    // The turn that dispatched the fork, cut before it could close itself.
     recorder.emit(RUN, { type: 'run_start', agentId: 'a' });
     recorder.emit(RUN, {
       type: 'head_split', rootId: ROOT, headIds: ['h1', 'h2', 'h3', 'h4'], rationale: RATIONALE,
     });
-    // A turn that DID close itself, on the same ledger — the control that makes
-    // the assertion below attributable to being open rather than to being old.
+    // Control: attributes the assertion below to being open, not to being old.
     recorder.emit('run-that-finished', { type: 'run_start', agentId: 'a' });
     recorder.emit('run-that-finished', { type: 'run_end', reason: 'complete' });
 
-    // The activation instant strictly POSTDATES the rows a dead activation
-    // left: the cutoff is `<`, so a same-millisecond tie counts as live and
-    // waits for the next activation rather than risking live work.
+    // The cutoff is `<`: a same-millisecond tie counts as live.
     await reconcileInterruptedForks({
       journal: w.journal, inbox: idleAgent().inbox, runEvents: recorder,
       now: Date.now() + 1,
@@ -281,14 +220,9 @@ describe('an operator-cancelled fork is not reported as running', () => {
     const cut = recorder.read(RUN);
     const closed = cut.filter((event) => event.type === 'run_end');
     expect(closed).toMatchObject([{ type: 'run_end', reason: 'interrupted' }]);
-    // The reason is not a mechanism. This ledger cannot distinguish an eviction
-    // from a process exit from a crash, and writing a guess into durable history
-    // is what the fork journal's own reason was rewritten to stop doing. Read off
-    // the emitted row, so a production rename fails here instead of agreeing with
-    // itself.
+    // The ledger cannot tell eviction from exit from crash, so the reason must not guess.
     expect(closed[0]?.reason).not.toContain('evict');
 
-    // The closed run keeps its own terminal row, and gains no second one.
     expect(recorder.read('run-that-finished').map((event) => event.type))
       .toEqual(['run_start', 'run_end']);
   });
@@ -299,10 +233,7 @@ describe('an operator-cancelled fork is not reported as running', () => {
     const sql = makeSql(w.db);
     const recorder = new RunEventRecorder(sql, testActorHandle(sql));
 
-    // Two runs the dead activation left open. The loop re-opened one at this
-    // activation's construction and continues it under the same id; the other
-    // is wreckage. Both predate the activation, so age alone cannot tell them
-    // apart — the loop's own word is what does.
+    // Both runs predate the activation; only the loop's own word says which it continues.
     recorder.emit('run-continued', { type: 'run_start', agentId: 'a' });
     recorder.emit('run-abandoned', { type: 'run_start', agentId: 'a' });
 
@@ -332,8 +263,7 @@ describe('an operator-cancelled fork is not reported as running', () => {
       now: Date.now() + 1,
     });
 
-    // Idempotent, because a closed run is no longer open. A second terminal row
-    // would make every duration query double-count the wake.
+    // A second terminal row would double-count every duration query.
     expect(recorder.read(RUN).filter((event) => event.type === 'run_end')).toHaveLength(1);
   });
 
@@ -352,7 +282,6 @@ describe('an operator-cancelled fork is not reported as running', () => {
     const ledger = new DynamicContextLedger();
     const history: ModelMessage[] = [{ role: 'user', content: 'research this' }];
 
-    // The step that read the lie.
     const before = ledger.weave(history, agentDynamicContext({
       factsBlock: undefined, memoryTail: undefined, recoveryFindings: [], executors: [],
       runningJobs: { items: [], total: 0 }, openTasks: { items: [], total: 0 }, liveHeadRuns: w.journal.listLive(), missingCapabilities: [],
@@ -362,8 +291,7 @@ describe('an operator-cancelled fork is not reported as running', () => {
 
     await reconcileInterruptedForks({ journal: w.journal, inbox: idleAgent().inbox });
 
-    // The next step: one more block at the tail (a superseding one), and the
-    // frozen bytes before it untouched — the prefix-cache contract.
+    // One superseding block at the tail; frozen bytes before it untouched (prefix-cache contract).
     const after = ledger.weave([...history, { role: 'assistant', content: 'working' }], agentDynamicContext({
       factsBlock: 'workspace = kinu', memoryTail: undefined, recoveryFindings: [], executors: [],
       runningJobs: { items: [], total: 0 }, openTasks: { items: [], total: 0 }, liveHeadRuns: w.journal.listLive(), missingCapabilities: [],
@@ -374,23 +302,10 @@ describe('an operator-cancelled fork is not reported as running', () => {
     expect(v.parse(v.string(), after.at(-1)?.content)).not.toContain('heads running');
   });
 
-  /**
-   * THE ORDERING RULE, from both sides.
-   *
-   * Reconciliation and a RESUME both run at start of life, and neither backend can
-   * order them: the CLI awaits this before recovery, while a Durable Object's `onStart`
-   * and `onFiberRecovered` are both dispatched by the Agents SDK. So the safety is a
-   * bound on the write — heads spawned before the reconciling activation — and these two
-   * tests are its two directions. Without the bound the second one fails: a resume that
-   * re-expanded its tree and then had this sweep run beside it would have its live nodes
-   * marked `aborted`, and the agent would be TOLD, over the one signal seam, that work
-   * still running had been retired.
-   */
+  /** Reconciliation and resume cannot be ordered; these two tests are the spawn-time bound's two directions. */
   test('a head the resume spawned in THIS activation survives the sweep beside it', async () => {
     const w = workspace();
     const activationStart = Date.now();
-    // The re-drive re-expands the interrupted tree: a new node, spawned now, under a
-    // root of its own. Journalled through the same writer a swarm node uses.
     w.journal.recordSplit('root-resumed', 'the re-entered search', activationStart + 5);
     w.journal.insertSpawn({
       id: 'resumed-node', parentId: null, rootId: 'root-resumed', depth: 1,
@@ -406,12 +321,9 @@ describe('an operator-cancelled fork is not reported as running', () => {
       journal: w.journal, inbox: agent.inbox, now: activationStart,
     });
 
-    // The DEAD attempt's heads are retired — the denominator, so this cannot pass by
-    // the sweep having done nothing at all.
+    // Denominator: the sweep did retire the dead attempt's heads.
     expect(settled.map((run) => run.rootId)).toEqual([ROOT]);
     expect(settled[0]?.abandoned).toBe(HEADS);
-    // And the live node is untouched: still `running`, still on the roster, and never
-    // named in the wake the agent was sent.
     expect(w.journal.readHead('resumed-node')?.status).toBe('running');
     expect(w.journal.readHead('resumed-node')?.error_message).toBeNull();
     expect(w.journal.listLive().items.map((run) => run.rootId)).toEqual(['root-resumed']);
@@ -419,26 +331,15 @@ describe('an operator-cancelled fork is not reported as running', () => {
   });
 
   /**
-   * THE SECOND ACTIVATION, where the offered set decides everything.
-   *
-   * `markInterrupted` transitions `running` rows only, so a run an EARLIER
-   * activation already marked is returned by nobody. The gate is therefore
-   * offered more than that return value, because `abandonRunning` sweeps every
-   * unclaimed `interrupted` row: a gate blind to those rows retires the run the
-   * job registry is re-driving right now, and sends the agent the "re-fork the
-   * work you still need" wake about work that is executing.
+   * `markInterrupted` transitions `running` rows only, so the resume gate must also be offered
+   * rows an earlier activation already marked, or it retires a run being re-driven.
    */
   test('a run an EARLIER activation marked is still offered to the resume gate', async () => {
     const w = workspace();
     const firstActivation = Date.now();
-    // Activation N: the gate is not wired (a caller with no durable resume), so
-    // the rows are marked interrupted and refused — the state the next
-    // activation inherits.
     w.journal.markInterrupted({ spawnedBefore: firstActivation }, firstActivation);
     expect(w.journal.readHeadView('h1')?.status).toBe('interrupted');
 
-    // Activation N+1: the durable job IS re-drivable, and its re-drive claims
-    // this root by task through findResumableRun.
     const agent = idleAgent();
     const offered: string[][] = [];
 
@@ -454,7 +355,6 @@ describe('an operator-cancelled fork is not reported as running', () => {
     });
 
     expect(offered).toEqual([[ROOT]]);
-    // Nothing retired, nothing said: the re-drive owns the run.
     expect(settled).toEqual([]);
     expect(agent.enqueued).toHaveLength(0);
     expect(w.journal.readHeadView('h1')?.status).toBe('interrupted');
@@ -462,7 +362,7 @@ describe('an operator-cancelled fork is not reported as running', () => {
   });
 
   test('and the same run is retired once the gate stops claiming it', async () => {
-    // The denominator for the test above: offering a root is not sparing it.
+    // Denominator: offering a root is not sparing it.
     const w = workspace();
     const firstActivation = Date.now();
     w.journal.markInterrupted({ spawnedBefore: firstActivation }, firstActivation);
@@ -482,10 +382,8 @@ describe('an operator-cancelled fork is not reported as running', () => {
 });
 
 describe('the operator cancel of ONE job reaches the agent', () => {
-  // The other half: a cancel issued while the agent keeps working. The runner's
-  // lifecycle test (unit-background-job-runner) pins the wake itself; this pins
-  // the reason it must exist — the roster the agent reads goes quiet, and a
-  // quiet roster does not retract a promise the runtime already made.
+  // The runner's wake is pinned in unit-background-job-runner; this pins why it must exist:
+  // a quiet roster retracts nothing.
   test('a cancelled job leaves the roster with nothing to correct the record', () => {
     const w = workspace();
     expect(w.jobs.listRunning()).toEqual({ items: [], total: 0 });

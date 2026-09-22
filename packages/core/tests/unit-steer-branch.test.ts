@@ -1,9 +1,4 @@
-/**
- * Steer-as-Branch — the single-head branch run (HeadRuntime seam), the settle
- * into the Alternate Takes pipeline (branch-sourced sets), and the pick flow
- * over branch candidates (no search_nodes involvement, 'corrected' + the
- * chosen text as the correction follow-up).
- */
+/** Steer-as-Branch: the single-head branch run, its settle into Alternate Takes, and the pick flow. */
 import { describe, test, expect } from 'bun:test';
 import { createTestActor, createTestWorkspace } from './helpers';
 import { SessionHistory } from '../src/session/history';
@@ -25,15 +20,10 @@ import { present } from '@kinu.run/test-utils';
 
 function setup() {
   const ws = createTestWorkspace();
-  // The production schema, minus search_nodes on purpose: a branch-sourced set
-  // has no convergence record, and only an absent table proves the pipeline
-  // never reaches for one — an UPDATE matching no row is indistinguishable
-  // from an UPDATE that was never issued.
+  // search_nodes omitted on purpose: only an absent table proves a branch-sourced set never
+  // reaches for a convergence record.
   ws.execRaw('DROP TABLE search_nodes');
 
-  // The journal is actor-private and the pick reads its turn pair from the
-  // actor-scoped conversation store, so the workspace issues the one actor that
-  // owns the branch heads written below and that the production readers resolve.
   const actor = createTestActor(ws.sql, ws.execRaw, 'ws-steer', 'steer');
 
   const history = new SessionHistory({
@@ -53,8 +43,7 @@ function completedReport(id: string, summary: string, status: HeadReport['status
   };
 }
 
-/** A HeadRuntime whose single head resolves with the given report (or runs the
- *  given body). Records spawn inputs + abort calls for assertions. */
+/** A HeadRuntime whose single head resolves with `report` (or runs `body`), recording spawns and aborts. */
 function fakeRuntime(run: (input: HeadInput) => Promise<HeadReport>) {
   const spawns: HeadInput[] = [];
   const aborts: string[] = [];
@@ -100,7 +89,6 @@ describe('startBranchHead — one budgeted head over the HeadRuntime seam', () =
     expect(spawns[0].budget.maxDepth).toBe(BRANCH_HEAD_BUDGET.maxDepth);
     expect(spawns[0].inheritedContext[0].content).toBe('original ask');
 
-    // Journaled like any head run: spawn row + final report status.
     const row = present(journal.readHead(spawns[0].id), 'the journaled head row');
     expect(row.status).toBe('completed');
     expect(row.summary).toBe('branch answer');
@@ -128,16 +116,10 @@ describe('startBranchHead — one budgeted head over the HeadRuntime seam', () =
 });
 
 /**
- * What a COLD settle reads, and the two things it has to get right: whether the
- * comparison is still owed, and which status to report when it is not.
- *
- * Driven through a real journal row rather than a literal, because the row's ID
- * is half the defect this reading exists for — a branch's head is journalled
- * under `branchHeadId(runId)`, so a replay that looks it up under the run id
- * finds nothing at all.
+ * What a cold settle reads: whether the comparison is still owed, and which status to report.
+ * A branch's head is journalled under `branchHeadId(runId)`, not the run id.
  */
 describe('branchOutcomeFromJournal — the journal read a cold settle makes', () => {
-  /** One real branch run, left with the status a caller wants to read back. */
   async function journalled(
     status: HeadReport['status'] | null, summary = 'the branch answer', errorMessage?: string,
   ) {
@@ -158,7 +140,6 @@ describe('branchOutcomeFromJournal — the journal read a cold settle makes', ()
     return { journal, runId: handle.id };
   }
 
-  /** The row a replay reads, addressed the way a replay addresses it. */
   function readBack(journal: HeadJournal, runId: string) {
     const head = journal.readHeadView(branchHeadId(runId));
 
@@ -183,9 +164,8 @@ describe('branchOutcomeFromJournal — the journal read a cold settle makes', ()
 
   test('a head still executing is owed — under both unsettled statuses', async () => {
     const { journal, runId } = await journalled(null);
-    // Spawned, no report.
     expect(readBack(journal, runId)).toBeNull();
-    // And after a cold activation's first transition, which is not a settlement.
+    // A cold activation's first transition is not a settlement.
     journal.markInterrupted();
     expect(journal.readHeadView(branchHeadId(runId))?.status).toBe('interrupted');
     expect(readBack(journal, runId)).toBeNull();
@@ -221,7 +201,6 @@ describe('settleBranchIntoTakes — honest settle into ONE takes pipeline', () =
     expect(set.candidates).toHaveLength(2);
     expect(set.candidates[0]).toMatchObject({ text: 'A-style answer', origin: 'live' });
     expect(set.candidates[1]).toMatchObject({ text: 'B-style answer', origin: 'branch' });
-    // The live answer is the winner until the user says otherwise.
     expect(set.winnerNodeId).toBe(set.candidates[0].nodeId);
     expect(set.chosenNodeId).toBeNull();
 
@@ -313,9 +292,7 @@ describe('recordTakePick over a branch-sourced set — the pipeline unchanged', 
 });
 
 
-// Every set id here is a fresh `take-${nanoid()}`, so the table has no natural
-// conflict to catch a settlement that ran twice: the second attempt would insert
-// a second set for one branch and broadcast a different take-set id.
+// Set ids are fresh, so no natural conflict catches a settlement that ran twice.
 describe('recordBranchTakeSet — the settlement key', () => {
   const args = (settlementKey?: string) => {
     const base = {
@@ -341,8 +318,7 @@ describe('recordBranchTakeSet — the settlement key', () => {
     const first = present(recordBranchTakeSet(sql, actor, args('branch:b-1')), 'the recorded take set');
     void sql`DELETE FROM alternate_takes WHERE id = ${first.id}`;
 
-    // The set existed and was consumed. Re-minting one is the duplicate the key
-    // exists to prevent.
+    // Re-minting a consumed set is the duplicate the key prevents.
     expect(recordBranchTakeSet(sql, actor, args('branch:b-1'))).toBeNull();
     expect(listAlternateTakeSets(sql, actor)).toEqual([]);
   });
@@ -364,7 +340,6 @@ describe('recordBranchTakeSet — the settlement key', () => {
 });
 
 describe('settlePendingBranch — the keyed settle both backends run at turn end', () => {
-  /** One pending branch whose head resolves with the given answer. */
   async function pendingBranch(answer: string, task = 'try the other way') {
     const { sql, actor } = setup();
     const journal = new HeadJournal(sql, actor);

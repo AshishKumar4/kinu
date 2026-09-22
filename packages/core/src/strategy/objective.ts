@@ -1,28 +1,9 @@
 /**
- * What is measured, who measures it, and where the number is kept.
- *
- * Specified by docs/EXPLORATION.md — "The objective", "Witness objectives", "The
- * closed verifier registry", "Comparability", "The floor", "The publication seal"
- * and "The records store". This module is the declarations those rules are stated
- * over: `strategy/swarm-run.ts` wires them into a run, `strategy/verifier-registry.ts`
- * resolves an instrument, and `strategy/records.ts` creates and writes the records
- * table. The types exist so the specification is compiled rather than prose, and so
- * the Lean stage has concrete field names to model.
- *
- * THE ONE RULE EVERYTHING HERE SERVES. A node never supplies its own score. A
- * verifier is handed a filesystem and a shell and nothing else — no model, no
- * network, no run-event ledger — so an outcome is a property of the FINAL STATE
- * and reproducible without the trajectory that produced it. That is exactly the
- * contract test-utils/src/eval-outcome.ts:91-98 already holds for the eval tier;
- * this generalises it to a live search.
- *
- * WHY THE CONTEXT TYPE IS DUPLICATED AND WHERE THE DUPLICATION DIES. `test-utils`
- * declares a structurally identical `VerifierContext` (eval-outcome.ts:95-98).
- * `@kinu.run/core` cannot import `@kinu.run/test-utils` — the dependency arrow runs
- * the other way — so the canonical declaration has to be here and test-utils has
- * to be re-pointed at it when this is wired. That re-pointing is a WIRING step,
- * deliberately not taken in this commit, and it is recorded here rather than in a
- * changelog because the second shape is the thing that drifts.
+ * What is measured, who measures it, and where the number is kept. Spec:
+ * docs/EXPLORATION.md "The objective" through "The records store".
+ * A node never supplies its own score: a verifier gets a filesystem and a shell
+ * only, so an outcome is a property of the final state. test-utils declares an
+ * identical `VerifierContext` and cannot be imported here; keep the two in step.
  */
 
 import type {
@@ -49,22 +30,9 @@ export {
 } from '../types/objective';
 
 /**
- * What each registered kind measures and what its `spec` must carry — the ONE
- * model-facing statement of both.
- *
- * IT LIVES HERE FOR THE REASON {@link VERIFIER_KINDS} DOES, one line up: the
- * vocabulary is reachable from {@link swarmValidity} and the registry is not, so a
- * refusal that wants to name the whole shape at CALL time has to read it from here.
- * Without it the caller learned the shape one field at a time from the registry's own
- * `bind`, which runs after the run has started — the measured incident this table
- * exists to end: five round trips, four of them spent discovering a field.
- *
- * `specFields` is the field LIST and deliberately not a second copy of the schema.
- * `verifier-registry.ts` owns the types, the ranges and the cross-field rules; this
- * says which keys a caller has to send, which is the half a refusal has to print. The
- * two are held together behaviourally rather than by comment: a test binds a spec
- * carrying exactly these keys through the real registry and fails if the registry
- * wants a key this list omits, or ignores one it names.
+ * The model-facing statement of each registered kind and the `spec` keys it needs.
+ * Lives here so {@link swarmValidity} can read it at call time; a test holds
+ * `specFields` equal to what the registry's schema requires.
  */
 export const VERIFIER_KIND_DOC = {
   'exec-ratio': {
@@ -73,29 +41,13 @@ export const VERIFIER_KIND_DOC = {
     specFields: ['params', 'reference', 'body', 'targetOps', 'lowerBoundOps'],
   },
 } satisfies Record<VerifierKind, {
-  /** When this instrument is the right one, in the caller's terms. */
   readonly summary: string;
-  /** Every key the kind's own schema requires inside `spec`. */
   readonly specFields: readonly string[];
 }>;
 
 /**
- * How much room a floor leaves, as a fraction of the best known honest cost.
- *
- * Reported, never thresholded: no single number is right for every problem, and a
- * threshold would either forbid legitimately tight bounds or wave through the
- * majority-vote floor. What the spec requires is that the margin is computed and
- * surfaced, because the failure being designed against was a thin margin nobody
- * had ever looked at.
- *
- * Returns 0 when the floor sits exactly at the best known cost and 1 when the
- * floor is 0. Negative means the floor already EXCEEDS the best known honest
- * cost, which refutes the floor outright.
- *
- * A named function rather than an inline expression because the sign convention
- * depends on `direction` and getting it backwards inverts the check it exists to
- * perform — the exact class of mistake the floor described in *The floor* was. It is
- * also the predicate *Floor margin*'s C1 check and the Lean model are stated over.
+ * Room a floor leaves, as a fraction of the best known honest cost. Reported, never
+ * thresholded. 0 at the best known cost, 1 when the floor is 0; negative refutes the floor.
  */
 export function floorMargin(floor: Floor, direction: ObjectiveDirection): number {
   const best = floor.bestKnownHonest;
@@ -107,16 +59,8 @@ export function floorMargin(floor: Floor, direction: ObjectiveDirection): number
 }
 
 /**
- * The gate. Total over {@link PUBLICATION_SURFACES} on purpose: the seal admits no
- * per-surface exception, so the surface is an argument the caller must NAME rather
- * than a discriminator this function reads. A new writer therefore cannot reach a
- * store without choosing a member of the enumeration.
- *
- * A sealed state with a recorded {@link FloorRederivation} admits again — that is
- * the retroactive publication *The publication seal* allows, and it is the one edge
- * out of a seal. Tested with `!== null` and never for falsiness: a re-derivation is
- * present or absent, and absent is not the same claim as a re-derivation that
- * adjudicated nothing.
+ * The publication gate, total over {@link PUBLICATION_SURFACES}: the caller must name
+ * the surface. A sealed state with a recorded {@link FloorRederivation} admits again.
  */
 export function admitsPublication(
   state: PublicationState, surface: PublicationSurface,
@@ -128,13 +72,7 @@ export function admitsPublication(
   return { kind: 'refused', surface, breach: state.breach };
 }
 
-/**
- * The disclosure, or `null` when the carry was not suppressed.
- *
- * `null` is "not suppressed". It is NOT the same claim as a suppression of zero
- * cells: a sealed run that reached no new best still had its carry axis voided, and
- * the report must say so.
- */
+/** The disclosure, or `null` when not suppressed (distinct from a suppression of zero cells). */
 export function carrySuppression(
   state: PublicationState, carry: PublishingCarry, suppressedCells: number,
 ): CarrySuppression | null {
@@ -152,8 +90,7 @@ export function carrySuppression(
   };
 }
 
-/** Derive the comparison axes from the objective rather than from measurements.
- * This makes a verifier unable to rename, add, or invert an objective dimension. */
+/** Axes come from the objective, so a verifier cannot rename, add, or invert a dimension. */
 export function paretoObjectiveAxes(objective: InstancedObjective | VectorObjective): ParetoAxes {
   const axes = objective.kind === 'instanced'
     ? objective.instances.map((id) => ({ id, direction: objective.direction }))
@@ -193,8 +130,6 @@ export function validateParetoEvidence(
   return { evidence };
 }
 
-/** `left` dominates `right` iff it is weakly better on every declared axis and
- * strictly better on at least one. */
 export function dominatesPareto(
   axes: readonly ParetoAxis[], left: ParetoEvidence, right: ParetoEvidence,
 ): boolean {
@@ -216,8 +151,7 @@ export function dominatesPareto(
   return strict;
 }
 
-/** Return the nondominated candidates in their supplied order. Input order is the
- * deterministic tie rule; equal vectors remain equally nondominated. */
+/** Nondominated candidates in supplied order; equal vectors remain equally nondominated. */
 export function paretoFront<Candidate extends { readonly evidence: ParetoEvidence }>(
   axes: readonly ParetoAxis[], candidates: readonly Candidate[],
 ): readonly Candidate[] {
@@ -233,17 +167,8 @@ export function paretoFront<Candidate extends { readonly evidence: ParetoEvidenc
 }
 
 /**
- * Is `candidate` better than `incumbent` in this direction?
- *
- * STRICTLY better — a tie does not displace. A tie carries no signal, and
- * `ORDER BY value DESC` over equal values is row order; mcts/convergence.ts:56-93
- * is the live precedent for refusing to read a winner out of a tie.
- *
- * A named function rather than an inline comparison for three reasons the rule
- * admits: it is the definition monotone displacement (*The records store*) is stated
- * over, the Lean invariant S2 (*The Lean invariants*) quantifies over it by name, and
- * its three intended call sites — displacement, eviction, and a cell's best — must
- * move in lockstep or the store stops being monotone in one of them.
+ * Strictly better: a tie does not displace. Displacement, eviction and a cell's
+ * best must all use this so the store stays monotone (Lean invariant S2).
  */
 export function isBetter(
   candidate: number, incumbent: number, direction: ObjectiveDirection,
@@ -252,24 +177,9 @@ export function isBetter(
 }
 
 /**
- * The normalisation *Raw units* leaves to the harness: the raw measurement mapped
- * onto the [0,1] a search climbs.
- *
- * `0` means "no better than the baseline the harness measured" and `1` means
- * "reached the declared target". The BASELINE is an argument rather than a field on
- * the objective because *Measured baseline* forbids a caller supplying one — it is
- * measured on the workspace as found, before any candidate exists.
- *
- * `null` means THERE IS NO RANGE TO SCORE ON: the baseline already meets the target,
- * or a `log` scale was asked for over a value that has no logarithm. Null rather than
- * 0, because a degenerate span makes every candidate saturate and a fabricated 0
- * would be indistinguishable from a candidate that genuinely improved on nothing —
- * the caller refuses the run instead — *Measured baseline*'s second normative
- * consequence.
- *
- * A named function for the same reason as {@link floorMargin} and {@link isBetter}:
- * the direction and the scale both invert the arithmetic, getting either backwards
- * silently reverses the search, and this is the expression *Raw units* is stated as.
+ * The raw measurement mapped onto [0,1]: 0 is the measured baseline, 1 the declared
+ * target. `null` when there is no range to score on (baseline meets the target, or
+ * `log` over a value with no logarithm); the caller refuses the run.
  */
 export function normalisedScore(input: {
   readonly value: number;
@@ -291,7 +201,6 @@ export function normalisedScore(input: {
   return Math.min(1, Math.max(0, progress / span));
 }
 
-/** The measurable reduction of an objective, or null when none exists. */
 export function measuredHalf(objective: Objective): MeasuredObjective | null {
   if (objective.kind === 'witness') {
     if (!objective.proxy) return null;
@@ -300,12 +209,7 @@ export function measuredHalf(objective: Objective): MeasuredObjective | null {
     return proxy && { ...proxy, witness: objective.check };
   }
 
-  // BOTH multi-axis kinds return null, and `instanced` was the one that did not. It
-  // carries every field a scalar does, so it fell through this function and was measured
-  // as though its `instances` were not there — the refusal below already said "measured
-  // per component or per instance" while only the component half was reachable. A run
-  // that reduces a declared front to one aggregate number is the accepted-and-ignored
-  // axis *Accepted and ignored* refuses, so the objective's own kind is what refuses.
+  // Multi-axis kinds have no single measurable reduction (*Accepted and ignored*).
   if (objective.kind === 'vector' || objective.kind === 'instanced') return null;
 
   return {

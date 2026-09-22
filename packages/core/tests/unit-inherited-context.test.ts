@@ -1,9 +1,4 @@
-/**
- * Unit tests: whole-message branch context inheritance (THINKING-AUDIT §4 #10).
- *
- * The fix replaces the char-slice (`.slice(-2000)` / `.slice(-800)`) that severed
- * the oldest surviving message mid-word with a last-N WHOLE-message builder.
- */
+/** Branch context inherits the last N whole messages, never a char-slice (THINKING-AUDIT §4 #10). */
 
 import { describe, test, expect } from 'bun:test';
 import {
@@ -49,8 +44,6 @@ describe('formatInheritedContext', () => {
   test('a kept message survives intact even if it is very long', () => {
     const long = 'X'.repeat(10_000);
     const out = formatInheritedContext([{ role: 'user', content: long }]);
-    // The old char-slice would have dropped the leading characters; the
-    // message-level builder keeps the whole thing.
     expect(out).toBe(`user: ${long}`);
   });
 

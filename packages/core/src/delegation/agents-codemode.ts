@@ -1,35 +1,8 @@
 /**
- * `agents.*` — the delegation tool, projected into the codemode sandbox.
- *
- * This is the bridge that makes a WORKFLOW an ordinary crafted tool: LLM-authored
- * JS inside `eval` already reaches `llm.*`, `workspace.*`, `web.*` and
- * every crafted tool in `tools.*`, so once it can also delegate, a deterministic
- * script over nondeterministic agent calls is just code — savable via
- * `workspace.createTool`, callable as `tools.<name>()`, schedulable via
- * `agent.schedule`, EMA-scored
- * and shareable like every other craft. No workflow DSL, graph engine, step store
- * or scheduler is needed, because each of those already exists here under a
- * different name.
- *
- * It is a PROJECTION, not a second implementation: every member funnels into
- * `dispatchAgentsAction` over the very same `AgentsToolDeps` the top-level
- * `agents` tool holds, so delegation depth, budgets, roster addressing and the
- * sole sub-agent path are shared, not mirrored. Which members exist is decided by
- * `agentsActionsFor(deps)` — the identical structural gate the tool's action
- * enum and the prompt's Delegation ladder read. An actor with no team deps has
- * no `agents.hire` in its sandbox because the member is never created.
- *
- * Deliberately NOT projected: the workspace-clone `forkAgent` RPC (clone the
- * whole agent DO at a message — the UI's fork-chat, a workspace operation and
- * not a delegation). It rejects while a turn is in flight and cloning the actor
- * mid-script is not delegation either.
- *
- * One honest limitation, stated in the swarm docstring the model reads: a search
- * started in here rides the enclosing `eval` call, and that job kind
- * declines background resume (side effects can't be re-run). Quick orchestration
- * belongs in the sandbox; one long expensive search that must survive an
- * eviction belongs at the top-level tool, which resumes from its search
- * checkpoint.
+ * `agents.*` in the codemode sandbox: a projection of `dispatchAgentsAction` over the same
+ * `AgentsToolDeps`, gated by `agentsActionsFor(deps)`. The workspace-clone `forkAgent` RPC
+ * is not projected. A search started here rides the enclosing `eval` job, which declines
+ * background resume.
  */
 
 import { readExecSignal } from '../execution/signal';
@@ -39,9 +12,7 @@ import { projectJsonValue } from '../utils/json';
 import * as v from 'valibot';
 import type { CodemodeProvider } from '../tools/sandbox-contract';
 import { TOOL_REACH, type AgentsToolAction } from '../tools/registry';
-// Beside the preset table it is rendered from, not beside the other doctrine: the
-// sandbox declaration and the native schema must show the same presets, and they can
-// only be the same if both read the rows.
+// The sandbox declaration and native schema must render presets from the same rows.
 import { SWARM_PRESET_DOCTRINE } from '../strategy/swarm';
 import { isJsonObject, JsonValueSchema, type JsonObject } from '../utils/json';
 import {
@@ -56,19 +27,7 @@ import {
 
 import { renderThrownChain } from '../obs/index';
 
-/**
- * The sandbox-visible declaration of each action, one block per member.
- *
- * Gating is per ACTION, not per field: the only deps shapes any backend wires
- * are `{swarm}` (subordinates, CLI local sessions, nodes) and `{swarm, team,
- * peers}` (the workspace orchestrator), so a field that would need finer gating
- * cannot occur. If one ever did, `dispatchAgentsAction` already answers it with
- * a sharp error naming the missing transport.
- *
- * Because these are literals rather than deps-derived text, the same action set
- * renders byte-identically on every backend — the sandbox contract does not
- * change shape depending on where the agent happens to be running.
- */
+/** Sandbox declaration per action. Literals, so every backend renders the same contract. */
 const AGENTS_CODEMODE_MEMBER_DOCS = {
   swarm: `  /** Run a configured search whose candidates are MEASURED rather than judged.
    *  You name the shape with \`preset\` and what counts with \`objective\`, and
@@ -125,12 +84,8 @@ const AGENTS_CODEMODE_RETURNS = {
   dismiss: 'Promise<unknown>',
 } satisfies Record<AgentsToolAction, string>;
 
-/** Render ONE action's sandbox input object from {@link AGENTS_ACTION_FIELDS}
- *  — the same lists the tool schema and the parse read. Field order, names,
- *  optionality and types all come from that single source plus the two tables
- *  beside it, so the sandbox contract cannot drift from the surface it mirrors
- *  (this rendering is exactly where a hand-written copy once lost the swarm's
- *  `name` field). */
+/** Render one action's sandbox input from {@link AGENTS_ACTION_FIELDS}, the source the
+ *  tool schema and parse share. */
 function renderInputVariant(
   fields: readonly (keyof typeof AGENTS_FIELD_TS_TYPES)[],
   variant: AgentsActionInputVariant,
@@ -152,16 +107,7 @@ function renderInputVariant(
   ].join('\n');
 }
 
-/**
- * The `hire` doc's SECOND HALF, rendered only where the port that runs a
- * `lifetime:'task'` hire is wired.
- *
- * Split from the literal above rather than folded into it, because this is the
- * one member whose LIFETIME is deps-gated: an actor with no child substrate has
- * `lifetime` in neither its variant list nor its schema, and a docstring
- * describing it anyway would be the only place on this surface that advertised
- * a shape the call refuses.
- */
+/** The `hire` doc's task-lifetime half, rendered only where the task-hire port is wired. */
 const AGENTS_CODEMODE_TASK_LIFETIME_DOC = `  /** \`lifetime\` decides how long a created helper lives. "durable" (the
    *  default) stays in your roster across turns. "task" creates a full agent
    *  for this ONE question — its own context window, its own tool loop — and
@@ -199,14 +145,7 @@ const AGENTS_CODEMODE_DESCRIPTIONS = {
   dismiss: 'Retire a subordinate (archived by default — its context is kept).',
 } satisfies Record<AgentsToolAction, string>;
 
-/**
- * `hire`'s RETURN and one-line DESCRIPTION at the `task` lifetime, gated from
- * the same fact its docstring is.
- *
- * Ungated they advertised a `lifetime:"task"` outcome on an actor whose `hire`
- * cannot produce one — the same overclaim the docstring gate exists to prevent,
- * two lines below it. Three projections of one capability, one condition.
- */
+/** `hire`'s return and description at the `task` lifetime, gated like its docstring. */
 const AGENTS_CODEMODE_TASK_LIFETIME_RETURN =
   'Promise<{ status: "completed" | "failed"; agent: string; lifetime: "task"; role: string;'
   + ' answer: string; transcript: "kept"; elapsed_ms: number; reason?: string } | unknown>';
@@ -238,23 +177,13 @@ function renderTypes(actions: readonly AgentsToolAction[], deps: AgentsToolDeps)
 }
 
 /**
- * Build the codemode provider that exposes `agents.*` to the sandbox.
- *
- * `deps` is a thunk, read per call: the exploration substrate binds the actor's
- * CURRENT model and MCTS session, and the provider outlives them (it is built
- * once with the sandbox tool). Its ACTION set is read once, at construction,
- * because which transports an actor wires is structural and fixed for its
- * lifetime — the same thing that decides its tool schema.
- *
- * At least one deps group must be present; callers gate on that, exactly as
- * they do for `createAgentsTool`.
+ * Build the `agents.*` codemode provider. `deps` is read per call; the action set is fixed
+ * at construction. Callers must supply at least one deps group.
  */
 export function createAgentsCodemodeProvider(deps: () => AgentsToolDeps): CodemodeProvider {
   const initialDeps = deps();
   const actions = agentsActionsFor(initialDeps);
-  // A provider belongs to one Plan/Build tool surface. Other dependencies may
-  // refresh between calls, but the trusted mode must not: eval may
-  // keep running after its originating turn has detached.
+  // The trusted mode is fixed per provider: eval may outlive its originating turn.
   const mode = initialDeps.mode;
   const tools: CodemodeProvider['tools'] = {};
 
@@ -263,13 +192,8 @@ export function createAgentsCodemodeProvider(deps: () => AgentsToolDeps): Codemo
       planAllowed: true,
       description: memberDescription(action, initialDeps),
       execute: (...args: unknown[]) => branchableToolCall(async () => {
-        // The node sandbox appends its exec context as a trailing argument, so a
-        // member called with no options of its own arrives as `list({ signal })`.
-        // That object is the HOST's, never a field the script wrote: it is found
-        // by the signal it carries and taken out of the input, because an
-        // injected field refused as unknown would refuse the call the script
-        // actually made. Reading it positionally (`args[1]`) also lost
-        // cancellation for every zero-argument call.
+        // The node sandbox appends its exec context as a trailing argument; find it by its
+        // signal and remove it from the input so it is not refused as an unknown field.
         let context: unknown;
 
         for (const arg of args) {
@@ -279,14 +203,12 @@ export function createAgentsCodemodeProvider(deps: () => AgentsToolDeps): Codemo
         const raw = args[0] === context ? undefined : args[0];
         const parsedRaw = raw === undefined ? undefined : v.safeParse(JsonValueSchema, raw);
 
-        // Reason first, as every refusal on this surface: a script branching on
-        // the class must not parse prose to learn its call was malformed.
+        // Reason first, so a script can branch on the class without parsing prose.
         if (parsedRaw && (!parsedRaw.success || !isJsonObject(parsedRaw.output))) {
           return { success: false, reason: 'bad_input', error: `agents.${action}: expects a single options object` };
         }
 
-        // `action` is written last: the member the script called decides it,
-        // never a field in the object the script passed.
+        // `action` comes from the called member, never from the script's object.
         const candidate: JsonObject = {};
 
         if (parsedRaw?.success) Object.assign(candidate, parsedRaw.output);
@@ -312,10 +234,7 @@ export function createAgentsCodemodeProvider(deps: () => AgentsToolDeps): Codemo
   }
 
   return {
-    // The namespace name is the registry's declared reach for this capability,
-    // not a literal here: TOOL_REACH is what says `agents` is reachable in the
-    // sandbox at all, so a declaration that took that away would fail to
-    // compile rather than leave this provider advertising a dead namespace.
+    // The namespace name comes from TOOL_REACH, so removing sandbox reach fails to compile.
     name: TOOL_REACH.agents.codemode,
     types: renderTypes(actions, initialDeps),
     tools,

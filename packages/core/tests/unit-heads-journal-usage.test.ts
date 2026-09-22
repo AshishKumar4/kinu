@@ -1,18 +1,4 @@
-/**
- * What the heads journal can say about a head's cost — including that it does
- * not know.
- *
- * Every usage column is NULLable with no default, so a head aborted before its
- * first model call and a head that genuinely cost nothing are different rows,
- * and a split nobody measured stays unmeasured. Absence is SQL NULL and comes
- * back as an absent `Usage` field.
- *
- * Every field has a column, derived from `USAGE_FIELDS` so a field added to
- * the type cannot be forgotten here. That includes the five fields beyond
- * input and output — a fork's cache reads and writes, its reasoning tokens,
- * and its Workers AI `neurons`, which is the one cost figure a provider
- * actually bills in.
- */
+/** Heads journal usage: every `Usage` field has a NULLable, default-free column, and absence reads back as an absent field. */
 
 import { describe, test, expect } from 'bun:test';
 import { Database } from 'bun:sqlite';
@@ -23,8 +9,7 @@ import type { HeadInput, HeadReport, MergeResult } from '../src/heads/index';
 import { makeSql, makeExecRaw, createTestActor } from './helpers';
 import { defaultLoopOrigin } from '../src/scaffold/bootstrap';
 
-/** Every usage column of one head, named through the map rather than by hand: a
- *  column added to `HEAD_USAGE_COLUMNS` is asserted below without editing here. */
+/** Named through the map, so a new `HEAD_USAGE_COLUMNS` entry is asserted without editing here. */
 
 function storedUsageColumns(db: Database, actorId: string, id: string): Record<string, number | null> {
   const columns = USAGE_FIELDS.map((field) => HEAD_USAGE_COLUMNS[field]);
@@ -34,9 +19,7 @@ function storedUsageColumns(db: Database, actorId: string, id: string): Record<s
   ).all(actorId, id)[0] ?? {};
 }
 
-/** A journal over a fresh database, bound to that database's own main actor —
- *  the journal is actor-private, so the owner has to come from the same store
- *  whose rows it is about to write. */
+/** Bound to the database's own main actor: the journal is actor-private. */
 function newJournal() {
   const db = new Database(':memory:');
   const execRaw = makeExecRaw(db);
@@ -47,15 +30,12 @@ function newJournal() {
   return { db, sql, actor, journal: new HeadJournal(sql, actor) };
 }
 
-/** What a head whose provider said nothing looks like in storage: NULL in every
- *  usage column, never a row of zeros. */
+/** NULL in every usage column, never zeros. */
 const NOTHING_REPORTED: Readonly<Record<string, null>> = Object.fromEntries(
   USAGE_FIELDS.map((field) => [HEAD_USAGE_COLUMNS[field], null]),
 );
 
-/** One head as a Workers AI fork reports itself: most of the prompt served from
- *  cache, and a FRACTIONAL neuron count that is the provider's own billing
- *  measurement. Both were dropped on the line that received them. */
+/** Cache-heavy prompt and a fractional neuron count. */
 const FULLY_REPORTED = {
   input: 9_140, output: 312, cacheRead: 8_704, cacheWrite: 436,
   cacheWrite1h: 128, reasoning: 96, neurons: 1_483.75,
@@ -90,9 +70,7 @@ describe('a fresh journal cannot fabricate a cost it was never told', () => {
       `SELECT name, type, "notnull", dflt_value FROM pragma_table_info('head_journal')`,
     ).all();
 
-    // The map is total over `keyof Usage`, which the compiler enforces. This is
-    // the other half: that the list the DDL is generated from is the same list
-    // every other reader of a Usage walks.
+    // The list the DDL is generated from is the list every Usage reader walks.
     expect(Object.keys(HEAD_USAGE_COLUMNS).sort()).toEqual([...USAGE_FIELDS].sort());
 
     for (const field of USAGE_FIELDS) {
@@ -103,8 +81,7 @@ describe('a fresh journal cannot fabricate a cost it was never told', () => {
       expect(column?.dflt_value).toBeNull();
     }
 
-    // A neuron count is fractional; INTEGER affinity would round the one figure
-    // here that a provider actually bills in. Token counts are whole.
+    // A neuron count is fractional; token counts are whole.
     expect(info.find((c) => c.name === HEAD_USAGE_COLUMNS.neurons)?.type).toBe('REAL');
     expect(info.find((c) => c.name === HEAD_USAGE_COLUMNS.input)?.type).toBe('INTEGER');
   });
@@ -113,8 +90,7 @@ describe('a fresh journal cannot fabricate a cost it was never told', () => {
     const { db, actor, journal } = newJournal();
     journal.insertSpawn(spawn('h-live', 'run-live'));
 
-    // insertSpawn names no usage column, so this is the DDL's own answer: with
-    // `DEFAULT 0` it claimed the head had spent nothing.
+    // insertSpawn names no usage column, so this is the DDL's own answer.
     expect(storedUsageColumns(db, actor.actorId, 'h-live')).toEqual(NOTHING_REPORTED);
   });
 
@@ -126,7 +102,7 @@ describe('a fresh journal cannot fabricate a cost it was never told', () => {
 
     expect(journal.readRun('run-cf')?.heads.find((h) => h.id === 'h-cf')?.usage)
       .toEqual({ ...FULLY_REPORTED });
-    // REAL, so the fraction survives the round trip rather than being truncated.
+    // REAL, so the fraction survives the round trip.
     expect(journal.readHead('h-cf')?.neurons).toBe(1_483.75);
     expect(journal.readTree('run-cf')[0]?.token_cache_read).toBe(8_704);
   });
@@ -137,15 +113,7 @@ describe('a fresh journal cannot fabricate a cost it was never told', () => {
     journal.insertSpawn(spawn('h-one', 'run-one'));
     journal.recordReport(report('h-one', FULLY_REPORTED));
 
-    // TWO SCOPINGS OF ONE PROJECTION, held to it here rather than only claimed
-    // in the docstring. `readHeadView` named `token_input` and `token_output`
-    // alone, so a reader that opened ONE branch was told its provider had
-    // reported no cache reads, no reasoning tokens and no `neurons` — while the
-    // run projection beside it reported all seven off the same row. A column the
-    // query never asked for comes back `undefined`, which is exactly what a
-    // provider that reported nothing comes back as, so the surface that renders
-    // one branch's spend (`read-models/node-transcript.ts`) could not have told
-    // the two apart.
+    // Two scopings of one projection: the single-branch read must name every usage column too.
     const fromRun = journal.readRun('run-one')?.heads.find((h) => h.id === 'h-one')?.usage;
     expect(fromRun).toEqual({ ...FULLY_REPORTED });
     expect(journal.readHeadView('h-one')?.usage).toEqual({ ...FULLY_REPORTED });
@@ -165,8 +133,7 @@ describe('a fresh journal cannot fabricate a cost it was never told', () => {
     expect(storedUsageColumns(db, actor.actorId, 'h-zero'))
       .toEqual({ ...NOTHING_REPORTED, token_input: 0, token_output: 0 });
 
-    // The distinction the columns now carry is the distinction the view serves:
-    // one head said nothing, the other measured itself at zero.
+    // One head said nothing, the other measured itself at zero.
     const heads = journal.readRun('run-1')?.heads ?? [];
     expect(heads.find((h) => h.id === 'h-silent')?.usage).toEqual({});
     expect(heads.find((h) => h.id === 'h-zero')?.usage).toEqual({ input: 0, output: 0 });

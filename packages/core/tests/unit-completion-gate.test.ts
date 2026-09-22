@@ -1,7 +1,4 @@
-// The mechanical completion gate: a one-shot run does not get to end on the
-// model's own say-so. These pin the two properties that make it a mechanism
-// rather than a prompt — it triggers on what the turn DID, and the state it
-// shows is read by the harness, so no claim can satisfy it.
+// The mechanical completion gate triggers on what the turn did and shows harness-read state, so no claim satisfies it.
 import { describe, test, expect } from 'bun:test';
 import {
   CompletionGate, observeCompletionState, completionGateText,

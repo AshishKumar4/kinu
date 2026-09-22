@@ -1,26 +1,5 @@
-// Where a delegation's ROLE and TIER actually reach the work.
-//
-// `tier` is documented as "the ONE routing input" for a delegation, the resolver
-// turns it into a concrete model, and the run freezes that resolution into its
-// own ledger row before it can detach. All three were true and the nodes still
-// ran the CALLER's model, because nothing connected the resolved spec to the
-// model a node was handed. The snapshot therefore recorded a model that never
-// executed — worse than not routing at all, since the spend and the provenance
-// both named it.
-//
-// Four properties, each asserted where it can actually fail:
-//
-//   1. A first attempt runs the resolved tier's model, and the ledger row names
-//      that same model.
-//   2. A role's own tier routes without the caller naming one, and the
-//      provenance keeps the difference.
-//   3. A re-drive runs the model its FROZEN snapshot names, however today's
-//      catalog has since been edited.
-//   4. A re-drive with no stored `preset` takes the preset from that snapshot's
-//      role, not from the literal fallback. The durable row holds the raw tool
-//      input, so a first attempt that took its preset from its role's default
-//      stored none — and `ideate`'s axes re-entering an audit's own tree is a
-//      different search wearing the same root id and the same claimed epoch.
+// A delegation's resolved role and tier reach the work, and the ledger row names the model
+// that actually ran, including on re-drive from the frozen snapshot.
 import { describe, test, expect } from 'bun:test';
 import { createTestRuntime, toolExecute, scriptedTurnModel } from '@kinu.run/test-utils';
 import { hostedSeatsOver } from './helpers-actor-host';
@@ -42,23 +21,18 @@ import {
 import type { JsonObject } from '../src/utils/json';
 import type { AgentRuntime } from '../src/types/agent-runtime';
 
-/** Two tiers whose models are DISTINGUISHABLE, which is the instrument here:
- *  `default` is what the caller's own turn runs at, `deep` is what a delegation
- *  asking for it has to reach. */
+/** `default` is the caller's own turn; `deep` is what a delegation must reach. */
 const TIERS_V1: TierAssignments = {
   default: { model: 'm-default' },
   deep: { model: 'm-deep-v1' },
 };
 
-/** The same catalog after the owner re-pointed `deep`. Nothing an in-flight
- *  search may notice. */
+/** `deep` re-pointed; an in-flight search must not notice. */
 const TIERS_V2: TierAssignments = {
   default: { model: 'm-default' },
   deep: { model: 'm-deep-v2' },
 };
 
-/** Default preset `ideate`: the one named preset that needs no objective, so a
- *  run under it settles without an instrument. */
 const LEAD: RoleDefinition = {
   description: 'Runs the room.',
   instructions: 'Delegate.',
@@ -67,9 +41,7 @@ const LEAD: RoleDefinition = {
   spawns: '*',
 };
 
-/** Default preset `audit`, which is scored `verify` — so a composition resolved
- *  from THIS role refuses without an objective where one resolved from `lead`
- *  runs. That difference is what makes the stored preset observable. */
+/** Scored `verify`, which makes the stored preset observable. */
 const AUDITOR: RoleDefinition = {
   description: 'Looks for what is wrong.',
   instructions: 'Audit.',
@@ -99,13 +71,7 @@ interface CountingModel {
   readonly calls: () => number;
 }
 
-/** A node's one answer, plus a COUNT of the calls this model served.
- *
- *  Counted inside `doGenerate` rather than off `doGenerateCalls`/`doStreamCalls`
- *  because the two node paths use different halves of the provider interface — a
- *  toolless node completes, an agent node streams — and `scriptedTurnModel`
- *  routes both through this one script. A fixture counting the wrong array reads
- *  zero and asserts nothing. */
+/** Counted in `doGenerate`: toolless nodes complete and agent nodes stream. */
 function countingModel(modelId: string): CountingModel {
   let calls = 0;
 
@@ -130,19 +96,14 @@ function countingModel(modelId: string): CountingModel {
 }
 
 interface Harness {
-  /** The tool's own execute, with the options bag a background re-drive
-   *  carries. Answers a JSON object either way: a settle report or a refusal. */
   readonly execute: (input: AgentsToolInput, options?: ToolExecutionOptions) => Promise<JsonObject>;
   readonly rt: AgentRuntime;
-  /** Every spec the runner asked to have built, in order. */
   readonly resolvedSpecs: string[];
   readonly callerCalls: () => number;
   readonly deepV1Calls: () => number;
   readonly deepV2Calls: () => number;
 }
 
-/** The agents tool over a catalog-bearing actor, with each tier's model
- *  separately observable. */
 function harness(input: {
   readonly envelope: ProfileCatalogEnvelope;
   readonly roleId: string;
@@ -155,13 +116,8 @@ function harness(input: {
 
   const swarm: AgentsSwarmDeps = {
     rt,
-    // One REAL actor per node, over the caller's own database: a routed run
-    // records which model each node ran on, and a node with no actor of its own
-    // would have no claim to record it against.
     hostNode: hostedSeatsOver({ rt, db: testSql.db }).hostNode,
     model: caller.model,
-    // Branching on the three specs this fixture declares rather than a lookup
-    // table, so an unexpected spec is a named failure instead of an undefined.
     resolveModel: (spec) => {
       resolvedSpecs.push(spec);
 
@@ -196,8 +152,7 @@ function harness(input: {
   };
 }
 
-/** The options bag a re-driven durable job arrives with. The marker is a
- *  property of the CALL, because the input IS the stored row. */
+/** The re-drive marker is a property of the call: the input is the stored row. */
 const REDRIVE = { toolCallId: 'tc-redrive', messages: [], [RESUME_REDRIVE_OPTION]: true };
 
 const RoutedResultSchema = v.object({
@@ -209,9 +164,7 @@ const RoutedResultSchema = v.object({
   }),
 });
 
-/** The profile a first attempt would have frozen, built through the REAL
- *  resolver against the v1 catalog — a hand-written snapshot would only prove
- *  the reader reads back whatever this test wrote into it. */
+/** Built through the real resolver, so the reader is not just echoing the test. */
 function frozenSnapshot(roleId: string): SwarmProfileSnapshot {
   const resolved: ResolvedTurnProfile = resolveTurnProfile({
     envelope: envelopeOf(TIERS_V1, 1),
@@ -229,11 +182,7 @@ function frozenSnapshot(roleId: string): SwarmProfileSnapshot {
   };
 }
 
-/** One interrupted swarm, in the state a first attempt leaves when its host
- *  dies: a `running` ledger row whose config carries the frozen profile, and the
- *  root tree row the attempt had already written. Both halves matter — a
- *  re-entry adopts the existing root rather than minting one, so a ledger row
- *  with no tree behind it is not a resumable search. */
+/** A re-entry adopts the existing root, so a ledger row with no tree is not resumable. */
 function seedInterruptedRun(input: {
   readonly rt: AgentRuntime;
   readonly task: string;
@@ -274,16 +223,10 @@ describe('a delegated tier routes the model its nodes run', () => {
       depth: 1,
     }));
 
-    // ROUTED. The tier's model served every node call and the caller's served
-    // none — the assertion that fails on a runner passing `deps.model` down.
     expect(h.resolvedSpecs).toEqual(['m-deep-v1']);
     expect(h.deepV1Calls()).toBeGreaterThan(0);
     expect(h.callerCalls()).toBe(0);
 
-    // AND THE RECORD AGREES. The same model in the snapshot the run returns and
-    // in the ledger row a later re-drive reads. This pairing is what was broken:
-    // the row said `m-deep-v1` while `m-default` did the work, so both the spend
-    // and the provenance named a model that never ran.
     expect(result.profile.profile.tier).toEqual({ id: 'deep', model: 'm-deep-v1' });
     expect(result.profile.sources.tierSource).toBe('explicit');
 
@@ -299,8 +242,7 @@ describe('a delegated tier routes the model its nodes run', () => {
   });
 
   test('a role\'s own tier routes without the caller naming one', async () => {
-    // `auditor` declares tier `deep`, and nothing in this call says so. The
-    // provenance has to report role-derived rather than flatten it to explicit.
+    // Provenance must say role-derived, not explicit.
     const h = harness({ envelope: envelopeOf(TIERS_V1, 1), roleId: 'auditor' });
 
     const result = v.parse(RoutedResultSchema, await h.execute({
@@ -318,8 +260,6 @@ describe('a delegated tier routes the model its nodes run', () => {
   });
 
   test('an unrouted actor — no catalog — still runs its nodes on the caller\'s model', async () => {
-    // The honest unrouted case, kept working: no profile authority means no tier
-    // to route to, so the seam is never consulted and nothing refuses.
     const { rt, testSql } = createTestRuntime();
     const caller = countingModel('m-default');
 
@@ -343,9 +283,7 @@ describe('a re-drive continues under the profile it started under', () => {
   const task = 'audit the retry path for lost work';
 
   test('a catalog edit between the interruption and the re-drive changes nothing', async () => {
-    // TODAY's catalog points `deep` at m-deep-v2, and the tool is wired with it.
-    // The only thing keeping this run on m-deep-v1 is that a re-drive reads its
-    // frozen row instead of resolving again.
+    // Only the frozen row keeps this run on m-deep-v1.
     const h = harness({ envelope: envelopeOf(TIERS_V2, 2), roleId: 'lead' });
     seedInterruptedRun({ rt: h.rt, task, roleId: 'lead' });
 
@@ -361,21 +299,8 @@ describe('a re-drive continues under the profile it started under', () => {
   });
 
   test('the stored role\'s preset selects the axes, not the literal fallback', async () => {
-    // PAIRED, because either half alone proves nothing. The two calls are
-    // byte-identical — same task, no `preset`, no `objective`, same re-drive
-    // marker — and differ ONLY in the role on the interrupted row they claim.
-    //
-    // `lead`'s default is `ideate`, scored `none`. `auditor`'s is `audit`, which is
-    // scored `verify` and, with nothing to measure, resolves to its judged sweep. So
-    // the outcome names which preset was resolved; route both to `ideate` and both
-    // calls simply run, discriminating nothing.
-    //
-    // THE DISCRIMINATOR IS THE JUDGE, not a refusal. A named preset with no objective
-    // is a legal call, so `audit` re-drives into a judged sweep rather than a scolding.
-    // What separates the two presets is that one of them ASKS A JUDGE — this harness
-    // scripts a model that returns nothing parseable, so the ensemble comes back empty
-    // and the run faults on its scorer. `ideate` is scored `none` and can never produce
-    // that, which is exactly the asymmetry the pair needs.
+    // Calls identical except the row's role: `lead` defaults to `ideate`, `auditor` to `audit`,
+    // and only `audit` asks this harness's unparseable judge and faults.
     const stored = harness({ envelope: envelopeOf(TIERS_V2, 2), roleId: 'lead' });
     seedInterruptedRun({ rt: stored.rt, task, roleId: 'auditor' });
     const pending = stored.execute({ action: 'swarm', task }, REDRIVE);
@@ -390,37 +315,25 @@ describe('a re-drive continues under the profile it started under', () => {
     }, REDRIVE));
 
     expect(result.preset).toBe('ideate');
-    // The preset carries its own width, and nothing in the call named a number:
-    // `ideate` fans 5. A preset read off the stored role brings its caps with it.
     expect(result.caps.branches).toEqual({ value: 5, origin: 'preset' });
   });
 
   test('the stored profile is readable before the claim, and only for a running row', () => {
-    // The reader the preset derivation depends on. It has to answer BEFORE
-    // `reenterSwarm` claims the row, because the axes resolve first — and it
-    // must make the same choice of row, or a preset from one row would drive a
-    // tree re-entered from another.
+    // Must pick the same row `reenterSwarm` claims, before it claims it.
     const { rt } = createTestRuntime();
     initMctsSearchTable(rt.storage.execRaw);
     expect(readStartedSwarmProfile(rt.storage, rt.actor, task)).toBeNull();
 
     seedInterruptedRun({ rt, task, roleId: 'auditor' });
     expect(readStartedSwarmProfile(rt.storage, rt.actor, task)?.profile.defaultPreset).toBe('audit');
-    // Task-keyed, like the claim itself: another task's re-drive sees nothing.
     expect(readStartedSwarmProfile(rt.storage, rt.actor, 'some other task')).toBeNull();
 
-    // Settled rows are not re-entered, so their profile is not offered either.
     new MctsSearchStore(rt.storage.sql, rt.actor).converge('root-auditor', 0, Date.now());
     expect(readStartedSwarmProfile(rt.storage, rt.actor, task)).toBeNull();
   });
 });
 
-/* ── per-node model routing (`models`) ────────────────────────────────────── */
-
-/** What one routed node's model was, observed where a node can only get it by
- * actually running on it: the model's own answer names its id. `scriptedTurnModel`
- * returns `answered by <modelId>`, so a node running the wrong model says so in
- * its own words. */
+/** `scriptedTurnModel` answers `answered by <modelId>`, so a node names its model. */
 const PerNodeResultSchema = v.object({
   preset: v.string(),
   caps: v.object({ branches: v.object({ value: v.number(), origin: v.string() }) }),
@@ -431,8 +344,6 @@ const PerNodeResultSchema = v.object({
   })),
 });
 
-/** A harness whose resolver knows TWO extra specs besides the caller's model, each
- * separately countable, plus the ordered specs the runner asked to build. */
 function perNodeHarness() {
   const { rt, testSql } = createTestRuntime();
   const caller = countingModel('m-default');
@@ -442,9 +353,6 @@ function perNodeHarness() {
 
   const swarm: AgentsSwarmDeps = {
     rt,
-    // One REAL actor per node, over the caller's own database: a routed run
-    // records which model each node ran on, and a node with no actor of its own
-    // would have no claim to record it against.
     hostNode: hostedSeatsOver({ rt, db: testSql.db }).hostNode,
     model: caller.model,
     resolveModel: (spec) => {
@@ -483,9 +391,6 @@ describe('`models` routes each node to its own assigned model', () => {
     }));
 
     expect(result.candidates).toHaveLength(2);
-    // ONE model did the work and the resolver was NEVER consulted: no list, no
-    // routing, and the caller's own model served every node — exactly the run
-    // this surface made before the field returned.
     expect(h.resolvedSpecs).toEqual([]);
     expect(h.callerCalls()).toBeGreaterThanOrEqual(2);
     expect(h.aCalls()).toBe(0);
@@ -502,25 +407,18 @@ describe('`models` routes each node to its own assigned model', () => {
     }));
 
     expect(result.candidates).toHaveLength(4);
-    // THE SEAM, ONCE PER SPEC: the whole list resolves before any node runs, not
-    // per node mid-run, and not twice for a spec two slots share.
+    // Resolved once per spec, before any node runs.
     expect(h.resolvedSpecs).toEqual(['m-alpha', 'm-beta']);
-    // ROUND-ROBIN BY SLOT over a wave of four: alpha, beta, alpha, beta. Both
-    // models served calls and the caller's own served none.
     expect(h.aCalls()).toBeGreaterThanOrEqual(2);
     expect(h.bCalls()).toBeGreaterThanOrEqual(2);
     expect(h.callerCalls()).toBe(0);
-    // AND THE NODES NAME THEM: each candidate's answer is the model's own
-    // `answered by <id>`, so the routing is observable in the recorded candidates
-    // rather than only in the fixture's counters.
     const byModel = result.candidates.map((candidate) => candidate.artifact);
     expect(byModel.filter((text) => text.includes('m-alpha'))).toHaveLength(2);
     expect(byModel.filter((text) => text.includes('m-beta'))).toHaveLength(2);
   });
 
   test('a list shorter than the wave wraps, and one longer than it truncates', async () => {
-    // ONE spec names every node — the degenerate routed run, which must still be
-    // a legal call rather than a demand for list.length === branches.
+    // The list need not match `branches`.
     const one = perNodeHarness();
 
     const oneResult = v.parse(PerNodeResultSchema, await one.execute({
@@ -532,9 +430,6 @@ describe('`models` routes each node to its own assigned model', () => {
     expect(one.aCalls()).toBeGreaterThanOrEqual(3);
     expect(one.bCalls()).toBe(0);
     expect(one.callerCalls()).toBe(0);
-    // And a list LONGER than the wave: the modulo truncates rather than refusing,
-    // so a caller tuning one shared list across presets of different widths never
-    // meets a composition rule.
     const long = perNodeHarness();
 
     const longResult = v.parse(PerNodeResultSchema, await long.execute({
@@ -558,8 +453,6 @@ describe('`models` routes each node to its own assigned model', () => {
     await expect(pending).rejects.toMatchObject({ code: 'bad_input' });
     await expect(pending).rejects.toThrow('m-ghost');
     await expect(pending).rejects.toThrow('models');
-    // NOTHING SPENT: no model served a call, so the refusal landed ahead of the
-    // first node rather than one wave in.
     expect(h.aCalls()).toBe(0);
     expect(h.bCalls()).toBe(0);
     expect(h.callerCalls()).toBe(0);
@@ -579,9 +472,7 @@ describe('`models` routes each node to its own assigned model', () => {
   });
 
   test('the identity digest changes when the models change', () => {
-    // TWO CALLS identical except the routing list, resolved through the real
-    // resolver: the digest is the record's identity key, so two runs differing
-    // only in which model each node ran on must not collide in the store.
+    // The digest is the record's identity key, so routing-only differences must not collide.
     const base = { preset: 'custom' as const, label: 'digest', task: 'same task' };
 
     const axes = {

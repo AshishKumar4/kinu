@@ -1,24 +1,6 @@
 /**
- * The durable half of the reactor's wake.
- *
- * A pending event is a promise the workspace made to itself. Until this
- * existed, the only thing keeping that promise was an in-memory debounce
- * timer — so an event admitted seconds before an eviction, or handed back by a
- * compensating signal, sat in `agent_log` with nothing scheduled to look at it
- * again, and waited for the next unrelated ingress.
- *
- * Two invariants, and both are about ORDER rather than end state, so both cases
- * hold the transition open and observe it mid-flight:
- *
- *   1. A fresh unbound reaction yields a wake time. Derived from the same rows
- *      the drain selects, so the wake and the work cannot disagree.
- *   2. Compensation re-establishes it. A host that refuses the signal turn
- *      returns the events to pending, and the re-arm is what makes them
- *      reachable again.
- *
- * The negative control is the self-emitted event: it must yield NO wake, or
- * "there is always a wake" would satisfy every assertion here and the agent
- * would alarm itself in a loop over its own output.
+ * Durable half of the reactor's wake: a fresh unbound reaction arms a wake and compensation re-arms
+ * it; self-emitted events must not, or the agent alarms itself in a loop.
  */
 import { describe, expect, test } from 'bun:test';
 import { Database } from 'bun:sqlite';
@@ -36,12 +18,10 @@ function newEventLog(): EventLog {
   const sql = makeSqlExec(db);
   initEventsHubTables(sql);
 
-  // The inbox is ONE actor's: a delivery admitted for a hired subordinate is
-  // that subordinate's to drain, never the root's.
+  // The inbox is one actor's: a subordinate's delivery is never the root's.
   return new EventLog(sql, createTestActorsOver(db).main);
 }
 
-/** An external delivery — the kind that must wake a turn. */
 function webhook(deliveryId: string): IngressDescriptor {
   return {
     ingress: 'webhook_hmac', variant: 'webhook',
@@ -50,7 +30,6 @@ function webhook(deliveryId: string): IngressDescriptor {
   };
 }
 
-/** The agent's own emission — the anti-self-wake-loop case. */
 function selfEmitted(): IngressDescriptor {
   return {
     ingress: 'self_emit', variant: 'internal', emitting_head_trust: 'self',
@@ -58,13 +37,7 @@ function selfEmitted(): IngressDescriptor {
   };
 }
 
-/**
- * A host that records both halves of the wake and can refuse the turn.
- *
- * `setTimer` NEVER runs the callback: the debounce is exactly the in-memory
- * mechanism under test, so a harness that fired it would drain the events and
- * hide whether anything durable had been armed.
- */
+/** `setTimer` never fires: firing would hide whether anything durable was armed. */
 function watchedHost(opts: { refuse?: boolean } = {}) {
   const enqueued: ProgrammaticTurn[] = [];
   const debounces: number[] = [];
@@ -120,7 +93,7 @@ describe('a pending reaction always has a durable successor wake', () => {
     expect(log.nextPendingDrainAt(now)).toBe(now);
   });
 
-  /** The negative control. Without it, "a wake exists" is vacuously true. */
+  /** Without this, "a wake exists" is vacuously true. */
   test("the agent's own emission wakes nothing", () => {
     const log = newEventLog();
     const now = 1_700_000_000_000;
@@ -146,7 +119,6 @@ describe('a pending reaction always has a durable successor wake', () => {
     log.defer(id, { kind: 'at', ts: now + 60_000 });
 
     expect(log.nextPendingDrainAt(now)).toBe(now + 60_000);
-    // …and once its moment has passed it is ordinary pending work.
     expect(log.nextPendingDrainAt(now + 60_000)).toBe(now + 60_000);
   });
 
@@ -185,21 +157,11 @@ describe('every drain path re-establishes the wake', () => {
 
     orch.scheduleDrain();
 
-    // Both halves, from one call: the debounce coalesces this burst, the arm is
-    // what survives the activation.
     expect(debounces).toHaveLength(1);
     expect(durableArms()).toBe(1);
   });
 
-  /**
-   * The compensation case, held at the exact boundary the defect lived on.
-   *
-   * The refusal arrives AFTER the events were bound to the synthetic turn, so
-   * at the moment compensation runs the rows are consumed and unreachable. The
-   * unbind returns them; the re-arm is what makes returning them mean
-   * anything. Asserted against the arm count taken just before the refusal, so
-   * the admission arm above cannot be mistaken for this one.
-   */
+  /** Counted from just before the refusal, to exclude the admission arm. */
   test('a refused signal turn returns its events to pending AND re-arms the wake', async () => {
     const log = newEventLog();
     const now = Date.now();
@@ -210,12 +172,9 @@ describe('every drain path re-establishes the wake', () => {
 
     await orch.drainPendingEvents();
 
-    // The host was asked, and refused.
     expect(enqueued).toHaveLength(1);
-    // The row is pending again…
     expect(log.pending()).toHaveLength(1);
     expect(log.nextPendingDrainAt(now)).not.toBeNull();
-    // …and something is now scheduled to come back for it.
     expect(durableArms()).toBeGreaterThan(armsBefore);
   });
 

@@ -1,47 +1,6 @@
 /**
- * One scenario, two transports, one durable state.
- *
- * Two backends now drive core's {@link TerminalTransitions}: a Durable Object,
- * whose close rides a fiber and whose wake is an alarm, and a CLI, whose close
- * is awaited inside the process that owns it and whose wake is its next start.
- * The state machine is meant to be the SAME machine under both. Nothing proved
- * that, and two adapters over one lifecycle drift silently — the drift shows up
- * as a reply nobody sent or a model lane paid for twice, on one backend only.
- *
- * So this suite is a differential one. Each scenario is a single script, run
- * twice over two fresh in-memory databases against two deliberately DIFFERENT
- * transports:
- *
- *   • `alarm` — the detached shape. `scheduleRetry` records the armed instant
- *     and a driver fires it on a fresh process; `hold` defers the close onto a
- *     queue the driver drains, so nothing of the close has happened when
- *     `settle` returns.
- *   • `startup` — the process-lifetime shape. `scheduleRetry` records the
- *     instant and does nothing else; `hold` starts the close immediately and the
- *     process awaits it before it exits, so the close is already under way
- *     inside `settle`.
- *
- * Neither is a real backend, and neither imports one: cf-backend and
- * cli-backend are unreachable from here on purpose. What they stand for is the
- * only two things a backend supplies — the effect implementations and the wake
- * transport. If the rows come out identical under both, the machine is
- * transport-independent, which is the property under test.
- *
- * THE ORACLE IS STORAGE, normalized. `terminal_effects` and
- * `tool_effect_claims` are read back and their clock columns collapsed to
- * ownership facts (`due`, `settled`) before the diff, because state OWNERSHIP is
- * what conformance means: which rows exist, in which disposition, with how many
- * attempts against them, and whether the outer transition is closed. The two
- * planes are deliberately given UNEQUAL clock bases so that raw instants cannot
- * coincide — a suite whose normalization was decorative would pass anyway, and
- * a machine that reads its own recorded instants back has to be offset-blind.
- *
- * Two journals ride along in the same snapshot, because the ledger's own rows
- * cannot witness a repeated side effect: `conf_effect_runs` is append-only and
- * counts EXECUTIONS, `conf_effect_output` is keyed on the effect's identity and
- * counts EFFECTS. An interruption after a side effect must make the first read 2
- * and leave the second at 1. That is the guarantee that makes replaying an owed
- * row safe.
+ * Differential conformance: each scenario runs over an `alarm` and a `startup` transport and the
+ * normalized storage must match.
  */
 import { describe, test, expect, beforeAll, afterAll } from 'bun:test';
 import { Database } from 'bun:sqlite';
@@ -65,62 +24,39 @@ import type { ActorHandle } from '../src/identity/actor-handle';
 import { makeSql, makeExecRaw } from './helpers';
 import { createTestActors } from '@kinu.run/test-utils';
 
-/** The response every scenario settles. One turn, one assistant message: the
- *  transition's identity is the pair, and the sequence id is derived from it. */
 const TRANSITION: TerminalTransition = { turnId: 'turn-conformance', messageId: 'msg-answer' };
 
-/** Carried in every effect's recorded input, and written out by the effect's
- *  keyed boundary. An output row holding it proves the input survived storage. */
 const ANSWER = 'the answer this turn settled on';
 
-/**
- * A tool of the SAME turn, claimed before the response settles.
- *
- * The witness for the release policy: `end` may drop a turn's tool claims only
- * once no response of that turn can still be settling, so this row surviving is
- * as much a conformance fact as the terminal row itself.
- */
+/** Same-turn tool claim; `end` must keep it while the turn can still settle. */
 const TOOL_CLAIM: ToolEffectKey = {
   turnId: TRANSITION.turnId, callId: 'write_file#1', digest: 'conformance-tool-digest',
 };
 
-/** The declared sequence, in declared order. Real names, because the ledger's
- *  schema IS the union and a row naming anything else is a different test. */
 const SEQUENCE = [
   'takes', 'event_reply', 'turn_record', 'auto_title',
 ] as const satisfies readonly TerminalEffectName[];
 
-/** The one detached effect: a model lane must not hold the turn queue. Exactly
- *  one, and it is LAST, so a cut on an inline effect leaves an exact suffix
- *  rather than a claim about scheduling. */
+/** Last, so a cut on an inline effect leaves an exact suffix. */
 const DETACHED: TerminalEffectName = 'auto_title';
 
-/** The effect the scripts make report itself owed. A reply channel that is
- *  still open is what `owed` means in production. */
 const HELD: TerminalEffectName = 'event_reply';
 
-/** Implemented by both adapters and absent from {@link SEQUENCE}: what a second
- *  `declare()` on a resumed response would try to add. Implemented on purpose —
- *  a frozen roster has to hold against an effect the adapter COULD run. */
+/** A resumed response's second `declare()` must not add this. */
 const LATE: TerminalEffectName = 'branches';
 
-/** Declared by one scenario and implemented by neither adapter: a row this
- *  build cannot attempt. */
 const UNIMPLEMENTED: TerminalEffectName = 'parent_report';
 
 const IMPLEMENTED: readonly TerminalEffectName[] = [...SEQUENCE, LATE];
 
 const EffectInputSchema = v.object({ answer: v.string() });
 
-/** How long a script waits before recovering: past the first backoff, because an
- *  attempt arms its schedule BEFORE the side effect and a replay inside that
- *  window is deliberately deferred. */
+/** An attempt arms its schedule before the side effect, so an earlier replay is deferred. */
 const PAST_BACKOFF_MS = TERMINAL_EFFECT_RETRY_BASE_MS + 1;
 
 type AdapterKind = 'alarm' | 'startup';
 
-/** Unequal on purpose: identical bases would make the normalization below look
- *  load-bearing when it was not. */
+/** Unequal so the normalization is load-bearing. */
 const CLOCK_BASE = {
   alarm: 1_700_000_000_000,
   startup: 1_700_000_987_654,
@@ -135,9 +71,6 @@ function roster(names: readonly TerminalEffectName[]): OwedEffect[] {
   }));
 }
 
-/** One ledger row with its clock columns collapsed. `due` and `settled` are
- *  ownership facts; the instants behind them are the plane's own clock and say
- *  nothing about which adapter is correct. */
 interface EffectView {
   readonly sequence: string;
   readonly key: string;
@@ -152,9 +85,7 @@ interface EffectView {
   readonly settled: boolean;
 }
 
-/** One claim row. The digest is left out: it is the key's binding rather than
- *  lifecycle state, and a wrong one shows up here anyway as a second row under
- *  the same call id. */
+/** Digest omitted: a wrong one shows up as a second row. */
 interface ClaimView {
   readonly turn: string;
   readonly call: string;
@@ -164,11 +95,9 @@ interface ClaimView {
 interface Snapshot {
   readonly effects: readonly EffectView[];
   readonly claims: readonly ClaimView[];
-  /** Executions per effect key. 2 means a body ran twice. */
+  /** 2 means a body ran twice. */
   readonly runs: Record<string, number>;
-  /** The keyed boundary each effect writes through. 1 row per key, always. */
   readonly outputs: Record<string, string>;
-  /** The order effects actually ran in — the lane's only observable effect. */
   readonly runOrder: readonly string[];
   readonly wake: 'none' | 'due' | 'future';
   readonly inFlight: number;
@@ -189,33 +118,16 @@ interface EffectLedgerRow {
   settled_at: number | null;
 }
 
-/**
- * One workspace, one transport, and the processes that come and go over them.
- *
- * The database outlives every process here, which is the whole point: a
- * `restart` is the isolate dying or the CLI exiting, and what the next process
- * can see is exactly what was written down.
- */
+/** The database outlives every process. */
 class Plane {
   private readonly db = new Database(':memory:');
   private readonly sql = makeSql(this.db);
   private readonly execRaw = makeExecRaw(this.db);
-  /** The owner of every row this plane writes. The database outlives each
-   *  process here, so the actor has to as well: a restart that re-issued one
-   *  would read an empty effect ledger and call it a clean boot. */
   private readonly actor = createTestActors(this.sql, this.execRaw).main;
 
   private clock: number;
   private cut: { readonly phase: TerminalEffectPhase; readonly name: TerminalEffectName } | null = null;
-  /**
-   * The instant this transport was last asked to wake at, consumed by a
-   * recovery.
-   *
-   * The two transports differ in how a wake is DELIVERED — an alarm fires it, a
-   * start supersedes it — not in what the machine asked for, so the asked-for
-   * instant is the comparable half and the one under test. It survives a
-   * restart: an alarm row and a next start both do.
-   */
+  /** Survives restart. */
   private wakeAt: number | null = null;
   /** `alarm`: closes the driver has not drained yet. */
   private readonly deferred: Array<() => Promise<void>> = [];
@@ -241,7 +153,6 @@ class Plane {
     this.db.close();
   }
 
-  /** The live process, booted on demand. */
   process(): TerminalTransitions {
     this.live ??= new TerminalTransitions({
       sql: this.sql,
@@ -253,25 +164,17 @@ class Plane {
         this.wakeAt = atMs;
         await Promise.resolve();
       },
-      // A REAL transaction, because both planes stand for processes that can die
-      // between two statements. The identity default is honest only inside a
-      // Durable Object, where a synchronous run cannot be interrupted — and a
-      // suite that took the default would be proving atomicity it never had.
+      // A real transaction: both planes stand for processes that can die between statements.
       transaction: <T>(body: () => T): T => this.db.transaction(body)(),
     });
 
     return this.live;
   }
 
-  /** The process is gone. Nothing it held in RAM comes back — the in-flight set
-   *  included, which is why a recovery can enter a sequence the dead process
-   *  had entered. */
   restart(): void {
     this.live = null;
   }
 
-  /** Effect keys in the order they actually ran. The lane's whole observable
-   *  consequence is ORDER, so a count cannot witness it. */
   runOrder(): readonly string[] {
     return this.sql<{ effect_key: string }>`
       SELECT effect_key FROM conf_effect_runs ORDER BY rowid`.map((row) => row.effect_key);
@@ -282,20 +185,15 @@ class Plane {
     this.clock += ms;
   }
 
-  /** Make one effect report itself owed on its first execution. */
   hold(name: TerminalEffectName): void {
     void this.sql`INSERT OR IGNORE INTO conf_held (effect_key)
       VALUES (${terminalEffectKey(name, TRANSITION.messageId)})`;
   }
 
-  /** Arm, or disarm, the interruption. Never persisted: a process death does
-   *  not survive itself. */
   interruptAt(phase: TerminalEffectPhase | null, name?: TerminalEffectName): void {
     this.cut = phase === null || name === undefined ? null : { phase, name };
   }
 
-  /** One settled response, driven through this transport. Returns as soon as the
-   *  adapter's `hold` has taken the close, exactly as `onChatResponse` does. */
   async settle(declare: () => readonly OwedEffect[]): Promise<void> {
     await this.capture(async () => {
       await this.process().settle({
@@ -306,8 +204,6 @@ class Plane {
     });
   }
 
-  /** Let the transport finish the close it is carrying: the driver drains its
-   *  queue, or the process awaits what it started. */
   async join(): Promise<void> {
     for (;;) {
       const close = this.deferred.shift();
@@ -322,9 +218,6 @@ class Plane {
     if (closing !== null) await closing;
   }
 
-  /** One settled response whose carrier dies before the close runs — a fiber
-   *  that could not start, a tracked promise that rejected — handed to the
-   *  one rule every backend's carrier reports through. */
   async settleOnLostCarrier(declare: () => readonly OwedEffect[]): Promise<void> {
     const reported: Promise<void>[] = [];
 
@@ -339,8 +232,7 @@ class Plane {
     await Promise.all(reported);
   }
 
-  /** Fire the armed wake into the process that is STILL running — a warm
-   *  isolate's alarm, a live CLI's timer. False when nothing was armed. */
+  /** False when nothing was armed. */
   async wakeLive(): Promise<boolean> {
     if (this.wakeAt === null) return false;
     this.clock = Math.max(this.clock, this.wakeAt);
@@ -350,19 +242,8 @@ class Plane {
     return true;
   }
 
-  /**
-   * Bring a process back for whatever is still owed, the way this transport
-   * does.
-   *
-   * The alarm shape depends on a wake having been armed and being due; the
-   * startup shape has the next start and needs neither. Same core entry point
-   * under both — a machine that converges only when something re-arms it for
-   * free would show up here as a divergence.
-   */
   async recover(): Promise<void> {
-    // Consumed under both transports — a start supersedes the arm it found
-    // exactly as firing spends it — so what remains afterwards is what this
-    // recovery itself asked for.
+    // Consumed under both transports.
     if (this.kind === 'alarm' && (this.wakeAt === null || this.wakeAt > this.clock)) return;
     this.wakeAt = null;
     this.restart();
@@ -411,18 +292,13 @@ class Plane {
       runs,
       runOrder: this.runOrder(),
       outputs,
-      // Derived from what is still OWED, not from the last arm. A wake armed
-      // before a replay and left pending after it fires once, finds nothing and
-      // stops — the harmless failure the ledger deliberately prefers to a suffix
-      // with no carrier. Reading the arm itself would call that a difference.
+      // Derived from what is still owed, not the last arm.
       wake: this.owedWake(),
       inFlight: this.live?.inFlightCount ?? 0,
       interrupts: [...this.interrupts],
     };
   }
 
-  /** When the ledger would next need this process back, as a state rather than
-   *  an instant: the two planes run on deliberately unequal clocks. */
   private owedWake(): 'none' | 'due' | 'future' {
     const at = this.live?.nextRetryAt() ?? null;
 
@@ -431,7 +307,6 @@ class Plane {
     return at <= this.clock ? 'due' : 'future';
   }
 
-  /** `alarm` defers the close; `startup` starts it and holds the promise. */
   private carry(close: () => Promise<void>): void {
     if (this.kind === 'alarm') {
       this.deferred.push(close);
@@ -442,11 +317,7 @@ class Plane {
     this.closing = this.capture(close);
   }
 
-  /**
-   * An interruption is caught HERE, one frame outside everything the transition
-   * runs — where the platform's own handler sits when an activation dies. Any
-   * other throw is a defect and travels.
-   */
+  /** Catches only interruptions; any other throw is a defect and travels. */
   private async capture(run: () => Promise<void>): Promise<void> {
     try {
       await run();
@@ -467,12 +338,7 @@ class Plane {
     };
   }
 
-  /**
-   * Both adapters run the same bodies, and every body writes twice: an
-   * append-only execution row, then its output under the effect's own versioned
-   * key. The output write is idempotent by construction, which is what makes
-   * replaying an owed row safe rather than a second side effect.
-   */
+  /** Output is keyed and idempotent, so replaying an owed row is safe. */
   private effects(): TerminalEffectTable {
     const declare = (name: TerminalEffectName): TerminalEffect => terminalEffect({
       input: EffectInputSchema,
@@ -502,15 +368,7 @@ class Plane {
   }
 }
 
-/**
- * Run one scenario through both transports over two fresh databases, prove the
- * durable state came out identical, and hand it back for the scenario's own
- * claims.
- *
- * The diff is the conformance claim; the returned snapshot is where a scenario
- * says what that shared state must actually BE, so that a machine broken the
- * same way under both adapters still fails.
- */
+/** Diffs durable state across transports and returns it. */
 async function conform(script: (plane: Plane) => Promise<void>): Promise<Snapshot> {
   const alarm = new Plane('alarm');
   const startup = new Plane('startup');
@@ -616,16 +474,12 @@ test('an unreadable recorded effect input is retained instead of dropping its ob
   });
 });
 
-/** Effect keys, as the scenarios name them. */
 const K = (name: TerminalEffectName): string => terminalEffectKey(name, TRANSITION.messageId);
 
-/** Which rows survive, and in what disposition. */
 function dispositions(snap: Snapshot): Record<string, string> {
   return Object.fromEntries(snap.effects.map((row) => [row.key, row.status]));
 }
 
-/** The claim table as a scenario reads it: which claims exist, and which are
- *  closed. */
 function claimState(snap: Snapshot): Record<string, string | null> {
   return Object.fromEntries(snap.claims.map((row) => [row.call, row.result]));
 }
@@ -635,7 +489,6 @@ const TERMINAL_CLAIM_CALL = `${TERMINAL_TRANSITION_CALL_ID}:${TRANSITION.message
 // The stored result is the JSON encoding of the string 'settled'.
 const SETTLED = JSON.stringify('settled');
 
-/** Every declared effect ran exactly once, and wrote exactly one output. */
 const RAN_ONCE: Record<string, number> = Object.fromEntries(SEQUENCE.map((name) => [K(name), 1]));
 
 const EVERY_OUTPUT: Record<string, string> = Object.fromEntries(
@@ -645,8 +498,6 @@ const EVERY_OUTPUT: Record<string, string> = Object.fromEntries(
 let restoreDiagnostics: (() => void) | null = null;
 
 beforeAll(() => {
-  // The blocked-row scenario and the duplicate callback both report themselves.
-  // Recorded rather than printed: the claims here are about rows.
   restoreDiagnostics = setDiagnosticsSink(createRecordingLogger());
 });
 
@@ -673,11 +524,10 @@ describe('terminal transition conformance across two adapters', () => {
     const snap = await conform(async (plane) => {
       await plane.settleOnLostCarrier(() => roster(SEQUENCE.filter((name) => name !== DETACHED)));
       const lost = plane.snapshot();
-      // Every effect ran and only the close is missing. A sequence the live
-      // process still held would be skipped by every later sweep.
+      // Later sweeps would skip a sequence the dead process held.
       expect(claimState(lost)[TERMINAL_CLAIM_CALL]).toBeNull();
       expect(lost.inFlight).toBe(0);
-      // No row is owed, so the ledger arms nothing: the re-arm is the only way back.
+      // No row is owed, so only the re-arm brings it back.
       expect(await plane.wakeLive()).toBe(true);
     });
 
@@ -699,8 +549,6 @@ describe('terminal transition conformance across two adapters', () => {
         [K('turn_record')]: 'pending',
         [K('auto_title')]: 'pending',
       });
-      // Nothing happened at the cut point, and the effects after it never
-      // started: the claim is what names them.
       expect(cut.runs).toEqual({ [K('takes')]: 1, [K('event_reply')]: 1 });
       expect(claimState(cut)[TERMINAL_CLAIM_CALL]).toBeNull();
 
@@ -752,8 +600,7 @@ describe('terminal transition conformance across two adapters', () => {
       await plane.join();
 
       const held = plane.snapshot();
-      // Owed, not failed: the row keeps its input and gates the close while
-      // every other effect of the sequence has completed.
+      // Owed, not failed: the row gates the close.
       expect(dispositions(held)).toEqual({
         [K('takes')]: 'completed',
         [K('event_reply')]: 'pending',
@@ -802,13 +649,8 @@ describe('terminal transition conformance across two adapters', () => {
 
       plane.interruptAt(null);
       plane.advance(PAST_BACKOFF_MS);
-      // The process that claimed the sequence is gone; the next one settles the
-      // same response with a roster that has grown under it.
       plane.restart();
-      // Counted for the record, not asserted at zero: the gather runs BEFORE any
-      // durable write so a throw inside it cannot leave an open claim with no
-      // rows, which means a resumed response gathers and then discards. What must
-      // not happen is a ROW appearing for the effect it re-declared.
+      // Not asserted at zero; no row may appear for the re-declared effect.
       let declared = 0;
       await plane.settle(() => {
         declared += 1;
@@ -821,8 +663,6 @@ describe('terminal transition conformance across two adapters', () => {
 
     expect(snap.effects).toEqual([]);
     expect(claimState(snap)).toEqual({ [TERMINAL_CLAIM_CALL]: SETTLED });
-    // The late effect has no row, no execution and no output: the roster was
-    // frozen at what the first attempt claimed.
     expect(snap.runs).toEqual(RAN_ONCE);
     expect(snap.outputs).toEqual(EVERY_OUTPUT);
     expect(snap.runs[K(LATE)]).toBeUndefined();
@@ -836,8 +676,7 @@ describe('terminal transition conformance across two adapters', () => {
       await plane.recover();
     });
 
-    // Nothing was pruned, because nothing closed: a blocked row is work a
-    // deploy still owes.
+    // Nothing pruned: a blocked row is work a deploy still owes.
     expect(dispositions(snap)).toEqual({
       [K('takes')]: 'completed',
       [K('event_reply')]: 'completed',
@@ -848,8 +687,7 @@ describe('terminal transition conformance across two adapters', () => {
     const blocked = snap.effects.find((row) => row.key === K(UNIMPLEMENTED));
     expect(blocked?.outcome)
       .toBe(`effect "${UNIMPLEMENTED}" is not implemented by this actor`);
-    // Attempted again by the recovery, and still blocked: convergence to
-    // success would delete the only evidence the work never happened.
+    // Still blocked: converging to success would erase the evidence.
     expect(blocked?.attempts).toBe(2);
     expect(claimState(snap)).toEqual({
       [TERMINAL_CLAIM_CALL]: null,
@@ -859,29 +697,15 @@ describe('terminal transition conformance across two adapters', () => {
     expect(snap.wake).toBe('future');
   });
 
-  /**
-   * A DETACHED row does not hold the inline work behind it, on replay either.
-   *
-   * The forward path runs every inline effect and only then starts the detached
-   * ones, but the roster interleaves them: a reply is declared before the
-   * recording. Recovery walks stored rows, so unless the LANE is stored too it
-   * walks them serially — and a reply whose channel hangs then blocks a recording
-   * the live path had already committed. This pins the lane onto the row.
-   */
+  /** A detached row must not hold inline work behind it on replay. */
   test('replay runs the inline work before the detached row declared ahead of it', async () => {
     const snapshot = await conform(async (plane) => {
-      // Detached FIRST in declared order, inline SECOND. A replay that walked the
-      // stored roster serially would run them in that order; the forward path
-      // never would, and a detached reply that hangs would then hold the
-      // recording behind it indefinitely.
+      // Detached first: a serial replay would let a hanging reply block the recording.
       const declared = (): readonly OwedEffect[] => [
         { name: 'auto_title', scope: TRANSITION.messageId, lane: 'detached', input: { answer: 'a' } },
         { name: 'turn_record', scope: TRANSITION.messageId, lane: 'inline', input: { answer: 'r' } },
       ];
 
-      // Cut on the INLINE row, which the forward path reaches first: nothing runs,
-      // so the replay is handed BOTH rows and its scheduling is what decides the
-      // order below.
       plane.interruptAt('before', 'turn_record');
       await plane.settle(declared);
       await plane.join();
@@ -896,20 +720,12 @@ describe('terminal transition conformance across two adapters', () => {
     expect(snapshot.runs[K('auto_title')]).toBe(1);
   });
 
-  /**
-   * A roster is all or nothing.
-   *
-   * Every row is inserted under one commit, because a PREFIX is what recovery
-   * cannot tell from a complete roster: it replays what it finds and then closes
-   * the outer claim over everything absent. A transaction that throws part-way
-   * must leave the storage exactly as it was.
-   */
+  /** A roster is all or nothing: recovery cannot tell a prefix from a complete one. */
   test('a roster that fails part-way through inserts nothing', async () => {
     const plane = new Plane('alarm');
 
     try {
-      // A roster whose second input cannot be serialized: the insert throws
-      // inside the commit, after the first row has been written.
+      // The insert throws after the first row is written.
       const circular: JsonObject = {};
       circular.self = circular;
 
@@ -923,13 +739,8 @@ describe('terminal transition conformance across two adapters', () => {
 
       await expect(plane.settle(declared)).rejects.toThrow();
       const after = plane.snapshot();
-      // NEITHER row. The first insert is rolled back with the failed one.
       expect(after.effects).toEqual([]);
-      // AND NO OUTER CLAIM. This is the half that makes the rollback matter: a
-      // claim with no roster behind it is what a recovery reads as a finished
-      // turn — it replays an empty suffix, settles, and every effect the
-      // response owed is gone. The claim belongs in the same commit as the rows
-      // it gates.
+      // No outer claim either: without its roster it reads as a finished turn.
       expect(after.claims.some((row) => row.call.startsWith(TERMINAL_TRANSITION_CALL_ID))).toBe(false);
     } finally {
       plane.close();

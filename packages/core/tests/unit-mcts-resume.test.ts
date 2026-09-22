@@ -1,13 +1,6 @@
 /**
- * MCTS evict-resume (B6): a search interrupted mid-run (DO eviction) is re-entered
- * from its durable checkpoint and continues its REMAINING budget against the
- * persisted tree, rather than being discarded or restarted from scratch. The
- * lease epoch fences a stale executor.
- *
- * Engine-seam test (DOs aren't bun-bootable): the durable MctsSearchStore lives
- * over the same in-memory SQLite the runtime uses; "eviction" is an AbortSignal
- * that unwinds the loop mid-run, leaving a `running` checkpoint; the resume is a
- * fresh runMCTS call for the same task.
+ * MCTS evict-resume (B6): an interrupted search continues its remaining budget from the durable checkpoint;
+ * the lease epoch fences a stale executor. "Eviction" is an AbortSignal that leaves a `running` checkpoint.
  */
 
 import { describe, test, expect } from 'bun:test';
@@ -35,7 +28,6 @@ describe('MCTS evict-resume (B6)', () => {
     initTables(rt);
     const store = new MctsSearchStore(makeSql(db), rt.actor);
 
-    // ── Run 1: budget 4, "evicted" after 2 iterations ──────────────────────
     const ctrl = new AbortController();
     let run1Iters = 0;
     await expect(runMCTS(rt, createMockSession(), TASK, {
@@ -56,7 +48,6 @@ describe('MCTS evict-resume (B6)', () => {
     expect(mid.epoch).toBe(0);
     const rootId = mid.rootId;
 
-    // ── Run 2: fresh call (restarted DO) resumes the SAME search ────────────
     let run2Iters = 0;
 
     const result = await runMCTS(rt, createMockSession(), TASK, {
@@ -67,8 +58,7 @@ describe('MCTS evict-resume (B6)', () => {
     });
 
     expect(result).toBeDefined();
-    // The resume did ONLY the 2 remaining iterations (continuing from 2 → 3, 4),
-    // not a fresh 4 — proof the checkpoint was honored, not restarted.
+    // Only the 2 remaining iterations, not a fresh 4.
     expect(run2Iters).toBe(4);
 
     const after = store.get(rootId);
@@ -76,7 +66,6 @@ describe('MCTS evict-resume (B6)', () => {
     expect(after?.budget).toBe(0);
     expect(after?.epoch).toBe(1);         // reclaim bumped the lease on resume (fence)
 
-    // No SECOND search row was created for the same task — it resumed in place.
     expect(store.findResumable(TASK)).toBeNull(); // the only row is now converged
   });
 
@@ -88,26 +77,18 @@ describe('MCTS evict-resume (B6)', () => {
     await runMCTS(rt, createMockSession(), TASK, { budget: 2, branches: 1, search: store });
     expect(store.findResumable(TASK)).toBeNull();   // converged → not resumable
 
-    // A brand-new run of the same task begins a distinct search (fresh root).
     const before = store.findResumable(TASK);
     await runMCTS(rt, createMockSession(), TASK, { budget: 2, branches: 1, search: store });
     expect(before).toBeNull();
   });
 });
 
-// The observability audit (2026-08-12): a durably-checkpointed search running
-// for hours produced NOTHING in Workers Logs / `wrangler tail` per iteration —
-// the checkpoint (mcts_search_runs.updated_at) is the one real heartbeat this
-// backend has, but nothing reached console output. Gated on `search` being
-// present, same as the checkpoint call itself.
+// The checkpoint heartbeat is logged per iteration, gated on `search` like the checkpoint call.
 
-/** The heartbeat, as the typed logger emits it: one JSON line whose `event` is the
- *  stable dotted name. Keyed on the NAME rather than on prose, which is the whole
- *  point of the name — this predicate is what a Workers Logs query would be. */
+/** Keyed on the stable dotted event name, as a log query would be. */
 const isCheckpointLine = (line: string): boolean => line.includes('"event":"mcts.checkpoint_reached"');
 
-/** A runtime plus the durable search store — the only configuration that
- *  heartbeats at all, so both channel assertions run against it. */
+/** The only configuration that heartbeats at all. */
 function checkpointedRuntime() {
   const { rt, db } = createTestRuntime();
   initTables(rt);
@@ -125,16 +106,12 @@ describe('MCTS per-iteration checkpoint logging', () => {
 
     const checkpointLines = stderr.filter(isCheckpointLine);
     expect(checkpointLines).toHaveLength(3);
-    // Fields, not prose: `iteration`/`total`/`remaining` are scalars a query can
-    // filter and order on, which an interpolated `iteration=1/3` string is not.
+    // Scalar fields a query can filter on, not an interpolated string.
     expect(JSON.parse(checkpointLines[0]).fields).toMatchObject({ iteration: 1, total: 3, remaining: 2 });
     expect(JSON.parse(checkpointLines[2]).fields).toMatchObject({ iteration: 3, total: 3, remaining: 0 });
   });
 
-  // Regression: a heartbeat on stdout lands in what `kinu exec --json` uses as
-  // the NDJSON event stream — four corrupt, unparseable lines per run for any
-  // CI consumer. Workers Logs capture stderr just the same, so one channel
-  // serves both surfaces.
+  // On stderr: stdout is the `kinu exec --json` NDJSON event stream.
   test('the heartbeat never touches stdout, which is the CLI machine channel', async () => {
     const { rt, store } = checkpointedRuntime();
 
@@ -159,13 +136,8 @@ describe('MCTS per-iteration checkpoint logging', () => {
 });
 
 /**
- * The judge ensemble a run was OBSERVED to sample, folded onto its ledger row.
- *
- * The number exists because the two spend knobs share one per-evaluation call pool, so
- * a request the pool cannot fund is realised lower. Disclosed once in the settle report
- * of the call that ran and persisted nowhere, it leaves `fork-params.ts` answering a
- * reader by recomputing the pool's CEILING from the knobs, which is not what a run that
- * short-circuited before judging actually sampled.
+ * The judge ensemble a run was observed to sample, folded onto its ledger row: the shared call pool
+ * can realise a request lower than the knobs' ceiling.
  */
 describe('the ledger records the ensemble a run was observed to sample', () => {
   function ledger() {
@@ -190,9 +162,7 @@ describe('the ledger records the ensemble a run was observed to sample', () => {
   });
 
   test('the SMALLEST observation wins, whichever order the observations arrive in', () => {
-    // The number answers "was the request honoured", so a run that funded one candidate
-    // and clamped the next did clamp. Ascending and descending both, because a
-    // last-write-wins fold passes one order and fails the other.
+    // Both orders, because a last-write-wins fold passes one and fails the other.
     const ascending = ledger();
 
     for (const seen of [2, 5, 9]) ascending.store.observeJudgeEnsemble('r1', seen);
@@ -205,8 +175,7 @@ describe('the ledger records the ensemble a run was observed to sample', () => {
   });
 
   test('an observation for a root with no ledger row changes nothing', () => {
-    // A search whose settled row was pruned still has its tree, and a late observation
-    // against it must not resurrect a row: the fold is an UPDATE, never an upsert.
+    // The fold is an UPDATE, never an upsert: a pruned row is not resurrected.
     const { store, realised } = ledger();
     store.observeJudgeEnsemble('some-other-root', 3);
     expect(realised()).toBeNull();
@@ -214,13 +183,8 @@ describe('the ledger records the ensemble a run was observed to sample', () => {
 });
 
 /**
- * Two engines write this ledger, and only one of them has a resume loop.
- *
- * `findResumable` keys on `status='running' AND task=?`, so without the engine column a
- * swarm that died mid-run would be handed to the MCTS loop as a resumable search of the
- * same task — which would then expand the swarm's tree with judged branches under the
- * swarm's own root id and report the result as that run's. A swarm's config parses as a
- * persisted MCTS config, so nothing downstream would notice.
+ * `findResumable` must filter on engine, or a dead swarm would be resumed by the MCTS loop
+ * (a swarm's config parses as a persisted MCTS config).
  */
 describe('the resume loop reclaims its own engine only', () => {
   test('a still-running swarm row is never handed to the resume loop', () => {
@@ -232,14 +196,10 @@ describe('the resume loop reclaims its own engine only', () => {
       config: { budget: 6, branches: 3, mode: 'build', maxDepth: 2 }, budget: 6, now: 1_000,
     });
 
-    // THE DENOMINATOR, so this cannot pass for the wrong reason: the row is running and
-    // its task is the one being asked for, which is every condition `findResumable`
-    // matches on except the engine.
+    // Matches every `findResumable` condition except the engine.
     expect(store.get('swarm-root')).toMatchObject({ status: 'running' });
     expect(store.findResumable(TASK, 'build')).toBeNull();
 
-    // And the engine's own row beside it still resumes, so this is a filter rather than a
-    // resume that quietly stopped working.
     store.begin({
       rootId: 'mcts-root', task: TASK, engine: 'mcts', rootMsgId: 'm1',
       config: { budget: 4, branches: 2, mode: 'build' }, budget: 4, now: 2_000,
@@ -266,12 +226,7 @@ describe('the resume loop reclaims its own engine only', () => {
   });
 });
 
-/**
- * The settle status is CLASSIFIED. 'converged' is the ledger's claim that an
- * acceptable answer was earned; a search that ran its loop out with every
- * branch below minAcceptableScore settles as 'no_acceptable_candidate' instead
- * — it did not break (`failed`) and it did not land an answer (`converged`).
- */
+/** A search whose every branch is below minAcceptableScore settles 'no_acceptable_candidate', not 'converged' or 'failed'. */
 describe('the ledger classifies a search that earned no acceptable answer', () => {
   function store() {
     const { rt, db } = createTestRuntime();
@@ -289,14 +244,12 @@ describe('the ledger classifies a search that earned no acceptable answer', () =
     const { s } = store();
     s.noAcceptableCandidate('r1', 0, 2_000);
     expect(s.get('r1')?.status).toBe('no_acceptable_candidate');
-    // And the run-level read model reports exactly that classification.
     expect(s.list(10)[0]).toMatchObject({ rootId: 'r1', status: 'no_acceptable_candidate' });
   });
 
   test('the classified settle is fenced on epoch like every other terminal write', () => {
     const { s } = store();
-    // A reclaimed search (epoch bumped) leaves the dead executor's settle a no-op:
-    // the row stays running for whoever holds the live lease.
+    // A reclaimed search (epoch bumped) makes the dead executor's settle a no-op.
     s.reclaim('r1');
     s.noAcceptableCandidate('r1', 0, 2_000);
     expect(s.get('r1')?.status).toBe('running');
@@ -307,20 +260,12 @@ describe('the ledger classifies a search that earned no acceptable answer', () =
     const { s } = store();
     s.noAcceptableCandidate('r1', 0, 2_000);
     expect(s.findResumable(TASK)).toBeNull();
-    // The one write site in engine.ts only reaches converge() when
-    // result.converged, so a converged status can never overwrite this one —
-    // but the fence alone proves they are distinct writes.
     s.converge('r1', 0, 3_000);
     expect(s.get('r1')?.status).toBe('no_acceptable_candidate');
   });
 });
 
-/**
- * The table ships WHOLE: `engine` and `judge_samples_realised` sit in the CREATE
- * and `begin` names both, so there is nothing for a `reconcileColumns` pass to
- * repair. These tests are what keeps that true: a column that reaches the writer
- * but not the DDL fails here instead of being silently re-added on the next boot.
- */
+/** The table ships whole: a column the writer names but the DDL lacks fails here rather than being re-added at boot. */
 describe('the search ledger is created whole', () => {
   function fresh() {
     const { rt, db } = createTestRuntime();
@@ -347,8 +292,7 @@ describe('the search ledger is created whole', () => {
       rootId: 'r1', task: TASK, engine: 'swarm', rootMsgId: null,
       config: { budget: 3, branches: 3 }, budget: 3, now: 1_000,
     });
-    // The discriminator is load-bearing: it is what stops the MCTS resume loop
-    // re-entering a swarm's tree. An unobserved ensemble is NULL, not 0.
+    // The discriminator stops the MCTS resume loop re-entering a swarm's tree. An unobserved ensemble is NULL, not 0.
     expect(sql<{ engine: string; judge_samples_realised: number | null }>`
       SELECT engine, judge_samples_realised FROM mcts_search_runs
       WHERE actor_id = ${actor.actorId} AND root_id = 'r1'`[0])
@@ -362,12 +306,9 @@ describe('the search ledger is created whole', () => {
       (actor_id, root_id, task, engine, root_msg_id, config_json, iteration, budget, status, epoch,
        judge_samples_realised, created_at, updated_at)
       VALUES (${actor.actorId}, 'r1', ${TASK}, 'mcts', 'm1', '{', 0, 2, 'running', 0, NULL, 1000, 1000)`;
-    // `begin` wrote this column with JSON.stringify, so an unparseable row is
-    // corruption. Resuming on a fabricated default would re-enter the search
-    // with one branch and no budget and call that a resume.
+    // An unparseable config is corruption; resuming on a default would fabricate a search.
     expect(() => store.findResumable(TASK)).toThrow();
 
-    // The swarm reader refuses by name rather than reporting a budget nobody set.
     void sql`UPDATE mcts_search_runs SET engine = 'swarm'
       WHERE actor_id = ${actor.actorId} AND root_id = 'r1'`;
     expect(() => store.findRunningSwarms(TASK)).toThrow('its ledger config_json will not parse');
@@ -384,13 +325,7 @@ describe('the search ledger is created whole', () => {
   });
 });
 
-/**
- * The upfront spend gate prices what the resume will still spend, not what the
- * search already spent. A search begun at budget 10 with 6 iterations behind it
- * has 4 left; a price that refuses a fresh 10 but funds the remaining 4 must
- * let the resume through. Pricing the persisted initial budget instead refuses
- * based on iterations that already ran.
- */
+/** The upfront spend gate prices the remaining iterations, not the persisted initial budget. */
 describe('a resume prices its remaining budget, not its initial one', () => {
   test('a resume whose remaining budget fits the cap runs its remainder', async () => {
     const { rt, db } = createTestRuntime();
@@ -399,7 +334,6 @@ describe('a resume prices its remaining budget, not its initial one', () => {
     const store = new MctsSearchStore(sql, rt.actor);
     const session = createMockSession();
 
-    // A search begun at budget 10, evicted with 6 iterations done and 4 left.
     const rootId = 'resume-budget-root';
 
     const rootMsgId = await recordNode(session, rt.storage.sql, rt.actor, {
@@ -423,9 +357,7 @@ describe('a resume prices its remaining budget, not its initial one', () => {
     });
     store.checkpoint(rootId, 0, { iteration: 6, budget: 4, now: 2_000 });
 
-    // $10-in/$50-out prices 10 fresh iterations at ~$0.92 (over the $0.50 cap)
-    // but the 4 remaining at ~$0.40 (under it). The resume must run those 4 —
-    // iterations 7 through 10 — rather than refuse on the spent 6.
+    // These prices refuse 10 fresh iterations but fund the remaining 4.
     let lastIteration = 0;
 
     const result = await runMCTS(rt, createMockSession(), TASK, {
@@ -437,18 +369,13 @@ describe('a resume prices its remaining budget, not its initial one', () => {
     });
 
     expect(result).toBeDefined();
-    // The resume spent ONLY its remainder: 6 done plus 4 more is 10, not a
-    // fresh 10 on top (which would end at 16).
+    // 6 done plus 4 is 10, not 16.
     expect(lastIteration).toBe(10);
     expect(store.get(rootId)).toMatchObject({ status: 'converged', budget: 0 });
   });
 });
 
-/**
- * A `begin` names a fresh search run. Repeating a live root id is a caller
- * fault, not a reset: replacing the row would wipe the checkpointed progress
- * to zero while the tree it checkpointed keeps growing underneath.
- */
+/** Repeating a live root id in `begin` is a caller fault: replacing the row would zero checkpointed progress. */
 describe('a repeated begin on a live root throws instead of resetting it', () => {
   test('root id reuse refuses and the checkpointed progress survives', () => {
     const { rt, db } = createTestRuntime();

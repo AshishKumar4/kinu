@@ -1,23 +1,4 @@
-/**
- * The `report` tool's dispatch logic — one status, one prose body and an
- * optional structured handoff, published into the parent workspace's EventLog.
- *
- * Factored out for the reason the other three dispatchers were: `report.*` in
- * codemode (delegation/report-codemode.ts) and the native `report` tool are two
- * surfaces of one capability, and they were validating the same two arguments
- * two different ways — codemode valibot-parsed both, while the native tool
- * hand-checked `content` and never checked `status` at all, so a status outside
- * the enum reached the orchestrator's inbox typed as if it were one of the
- * three. One dispatcher, two callers, one vocabulary.
- *
- * WHY THE BODY IS NOT ENOUGH ON ITS OWN. A prose blob makes the parent
- * re-derive what the child already knew: which sentence is a decision it must
- * weigh, which is a departure from the brief it handed down, and which is
- * narration. The four handoff fields
- * ({@link SUBORDINATE_REPORT_HANDOFF_FIELDS}) are the parts a parent acts on,
- * and they are all optional — a caller that sends `{status, content}` is
- * exactly as valid as it was before they existed.
- */
+/** Dispatch logic for the `report` tool, shared by the native tool and codemode `report.*`. */
 
 import * as v from 'valibot';
 import {
@@ -34,16 +15,13 @@ const StatusSchema = v.picklist(SUBORDINATE_REPORT_STATUSES);
 
 const ContentSchema = v.pipe(v.string(), v.trim(), v.minLength(1));
 
-/** One handoff field as it arrives: a list of entries, each trimmed, with the
- *  blanks a model leaves behind dropped rather than rendered to the parent as
- *  empty bullets. */
+/** One handoff field as it arrives: entries trimmed, blanks dropped. */
 const HandoffListSchema = v.pipe(
   v.array(v.pipe(v.string(), v.trim())),
   v.transform((entries) => entries.filter((entry) => entry.length > 0)),
 );
 
-/** One handoff field as the provider is shown it. The budget sentence is
- *  shared because the budget itself is: all four lists spend one. */
+/** One handoff field as shown to the provider; all four lists share one budget. */
 function handoffField(purpose: string): HandoffProperty {
   return {
     type: 'array',
@@ -52,10 +30,7 @@ function handoffField(purpose: string): HandoffProperty {
   };
 }
 
-/** What each handoff field is FOR, in the words the model reads. The
- *  `satisfies` is TOTAL over the vocabulary, so a field added there cannot
- *  ship undeclared — and an undeclared field is one this file's parse admits
- *  while no model is ever told it exists. */
+/** What each handoff field is for, in the model's words; `satisfies` keeps it total. */
 const HANDOFF_PROPERTIES = {
   concerns: handoffField('Uncertainty the orchestrator has to weigh: what you are not confident in, and what it would cost if you are wrong.'),
   deviations: handoffField('Where the work departed from the brief you were given, and what you did instead.'),
@@ -63,46 +38,25 @@ const HANDOFF_PROPERTIES = {
   open_work: handoffField('What remains — unfinished work, follow-ups, and what you would do next.'),
 } satisfies Record<SubordinateReportHandoffField, HandoffProperty>;
 
-/** The report tool's input as it ARRIVES. The AI SDK leaves `Schema.validate`
- *  undefined for a `jsonSchema`-declared tool input, so NOTHING here is an
- *  established value: the provider-facing enum, the non-empty body and the
- *  four lists are all requests, declared in the shape they are asked for and
- *  believed in none of them. Narrowing them is {@link dispatchReport}'s job,
- *  and the strong types are earned there — which is why they appear on
- *  `ReportToolDeps.report`, not here. */
+/** Report input as it arrives, unvalidated: the AI SDK skips `Schema.validate` for
+ *  `jsonSchema` inputs. {@link dispatchReport} narrows it. */
 export interface ReportToolInput extends SubordinateReportHandoff {
   status: string;
   content: string;
 }
 
-/** One handoff field as the provider is shown it. A named contract rather
- *  than a dictionary: the four names are the vocabulary's, not a key space. */
 interface HandoffProperty {
   readonly type: 'array';
   readonly items: { readonly type: 'string' };
   readonly description: string;
 }
 
-/**
- * The handoff fields, as JSON-schema properties for the native tool.
- *
- * Declared here rather than in `builtins.ts` so the shape the model is
- * offered and the parse that admits it are one edit apart. NONE at all for a
- * destination that reads only the prose body: see `ReportToolDeps.bodyOnly`.
- */
+/** Handoff fields as JSON-schema properties; none for a `bodyOnly` destination. */
 export function reportHandoffProperties(deps: ReportToolDeps) {
   return deps.bodyOnly ? {} : HANDOFF_PROPERTIES;
 }
 
-/**
- * Narrow the four optional lists, or refuse in words the model can act on.
- *
- * The budget is checked ACROSS the fields rather than per field, because what
- * the parent pays is one brief, and a report that spends the whole of it on
- * concerns is making a legitimate choice. Refused rather than truncated: a
- * silently shortened list of open work is a list the parent believes it has
- * read.
- */
+/** Narrow the four optional lists. The budget spans all fields; over budget is refused, not truncated. */
 function parseHandoff(args: ReportToolInput): SubordinateReportHandoff {
   const handoff: { -readonly [Field in SubordinateReportHandoffField]?: string[] } = {};
   let charged = 0;
@@ -138,21 +92,8 @@ function parseHandoff(args: ReportToolInput): SubordinateReportHandoff {
 export type ReportToolResult = JsonValue | undefined;
 
 /**
- * Dispatch one report, parsing every argument against the one vocabulary.
- *
- * A refusal names the three statuses. A refusal the model cannot act on is how
- * one malformed call becomes a loop — which is exactly what the `tasks` tool's
- * `unknown tasks action 'list">'` was.
- *
- * A `bodyOnly` destination is not offered the handoff fields, so it is not
- * parsed for them either: a value that arrived anyway was never advertised,
- * and passing it to something that drops it is the defect the declaration
- * rule exists for.
- *
- * A report that carries no handoff delivers the object it always delivered —
- * not one with an empty `handoff` beside the body. An optional field is
- * absent when unused, or every destination has to learn to tell `{}` from
- * "the child said nothing".
+ * Dispatch one report. Refusals name the valid statuses; a `bodyOnly` destination is not
+ * parsed for handoff, and an empty handoff is omitted rather than sent as `{}`.
  */
 export async function dispatchReport(
   deps: ReportToolDeps,

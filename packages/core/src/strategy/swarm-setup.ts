@@ -1,12 +1,6 @@
 /**
- * Setup and measurement context for one swarm run: the region refusals that gate what
- * this runner can execute at all, the measurement context an instrument sees, the
- * measured-baseline helpers, and — as they are extracted — the run's own context
- * construction ahead of the expansion loop.
- *
- * Split from `swarm-run.ts` because this is the SETUP policy: everything decided once,
- * before any node expands, where a refusal is free and a mistake would spend a whole
- * search. The loop and the settle barrier live elsewhere; nothing here reads loop state.
+ * Setup for one swarm run: region refusals, measurement context, measured-baseline helpers and
+ * run context construction. Decided once before any node expands; nothing here reads loop state.
  */
 import type { Clock } from '../types/clock';
 import {
@@ -79,13 +73,8 @@ export function badInput(error: string): Refusal {
 }
 
 /**
- * Whether this tree can execute the resolved shape now, or the refusal naming what
- * it would have needed.
- *
- * Every arm names the one thing that is missing and the one move that fixes it, because
- * *Refusals* holds that a refusal offering two remedies was measured being corrected to
- * the wrong one. Plan may explore and merge findings; a run that measures, publishes
- * through its carry, or applies its result to the project is Build work.
+ * Whether this tree can execute the resolved shape now, or the refusal naming what it needs.
+ * Each arm names one remedy (*Refusals*). Measuring, publishing or applying is Build work.
  */
 export function regionRefusal(resolved: ResolvedSwarm, mode: WorkMode): Refusal | null {
   const composition = compositionRefusal(resolved);
@@ -113,62 +102,37 @@ function compositionRefusal(resolved: ResolvedSwarm): Refusal | null {
       + 'candidates an expansion produces. Pass `branches`, or name a base with `from`.');
   }
 
-  // Tool-using nodes are graded on their reports, not shared-workspace diffs;
-  // the recorded `agent-trajectory-search` result of 18% demonstrates the cost
-  // of blocking the composition on the wrong boundary. Judged scoring uses the
-  // existing `mcts/evaluation.ts` ensemble with its call-budget clamp and
-  // realized-size report, since that evaluator depends on a task, candidate
-  // text, executor and two LLMs rather than tree structure.
-  // So the ensemble is REACHED below (`judgeMarginalisationRefusal`) rather
-  // than reimplemented here.
-  //
-  // What survives is the one refusal that is about the measurement rather than about
-  // the wiring: a judged TREE below the marginalisation floor runs a scorer the
-  // literature says is not worth building, and it is refused here as well as in
-  // `swarmValidity` because this function is also the in-process entry point.
+  // Judged scoring reaches the `mcts/evaluation.ts` ensemble. The marginalisation refusal is repeated
+  // from `swarmValidity` because this is also the in-process entry point.
   const marginalisation = judgeMarginalisationRefusal(config);
 
   if (marginalisation) return marginalisation;
 
   if (isTreeAdvance(config.advance.kind) && config.score.kind === 'none') {
-    // Unreachable through `swarmValidity`, which refuses this composition outright.
-    // Kept because this function is also the in-process entry point.
+    // Also refused by `swarmValidity`; kept for in-process callers.
     return badInput(`advance:"${config.advance.kind}" cannot select without a score.`);
   }
 
   if (config.advance.kind === 'pareto'
     && PUBLISHING_CARRIES.some((carry) => carry === config.carry.kind)) {
-    // Unreachable through `swarmValidity`, which refuses this composition outright.
-    // Kept because this function is also the in-process entry point.
+    // Also refused by `swarmValidity`; kept for in-process callers.
     return badInput('advance:"pareto" keeps its durable frontier in node evidence and cannot '
       + 'publish a vector through the scalar records store. Use carry:"none" or "reflections".');
   }
 
-  // `advance:'archive'` RUNS — see `admitToArchive` at the settle barrier. It does NOT
-  // share `pareto`'s refusal: "needs a store this run has no writer for" is one sentence
-  // covering two different causes, and the archive is not one of them —
-  // `exploration_records` IS the archive's grid, a row keyed by a descriptor, one elite
-  // per cell, monotone, sealed. What refuses below is the archive's own region, checked
-  // through the predicate `swarmValidity` shares so an in-process caller cannot run a
-  // shape the tool surface refuses.
+  // The archive's own region, via the predicate `swarmValidity` shares, so an in-process caller
+  // cannot run a shape the tool surface refuses.
   const archive = archiveRegionRefusal(config, caps);
 
   if (archive) return archive;
 
   if (!resolved.key && config.advance.kind === 'archive') {
-    // Unreachable through `swarmValidity`, which refuses an archive with no descriptor
-    // outright. Kept because this function is also the in-process entry point, and
-    // because everything below binds the cell to this field.
+    // Also refused by `swarmValidity`; kept for in-process callers and because the cell binds to `key`.
     return badInput('advance:"archive" bins its elites by a descriptor and this call named none. '
       + 'Supply `key`, naming a quantity the objective\'s own instrument reports.');
   }
 
-  // `expand:'aggregate'` RUNS — see `fanInAtLevel`. What refuses here is a composition
-  // in which a fan-in could never HAPPEN, and each arm names the one thing that makes it
-  // impossible. A composition that resolved and then quietly aggregated nothing would
-  // be the accepted-and-ignored axis *Accepted and ignored* refuses, and that is the
-  // defect each arm below is written against. A blanket refusal of `aggregate` would
-  // be false about this engine: it fans in.
+  // Refuse compositions where a fan-in could never happen (*Accepted and ignored*).
   if (config.expand === 'aggregate' && config.advance.kind === 'pareto') {
     return badInput('expand:"aggregate" needs a scalar verifier verdict to re-grade a merge node, '
       + 'while advance:"pareto" preserves a vector without collapsing it. Use expand:"sample".');
@@ -189,12 +153,8 @@ function compositionRefusal(resolved: ResolvedSwarm): Refusal | null {
     }
 
     if (config.score.kind !== 'verify') {
-      // NOT "judge cannot score". It scores, and the ensemble is reached above — what it
-      // does not do is PLACE a candidate. A fan-in merges its parents' work, and a
-      // member's diff is the answer this engine wrote to the verifier's own artifact
-      // path; a judged run has no such path, so there is nothing for a fan-in to take a
-      // diff against and no measured verdict for merge-back's binding rule — *A verdict
-      // is bound to the exact pair it was issued over* — to read.
+      // A fan-in diffs against the placed artifact path; a judged run has no such path and no measured
+      // verdict for merge-back to bind to.
       return badInput('expand:"aggregate" merges what its parents produced, and a member\'s diff is '
         + `the candidate this engine PLACED at the objective's own path. score:"${config.score.kind}" `
         + 'names no path and issues no measured verdict, so every fan-in could only refuse for want '
@@ -206,8 +166,7 @@ function compositionRefusal(resolved: ResolvedSwarm): Refusal | null {
   return null;
 }
 
-/** The workspace, as an instrument sees it. The two members *Measurement context* names
- *  and no others: no model, no network, no trajectory. */
+/** The workspace as an instrument sees it: only the members *Measurement context* names. */
 export function measurementContext(rt: AgentRuntime): MeasurementContext | null {
   const shell = rt.shell;
 
@@ -216,8 +175,7 @@ export function measurementContext(rt: AgentRuntime): MeasurementContext | null 
   return { vfs: rt.storage.vfs, exec: (command) => shell.exec(command) };
 }
 
-/** The measured baseline this instrument reported alongside a candidate, or null when
- *  the kind measures none. *Measured baseline*: measured, never asserted. */
+/** The measured baseline reported alongside a candidate, or null (*Measured baseline*). */
 export function baselineOf(measurement: Measurement, key: string | null): number | null {
   if (!key) return null;
   const reported = measurement.measured?.[key];
@@ -225,9 +183,7 @@ export function baselineOf(measurement: Measurement, key: string | null): number
   return reported !== undefined && Number.isFinite(reported) ? reported : null;
 }
 
-/** Whether `value` sits on the side of the floor no correct candidate can reach.
- *  Named because the comparison INVERTS with the direction, and getting it backwards
- *  turns the fraud check into a fraud. */
+/** Whether `value` sits past the floor; the comparison inverts with the direction. */
 export function breaches(floor: Floor, direction: ObjectiveDirection, value: number): boolean {
   return direction === 'minimise' ? value < floor.value : value > floor.value;
 }
@@ -243,11 +199,10 @@ export interface PreparedParetoMeasurement {
   }[];
 }
 
-/** Resolve every instrument of a multi-axis objective before any node is expanded.
- *
- * An instanced objective has one instrument that must report every declared instance.
- * A vector objective has one instrument per component. Neither arm derives an axis
- * from a returned label: the objective declares the comparable coordinates. */
+/**
+ * Resolve every instrument of a multi-axis objective before any node expands. Axes come from
+ * the objective declaration, never from returned labels.
+ */
 export async function prepareParetoMeasurement(input: {
   readonly rt: AgentRuntime;
   readonly resolved: ResolvedSwarm;
@@ -321,24 +276,17 @@ export interface PreparedMeasurement {
 }
 
 /**
- * THE ARCHIVE IN FORCE, or null. Derived once from the resolved advance and passed,
- * never re-read from the axis: the descriptor a candidate is binned into, the admission
- * test that gates its write and the cell count the seal's disclosure reports are three
- * facts about one archive, and three derivations of it are three things that can
- * disagree. `key` is non-null under this arm by `regionRefusal`, so the pair is
- * complete or absent together.
+ * The archive in force, or null. Derived once and passed, never re-read from the axis, so binning,
+ * admission and the seal disclosure cannot disagree.
  */
 export interface ArchiveInForce {
   readonly key: string;
   readonly novelty: number;
 }
 
-/** What a MEASURED run resolves before anything expands: the objective half, the
- * resolved instrument, the measurement context, the workspace-as-found baseline and
- * the objective identity. Every refusal here is free - it fails the run before any
- * node is paid for - and their ORDER is load-bearing: kind, shell, runnability, then
- * spec, so a caller is never sent to correct a field while the instrument behind it
- * is unrunnable.
+/**
+ * What a measured run resolves before anything expands. Refusal order is load-bearing: kind,
+ * shell, runnability, then spec, so a caller never fixes a field of an unrunnable instrument.
  */
 export async function prepareMeasurement(input: {
   readonly rt: AgentRuntime;
@@ -359,28 +307,13 @@ if (!measured) {
 }
 
 if (!('kind' in measured.verify)) {
-  // The closure arm is legal for in-process callers and unusable HERE, for a
-  // reason that is not about publishability: a closure declares no path a
-  // candidate belongs at, so a runner holding one could only measure the
-  // workspace as found and report it as a candidate's score. Registering the kind
-  // is what supplies that path — and it is also what gives the closed registry
-  // (*The closed verifier registry*) a name that can fail to resolve.
+  // A closure declares no candidate path; registering the kind supplies one (*The closed verifier registry*).
   return unsupported('this objective supplies `verify` as a closure, which names no path a '
     + 'candidate is written to, so this run cannot place one for it to measure. Register a '
     + 'verifier kind and pass verify as {kind, spec}.');
 }
 
-// ORDER MATTERS HERE: the kind, the shell, then whether THIS instrument can run in THIS
-// shell, and only then the spec. Every refusal above the spec is one no spec could have
-// avoided, so a caller is never sent to correct a field while the instrument behind it
-// is unrunnable.
-//
-// Validating `spec` first, then building the measurement context, then measuring the
-// baseline, teaches a caller about its spec's fields first and about an instrument that
-// cannot run in this workspace at all LAST — one refusal per attempt, each one a real
-// turn step. Measured in production: a model spent five of its ten steps on that
-// sequence (an unregistered kind, two spec-shape complaints, then two faulted
-// baselines) and the turn was cut before it ever ran a search.
+// Order matters: kind, shell, runnability, then spec (see above).
 const kind = registeredVerifierKind(measured.verify.kind);
 
 if (kind === null) return unregisteredKindRefusalFor(measured.verify.kind);
@@ -444,9 +377,7 @@ const identity = {
     : argumentDigest({ proxy: proxyDigest, witness: witnessDigest }),
 };
 
-// *Measured baseline*: the baseline is measured on the workspace AS FOUND, before
-// any candidate exists. A fault here MUST NOT start the run — there is nothing to
-// normalise against and nothing to compare to.
+// *Measured baseline*: measured on the workspace as found; a fault must not start the run.
 let asFound: Measurement;
 
 try {
@@ -473,8 +404,7 @@ if (measured.floor && breaches(measured.floor, measured.direction, baseline)) {
     + `exists. Re-derive the bound: ${measured.floor.proof}`);
 }
 
-// *Measured baseline* — a target at or beyond the measured baseline leaves no range
-// to score on.
+// *Measured baseline*: a target already met leaves no range to score on.
 if (normalisedScore({
   value: baseline, baseline, target: measured.target,
   direction: measured.direction, scale: measured.scale,
@@ -485,13 +415,8 @@ if (normalisedScore({
     + `than declared, so raise the target past ${String(baseline)}.`);
 }
 
-// THE ARCHIVE'S KEY, CHECKED AGAINST THE INSTRUMENT THAT HAS TO WITNESS IT — here,
-// because this is the first and cheapest moment it can be: the baseline measurement
-// has just reported the quantities this instrument reports, and a key naming none of
-// them would otherwise be discovered one candidate at a time at the settle barrier,
-// where every write is refused for want of a cell and the run reports coverage over an
-// archive it could never have written. Refused before a single candidate is expanded,
-// naming the keys this instrument does report.
+// The archive key must be a quantity the instrument reports; checked here, at the baseline,
+// before any candidate is expanded.
 if (archive) {
   const cell = archiveCellOf(archive.key, asFound.measured);
 
@@ -516,15 +441,7 @@ log.event('swarm.baseline_measured', {
   return { measured, verifier, witnessVerifier, ctx, baseline, identity };
 }
 
-/**
- * THE RUN'S STORES, initialised in dependency order: the selection tree, the head
- * journal, the run-level search ledger, the exploration records and the per-node
- * content store a RE-ENTRY reads.
- *
- * Initialised rather than assumed because a workspace that has never run a fork or a
- * search holds none of these tables, and every read below would be a query against a
- * table that does not exist.
- */
+/** The run's stores, initialised in dependency order; a workspace that never ran a search has none of these tables. */
 export interface RunLedgers {
   readonly sql: SqlExecutor;
   readonly journal: HeadJournal;
@@ -534,75 +451,34 @@ export interface RunLedgers {
 export function initRunLedgers(
   rt: AgentRuntime,
   /**
-   * Where this run's durable journal writes are announced, or absent for a
-   * caller with nothing watching.
-   *
-   * THE ONE REASON THIS PARAMETER EXISTS. `LiveHeadJournal`'s contract is that
-   * every path into the journal — hosted and unhosted, head and node, top-level
-   * and recursive — goes through the instance a backend hands the controller and
-   * the node host. A swarm never went through it: this factory built a raw
-   * `HeadJournal` of its own, so a node's spawn, its report, and (in-isolate)
-   * every one of its steps landed durably and told nobody. Only a HOSTED node's
-   * steps announced anything, because those cross to the parent's
-   * `recordHeadStep` and the parent's journal is the announcing one — so the
-   * Exploration surface was live for one write of one transport and poll-only
-   * for every other, which is the worst shape a liveness defect can take.
-   *
-   * A LISTENER RATHER THAN A JOURNAL INSTANCE. The tables below are `rt`'s, so
-   * the journal has to be built over `rt.storage.sql`; a caller handing in an
-   * instance could hand one bound to a different database than the one this just
-   * initialised. Only the ANNOUNCEMENT is the backend's, which is exactly the
-   * seam `LiveHeadJournal` takes.
+   * Where this run's journal writes are announced, or absent. A listener rather than a journal
+   * instance, so the journal is always built over `rt.storage.sql`.
    */
   announce?: AnnounceHeadActivity,
 ): RunLedgers {
   const sql = rt.storage.sql;
   initSearchTables(rt.storage.execRaw);
-  // The transcript store *The journal read model* governs, and it is the SAME ledger a
-  // fork's turns land in: the transcript is a read model over the node's journal, never
-  // a second store. `search_nodes` stays the TREE — structure and one normalised value
-  // per node — and the journal stays the turns. Initialised rather than assumed, for the
-  // reason `initSearchTables` is: a workspace that has never run a fork has no
-  // `head_journal`.
+  // *The journal read model*: the same ledger a fork's turns land in; `search_nodes` stays the tree.
   initHeadsTables(rt.storage.execRaw);
 
   const journal = announce === undefined
     ? new HeadJournal(sql, rt.actor)
     : new LiveHeadJournal(sql, rt.actor, announce);
 
-  // The run-level ledger every search in this workspace has a row in. Initialised for
-  // the same reason the two above are, and written for the reason *Accepted and
-  // ignored* gives: a swarm wrote a tree and no ledger row, so the surface could read
-  // its structure and not one knob it ran under, and the judge clamp it computes and
-  // discloses was persisted nowhere at all.
+  // The run-level ledger (*Accepted and ignored*): persists the knobs and judge clamp a run ran under.
   initMctsSearchTable(rt.storage.execRaw);
   const searchLedger = new MctsSearchStore(sql, rt.actor);
-  // The leaderboard *The records store* governs, initialised for the same reason the two
-  // above are: a workspace that has never run a search has no `exploration_records`, and
-  // the carry-in read immediately below would be a query against a table that does not
-  // exist.
+  // The leaderboard *The records store* governs.
   initExplorationRecordsTable(rt.storage.execRaw);
-  // The per-node content store a RE-ENTRY reads (*swarm-resume.ts*), initialised for
-  // the same reason the three above are. `search_nodes` holds this tree's selection
-  // state and cannot answer a resume — `value` is a mean over a subtree, and no column
-  // holds the raw measurement a winner is ranked on or the breach that seals a run.
+  // Per-node content a re-entry reads (swarm-resume.ts); `search_nodes` cannot answer a resume.
   initSwarmNodeRecords(rt.storage.execRaw);
 
   return { sql, journal, searchLedger };
 }
 
 /**
- * CARRY-IN. What earlier runs of THIS objective, under THIS floor, already reached -
- * read before anything is expanded, so the search starts from it rather than
- * rediscovering it. This is the half that makes the store a store: a writer with no
- * reader persists rows nothing ever starts from, which is the same per-invocation
- * search with a table beside it.
- *
- * Gated on a PUBLISHING carry rather than run unconditionally. `carry` is the axis
- * that says whether a run belongs to a cumulative sequence, and seeding a
- * `carry:'none'` run out of the store would break that axis in the direction nobody
- * is watching - the run would silently inherit a starting point its configuration
- * says it has none of.
+ * Carry-in: what earlier runs of this objective under this floor reached, read before expansion.
+ * Gated on a publishing carry so a `carry:'none'` run inherits nothing.
  */
 export interface CarryIn {
   readonly carriedIn: readonly ExplorationRecord[];
@@ -611,8 +487,7 @@ export interface CarryIn {
 
 export function readCarryIn(input: {
   readonly sql: SqlExecutor;
-  /** The RUN's own actor: the carry-in population is the leaderboard of the
-   *  actor that opened the search, never of a node that produced one candidate. */
+  /** The run's own actor, never a node's. */
   readonly actor: ActorHandle;
   readonly identity: ObjectiveIdentity | null;
   readonly publishing: PublishingCarry | null;
@@ -646,30 +521,14 @@ export function readCarryIn(input: {
 }
 
 /**
- * Re-entry resumes an unreported node under its existing ID and leaves it
- * unfinished until its work settles (`swarm-resume.ts`, `PendingSwarmNode`);
- * retiring it and allocating a replacement would fabricate one failure and
- * repay one node per interruption. Only start-of-life reconciliation may
- * retire a node when its root has no re-drive path — the one place where "no
- * report will arrive" is a true statement.
+ * Re-entry resumes an unreported node under its existing ID (`PendingSwarmNode`); only start-of-life
+ * reconciliation may retire a node, when its root has no re-drive path.
  */
 
 /**
- * THE SEARCH THIS CALL IS: the interrupted one it re-enters, or a new one - plus THE
- * PROFILE THIS RUN RUNS UNDER.
- *
- * A re-driven background job replays the stored tool input verbatim
- * (`orchestrator/background-tools.ts`), so minting a fresh root here is what turned
- * ONE evicted five-head search into two abandoned trees, a second ledger row, and a
- * job that settled `completed - took 18m` carrying an aborted result.
- * `swarm-resume.ts` states the rest of the rule and names what a re-entry cannot
- * recover.
- *
- * The profile follows the same first-attempt/re-drive split: first attempt, the
- * caller's resolution carried down in deps - the snapshot a later re-drive replays,
- * written into the ledger row at `begin`; re-drive, the claimed row's own record, so
- * today's catalog cannot reach an in-flight tree. A first attempt says so out loud
- * with `swarm.profile_snapshot`.
+ * The search this call is (the interrupted one it re-enters, or a new one) and the profile it
+ * runs under. A re-drive replays tool input verbatim, so it must re-enter rather than mint a root;
+ * its profile is the claimed row's record, never today's catalog.
  */
 export interface ReentryResolution {
   readonly reentry: SwarmReentry | null;
@@ -713,23 +572,9 @@ export function resolveReentry(input: {
 }
 
 /**
- * THE MODEL EVERY NODE RUNS ON, decided once, here.
- *
- * The caller's model is what runs absent a profile record. When a profile record
- * exists, its `tier.model` is what this delegation was routed to, so that is what the
- * nodes run - and BOTH cases read the same field, which is what makes a re-drive
- * continue on the model it started on. Today's catalog cannot reach an in-flight tree
- * because today's catalog is never consulted: the re-drive arm reads the claimed
- * ledger row, and the row was frozen before the first attempt detached.
- *
- * REFUSED, not degraded, in both directions. When the seam is MISSING, running the
- * caller's model while the ledger row names the tier's would put a model that never
- * executed into the provenance AND into the spend, and both are read later as
- * evidence of what this search cost. When the seam THROWS - a session with no
- * registry to build that spec, an unknown provider, a revoked credential - the honest
- * answer is that this tier is unreachable HERE, and a refusal says so where a
- * propagated throw would hand the operator a stack instead of the fact. The cause
- * chain is kept, because the provider's own reason is the actionable half.
+ * The model every node runs on. With a profile record, its `tier.model` (the claimed row's, so a
+ * re-drive keeps its model). A missing or throwing resolver refuses rather than degrading to the
+ * caller's model, which would misstate provenance and spend.
  */
 export function resolveNodeModel(input: {
   readonly model: LanguageModel;
@@ -767,34 +612,9 @@ export function resolveNodeModel(input: {
 }
 
 /**
- * THE MODELS A ROUTED RUN'S NODES RUN ON, resolved once, here, and refused BEFORE
- * anything spends.
- *
- * `models` routes each node to the spec its slot is assigned (round-robin, per
- * `SwarmInput.models`). Every spec crosses the ONE seam the actor already routes a
- * delegation's tier through — {@link resolveModel}, wired by `agents-tool.ts` from
- * `AgentsSwarmDeps.resolveModel` — so a swarm's per-node routing and its tier routing
- * build models through the same registry, and there is no second resolver to drift.
- *
- * REFUSED, not degraded, in both directions, and for the same reason
- * {@link resolveNodeModel} refuses: a missing seam would put a model the caller never
- * named into the spend AND the transcript, and a spec the seam cannot build is a
- * caller error naming a model this session has never had. `bad_input` rather than
- * `unavailable`, because the spec is the caller's own words on this surface — the
- * tier arm keeps `unavailable` because a tier is a catalog row the caller only named
- * indirectly.
- *
- * Resolved ONCE for the whole list, not per node mid-run: a run that routes its first
- * two nodes and then faults on the third has already spent on a routing it then
- * abandoned, and a re-entry would re-fault the same spec every wave. The whole list
- * resolves before `createRoot`, which is before the baseline instrument runs, before
- * any ledger row opens, and before any node expands — the "before anything spends"
- * the field's first life lacked.
- *
- * EACH ENTRY KEEPS THE CALLER'S OWN SPEC beside the model it resolved to, because a
- * hosted node cannot be handed a live model: the spec string crosses the facet RPC on
- * `HeadInput.model` and the facet resolves it through the same owner registry
- * (`facetModelSpec('swarm', …)`), so both transports route from one vocabulary.
+ * Per-node routed models, resolved once through {@link resolveModel} before `createRoot`, so nothing
+ * spends on a routing that later faults. Refused like {@link resolveNodeModel}, but `bad_input`:
+ * the spec is the caller's own words. Each entry keeps its spec for `HeadInput.model`.
  */
 export interface RoutedNodeModel {
   readonly spec: string;
@@ -834,28 +654,8 @@ export function resolveNodeModels(input: {
 }
 
 /**
- * AND IF IT IS NEITHER, IT IS NOTHING. A call that did not re-enter and finds a search
- * of its own task STILL RUNNING is refused rather than given a second tree.
- *
- * A DELIBERATE ARM HERE — "a fresh `agents.swarm` whose task matches a search still
- * expanding gets its own root" - would be defending something real: two concurrent
- * deliberate calls must not grow one search between them. What it does not survive is
- * how a re-spawn actually arrives. A failed job's wake tells the model "decide whether
- * to retry or report the failure", the model retries by calling the tool again, and that
- * call carries no re-drive marker because it is not a re-drive - so it takes that arm
- * and mints a second root over a tree the first attempt had left running. Measured on
- * the owner's live workspace: two roots with byte-identical task text, six waves and
- * thirty head spawns against one budget-5 job.
- *
- * A REFUSAL RATHER THAN AN ADOPTION, because adoption is exactly what the marker
- * exists to authorise: a caller with no marker has not proved it owns the earlier
- * attempt, and silently continuing somebody else's tree is the collision from the
- * other direction. So the caller is told the search is already running, told where,
- * and told its result arrives as a wake - which is the answer it wanted.
- *
- * A row this call itself superseded is gone by here: `reenterSwarm` supersedes the
- * losers before it claims, so a re-drive that genuinely found nothing to re-enter
- * leaves nothing running and falls through to a fresh search.
+ * A call that did not re-enter and finds a search of its own task still running is refused, not
+ * given a second root or adopted: without a re-drive marker it has not proved it owns the tree.
  */
 export function refuseContendedRun(input: {
   readonly searchLedger: MctsSearchStore;
@@ -884,24 +684,17 @@ export function refuseContendedRun(input: {
 }
 
 /**
- * The ROOT: the workspace as found at depth 0 - the one node no model wrote. Recorded
- * so that selection has something to select and so that every child's depth is DERIVED
- * from a row this engine wrote rather than asserted by its author. A re-entry adopts
- * the row its first attempt wrote: re-inserting it would collide on the primary key,
- * and minting a second root is the duplicate-root defect. One run header is recorded
- * beside it so every node of this search groups under one root in the journal;
- * idempotent under a re-entry - the row is keyed on the root and re-labelled.
+ * The root: the workspace as found at depth 0, so every child's depth is derived. A re-entry adopts
+ * the existing row; the journal run header is idempotent.
  */
 export async function createRoot(input: {
   readonly sql: SqlExecutor;
-  /** The RUN's own actor. The root node it inserts belongs to the actor that
-   *  opened the search, so the whole tree is keyed to one actor from its root. */
+  /** The run's own actor; the whole tree is keyed to it. */
   readonly actor: ActorHandle;
   readonly reentry: SwarmReentry | null;
   readonly verifier: ResolvedVerifier | null;
   readonly ctx: MeasurementContext | null;
   readonly resolved: ResolvedSwarm;
-  /** The origin agent's own conversation, the root's children's prefix when supplied. */
   readonly originContext?: readonly ModelMessage[];
   readonly measures: boolean;
   readonly journal: HeadJournal;
@@ -909,34 +702,18 @@ export async function createRoot(input: {
 }): Promise<{
   readonly rootId: string;
   readonly nodes: Map<string, TreeNode>;
-  /** The node this call just built, so a caller needing it does not re-read the map
-   *  it was handed and deal with an absence that cannot happen. */
   readonly root: TreeNode;
 }> {
   const { actor, sql, reentry, verifier, ctx, resolved, measures, journal, agentNodes } = input;
-  // The ROOT is the workspace as found at depth 0 — the one node no model wrote.
-  // Recorded so that selection has something to select and so that every child's
-  // depth is DERIVED from a row this engine wrote rather than asserted by its author.
-  // A re-entry adopts the row its first attempt wrote: re-inserting it would collide on
-  // the primary key, and minting a second root is the defect above.
   const rootId = reentry?.rootId ?? nanoid();
-  // MEASURED NOW IN BOTH CASES, never read back off the row. The root IS the workspace
-  // as found, and what a re-entering run finds is the state its own first attempt left
-  // — including the winner an earlier settle applied. Reading the stored `observation`
-  // instead would hand a resumed run the workspace as it was BEFORE any of that, and
-  // that column also carries the task string where the path held nothing, which is not
-  // an artifact at all.
+  // Measured now even on re-entry: the stored `observation` predates earlier settles and may hold the task text.
   const rootArtifact = verifier && ctx ? await readArtifact(ctx, verifier.artifact) : null;
 
   if (!reentry) {
     insertSearchNode(sql, actor, {
       nodeId: rootId, parentNodeId: null, parentMsgId: null, rootId,
       task: resolved.task,
-      // The root's label is the RUN'S NAME — what the exploration surface
-      // draws where every other node carries its proposal's why. A caller who
-      // named nothing leaves it to a composed configuration's provenance
-      // label; with neither, the read model derives from the task and this
-      // stays empty exactly as it always has.
+      // The run's name, else a composed configuration's label, else empty (the read model derives from the task).
       action: resolved.name ?? resolved.label ?? '',
       observation: rootArtifact ?? resolved.task,
       codeUsed: null, depth: 0, msgId: null,
@@ -945,28 +722,19 @@ export async function createRoot(input: {
 
   const root: TreeNode = {
     id: rootId, parentId: null, depth: 0, artifact: rootArtifact,
-    // The baseline IS the root's measurement, and its normalised score is 0 by
-    // construction — the point the search climbs away from.
+    // The root's normalised score is 0 by construction.
     measurement: null, score: measures ? 0 : null, pareto: null,
     proposal: null, proposalError: null, granted: null,
-    // The root reported nothing because no model wrote it. Its children's prefix is
-    // the ORIGIN's conversation when the caller supplied one (*Inherited context*: a
-    // root that started blank would throw away precisely the context that made the
-    // caller decide to search) and the task block alone when it did not.
+    // Children's prefix is the origin's conversation when supplied (*Inherited context*).
     conclusion: null,
     transcript: reentry?.originContext ?? input.originContext ?? [],
     compacted: null,
-    // The root aggregates nothing: it IS the workspace as found, and a fan-in consumes
-    // a level the search produced.
     aggregated: [],
   };
 
   const nodes = new Map<string, TreeNode>([[rootId, root]]);
 
-  // One run header, so every node of this search groups under one root in the journal
-  // instead of each appearing as its own empty run — the defect `recordSplit` exists
-  // to close, reached here for the same reason. Idempotent under a re-entry: the row is
-  // keyed on the root and re-labelled rather than duplicated.
+  // One run header so every node groups under one root; idempotent under re-entry.
   if (agentNodes) {
     journal.recordSplit(rootId, resolved.label ?? resolved.preset, Date.now());
   }
@@ -975,28 +743,9 @@ export async function createRoot(input: {
 }
 
 /**
- *
- * Every accumulator above is seeded from the durable rows so a re-entry continues
- * one search instead of reporting the half of it that happens to be in memory: the
- * tree (so selection descends what exists), the candidate list (so `expansions`
- * counts the whole search), the WINNER (so a resumed run cannot crown a candidate
- * worse than one already measured), the SEAL (so a run that breached its floor stays
- * unpublishable — resuming open would publish work the seal exists to hold back),
- * the realised ensembles and the per-candidate spend.
- *
- * Nodes arrive parent-before-child, which is what lets a `context:'inherit'` child of a
- * re-entered parent inherit that parent's conversation: the transcript is composed
- * down the chain exactly as the loop composes it. What it does NOT carry is each
- * child's own seed message — a user turn built from prompt state that was never
- * durable — so an inherited prefix is the ancestors' turns without the questions that
- * prompted them. Named because it is a real difference in what a resumed child reads,
- * and the alternative was persisting every node's whole prefix, which is quadratic in
- * depth.
- *
- * A node with a tree row and no record cannot happen going forward — the record is
- * written first, so a row implies one — but an older workspace can hold one, and it
- * is rebuilt as a selectable parent that is not a candidate: it has an answer and no
- * measurement, and ranking it would rank an unmeasured node.
+ * Accumulators seeded from durable rows so a re-entry continues one search, including the winner
+ * and the seal. Resumed inherit-children lack their seed message (never durable). A tree row with
+ * no record (older workspaces) is a selectable parent, not a candidate.
  */
 export interface ResumedSearchSeed {
   readonly candidates: SwarmCandidate[];
@@ -1005,21 +754,8 @@ export interface ResumedSearchSeed {
   readonly best: SwarmCandidate | null;
   readonly bestValue: number | null;
   /**
-   * HOW MANY EXPANSIONS THIS SEARCH HAS ALREADY MADE, and therefore what the budget
-   * this attempt may still spend is.
-   *
-   * THE UNION of the two durable records of a node's existence, and it has to be the
-   * union or the count is wrong in one direction or the other. A node's spawn is
-   * written to `head_journal` before its model runs; its answer is written to
-   * `search_nodes` only after its whole LEVEL settled. Counting tree rows alone —
-   * which is what this did — made a search cut inside its only level count ZERO
-   * expansions, recreate the entire budget and expand a second full wave under fresh
-   * ids, so a five-node request produced ten nodes and then fifteen. Counting journal
-   * rows alone would miss a `unit:'thought'` run, which journals nothing at all.
-   *
-   * The two sets partition cleanly, so the union is a sum with no de-duplication: a
-   * node with a tree row is finished as far as the search is concerned, and a node
-   * with a journal row and no tree row is exactly what `SwarmReentry.pending` is.
+   * Expansions already made: tree rows plus pending journal-only nodes. The two sets partition, so
+   * the union is a plain sum; either alone miscounts.
    */
   readonly inheritedExpansions: number;
   readonly inheritedTokens: number | null;
@@ -1028,7 +764,6 @@ export interface ResumedSearchSeed {
 export function seedResumedSearch(input: {
   readonly reentry: SwarmReentry | null;
   readonly nodes: Map<string, TreeNode>;
-  /** The direction `best` is chosen in - the objective's own, or `maximise` judged. */
   readonly rankDirection: ObjectiveDirection;
   readonly spentBy: Map<string, number | null>;
 }): ResumedSearchSeed {
@@ -1038,14 +773,11 @@ export function seedResumedSearch(input: {
   let bestValue: number | null = null;
   const ensembles: number[] = [];
   let publication: PublicationState = { kind: 'open' };
-  // The paid-for expansions this re-entry re-runs rather than re-buys. Counted
-  // BEFORE the loop, because they are not in `reentry.nodes` — that is the whole
-  // point of them.
+  // Pending expansions are re-run, not re-bought; they are not in `reentry.nodes`.
   let inheritedExpansions = reentry?.pending.length ?? 0;
   let inheritedTokens: number | null = null;
 
   for (const node of reentry?.nodes ?? []) {
-    // The root was seeded above, measured against the workspace as it is NOW.
     if (node.parentId === null) continue;
     inheritedExpansions += 1;
     const { record } = node;
@@ -1064,13 +796,10 @@ export function seedResumedSearch(input: {
       id: node.id, parentId: node.parentId, depth: node.depth,
       artifact: node.artifact,
       measurement, score, pareto,
-      // named losses in `swarm-resume.ts`: the node is selectable again and expands
-      // under the run's own `context`, and the grant's debit is refunded because
-      // nothing was created.
+      // Named losses in `swarm-resume.ts`: the grant is refunded because nothing was created.
       proposal: null, proposalError: null, granted: null,
       conclusion: record?.conclusion ?? null,
       transcript: [...(nodes.get(node.parentId)?.transcript ?? []), ...node.produced],
-      // Recomputed when this node becomes a branch point, exactly as a fresh one is.
       compacted: null,
       aggregated: record?.aggregated ?? [],
     });
@@ -1103,9 +832,7 @@ export function seedResumedSearch(input: {
       publication = { kind: 'sealed', breach: outcome.breach, clearedBy: null };
     }
 
-    // THE SAME RANK EXPRESSION THE LOOP USES, over the same arms: a verified candidate
-    // ranks on its RAW measurement and a judged one on the ensemble's median, and a
-    // sealed candidate ranks on nothing at all.
+    // Same rank expression as the loop: raw measurement, judged median, sealed ranks nothing.
     let rank: number | null = null;
 
     if (outcome?.kind === 'scored') rank = outcome.measurement.value;
@@ -1124,20 +851,11 @@ export function seedResumedSearch(input: {
 }
 
 /**
- * What every agent node of this run is handed, built ONCE.
- *
- * Assigned rather than spread conditionally, and the reason is the same one
- * `nodeWorkspace` is written for: an absent dep must be an ABSENT KEY. A key written as
- * `undefined` would make "the caller wired none" indistinguishable from "the caller
- * wired nothing", and that distinction is what decides whether a node's surface holds a
- * tool at all.
- *
- * Extracted verbatim from the runner's setup; the report gate is attached by the caller,
- * which is the one place that knows whether an instrument exists.
+ * What every agent node is handed, built once. Absent deps stay absent keys: presence decides
+ * whether a node holds a tool. The report gate is attached by the caller.
  */
 export function buildNodeDeps(input: {
-  /** Acquire the hosted logical actor ONE node runs as. Per node, never per
-   *  run: see {@link NodeAgentDeps.hostNode}. */
+  /** Per node, never per run: see {@link NodeAgentDeps.hostNode}. */
   readonly hostNode: (node: NodeIdentity) => Promise<HostedNodeSeat>;
   readonly model: LanguageModel;
   readonly journal: HeadJournal;
@@ -1157,9 +875,7 @@ export function buildNodeDeps(input: {
 
   const nodeDeps: NodeAgentDeps = {
     hostNode: deps.hostNode, model: deps.model, journal: deps.journal, logger: deps.logger,
-    // The wall clock is OPT-IN (deps.maxWallClockMs, wired below when declared):
-    // there is no default clock over a node's work. Its turn runs until it is
-    // done, cancelled, refused by its mission governor, or fails definitively.
+    // No default wall clock; `maxWallClockMs` is opt-in.
   };
 
   if (deps.signal !== undefined) nodeDeps.signal = deps.signal;

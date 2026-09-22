@@ -1,28 +1,5 @@
-// `depth > 1` — the half of the swarm surface that was declared and not real.
-//
-// A `depth` cap that cannot produce a second level is an axis in the docstring and a
-// no-op in the engine, which is the defect *Accepted and ignored* exists to refuse.
-// So these tests are about the three things that make the cap real, and each is
-// asserted at the level where it can actually fail:
-//
-//   1. THE ARBITER, as a pure function, against `Exploration/Arbitration.lean`. The
-//      Lean file proves five theorems about `arbitrate`; every one of them is
-//      universally quantified over the proposal, because a proposal is UNTRUSTED
-//      input — a node's request. The suite below is those theorems on the shipped
-//      arbiter, so the proven one and the executable one cannot drift apart.
-//   2. THE SCHEDULER, over real SQLite rows, because the depth cap is a WHERE-clause
-//      exclusion and a WHERE clause is not something a unit test can fake past.
-//   3. THE WHOLE RUN, end to end, with a real model call and a REAL MEASUREMENT — the
-//      metered-oracle harness spawning node inside the workspace shell. Nothing here
-//      stubs the verifier: the point of this work was that the tree climbs the
-//      caller's own objective, and a stubbed instrument would assert the plumbing
-//      while leaving that claim untested.
-//
-// CAP EVASION IS TESTED BY ROUTE, not by assertion count. There are exactly three ways
-// a node could reach depth `maxDepth + 1` — selection returning a node at the cap, an
-// accepted proposal granting children past it, or a child's depth being taken from
-// something other than its parent's row — and each has its own test below.
-//
+// `depth > 1` swarm: the arbiter against `Exploration/Arbitration.lean`, the depth cap over real rows,
+// and whole runs with a real `exec-ratio` measurement. Each cap-evasion route has its own test.
 // Specified by docs/EXPLORATION.md — "Accepted and ignored", "Arbitration", "Presets",
 // "Inherited context", "The publication seal" and "Merge-back".
 import { describe, test, expect } from 'bun:test';
@@ -57,18 +34,8 @@ import { createTestActors, present } from '@kinu.run/test-utils';
 import * as v from 'valibot';
 import { refuseHostNode } from './helpers-actor-host';
 
-/**
- * The `hostNode` seam every run below is given, and why it REFUSES.
- *
- * Every search in this file is `unit:{kind:'thought'}` (see `treeConfig`), and a
- * thought node is one toolless model call that acquires no tools, no journal row
- * and no shell — so it never asks for a seat. A stub seat here would let a suite
- * that quietly grew an agent node run it under a fabricated actor and still pass;
- * the refusal turns that into a failure that names the fixture.
- */
+/** Refuses: thought nodes never ask for a seat, so an agent node here fails naming the fixture. */
 const NO_NODE = refuseHostNode('the depth suite runs thought nodes only');
-
-/* ── The arbiter, against the theorems ────────────────────────────────────── */
 
 function treeConfig(over?: Partial<SwarmConfig>): SwarmConfig {
   return {
@@ -86,8 +53,6 @@ function caps(depth: number | null, branches: number): ResolvedSwarmCaps {
   };
 }
 
-/** A legal proposal: the minimum width `BRANCH_PROPOSAL_WIDTH` states, and no context
- *  conflict. */
 function proposal(over?: Partial<BranchProposal>): BranchProposal {
   return {
     rationale: 'this thread splits into two independent sub-questions',
@@ -99,18 +64,15 @@ function proposal(over?: Partial<BranchProposal>): BranchProposal {
   };
 }
 
-/** A proposal whose branches all ask to FORK — the shape the fifth arm refuses under a
- *  `fresh` search and accepts under an inheriting one. */
+/** Every branch asks to fork: refused under a `fresh` search, accepted under an inheriting one. */
 function inheriting(width = 2): BranchProposal {
   return branchesOf(width, 'inherit');
 }
 
-/** A proposal of exactly `width` branches, for the band checks. */
 function widthOf(width: number): BranchProposal {
   return branchesOf(width, 'fresh');
 }
 
-/** `width` sub-questions, each asking for the same context arm. */
 function branchesOf(width: number, context: 'inherit' | 'fresh'): BranchProposal {
   return proposal({
     branches: Array.from({ length: width }, (_unused, i) => ({
@@ -121,10 +83,7 @@ function branchesOf(width: number, context: 'inherit' | 'fresh'): BranchProposal
 
 describe('*Arbitration* — a node proposes, the engine decides', () => {
   test('a legal proposal is accepted at its own width — the arbiter is not vacuous', () => {
-    // Sharpness, and it is load-bearing: every theorem below is an implication OUT of
-    // `accepted`, so without this one they would all hold of an arbiter that refuses
-    // everything, which would be useless rather than safe. Lean states the same
-    // witness for the same reason (`a_legal_proposal_is_accepted`).
+    // `a_legal_proposal_is_accepted`: without it an always-refusing arbiter satisfies every theorem below.
     const verdict = arbitrateBranch({
       config: treeConfig(), caps: caps(5, 3), atDepth: 1,
       remainingChildren: 10, proposal: inheriting(),
@@ -134,15 +93,11 @@ describe('*Arbitration* — a node proposes, the engine decides', () => {
   });
 
   test('all five refusals are reachable, and each NAMES its policy and its state', () => {
-    // `every_refusal_is_reachable`. A reason the arbiter can never give is a reason
-    // that does not exist, and a refusal that does not say what refused it leaves the
-    // node unable to tell refusal from being ignored — so both halves are asserted:
-    // the policy token (queryable) and the prose naming the state (actionable).
+    // `every_refusal_is_reachable`: both the policy token and the prose naming the state.
     const reached: { policy: BranchRefusalPolicy; error: string }[] = [];
 
     const refusals = [
-      // `advance:'none'` has no selection step, so there is no second level for a
-      // branch to land on. This is the flat run's honest answer to a proposal.
+      // `advance:'none'` has no selection step, so no second level exists.
       arbitrateBranch({
         config: treeConfig({ advance: { kind: 'none' } }), caps: caps(1, 3), atDepth: 0,
         remainingChildren: 10, proposal: proposal(),
@@ -151,7 +106,6 @@ describe('*Arbitration* — a node proposes, the engine decides', () => {
         config: treeConfig(), caps: caps(5, 3), atDepth: 1,
         remainingChildren: 10, proposal: widthOf(BRANCH_PROPOSAL_WIDTH.max + 1),
       }),
-      // At the cap: the node's children would be depth 2 against a cap of 1.
       arbitrateBranch({
         config: treeConfig(), caps: caps(1, 3), atDepth: 1,
         remainingChildren: 10, proposal: proposal(),
@@ -160,9 +114,7 @@ describe('*Arbitration* — a node proposes, the engine decides', () => {
         config: treeConfig(), caps: caps(5, 3), atDepth: 3,
         remainingChildren: 1, proposal: proposal(),
       }),
-      // The fifth arm moved onto the axis *Inherited context* governs: a search resolved
-      // `fresh` refuses a child that asks to `fork`, which is "a node may narrow and
-      // never widen" over the axis that actually owns inheritance.
+      // Fifth arm: a `fresh` search refuses a child that asks to `fork` (narrow, never widen).
       arbitrateBranch({
         config: treeConfig({ context: 'fresh' }), caps: caps(5, 3), atDepth: 1,
         remainingChildren: 10, proposal: inheriting(),
@@ -176,9 +128,7 @@ describe('*Arbitration* — a node proposes, the engine decides', () => {
       reached.push({ policy: verdict.policy, error: verdict.error });
     }
 
-    // Every one of the five, exactly once, in the table's own order.
     expect(reached.map((r) => r.policy)).toEqual([...BRANCH_REFUSAL_POLICIES]);
-    // And each names the state that produced it, not merely the rule it broke.
     expect(reached[0]?.error).toContain('advance:"none"');
     expect(reached[1]?.error).toContain('names 5');
     expect(reached[2]?.error).toContain('depth exhausted at depth 1');
@@ -187,10 +137,7 @@ describe('*Arbitration* — a node proposes, the engine decides', () => {
   });
 
   test('an absent depth cap refuses as ABSENT, which is not the same as exhausted', () => {
-    // Reachable only through `custom` with no `from`: a row exists for every named preset
-    // (*Presets*) and none for a composition that named no base. A run whose depth
-    // nothing states cannot grant depth, and saying "exhausted" would claim a number
-    // was consumed when none was ever declared.
+    // Only reachable via `custom` with no `from`: undeclared depth cannot be granted.
     const verdict = arbitrateBranch({
       config: treeConfig(), caps: caps(null, 3), atDepth: 0,
       remainingChildren: 10, proposal: proposal(),
@@ -203,10 +150,7 @@ describe('*Arbitration* — a node proposes, the engine decides', () => {
   });
 
   test('CAP EVASION, route 1: no proposal is granted children past the cap', () => {
-    // S3 where it has CONTENT rather than where it is definitional — the depth comes
-    // from the row the engine wrote, and the proposal is a request over it. Quantified
-    // over the whole grid rather than sampled, and the assertion is the theorem:
-    // accepted ⟹ atDepth + 1 ≤ maxDepth.
+    // S3 over the whole grid: accepted ⟹ atDepth + 1 ≤ maxDepth.
     for (const maxDepth of [1, 2, 3, 5]) {
       for (let atDepth = 0; atDepth <= 7; atDepth += 1) {
         const verdict = arbitrateBranch({
@@ -230,8 +174,7 @@ describe('*Arbitration* — a node proposes, the engine decides', () => {
   });
 
   test('a proposal cannot mint children the search cannot pay for', () => {
-    // `accepted_within_budget` — the other half of S8. The budget is the SEARCH's,
-    // shared by every node, so a proposal is an input to `advance` and not a bypass.
+    // `accepted_within_budget` (S8): the budget is the search's, shared by every node.
     for (let remaining = 0; remaining <= 5; remaining += 1) {
       const verdict = arbitrateBranch({
         config: treeConfig(), caps: caps(5, 3), atDepth: 1,
@@ -244,9 +187,7 @@ describe('*Arbitration* — a node proposes, the engine decides', () => {
   });
 
   test('every proposal gets a verdict — there is no third outcome meaning "ignored"', () => {
-    // `every_proposal_gets_a_verdict`, over a grid that crosses every arm. Silence is the
-    // failure mode *Arbitration* is written against: a node that cannot tell refusal from
-    // being ignored will simply propose again.
+    // `every_proposal_gets_a_verdict`, over a grid crossing every arm.
     const verdictIsStated = (advance: SwarmAdvance, context: 'inherit' | 'fresh', width: number): void => {
       for (const asked of ['inherit', 'fresh'] as const) {
         const verdict = arbitrateBranch({
@@ -273,26 +214,16 @@ describe('*Arbitration* — a node proposes, the engine decides', () => {
   });
 });
 
-/* ── The scheduler, over real rows ────────────────────────────────────────── */
-
 interface Tree {
   readonly sql: SqlExecutor;
-  /** The RUN's actor — the one that opened this search. Every row of this tree,
-   *  and every read of it, is scoped to it: `search_nodes` is keyed
-   *  `(actor_id, id)` now, so a seed and a select under different handles would
-   *  come back empty and read as "nothing selectable at this depth" rather than
-   *  as a scoping mistake. */
+  /** The run's actor; `search_nodes` is keyed `(actor_id, id)`, so mismatched handles read as an empty tree. */
   readonly actor: ActorHandle;
   readonly rootId: string;
-  /** Record a child of `parentId`, at the depth the ENGINE derives, and give it its
-   *  own reward. Returns the child's id. */
   child(parentId: string, reward: number | null): string;
   depthOf(nodeId: string): number;
   select(policy: FrontierPolicy, maxDepth: number): SearchNode | null;
 }
 
-/** A tree over an in-memory database, built the way the runner builds one: the depth
- *  is always the parent's row plus one, never a number the caller chose. */
 function tree(): Tree {
   const db = new Database(':memory:');
   const sql = makeSql(db);
@@ -336,9 +267,7 @@ function tree(): Tree {
 
 describe('the scheduler: one policy per `advance`, and the cap is a WHERE clause', () => {
   test('a scored frontier DESCENDS, so a second level is reachable at all', () => {
-    // The property `depth > 1` needs and did not have: after the root's children are
-    // scored, selection must be able to return one of THEM, because that is the only
-    // way a depth-2 node can come to exist.
+    // Selection must be able to return a scored child, or no depth-2 node can exist.
     const t = tree();
     const good = t.child(t.rootId, 0.9);
     t.child(t.rootId, 0.1);
@@ -347,19 +276,13 @@ describe('the scheduler: one policy per `advance`, and the cap is a WHERE clause
       const next = t.select(policy, 3);
       expect(next).not.toBeNull();
       expect(next?.depth).toBe(1);
-      // And it picks the child that MEASURED better, which is the objective reaching
-      // selection rather than row order deciding.
       expect(next?.id).toBe(good);
     }
   });
 
   test('CAP EVASION, route 2: a node at the cap is never SELECTED, at any width', () => {
-    // WP-A4: the cap excludes, it does not abort. The invariant is not "nothing is
-    // selectable at the cap" — under `uct` the ROOT stays selectable, because
-    // re-selecting an expanded node is re-widening and a wider level is not a deeper
-    // one. The invariant is that no node at depth >= maxDepth is ever returned, which
-    // is what makes a child at maxDepth + 1 unreachable: a child comes from a selected
-    // parent, and no parent past the cap is ever selected.
+    // WP-A4: the cap excludes rather than aborts. Under `uct` the root stays selectable (re-widening);
+    // no node at depth >= maxDepth is ever returned.
     const t = tree();
     t.child(t.rootId, 0.9);
     t.child(t.rootId, 0.4);
@@ -372,21 +295,16 @@ describe('the scheduler: one policy per `advance`, and the cap is a WHERE clause
       }
     }
 
-    // The two frontier policies have nothing left at depth 1 that they may expand,
-    // and say so rather than returning a capped node.
     for (const policy of ['best-first', 'none'] as const) {
       expect(t.select(policy, 1)).toBeNull();
     }
 
-    // Raising the cap makes the same depth-1 rows selectable, so the nulls above are
-    // the cap talking and not an empty frontier.
+    // Raising the cap makes the same rows selectable, so the nulls above come from the cap.
     expect(t.select('best-first', 2)?.depth).toBe(1);
   });
 
   test('CAP EVASION, route 3: a child never states its own depth', () => {
-    // `subordinates/depth.ts`'s discipline, one level over: the number is derived from
-    // the parent's row, so a chain of five is exactly 1..5 and nothing in the child's
-    // own content can move it.
+    // Depth derives from the parent's row, so a chain of five is exactly 1..5.
     const t = tree();
     let parent = t.rootId;
 
@@ -400,39 +318,28 @@ describe('the scheduler: one policy per `advance`, and the cap is a WHERE clause
     const t = tree();
     expect(t.select('none', 1)?.id).toBe(t.rootId);
     t.child(t.rootId, 0.5);
-    // Expanded: there is no second level to reach, which is exactly what the
-    // `depth > 1` refusal for this axis value says in prose.
     expect(t.select('none', 1)).toBeNull();
     expect(t.select('none', 9)).toBeNull();
   });
 
   test('best-first takes the best UNEXPANDED node, so it cannot stall on a parent', () => {
-    // Why this is not `uct` with a zero weight: a parent's backpropagated mean can tie
-    // its best child, and a greedy argmax over all open nodes would then re-pick the
-    // node it just expanded, forever. The frontier is read off the tree.
+    // Not `uct` with zero weight: a parent's mean can tie its best child and an argmax would re-pick it forever.
     const t = tree();
     const first = t.child(t.rootId, 1);
     expect(t.select('best-first', 3)?.id).toBe(first);
     const under = t.child(first, 1);
-    // `first` now has a child, so best-first moves on rather than re-picking it.
     expect(t.select('best-first', 3)?.id).toBe(under);
   });
 
   test('the level-synchronised schedule went with `beam`, and best-first does not replace it', () => {
-    // The honest record of what the cut cost. `beam` selected exactly what
-    // best-first selects — highest value, unexpanded — and differed only in ORDER:
-    // `depth ASC` finished a whole level before entering the next. Nothing left in
-    // the scheduler reproduces that, and this asserts the difference rather than
-    // claiming an equivalence.
+    // `beam` differed from best-first only in order (`depth ASC`); this asserts that difference.
     const t = tree();
     const best = t.child(t.rootId, 0.9);
     const second = t.child(t.rootId, 0.8);
     t.child(t.rootId, 0.2);
 
     expect(t.select('best-first', 4)?.id).toBe(best);
-    // A deeper child of the best node now outranks every remaining depth-1 sibling,
-    // and best-first DESCENDS to it immediately. A beam would have expanded
-    // `second` first, because it was still on the level being swept.
+    // Best-first descends to the deeper child at once; a beam would have expanded `second` first.
     const deeper = t.child(best, 0.95);
     const next = t.select('best-first', 4);
     expect(next?.id).toBe(deeper);
@@ -441,19 +348,9 @@ describe('the scheduler: one policy per `advance`, and the cap is a WHERE clause
   });
 });
 
-/* ── The whole run, with a real measurement ───────────────────────────────── */
-
 /**
- * A measurable optimisation task, in full, as `exec-ratio` takes it.
- *
- * Deliberately NOT a corpus entry: this suite is about the tree, so its instrument is
- * the smallest thing that genuinely measures — find the largest of `n` opaque tokens
- * through a counted `greater` oracle. The reference is correct and wasteful (it
- * verifies every token against every other), the optimum is one linear scan, and the
- * gap between them is the gradient the tree climbs.
- *
- * `n` is small because every measurement spawns a real node process inside the
- * workspace shell, and this suite makes several.
+ * Measurable task for `exec-ratio`: largest of `n` tokens through a counted `greater` oracle.
+ * `n` stays small because every measurement spawns a real process in the workspace shell.
  */
 const N = 24;
 
@@ -471,9 +368,7 @@ const REFERENCE = `export function solve(input, oracle) {
 }
 `;
 
-/** The harness body: build one instance, meter the oracle, compare both answers
- *  through the same decoder. `P`, `shuffle`, `tok`, `valueOf`, `meter`, `trial` and
- *  `emitTrials` all come from the shared prologue. */
+/** `P`, `shuffle`, `tok`, `valueOf`, `meter`, `trial` and `emitTrials` come from the shared prologue. */
 const BODY = `
 const values = shuffle(Array.from({ length: P.n }, (_unused, i) => i + 1));
 const tokens = values.map(tok);
@@ -482,7 +377,6 @@ const decode = (out) => (out === undefined || out === null ? null : valueOf(out)
 emitTrials([trial({ tokens }, oracle, decode, P.n)]);
 `;
 
-/** The optimum: one pass, n-1 calls. What a model would have to find. */
 const OPTIMAL = `export function solve(input, oracle) {
   const t = input.tokens;
   let best = t[0];
@@ -494,14 +388,8 @@ const OPTIMAL = `export function solve(input, oracle) {
 `;
 
 /**
- * The suite's objective.
- *
- * `floor` is an override rather than a constant because one thing this file has to reach
- * is a REFUTED bound. The shipped floor of ceil(n/2) is sound, and no honest candidate
- * can cross it, so a seal is unreachable through it — which is correct and also means
- * the seal's own wiring would go untested. A caller passing a floor ABOVE the optimum
- * gets a bound the run's first correct candidate refutes, which is hypothesis H1 exactly:
- * the floor is wrong.
+ * `floor` is overridable so a test can pass a bound above the optimum, which the first
+ * correct candidate refutes (H1): the only way to reach the seal's wiring.
  */
 function objective(floor?: Floor): Objective {
   return {
@@ -510,7 +398,6 @@ function objective(floor?: Floor): Objective {
     unit: 'oracle calls',
     direction: 'minimise',
     scale: 'log',
-    // The measured cost of the best algorithm there is for this task.
     target: N - 1,
     verify: {
       kind: 'exec-ratio',
@@ -533,14 +420,8 @@ function objective(floor?: Floor): Objective {
 }
 
 /**
- * A model that answers with the optimal solution, and — when asked to — appends a branch
- * proposal of `proposeWidth` sub-questions.
- *
- * `answers` is a parameter so a test can vary the ANSWER without a second copy of this
- * model, and it is a LIST cycled one per call: an archive needs a wave whose members
- * differ, either in the cell their measurement puts them in or in how far apart their text
- * is, and one fixed answer produces neither. `seen` collects the prompts it was sent, for
- * the tests that have to assert what a child was TOLD.
+ * Answers the optimal solution (cycling `answers`, one per call) and, when asked, appends a
+ * proposal of `proposeWidth` sub-questions. `seen` collects the prompts sent.
  */
 function answering(
   proposeWidth: number | null,
@@ -581,9 +462,7 @@ function answering(
   });
 }
 
-/** A resolved `custom` composition, through the real resolver and the real validity
- *  predicate — a test that hand-built a `ResolvedSwarm` could assert a tree the tool
- *  surface cannot actually ask for. */
+/** Resolved through the real resolver and validity predicate, so the tree is one the tool surface can ask for. */
 interface ResolveRequest {
   depth: number;
   branches: number;
@@ -616,8 +495,7 @@ interface Run {
   readonly logger: RecordingLogger;
   readonly nodes: readonly SearchNode[];
   readonly result: SwarmResult | Refusal;
-  /** Every prompt the model was actually sent, serialized. The only way to assert what a
-   *  child was TOLD rather than what the engine computed. */
+  /** Every prompt sent, serialized: the only way to assert what a child was told. */
   readonly prompts: readonly string[];
 }
 
@@ -626,17 +504,10 @@ async function run(input: {
   readonly branches: number;
   readonly proposeWidth: number | null;
   readonly config?: Partial<SwarmConfig>;
-  /** A bound the run will refute, for the seal's own wiring. */
   readonly floor?: Floor;
-  /** The coverage descriptor `advance:'archive'` bins by, and which every other advance
-   *  is refused for supplying. */
+  /** The coverage descriptor `advance:'archive'` bins by; refused for every other advance. */
   readonly key?: string;
-  /** The answers the wave produces, cycled one per model call. One fixed answer where a
-   *  test does not care, several where the cells or the distances between candidates are
-   *  what it is about. */
   readonly answers?: readonly [string, ...string[]];
-  /** The workspace to run IN. Supplied where a test needs two runs to share one store,
-   *  which is the only way "a record survives a run" can be asserted at all. */
   readonly rt?: AgentRuntime;
 }): Promise<Run> {
   const rt = input.rt ?? createTestRuntime().rt;
@@ -658,20 +529,15 @@ async function run(input: {
 describe('a swarm at depth 2 expands, and its tree is measured', () => {
   test('depth 2 is REACHED, every node is derived from its parent, and the cap holds', async () => {
     const { nodes, result, logger } = await run({ depth: 2, branches: 2, proposeWidth: null });
-    // Not a refusal. This is the whole ticket: nothing answers `unsupported`
-    // here, because an engine scores nodes against the caller's metric.
     expect('reason' in result).toBe(false);
 
     if ('reason' in result) return;
 
-    // THE CLAIM: a second level exists.
     const depths = nodes.map((node) => node.depth);
     expect(Math.max(...depths)).toBe(2);
     expect(depths.filter((depth) => depth === 2).length).toBeGreaterThan(0);
-    // The root is the workspace as found, and it is the only node at depth 0.
     expect(depths.filter((depth) => depth === 0)).toEqual([0]);
-    // Every non-root node's depth is exactly its parent's plus one — derived, never
-    // stated. Asserted over the rows rather than trusted from the code that wrote them.
+    // Every non-root depth is its parent's plus one, asserted over the rows.
     const byId = new Map(nodes.map((node) => [node.id, node]));
 
     for (const node of nodes) {
@@ -679,29 +545,22 @@ describe('a swarm at depth 2 expands, and its tree is measured', () => {
       expect(node.depth).toBe((byId.get(node.parent_id)?.depth ?? -99) + 1);
     }
 
-    // The budget is depth × branches, and the tree spent it on real children.
     expect(result.report.expansions).toBe(4);
     expect(result.candidates.length).toBe(4);
 
-    // AND THE OBJECTIVE IS WHAT WAS MEASURED — the reason this needed its own engine.
-    // The candidate is the optimal algorithm, so it measures the target and scores 1.
     expect(result.best).not.toBeNull();
     expect(result.best?.measured?.kind).toBe('measured');
     expect(result.best?.measured?.value).toBe(N - 1);
     expect(result.best?.score).toBe(1);
     expect(result.report.baseline).toBeGreaterThan(N - 1);
-    // A measured run, not a judged one: the baseline came off the instrument.
     expect(logger.emitted.map((line) => line.event)).toContain('swarm.baseline_measured');
-    // The floor was computed and surfaced at declaration, never thresholded, and
-    // nothing breached it, so the answer is publishable.
     expect(result.report.floorMargin).toBeGreaterThan(0);
     expect(result.publication.state.kind).toBe('open');
     expect(result.publication.caveat).toBeNull();
   });
 
   test('depth 1 is UNCHANGED: one wave, one level, and the flat report it always gave', async () => {
-    // The regression that matters most. Enabling the tree must not move the depth that
-    // already ran, and `advance:'none'` is the axis value that fixes depth at 1.
+    // Enabling the tree must not move depth 1 under `advance:'none'`.
     const { nodes, result } = await run({
       depth: 1, branches: 3, proposeWidth: null,
       config: { advance: { kind: 'none' }, score: { kind: 'verify' } },
@@ -713,15 +572,11 @@ describe('a swarm at depth 2 expands, and its tree is measured', () => {
     expect(Math.max(...nodes.map((node) => node.depth))).toBe(1);
     expect(result.candidates.length).toBe(3);
     expect(result.report.expansions).toBe(3);
-    // A full width came back with nothing left to select: settled, not truncated.
     expect(result.report.stop).toBe('settled');
   });
 
   test('a REFUSED proposal names its reason, and the node still gets expanded', async () => {
-    // Seven sub-questions against the arbiter's declared band of 2-4
-    // (`BRANCH_PROPOSAL_WIDTH`). The refusal must reach the diagnostics stream carrying
-    // its policy token and its prose, because a toolless node has already finished its
-    // turn and this is the only channel that exists.
+    // Seven against the band 2-4 (`BRANCH_PROPOSAL_WIDTH`): diagnostics is a toolless node's only channel.
     const { logger, result, nodes } = await run({ depth: 2, branches: 2, proposeWidth: 7 });
     expect('reason' in result).toBe(false);
 
@@ -731,17 +586,14 @@ describe('a swarm at depth 2 expands, and its tree is measured', () => {
     expect(fields).toMatchObject({ policy: 'width-out-of-range' });
     expect(String(fields?.error)).toContain('names 7');
 
-    // Every refusal names WHERE it happened, and it names it from the ROW: the id
-    // belongs to a node of this tree, and the depth the verdict discloses is that
-    // row's own derived depth rather than anything the node said about itself.
+    // The refusal's id and depth come from the tree row, not from the node's own claim.
     for (const refusal of refusals) {
       const row = nodes.find((node) => node.id === String(refusal.fields.node));
       expect(row).toBeDefined();
       expect(refusal.fields.depth).toBe(row?.depth ?? -1);
     }
 
-    // Refused the BRANCH, not the node: the engine still expanded it under its own
-    // policy, so a bad proposal costs the node its request and not its turn.
+    // Refused the branch, not the node: a bad proposal costs the request, not the turn.
     expect(Math.max(...nodes.map((node) => node.depth))).toBe(2);
   });
 
@@ -751,30 +603,15 @@ describe('a swarm at depth 2 expands, and its tree is measured', () => {
 
     const accepted = logger.emitted.filter((line) => line.event === 'swarm.branch_accepted');
     expect(accepted.length).toBeGreaterThan(0);
-    // Accepted at the proposal's own width — three, where the search's own width is
-    // two — which is how the node's information reaches the search at all.
+    // Accepted at the proposal's width (three) where the search's own width is two.
     expect(accepted[0]?.fields).toMatchObject({ children: 3 });
-    // CAP EVASION, end to end: every node proposed on every call and nothing reached
-    // depth 4.
-    //
-    // WORTH BEING PRECISE ABOUT WHAT THIS DOES AND DOES NOT PROVE, so nobody later
-    // mistakes it for the cap's own test. Under the derived budget (depth × branches)
-    // the budget bounds reachable depth at `depth` on its own, and the schedulers'
-    // exploration term prefers a shallower unexpanded node to a deeper one — so an
-    // end-to-end run cannot be made to WANT a node past the cap, and removing the cap
-    // does not change this assertion. The cap is therefore proven where it acts: in
-    // selection (`CAP EVASION, route 2`, which a mutation of the WHERE clause turns
-    // red) and in arbitration (`route 1`). What this line proves is the composition of
-    // the three: with proposals granted at a width the search did not choose, the tree
-    // still lands inside the cap.
+    // Composition check only: the budget already bounds depth here, so removing the cap does not change
+    // this assertion. The cap itself is proven in selection (route 2) and arbitration (route 1).
     expect(Math.max(...nodes.map((node) => node.depth))).toBeLessThanOrEqual(3);
   });
 
   test('nothing a node asks for is dropped in silence — every proposal is answered', async () => {
-    // The rule *Arbitration* states, as a count: a node that cannot tell refusal from
-    // being ignored will simply propose again. Every child here proposes, so every child
-    // must appear in exactly one verdict — the ones selection reached, and the ones swept
-    // afterwards.
+    // Every proposing child appears in exactly one verdict (*Arbitration*).
     const { logger, nodes } = await run({ depth: 2, branches: 2, proposeWidth: 2 });
 
     const answered = logger.emitted
@@ -785,7 +622,6 @@ describe('a swarm at depth 2 expands, and its tree is measured', () => {
       .filter((line) => line.event === 'swarm.branch_accepted')
       .map((line) => String(line.fields.node));
 
-    // Every node that is not the root proposed, since the mock always appends a block.
     const proposers = nodes.filter((node) => node.parent_id !== null).map((node) => node.id);
     expect(proposers.length).toBeGreaterThan(0);
 
@@ -793,26 +629,20 @@ describe('a swarm at depth 2 expands, and its tree is measured', () => {
       expect([...answered, ...accepted]).toContain(id);
     }
 
-    // And the ones the budget outlived are refused for the BUDGET, at their own depth,
-    // which is the reason that only the post-loop sweep can reach.
+    // Proposals the budget outlived are refused for the budget at their own depth (post-loop sweep).
     const budget = logger.emitted.filter((line) =>
       line.event === 'swarm.branch_refused' && line.fields.policy === 'budget-exhausted');
 
     expect(budget.length).toBeGreaterThan(0);
     expect(String(budget[0]?.fields.error)).toContain('budget exhausted at depth');
 
-    // AND A NODE AT THE CAP THAT PROPOSES ANYWAY IS TOLD SO — route 1, reached end to
-    // end. A depth-2 node in a depth-2 search is never INVITED to propose (*Build-time
-    // exclusion*: a request that could only be refused is not offered), but this
-    // model appends a block regardless, which is exactly what an untrusted node does.
-    // The sweep answers it by name instead of dropping it.
+    // Route 1 end to end: a node at the cap proposing uninvited is refused by name.
     const capped = logger.emitted.filter((line) =>
       line.event === 'swarm.branch_refused' && line.fields.policy === 'depth-exhausted');
 
     expect(capped.length).toBeGreaterThan(0);
     expect(capped[0]?.fields.depth).toBe(2);
     expect(String(capped[0]?.fields.error)).toContain('depth exhausted at depth 2');
-    // And no node that asked from the cap was given children.
     const cappedIds = new Set(capped.map((line) => String(line.fields.node)));
 
     for (const node of nodes) {
@@ -823,44 +653,21 @@ describe('a swarm at depth 2 expands, and its tree is measured', () => {
   });
 
   test('the deepest level a branch could still be granted from is invited to propose', async () => {
-    // THE BOUNDARY BELONGS TO `arbitrateBranch` ALONE, which refuses
-    // `caps.depth.value <= atDepth`. So in a depth-2 search a proposal from depth 1 is
-    // granted and one from depth 2 is refused, and the prompt must invite depth 1 and
-    // not depth 2. The agent-node tool gate and the fan-in skip already spell that
-    // boundary; the thought node's invitation read one level tighter and suppressed
-    // itself on the only level that could have been granted, so no node in a depth-2
-    // thought search was ever asked.
-    //
-    // ASSERTED THROUGH WHAT THE MODEL WAS SENT, because the invitation is prompt text
-    // and nothing else observes it. `proposeWidth: null` matters: this suite's model
-    // appends a proposal block whether or not it was invited, which is exactly how the
-    // suite stayed green while the invitation was missing — the tree still expanded, so
-    // every count and every event looked right.
+    // Only `arbitrateBranch` owns the boundary (`caps.depth.value <= atDepth`): in a depth-2 search depth 1 is
+    // invited and depth 2 is not. Asserted via prompts because the mock proposes even when uninvited.
     const { nodes, prompts } = await run({ depth: 2, branches: 2, proposeWidth: null });
     const invited = prompts.filter((sent) => sent.includes('You are proposing, not spawning'));
     const oneBelowTheCap = nodes.filter((node) => node.depth === 1).length;
     expect(oneBelowTheCap).toBeGreaterThan(0);
     expect(invited).toHaveLength(oneBelowTheCap);
-    // And the level AT the cap is not asked, so the count above is not "all of them".
     expect(invited.length).toBeLessThan(prompts.length);
   });
 });
 
-/* ── `carry` admission is consulted at the settle barrier ─────────────────── */
-
-// LIVES HERE BECAUSE THE REAL RUN LIVES HERE. `unit-merge-back.test.ts` covers what
-// `admitCarry` decides; this covers whether the decision is REACHED — and the only
-// harness in the suite that drives a genuine settle, with real candidates carrying real
-// normalised scores, is the one above. A second copy of this objective, model and
-// resolver would be eighty duplicated lines defending a one-line call site.
-//
-// The defect being closed: `carry:'artifacts'` declares an admission `threshold` on its
-// own arm and NOTHING read it, so a tagged parameter changed nothing.
+// `carry:'artifacts'` admission `threshold` is consulted at settle.
 describe('carry admission at the settle barrier', () => {
   test('the artifacts threshold is read, and a candidate under it is not carried', async () => {
-    // Above any normalised score, so every candidate must fall under it. A wiring that
-    // ignored the threshold would admit them instead, which is the failure this asserts
-    // against rather than around.
+    // Above any normalised score, so every candidate must be refused.
     const { logger, result } = await run({
       depth: 1, branches: 2, proposeWidth: null,
       config: { carry: { kind: 'artifacts', threshold: 2 } },
@@ -871,16 +678,13 @@ describe('carry admission at the settle barrier', () => {
     if ('reason' in result) return;
 
     const refused = logger.emitted.filter((line) => line.event === 'swarm.carry_refused');
-    // NOT VACUOUS: a run that produced no candidates would emit no per-candidate events
-    // and every assertion below would hold trivially.
+    // Non-vacuity: no candidates would make every assertion below hold trivially.
     expect(refused.length).toBeGreaterThan(0);
     expect(refused[0]?.fields).toMatchObject({
       carry: 'artifacts', threshold: 2, cause: 'below-threshold',
     });
     expect(logger.emitted.filter((line) => line.event === 'swarm.carry_admitted')).toHaveLength(0);
 
-    // And the aggregate, so "how many survived this run" is one line rather than a count
-    // over N of them.
     const [settled] = logger.emitted.filter((line) => line.event === 'swarm.carry_settled');
     expect(settled?.fields).toMatchObject({ carry: 'artifacts', admitted: 0 });
     expect(settled?.fields.refused).toBe(refused.length);
@@ -903,28 +707,11 @@ describe('carry admission at the settle barrier', () => {
   });
 });
 
-/* ── The records store: what one run reached, the next one starts from ────── */
-
-// LIVES HERE FOR THE REASON THE BLOCK ABOVE DOES: the only harness in this repository
-// that drives a genuine settle with real candidates carrying real measured values is
-// this one. `unit-exploration-records.test.ts` proves what the store DECIDES — the seal,
-// the monotone rule, the floor-carrying key, the displacement counter — over rows it
-// writes directly. These prove the decisions are REACHED, and that the read half exists:
-// a writer nothing reads back persists rows no run ever starts from, which is the same
-// per-invocation search with a table beside it.
+// The records store's decisions are reached and read back (decisions: `unit-exploration-records.test.ts`).
 
 /**
- * The identity a run of this suite's objective resolves to.
- *
- * DERIVED the way the run derives it — the spec the objective names, and the code that
- * name resolved to through the registry — rather than restated beside it. A restated
- * digest would go green while the run wrote a different key, which is the one failure a
- * test that reads the store back has to be unable to have.
- *
- * A function and not a module constant: it hashes, and this repository has already had
- * a module-scope digest reach `node:crypto` on an import path where the bundler shims it
- * to a throwing stub. The rule is cheap to keep everywhere rather than remembered where
- * it bites.
+ * The identity a run of this objective resolves to, derived the way the run derives it.
+ * A function, not a module constant: hashing at module scope can hit a throwing `node:crypto` shim.
  */
 function identityOf(): ObjectiveIdentity {
   const scalar = objective();
@@ -956,8 +743,7 @@ const SUITE_FLOOR: Floor = {
     + 'touches two, so covering n needs at least ceil(n/2) calls.',
 };
 
-/** A bound the optimum itself refutes: the optimum spends n-1 calls, so a floor above
- *  that is crossed by the first correct candidate. H1, in a fixture. */
+/** A floor above the optimum's n-1 calls, refuted by the first correct candidate (H1). */
 const REFUTED_FLOOR: Floor = {
   value: N + 6,
   kind: 'certificate',
@@ -967,9 +753,7 @@ const REFUTED_FLOOR: Floor = {
 
 describe('the records store: what one run reached, the next one starts from', () => {
   test("A RECORD SURVIVES ONE RUN AND THE NEXT RUN READS IT", async () => {
-    // THE WHOLE TICKET, end to end. Two runs, one workspace. The first writes what it
-    // reached; the second reads it before it expands anything and says so on its own
-    // report. Without the read half this passes on a store nothing consults.
+    // Two runs, one workspace: the second reads what the first wrote before expanding.
     const { rt } = createTestRuntime();
 
     const first = await run({
@@ -980,12 +764,10 @@ describe('the records store: what one run reached, the next one starts from', ()
     expect('reason' in first.result).toBe(false);
 
     if ('reason' in first.result) return;
-    // Nothing to carry in — this is the first run of this objective in this workspace.
     expect(first.result.report.records).toMatchObject({ carriedIn: 0, carriedInBest: null });
     expect(first.result.report.records?.written).toBeGreaterThan(0);
 
-    // The row is REALLY there, read back the way a consumer reads it: scoped by the
-    // identity and the floor, never by the objective id alone.
+    // Read back scoped by identity and floor, never by objective id alone.
     const persisted = recordsFor(rt.storage.sql, rt.actor, { identity: identityOf(), floor: SUITE_FLOOR });
     expect(persisted.length).toBeGreaterThan(0);
     expect(persisted[0]?.value).toBe(first.result.best?.measured?.value ?? -1);
@@ -1000,32 +782,23 @@ describe('the records store: what one run reached, the next one starts from', ()
 
     if ('reason' in second.result) return;
 
-    // READ. The number the first run reached is the number the second one started from.
     expect(second.result.report.records?.carriedIn).toBe(persisted.length);
     expect(second.result.report.records?.carriedInBest).toBe(persisted[0]?.value ?? -1);
     const carried = second.logger.emitted.filter((line) => line.event === 'swarm.records_carried_in');
     expect(carried).toHaveLength(1);
     expect(carried[0]?.fields).toMatchObject({ carry: 'elites', best: persisted[0]?.value ?? -1 });
 
-    // AND THE SEARCH WAS TOLD. Without this the read is a number on a report and the
-    // store is still something no run starts FROM: `carriedIn` would hold while the
-    // prompt-side wiring was dead code. Asserted over what the model was actually sent.
+    // The search was told, per the prompts sent; otherwise `carriedIn` holds with dead prompt wiring.
     const told = second.prompts.filter((sent) => sent.includes('An earlier run of this same objective'));
     expect(told).toHaveLength(second.prompts.length);
-    // The number to beat AND the program that reached it — the number alone is a bar with
-    // no way to clear it, and the program alone is code with no reason to trust it.
     expect(told[0]).toContain(String(persisted[0]?.value ?? -1));
     expect(told[0]).toContain('function solve');
-    // The FIRST run had nothing to inherit, so this is not passing on a string the
-    // prompt always carries.
     expect(first.prompts.some((sent) => sent.includes('An earlier run of this same objective')))
       .toBe(false);
   });
 
   test('re-running the same search does not lower what the store holds', async () => {
-    // The monotone rule through the real path. The model answers with the same optimum
-    // both times, so the second run re-records one artifact at the same number — a tie,
-    // which does not displace — and the store says so instead of silently rewriting.
+    // Monotone rule: re-recording the same optimum is a tie, which does not displace, and the store says so.
     const { rt } = createTestRuntime();
 
     const first = await run({
@@ -1051,8 +824,7 @@ describe('the records store: what one run reached, the next one starts from', ()
   });
 
   test("`carry:'artifacts'` admissions reach persistence, and a refused one writes nothing", async () => {
-    // Both publishing carries land in this store — `SWARM_CARRIES` says the store IS
-    // where the axis lands — so the threshold that gates admission gates the write too.
+    // `SWARM_CARRIES`: the admission threshold gates the write too.
     const clears = await run({
       depth: 1, branches: 2, proposeWidth: null,
       config: { carry: { kind: 'artifacts', threshold: 0 } },
@@ -1063,8 +835,6 @@ describe('the records store: what one run reached, the next one starts from', ()
     if ('reason' in clears.result) return;
     const records = clears.result.report.records;
     expect(records?.written).toBeGreaterThan(0);
-    // One event per row, so the aggregate on the report and the per-row trail cannot
-    // disagree about how many survived.
     expect(clears.logger.emitted.filter((line) => line.event === 'swarm.record_written').length)
       .toBe(records?.written ?? -1);
 
@@ -1076,7 +846,6 @@ describe('the records store: what one run reached, the next one starts from', ()
     expect('reason' in misses.result).toBe(false);
 
     if ('reason' in misses.result) return;
-    // Refused at the barrier, so the writer is never reached and nothing lands.
     expect(misses.result.report.records).toMatchObject({ written: 0, notBetter: 0 });
   });
 
@@ -1096,10 +865,7 @@ describe('the records store: what one run reached, the next one starts from', ()
     expect('reason' in isolated.result).toBe(false);
 
     if ('reason' in isolated.result) return;
-    // The store HAS a row, and this run neither read it nor attempted a write: the
-    // barrier ADMITS every candidate under `carry:'none'` — the seal is not that value's
-    // business — so the whole shape is asserted rather than the two fields that would
-    // still hold if the writer read that verdict and only the monotone rule stopped it.
+    // Under `carry:'none'` the store is neither read nor written; the whole shape is asserted, not two fields.
     expect(recordsFor(rt.storage.sql, rt.actor, { identity: identityOf(), floor: SUITE_FLOOR }).length)
       .toBeGreaterThan(0);
     expect(isolated.logger.emitted.filter((line) => line.event === 'swarm.carry_admitted').length)
@@ -1110,11 +876,8 @@ describe('the records store: what one run reached, the next one starts from', ()
   });
 
   test('A BREACHED RUN WRITES NOTHING — the seal reaches the store', async () => {
-    // *The publication seal* at this surface, through the real engine: the run measures a
-    // candidate past a bound the candidate itself refutes, the floor is suspended, and the
-    // leaderboard stays empty. The run does NOT halt — the verifier still works and the
-    // calling turn is the primary consumer — which is what makes "wrote nothing" the
-    // assertion rather than "refused".
+    // *The publication seal*: a candidate refutes its bound, the floor is suspended and nothing is written.
+    // The run does not halt.
     const { rt } = createTestRuntime();
 
     const breached = await run({
@@ -1130,26 +893,13 @@ describe('the records store: what one run reached, the next one starts from', ()
     expect(breached.result.publication.state.kind).toBe('sealed');
     expect(breached.result.report.records).toMatchObject({ written: 0 });
     expect(recordsFor(rt.storage.sql, rt.actor, { identity: identityOf(), floor: REFUTED_FLOOR })).toHaveLength(0);
-    // And the run says the carry was voided, with the cell count that tells the next run
-    // what the seal cost it.
     expect(breached.result.report.carrySuppressed?.carry).toBe('elites');
     expect(breached.result.report.carrySuppressed?.refused).toContain('records');
   });
 });
 
-/* ── `score:'judge'` runs from the swarm path ─────────────────────────────── */
-
-// The refusal said judge "needs the marginalised ensemble the shipped tree owns", and the
-// tree owns one: `mcts/evaluation.ts` samples a judge `k` times over one prompt and takes
-// the median. These prove the swarm path REACHES it, and that the ensemble validity
-// admitted is the ensemble that runs.
-//
-// THE POOL IS DERIVED FROM THE REQUEST (`judgeCallPool`), never from
-// `DEFAULT_CONFIG.mcts.maxEvalLLMCalls` — the MCTS engine's dial, 4, sized for that
-// engine's own `judgeSamples: 3`. Handing the evaluator that dial admits a judged tree
-// at the marginalisation floor of 20 and executes it at 3: disclosed and
-// non-functional, `{requested: 20, realised: 3}` with a clamp event to announce it.
-// The floor is untouched and nothing can bind a clamp.
+// The swarm path reaches `mcts/evaluation.ts`'s judge ensemble. The pool derives from the request
+// (`judgeCallPool`), never `DEFAULT_CONFIG.mcts.maxEvalLLMCalls`, or a 20-sample judge runs at 3.
 describe("score:'judge' reaches the ensemble the tree already owns", () => {
   test('A JUDGED TREE RUNS at the ensemble it was admitted at', async () => {
     const { result } = await run({
@@ -1162,24 +912,15 @@ describe("score:'judge' reaches the ensemble the tree already owns", () => {
     if ('reason' in result) return;
 
     expect(result.report.judgeEnsemble).toEqual({ requested: 20, realised: 20 });
-    // It genuinely SCORED: a judged candidate carries the ensemble's number and no
-    // measurement, because the median is not a value in any objective's unit.
     expect(result.candidates.length).toBeGreaterThan(0);
     expect(result.best).not.toBeNull();
     expect(result.best?.score).toBeGreaterThan(0);
     expect(result.best?.measured).toBeNull();
-    // And no record is keyed by a judged run: it measured no objective, so it has no
-    // identity, which is a different claim from writing zero rows.
     expect(result.report.records).toBeNull();
   });
 
   test('the realised ensemble is PERSISTED, so a reader can state it once the call has returned', async () => {
-    // A figure computed, disclosed in the settle report and written nowhere is one no
-    // surface can show however well rendered — the accepted-and-ignored shape
-    // *Accepted and ignored* refuses: a measurement taken and dropped. It is folded
-    // onto the run's own ledger row as the smallest ensemble any candidate reached,
-    // and it is worth keeping when it equals the request: the row is the evidence that
-    // the pool held, not a record of a downgrade.
+    // The smallest realised ensemble is folded onto the run's ledger row, even when it equals the request.
     const { rt } = createTestRuntime();
 
     const { result } = await run({
@@ -1195,20 +936,13 @@ describe("score:'judge' reaches the ensemble the tree already owns", () => {
     const page = readExplorationCanvas(rt.storage.sql, rt.actor);
     expect(page.items).toHaveLength(1);
     const entry = page.items[0];
-    // The knobs this run ran under, from the ledger row the swarm path writes: without
-    // it, `readForkRunParams` answers a swarm with the transcript half alone.
+    // Without the swarm ledger row, `readForkRunParams` answers with the transcript half alone.
     expect(entry.params?.search).toMatchObject({
       budget: 2, branches: 2, maxDepth: 1, mode: 'build',
       judgeSamplesRequested: 20, judgeSamplesRealised: 20,
     });
-    // The persisted number and the disclosed one are the same number, which is the
-    // property that makes one of them a projection of the other rather than a second
-    // opinion.
     expect(entry.params?.search?.judgeSamplesRealised)
       .toBe(result.report.judgeEnsemble?.realised ?? null);
-    // A `thought` run holds no tools and journals nothing, so it has the tree half and
-    // only the tree half — the honest tree-only shape, told apart from a swarm of agents
-    // by the run's own two facts rather than by a settlement tag.
     expect(entry.run.hasSearchTree).toBe(true);
     expect(entry.tree.length).toBeGreaterThan(0);
     expect(entry.run.hasNodeTranscripts).toBe(false);
@@ -1216,9 +950,7 @@ describe("score:'judge' reaches the ensemble the tree already owns", () => {
   });
 
   test('no clamp is disclosed, because none can bind', async () => {
-    // The pool is sized from the requested ensemble, so the run emits no
-    // `swarm.judge_ensemble_clamped` event. An ensemble shortfall is an instrument
-    // fault that fails the run, not a disclosed downgrade.
+    // The pool is sized from the request, so no `swarm.judge_ensemble_clamped` event; a shortfall fails the run.
     const { logger, result } = await run({
       depth: 1, branches: 2, proposeWidth: null,
       config: { score: { kind: 'judge', samples: 20 } },
@@ -1230,11 +962,7 @@ describe("score:'judge' reaches the ensemble the tree already owns", () => {
   });
 
   test('a judged tree BELOW the marginalisation floor is refused, by the in-process entry point too', async () => {
-    // `swarmValidity` refuses this and `runSwarm` does not route through it, so without
-    // the runner's own gate an in-process caller runs a scorer the measurement says is
-    // not worth building — 28.5% unmarginalised against 30.0% marginalised at fixed
-    // node expansions. The composition is built through the real resolver and past
-    // validity deliberately, because what is under test is the runner's own gate.
+    // Built past `swarmValidity`: `runSwarm` does not route through it, so the runner needs its own gate.
     const call = resolveSwarm({
       preset: 'custom',
       label: 'depth-suite',
@@ -1248,7 +976,6 @@ describe("score:'judge' reaches the ensemble the tree already owns", () => {
     expect('reason' in call).toBe(false);
 
     if ('reason' in call) return;
-    // Both gates agree, and they agree because there is one of them.
     expect(swarmValidity(call)?.error).toContain('samples ≥ 20');
 
     const { rt } = createTestRuntime();
@@ -1258,14 +985,11 @@ describe("score:'judge' reaches the ensemble the tree already owns", () => {
     if (!('reason' in refusal)) return;
     expect(refusal.reason).toBe('bad_input');
     expect(refusal.error).toContain('samples ≥ 20');
-    // The refusal names the binding cap, because raising `samples` alone does nothing.
     expect(refusal.error).toContain('maxEvalLLMCalls');
   });
 
   test('a FLAT judged run has no floor to clear — the bound is about trees', async () => {
-    // `advance:'none'` has no selection step, so there is no scorer noise for a tree to
-    // amplify and the marginalisation floor does not apply. Asserted so that raising the
-    // bound over the whole axis, rather than over trees, goes red.
+    // `advance:'none'` has no selection step, so the marginalisation floor does not apply.
     const call = resolveSwarm({
       preset: 'custom',
       label: 'depth-suite',
@@ -1289,14 +1013,7 @@ describe("score:'judge' reaches the ensemble the tree already owns", () => {
   });
 });
 
-/* ── Merge-back is how the answer reaches the origin ──────────────────────── */
-
-// THE MODULE'S EXPORTS EXIST BECAUSE THIS CALLS THEM. Merge-back's own suite proves what
-// each policy decides; these prove a real settle goes THROUGH it, because a merge-back
-// nobody calls leaves a settled swarm's work exactly as stranded as no merge-back at all.
-//
-// Driven through `runSwarm` directly rather than the shared `shell` helper, because these
-// assert the WORKSPACE and need the runtime the helper keeps to itself.
+// A real settle goes through merge-back. Drives `runSwarm` directly to reach the workspace runtime.
 describe('merge-back at the settle barrier', () => {
   test("the winner's answer reaches the origin through apply-winner", async () => {
     const { rt } = createTestRuntime();
@@ -1311,7 +1028,6 @@ describe('merge-back at the settle barrier', () => {
 
     if ('reason' in result) return;
 
-    // The policy is DERIVED: a scored run settles on one incumbent.
     const winner = result.best;
     expect(winner).not.toBeNull();
 
@@ -1321,8 +1037,6 @@ describe('merge-back at the settle barrier', () => {
     expect(applied?.fields).toMatchObject({ policy: 'apply-winner', files: 1 });
     expect(applied?.fields.node).toBe(winner.id);
 
-    // And it is the reported winner that is on disk, not whichever candidate happened to
-    // be measured last.
     const landed = await rt.storage.vfs.readFile(SOLUTION_FILE, { encoding: 'utf8' });
     expect(landed).toBe(winner.artifact);
 
@@ -1332,10 +1046,7 @@ describe('merge-back at the settle barrier', () => {
     });
   });
 
-  // THE SIZE BOUND, LIVE. The padding is a comment, so the candidate still verifies and
-  // still measures the optimal operation count — the only thing that changes is that it no
-  // longer fits one host transaction. The settle write is bounded — nothing hands a
-  // blob to the substrate at any size.
+  // The padding is a comment: still optimal, but too large for one host transaction.
   test('an oversized winner is refused at settle with the bound named', async () => {
     const { rt } = createTestRuntime();
     const logger = createRecordingLogger();
@@ -1350,7 +1061,6 @@ describe('merge-back at the settle barrier', () => {
 
     if ('reason' in result) return;
 
-    // It still won — the refusal is about the APPLY, not about the measurement.
     expect(result.best).not.toBeNull();
 
     const [oversized] = logger.emitted.filter((line) => line.event === 'swarm.merge_oversized');
@@ -1358,23 +1068,13 @@ describe('merge-back at the settle barrier', () => {
       policy: 'apply-winner', bound: 'blobBytes', maximum: MAX_TX_BLOB_BYTES,
     });
     expect(String(oversized?.fields.error)).toContain('committed prefix');
-    // Refused rather than applied, and the run still settles rather than throwing.
     expect(logger.emitted.filter((line) => line.event === 'swarm.merge_applied')).toHaveLength(0);
     const [settled] = logger.emitted.filter((line) => line.event === 'swarm.merge_settled');
     expect(settled?.fields).toMatchObject({ applied: 0, refused: 1 });
   });
 });
 
-/* ── The DAG: `expand:'aggregate'` fans a level in ────────────────────────── */
-
-/**
- * A model that answers from a script, cycling.
- *
- * The script is the fixture: a fan-in's behaviour is decided by whether its parents
- * AGREE, so the suite needs answers that measure identically and differ in bytes, and
- * answers that do neither. Every entry is a whole solution, so each candidate is still
- * measured by the real instrument.
- */
+/** A model answering from a cycling script of whole solutions, so each candidate is still really measured. */
 function scripted(answers: readonly string[]): MockLanguageModelV3 {
   let call = -1;
 
@@ -1400,25 +1100,16 @@ function scripted(answers: readonly string[]): MockLanguageModelV3 {
   });
 }
 
-/** The optimal algorithm, with a comment that changes its bytes and not its cost. Two of
- *  these AGREE with each other and DISAGREE with a third, which is the whole fixture: a
- *  fan-in reconciles what its parents disagree about and accumulates what they do not. */
+/** Optimal, with a comment that changes its bytes but not its cost: two agree, a third disagrees. */
 function variant(mark: string): string {
   return `${OPTIMAL}// ${mark}\n`;
 }
 
-/** The fields of every line under one event name — the shape a fan-in assertion reads,
- *  in the logger's own field type rather than a dictionary of `unknown`. */
 function fanInEvents(logger: RecordingLogger, event: string): readonly LogFields[] {
   return logger.emitted.filter((line) => line.event === event).map((line) => line.fields);
 }
 
-// A FAN-IN'S CLAIM IS AN ORDER, so these assert the order and the graph, not that
-// something merged. `unit-merge-back.test.ts` proves what the ordering decides and
-// `mutation-merge-back.test.ts` proves it is load-bearing; what only a real run can show
-// is that the DAG the engine builds actually produces the edges that ordering needs, that
-// a conflict at a fan-in becomes a graded node through the ONE conflict policy, and that
-// `expand:'sample'` is untouched by all of it.
+// Asserts fan-in order and DAG edges, not merely that something merged.
 describe("`expand:'aggregate'`: a level is fanned in, in dependency order", () => {
   test('a real DAG runs: agreement accumulates, a disagreement becomes a graded vertex', async () => {
     const { rt } = createTestRuntime();
@@ -1439,9 +1130,7 @@ describe("`expand:'aggregate'`: a level is fanned in, in dependency order", () =
     if (!fanIn) return;
     expect(fanIn.levels).toBeGreaterThan(0);
 
-    // THE FIRST BARRIER, in full. Three parents: two agree and accumulate, and the third
-    // disagrees — so exactly one node is spawned, and it is spawned through the conflict
-    // policy *Merge-back* names rather than through anything this engine added beside it.
+    // Two parents agree, the third disagrees: exactly one node spawns via the *Merge-back* conflict policy.
     const [first] = fanInEvents(logger, 'swarm.aggregate_fan_in');
     expect(first).toMatchObject({ depth: 1, parents: 3, members: 3, merged: 2 });
     const [spawned] = fanInEvents(logger, 'swarm.merge_node_spawned');
@@ -1450,15 +1139,11 @@ describe("`expand:'aggregate'`: a level is fanned in, in dependency order", () =
     });
     expect(spawned?.spawned).toBe(String(first?.vertex));
 
-    // THE SECOND MEMBER'S BASE MOVED under the first, so it was re-verified through the
-    // instrument before it landed — the rebase is licensed by a fresh measurement rather
-    // than by ignoring the staleness.
     const reverified = fanInEvents(logger, 'swarm.merge_reverified');
     expect(reverified.length).toBeGreaterThan(0);
     expect(reverified[0]).toMatchObject({ outcome: 'scored' });
 
-    // AND THE VERTEX IS A CANDIDATE LIKE ANY OTHER: a real row at the level below its
-    // parents, hanging off the member already applied, measured by the same instrument.
+    // The vertex is a real row one level below its parents, measured by the same instrument.
     const rows = rt.storage.sql<SearchNode>`SELECT * FROM search_nodes ORDER BY depth, created_at`;
     const [vertex] = fanInEvents(logger, 'swarm.aggregate_vertex');
     const vertexRow = rows.find((row) => row.id === String(vertex?.node));
@@ -1466,8 +1151,6 @@ describe("`expand:'aggregate'`: a level is fanned in, in dependency order", () =
     expect(vertexRow?.parent_id).toBe(String(vertex?.selection_parent));
     const graded = result.candidates.find((candidate) => candidate.id === vertexRow?.id);
     expect(graded?.measured?.kind).toBe('measured');
-    // The k edges are in the record even though the row holds one: the selection parent is
-    // one of the parents it consumed, and the rest are the DAG's.
     const edges = String(vertex?.aggregated).split(',');
     expect(edges.length).toBe(3);
     expect(edges).toContain(String(vertex?.selection_parent));
@@ -1490,9 +1173,7 @@ describe("`expand:'aggregate'`: a level is fanned in, in dependency order", () =
     const node = String(vertex?.node);
     const edges = String(vertex?.aggregated).split(',');
 
-    // The barrier that offered the vertex TOGETHER WITH a parent whose work had not
-    // landed. That is where an order can invert: the vertex was created before the wave
-    // beside it, so the level hands it over FIRST, and its parent is a level shallower.
+    // The vertex was offered before its shallower parent's work landed: where an order can invert.
     const together = fanInEvents(logger, 'swarm.aggregate_fan_in')
       .map((fields) => String(fields.order).split(','))
       .find((order) => order.includes(node) && edges.some((edge) => order.includes(edge)));
@@ -1506,8 +1187,7 @@ describe("`expand:'aggregate'`: a level is fanned in, in dependency order", () =
       expect(together.indexOf(edge)).toBeLessThan(together.indexOf(node));
     }
 
-    // NOT VACUOUS: the offered order really did put the dependent first, so this is a
-    // reordering and not a list that happened to be right.
+    // Non-vacuity: the offered order put the dependent first.
     expect(together[0]).not.toBe(node);
   });
 
@@ -1516,9 +1196,7 @@ describe("`expand:'aggregate'`: a level is fanned in, in dependency order", () =
     const logger = createRecordingLogger();
 
     const result = await runSwarm(
-      // One answer, so every candidate is byte-identical: two members that wrote the same
-      // bytes have not conflicted, and spawning a graded node to reconcile them with
-      // themselves would spend a model call to decide nothing.
+      // Byte-identical members have not conflicted, so no graded node is spawned.
       { rt, hostNode: NO_NODE, model: answering(null), mode: 'build', logger },
       resolved({ depth: 2, branches: 2, over: { expand: 'aggregate' } }),
     );
@@ -1532,7 +1210,6 @@ describe("`expand:'aggregate'`: a level is fanned in, in dependency order", () =
     expect(fanInEvents(logger, 'swarm.merge_node_spawned')).toHaveLength(0);
     expect(result.report.fanIn?.vertices).toEqual([]);
     expect(result.report.fanIn?.merged).toBe(2);
-    // And the accumulation is what the workspace holds.
     const winner = result.best;
     expect(winner).not.toBeNull();
 
@@ -1545,8 +1222,7 @@ describe("`expand:'aggregate'`: a level is fanned in, in dependency order", () =
     const logger = createRecordingLogger();
 
     const result = await runSwarm(
-      // The reference algorithm measures the baseline, so it scores 0 and the tree retires
-      // it — a parent with a last good state, which is the case the decision is about.
+      // The reference scores 0 and is retired: a parent with a last good state.
       {
         rt,
         hostNode: NO_NODE,
@@ -1563,11 +1239,9 @@ describe("`expand:'aggregate'`: a level is fanned in, in dependency order", () =
 
     const rows = rt.storage.sql<SearchNode>`SELECT * FROM search_nodes`;
     const retired = rows.filter((row) => row.status === 'pruned').map((row) => row.id);
-    // NOT VACUOUS: pruning has to have fired for the decision to be under test at all.
+    // Non-vacuity: pruning fired.
     expect(retired.length).toBeGreaterThan(0);
 
-    // THE DECISION: pruning says where the next unit of budget goes, not whether measured
-    // work reaches the origin, so a retired parent keeps its edge and is still merged.
     expect(result.report.fanIn?.prunedParents).toBeGreaterThan(0);
 
     const consumed = fanInEvents(logger, 'swarm.aggregate_fan_in')
@@ -1581,8 +1255,7 @@ describe("`expand:'aggregate'`: a level is fanned in, in dependency order", () =
     const logger = createRecordingLogger();
 
     const result = await runSwarm(
-      // One candidate the instrument cannot measure. It has no answer to aggregate, so it
-      // gets no edge — and a level with one consumable parent left is not a fan-in.
+      // An unmeasurable candidate gets no edge, leaving one consumable parent: not a fan-in.
       { rt, hostNode: NO_NODE, model: scripted(['export function solve() { throw new Error("no"); }\n', OPTIMAL]), mode: 'build', logger },
       resolved({ depth: 2, branches: 2, over: { expand: 'aggregate' } }),
     );
@@ -1611,9 +1284,7 @@ describe("`expand:'aggregate'`: a level is fanned in, in dependency order", () =
 
     if ('reason' in result) return;
 
-    // The candidates still measure — the refusal is about the APPLY — and the fan-in
-    // refuses its first member with the bound named rather than handing it to the
-    // substrate to split across the members behind it.
+    // Candidates still measure; the fan-in refuses its first member naming the bound.
     const [oversized] = fanInEvents(logger, 'swarm.merge_oversized');
     expect(oversized).toMatchObject({
       policy: 'sequential-rebase', bound: 'blobBytes', maximum: MAX_TX_BLOB_BYTES,
@@ -1629,7 +1300,6 @@ describe("`expand:'aggregate'`: a level is fanned in, in dependency order", () =
 
     expect(result.report.fanIn).toBeNull();
     expect(logger.emitted.filter((line) => line.event.startsWith('swarm.aggregate'))).toHaveLength(0);
-    // And its settle is the one it always was: one winner, one policy.
     const [settled] = logger.emitted.filter((line) => line.event === 'swarm.merge_settled');
     expect(settled?.fields).toMatchObject({ policy: 'apply-winner', members: 1 });
   });
@@ -1642,9 +1312,7 @@ describe("`expand:'aggregate'`: a level is fanned in, in dependency order", () =
       resolved({ depth: 1, branches: 3, over: { expand: 'aggregate' } }),
     );
 
-    // Depth 1 runs one wave off the root, whose level is the root alone. The refusal
-    // names what THIS composition lacks and the one move that fixes it — a blanket
-    // "`aggregate` is unsupported" would be false of every other composition.
+    // The refusal names what this composition lacks and the fix, not a blanket "unsupported".
     expect('reason' in refusal).toBe(true);
 
     if (!('reason' in refusal)) return;
@@ -1655,23 +1323,9 @@ describe("`expand:'aggregate'`: a level is fanned in, in dependency order", () =
   });
 });
 
-/* ── `advance:'archive'` runs: cells, admission, and what survives a run ───── */
+// Archive cells are witnessed by the real `exec-ratio` instrument; `candOps` is the descriptor.
 
-// LIVES HERE FOR THE REASON THE BLOCKS ABOVE DO, and one more of its own: an archive's
-// cell is WITNESSED by the instrument, so a suite that stood up its own fake measurement
-// would prove the wiring against a descriptor no registered verifier reports. This harness
-// runs the real `exec-ratio` instrument, which reports `refOps`/`candOps`/`refMs`/`candMs`
-// — and `candOps` is a genuine behaviour descriptor for this task: how many oracle calls
-// the answer spends. Two answers with different op counts land in different cells; two
-// answers with the same op count land in one, which is where the admission test bites.
-//
-// `unit-exploration-records.test.ts` proves what the archive DECIDES over rows it writes
-// directly. These prove the decisions are REACHED: that a run bins, that a second run
-// starts from the occupants, and that the seal reaches this surface too.
-
-/** Correct and wasteful: the optimal scan followed by one redundant confirming pass, so
- *  n-1 + n oracle calls. A different cell from the optimum under `key:'candOps'`, which is
- *  what makes a single wave fill more than one. */
+/** Correct but wasteful (n-1 + n calls): a different `candOps` cell from the optimum. */
 const THOROUGH = `export function solve(input, oracle) {
   const t = input.tokens;
   let best = t[0];
@@ -1685,21 +1339,15 @@ const THOROUGH = `export function solve(input, oracle) {
 }
 `;
 
-/** The optimum, restated with a comment: the SAME oracle calls, so the same cell, and a
- *  handful of tokens of difference. The near-copy an archive exists to refuse — ten
- *  variants of one answer are one finding. */
+/** The optimum restated: same cell, a few tokens apart — the near-copy an archive refuses. */
 const RESTATED = `${OPTIMAL}// the same single scan, said again\n`;
 
-/** The cells the two answers above are witnessed into, spelled out: n-1 calls for the
- *  optimum and (n-1) + n for the wasteful pass. Written rather than computed, so a change
- *  to how a coordinate is built fails here instead of quietly re-binning every cell. */
+/** Cells spelled out rather than computed, so a coordinate change fails here. */
 const OPTIMAL_CELL = `candOps=${String(N - 1)}`;
 
 const THOROUGH_CELL = `candOps=${String(N - 1 + N)}`;
 
-/** The archive axes: the grid, a rejection test strict enough that a restated answer
- *  cannot clear it and loose enough that a different algorithm can, and the carry that
- *  makes the occupants the next run's starting population. */
+/** Archive axes: a rejection threshold a restatement cannot clear and a different algorithm can. */
 const ARCHIVE: Partial<SwarmConfig> = {
   advance: { kind: 'archive', novelty: 0.4 },
   carry: { kind: 'elites' },
@@ -1707,10 +1355,7 @@ const ARCHIVE: Partial<SwarmConfig> = {
 
 describe("advance:'archive' bins a wave into cells, and the next run starts from them", () => {
   test('A REAL RUN FILLS THE CELLS ITS INSTRUMENT WITNESSED, one elite each', async () => {
-    // THE WHOLE TICKET. This composition is SERVED, not refused with "reports a front
-    // or an archive, and both need a store this run has no writer for" — it WRITES that
-    // store: a row per cell, keyed by the descriptor the MEASUREMENT carried rather
-    // than by anything a node said about itself.
+    // The composition is served: one row per cell, keyed by the measured descriptor.
     const { rt } = createTestRuntime();
 
     const { result, logger } = await run({
@@ -1722,12 +1367,10 @@ describe("advance:'archive' bins a wave into cells, and the next run starts from
 
     if ('reason' in result) return;
 
-    // Derived, never chosen: `settleOf` maps this advance onto the archive settle.
     expect(result.report.settle).toBe('archive');
     expect(result.report.records?.written).toBe(2);
     expect(result.report.records?.tooClose).toBe(0);
 
-    // TWO CELLS, and each holds the answer whose measurement put it there.
     const rows = recordsFor(rt.storage.sql, rt.actor, { identity: identityOf(), floor: SUITE_FLOOR });
     expect(rows.map((row) => present(row.descriptor, 'the record descriptor')).sort((a, b) => a.localeCompare(b))).toEqual([OPTIMAL_CELL, THOROUGH_CELL]);
     expect(bestInCell(rt.storage.sql, rt.actor, {
@@ -1737,17 +1380,12 @@ describe("advance:'archive' bins a wave into cells, and the next run starts from
       identity: identityOf(), floor: SUITE_FLOOR, descriptor: THOROUGH_CELL,
     })?.value).toBe(N - 1 + N);
 
-    // And the trail says which cell each row landed in, so the coverage on the report and
-    // the descriptors in the store cannot disagree.
     const written = logger.emitted.filter((line) => line.event === 'swarm.record_written');
     expect(written.map((line) => v.parse(v.string(), line.fields.cell)).sort((a, b) => a.localeCompare(b))).toEqual([OPTIMAL_CELL, THOROUGH_CELL]);
   });
 
   test('A SECOND RUN READS THE OCCUPANTS, and reports the COVERAGE it started from', async () => {
-    // `carry:'elites'` made concrete: elites ARE the archive's occupants, and the point of
-    // the whole records/carry chain is that the next run starts from them. `carriedIn`
-    // counts rows; `carriedInCells` is the coverage, which is the number an archive that
-    // collapsed onto one cell would otherwise still report as full.
+    // `carriedInCells` is coverage: an archive collapsed onto one cell would still report `carriedIn` as full.
     const { rt } = createTestRuntime();
 
     const first = await run({
@@ -1771,8 +1409,6 @@ describe("advance:'archive' bins a wave into cells, and the next run starts from
     expect(second.result.report.records).toMatchObject({
       carriedIn: 2, carriedInCells: 2, carriedInBest: N - 1,
     });
-    // AND THE SEARCH WAS TOLD, over what the model was actually sent — otherwise the read
-    // is a number on a report and the archive is still something no run starts FROM.
     expect(second.prompts.every((sent) => sent.includes('An earlier run of this same objective')))
       .toBe(true);
     expect(first.prompts.some((sent) => sent.includes('An earlier run of this same objective')))
@@ -1780,10 +1416,7 @@ describe("advance:'archive' bins a wave into cells, and the next run starts from
   });
 
   test('A NEAR-COPY OF AN OCCUPANT IS REFUSED, and the refusal NAMES the occupant', async () => {
-    // The admission test through the real engine, across two runs — which is where it
-    // matters, because the cell it collides with was filled by a run that has already
-    // ended. Both answers spend the same oracle calls, so the instrument witnesses the same
-    // cell for both, and the second is the first said again.
+    // Admission across two runs: the same oracle calls hit the same cell, and the second answer restates the first.
     const { rt } = createTestRuntime();
 
     const first = await run({
@@ -1797,8 +1430,6 @@ describe("advance:'archive' bins a wave into cells, and the next run starts from
       identity: identityOf(), floor: SUITE_FLOOR, descriptor: OPTIMAL_CELL,
     });
 
-    // As PLACED, which is the answer read back out of the fence rather than the string the
-    // model was scripted with: the engine records the artifact it measured.
     expect(occupant?.artifact).toBe(OPTIMAL.trimEnd());
 
     const second = await run({
@@ -1815,20 +1446,14 @@ describe("advance:'archive' bins a wave into cells, and the next run starts from
     expect(refused?.fields).toMatchObject({
       cause: 'too-close', occupant: occupant?.artifactDigest ?? '',
     });
-    // The comparison, not just its outcome: a rejection whose distance nobody can see is
-    // indistinguishable from a threshold set wrong.
     expect(Number(refused?.fields.distance)).toBeLessThan(0.4);
     expect(Number(refused?.fields.distance)).toBeGreaterThan(0);
-    // The cell still holds ONE answer, and it is the one that got there first.
     expect(recordsFor(rt.storage.sql, rt.actor, { identity: identityOf(), floor: SUITE_FLOOR }))
       .toHaveLength(1);
   });
 
   test('THE MONOTONE RULE HOLDS ACROSS RUNS, inside the cell', async () => {
-    // A cell's best never falls, through the archive's own writer: the second run
-    // re-measures the same artifact into the same cell at the same number — a tie, which
-    // does not displace — and the store says so instead of silently rewriting the row. The
-    // archive is a policy over that rule and not a way around it.
+    // A cell's best never falls: a tie does not displace, and the store says so.
     const { rt } = createTestRuntime();
 
     const first = await run({
@@ -1846,8 +1471,6 @@ describe("advance:'archive' bins a wave into cells, and the next run starts from
     expect('reason' in second.result).toBe(false);
 
     if ('reason' in second.result) return;
-    // NOT `too-close`: an identical artifact is the row that already exists, so it is the
-    // monotone rule that answers and never the admission test.
     expect(second.result.report.records).toMatchObject({ written: 0, notBetter: 1, tooClose: 0 });
 
     const cell = bestInCell(rt.storage.sql, rt.actor, {
@@ -1859,15 +1482,8 @@ describe("advance:'archive' bins a wave into cells, and the next run starts from
   });
 
   test('A BREACHED RUN WRITES NOTHING TO THE ARCHIVE, and says how many cells that cost', async () => {
-    // *The publication seal* at this surface. The seal is checked at the barrier AND inside
-    // the archive's own writer, and this is the barrier half through the real engine: the
-    // run measures a candidate past a bound that candidate itself refutes, and the grid
-    // stays empty.
-    //
-    // The cell COUNT is the archive-shaped half of the disclosure. It was pinned at one
-    // because a flat run has exactly one partition; here two candidates were witnessed into
-    // two cells, and reporting one would understate what the seal cost the next run by
-    // exactly the coverage it lost.
+    // *The publication seal*, barrier half: a candidate refutes its bound and the grid stays empty.
+    // The cell count reports both witnessed cells: the coverage the seal cost.
     const { rt } = createTestRuntime();
 
     const breached = await run({
@@ -1893,9 +1509,7 @@ describe("advance:'archive' bins a wave into cells, and the next run starts from
 });
 
 describe("the archive's own region, and the refusal `pareto` carries alone", () => {
-  /** A composition expected to be illegal, through the real resolver and the real
-   *  predicate. Returns the refusal's text, or '' when it was legal — which fails an
-   *  assertion rather than passing on a string that happens to contain nothing. */
+  /** Refusal text for an expected-illegal composition, or '' when legal. */
   function archiveRefusal(input: {
     readonly depth: number;
     readonly config?: Partial<SwarmConfig>;
@@ -1922,9 +1536,7 @@ describe("the archive's own region, and the refusal `pareto` carries alone", () 
   });
 
   test('past depth 1 it is refused, naming where an archive would have selected from', () => {
-    // The honest boundary. An archive selects by cell and its cells are written at the
-    // settle barrier, so within one run there is nothing to select a second level from —
-    // refused rather than silently flattened, exactly as advance:"none" past depth 1 is.
+    // Archive cells are written at settle, so one run has no second level to select; refused, not flattened.
     const error = archiveRefusal({ depth: 3, key: 'candOps' });
     expect(error).toContain('depth 3 cannot be run');
     expect(error).toContain('settle barrier');
@@ -1932,8 +1544,7 @@ describe("the archive's own region, and the refusal `pareto` carries alone", () 
   });
 
   test('an archive with no measured objective cannot key a cell, and says so', () => {
-    // A cell is keyed by the objective's identity and ordered by its direction. A judged
-    // run measures neither, so its coverage would be over a store it never wrote.
+    // A judged run has no objective identity or direction to key cells by.
     const error = archiveRefusal({
       depth: 1, key: 'candOps', config: { score: { kind: 'judge', samples: 20 } },
     });
@@ -1943,10 +1554,7 @@ describe("the archive's own region, and the refusal `pareto` carries alone", () 
   });
 
   test('a novelty threshold no distance can satisfy is refused, with the unit STATED', () => {
-    // The hazard is invisible otherwise: this parameter is a distance FLOOR while every
-    // published filter the axis was argued from is a similarity CEILING, so an
-    // unconverted transcription is a stricter archive than the evidence describes and a
-    // transcribed similarity above 1 is an archive no candidate can enter.
+    // A distance floor, not a similarity ceiling: an unconverted value is stricter than intended or unenterable.
     const error = archiveRefusal({
       depth: 1, key: 'candOps', config: { advance: { kind: 'archive', novelty: 1.4 } },
     });
@@ -1956,11 +1564,7 @@ describe("the archive's own region, and the refusal `pareto` carries alone", () 
   });
 
   test('a key the instrument does not witness is refused BEFORE a candidate is expanded', async () => {
-    // The descriptor is measured, never asserted — so a key naming something this
-    // instrument cannot report is refused as soon as the baseline says what it reports,
-    // rather than one candidate at a time at the barrier, where every write would be
-    // refused for want of a cell and the run would report coverage over an archive it could
-    // never have written.
+    // A key the instrument cannot report is refused once the baseline shows what it reports, not per candidate.
     const { result } = await run({
       depth: 1, branches: 1, proposeWidth: null, key: 'tactic', config: ARCHIVE,
     });
@@ -1970,7 +1574,6 @@ describe("the archive's own region, and the refusal `pareto` carries alone", () 
     if (!('reason' in result)) return;
     expect(result.reason).toBe('bad_input');
     expect(result.error).toContain('"tactic" is not among the quantities');
-    // Naming what it DOES report, because the caller's next move is to pick one.
     expect(result.error).toContain('candOps');
     expect(result.error).toContain('refOps');
   });
@@ -2057,25 +1660,15 @@ describe("the archive's own region, and the refusal `pareto` carries alone", () 
   });
 
   test("advance:'pareto' with nothing measured refuses instead of settling empty", async () => {
-    // THE IN-PROCESS ENTRY POINT, which is the one `regionRefusal` says it exists
-    // for. `swarmValidity` refuses this composition at the tool surface — a
-    // frontier needs an instanced or vector objective, and both of those score by
-    // `verify` — so only a caller that skips it can arrive here, and this test is
-    // that caller.
-    //
-    // THE SETTLEMENT THIS REFUSES: `pareto` is prepared only for a MEASURING run, so a
-    // selection arm reading `pareto === null ? null : select(...)` inside the branch
-    // it has already tested returns no node on the first iteration, and the run
-    // settles with zero candidates, zero spend and no sentence anywhere in it
-    // saying the scheduler could not exist.
+    // In-process only: `swarmValidity` refuses this at the tool surface. Without the refusal a `pareto`
+    // selection with no front returns no node and the run settles empty, silently.
     const call = resolveSwarm({
       preset: 'custom',
       label: 'pareto-unmeasured',
       task: 'reach the front',
       config: treeConfig({
         advance: { kind: 'pareto' },
-        // Admitted at the marginalisation floor, so the judged arm is legal and the
-        // refusal below is about the missing FRONT rather than about the ensemble.
+        // Admitted at the marginalisation floor, so the refusal is about the missing front.
         score: { kind: 'judge', samples: JUDGE_MARGINALISATION_MIN },
         carry: { kind: 'none' },
       }),
@@ -2084,7 +1677,6 @@ describe("the archive's own region, and the refusal `pareto` carries alone", () 
     });
 
     if ('reason' in call) throw new Error(`the suite's own composition does not resolve: ${call.error}`);
-    // Non-vacuity for "in-process only": the tool surface's own gate refuses it.
     expect(swarmValidity(call)?.error).toContain('advance:"pareto"');
 
     const { rt } = createTestRuntime();
@@ -2097,54 +1689,25 @@ describe("the archive's own region, and the refusal `pareto` carries alone", () 
     if (!('reason' in result)) throw new Error('an unmeasured pareto run must refuse, not settle');
     expect(result.reason).toBe('unsupported');
     expect(result.error).toContain('orders its frontier by the axes');
-    // And it refuses BEFORE spending: no node was expanded, so no row was written.
     expect(rt.storage.sql<{ n: number }>`SELECT COUNT(*) AS n FROM search_nodes`[0]?.n ?? 0).toBe(0);
   });
 });
 
-/* ── The direction a judged run ranks in ──────────────────────────────────── */
-
 /**
- * A JUDGED RUN CROWNS THE HIGHEST MEDIAN, and what is asserted here is the ORDER.
- *
- * The judged tests above assert `best.score > 0`, which every candidate of every judged
- * run in this repository satisfies: `rt.judgeModel` is the shared mock and it answers
- * 0.5 to every prompt, so a whole wave TIES and the comparison is unobservable. Read the
- * other way this run would crown the WORST approach and report a positive number for it,
- * which is a failure that reads exactly like a search that worked.
- *
- * So each sibling below gets a DIFFERENT median, keyed off the diversity angle the engine
- * handed it, and the highest sits in the MIDDLE of the wave. The placement is the point:
- * an ordering asserted over a set whose maximum is also its first or its last member is
- * equally satisfied by "take the first" and by "take the last", and neither of those is
- * the rule. `awaitLevel` returns the order it was given, so a candidate's position in
- * `result.candidates` is its branch index rather than an artefact of scheduling.
- *
- * PROSE, DELIBERATELY. A judged prose candidate scores `PROSE_CONFIDENCE × median`, which
- * is strictly monotone in the median and spends no executor call — so the medians are the
- * only thing separating these candidates, and what the assertions reach is the engine's
- * own comparison rather than the evaluator's band arithmetic.
+ * A judged run crowns the highest median. The shared mock judge answers 0.5 to everything, so each
+ * branch here gets a distinct median, with the maximum in the middle of the wave.
  */
 describe("a judged run's winner is the highest median, not the lowest", () => {
-  /** One median per branch. Five of them, all distinct so that "the maximum" names
-   *  exactly one, and the maximum at index 2 so it is neither the first candidate the
-   *  wave produced nor the last. */
+  /** Distinct medians per branch; the maximum sits at index 2, neither first nor last. */
   const MEDIANS = [0.20, 0.55, 0.95, 0.40, 0.10] as const;
 
-  /** Whose median is highest. Named because three assertions are about this one branch
-   *  and a repeated literal could come to disagree with the table above it. */
   const WINNER = 2;
 
-  /** What a branch writes into its answer so the judge — and then the assertions — can
-   *  tell which branch produced it. */
+  /** The marker a branch writes so the judge and assertions can identify it. */
   const MARK = 'MEDIAN-MARK-';
 
   test('the wave is ranked highest-first, and the crown goes to the interior maximum', async () => {
-    // A PROSE ANSWER PER BRANCH, keyed off the angle the engine handed it and never off a
-    // call counter: the wave runs under one `Promise.all`, so a counter would decide which
-    // branch is which by scheduling. Only a branch's OWN angle is introduced by
-    // `Your angle:` — its siblings' angles arrive as a numbered calibration block — so the
-    // match names exactly one branch.
+    // Keyed off the branch's own angle (`Your angle:`), not a call counter: the wave runs concurrently.
     const model = new MockLanguageModelV3({
       provider: 'fake',
       modelId: 'fake-judged-wave',
@@ -2173,10 +1736,7 @@ describe("a judged run's winner is the highest median, not the lowest", () => {
       },
     });
 
-    // THE JUDGE FOR THIS RUN, answering per CANDIDATE rather than per call. Every sibling's
-    // text is in the prompt too — the ensemble is asked to calibrate against them — so a
-    // search over the whole prompt would hand every candidate the same median and rebuild
-    // the tie this test exists to break. The prompt's own section header bounds the read.
+    // Answers per candidate, bounded by the prompt's section header, since siblings' text is in the prompt too.
     const judgeModel: LLM = {
       // eslint-disable-next-line require-yield -- an ensemble only ever calls `complete`.
       async *stream(): AsyncIterable<string> {
@@ -2198,9 +1758,7 @@ describe("a judged run's winner is the highest median, not the lowest", () => {
       preset: 'custom',
       label: 'judged-rank',
       task: 'Say in prose how to find the largest token with fewer comparisons.',
-      // FLAT and ONE sample: `advance:'none'` has no selection step, so the marginalisation
-      // floor does not apply and the realised ensemble is exactly one — which makes the
-      // median the single number this test chose rather than an aggregate over noise.
+      // Flat and one sample, so the realised ensemble is one and the score is the chosen median.
       config: treeConfig({ score: { kind: 'judge', samples: 1 }, advance: { kind: 'none' } }),
       depth: 1,
       branches: MEDIANS.length,
@@ -2218,10 +1776,7 @@ describe("a judged run's winner is the highest median, not the lowest", () => {
 
     if ('reason' in result) throw new Error(`the run must not refuse: ${result.error}`);
 
-    // THE DENOMINATORS, each load-bearing. Five candidates, one per branch, each
-    // identifiable; one judge sample, so a candidate's score really is the median chosen
-    // for it; and five DISTINCT scores, because a direction asserted over a tie is
-    // asserted over nothing at all — which is the gap this test closes.
+    // Five identifiable candidates, one sample, five distinct scores: a tie asserts nothing.
     expect(result.report.judgeEnsemble).toEqual({ requested: 1, realised: 1 });
     expect(result.candidates).toHaveLength(MEDIANS.length);
     const byBranch = new Map<number, number>();
@@ -2240,9 +1795,6 @@ describe("a judged run's winner is the highest median, not the lowest", () => {
     expect(byBranch.size).toBe(MEDIANS.length);
     expect(new Set(byBranch.values()).size).toBe(MEDIANS.length);
 
-    // THE ORDER, over every pair rather than at the extremes: the run's own score is
-    // monotone in the median the judge returned. Without this the crown below would also
-    // hold of a scorer that ignored the judge entirely.
     for (const [i, mine] of MEDIANS.entries()) {
       for (const [j, theirs] of MEDIANS.entries()) {
         if (mine <= theirs) continue;
@@ -2254,9 +1806,6 @@ describe("a judged run's winner is the highest median, not the lowest", () => {
       }
     }
 
-    // AND THE RUN CROWNED THE MAXIMUM. Branch 2 holds the highest median and is interior to
-    // the wave, so no "first" or "last" rule satisfies this; ranked the other way the crown
-    // lands on branch 4 and the run reports its worst approach as its answer.
     expect(Math.max(...MEDIANS)).toBe(MEDIANS[WINNER]);
     expect(WINNER).toBeGreaterThan(0);
     expect(WINNER).toBeLessThan(MEDIANS.length - 1);

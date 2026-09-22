@@ -1,14 +1,7 @@
 /**
- * The facet inherited-context digest — what a spawned head (or a steer
- * branch) sees of its parent conversation. Shared by both backends.
- *
- * The per-message window is applied HERE, at read time, as the digest is
- * built — not later at render time. A root materialises up to
- * INHERITED_CONTEXT_CAP stored bodies, each of which may run to
- * EVIDENCE_BUDGETS.storedAssistantResponse (16,000 chars), and that array is
- * copied into every spawned head's HeadInput and crosses a Durable Object RPC
- * boundary once per head. Windowing after those copies exist bounds the prompt
- * but not the memory, so the cap lives at the read and nowhere else.
+ * Inherited-context digest a spawned head or steer branch sees of its parent.
+ * The per-message window applies at read time: the digest is copied into every head's input,
+ * so windowing later bounds the prompt but not the memory.
  */
 
 import type { ModelMessage } from 'ai';
@@ -17,8 +10,6 @@ import type { SerializedMessage } from '../heads/types';
 import type { SessionTranscriptReader } from '../session/transcript';
 import { EVIDENCE_BUDGETS, evidenceWindow } from '../prompts/evidence-window';
 
-/** The parent-conversation cap handed to each spawned head — bounds head LLM
- *  context over long sessions. */
 const INHERITED_CONTEXT_CAP = 50;
 
 /** Detach a delegation's birth-time conversation from its parent's live turn. */
@@ -26,17 +17,14 @@ export function freezeInheritedContext<T>(messages: readonly T[]): readonly T[] 
   return Object.freeze(structuredClone([...messages]));
 }
 
-/** Narrow an arbitrary stored role to the SerializedMessage union (anything
- *  unrecognized reads as assistant output). */
+/** Unrecognized roles read as assistant output. */
 export function narrowInheritedRole(role: string): SerializedMessage['role'] {
   return role === 'system' || role === 'user' || role === 'assistant' || role === 'tool'
     ? role
     : 'assistant';
 }
 
-/** Serialize message content for head inheritance. File-part payloads (data
- *  URLs from attachments) are reduced to their filename/mediaType reference so
- *  spawned heads never inherit megabytes of base64. */
+/** File parts reduce to filename/mediaType so heads never inherit base64 payloads. */
 export function serializeContentForHeads(content: ModelMessage['content']): string {
   const text = v.safeParse(v.string(), content);
 
@@ -54,10 +42,7 @@ export function serializeContentForHeads(content: ModelMessage['content']): stri
   return JSON.stringify(content);
 }
 
-/** Stored conversation rows as inherited context (the cf backend's source: it
- *  digests durable message rows, having already decoded each row's text). */
-/** A live conversation as inherited context: the frozen origin a hire is
- *  born with. The root's own inheritance reads the transcript instead. */
+/** The frozen origin a hire is born with; the root's own inheritance reads the transcript. */
 export function inheritedContextFromHistory(
   history: readonly ModelMessage[],
   cap: number = INHERITED_CONTEXT_CAP,
@@ -72,12 +57,7 @@ export function inheritedContextFromHistory(
   return [...inheritedContextOmissionNote(history.length, kept.length), ...kept];
 }
 
-/**
- * The recent durable conversation of one actor as inherited context, read
- * from the canonical transcript. Both backends hand a hire the same window:
- * the newest {@link INHERITED_CONTEXT_CAP} entries of the leaf's ancestry,
- * led by the disclosure note when the transcript holds more.
- */
+/** Both backends hand a hire the same window: the newest entries of the leaf's ancestry. */
 export async function inheritedContextFromTranscript(transcript: SessionTranscriptReader): Promise<SerializedMessage[]> {
   const kept: SerializedMessage[] = [];
 
@@ -90,8 +70,7 @@ export async function inheritedContextFromTranscript(transcript: SessionTranscri
   return [...inheritedContextOmissionNote(transcript.count(), kept.length), ...kept];
 }
 
-/** The disclosure entry a capped inheritance leads with — a head must be able
- *  to tell its view is a window, or it treats the window as the whole story. */
+/** A head must be able to tell its view is a window. */
 export function inheritedContextOmissionNote(total: number, kept: number): SerializedMessage[] {
   if (total <= kept) return [];
 

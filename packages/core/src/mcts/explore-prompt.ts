@@ -1,28 +1,10 @@
-/**
- * What an MCTS branch is asked, and how its answer is read back.
- *
- * A branch runs on whichever substrate the backend has — a Cloudflare facet, a
- * local subprocess, or an inline closure when facets are unavailable — and the
- * substrate is genuinely different in each case. The QUESTION is not: the
- * prompt and diversity directive make branches comparable. The executor's
- * declared languages keep the prompt aligned with the evaluator that will run
- * the fenced implementation.
- *
- * Written per substrate, it drifted — and drifted invisibly, because each copy
- * was only ever compared against itself. The inline fallback carried a comment
- * claiming it "match[ed] the Facet's explore() exactly" while asking a
- * materially weaker question: no known-patterns hints, "Propose ONE approach"
- * instead of "ONE specific concrete approach", and a reflection prompt that
- * never mentioned the attempt it was reflecting on. Branches from the fallback
- * path were therefore scored against branches asked something else.
- */
+/** What an MCTS branch is asked and how its answer is read back, shared by every substrate so branches stay comparable. */
 
 import { diversityDirective } from './diversity';
 import { EVIDENCE_BUDGETS, evidenceWindow } from '../prompts/evidence-window';
 import type { WorkMode } from '../types/turn';
 
-/** A crafted tool as a branch is told about it — name and description only. A
- *  branch reasons, it does not call tools. */
+/** A crafted tool as a branch is told about it; a branch reasons, it does not call tools. */
 export interface ExploreToolHint {
   readonly name: string;
   readonly description: string;
@@ -30,13 +12,9 @@ export interface ExploreToolHint {
 
 export interface ExplorePromptInput {
   readonly mode: WorkMode;
-  /** The parent conversation, already bounded (formatInheritedContext). */
   readonly context: string;
-  /** Patterns this agent has already crafted, offered as prior art. */
   readonly craftedTools: readonly ExploreToolHint[];
-  /** The angles this branch's parallel siblings were handed (siblingAngles). */
   readonly siblings: readonly string[];
-  /** Languages the executor that will score this proposal can run. */
   readonly languages: readonly [string, ...string[]];
 }
 
@@ -45,7 +23,6 @@ export interface ExplorePrompt {
   readonly user: string;
 }
 
-/** The one question every branch is asked. */
 export function explorePrompt({ mode, context, craftedTools, siblings, languages }: ExplorePromptInput): ExplorePrompt {
   const toolHints = craftedTools.length > 0
     ? `\nKnown patterns:\n${craftedTools.map((t) => `- ${t.name}: ${t.description}`).join('\n')}`
@@ -75,18 +52,8 @@ export function explorePrompt({ mode, context, craftedTools, siblings, languages
 }
 
 /**
- * The failure post-mortem a branch writes about its own attempt.
- *
- * Both ends of the attempt are kept under the shared evidence budget: a
- * reflection is about how the attempt ENDED, and the unbounded version put a
- * whole trace into a prompt asking for one sentence. `attempt` is empty on a
- * substrate with no trace table, which drops the line rather than showing the
- * model an empty heading.
- *
- * `outcome` is the environment's verdict on the attempt — LATS reflects on the
- * trajectory AND its reward (§4.2). Absent when nothing was executed, in which
- * case the branch is being asked about prose and the line is dropped rather
- * than filled with a guess.
+ * The failure post-mortem a branch writes about its own attempt. Lines for an empty
+ * `attempt` or absent `outcome` are dropped rather than shown empty or guessed.
  */
 export function reflectionPrompt(task: string, attempt: string, outcome?: string): string {
   const bounded = evidenceWindow(attempt, EVIDENCE_BUDGETS.reflection);

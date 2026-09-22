@@ -1,5 +1,4 @@
-// TurnAccumulator — the per-turn accounting the cf-backend hooks drive through
-// `AgentOrchestrator.acc`. One object owns it, so no hook keeps a second copy.
+// TurnAccumulator: per-turn accounting behind `AgentOrchestrator.acc`.
 import { describe, test, expect } from 'bun:test';
 import { Database } from 'bun:sqlite';
 import { TurnAccumulator } from '../src/orchestrator/turn-accumulator';
@@ -16,8 +15,7 @@ describe('TurnAccumulator', () => {
     const a = new TurnAccumulator();
     a.recordStep({ usage: { input: 5, output: 3 } });
     a.recordToolCall({ toolCallId: 'fixture-1', toolName: 'shell', success: true, output: 'ok' });
-    // A failed call first, so the hadError assertion below is not vacuous —
-    // a reset that forgot the flag would leak the previous turn's failure.
+    // A failed call first, so a reset that forgot hadError leaks it.
     a.recordToolCall({ toolCallId: 'fixture-2', toolName: 'shell', success: false, reason: null, error: 'boom' });
     a.onFirstChunk();
     expect(a.hadError).toBe(true);
@@ -49,10 +47,7 @@ describe('TurnAccumulator', () => {
   });
 
   test('recordToolCall — the durable event carries WHAT the call was asked to do', () => {
-    // Without this the row names the tool and nothing else, so a ledger of `file`
-    // failures cannot say whether the agent was reading, writing or editing —
-    // and for a dispatcher tool the action is the whole difference between a
-    // refusal it was right to make and a defect.
+    // Without the action, dispatcher-tool failures are indistinguishable.
     const toolEvents: Array<{ args?: unknown }> = [];
     const a = new TurnAccumulator({ onToolCallEvent: (e) => toolEvents.push(e) });
     a.recordToolCall({ toolCallId: 'fixture-4', toolName: 'file', input: { action: 'edit', path: 'src/a.ts' }, success: true, output: { ok: true } });
@@ -60,16 +55,13 @@ describe('TurnAccumulator', () => {
   });
 
   test('recordToolCall — a big argument is DIGESTED, not stored whole', () => {
-    // The ledger's durable cost must track what the turn DID, not how much
-    // content it moved: a `write` body would otherwise be stored twice, once
-    // here and once in the step transcript.
+    // A `write` body must not be stored twice.
     const toolEvents: Array<{ args?: unknown }> = [];
     const a = new TurnAccumulator({ onToolCallEvent: (e) => toolEvents.push(e) });
     a.recordToolCall({ toolCallId: 'fixture-5', toolName: 'file', input: { action: 'write', content: 'x'.repeat(5000) }, success: true, output: { ok: true } });
     const args = toolEvents[0].args;
     expect(args).toBeTypeOf('string');
     expect(String(args).length).toBeLessThan(1000);
-    // Visibly a digest, and the action still legible at the front of it.
     expect(String(args).endsWith('…')).toBe(true);
     expect(String(args)).toContain('"action":"write"');
   });
@@ -78,21 +70,14 @@ describe('TurnAccumulator', () => {
     const toolEvents: Array<{ error?: string }> = [];
     const a = new TurnAccumulator({ onToolCallEvent: (e) => toolEvents.push(e) });
     a.recordToolCall({ toolCallId: 'fixture-6', toolName: 'shell', success: false, reason: null, error: new Error('boom') });
-    // ONE description of the failure in both ledgers. `.message` in the core record
-    // against `String(error)` at the sink makes them disagree — the same call reads
-    // as `boom` in the evolution signal and `Error: boom` in the run-event log.
+    // One failure description in both ledgers.
     expect(a.toolCalls[0]).toEqual({ toolCallId: 'fixture-6', name: 'shell', args: {}, result: { error: 'boom' }, outcome: { success: false, reason: null } });
     expect(a.hadError).toBe(true);
     expect(toolEvents[0].error).toBe('boom');
   });
 
   test('recordToolCall — a failure with NO error is never recorded as clean', () => {
-    // The measured invisibility path. `String(c.error ?? '')` writes `error: ''`,
-    // and every reader's discriminator is `error != null && error !== ''` — so a
-    // tool reporting failure without saying why is scored as a successful call,
-    // while `hadError` on the same branch knows it failed. Three nullish shapes,
-    // because `String(undefined)` and `String(null)` produce fabricated text rather
-    // than an empty string.
+    // `String(undefined)`/`String(null)` fabricate text; `error: ''` reads as success.
     for (const error of [undefined, null, '']) {
       const toolEvents: Array<{ error?: string }> = [];
       const a = new TurnAccumulator({ onToolCallEvent: (e) => toolEvents.push(e) });
@@ -103,7 +88,6 @@ describe('TurnAccumulator', () => {
         toolCallId: 'fixture-7',
         name: 'eval', args: {}, result: { error: FAILURE_WITHOUT_ERROR }, outcome: { success: false, reason: null },
       });
-      // And the census reads it back as its own reason rather than as `threw`.
       expect(classifyToolFailure({
         type: 'tool_call_end', eventIndex: 0, runId: 'r', timestamp: new Date().toISOString(),
         name: 'eval', toolCallId: 'tc-1', error: toolEvents[0].error,
@@ -117,9 +101,7 @@ describe('TurnAccumulator', () => {
     a.recordStep({ usage: { input: 100, output: 40, cacheRead: 10 }, finishReason: 'tool-calls', toolCalls: [{ toolName: 'shell' }] });
     a.recordStep({ usage: { input: 50, output: 20, cacheWrite: 30 }, finishReason: 'stop' });
     expect(a.stepCount).toBe(2);
-    // A field only ONE step reported carries that step's number; a field no step
-    // reported stays absent, so "nobody mentioned reasoning" cannot be read as
-    // "the model did no reasoning".
+    // Unreported stays absent, not zero.
     expect(a.usage).toEqual({ input: 150, output: 60, cacheRead: 10, cacheWrite: 30 });
     expect('reasoning' in a.usage).toBe(false);
     expect(steps).toEqual([1, 2]);
@@ -127,8 +109,6 @@ describe('TurnAccumulator', () => {
 
   test('reportedUsage is the turn usage, or undefined when nothing was reported', () => {
     const a = new TurnAccumulator();
-    // A provider that reports no usage must not be recorded as having spent
-    // zero — a cost consumer has to be able to tell the two apart.
     a.recordStep({ finishReason: 'stop' });
     expect(a.reportedUsage()).toBeUndefined();
     a.recordStep({ usage: { input: 12, output: 4, cacheRead: 8 } });
@@ -139,14 +119,12 @@ describe('TurnAccumulator', () => {
 
   test('lastPromptTokens tracks the newest reporting step and survives usage-less steps', () => {
     const a = new TurnAccumulator();
-    // Never reported is not the same number as reported zero — the compaction
-    // trigger has to be able to tell them apart.
+    // Never reported is not reported zero.
     expect(a.lastPromptTokens).toBeUndefined();
     a.recordStep({ usage: { input: 1_000, output: 40 } });
     a.recordStep({ usage: { input: 1_450, output: 20 } });
-    a.recordStep({}); // a step whose provider reported nothing
+    a.recordStep({});
     expect(a.lastPromptTokens).toBe(1_450);
-    // A reported 0 IS a measurement of the request, so it replaces the old one.
     a.recordStep({ usage: { input: 0, output: 4 } });
     expect(a.lastPromptTokens).toBe(0);
     a.reset(1);
@@ -180,8 +158,7 @@ describe('TurnAccumulator', () => {
   });
 
   test('a 0ms duration is a real measurement, not an absent one', () => {
-    // `durationMs != null` must not degrade into a truthiness check: a
-    // sub-millisecond tool would silently lose its timing.
+    // Not a truthiness check: sub-millisecond timings count.
     const details: Array<string | undefined> = [];
     const durations: Array<number | undefined> = [];
 
@@ -204,8 +181,6 @@ describe('TurnAccumulator', () => {
   });
 
   test('a non-string finishReason reaches the step sink as undefined, not as "undefined"', () => {
-    // The run-event log's `reason` is a nullable string column; stringifying an
-    // absent finishReason would write the literal text into it.
     const reasons: Array<string | undefined> = [];
     const a = new TurnAccumulator({ onStepEvent: (e) => reasons.push(e.reason) });
     a.recordStep({ finishReason: 'stop' });
@@ -221,8 +196,6 @@ describe('TurnAccumulator', () => {
       usage: { input: 900, output: 40, cacheRead: 700, reasoning: 12 },
       response: { modelId: 'claude-sonnet-4.5' },
     });
-    // `usage` is the provider's report verbatim; who served it and what it cost
-    // are siblings on the row, never members of the report.
     expect(events[0]?.usage).toEqual({ input: 900, output: 40, cacheRead: 700, reasoning: 12 });
     expect(events[0]?.modelId).toBe('claude-sonnet-4.5');
   });
@@ -248,8 +221,7 @@ describe('TurnAccumulator', () => {
     a.composition.openTurn({ system: 'soul' });
     a.composition.measure([{ role: 'user', content: 'hello' }]);
     a.recordStep({ usage: { input: 10, output: 1 } });
-    // Drained: the next step measured nothing, so it reports nothing rather
-    // than re-reporting the previous request's composition.
+    // Drained: nothing re-reports the previous composition.
     a.recordStep({ usage: { input: 10, output: 1 } });
     expect(events[0]?.context?.measuredChars).toBe('soul'.length + 'hello'.length);
     expect(events[1]?.context).toBeUndefined();
@@ -279,8 +251,6 @@ describe('TurnAccumulator', () => {
     const sql = makeSql(db);
     const execRaw = makeExecRaw(db);
 
-    // The cap is per actor, so the governor is bound to the actor whose spend
-    // the accumulator is metering.
     const governor = new MissionGovernor({
       storage: { sql, execRaw }, actor: createTestActors(sql, execRaw).main,
     });
@@ -290,16 +260,12 @@ describe('TurnAccumulator', () => {
     const events: Array<{ usage?: Usage }> = [];
     const a = new TurnAccumulator({ onStepEvent: (e) => events.push(e) }, governor);
 
-    // A provider that answered "zero" HAS answered: the row is a measurement of
-    // a request that cost nothing, and suppressing it would make that
-    // indistinguishable from a provider that never reports usage at all.
+    // A zero answer is a measurement, not silence.
     a.recordStep({ usage: { input: 0, output: 0 } });
     expect(events[0]?.usage).toEqual({ input: 0, output: 0 });
     expect(a.reportedUsage()).toEqual({ input: 0, output: 0 });
     expect(governor.snapshot('nightly')[0]?.calls).toBe(1);
 
-    // A provider that said nothing: no usage row, and nothing metered at all —
-    // not even the call, because there is no measured request behind it.
     a.recordStep({ finishReason: 'stop' });
     expect(events[1]?.usage).toBeUndefined();
     expect(governor.snapshot('nightly')[0]?.calls).toBe(1);

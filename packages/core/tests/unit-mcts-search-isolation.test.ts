@@ -1,14 +1,6 @@
 /**
- * Search isolation — one runMCTS call may only ever read, expand and settle its
- * OWN tree.
- *
- * Selection, pruning and convergence scan by `root_id`. A global scan over
- * `search_nodes` rests on one invariant — "nothing stays open across tasks" —
- * enforced only by the tree close at the end of a successful converge(): every
- * way of not reaching that close (an eviction, an aborted turn, a convergence
- * that throws) leaves it broken, and a converged search's terminal winner is
- * never excluded at all. These tests pin the invariant to the DATA (`root_id`)
- * rather than to the happy path.
+ * One runMCTS call may only read, expand and settle its own tree: selection, pruning and
+ * convergence are pinned to `root_id`, not to a tree close that an eviction, abort or throw skips.
  */
 
 import { describe, test, expect } from 'bun:test';
@@ -27,8 +19,7 @@ function initTables(rt: AgentRuntime): void {
   initMctsSearchTable(rt.storage.execRaw);
 }
 
-/** An LLM whose judge verdicts are controlled per-search, so one search can be
- *  made to score higher than the next. */
+/** Judge verdicts controlled per search, so one search can outscore the next. */
 function scriptedLLM(score: () => number, onSummary: () => string): LLM {
   return {
     stream() { throw new Error('MCTS never streams — branches are mocked'); },
@@ -65,8 +56,7 @@ describe('MCTS search isolation', () => {
     const { rt, db } = createTestRuntime();
     initTables(rt);
     const store = new MctsSearchStore(makeSql(db), rt.actor);
-    // converge() awaits a summary call after the branches are scored; failing it
-    // is the cheapest faithful stand-in for "the settle work did not complete".
+    // Failing the post-scoring summary call stands in for incomplete settle work.
     rt.llm = scriptedLLM(() => 0.9, () => { throw new Error('summary model down'); });
     rt.judgeModel = rt.llm;
 
@@ -121,8 +111,7 @@ describe('MCTS search isolation', () => {
     rt.llm = scriptedLLM(() => 0.9, () => 'summary');
     rt.judgeModel = rt.llm;
 
-    // Search A is evicted after one iteration: its tree stays open and its
-    // durable row stays 'running' (that is what makes it resumable).
+    // Evicted after one iteration: tree open, durable row 'running' (resumable).
     const ctrl = new AbortController();
     await expect(runMCTS(rt, createMockSession(), 'ABANDONED', {
       budget: 4, branches: 2, search: store, signal: ctrl.signal,

@@ -1,32 +1,7 @@
 /**
- * One request is one fork run, however many times its job is re-driven.
- *
- * The reproduction, from the owner's own workspace: a single research fork
- * showed as FOUR near-identical `merged · 5 branches` rows in the Exploration
- * list, same task text, same day. They were not one run recorded four times —
- * they were four runs really executed, each spawning and paying for its own
- * five heads.
- *
- * Mechanism: a detached fork's background job is re-driven by evict/exit
- * recovery (jobs/runner.ts — five re-drives and then a give-up when this was
- * written; unbounded attempts at a capped pace since 2026-09-04, which makes
- * this defect's blast radius larger, not smaller), and `resumeBackgroundJob`
- * re-executes the raw `agents` call with the stored input. MCTS survives that
- * because re-entry reclaims the same search by task, keeping ONE `root_id`.
- * `HeadController.run` had no such reclaim: `opts.rootId ?? opts.parentHeadId ??
- * nanoid()` with a top-level split passing neither, so every re-drive minted a
- * fresh root.
- *
- * These tests drive the controller the way a re-drive drives it — same stored
- * task, fresh call, no root id — and assert on what `listForkRuns` (the read
- * model behind that list) actually returns, not on internals.
- *
- * No timers: the controller records the split and every spawn synchronously,
- * before its first await, so an interrupted drive has already left its journal
- * rows by the time `run()` yields.
- *
- * Specified by docs/EXPLORATION.md — "One node, one row, across every re-entry",
- * whose fork paragraph states the derived-id rule and the one merged answer.
+ * One request is one fork run however often its job is re-driven: a top-level split derives its root
+ * from the stored task, so a re-drive reopens the same journal rows. Asserted through `listForkRuns`.
+ * Spec: docs/EXPLORATION.md "One node, one row, across every re-entry".
  */
 
 import { describe, test, expect } from 'bun:test';
@@ -102,13 +77,7 @@ function freshJournal() {
   return { db, sql, actor, journal: new HeadJournal(sql, actor) };
 }
 
-/**
- * A head runtime, in one of the two shapes this file needs.
- *
- * `settles: false` is an interrupted attempt: the heads spawn and their reports
- * never arrive, which is what a fork looks like when the activation driving it
- * dies. `settles: true` is the attempt that lands.
- */
+/** `settles: false` is an interrupted attempt whose reports never arrive; `settles: true` lands. */
 function runtime(opts: { settles: boolean; spawned: HeadInput[]; pendingHeads?: PendingHead[]; compiled?: string[] }): HeadRuntime {
   return {
     async spawnHead(input: HeadInput): Promise<SpawnedHead> {
@@ -150,12 +119,9 @@ function splitRequest(branches: number, rationale = TASK): SplitRequest {
   };
 }
 
-/** One drive of the head, exactly as `resumeBackgroundJob` drives it: a fresh
- *  controller call carrying the stored input — the authored depth room included,
- *  since a re-drive replays it unchanged — and no run identity. */
+/** One drive as `resumeBackgroundJob` makes it: a fresh call with the stored input and no run identity. */
 interface DriveOptions {
   journal: HeadJournal;
-  /** Collects every head the drive spawns, across drives. */
   spawned: HeadInput[];
   settles: boolean;
   branches?: number;
@@ -168,7 +134,6 @@ function drive({ journal, spawned, settles, branches = 5, pendingHeads }: DriveO
     parentHeadId: null,
     inheritedContext: [],
     request: splitRequest(branches),
-    // One level: these heads report, they never split again.
     parentBudget: { maxDepth: 1, spawnedAt: Date.now() },
   });
 }
@@ -190,25 +155,18 @@ describe('a re-driven fork job stays one run', () => {
     expect(runs).toHaveLength(1);
     expect(runs[0]).toMatchObject({ task: TASK, hasSearchTree: false, hasNodeTranscripts: true, status: 'completed' });
 
-    // All four attempts' heads live under that one root.
     expect(new Set(spawned.map((head) => head.rootId)).size).toBe(1);
     expect(spawned).toHaveLength(20);
     await settleInterruptedRuns(pendingHeads, interruptedRuns);
   });
 
   test('N heads requested stays exactly N journal rows through repeated resets', async () => {
-    // THE OWNER'S `Systemfork interrupted` REPORT, as a test. A head id is
-    // derived from its branch point and slot, so a re-drive reopens the same
-    // journal row.
-    //
-    // Minting fresh ids while aborting unreported rows would add five apparent
-    // failed branches on every re-drive of a five-branch request, even though
-    // the logical work is unchanged.
+    // A head id derives from its branch point and slot, so a re-drive reopens the same journal row
+    // instead of aborting it and minting a fresh one.
     const { sql, actor, journal } = freshJournal();
     const spawned: HeadInput[] = [];
     const pendingHeads: PendingHead[] = [];
 
-    // Three resets that never report, then one that lands.
     const interruptedRuns = Array.from(
       { length: 3 },
       () => drive({ journal, spawned, settles: false, pendingHeads }),
@@ -220,16 +178,13 @@ describe('a re-driven fork job stays one run', () => {
       SELECT id, status, error_message FROM head_journal
       WHERE actor_id = ${actor.actorId} AND root_id = ${spawned[0]?.rootId ?? ''} ORDER BY rowid`;
 
-    // FIVE ROWS FOR FIVE BRANCHES, after four drives. The incident produced twenty.
+    // Five rows for five branches after four drives.
     expect(rows).toHaveLength(5);
-    // …and they are the same five ids every attempt spawned.
     expect(new Set(spawned.map((head) => head.id)).size).toBe(5);
-    // Each reset re-ran the work — that is unavoidable for an ephemeral facet — so
-    // the spawn count still counts attempts, not branches.
+    // Heads are re-run on each reset, so spawns count attempts, not branches.
     expect(spawned).toHaveLength(20);
 
-    // NO FAKE TERMINAL ROW. Every row reached the real outcome of the attempt that
-    // reported, and none carries a takeover reason of any kind.
+    // No row carries a takeover reason.
     expect(rows.every((row) => row.status === 'completed')).toBe(true);
     expect(rows.filter((row) => row.status === 'aborted')).toHaveLength(0);
     expect(rows.every((row) => row.error_message === null)).toBe(true);
@@ -238,7 +193,6 @@ describe('a re-driven fork job stays one run', () => {
       WHERE actor_id = ${actor.actorId} AND error_message LIKE '%the retry%'`[0]?.n)
       .toBe(0);
 
-    // ONE run, and its report compiles once: one cached merge for one root.
     expect(listForkRuns(sql, actor, null, 30).items).toHaveLength(1);
     expect(sql<{ n: number }>`
       SELECT COUNT(*) AS n FROM head_merge_results WHERE actor_id = ${actor.actorId}`[0]?.n).toBe(1);
@@ -246,18 +200,13 @@ describe('a re-driven fork job stays one run', () => {
   });
 
   test('two parents splitting at one depth get distinct branch ids', async () => {
-    // The other half of deriving the id. Keyed on the branch POINT, uniqueness
-    // needs no randomness: keyed on the ROOT, two parents splitting at the same
-    // depth under one root produce the same `${rootId}-d${depth}-${idx}` prefix
-    // and only the random suffix keeps them apart.
+    // Keyed on the branch point: keyed on the root, two parents at one depth would share the `${rootId}-d${depth}-${idx}` prefix.
     const { journal } = freshJournal();
     const spawned: HeadInput[] = [];
     const controller = new HeadController(runtime({ settles: true, spawned }), journal);
     const shared = { mode: 'build' as const, inheritedContext: [], request: splitRequest(2) };
 
-    // Two levels, each stated where it is spent: the root split authors the
-    // room, and every nested split runs on the budget its parent head actually
-    // inherited — the same handoff `split_subheads` makes in production.
+    // Nested splits run on the budget the parent head inherited, as `split_subheads` does in production.
     await controller.run({
       ...shared, parentHeadId: null,
       parentBudget: { maxDepth: 2, spawnedAt: Date.now() },
@@ -276,13 +225,7 @@ describe('a re-driven fork job stays one run', () => {
   });
 
   test('one request compiles exactly ONE answer, however many times it is re-driven', async () => {
-    // EXACTLY-ONCE COMPILATION. The heads are re-RUN on every reset — they are
-    // ephemeral facets with no checkpoint, so there is nothing else a resume can
-    // do — but the SYNTHESIS is the run's answer, and a run holds one. Two ways
-    // that could break, and both are asserted here rather than reasoned about:
-    // an attempt that never reported must compile nothing, because there is no
-    // set of findings to compile; and the attempt that lands must compile once,
-    // not once per branch.
+    // An attempt that never reported compiles nothing; the attempt that lands compiles once, not once per branch.
     const { sql, actor, journal } = freshJournal();
     const spawned: HeadInput[] = [];
     const compiled: string[] = [];
@@ -306,11 +249,8 @@ describe('a re-driven fork job stays one run', () => {
       parentBudget: { maxDepth: 1, spawnedAt: Date.now() },
     });
 
-    // ONE synthesis for five branches and four drives.
     expect(compiled).toHaveLength(1);
-    // One durable answer, under one run identity — `cacheMerge` is keyed on the
-    // root, so a re-drive that had minted a fresh id would have added a row here
-    // rather than replaced one.
+    // `cacheMerge` is keyed on the root, so a fresh id would add a row rather than replace one.
     expect(sql<{ n: number }>`
       SELECT COUNT(*) AS n FROM head_merge_results WHERE actor_id = ${actor.actorId}`[0]?.n).toBe(1);
     expect(sql<{ n: number }>`
@@ -355,14 +295,7 @@ describe('a re-driven fork job stays one run', () => {
     await settleInterruptedRuns(pendingHeads, interruptedRuns);
   });
 
-  /**
-   * "They say merged but there is no information on them."
-   *
-   * A run under the merge POLICY that never reached its synthesis has not merged
-   * anything, and the list must not claim it did. The status vocabulary is what
-   * carries that: `partial` is "it stopped without an answer", which is exactly
-   * what an interrupted split is until something retries it.
-   */
+  /** A merge-policy run that never reached its synthesis is `partial`, not `merged`. */
   test('an interrupted split reads as stopped, never as merged', async () => {
     const { sql, actor, journal } = freshJournal();
     const spawned: HeadInput[] = [];
@@ -375,8 +308,7 @@ describe('a re-driven fork job stays one run', () => {
     }
 
     expect(pendingHeads).toHaveLength(5);
-    // Nothing retried it: the reconciliation that retires stale heads has run,
-    // which is the state a workspace reopens in.
+    // The stale-head reconciliation has run: the state a workspace reopens in.
     journal.abandonRunning('no executor: outlived the activation that spawned it');
 
     const [run] = listForkRuns(sql, actor, null, 30).items;
@@ -399,8 +331,7 @@ describe('a re-driven fork job stays one run', () => {
       parentDepth: 1,
       inheritedContext: [],
       request: splitRequest(2),
-      // The parent head is synthetic here, so its inherited room is authored:
-      // one level, which is all this sub-split spends.
+      // The parent head is synthetic, so its inherited room is authored.
       parentBudget: { maxDepth: 1, spawnedAt: Date.now() },
     });
 

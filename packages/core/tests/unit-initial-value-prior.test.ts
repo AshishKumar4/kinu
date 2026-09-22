@@ -1,15 +1,7 @@
 /**
- * Unit tests: BUG-1 — a fresh search node's value prior is 0, NOT 0.5.
- *
- * Formal spec: MCTS/Backpropagation.lean:initial_in_range — `InRange S s` is
- * `0 ≤ scaledSum ∧ scaledSum ≤ S · visits`. At visits = 0 that pins scaledSum
- * (hence the derived mean `value`) to exactly 0; a 0.5 neutral prior is outside
- * the invariant, because a node that has received no rewards has no mean.
- *
- * Backpropagation itself cannot detect the prior — Lean's
- * `init_values_equal_at_first_step` proves the first update erases it. The
- * prior is only observable where an UNVISITED node is ranked against evaluated
- * ones, i.e. at convergence, so that is where it is tested from.
+ * A fresh search node's value prior is 0, not 0.5.
+ * Formal spec: MCTS/Backpropagation.lean:initial_in_range — at visits = 0, scaledSum is exactly 0.
+ * `init_values_equal_at_first_step` erases the prior at first update, so it is tested at convergence.
  */
 
 import { describe, test, expect } from 'bun:test';
@@ -23,8 +15,7 @@ import { initActorTables } from '../src/identity/schema';
 import type { SqlExecutor } from '../src/types/primitives';
 import type { ActorHandle } from '../src/identity/actor-handle';
 
-/** Record a node the way the engine does — value/visits are never written, so
- *  the DDL default is what lands in the row. */
+/** Records a node as the engine does: value/visits come from the DDL default. */
 function record(
   session: SessionWriter, sql: SqlExecutor, actor: ActorHandle, nodeId: string,
 ): Promise<string> {
@@ -63,11 +54,9 @@ describe('BUG-1: the initial value prior', () => {
     await record(session, rt.storage.sql, rt.actor, 'a');
     await record(session, rt.storage.sql, rt.actor, 'b');
 
-    // No backpropagate() call anywhere: no branch has earned a score.
     const result = await converge(rt, session, 'r');
 
-    // A 0.5 prior would clear minAcceptableScore (0.3) on its own and report
-    // success for a search that never scored a single branch.
+    // A 0.5 prior would clear minAcceptableScore on its own.
     expect(result.winnerValue).toBe(0);
     expect(result.converged).toBe(false);
   });
@@ -79,8 +68,7 @@ describe('BUG-1: the initial value prior', () => {
     await record(session, rt.storage.sql, rt.actor, 'scored');
     await record(session, rt.storage.sql, rt.actor, 'never-evaluated');
 
-    // 0.35: a real but mediocre grounded score — above minAcceptableScore (0.3)
-    // and below a 0.5 prior, so the prior would steal the win.
+    // 0.35: above minAcceptableScore (0.3), below a 0.5 prior that would steal the win.
     backpropagate(rt.storage.sql, rt.actor, 'scored', 0.35);
 
     const result = await converge(rt, session, 'r');
@@ -90,9 +78,7 @@ describe('BUG-1: the initial value prior', () => {
   });
 
   test('the MCTS-only DDL and the unified actor DDL agree on the search_nodes column defaults', () => {
-    // schemas.ts documents that it must stay in sync with identity/schema.ts.
-    // CREATE TABLE IF NOT EXISTS means a drift between them silently depends on
-    // whichever subsystem initialized the storage first.
+    // Must stay in sync with identity/schema.ts: `CREATE TABLE IF NOT EXISTS` makes drift depend on init order.
     const defaultsOf = (init: (db: Database) => void): Record<string, string | null> => {
       const db = new Database(':memory:');
       init(db);

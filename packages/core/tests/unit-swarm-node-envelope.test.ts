@@ -1,23 +1,6 @@
 /**
- * THE NODE ENVELOPE'S DERIVATION, held against the measurement it came from.
- *
- * The sibling of `unit-turn-envelope.test.ts` and deliberately the same shape: the
- * measured figures live HERE rather than being exported, because an exported
- * measurement with no production reader is a constant only its own test can reach, and
- * the bound in `node-agent.ts` is held to the equality it claims plus the floor the
- * measurement puts under it.
- *
- * WHAT WAS MEASURED. One credentialed run of `tests/evals/swarm.eval.ts` at depth 2 and
- * width 3, tool-using agent nodes, real registered verifier, on the shipped default
- * model `@cf/deepseek-ai/deepseek-v4-pro-0813`. Three nodes, 22 / 25 / 26 model steps
- * and 25 / 27 / 27 tool calls, still working at 1,216,358 / 1,310,061 / 1,336,833 ms
- * when the run's 1,200,000 ms `AbortSignal` fired. The run crowned nothing:
- * `best = null`, `records.written 0`, `stop = 'aborted'`.
- *
- * WHY THAT MAKES A NODE'S OWN CLOCK DERIVABLE AND ITS TOTAL NOT. Every figure above is
- * a LOWER bound on a node's work, because no node finished — so "how long a node needs"
- * is not in the data and is never estimated here. What IS in the data is the cost of a
- * STEP, and a step is the unit the bound is built out of.
+ * The node envelope's derivation, held against the measurement it came from (sibling of
+ * `unit-turn-envelope.test.ts`). No measured node finished, so only the cost of a step is derivable.
  */
 import { describe, expect, test, spyOn } from 'bun:test';
 import { scriptedTurnModel } from '@kinu.run/test-utils';
@@ -35,29 +18,16 @@ test('a node with no caller clock can finish after a long elapsed step', async (
 });
 
 /**
- * WHERE THE DEADLINE IS READ, AND WHAT THAT LEAVES UNBOUNDED.
- *
- * A cooperative deadline cannot pre-empt synchronous work. The honest response is to
- * bound a MANY-STEP node at its step boundaries and to state the residue rather than
- * pretend a signal reaches inside a step — one measured step held the runner at 91% CPU
- * for 26 minutes and neither this deadline nor the caller's `AbortSignal.timeout` had
- * any effect on it. So the limit is asserted here in both directions: the deadline DOES
- * stop a node, and it does NOT stop the step that was running when it passed.
+ * A cooperative deadline is read at step boundaries and cannot pre-empt a running step;
+ * both directions are asserted.
  */
-/**
- * One node with room for 40 steps and a deadline of `maxWallClockMs`, whose model never
- * stops on its own: every step asks for another tool call, so the ONLY thing that can
- * end this loop is a bound. Shared by both arms below, which differ in exactly one
- * number — a second copy of a scripted loop is a second thing to keep in step.
- */
+/** One node with room for 40 steps whose model never stops on its own, so only a bound ends the loop. */
 async function nodeUnderDeadline(
   maxWallClockMs?: number,
 ): Promise<{ readonly run: NodeRun; readonly steps: number }> {
   const { rt, db } = createTestRuntime();
   const journal = new HeadJournal(rt.storage.sql, rt.actor);
-  // One hosted actor per node id, over the caller's own database: a node's turn
-  // is a claimed turn on its OWN session, and the deadline under test is
-  // observed between the steps of that turn.
+  // One hosted actor per node id; the deadline is observed between steps of its claimed turn.
   const seats = hostedSeatsOver({ rt, db });
   let steps = 0;
   let now = Date.now();
@@ -102,38 +72,25 @@ async function nodeUnderDeadline(
 
 describe('what the node deadline reaches, and what it does not', () => {
   test('a deadline expiring during a step stops the next request, not completed work', async () => {
-    // Room for 40 steps, and a deadline that has already passed by the time the first
-    // one finishes. The step cap is therefore NOT what stops this node.
+    // The deadline has passed by the first step's end, so the step cap is not what stops this node.
     const { run, steps } = await nodeUnderDeadline(1);
 
-    // IT STOPS THE NODE, and says which bound did it.
     expect(run.report.status).toBe('budget_exceeded');
     expect(run.report.errorMessage).toContain('wall-clock');
     expect(steps).toBeLessThan(40);
 
-    // AND IT DID NOT STOP THE STEP. The deadline expires no later than the end of the
-    // first step, and that step still ran to completion — one whole model call and its
-    // tool result, banked. That is the residue, measured rather than asserted away: a
-    // deadline that could pre-empt would have produced no steps at all, and a node
-    // whose one step took 26 minutes would still take 26 minutes here.
+    // The step that was running when the deadline passed still completes: the residue.
     expect(steps).toBe(1);
     expect(run.report.stepCount).toBe(1);
   });
 
   test('a deadline of ZERO is a deadline, so a node declared no time is given none', async () => {
-    // WHY THIS NUMBER RATHER THAN ANOTHER SMALL ONE. Zero is the single input on which
-    // `??` and `||` disagree, and `runSwarm` resolves a caller's clock with `??`. The
-    // table in `unit-swarm-incomplete-node.test.ts` pins the number a node is GRANTED;
-    // this pins the number MEANING something, which is what makes zero a legal
-    // declaration rather than an accident of the type. `budgetExhausted` compares
-    // elapsed against the bound with `>=`, so a zero bound is already spent at the first
-    // boundary it is asked at — and a node stopped by it is reported exactly as a node
-    // stopped by any other clock, rather than as a node with no clock at all.
+    // Zero is where `??` and `||` disagree; `runSwarm` uses `??`, and `budgetExhausted` compares with `>=`,
+    // so a zero bound is spent at the first boundary and reported like any other clock.
     const { run, steps } = await nodeUnderDeadline(0);
 
     expect(run.report.status).toBe('budget_exceeded');
     expect(run.report.errorMessage).toContain('wall-clock');
-    // A zero budget is exhausted before entry: no first step may begin.
     expect(steps).toBe(0);
     expect(run.report.stepCount).toBe(0);
   });

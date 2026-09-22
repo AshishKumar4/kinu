@@ -1,17 +1,11 @@
-/**
- * Unit tests: cost estimation.
- */
-
 import { describe, test, expect } from 'bun:test';
 import { describeCostBasis, estimateCost } from '../src/mcts/cost';
 
 describe('Cost estimation', () => {
   test('calculates correct total calls', () => {
     const est = estimateCost(20, 3, 4);
-    // exploration: 20*3 = 60 (one explore call per branch — single-step rollouts)
-    // evaluation: 20*3*4 = 240 (maxEvalLLMCalls = 4)
-    // reflection: ceil(20*3*0.3) = 18
-    // total: 318
+    // exploration 20*3 = 60, evaluation 20*3*4 = 240 (maxEvalLLMCalls = 4),
+    // reflection ceil(20*3*0.3) = 18: total 318
     expect(est.totalCalls).toBe(318);
   });
 
@@ -35,13 +29,8 @@ describe('Cost estimation', () => {
 });
 
 /**
- * The defect these pin: one static blended rate for every model at once refused
- * searches the catalog prices at nothing and waved through searches on models
- * costing an order of magnitude more than the blend.
- *
- * Rates below are the real models.dev `cost` blocks (USD per 1M tokens), read
- * from the catalog the repo already integrates: `@cf/deepseek-ai/
- * deepseek-v4-pro-0813` is the shipped Workers AI default.
+ * Per-model rates, not one blended rate. Rates are the catalog's models.dev `cost` blocks
+ * (USD per 1M tokens).
  */
 describe('Cost estimation is model-aware', () => {
   const DEFAULT_SPEC = 'workers-ai/@cf/deepseek-ai/deepseek-v4-pro-0813';
@@ -70,7 +59,7 @@ describe('Cost estimation is model-aware', () => {
 
     expect(est.estimatedUSD).toBe(0);
     expect(est.basis.source).toBe('catalog');
-    // The whole point of the gate fix: free work is not refusable at any cap.
+    // Free work is not refusable at any cap.
     expect(est.estimatedUSD > 0).toBe(false);
   });
 
@@ -82,15 +71,13 @@ describe('Cost estimation is model-aware', () => {
       model: 'ollama-cloud/deepseek-v4-pro',
       usdPer1kTokens: 0.003,
     });
-    // Distinguishable from the catalog-priced zero above by basis alone, which
-    // is the distinction a spend gate has to be able to make.
+    // Distinguishable from the catalog-priced zero by basis alone.
     const free = estimateCost(20, 3, 4, { spec: 'x/y', pricing: { input: 0, output: 0 } });
     expect(free.basis.source).not.toBe(unknown.basis.source);
   });
 
   test('an expensive model is priced from its catalog, not understated by the blend', () => {
-    // anthropic/claude-fable-5 — the failure mode that matters more than
-    // refusing free work: the blend prices this at a fraction of its cost.
+    // The blend prices this model at a fraction of its cost.
     const est = estimateCost(20, 3, 4, {
       spec: 'anthropic/claude-fable-5',
       pricing: { input: 10, output: 50 },

@@ -1,8 +1,4 @@
-/**
- * Unit tests: sibling diversity at MCTS expansion (DO-NOW #1), and the branch
- * prompt every substrate shares — a facet, a local subprocess and the inline
- * fallback are only comparable if they were asked the same question.
- */
+/** Sibling diversity at MCTS expansion, and the branch prompt every substrate shares. */
 
 import { describe, test, expect } from 'bun:test';
 import { diversityAngle, siblingAngles, diversityDirective } from '../src/mcts/diversity';
@@ -25,7 +21,6 @@ describe('diversity angles', () => {
     for (let i = 0; i < n; i++) {
       const sibs = siblingAngles(i, n);
       expect(sibs.length).toBe(n - 1);
-      // A branch never sees its own angle in its sibling list.
       expect(sibs).not.toContain(diversityAngle(i, n));
     }
   });
@@ -37,16 +32,11 @@ describe('diversity angles', () => {
   });
 
   test('a wave wider than the shape list still hands out distinct angles', () => {
-    // THE DEFECT: the angle was `SHAPES[i % 6]`, so branch 7 was handed branch 1's
-    // angle BYTE FOR BYTE — and the angle is the only thing that differs between
-    // siblings in the count-based mode, so those two were asked an identical question
-    // and then compared against each other. `branches` has no upper bound; the named
-    // presets run 3-5, which is why it stayed invisible.
+    // Angles must not repeat beyond six branches: the angle is all that differs between count-based siblings.
     for (const n of [7, 12, 30]) {
       const angles = Array.from({ length: n }, (_unused, i) => diversityAngle(i, n));
       expect(new Set(angles).size).toBe(n);
 
-      // …and no branch is ever told to differ from its own angle.
       for (let i = 0; i < n; i += 1) {
         expect(siblingAngles(i, n)).not.toContain(diversityAngle(i, n));
       }
@@ -54,9 +44,7 @@ describe('diversity angles', () => {
   });
 
   test('the first six branches read exactly as they always did', () => {
-    // The six shapes are the honest distinctions and every run this engine has done
-    // was asked in those words. The second axis is reached only by a wider wave, so a
-    // five-wide `ideate` reads byte-identically at either width.
+    // The second axis is reached only by a wider wave, so a five-wide `ideate` is unchanged.
     for (let i = 0; i < 6; i += 1) {
       expect(diversityAngle(i, 6)).not.toContain('starting from');
       expect(diversityAngle(i, 30)).toBe(diversityAngle(i, 6));
@@ -78,10 +66,7 @@ describe('explorePrompt — the one question every substrate asks', () => {
   } satisfies ExplorePromptInput;
 
   test('asks for a fence in a language the executor declared, which is what makes a branch groundable', () => {
-    // The grounded evaluator scores a branch by EXECUTING its code. It only
-    // has code to run because the prompt asked for a fence, so this is a
-    // correctness property of the prompt, not a style choice — and asking for
-    // a language nothing can run is how a whole search ends up ungrounded.
+    // The grounded evaluator executes a branch's code fence, so the prompt must ask for a runnable one.
     expect(explorePrompt(base).system).toContain('```javascript code block');
     const polyglot = explorePrompt({ ...base, languages: ['python', 'javascript'] });
     expect(polyglot.system).toContain('```python code block');
@@ -135,8 +120,7 @@ describe('reflectionPrompt', () => {
   });
 
   test('a long attempt is bounded at both ends, not truncated to its opening', () => {
-    // A reflection is about how the attempt ENDED; a head-only clamp would
-    // hide the failure it is being asked to explain.
+    // A head-only clamp would hide how the attempt ended.
     const attempt = `START${'x'.repeat(EVIDENCE_BUDGETS.reflection * 2)}FAILED HERE`;
     const prompt = reflectionPrompt('t', attempt);
     expect(prompt).toContain('START');

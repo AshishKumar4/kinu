@@ -47,8 +47,7 @@ describe('a node keeps its assigned question across re-entry', () => {
   test('the durable node list names each question instead of repeating the run task', async () => {
     const { rt, db } = createTestRuntime();
 
-    // A real actor per node: this run actually executes its nodes, and each one
-    // is its own actor of the one workspace database.
+    // A real actor per node over the one workspace database.
     const result = await runSwarm({
       rt, model: model(), mode: 'build', logger: createRecordingLogger(),
       hostNode: hostedSeatsOver({ rt, db }).hostNode,

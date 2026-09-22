@@ -1,19 +1,6 @@
-// The two merge-back guards, PROVEN by deleting them.
-//
-// Both defend a SILENT failure, and a test that would still pass with the check gone is
-// not defending anything. So each check here is removed mechanically and the suite
-// asserts that behaviour changes — the difference between a guard and a comment.
-//
-// WHY A MUTANT COPY AND NOT THE REAL FILE. Editing the strategy in place would
-// expose every concurrent reader, and a crash could leave a deleted guard.
-// Each mutation lives under owned scratch, is imported once, and is removed by
-// the test process's shared release. The real source is never touched.
-//
-// EVERY MUTATION ASSERTS IT LANDED. `mutate` requires each snippet to occur EXACTLY once
-// and throws otherwise, because a mutation test whose edit silently missed is a test
-// that proves the guard is load-bearing by never removing it. That check is the reason
-// this file can be believed.
-//
+// Red-proofs for the merge-back guards: each check is removed mechanically from an owned
+// scratch copy and the suite asserts behaviour changes. `mutate` requires each snippet to
+// occur exactly once, so a mutation that silently missed throws.
 // Specified by docs/EXPLORATION.md — "Merge-back", including *Dependency order*.
 import { describe, expect, test } from 'bun:test';
 import { symlinkSync, writeFileSync, realpathSync } from 'node:fs';
@@ -32,19 +19,13 @@ const SOURCE = new URL('../src/strategy/merge-back.ts', import.meta.url).pathnam
 
 const SOURCE_DIR = dirname(SOURCE);
 
-// Canonical, because the loader resolves a copy's relative imports from its REAL
-// path: on macOS `tmpdir()` is `/var/folders/...`, a symlink to `/private/var/...`
-// one level deeper, so a specifier counted from the symlink lands one `../` short.
+// Canonical: the loader resolves relative imports from the real path, and on macOS
+// `tmpdir()` is a symlink one level shallower than its target.
 const MUTANTS = realpathSync(scratchDir('mutation-merge-back'));
 
 symlinkSync(resolve(SOURCE_DIR, '../../../../node_modules'), join(MUTANTS, 'node_modules'), 'dir');
 
-/**
- * A copy of merge-back with `edits` applied, loaded as its own module.
- *
- * It lives in owned scratch, outside every source scanner. Relative imports
- * are re-pointed to pristine source before the module is loaded.
- */
+/** A copy of merge-back with `edits` applied, imports re-pointed to pristine source. */
 async function mutate(
   label: string, edits: readonly (readonly [find: string, replace: string])[],
 ): Promise<MergeBackModule> {
@@ -77,14 +58,10 @@ async function mutate(
   const path = join(MUTANTS, `merge-back.mutant-${label}.ts`);
   writeFileSync(path, rewritten);
 
-  // SAFETY: the mutant is `merge-back.ts`'s own text with `edits` applied, and every edit
-  // is required above to have matched exactly once — so its export shape is the pristine
-  // module's by construction. A dynamic specifier carries no static type, and a wrong
-  // rewrite of the import depths throws here rather than producing a wrong shape.
+  // SAFETY: every edit matched exactly once, so the export shape is the pristine module's;
+  // a wrong import-depth rewrite throws here.
   return await import(path);
 }
-
-/* ── Fixtures, shared with the behavioural suite's shape ──────────────────── */
 
 interface Origin {
   readonly at: Map<string, string>;
@@ -93,13 +70,8 @@ interface Origin {
 }
 
 /**
- * An origin whose write TEARS above the bound, the way the substrate does.
- *
- * `writeBatch` is one `transactionSync` and refuses to split; the hosted
- * `writeBatchStream` is *"committed-prefix"* and publishes the waves that fit before
- * failing. This models the second, because that is the failure the pre-flight exists to
- * prevent: over the bound, the files that fit LAND and the rest do not, leaving a
- * workspace that is neither the old state nor the new one.
+ * Tears above the bound like the hosted committed-prefix `writeBatchStream`: files that fit
+ * land and the rest do not.
  */
 function tearingOrigin(initial: Record<string, string> = {}): Origin & { applyMember: MemberApply } {
   const at = new Map(Object.entries(initial));
@@ -177,10 +149,7 @@ function runWith(
   });
 }
 
-/* ── Red-proof 1: the size refusal ────────────────────────────────────────── */
-
-// Two files, each comfortably inside the bound on its own and jointly over it. That is
-// the shape a committed prefix needs: the first lands, the second cannot.
+// Each file fits alone, jointly over the bound: a committed prefix lands the first only.
 function oversizedPair(): readonly MemberFileChange[] {
   const half = 'x'.repeat(Math.floor(MAX_TX_BLOB_BYTES * 0.75));
 
@@ -202,7 +171,6 @@ describe('the size refusal is load-bearing', () => {
     if (outcome?.kind !== 'refused') throw new Error('expected a refusal');
     expect(outcome.refusal.cause).toBe('oversized');
     expect(outcome.refusal.error).toContain('blobBytes');
-    // The substrate was never reached, so there was nothing to tear.
     expect(origin.transactions).toHaveLength(0);
     expect(origin.at.size).toBe(0);
   });
@@ -218,16 +186,11 @@ describe('the size refusal is load-bearing', () => {
 
     const report = await runWith(mutant, origin, 'apply-winner', [member]);
 
-    // The apply was attempted, which is the whole difference.
     expect(origin.transactions).toHaveLength(1);
-    // AND THE WORKSPACE IS TORN: a strict subset of the member's files landed. Not the
-    // old state, not the new one — the outcome "one host transaction per member" exists
-    // to make impossible.
+    // Torn: a strict subset of the member's files landed.
     expect(origin.at.has('first.bin')).toBe(true);
     expect(origin.at.has('second.bin')).toBe(false);
-    // It is reported as a substrate failure, which is a refusal AFTER the damage rather
-    // than instead of it. A caller reading only the outcome kind cannot tell the two
-    // apart, which is exactly why the pre-flight and not the error path is the guard.
+    // Reported as a substrate failure after the damage; only the pre-flight prevents it.
     expect(report.outcomes[0]?.kind).toBe('refused');
   });
 
@@ -250,13 +213,9 @@ describe('the size refusal is load-bearing', () => {
   });
 });
 
-/* ── Red-proof 2: the (memberDigest, baseDigest) comparison ───────────────── */
-
 const STALE_COMPARISON = 'if (member.verdict.baseDigest !== baseDigest) {';
 
-/** A settle where member two's base is moved by member one landing first — the rebase,
- *  and the only situation in which a verdict can go stale without anyone editing a
- *  diff. Same content on the shared path, so this is agreement and not a conflict. */
+/** Member one landing moves member two's base; same content, so agreement, not a conflict. */
 async function rebasePair(origin: Origin, module: MergeBackModule) {
   return [
     await memberOf({ origin, nodeId: 'n1', files: [{ path: 'shared.ts', base: 'V0\n', after: 'V1\n' }], module }),
@@ -278,9 +237,7 @@ describe('the stale-verdict refusal is load-bearing', () => {
     expect(outcome.refusal.cause).toBe('verdict-stale');
   });
 
-  // THE ACCEPTANCE MUTATION: delete the baseDigest comparison. The stale branch then
-  // never runs, no re-verification is demanded, and the member applies on a verdict
-  // describing a base that no longer holds.
+  // Mutation: delete the baseDigest comparison, so a stale verdict applies.
   test('RED: delete the baseDigest comparison and the stale verdict applies', async () => {
     const mutant = await mutate('no-base-digest-check', [[STALE_COMPARISON, 'if (false) {']]);
     const origin = tearingOrigin({ 'shared.ts': 'V0\n' });
@@ -288,17 +245,13 @@ describe('the stale-verdict refusal is load-bearing', () => {
 
     const report = await runWith(mutant, origin, 'sequential-rebase', members);
 
-    // Both applied, and nothing was re-verified. Under the real check this settle stops
-    // at n2; the assertion in the GREEN test above is what turns red.
+    // The green test's stop at n2 is what turns red.
     expect(report.outcomes.map((o) => o.kind)).toEqual(['applied', 'applied']);
     expect(report.stoppedAt).toBeNull();
     expect(report.outcomes.filter((o) => o.kind === 'refused')).toHaveLength(0);
   });
 
-  // The mutation the pair-binding exists to rule out, and the reason the member digest
-  // alone is not the check: a diff is immutable, so this comparison can never fire. It
-  // is a check in shape and a no-op in effect, and it is indistinguishable from the real
-  // one by any test that does not move the base.
+  // A diff is immutable, so a member-digest-only check can never fire.
   test('RED: binding the member digest ALONE is vacuous and admits the same stale verdict', async () => {
     const mutant = await mutate('member-digest-only', [[
       STALE_COMPARISON,
@@ -314,8 +267,7 @@ describe('the stale-verdict refusal is load-bearing', () => {
     expect(report.stoppedAt).toBeNull();
   });
 
-  // A re-verification bound to some OTHER base is the second half of rule 4. Without
-  // this comparison a registry could answer a different question and be believed.
+  // Rule 4's second half: a re-verification bound to another base must not be believed.
   test('RED: drop the re-verification base check and a mismatched verdict is believed', async () => {
     const mutant = await mutate('no-reverify-base-check', [[
       'if (fresh.baseDigest !== baseDigest) {',
@@ -344,14 +296,10 @@ describe('the stale-verdict refusal is load-bearing', () => {
   });
 });
 
-/* ── Red-proof 3: the derived order (*Dependency order*) ──────────────────── */
-
 const DERIVED_ORDER = 'dependencyOrder(members, settled)';
 
-// A fan-in and one of its parents, with the DEPENDENT offered first — which is the order a
-// level hands over, since a vertex is created after the parents it consumed and is
-// therefore held after them. Different paths, so nothing here is a conflict: the only
-// thing that decides whether both land is the order.
+// A fan-in with its dependent offered first, as a level hands it over. Different paths:
+// only the order decides whether both land.
 async function vertexBeforeParent(origin: Origin, module: MergeBackModule) {
   return [
     await memberOf({
@@ -373,9 +321,7 @@ describe('the derived dependency order is load-bearing', () => {
     expect(origin.at.get('c.ts')).toBe('C1\n');
   });
 
-  // THE ACCEPTANCE MUTATION: apply the members in the order they were offered. Rule 1 then
-  // refuses the dependent — and without the derived order the vertex's own work never
-  // lands, which is what makes the derivation the mechanism rather than a tidy-up.
+  // Mutation: apply in offered order, so rule 1 refuses the dependent vertex.
   test('RED: apply them as offered and the dependent refuses for want of its dependency', async () => {
     const mutant = await mutate('offered-order', [[
       DERIVED_ORDER, "({ kind: 'ordered' as const, members })",
@@ -391,16 +337,13 @@ describe('the derived dependency order is load-bearing', () => {
 
     if (outcome?.kind !== 'refused') throw new Error('expected a refusal');
     expect(outcome.refusal.cause).toBe('dependency-unsettled');
-    // The refusal is skipped rather than stopped at, so the parent still lands behind
-    // it — but the vertex's work does not, which is the RED half of this proof.
+    // The parent still lands, but the vertex's work does not.
     expect(landed?.kind).toBe('applied');
     expect(report.stoppedAt).toBeNull();
     expect(origin.at.get('c.ts')).toBe('C0\n');
     expect(origin.at.get('a.ts')).toBe('A1\n');
   });
 });
-
-/* ── The mutation harness itself ──────────────────────────────────────────── */
 
 describe('the harness cannot prove a guard it did not remove', () => {
   test('a snippet that is not present exactly once throws instead of passing', async () => {

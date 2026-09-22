@@ -1,39 +1,5 @@
-// Seven exploration policy decisions, PROVEN load-bearing by inverting them.
-//
-// Every decision here is a comparison, a precedence or a bound whose two readings are
-// both plausible: `distance < novelty` and `distance > novelty`, `candidate < incumbent`
-// and `candidate <= incumbent`, `'best' -> 'apply-winner'` and `'best' -> anything else`.
-// An inversion of one of those changes no type, throws nothing, and leaves a suite green
-// unless some test pins the direction — so a green suite is not evidence the direction is
-// right. This file is that evidence: each mutation is applied mechanically and the NAMED
-// test that defends it is executed against the mutant and required to fail.
-//
-// WHAT "TURNS A NAMED TEST RED" MEANS HERE, and it is executed rather than claimed. Each
-// mutation carries a {@link Defended} — a file and an exact `test(...)` title — and a
-// `defence` function whose body is that test's own assertions. The defence is run twice:
-// against the pristine module, where it must pass, and against the mutant, where it must
-// reject. A defence that passed both ways would prove the mutation harmless, and a
-// defence naming a test that does not exist would prove nothing at all, so
-// `every defended test exists exactly once where it is claimed` asserts the titles
-// against the files. Both halves are needed: the first says the mutation matters, the
-// second says the claim about which test catches it is true.
-//
-// WHY A MUTANT COPY AND NOT THE REAL FILE — the same reason
-// `mutation-merge-back.test.ts` gives. Editing a strategy in place would expose
-// every concurrent reader and a crash could leave the source inverted. Each
-// mutation lives under owned scratch, is imported once, and is removed by the
-// test process's shared release.
-//
-// AND THE COPY IS A CLOSURE, which is the one thing this harness adds over that file's.
-// `isBetter` and `admitsPublication` are observable only through `records.ts`, and a
-// mutant `objective.ts` beside a pristine `records.ts` would be a mutation nothing can
-// see — the suite would go green and read as proof. So a plan may copy a DEPENDENT with
-// no edits at all, and every copied file's relative imports are re-pointed at the copies
-// beside it rather than at the originals.
-//
-// EVERY MUTATION ASSERTS IT LANDED. `writeMutants` requires each snippet to occur EXACTLY
-// once and throws otherwise, because a mutation whose edit silently missed is a test that
-// proves a guard is load-bearing by never removing it.
+// Exploration policy decisions proven load-bearing: each named defending test must pass on
+// the pristine module and fail on a mutant copy.
 import { describe, expect, test } from 'bun:test';
 import { readFileSync, symlinkSync, writeFileSync, realpathSync } from 'node:fs';
 import { relative, resolve } from 'node:path';
@@ -76,36 +42,22 @@ type ObjectiveModule = typeof pristineObjective;
 
 const TEST_DIR = new URL('.', import.meta.url).pathname;
 
-// Canonical, because the loader resolves a copy's relative imports from its REAL
-// path: on macOS `tmpdir()` is `/var/folders/...`, a symlink to `/private/var/...`
-// one level deeper, so a specifier counted from the symlink lands one `../` short.
+// Canonical: the loader resolves a copy's imports from its real path, and macOS `tmpdir()`
+// is a symlink one level shallower than its target.
 const MUTANTS = realpathSync(scratchDir('mutation-exploration-policy'));
 
 const SRC = new URL('../src/', import.meta.url).pathname;
 
 symlinkSync(resolve(TEST_DIR, '../../../node_modules'), resolve(MUTANTS, 'node_modules'), 'dir');
 
-/** A file to copy, and what to change in it. */
 interface Copy {
-  /** Path under `packages/core/src/`, for example `strategy/objective.ts`. */
   readonly src: string;
-  /** Literal find/replace pairs. Absent when the file is copied only so that it imports
-   *  the mutants beside it rather than the pristine originals. */
+  /** Absent when the file is copied only so it imports the mutants beside it. */
   readonly edits?: readonly (readonly [find: string, replace: string])[];
 }
 
-
-/**
- * Write every file in `plan` under this run's owned scratch directory and
- * answer with a lookup from planned `src` to the copy's path.
- *
- * A copied file's relative imports are resolved against its source directory
- * and re-emitted relative to scratch. A specifier pointing at another copied
- * file lands on that copy; every other specifier lands on pristine source.
- */
 function writeMutants(label: string, plan: readonly Copy[]): (src: string) => string {
-  // A copy is named so the `*.test.ts` glob cannot match it and the runner never treats a
-  // mutant as a suite of its own.
+  // Named so the `*.test.ts` glob never runs a mutant as a suite.
   const target = new Map(plan.map((copy) => [
     resolve(SRC, copy.src),
     resolve(MUTANTS, `policy.mutant-${label}-${copy.src.replaceAll('/', '-')}`),
@@ -157,8 +109,6 @@ function writeMutants(label: string, plan: readonly Copy[]): (src: string) => st
   };
 }
 
-/* ── The snippets, and the readings that invert them ──────────────────────── */
-
 const NOVELTY_FLOOR = 'if (nearest !== null && nearest.distance < novelty) {';
 
 const NEAREST_SEARCH =
@@ -179,7 +129,6 @@ const BUDGET_ROOM = 'if (remainingChildren < width) {';
 
 const CLAMP_TAIL = 'const tail = text.slice(tailStart(text, room - headLen));';
 
-/** Every snippet above, against the file it must sit in exactly once. */
 const SNIPPETS: readonly (readonly [src: string, snippet: string])[] = [
   ['strategy/archive.ts', NOVELTY_FLOOR],
   ['strategy/archive.ts', NEAREST_SEARCH],
@@ -193,34 +142,14 @@ const SNIPPETS: readonly (readonly [src: string, snippet: string])[] = [
 ];
 
 /**
- * The first line of every failed `expect`, and a RED proof asserts the rejection contains
- * it.
- *
- * Without this, a mutation that made the module throw — a `ReferenceError`, a SQL error, a
- * bad import rewrite — would satisfy a bare `rejects.toThrow()` and the suite would report
- * the decision as defended when nothing had measured the decision at all. "The mutant blew
- * up" and "the defended assertion went false" are different facts, and only the second is
- * evidence.
+ * The first line of a failed `expect`: a RED proof must reject with an assertion failure,
+ * not a crash in the mutant.
  */
 const ASSERTION_FAILED = /expect\(.{0,24}?received/s;
-// Why TEXT at all: bun's assertion errors carry no structural identity — measured
-// 2026-08-19, `name: "Error"`, constructor `Error`, zero own keys, no
-// `matcherResult` — so the message is the only channel this boundary offers.
-// Why not the literal 'expect(received)': under a TTY bun colours the message and
-// the codes land BETWEEN the tokens, so the literal matched in every piped run
-// and failed in every real deploy. Both production deploys today failed on
-// exactly these nine proofs; the first was misattributed to node_modules
-// contention. The tokens themselves stay contiguous under colouring, so this
-// matches them without encoding the decoration — `no-control-regex` refused the
-// version that spelled the escape codes, correctly. The bounded gap keeps a
-// crash from matching by accident across a long message: a ReferenceError or a
-// SQL error contains no `expect(` at all, which is the distinction this constant
-// exists for — "the mutant blew up" and "the defended assertion went false" are
-// different facts, and only the second is evidence.
+// Bun assertion errors carry no structural identity, so the message is the only channel.
+// Under a TTY colour codes land between tokens, so the literal 'expect(received)' fails;
+// the bounded gap keeps a crash message from matching by accident.
 
-/* ── The tests each mutation must turn red ────────────────────────────────── */
-
-/** A test that defends a decision: the file that holds it and its exact title. */
 interface Defended {
   readonly file: string;
   readonly name: string;
@@ -292,18 +221,7 @@ const DEFENDED: readonly Defended[] = [
   HONOURS_A_CUSTOM_BUDGET, PARETO_DIRECTION,
 ];
 
-/* ── Fixtures, the shapes the defended tests use ──────────────────────────── */
-
-/**
- * The leaderboard, and the actor it belongs to, as the leading
- * `(sql, actor)` pair every records/archive call now takes.
- *
- * Returned as a spreadable tuple rather than two names: `exploration_records`
- * is keyed `(actor_id, record_key)`, so a seed and a read under different
- * handles come back EMPTY — which for `bestInCell` reads as "no incumbent" and
- * would let a mutant that never admits anything pass every defence below.
- * One pair, spread into both halves, is what keeps that impossible.
- */
+/** Seed and read must share one actor, or reads come back empty and a mutant passes. */
 function store(records: RecordsModule): [SqlExecutor, ActorHandle] {
   const db = new Database(':memory:');
   const sql = makeSql(db);
@@ -467,8 +385,6 @@ function proposal(width: number): BranchProposal {
   };
 }
 
-/* ── The defences, each the body of the named test it stands for ───────────── */
-
 /** {@link THRESHOLD_IS_A_FLOOR}. */
 async function thresholdIsAFloor(archive: ArchiveModule): Promise<void> {
   const permissive = store(pristineRecords);
@@ -629,22 +545,13 @@ async function honoursACustomBudget(clamp: ClampModule): Promise<void> {
   expect(clamped.length).toBeLessThanOrEqual(clamp.DEFAULT_TOOL_RESULT_MAX_CHARS);
 }
 
-/* ── The mutants, one loader per closure ──────────────────────────────────── */
-
-// THE SHARED GROUND FOR EVERY LOADER BELOW: a mutant is the original module's own text
-// with the edits applied, and `writeMutants` requires every edit to have matched exactly
-// once — so its export shape is the pristine module's by construction. A dynamic specifier
-// carries no static type, and a wrong rewrite of the import depths throws at import rather
-// than producing a wrong shape; each call site annotates the module it asked for.
-
 function mutantOf(src: string, label: string, edits: readonly (readonly [string, string])[]) {
   const at = writeMutants(label, [{ src, edits }]);
 
   return import(at(src));
 }
 
-/** A module observable only through a dependent: the dependent is copied unedited and
- *  re-pointed at the mutant beside it, and it is the dependent that is imported. */
+/** Imports the mutant through an unedited dependent copy. */
 function mutantThrough(
   src: string, dependent: string, label: string, edits: readonly (readonly [string, string])[],
 ) {
@@ -653,17 +560,12 @@ function mutantThrough(
   return import(at(dependent));
 }
 
-/* ── The novelty comparison ───────────────────────────────────────────────── */
-
 describe('the archive novelty comparison is load-bearing', () => {
   test('GREEN: the floor admits at the threshold and refuses below it', async () => {
     await thresholdIsAFloor(pristineArchive);
   });
 
-  // Both readings refuse SOMETHING, which is why one threshold is not enough to tell
-  // them apart: under `>` the archive refuses everything a floor should admit and admits
-  // everything it should refuse, and a suite asserting only "a near-copy was refused"
-  // stays green through the swap.
+  // Both readings refuse something, so one threshold cannot tell them apart.
   test(`RED: reading the floor as a ceiling turns "${THRESHOLD_IS_A_FLOOR.name}" red`, async () => {
     const mutant: ArchiveModule = await mutantOf('strategy/archive.ts', 'floor-as-ceiling', [
       [NOVELTY_FLOOR, 'if (nearest !== null && nearest.distance > novelty) {'],
@@ -676,10 +578,7 @@ describe('the archive novelty comparison is load-bearing', () => {
     await nearestIsNamed(pristineArchive);
   });
 
-  // A SECOND comparison on the same surface, and it inverts independently of the floor:
-  // the fold that finds the nearest occupant keeps the closest, and keeping the farthest
-  // leaves every threshold reading a distance no candidate collided with. Nothing throws
-  // and the floor test above still passes, so only this one catches it.
+  // Inverts independently of the floor: keeping the farthest occupant leaves the floor test green.
   test(`RED: searching for the farthest occupant turns "${NEAREST_IS_NAMED.name}" red`, async () => {
     const mutant: ArchiveModule = await mutantOf('strategy/archive.ts', 'farthest-occupant', [
       [NEAREST_SEARCH,
@@ -689,8 +588,6 @@ describe('the archive novelty comparison is load-bearing', () => {
     await expect(nearestIsNamed(mutant)).rejects.toThrow(ASSERTION_FAILED);
   });
 });
-
-/* ── `isBetter`, in both of the ways it can be wrong ──────────────────────── */
 
 describe('`isBetter` is load-bearing in its direction and in its strictness', () => {
   test('GREEN: the direction decides which way is better', async () => {
@@ -710,12 +607,9 @@ describe('`isBetter` is load-bearing in its direction and in its strictness', ()
     await tieDoesNotDisplace(pristineRecords);
   });
 
-  // THE MUTATION THE PROOF ASKED FOR. `RecordsStore.lean —
-  // the_tie_rule_is_not_what_makes_it_monotone` shows that admitting a tie leaves the
-  // store's monotone invariant TRUE, and `RecordsStore.lean —
-  // lenient_best_never_falls` shows it stays true over every trace. So no monotonicity
-  // property can catch this relaxation and no proof will ever be the thing that defends
-  // it — the strictness answers to the displacement count, and this is its only gate.
+  // No monotonicity property catches this relaxation (`RecordsStore.lean —
+  // the_tie_rule_is_not_what_makes_it_monotone`, `RecordsStore.lean — lenient_best_never_falls`),
+  // so this is the strictness's only gate.
   test(`RED: relaxing the comparison to accept a tie turns "${TIE_DOES_NOT_DISPLACE.name}" red`, async () => {
     const mutant: RecordsModule = await mutantThrough('strategy/objective.ts', 'strategy/records.ts', 'tie-admitted', [
       [IS_BETTER,
@@ -726,17 +620,12 @@ describe('`isBetter` is load-bearing in its direction and in its strictness', ()
   });
 });
 
-/* ── The seal ─────────────────────────────────────────────────────────────── */
-
 describe('the publication seal is load-bearing', () => {
   test('GREEN: a breached run writes nothing', async () => {
     await sealWritesNothing(pristineRecords);
   });
 
-  // The inversion is not "delete the check" — it is reading the cleared field the other
-  // way, which is the mistake a reader makes on a field whose absence means "still
-  // sealed". It publishes exactly the run §4.4 exists to withhold, and it is invisible
-  // to any test that only ever asserts a re-derivation publishes again.
+  // Reading the cleared field inverted publishes exactly the run the seal withholds.
   test(`RED: reading the cleared seal inverted turns "${SEAL_WRITES_NOTHING.name}" red`, async () => {
     const mutant: RecordsModule = await mutantThrough('strategy/objective.ts', 'strategy/records.ts', 'seal-inverted', [
       [SEAL_CLEARED, "if (state.clearedBy === null) return { kind: 'admitted' };"],
@@ -746,16 +635,12 @@ describe('the publication seal is load-bearing', () => {
   });
 });
 
-/* ── The merge policy derivation ──────────────────────────────────────────── */
-
 describe('the merge policy derivation is load-bearing', () => {
   test('GREEN: each settle shape maps to its policy', async () => {
     await policyFromSettle(pristineMergeBack);
   });
 
-  // A switch arm returning a policy that EXISTS is the dangerous shape: nothing
-  // typechecks differently, `mergeBack` runs, and a scored settle silently applies every
-  // member instead of its one winner.
+  // Returning another real policy typechecks and runs, applying every member instead of the winner.
   test(`RED: pointing 'best' at another real policy turns "${POLICY_FROM_SETTLE.name}" red`, async () => {
     const mutant: MergeBackModule = await mutantOf('strategy/merge-back.ts', 'best-rebases', [
       [POLICY_BEST, "case 'best': return 'sequential-rebase';"],
@@ -765,19 +650,12 @@ describe('the merge policy derivation is load-bearing', () => {
   });
 });
 
-/* ── The dependency order's all-or-nothing refusal ────────────────────────── */
-
 describe("the cycle scan's all-or-nothing is load-bearing", () => {
   test('GREEN: a cycle refuses the whole set, orderable prefix included', async () => {
     await cycleWhateverTheOrder(pristineMergeBack);
   });
 
-  // `mutation-merge-back.test.ts` already proves the ORDER is derived. This is the other
-  // half and it inverts separately: skip the scan that finds an unplaced member and the
-  // function returns `{ kind: 'ordered' }` carrying whatever the sweeps managed to place.
-  // The merge then applies the orderable prefix of a set whose remainder can never land,
-  // which is half a merge published — and it reports `applied`, not a refusal, so nothing
-  // downstream can tell.
+  // Skipping the scan applies the orderable prefix of an unorderable set and reports `applied`.
   test(`RED: skipping the cycle scan turns "${CYCLE_WHATEVER_THE_ORDER.name}" red`, async () => {
     const mutant: MergeBackModule = await mutantOf('strategy/merge-back.ts', 'no-cycle-scan', [
       [CYCLE_SCAN, 'if (true) continue;\n\n    const stuck = new Map('],
@@ -787,20 +665,13 @@ describe("the cycle scan's all-or-nothing is load-bearing", () => {
   });
 });
 
-/* ── Budget arbitration ───────────────────────────────────────────────────── */
-
 describe('budget arbitration is load-bearing', () => {
   test('GREEN: every refusal policy is still reachable through the budget', async () => {
     await everyPolicyReachable(pristineSwarmBudget);
   });
 
-  // Inverting the conservation comparison makes the arbiter throw nothing and no single
-  // budget go negative. What it does, measured against the reachability set: a proposal
-  // with ONE child of room and a width of two is ACCEPTED, and a proposal with ten
-  // children of room is refused `budget-exhausted` instead of reaching the context check
-  // behind it. So the arm fires on the inputs it exists to pass and passes the inputs it
-  // exists to refuse, `context-conflict` becomes unreachable, and every individual
-  // verdict still looks legal.
+  // Inverted, the arbiter accepts a width-two proposal with one child of room and makes
+  // `context-conflict` unreachable, while every verdict still looks legal.
   test(`RED: inverting the room comparison turns "${EVERY_POLICY_REACHABLE.name}" red`, async () => {
     const mutant: SwarmBudgetModule = await mutantThrough('strategy/swarm.ts', 'strategy/swarm-budget.ts', 'room-inverted', [
       [BUDGET_ROOM, 'if (remainingChildren > width) {'],
@@ -810,17 +681,12 @@ describe('budget arbitration is load-bearing', () => {
   });
 });
 
-/* ── The clamp arithmetic ─────────────────────────────────────────────────── */
-
 describe('the clamp arithmetic is load-bearing', () => {
   test('GREEN: the shared budget is honoured', async () => {
     await honoursACustomBudget(pristineClamp);
   });
 
-  // The head and the tail must SUM to what the marker leaves. Taking the whole cap for
-  // the tail is the arithmetic slip that leaves the result nearly twice its budget, and
-  // nothing throws: the marker is still honest, the spill still round-trips, and the only
-  // observable is a length nobody asserts unless a test pins it.
+  // Head and tail must sum to what the marker leaves; a whole-cap tail nearly doubles the result.
   test(`RED: giving the tail the whole cap turns "${HONOURS_A_CUSTOM_BUDGET.name}" red`, async () => {
     const mutant: ClampModule = await mutantOf('tools/clamp.ts', 'tail-takes-the-cap', [
       [CLAMP_TAIL, 'const tail = text.slice(tailStart(text, DEFAULT_TOOL_RESULT_MAX_CHARS));'],
@@ -829,8 +695,6 @@ describe('the clamp arithmetic is load-bearing', () => {
     await expect(honoursACustomBudget(mutant)).rejects.toThrow(ASSERTION_FAILED);
   });
 });
-
-/* ── Pareto direction ────────────────────────────────────────────────────── */
 
 describe('Pareto direction is load-bearing', () => {
   test('GREEN: each declared vector direction is honoured', async () => {
@@ -845,8 +709,6 @@ describe('Pareto direction is load-bearing', () => {
     await expect(paretoDirectionDecides(mutant)).rejects.toThrow(ASSERTION_FAILED);
   });
 });
-
-/* ── The harness cannot prove a guard it did not remove ───────────────────── */
 
 describe('the harness cannot prove a guard it did not remove', () => {
   test('a snippet that is not present exactly once throws instead of passing', () => {
@@ -865,10 +727,7 @@ describe('the harness cannot prove a guard it did not remove', () => {
     expect(moved).toEqual([]);
   });
 
-  // A mutation that claims to turn a named test red proves nothing if the name has
-  // rotted: the RED assertion above would still pass, because it runs THIS file's copy of
-  // the assertions rather than that file's test. So the titles are checked against the
-  // files that hold them.
+  // RED proofs run this file's copy of the assertions, so the named titles must still exist.
   test('every defended test exists exactly once where it is claimed', () => {
     const missing = DEFENDED.filter((defended) => {
       const source = readFileSync(resolve(TEST_DIR, defended.file), 'utf8');

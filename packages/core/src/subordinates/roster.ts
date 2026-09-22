@@ -1,16 +1,6 @@
 /**
- * THE SUBORDINATE ROSTER — the parent's own record of who works for it.
- *
- * ONE table, `actor_subordinates`, and one place its status policy lives, so
- * the tools, the report ingress, the per-step snapshot and the operator surfaces
- * cannot drift from each other. Split out of `support.ts` because it is the
- * STORE and that module is the POLICY over it: an actor's orchestration reads
- * this, and this reads nothing back.
- *
- * Every lifetime lives here. A durable `hire` and the temporary agent a
- * role-targeted `ask` creates are rows in the SAME roster, distinguished by the
- * one column neither can derive (`lifetime`), because "who works here" is one
- * question and two registers would have been two answers to it.
+ * The subordinate roster (`actor_subordinates`): the parent's record of who works for it.
+ * Durable and task-lifetime helpers share the table, distinguished by `lifetime`.
  */
 
 import * as v from 'valibot';
@@ -35,8 +25,7 @@ const ROSTER_PROJECTION =
   + 'created_at AS createdAt, dismissed_at AS dismissedAt, '
   + 'lifetime, task_event_id AS taskEventId, actor_reference AS actorReference, birth_request AS birth, delete_requested AS deleteRequested';
 
-/** What a compensating restore overwrites: every column the row carries apart
- *  from the key it conflicts on. */
+/** Every column a compensating restore overwrites, except the conflict key. */
 const ROSTER_RESTORE_CONFLICT = `
        ON CONFLICT(actor_id, name) DO UPDATE SET
          created_by = excluded.created_by,
@@ -48,21 +37,10 @@ const ROSTER_RESTORE_CONFLICT = `
          task_event_id = excluded.task_event_id,
          actor_reference = excluded.actor_reference, birth_request = excluded.birth_request, delete_requested = excluded.delete_requested`;
 
-/** The two roster columns nothing else can derive.
- *
- *  `lifetime` is a DECISION the creating call made and no later state recovers:
- *  a task-lifetime row and a durable row with an open assignment are the same
- *  shape, and only one of them is released when it answers.
- *
- *  `task_event_id` is the EventLog's own id for the assignment this row is
- *  working on. Admission supplies this identity.
- *  what correlates the eventual report with the thing that was asked. It is the
- *  same id the sender is handed as `SubordinateHandoff.eventId`, which is what
- *  makes the correlation the one already documented on this surface rather than
- *  a second scheme beside it. */
+/** Roster columns nothing else can derive: `lifetime` (whether an answer releases the row)
+ *  and `task_event_id` (the EventLog id the report cites, as in `SubordinateHandoff.eventId`). */
 
-/** Lifecycle and task facts only — the title and role a subordinate presents
- *  live in ITS actor_config ({@link SubordinateDescriptorSource}), never here. */
+/** Lifecycle and task facts only; title and role live in the child's actor_config. */
 export const SubordinateRosterEntrySchema = v.object({
   name: v.string(),
   actorReference: v.nullable(ActorReferenceSchema),
@@ -105,15 +83,11 @@ function reportedRosterStatus(status: SubordinateReportStatus, currentTask: stri
   return currentTask === null || currentTask === '' ? 'idle' : 'working';
 }
 
-/** Parent-DO product roster. All status policy lives here so tools, report
- * ingress, snapshots, and the future UI cannot drift. */
+/** Parent-actor roster; owns all subordinate status policy. */
 export class SubordinateRosterStore {
   private readonly actorId: string;
 
-  /** Bind the roster to ONE PARENT actor. A subordinate name is chosen by the
-   *  parent that hired it ('reviewer', 'scout'), so two actors of one workspace
-   *  really do hire the same name — and a shared table would let one parent
-   *  dismiss, re-point or delete another's child by name alone. */
+  /** Scoped to one parent actor: subordinate names are unique only per parent. */
   constructor(private readonly sql: SqlExec, private readonly actor: ActorHandle) {
     this.actorId = actor.actorId;
   }
@@ -138,8 +112,7 @@ export class SubordinateRosterStore {
       ON actor_subordinates(actor_id, created_at, name)`);
   }
 
-  /** The one write of a roster row. `onConflict` is empty for a first
-   *  insert and the exact-upsert clause for a compensating restore. */
+  /** `onConflict` is empty for a first insert and the upsert clause for a compensating restore. */
   private writeRow(entry: SubordinateRosterEntry, onConflict: string): void {
     this.actor.assertCurrent();
     this.sql.exec(
@@ -186,8 +159,7 @@ export class SubordinateRosterStore {
       this.actorId, name);
   }
 
-  /** Every row of this parent in roster order, narrowed by one extra
-   *  condition on top of the actor scope (empty for all of them). */
+  /** This parent's rows in roster order, narrowed by `condition` (empty for all). */
   private orderedRows(condition: string): SubordinateRosterEntry[] {
     this.actor.assertCurrent();
 
@@ -198,8 +170,6 @@ export class SubordinateRosterStore {
     ).toArray().map(parseStoredRosterRow);
   }
 
-  /** Whether any row of this parent meets `condition` — one name, not a page:
-   *  the callers only branch on presence. */
   private anyRow(condition: string): boolean {
     this.actor.assertCurrent();
 
@@ -307,9 +277,8 @@ export class SubordinateRosterStore {
     return seekPage(rows.toArray().map(parseStoredRosterRow), limit, (row) => row.name);
   }
 
-  /** Open an assignment on this row. `eventId` is the EventLog id the eventual
-   *  report cites; it lands here in a SECOND write because admission issues it
-   *  and admission happens after the roster transition it compensates. */
+  /** Open an assignment on this row. `eventId` is a separate write because admission
+   *  issues it after the roster transition. */
   assign(name: string, task: string): void {
     this.requireActive(name);
     this.sql.exec(
@@ -322,7 +291,6 @@ export class SubordinateRosterStore {
     );
   }
 
-  /** Record which admitted event this row's open assignment IS. */
   recordAssignmentEvent(name: string, eventId: string): void {
     this.actor.assertCurrent();
     this.sql.exec(
@@ -345,18 +313,8 @@ export class SubordinateRosterStore {
   }
 
   /**
-   * Move a row on its child's own word.
-   *
-   * `origin` and `now` are what a TASK-lifetime row needs and a durable one
-   * ignores. A temporary agent exists for one answer, so the report that IS its
-   * answer ends it — and when that report arrives with nobody waiting on it (the
-   * asking activation was evicted, so the answer became an ordinary event rather
-   * than a return value) this is the ONLY thing that still runs. Without the
-   * release here that row stayed listed as a live helper forever: addressable by
-   * name, never retired, and contradicting the lifetime that created it.
-   *
-   * A durable subordinate is untouched by this: `completed` still takes it to
-   * idle and `blocked` to awaiting_input, because it is meant to stay.
+   * Move a row on its child's report. A task-lifetime row is released by its answer here,
+   * since no waiter may remain to do it; durable rows go to idle or awaiting_input.
    */
   applyReport(
     name: string,
@@ -366,8 +324,7 @@ export class SubordinateRosterStore {
   ): void {
     const entry = this.requireActive(name);
 
-    // The SAME predicate the port settles on, so the two paths cannot disagree
-    // about which report was the answer.
+    // Same predicate as the port's settle, so both paths agree on which report is the answer.
     if (entry.lifetime === TEMPORARY_LIFETIME && temporaryRunSettles({ status, origin })) {
       this.dismiss(name, now);
 

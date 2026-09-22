@@ -1,37 +1,7 @@
 /**
- * THE SECOND-SEARCH DEFECT, AS A TEST: a swarm killed mid-flight is RE-ENTERED by the
- * real job-resume path, not started again.
- *
- * WHAT WAS MEASURED IN PRODUCTION. A `preset:'ideate'` swarm spawned five heads, the
- * Durable Object idled after the turn and was evicted inside five minutes, and on the
- * next wake `BackgroundJobRunner.recoverJob` reclaimed the job and `resumeBackgroundJob`
- * re-ran the stored input FROM SCRATCH — a second search under a second root, while the
- * first tree sat abandoned. The second died the same way. The job settled
- * `completed — took 18m` carrying an aborted result, and two ledger rows still read
- * `running iter=0/5` eleven hours later.
- *
- * WHAT "KILLED MID-FLIGHT" MEANS HERE, precisely, because a simulation that cheats
- * proves nothing. An eviction destroys the ISOLATE and keeps the STORAGE, so:
- *
- *   - the first attempt's model FREEZES on the first call of its level-2 wave — a
- *     promise that never settles, which is what an `await` inside a destroyed isolate
- *     looks like from the outside. Nothing settles the run, nothing settles the ledger
- *     row, and nothing settles the journal rows of the nodes that were starting. That is
- *     the exact on-disk state the incident left behind;
- *   - the second attempt keeps the DATABASE and the WORKSPACE — the durable half — and
- *     shares no in-memory state with the first, because every accumulator a swarm run
- *     owns is local to the `runSwarm` call. A fresh call therefore starts from nothing
- *     but the rows, which is what the resume has to work from;
- *   - and it is driven through the REAL path: a `running` row in `background_jobs`, a
- *     `BackgroundJobRunner` with `resume: resumeBackgroundJob` wired over the real
- *     `agents` tool, and `recoverOrphans()`. Nothing here calls `reenterSwarm`.
- *
- * The instrument is real (the registered `exec-ratio` verifier, in the workspace shell)
- * and the model is scripted, for the reason the agent-node suite records: the
- * measurement is the part that must not be faked and the model is the part that must be
- * controlled.
- * Specified by docs/EXPLORATION.md — "A node is an agent", "Inherited context" and
- * "Budget conservation"; docs/MCTS.md for the shared search ledger.
+ * A swarm killed mid-flight is re-entered by the real job-resume path, not started again.
+ * An eviction keeps storage and loses the isolate: attempt one freezes on a never-settling call;
+ * attempt two shares only the database and workspace. Spec: docs/EXPLORATION.md, docs/MCTS.md.
  */
 import { describe, expect, test } from 'bun:test';
 import { Database } from 'bun:sqlite';
@@ -69,8 +39,6 @@ import type { Schedule, SqlExecutor } from '../src/types/primitives';
 import type { SearchNode } from '../src/types/mcts';
 import type { ActorHandle } from '../src/identity/actor-handle';
 
-/* ── the ledger's own collision rule, over the store ──────────────────────── */
-
 const TASK = 'find the largest of 12 opaque tokens in the fewest oracle calls';
 
 function ledgerOnly() {
@@ -94,15 +62,11 @@ describe('the swarm-scoped resume lookup, and what it does about a collision', (
     const store = ledgerOnly();
     beganSwarm(store, 'older', 1_000);
     beganSwarm(store, 'newer', 2_000);
-    // The MCTS row is every condition the query matches on EXCEPT the engine, which is
-    // the denominator: without the discriminator this list would hand a judged search's
-    // checkpoint to the swarm runner.
+    // Differs only in engine: without the discriminator a judged search's checkpoint reaches the swarm runner.
     store.begin({
       rootId: 'mcts-row', task: TASK, engine: 'mcts', rootMsgId: 'm1',
       config: { budget: 4, branches: 2, mode: 'build' }, budget: 4, now: 3_000,
     });
-    // …and it still resumes on its own loop, so the filter is a filter and not a resume
-    // that quietly stopped working.
     expect(store.findResumable(TASK, 'build')?.rootId).toBe('mcts-row');
 
     expect(store.findRunningSwarms(TASK).map((row) => row.rootId)).toEqual(['newer', 'older']);
@@ -113,17 +77,13 @@ describe('the swarm-scoped resume lookup, and what it does about a collision', (
     beganSwarm(store, 'converged', 1_000);
     beganSwarm(store, 'failed', 2_000);
     beganSwarm(store, 'superseded', 3_000);
-    // Each settled at its OWN instant: `list` orders on `updated_at`, so settling all
-    // three at one timestamp would make the order below a fact about SQLite's tie-break
-    // rather than about the query.
+    // Distinct instants: `list` orders on `updated_at`, so a shared timestamp would test the tie-break.
     store.converge('converged', 0, 4_000);
     store.fail('failed', 0, 5_000);
     store.supersede('superseded', 6_000);
 
     expect(store.findRunningSwarms(TASK)).toEqual([]);
-    // And each row says which of the three it was. `superseded` is not `failed`: the run
-    // did not break, a newer attempt of the same task took it over, and a reader who
-    // cannot tell those apart goes looking for a fault that never happened.
+    // `superseded` is not `failed`: a newer attempt took the run over.
     expect(store.get('converged')?.status).toBe('converged');
     expect(store.get('failed')?.status).toBe('failed');
     expect(store.get('superseded')?.status).toBe('superseded');
@@ -164,12 +124,8 @@ describe('the swarm-scoped resume lookup, and what it does about a collision', (
 });
 
 /**
- * S12: A SWARM'S PROGRESS LIVES IN THE TREE, NOT THE ROW. The ledger row's
- * integer columns are the MCTS loop's checkpoint, and a swarm writes no level
- * barriers into them — a run cut inside a level would read the level before it.
- * Every swarm progress reader derives iteration (children the tree records) and
- * remaining budget (the persisted initial budget minus those children) at read
- * time, and the row's own writes are an epoch-fenced liveness touch.
+ * S12: a swarm's progress lives in the tree, not the ledger row's integer columns;
+ * readers derive iteration and remaining budget from tree children.
  */
 describe('swarm progress reads the durable tree, not the row', () => {
   function treeAndLedger() {
@@ -190,9 +146,7 @@ describe('swarm progress reads the durable tree, not the row', () => {
     return { sql, ledger, actor };
   }
 
-  /** Grow the tree the way the engine grows it — one row per child, under the
-   *  RUN's own actor, because `search_nodes` is keyed `(actor_id, id)` and a
-   *  child written under any other owner is a node the run cannot select. */
+  /** One row per child under the run's own actor: `search_nodes` is keyed `(actor_id, id)`. */
   function expand(
     sql: SqlExecutor, actor: ActorHandle,
     ids: readonly (readonly [string, string | null])[], depth: number,
@@ -207,8 +161,7 @@ describe('swarm progress reads the durable tree, not the row', () => {
     const { sql, ledger, actor } = treeAndLedger();
     expand(sql, actor, [['c1', 'mid-level'], ['c2', 'mid-level'], ['c3', 'mid-level']], 1);
 
-    // Every reader agrees, and none of them read the row's integer columns:
-    // those still hold what `begin` wrote, because nothing has written since.
+    // No reader uses the row's integer columns; they still hold what `begin` wrote.
     expect(ledger.findRunningSwarms(TASK)).toEqual([
       { rootId: 'mid-level', iteration: 3, budget: 3, epoch: 0 },
     ]);
@@ -248,13 +201,11 @@ describe('swarm progress reads the durable tree, not the row', () => {
     expect(row?.updated_at).toBe(5_000);
     expect(row).toMatchObject({ status: 'running', iteration: 0, budget: 6, epoch: 0 });
 
-    // A zombie holding a stale lease cannot even move the heartbeat.
     ledger.touch('mid-level', 7, 6_000);
     expect(sql<{ updated_at: number }>`
       SELECT updated_at FROM mcts_search_runs
       WHERE actor_id = ${actor.actorId} AND root_id = 'mid-level'`[0]?.updated_at).toBe(5_000);
 
-    // And once the run settled, nothing re-livens it.
     ledger.converge('mid-level', 0, 7_000);
     ledger.touch('mid-level', 0, 8_000);
     expect(ledger.get('mid-level')).toMatchObject({ status: 'converged' });
@@ -265,14 +216,7 @@ describe('swarm progress reads the durable tree, not the row', () => {
 });
 
 describe('harvesting a capped swarm', () => {
-  /**
-   * The harvested search, and the actor that OPENED it.
-   *
-   * One handle for the ledger, the tree and the node records: `search_nodes` and
-   * `swarm_node_records` are both keyed `(actor_id, …)` now, so a seed written
-   * under one actor and harvested under another comes back as "no candidate to
-   * report" — the harvest's own null answer — rather than as a scoping mistake.
-   */
+  /** The harvested search and the actor that opened it; reads are keyed `(actor_id, …)`. */
   function setupHarvest() {
     const db = new Database(':memory:');
     const sql = makeSql(db);
@@ -402,12 +346,7 @@ describe('harvesting a capped swarm', () => {
   });
 
   test('a harvest under another actor of the same workspace reports NOTHING', () => {
-    // The refusal that distinguishes "wrong actor" from "no rows". Every read
-    // above is scoped `(actor_id, …)`, so a sibling handle threaded into the
-    // harvest by mistake would answer `null` — the same answer a settled search
-    // gives — and every assertion above would still pass. This pins the
-    // difference: the SAME rows, harvested under a sibling of the run's actor,
-    // are not visible at all.
+    // A sibling actor harvesting the same rows sees nothing; otherwise wrong-actor and settled-search both read `null`.
     const { sql, ledger, actor, sibling: issue } = setupHarvest();
     void sql`INSERT INTO search_nodes (actor_id, id, parent_id, root_id, task, observation, depth)
       VALUES (${actor.actorId}, 'good', 'harvest-root', 'harvest-root', ${TASK},
@@ -418,13 +357,9 @@ describe('harvesting a capped swarm', () => {
       record: { outcome: null, conclusion: null, aggregated: [], tokens: null },
       now: 2_000,
     });
-    // The run's own actor sees its candidate — the positive read that makes the
-    // negative one below mean something.
     expect(harvestSwarm({ sql, ledger, actor }, TASK)?.candidates.map((c) => c.nodeId))
       .toEqual(['good']);
 
-    // A sibling's ledger holds no running row for this task at all, which is the
-    // first thing a harvest asks — so the tree it would have read is unreachable.
     const sibling = issue('other');
     const siblingLedger = new MctsSearchStore(sql, sibling);
     expect(siblingLedger.findRunningSwarms(TASK)).toEqual([]);
@@ -432,11 +367,8 @@ describe('harvesting a capped swarm', () => {
   });
 });
 
-/* ── the record envelope: stamped, refused, or corrupt ───────────────────── */
-
 describe('the durable record envelope is versioned', () => {
-  /** The record FIELDS. A stored row is these plus the `v` stamp `recordSwarmNode`
-   *  writes; nothing else is a readable envelope. */
+  /** The record fields; a stored row is these plus the `v` stamp. */
   const A_RECORD: SwarmNodeRecord = {
     outcome: {
       kind: 'scored',
@@ -449,8 +381,7 @@ describe('the durable record envelope is versioned', () => {
   };
 
   function resumeFixture() {
-    // The production workspace schema, so head_journal exists for the re-entry's
-    // start-of-life sweep; the search tables are re-initialised idempotently.
+    // Production schema, so head_journal exists for the re-entry's start-of-life sweep.
     const { rt } = createTestRuntime();
     const sql = rt.storage.sql;
     initSearchTables(rt.storage.execRaw);
@@ -493,8 +424,6 @@ describe('the durable record envelope is versioned', () => {
   });
 
   test('an unstamped row is corruption, not an older shape', () => {
-    // Field-perfect but stampless: there is one schema and the stamp is in it, so
-    // this fails by name rather than falling through to a second read path.
     const fixture = resumeFixture();
     void fixture.sql`INSERT INTO swarm_node_records
         (actor_id, node_id, root_id, record_json, created_at)
@@ -512,7 +441,6 @@ describe('the durable record envelope is versioned', () => {
   });
 
   test('a stamped row this build cannot parse refuses, naming itself as the writer', () => {
-    // An outcome arm no version of this engine ever wrote.
     const badArm = resumeFixture();
     void badArm.sql`INSERT INTO swarm_node_records
         (actor_id, node_id, root_id, record_json, created_at)
@@ -523,7 +451,6 @@ describe('the durable record envelope is versioned', () => {
       })}, 2_000)`;
     expect(() => reenter(badArm)).toThrow('corruption rather than an old shape');
 
-    // A field this build's own schema requires, missing.
     const missingField = resumeFixture();
     void missingField.sql`INSERT INTO swarm_node_records
         (actor_id, node_id, root_id, record_json, created_at)
@@ -534,9 +461,7 @@ describe('the durable record envelope is versioned', () => {
   });
 });
 
-/* ── the task, measured for real ──────────────────────────────────────────── */
-
-/** Small because every measurement spawns a real process in the workspace shell. */
+/** Small: every measurement spawns a real process in the workspace shell. */
 const N = 12;
 
 const REFERENCE = `export function solve(input, oracle) {
@@ -561,7 +486,6 @@ const decode = (out) => (out === undefined || out === null ? null : valueOf(out)
 emitTrials([trial({ tokens }, oracle, decode, P.n)]);
 `;
 
-/** One linear scan: n-1 comparisons, the optimum, and what every node reports. */
 const OPTIMAL = `export function solve(input, oracle) {
   const t = input.tokens;
   let best = t[0];
@@ -595,8 +519,7 @@ function objective(): Objective {
   };
 }
 
-/** `context:'inherit'` so a level-2 node of a RE-ENTERED parent has to inherit that
- *  parent's conversation — which on a resume can only come out of the journal. */
+/** `context:'inherit'`: a level-2 node of a re-entered parent can only inherit from the journal. */
 function config(): SwarmConfig {
   return {
     unit: { kind: 'answer' },
@@ -608,9 +531,7 @@ function config(): SwarmConfig {
   };
 }
 
-/** The CAPS both halves of a suite must agree on: the TOOL input and the resolved
- *  call have to name the same two, or the re-drive replays a different search from
- *  the one the first attempt ran. */
+/** The tool input and the resolved call must name the same caps, or the re-drive replays a different search. */
 interface SearchCaps {
   readonly depth: number;
   readonly branches: number;
@@ -618,7 +539,6 @@ interface SearchCaps {
 
 const DEEP_SEARCH: SearchCaps = { depth: 2, branches: 2 };
 
-/** The call as the TOOL takes it: the surface is snake_case where the type is not. */
 function swarmCall(caps: SearchCaps = DEEP_SEARCH): AgentsToolInput {
   return {
     action: 'swarm',
@@ -647,52 +567,31 @@ function resolved(caps: SearchCaps = DEEP_SEARCH): ResolvedSwarm {
   return call;
 }
 
-/* ── the model: a node that works, and (optionally) one that freezes ───────── */
-
 const CALL_INPUT_TOKENS = 100;
 
 const CALL_OUTPUT_TOKENS = 40;
 
-/** `usageTotal` is input + output. */
 const CALL_TOKENS = CALL_INPUT_TOKENS + CALL_OUTPUT_TOKENS;
 
 interface Script {
-  /** `doGenerate` calls served — the provider's own call count. */
   calls: () => number;
-  /** How many nodes STARTED, i.e. calls whose prompt held no turn of the node's own. */
+  /** Calls whose prompt holds no turn of the node's own. */
   starts: () => number;
-  /** Inherited assistant turns in front of each node on its first step, in start order.
-   *  Zero means "started from the seed"; non-zero means "inherited a conversation". */
+  /** Inherited assistant turns per node on its first step; zero means it started from the seed. */
   readonly inherited: number[];
-  /**
-   * Resolves once {@link FROZEN_NODES} node-starts have frozen — the run's OWN signal
-   * that it is stuck where an evicted isolate would be, awaited instead of a guessed
-   * sleep. Never resolves for a model that freezes nothing, which is why only the killed
-   * attempt awaits it.
-   */
+  /** Resolves once {@link FROZEN_NODES} node-starts have frozen. */
   readonly frozen: Promise<void>;
 }
 
 /**
- * A node that reads the workspace and reports.
- *
- * Scripted off ITS OWN TURNS rather than a shared counter, because several nodes are
- * mid-loop at once under one barrier and a counter would interleave their scripts. A
- * node's own turns are the assistant messages after the last user message, because
- * inheritance is append-only and the task block is last.
- *
- * `freezeFromStart` is the eviction: from that node-start onward the call returns a
- * promise that never settles, so the run stops exactly where a destroyed isolate would
- * have stopped it — after everything before it was made durable.
+ * Scripted off the node's own turns (assistant messages after the last user message),
+ * since concurrent nodes would interleave a shared counter. `freezeFromStart` is the eviction.
  */
 function nodeModel(opts: {
   readonly freezeFromStart?: number;
-  /** How many frozen starts settle {@link Script.frozen}. The default is the deep
-   *  shape's level-2 wave; a wider run has to wait for all of its own. */
   readonly frozenNodes?: number;
 } = {}) {
-  // Inferred rather than annotated: an anonymous object type here would discard the
-  // mock's own type, and `Script` is proven at the return with `satisfies` instead.
+  // Inferred, not annotated: an annotation would discard the mock's type; `satisfies` proves it.
   let generations = 0;
   let starts = 0;
   let frozenStarts = 0;
@@ -720,10 +619,7 @@ function nodeModel(opts: {
 
           if (frozenStarts >= (opts.frozenNodes ?? FROZEN_NODES)) gate.resolve();
 
-          // THE EVICTION. Never settled and never rejected — the resolvers are simply
-          // dropped — so the run stops exactly where a destroyed isolate would stop it,
-          // it holds no timer for the event loop to wait on, and its durable rows stay
-          // as they were the instant it stopped.
+          // The eviction: never settled nor rejected, and no timer holds the event loop.
           return Promise.withResolvers<never>().promise;
         }
       }
@@ -771,27 +667,10 @@ function nodeModel(opts: {
   return { model, script };
 }
 
-/* ── the workspace, and the durable half that survives the kill ───────────── */
-
 /**
- * The workspace both attempts share, and the node-hosting seam a search of
- * `unit:{kind:'answer'}` needs.
- *
- * REAL seats, not a stub: every node here runs a tool-using loop, and a node's
- * turn is admitted on its OWN actor now. `hostedSeatsOver` issues those actors
- * as children of this workspace's main actor through the production directory,
- * so a re-entry re-seats the SAME node ids it froze — the directory keys a
- * creation by `(parent, creationId)`, which is durable.
- *
- * `activation()` IS THE EVICTION BOUNDARY, and it has to be called once per
- * attempt. An `ActorHost` holds one live session per hosted actor, and an
- * admitted turn lives on that session — in memory, for the life of the isolate.
- * A single host shared across both attempts would therefore refuse the re-entry
- * with "this actor already has an admitted turn", because the frozen turns of
- * attempt one would still be admitted; a real eviction destroys those sessions
- * and keeps only the rows. Each call here is one activation: fresh sessions
- * over the same durable directory, which is precisely the state the incident
- * left behind.
+ * Workspace both attempts share, with real hosted seats keyed `(parent, creationId)`.
+ * Call `activation()` once per attempt: a shared host would refuse the re-entry because
+ * attempt one's frozen turns stay admitted on its in-memory sessions.
  */
 async function workspace(): Promise<{
   rt: AgentRuntime;
@@ -805,8 +684,6 @@ async function workspace(): Promise<{
   return { rt, db, activation: () => hostedSeatsOver({ rt, db }).hostNode };
 }
 
-/** A fiber that runs its body inline and keeps the promise, so a test can await the
- *  re-drive the runner started. */
 function inlineFiber() {
   const runs: Promise<unknown>[] = [];
 
@@ -820,8 +697,7 @@ function inlineFiber() {
   return { fiber, settled: () => Promise.all(runs) };
 }
 
-/** An idle agent, so a settle wake routes through `enqueueTurn` — which is what "the
- *  agent learns at its next step" means when no turn is running. */
+/** Idle, so a settle wake routes through `enqueueTurn`. */
 function idleAgent() {
   const enqueued: ProgrammaticTurn[] = [];
 
@@ -841,7 +717,6 @@ function idleAgent() {
 
 const MISSION_LABEL = 'nightly';
 
-/** Both children in the frozen level must start before the test reads its journal. */
 const FROZEN_NODES = 2;
 
 
@@ -858,15 +733,13 @@ describe('a swarm killed mid-flight is re-entered by the real resume path', () =
 
     const governor = new MissionGovernor({
       storage: { sql: makeSql(db), execRaw: makeExecRaw(db) },
-      // The MISSION's own actor: a mission ledger is per actor, and the run
-      // whose spend this governs is the caller's, not any node's.
+      // A mission ledger is per actor; the caller's actor pays.
       actor: rt.actor,
     });
 
     governor.declare(MISSION_LABEL, {});
     governor.activate([MISSION_LABEL]);
 
-    // ── ATTEMPT ONE, killed inside its level-2 wave ────────────────────────
     const log = createRecordingLogger();
     const first = nodeModel({ freezeFromStart: 3 });
 
@@ -875,29 +748,19 @@ describe('a swarm killed mid-flight is re-entered by the real resume path', () =
       resolved(),
     );
 
-    // It is never awaited: `await` never returns when its activation is evicted. Held so
-    // the reference is deliberate rather than a dropped promise.
+    // Never awaited: an evicted activation never returns.
     expect(frozen).toBeInstanceOf(Promise);
-    // Awaited on the RUN'S OWN signal: both level-2 nodes are journalled and stuck, so
-    // everything before them is on disk and nothing more will ever be written.
     await first.script.frozen;
 
     const rootId = firstRoot(sql)?.root_id ?? '';
     expect(rootId).not.toBe('');
-    // The level-1 barrier landed and SAID SO. A ledger row written at `begin` and at
-    // the settle barrier only leaves an evicted run with `iter=0` on disk and a
-    // re-entry with no progress to read.
     expect(log.emitted.map((line) => line.event)).toContain('swarm.checkpoint_reached');
     expect(ledger.get(rootId)).toMatchObject({ status: 'running', iteration: 2, epoch: 0 });
     expect(treeOf(sql).filter((node) => node.depth === 1)).toHaveLength(2);
     expect(treeOf(sql).filter((node) => node.depth === 2)).toHaveLength(0);
-    // …and the run holds the two level-2 nodes it was starting, journalled `running`
-    // with nothing left that could report them. Exactly the incident's shape.
     expect(journal.listLive().items.find((run) => run.rootId === rootId)?.running).toBe(FROZEN_NODES);
 
-    // The ids of those two, held so the re-entry can be checked against them by
-    // IDENTITY and not merely by count. A run that retires these and mints two more
-    // passes every count assertion below and is exactly the reported defect.
+    // Checked by identity below: retiring these and minting two more would pass a count check.
     const frozenNodeIds = sql<{ id: string }>`
       SELECT id FROM head_journal
       WHERE actor_id = ${rt.actor.actorId} AND root_id = ${rootId} AND depth = 2
@@ -905,14 +768,10 @@ describe('a swarm killed mid-flight is re-entered by the real resume path', () =
       .map((row) => row.id);
 
     expect(frozenNodeIds).toHaveLength(FROZEN_NODES);
-    // Nothing charged: this attempt was handed no mission scope, so every token below is
-    // the SECOND attempt's and a re-charge of settled nodes cannot hide in the total.
+    // No mission scope here, so every charged token belongs to attempt two.
     expect(governor.snapshot(MISSION_LABEL)[0]?.spent.tokens ?? 0).toBe(0);
     expect(first.script.calls()).toBeGreaterThan(0);
 
-    // ── ATTEMPT TWO, through the REAL runner path ──────────────────────────
-    // The durable half survives (`db`, the workspace); nothing of the first run's memory
-    // does, because every accumulator `runSwarm` owns is local to the call.
     const second = nodeModel();
     initBackgroundJobsTable(makeExecRaw(db));
     const jobs = new BackgroundJobStore(makeSql(db), rt.actor);
@@ -922,7 +781,6 @@ describe('a swarm killed mid-flight is re-entered by the real resume path', () =
 
     const deps: AgentsToolDeps = {
       mode: 'build',
-      // A SECOND activation's host — see `workspace`.
       swarm: { rt, hostNode: activation(), model: second.model },
       budget: governor,
     };
@@ -938,8 +796,6 @@ describe('a swarm killed mid-flight is re-entered by the real resume path', () =
       onSettled: (job) => notified.push(job.status),
     });
 
-    // The row the detach left behind: `running`, carrying the stored tool input, with no
-    // executor in this isolate. `recoverOrphans` is what a cold activation runs.
     const jobId = 'bgjob-swarm';
     jobs.create({
       id: jobId, kind: 'agents', workMode: 'build', now: Date.now(),
@@ -948,38 +804,26 @@ describe('a swarm killed mid-flight is re-entered by the real resume path', () =
     await runner.recoverOrphans();
     await settled();
 
-    // ── WHAT THE RE-ENTRY DID ──────────────────────────────────────────────
-    // ONE root, and it is the FIRST attempt's. This is the whole defect: the incident
-    // produced a second root here.
+    // One root, and it is the first attempt's.
     const tree = treeOf(sql);
     expect(new Set(tree.map((node) => node.root_id))).toEqual(new Set([rootId]));
-    // The tree grew rather than restarted: one root, the two level-1 nodes the first
-    // attempt settled, and two the second added at depth 2.
     expect(tree.filter((node) => node.parent_id === null)).toHaveLength(1);
     expect(tree.filter((node) => node.depth === 1)).toHaveLength(2);
     expect(tree.filter((node) => node.depth === 2)).toHaveLength(2);
 
-    // EXACTLY AS MANY LOGICAL NODES AS THE SEARCH ASKED FOR, and this is the
-    // reported defect's own assertion. `depth * branches` is four, so four nodes and
-    // one root — across the eviction, not per attempt. The incident produced
-    // `branches` extra journal rows on every re-drive until thirty rows described
-    // five nodes.
+    // `depth * branches` logical nodes across the eviction, not per attempt.
     const journalled = sql<{ id: string; status: string; error_message: string | null; depth: number }>`
       SELECT id, status, error_message, depth FROM head_journal
       WHERE actor_id = ${rt.actor.actorId} AND root_id = ${rootId}
       ORDER BY depth ASC, rowid ASC`;
 
     expect(journalled).toHaveLength(4);
-    // …and the two the first attempt spawned are the same two the second one ran.
     expect(journalled.filter((row) => row.depth === 2).map((row) => row.id))
       .toEqual(frozenNodeIds);
     expect(tree.filter((node) => node.depth === 2).map((node) => node.id).sort())
       .toEqual([...frozenNodeIds].sort());
 
-    // NO FAKE TERMINAL ROW ANYWHERE. Every row reached a real outcome, and none
-    // carries takeover prose on a node that is about to be re-run: "Interrupted
-    // before it reported. This search was re-entered from its durable rows, and the
-    // nodes after it are the continuation."
+    // No row carries the takeover prose of a retirement.
     expect(journalled.map((row) => row.status)).toEqual(['completed', 'completed', 'completed', 'completed']);
 
     for (const row of journalled) expect(row.error_message).toBeNull();
@@ -988,8 +832,7 @@ describe('a swarm killed mid-flight is re-entered by the real resume path', () =
       WHERE actor_id = ${rt.actor.actorId}
         AND error_message LIKE '%re-entered from its durable rows%'`[0]?.n)
       .toBe(0);
-    // The re-run cleared the dead attempt's partial transcript rather than
-    // interleaving it: every step under a node belongs to the attempt that answered.
+    // Every step under a node belongs to the attempt that answered.
     expect(sql<{ n: number }>`
       SELECT COUNT(*) AS n FROM head_steps
       WHERE actor_id = ${rt.actor.actorId}
@@ -998,79 +841,49 @@ describe('a swarm killed mid-flight is re-entered by the real resume path', () =
         )`[0]?.n)
       .toBe(0);
 
-    // ONE ledger row for the task, converged under the RECLAIMED lease.
     const rows = ledger.list(10).filter((row) => row.engine === 'swarm');
     expect(rows.map((row) => row.rootId)).toEqual([rootId]);
     expect(rows[0]).toMatchObject({ status: 'converged', epoch: 1, iteration: 4 });
 
-    // THE JOB SETTLED ONCE, with a report rather than an aborted result, and the agent
-    // was woken once.
     expect(jobs.get(jobId)?.status).toBe('completed');
     expect(notified).toEqual(['completed']);
     expect(agent.enqueued).toHaveLength(1);
 
-    // THE REPORT DISCLOSES THE RESUME. A resumed run that reads like a fresh one hides
-    // the eviction from the operator, which is how an 18-minute wall clock over four
-    // expansions went unquestioned.
+    // The report discloses the resume.
     const report = jobResultReport(jobs.get(jobId)?.result ?? null);
     expect(report.resumed).not.toBeNull();
     expect(report.resumed).toMatchObject({
       rootId,
-      // FOUR, not two. The union of both durable records of a node's existence: the
-      // two level-1 nodes the tree holds, and the two level-2 nodes the journal holds
-      // and the tree does not. Counting tree rows alone read this as two, recreated
-      // half the budget, and expanded a SECOND level-2 wave under fresh ids.
+      // Four: tree rows plus journal-only level-2 rows; counting the tree alone recreates half the budget.
       inheritedExpansions: 4,
-      // `depth * branches` is 4 and all four expansions exist, so this attempt buys
-      // nothing: it re-runs the two it already owns and settles.
       remainingBudget: 0,
-      // The two the first attempt spawned and never recorded. Re-run under their own
-      // ids, not retired and not replaced.
+      // Re-run under their own ids, not replaced.
       resumedNodes: 2,
       superseded: [],
       attempt: 2,
     });
-    // SETTLED SCORES SURVIVED: the whole search is FOUR expansions, not the two this
-    // activation ran. That number is the claim — a re-entry that forgot the first
-    // attempt's candidates would report two, which is what the incident's second search
-    // reported about a tree it had abandoned.
+    // Settled scores survive: four expansions, not the two this activation ran.
     expect(report.expansions).toBe(4);
-    // `budget` rather than `settled`, and it is the same answer a FRESH depth-2 run of
-    // this shape gives: `depth * branches` is spent while `uct` can still re-widen a
-    // depth-1 node, which is a truncated search by the report's own definition. A
-    // resumed run does not get a different vocabulary for the same outcome.
+    // Same `budget` answer a fresh depth-2 run of this shape gives.
     expect(report.stop).toBe('budget');
 
-    // AND NOTHING WAS CHARGED TWICE. The ledger holds exactly what the two providers
-    // said they served — the suite's own arithmetic, never a figure read back off the
-    // ledger under test — so a re-entry that re-ran the settled nodes would show tokens
-    // nobody served.
+    // Nothing charged twice; the expected total is the providers' own count, not a ledger read.
     const servedSecond = second.script.calls();
     expect(servedSecond).toBeGreaterThan(0);
     const spent = governor.snapshot(MISSION_LABEL)[0]?.spent.tokens ?? 0;
     expect(spent).toBe(servedSecond * CALL_TOKENS);
-    // The first attempt's calls went through no mission port at all, so they are not in
-    // this total — and the two settled nodes were not re-served either, which is the
-    // claim: `servedSecond` covers the two NEW nodes and no more.
     expect(second.script.starts()).toBe(2);
 
-    // A LEVEL-2 NODE OF A RE-ENTERED PARENT INHERITED ITS PARENT'S CONVERSATION. Under
-    // `context:'inherit'` that prefix can only have come out of the journal, because the
-    // parent's own `ModelMessage[]` died with the first attempt.
+    // Under `context:'inherit'` this prefix can only come from the journal.
     expect(second.script.inherited).toHaveLength(2);
 
     for (const turns of second.script.inherited) expect(turns).toBeGreaterThan(0);
 
-    // THE ZOMBIE IS FENCED. If the first attempt's activation ever came back, its
-    // writes carry epoch 0: its heartbeat touch cannot move the row this run settled,
-    // and neither can its settle — which is what makes the wake idempotent rather than
-    // merely unlikely.
+    // Epoch fencing: attempt one's heartbeat and settle cannot move the row.
     ledger.touch(rootId, 0, Date.now());
     ledger.fail(rootId, 0, Date.now());
     expect(ledger.get(rootId)).toMatchObject({ status: 'converged', iteration: 4 });
 
-    // AND A SECOND RECOVERY SWEEP SETTLES NOTHING NEW. The job is terminal, so recovery
-    // re-delivers the wake it may have lost and re-drives nothing: one settled result.
     await runner.recoverOrphans();
     expect(jobs.get(jobId)?.status).toBe('completed');
     expect(notified).toEqual(['completed']);
@@ -1080,29 +893,8 @@ describe('a swarm killed mid-flight is re-entered by the real resume path', () =
 });
 
 /**
- * THE REPORTED DEFECT, VERBATIM: "a swarm sized for 5 spawns several MORE failed
- * nodes, and the search keeps running".
- *
- * WHAT THE OWNER SAW. Five nodes were requested. The activation died inside the one
- * and only level — before ANY node had a tree row, which is the ordinary eviction and
- * the case the suite above does not cover, because there a level had already settled.
- * The re-drive then did two wrong things at once, and they compounded:
- *
- *   - it stamped all five unreported rows `aborted` with "Interrupted before it
- *     reported. This search was re-entered from its durable rows, and the nodes after
- *     it are the continuation." — a terminal claim about work nothing had finished
- *     with;
- *   - and, because the ONLY evidence the accounting read was the tree, it counted
- *     ZERO expansions, recreated the whole five-expansion budget, and bought the
- *     "nodes after it" as five FRESH ids.
- *
- * Ten journal rows for a five-node search, five of them failures, and `branches` more
- * on every eviction — which is how one root came to hold thirty rows.
- *
- * THE INVARIANT THIS PINS: the number of logical nodes a search holds is decided by
- * its caps and by nothing else, across any number of re-entries. Asserted by IDENTITY
- * and not only by count, because retiring five rows and minting five more keeps the
- * count.
+ * Eviction before any node has a tree row: the re-entry must re-run the same five nodes,
+ * not mark them aborted and mint five more. Logical node count is fixed by the caps; asserted by identity.
  */
 describe('a swarm cut before any node reported re-runs those nodes, and creates none', () => {
   const FLAT_SEARCH: SearchCaps = { depth: 1, branches: 5 };
@@ -1113,7 +905,6 @@ describe('a swarm cut before any node reported re-runs those nodes, and creates 
     const ledger = new MctsSearchStore(sql, rt.actor);
     const journal = new HeadJournal(sql, rt.actor);
 
-    // ── ATTEMPT ONE: every node freezes on its first call ──────────────────
     const first = nodeModel({ freezeFromStart: 1, frozenNodes: FLAT_SEARCH.branches });
 
     const frozen = runSwarm(
@@ -1126,8 +917,6 @@ describe('a swarm cut before any node reported re-runs those nodes, and creates 
 
     const rootId = firstRoot(sql)?.root_id ?? '';
     expect(rootId).not.toBe('');
-    // THE INCIDENT'S EXACT ON-DISK STATE: the root and nothing else in the tree, five
-    // journal rows claiming to be running, one ledger row at iteration 0.
     expect(treeOf(sql)).toHaveLength(1);
     expect(ledger.get(rootId)).toMatchObject({ status: 'running', iteration: 0, epoch: 0 });
 
@@ -1138,14 +927,12 @@ describe('a swarm cut before any node reported re-runs those nodes, and creates 
 
     expect(spawnedIds).toHaveLength(FLAT_SEARCH.branches);
 
-    // ── ATTEMPT TWO, through the REAL runner path ──────────────────────────
     const second = nodeModel();
     initBackgroundJobsTable(makeExecRaw(db));
     const jobs = new BackgroundJobStore(makeSql(db), rt.actor);
     const agent = idleAgent();
     const { fiber, settled } = inlineFiber();
 
-    // A SECOND activation's host — see `workspace`.
     const agents = createAgentsTool({
       mode: 'build', swarm: { rt, hostNode: activation(), model: second.model },
     });
@@ -1164,8 +951,7 @@ describe('a swarm cut before any node reported re-runs those nodes, and creates 
       input: JSON.stringify(swarmCall(FLAT_SEARCH)),
     });
 
-    // Both halves of a cold activation, in the order it runs them: the journal
-    // reconciliation, with the job sweep as its resume gate.
+    // A cold activation runs journal reconciliation with the job sweep as its resume gate.
     const retired = await reconcileInterruptedForks({
       journal,
       inbox: agent.inbox,
@@ -1179,8 +965,6 @@ describe('a swarm cut before any node reported re-runs those nodes, and creates 
 
     await settled();
 
-    // FIVE LOGICAL NODES, AND THEY ARE THE SAME FIVE. This is the assertion the
-    // incident fails: it produced ten rows here, five of them aborted.
     const journalled = sql<{ id: string; status: string; error_message: string | null }>`
       SELECT id, status, error_message FROM head_journal
       WHERE actor_id = ${rt.actor.actorId} AND root_id = ${rootId}
@@ -1190,29 +974,22 @@ describe('a swarm cut before any node reported re-runs those nodes, and creates 
     expect(journalled.map((row) => row.status))
       .toEqual(Array.from({ length: FLAT_SEARCH.branches }, () => 'completed'));
 
-    // NO FAKE TERMINAL ROW: no row carries a retirement reason of any kind, because
-    // no row was retired — each was re-entered.
     for (const row of journalled) expect(row.error_message).toBeNull();
     expect(sql<{ n: number }>`
       SELECT COUNT(*) AS n FROM head_journal
       WHERE actor_id = ${rt.actor.actorId} AND error_message IS NOT NULL`[0]?.n).toBe(0);
     expect(retired).toEqual([]);
 
-    // The tree holds the root and those same five nodes — no sixth, no replacement.
     const tree = treeOf(sql);
     expect(tree).toHaveLength(FLAT_SEARCH.branches + 1);
     expect(tree.filter((node) => node.parent_id !== null).map((node) => node.id).sort())
       .toEqual([...spawnedIds].sort());
     expect(new Set(tree.map((node) => node.root_id))).toEqual(new Set([rootId]));
 
-    // ONE ledger row, settled under the reclaimed lease, counting five expansions.
     expect(ledger.list(10).filter((row) => row.engine === 'swarm').map((row) => row.rootId))
       .toEqual([rootId]);
     expect(ledger.get(rootId)).toMatchObject({ epoch: 1, iteration: FLAT_SEARCH.branches });
 
-    // EVERY REPORT COMPILED, EXACTLY ONCE. Five nodes settled in one wave and the
-    // run's own record counts five — one record row per node, and one candidate per
-    // record.
     expect(sql<{ n: number }>`
       SELECT COUNT(*) AS n FROM swarm_node_records WHERE root_id = ${rootId}`[0]?.n)
       .toBe(FLAT_SEARCH.branches);
@@ -1226,37 +1003,19 @@ describe('a swarm cut before any node reported re-runs those nodes, and creates 
       attempt: 2,
     });
 
-    // AND THE AGENT WAS TOLD ONCE. The job settled once and no interrupted-fork card
-    // was delivered beside it: a run being continued is not a run that was lost, and
-    // two events for one transition is the duplicate the surface renders twice.
+    // No interrupted-fork card beside the settle: a continued run is not a lost one.
     expect(jobs.get(jobId)?.status).toBe('completed');
     expect(agent.enqueued).toHaveLength(1);
     expect(agent.enqueued.map((turn) => turn.metadata?.kinuEvent))
       .not.toContain(FORK_INTERRUPTED_SIGNAL);
 
-    // The five re-runs are the only model work this attempt did: no sixth node
-    // started, so nothing was paid for twice.
     expect(second.script.starts()).toBe(FLAT_SEARCH.branches);
   });
 });
 
 /**
- * THE OTHER HALF OF THE SAME WAKE, which the suite above leaves out: a real cold
- * activation does not run only `recoverOrphans()`. It also reconciles the fork
- * journal, because a `running` head row cannot be executing in an isolate that
- * has just started — and the ORDER of those two is the whole subject here.
- *
- * MEASURED ON THE OWNER'S WORKSPACE, the run before the one the suite above
- * pins: five heads spawned, none reported, and the next activation retired all
- * five with `no executor: spawned, never reported, and retired when a later
- * activation found nothing left that could run it`. The re-entry never ran. The
- * agent was told its work was gone and re-forked by hand.
- *
- * The order is not a race. A sweep that is unconditional and synchronous at start
- * of life beats a conditional re-drive on every eviction, and its own message then
- * asserts that nothing could run the heads at the moment something still could.
- *
- * Both halves of one activation, in the order an activation runs them.
+ * A cold activation also reconciles the fork journal; the sweep must consult the resume gate
+ * and not retire heads the re-drive is about to run.
  */
 describe('the start-of-life sweep does not retire a swarm the re-drive can re-enter', () => {
   test('the run is re-entered, and the agent is told nothing was lost', async () => {
@@ -1265,7 +1024,6 @@ describe('the start-of-life sweep does not retire a swarm the re-drive can re-en
     const ledger = new MctsSearchStore(sql, rt.actor);
     const journal = new HeadJournal(sql, rt.actor);
 
-    // ── ATTEMPT ONE, killed inside its level-2 wave ────────────────────────
     const first = nodeModel({ freezeFromStart: 3 });
 
     const frozen = runSwarm(
@@ -1281,15 +1039,13 @@ describe('the start-of-life sweep does not retire a swarm the re-drive can re-en
     expect(ledger.get(rootId)).toMatchObject({ status: 'running' });
     expect(journal.listLive().items.find((run) => run.rootId === rootId)?.running).toBe(FROZEN_NODES);
 
-    // ── THE NEXT ACTIVATION ────────────────────────────────────────────────
     const second = nodeModel();
     initBackgroundJobsTable(makeExecRaw(db));
     const jobs = new BackgroundJobStore(makeSql(db), rt.actor);
     const agent = idleAgent();
     const { fiber, settled } = inlineFiber();
 
-    // A SECOND activation's host: the first one's frozen turns are still admitted
-    // on its in-memory sessions, and an eviction is what destroys them.
+    // A second host: an eviction is what destroys the first one's admitted turns.
     const agents = createAgentsTool({
       mode: 'build', swarm: { rt, hostNode: activation(), model: second.model },
     });
@@ -1307,8 +1063,6 @@ describe('the start-of-life sweep does not retire a swarm the re-drive can re-en
       input: JSON.stringify(swarmCall()),
     });
 
-    // The activation's own reconciliation, with the resume gate it is supposed to
-    // consult. Nothing here calls `reenterSwarm`: the gate is the real runner.
     const retired = await reconcileInterruptedForks({
       journal,
       inbox: agent.inbox,
@@ -1321,39 +1075,27 @@ describe('the start-of-life sweep does not retire a swarm the re-drive can re-en
 
     await settled();
 
-    // NOTHING WAS RETIRED, because the re-drive claimed the run.
     expect(retired).toEqual([]);
-    // …and the agent was told nothing. A card saying work was retired is the
-    // wrong thing to say about work that is being continued, and it is what sent
-    // the owner's agent off to re-fork by hand.
     expect(agent.enqueued.map((turn) => turn.metadata?.kinuEvent))
       .not.toContain(FORK_INTERRUPTED_SIGNAL);
-    // No head carries the retirement reason, on either attempt's rows.
     expect(sql<{ n: number }>`
       SELECT COUNT(*) AS n FROM head_journal
       WHERE actor_id = ${rt.actor.actorId}
         AND error_message = ${FORK_INTERRUPTED_REASON}`[0]?.n).toBe(0);
 
-    // THE RUN WAS RE-ENTERED: one root, the first attempt's, grown rather than
-    // restarted.
     const tree = treeOf(sql);
     expect(new Set(tree.map((node) => node.root_id))).toEqual(new Set([rootId]));
     expect(tree.filter((node) => node.depth === 2)).toHaveLength(2);
     expect(ledger.list(10).filter((row) => row.engine === 'swarm').map((row) => row.rootId))
       .toEqual([rootId]);
 
-    // AND THE ROSTER STOPPED LYING ANYWAY. The two frozen nodes are no longer
-    // counted as running — that was the whole point of the sweep and it is not
-    // given up to keep the run alive.
+    // The frozen nodes stop counting as running even though the run continues.
     expect(journal.listLive().items.find((run) => run.rootId === rootId)?.running ?? 0)
       .not.toBe(FROZEN_NODES);
   });
 
   test('a run the re-drive REFUSED is retired, and the agent is told', async () => {
-    // The other side of the same gate: no durable job exists, so nothing can ever
-    // re-enter this run. That is the case the retirement message describes
-    // truthfully, and it must still fire — otherwise a genuinely dead fork sits in
-    // the roster forever, which is the defect the sweep was built for.
+    // No durable job: nothing can re-enter the run, so retirement must still fire.
     const { rt, db, activation } = await workspace();
     const hostNode = activation();
     const sql = rt.storage.sql;
@@ -1374,7 +1116,6 @@ describe('the start-of-life sweep does not retire a swarm the re-drive can re-en
     const retired = await reconcileInterruptedForks({
       journal,
       inbox: agent.inbox,
-      // The gate ran and claimed nothing: there was no job to re-drive.
       resume: async () => [],
     });
 
@@ -1389,18 +1130,8 @@ describe('the start-of-life sweep does not retire a swarm the re-drive can re-en
   });
 
   test('a run a LATER activation refuses is still retired, not left interrupted forever', async () => {
-    // THE HOLE THIS CLOSES. Gating retirement on THIS activation having marked
-    // something (`if (interrupted.length === 0) return []`) asks a different question
-    // from "did the gate refuse it". A run marked `interrupted` by an earlier
-    // activation is not marked again, so on the activation whose gate finally refuses
-    // it that early return fires and its rows stay `interrupted` for the life of the
-    // workspace: no report, no terminal state, and no card. The ledger row beside them
-    // is closed on the gate's answer alone, so one sweep's two halves would disagree
-    // about which activation is allowed to settle.
-    //
-    // Reachable because a swarm's re-entry writes no terminal rows of its own: it
-    // re-runs what it owns, so the only writer left for a genuinely dead run is this
-    // sweep.
+    // A run marked `interrupted` by an earlier activation must still settle when a later gate refuses it;
+    // gating on this activation having marked something would strand its rows.
     const { rt, activation } = await workspace();
     const hostNode = activation();
     const sql = rt.storage.sql;
@@ -1418,8 +1149,6 @@ describe('the start-of-life sweep does not retire a swarm the re-drive can re-en
     const rootId = firstRoot(sql)?.root_id ?? '';
     const agent = idleAgent();
 
-    // ACTIVATION TWO: the gate claims the run, so nothing is retired and the rows are
-    // left `interrupted` for a re-entry that never lands.
     const claimed = await reconcileInterruptedForks({
       journal, inbox: agent.inbox, search: ledger, resume: async () => [rootId],
     });
@@ -1430,9 +1159,6 @@ describe('the start-of-life sweep does not retire a swarm the re-drive can re-en
       WHERE actor_id = ${rt.actor.actorId} AND status = 'interrupted'`[0]?.n)
       .toBe(FROZEN_NODES);
 
-    // ACTIVATION THREE: the job is past its resume cap, so the gate refuses. Nothing
-    // is newly marked — the rows are already `interrupted` — and the run must still
-    // settle definitively.
     const retired = await reconcileInterruptedForks({
       journal, inbox: agent.inbox, search: ledger, resume: async () => [],
     });
@@ -1444,8 +1170,7 @@ describe('the start-of-life sweep does not retire a swarm the re-drive can re-en
       WHERE actor_id = ${rt.actor.actorId}
         AND error_message = ${FORK_INTERRUPTED_REASON}`[0]?.n).toBe(FROZEN_NODES);
     expect(ledger.get(rootId)?.status).toBe('failed');
-    // Told ONCE, on the activation that actually settled it. The claimed activation
-    // said nothing, so the agent gets one card for one transition.
+    // One card, on the activation that settled it.
     expect(agent.enqueued.map((turn) => turn.metadata?.kinuEvent))
       .toEqual([FORK_INTERRUPTED_SIGNAL]);
   });
@@ -1473,19 +1198,8 @@ describe('the start-of-life sweep reaches registry-only jobs', () => {
 });
 
 /**
- * THE STALE-RUNNING DEFECT, AS A TEST: a swarm whose job settled `failed` left
- * its `mcts_search_runs` row claiming a live executor forever. Measured on the
- * owner's workspace: root `2rye1eyny1efm9583sqye` read `running · 2 reported ·
- * 18 stopped · last step 11h ago`, because the only writers of that row sit
- * inside the executor the platform had already destroyed, and the start-of-life
- * sweep closed the journal rows but never the ledger row beside them.
- *
- * The incident's job reached `failed` through the resume cap — five evictions,
- * "gave up" — which is deleted as of 2026-09-04. The defect this pins does not
- * depend on it: what strands the ledger row is a job REFUSED by the resume gate,
- * and refusal has outlived the cap. It is now the honest terminals only (a
- * definitive failure, a kind nothing can re-drive), which is why the test drives
- * a refusal rather than a count.
+ * A swarm whose job the resume gate refuses must not leave its `mcts_search_runs` row `running`:
+ * the start-of-life sweep closes the ledger row with the journal rows.
  */
 describe('the start-of-life sweep closes a swarm row nothing re-drives', () => {
   test('a refused run\'s ledger row is failed, and the surface stops calling it running', async () => {
@@ -1511,14 +1225,11 @@ describe('the start-of-life sweep closes a swarm row nothing re-drives', () => {
       journal,
       inbox: agent.inbox,
       search: ledger,
-      // The gate ran and claimed nothing: this job is past its resume cap.
       resume: async () => [],
     });
 
     expect(retired.map((run) => run.rootId)).toEqual([rootId]);
     expect(ledger.get(rootId)?.status).toBe('failed');
-    // The read model is what the exploration surface renders; through it, a run
-    // whose every node stopped is never `running` again.
     expect(readForkRun(sql, rt.actor, rootId)?.status).not.toBe('running');
   });
 
@@ -1547,8 +1258,7 @@ describe('the start-of-life sweep closes a swarm row nothing re-drives', () => {
       resume: async () => [rootId],
     });
 
-    // Still the re-drive's row to close or converge; closing it here would
-    // fail a search that is about to continue.
+    // Still the re-drive's row: closing it here would fail a search about to continue.
     expect(ledger.get(rootId)?.status).toBe('running');
   });
 
@@ -1575,8 +1285,7 @@ describe('the start-of-life sweep closes a swarm row nothing re-drives', () => {
   });
 
   test('a row with no journalled heads closes too, on its own evidence', async () => {
-    // A `unit:'thought'` swarm journals no head rows, so the journal sweep has
-    // nothing to find — returning on that alone would never look at the ledger.
+    // A `unit:'thought'` swarm journals no head rows, so the sweep must still check the ledger.
     const { rt } = await workspace();
     const sql = rt.storage.sql;
     const ledger = new MctsSearchStore(sql, rt.actor);
@@ -1611,18 +1320,12 @@ describe('the start-of-life sweep closes a swarm row nothing re-drives', () => {
       },
     });
 
-    // An unanswered gate is not a refusal. The row survives until an activation
-    // whose gate answers decides its fate.
+    // An unanswered gate is not a refusal.
     expect(ledger.get('root-ungated')?.status).toBe('running');
   });
 });
 
-/**
- * THE NAME, END TO END: what the caller passes to `agents.swarm` is what the
- * exploration surface calls the run. The engine writes it as the search root's
- * own label — the field a root has always had and never filled, which is why
- * the tree drew `(root)` — and the read model hands it back.
- */
+/** The name passed to `agents.swarm` becomes the search root's label and the run summary's name. */
 describe('a named swarm is called by its name', () => {
   test('the name reaches the root row and the run summary', async () => {
     const { rt, activation } = await workspace();
@@ -1643,10 +1346,8 @@ describe('a named swarm is called by its name', () => {
 
     const rootId = firstRoot(sql)?.root_id ?? '';
     expect(rootId).not.toBe('');
-    // The root carries it, so the tree draws the name where it drew `(root)`.
     expect(sql<{ action: string }>`
       SELECT action FROM search_nodes WHERE id = ${rootId}`[0]?.action).toBe('token duel');
-    // And every surface that reads a run summary gets the same word.
     expect(readForkRun(sql, rt.actor, rootId)?.name).toBe('token duel');
   });
 
@@ -1664,20 +1365,12 @@ describe('a named swarm is called by its name', () => {
   });
 });
 
-/** The search this workspace holds, read off the tree rather than off a variable the
- *  first attempt never returned. */
 function firstRoot(sql: SqlExecutor): { root_id: string } | undefined {
   return sql<{ root_id: string }>`
     SELECT root_id FROM search_nodes WHERE parent_id IS NULL LIMIT 1`[0];
 }
 
-/**
- * The settle report as the JOB ROW carries it — parsed, not asserted.
- *
- * Read out of the stored result rather than off the value `runSwarm` returned, because
- * what a caller actually receives after a resume is this JSON: a field the run computes
- * and the serialisation drops would pass an in-memory assertion and fail the operator.
- */
+/** The settle report parsed from the job row, which is what a caller receives after a resume. */
 const StoredReportSchema = v.object({
   report: v.object({
     expansions: v.number(),
@@ -1700,24 +1393,9 @@ function jobResultReport(result: string | null) {
   return v.parse(StoredReportSchema, JSON.parse(result)).report;
 }
 
-/* ── the OTHER second-search defect: a re-spawn, not a re-drive ───────────── */
-
 /**
- * A call that is not a re-drive, over a task this workspace is still searching, is
- * REFUSED rather than given a tree of its own.
- *
- * The suite above closes the EVICTION path. This closes the path a MODEL takes. A
- * failed job's wake said "decide whether to retry or report the failure", the model
- * retried by calling `agents.swarm` again, and that call carries no re-drive marker
- * because it genuinely is not one — so it fell through to a fresh root over a tree the
- * first attempt had left running. Measured on the owner's live workspace: two roots
- * with byte-identical task text, six waves, thirty head spawns against a budget of
- * five.
- *
- * The ledger row is written directly here, and that IS the guard's production input:
- * it reads `findRunningSwarms`, so a `running` row for the task is the whole
- * precondition. Driving a real first attempt to a freeze — as the suite above does —
- * would prove the same thing at a hundred times the cost.
+ * A non-re-drive call over a task this workspace is still searching is refused, not given a new root.
+ * A `running` ledger row is the guard's whole input (`findRunningSwarms`).
  */
 describe('a second search over a task already running is refused', () => {
   test('no new root, no new ledger row, and the refusal names the run to wait for', async () => {
@@ -1727,8 +1405,6 @@ describe('a second search over a task already running is refused', () => {
     const ledger = new MctsSearchStore(sql, rt.actor);
     const log = createRecordingLogger();
 
-    // The state the first attempt left: its own root, still running, two children
-    // expanded — written where progress actually lives, the tree, not a checkpoint.
     beganSwarm(ledger, 'root-in-flight', Date.now());
     void sql`INSERT INTO search_nodes (actor_id, id, root_id, task, observation)
       VALUES (${rt.actor.actorId}, 'root-in-flight', 'root-in-flight', ${TASK}, 'root')`;
@@ -1747,8 +1423,7 @@ describe('a second search over a task already running is refused', () => {
       resolved(),
     );
 
-    // REFUSED, and the refusal is actionable: it names the run, says where it got to,
-    // and says the result arrives on its own. A caller told only "no" re-spawns again.
+    // The refusal names the run and its progress, so the caller does not re-spawn.
     expect('reason' in result).toBe(true);
 
     if ('reason' in result) {
@@ -1757,9 +1432,7 @@ describe('a second search over a task already running is refused', () => {
       expect(result.error).toMatch(/wake/i);
     }
 
-    // NOTHING WAS CREATED. This is the assertion the incident fails: no second root,
-    // no second ledger row, and the live row untouched — not superseded, because this
-    // call had no standing to take it over.
+    // No second root or ledger row; the live row is not superseded.
     const seededTree = sql<{ id: string }>`SELECT id FROM search_nodes
                                              WHERE actor_id = ${rt.actor.actorId}
                                              ORDER BY id`.map((r) => r.id);
@@ -1768,25 +1441,19 @@ describe('a second search over a task already running is refused', () => {
       .toEqual(['root-in-flight']);
     expect(ledger.get('root-in-flight')).toMatchObject({ status: 'running', epoch: 0 });
 
-    // …and the refusal ADDED nothing to the tree it read.
     expect(sql<{ id: string }>`SELECT id FROM search_nodes
                                  WHERE actor_id = ${rt.actor.actorId} ORDER BY id`.map((r) => r.id))
       .toEqual(seededTree);
 
-    // And no model call was made at all: the refusal lands before the first wave, so a
-    // re-spawn costs nothing rather than costing a level.
     expect(second.script.calls()).toBe(0);
 
-    // Attributed in the stream, so six waves against one budget can never again be
-    // unexplained.
     const refused = log.emitted.filter((line) => line.event === 'swarm.duplicate_root_refused');
     expect(refused).toHaveLength(1);
     expect(refused[0]?.fields).toMatchObject({ root: 'root-in-flight', redrive: false, running: 1 });
   });
 
   test('a task nothing is running is not refused, so the guard cannot block a first call', () => {
-    // The guard's other direction. Without this arm a change that refuses every call
-    // passes the test above.
+    // Without this arm, refusing every call would pass.
     const store = ledgerOnly();
     beganSwarm(store, 'other-root', Date.now());
     store.converge('other-root', 0, Date.now());

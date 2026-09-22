@@ -1,35 +1,6 @@
 /**
- * THE BEHAVIOURAL PROOF OF R0: a depth-2 swarm of TOOL-USING agents finishes a real
- * task, and every node has a transcript a human can read.
- *
- * *"Every node is a real tool-calling agent with its own turns and transcript"* is the
- * requirement, and it is not a claim a unit test can make. So this suite runs the whole
- * engine, with:
- *
- *   - a REAL MEASUREMENT. The metered-oracle instrument from the depth suite, which
- *     spawns a real node process inside the workspace shell and counts the comparisons a
- *     candidate actually makes. Nothing here stubs the verifier: the point of the work is
- *     that the tree climbs the caller's own objective, and a stubbed instrument would
- *     assert the plumbing while leaving that claim untested.
- *   - REAL TOOL CALLS against the real runtime. Each node reads a real file out of the
- *     workspace VFS through the `file` tool before it answers, so the loop is a loop
- *     rather than one generation dressed as one. The read is load-bearing: the file holds
- *     the wasteful reference implementation, which is what a node is improving on.
- *   - THE PROPOSAL AS A TOOL. A depth-1 node calls `propose_branch` and reads the
- *     verdict out of the return value, which is the half a toolless node cannot have.
- *     That is also the only way depth 2 is reached here, so a broken verdict is a
- *     one-level tree rather than a passing test.
- *   - THE REPORT AS THE GRADED ARTEFACT. A node finishes by calling `report`, and what
- *     it reports is what the instrument measures. Nothing reads the workspace to grade a
- *     node, because nodes share one plane and every node changed the same tree.
- *
- * The model is scripted rather than live, exactly as the depth suite's is, for the reason
- * that suite records: the instrument is real and the model is the part under control. A
- * scripted model that must issue three different tool calls in sequence and read one
- * verdict back still proves the loop, the surface and the journal — which is what the
- * requirement is about.
- *
- * Specified by docs/EXPLORATION.md — "A node is an agent", "Arbitration",
+ * Depth-2 swarm of tool-using agents on a real task, real instrument and tools; only the
+ * model is scripted. Specified by docs/EXPLORATION.md — "A node is an agent", "Arbitration",
  * "Inherited context", "Isolation" and "The six axes".
  */
 import { beforeAll, describe, expect, test } from 'bun:test';
@@ -58,13 +29,9 @@ import type { Objective } from '../src/strategy/objective';
 import type { ResolvedSwarm, SwarmConfig } from '../src/strategy/swarm';
 import type { SearchNode } from '../src/types/mcts';
 
-/* ── The task, and it is measured ─────────────────────────────────────────── */
-
-/** Small because every measurement spawns a real process inside the workspace shell. */
+/** Small: every measurement spawns a real process in the workspace shell. */
 const N = 24;
 
-/** The wasteful-but-correct starting point, and a real file in the workspace: it is what
- *  a node READS with the `file` tool before it answers. */
 const REFERENCE = `export function solve(input, oracle) {
   const t = input.tokens;
   const n = t.length;
@@ -87,7 +54,6 @@ const decode = (out) => (out === undefined || out === null ? null : valueOf(out)
 emitTrials([trial({ tokens }, oracle, decode, P.n)]);
 `;
 
-/** One linear scan: n-1 comparisons, the optimum, and what a node reports. */
 const OPTIMAL = `export function solve(input, oracle) {
   const t = input.tokens;
   let best = t[0];
@@ -98,7 +64,6 @@ const OPTIMAL = `export function solve(input, oracle) {
 }
 `;
 
-/** Where the reference sits in the workspace. A node reads it; the instrument does not. */
 const REFERENCE_PATH = 'candidate/reference.js';
 
 function objective(): Objective {
@@ -131,10 +96,7 @@ function objective(): Objective {
 
 function agentConfig(over?: Partial<SwarmConfig>): SwarmConfig {
   return {
-    // The whole point: an AGENT node, not the `unit` axis's degenerate point (*The six axes*).
     unit: { kind: 'answer' },
-    // The first level continues the origin's framing and the second level asks for
-    // what it wants; a `fresh` search could not accept an inheriting child at all.
     context: 'inherit',
     expand: 'sample',
     score: { kind: 'verify' }, advance: { kind: 'uct' }, carry: { kind: 'none' },
@@ -142,8 +104,7 @@ function agentConfig(over?: Partial<SwarmConfig>): SwarmConfig {
   };
 }
 
-/** What every run below asks for. One string, because the ledger suite dispatches the
- *  same search through `agents.swarm` and a second copy could drift from this one. */
+/** Shared with the `agents.swarm` ledger suite so the two cannot drift. */
 const TASK = `Return the largest of ${String(N)} opaque tokens using the fewest oracle calls. `
   + `The current implementation is at ${REFERENCE_PATH}.`;
 
@@ -166,48 +127,22 @@ function resolved(depth: number, branches: number, over?: Partial<SwarmConfig>):
   return call;
 }
 
-/* ── The model: a node that actually works ────────────────────────────────── */
-
-/** What one scripted node did, so the suite can assert the loop rather than the text. */
 interface ScriptedRun {
-  /** Every tool the model asked for, in order, across every node. */
   readonly calls: string[];
-  /** Verdict strings `propose_branch` handed back — *Arbitration*'s return-value
-   *  contract. */
   readonly verdicts: string[];
-  /** The tool names the surface actually offered, read off the request. */
   readonly offered: Set<string>;
-  /**
-   * How many assistant turns each node ALREADY HAD in front of it on its first step.
-   *
-   * The discriminator *Inherited context* turns on, observed rather than inferred: a
-   * `inherit` child's prompt opens with its parent's own turns, and a `fresh` child's opens
-   * with the seed alone. Zero therefore means "started from the seed", and non-zero
-   * means "inherited a conversation".
-   */
+  /** Prior assistant turns at each node's first step: zero means `fresh`, non-zero inherited. */
   readonly inheritedTurns: number[];
-  /** How many `doGenerate` calls the run made, which is the model-call count. */
   count: () => number;
 }
 
-/**
- * A node that reads the workspace, proposes once, and reports.
- *
- * Scripted off ITS OWN TURNS rather than off a shared counter, and that is not a detail:
- * several nodes are mid-loop at once under one `Promise.allSettled`, so a counter would
- * interleave their scripts. A node's own turns are exactly the assistant messages AFTER
- * the last user message, because inheritance is append-only and the task block is last —
- * which also means this works identically for a child that inherited a conversation and
- * one that did not.
- */
+/** Scripted off the node's own turns, not a shared counter: nodes run concurrently. */
 interface ScriptedNode {
   readonly model: MockLanguageModelV3;
   readonly script: ScriptedRun;
 }
 
-/** What this model reports for EVERY call it serves. Named because the ledger suite
- *  below multiplies them by the call count the script observed: the expected total is
- *  then the provider's own arithmetic, not a number read back off the ledger. */
+/** Per-call usage; expected ledger totals are this times observed calls. */
 const CALL_INPUT_TOKENS = 120;
 
 const CALL_OUTPUT_TOKENS = 45;
@@ -254,8 +189,6 @@ function workingNode(input: { readonly proposeAtDepth1: boolean }): ScriptedNode
       let finish: 'stop' | 'tool-calls' = 'tool-calls';
 
       if (own === 0) {
-        // Look at the real workspace before answering. The result comes back through the
-        // real VFS, so a broken surface fails here rather than later.
         content.push({ type: 'text', text: 'Reading the current implementation first.' });
         content.push({
           type: 'tool-call', toolCallId: `read-${String(generations)}`, toolName: 'file',
@@ -263,7 +196,6 @@ function workingNode(input: { readonly proposeAtDepth1: boolean }): ScriptedNode
         });
         calls.push('file');
       } else if (proposes && own === 1) {
-        // Ask for a branch, and read the verdict off the return value.
         content.push({ type: 'text', text: 'The tail of this deserves its own thread.' });
         content.push({
           type: 'tool-call', toolCallId: `propose-${String(generations)}`, toolName: PROPOSE_BRANCH_TOOL,
@@ -277,7 +209,6 @@ function workingNode(input: { readonly proposeAtDepth1: boolean }): ScriptedNode
         });
         calls.push(PROPOSE_BRANCH_TOOL);
       } else if (own === reportAt) {
-        // Report the candidate. What is reported is what is measured.
         content.push({
           type: 'tool-call', toolCallId: `report-${String(generations)}`, toolName: 'report',
           input: JSON.stringify({
@@ -287,9 +218,7 @@ function workingNode(input: { readonly proposeAtDepth1: boolean }): ScriptedNode
         });
         calls.push('report');
       } else {
-        // Close. A tool call makes the SDK take another step whatever the finish reason
-        // says, so a node whose last word was a tool call would run to its step envelope
-        // and be reported `budget_exceeded` for having finished its work.
+        // Ending on a tool call forces another SDK step and a `budget_exceeded` report.
         content.push({ type: 'text', text: 'Reported: a single linear scan.' });
         finish = 'stop';
       }
@@ -309,8 +238,6 @@ function workingNode(input: { readonly proposeAtDepth1: boolean }): ScriptedNode
   return { model, script: { calls, verdicts, offered, inheritedTurns, count: () => generations } };
 }
 
-/** A runtime whose workspace holds the reference implementation, so the `file` tool has
- *  something real to return. Shared by both harnesses below. */
 async function workspace(): Promise<{ rt: AgentRuntime; db: Database }> {
   const { rt, db } = createTestRuntime();
   await rt.storage.vfs.mkdir('candidate', { recursive: true });
@@ -318,8 +245,6 @@ async function workspace(): Promise<{ rt: AgentRuntime; db: Database }> {
 
   return { rt, db };
 }
-
-/* ── The run ──────────────────────────────────────────────────────────────── */
 
 async function run(input: {
   readonly depth: number;
@@ -338,9 +263,7 @@ async function run(input: {
 
   const wallClockMs = Date.now() - startedAt;
 
-  // Scoped: the run's search ledger is the CALLER's (`initRunLedgers` binds
-  // `rt.actor`), and each node is now its own actor over this same database, so
-  // an unscoped `SELECT *` would fold a node's own tree rows into this count.
+  // Scoped to the caller's actor: nodes are actors over this database too.
   const nodes = rt.storage.sql<SearchNode>`
     SELECT * FROM search_nodes WHERE actor_id = ${rt.actor.actorId}
     ORDER BY depth ASC, created_at ASC`;
@@ -363,16 +286,12 @@ describe('a depth-2 swarm of tool-using agents, end to end', () => {
 
     if ('reason' in result) throw new Error(`the run must not refuse: ${result.error}`);
 
-    // A LOOP, not a generation: every node issued at least a read and a report, so a
-    // node's turn count is greater than one by construction.
+    // More than one turn per node: a loop, not one generation.
     expect(script.calls.filter((name) => name === 'file').length).toBeGreaterThanOrEqual(3);
     expect(script.calls.filter((name) => name === 'report').length).toBeGreaterThanOrEqual(3);
     expect(script.calls).toContain(PROPOSE_BRANCH_TOOL);
 
-    // THE SURFACE. *A node is an agent* on its tool surface and on its lack of delegation
-    // authority: the four confined builtins the runtime could build, the report, the
-    // proposal — and no `agents` tool, which is not withheld by a check but absent
-    // because the dep was never wired.
+    // No `agents` tool: never wired, not withheld.
     expect(script.offered.has('file')).toBe(true);
     expect(script.offered.has('report')).toBe(true);
     expect(script.offered.has(PROPOSE_BRANCH_TOOL)).toBe(true);
@@ -382,7 +301,6 @@ describe('a depth-2 swarm of tool-using agents, end to end', () => {
       expect([...NODE_BUILTIN_TOOLS, PROPOSE_BRANCH_TOOL]).toContain(name);
     }
 
-    // DEPTH 2, and every node's depth derived from the row its parent got.
     const depths = nodes.map((node) => node.depth);
     expect(Math.max(...depths)).toBe(2);
     const byId = new Map(nodes.map((node) => [node.id, node]));
@@ -392,14 +310,9 @@ describe('a depth-2 swarm of tool-using agents, end to end', () => {
       expect(node.depth).toBe((byId.get(node.parent_id)?.depth ?? -99) + 1);
     }
 
-    // THE VERDICT CAME BACK THROUGH THE TOOL — *Arbitration*'s return-value contract,
-    // which is what a toolless node cannot have.
     expect(script.verdicts.some((verdict) => verdict.startsWith('Granted:'))).toBe(true);
     expect(logger.emitted.map((line) => line.event)).toContain('swarm.branch_accepted');
 
-    // AND THE OBJECTIVE WAS MEASURED, off the reported candidate. The scan is optimal, so
-    // it measures the target and scores 1 — through the real instrument, in the real
-    // shell.
     expect(result.best).not.toBeNull();
     expect(result.best?.measured?.kind).toBe('measured');
     expect(result.best?.measured?.value).toBe(N - 1);
@@ -413,8 +326,6 @@ describe('a depth-2 swarm of tool-using agents, end to end', () => {
 
     if ('reason' in result) throw new Error(`the run must not refuse: ${result.error}`);
 
-    // The run groups under ONE root, so the journal shows a search rather than N
-    // unrelated single-node runs.
     const rootId = nodes.find((node) => node.parent_id === null)?.root_id;
     expect(rootId).toBeTruthy();
     const view = journal.readRun(rootId ?? '');
@@ -422,30 +333,22 @@ describe('a depth-2 swarm of tool-using agents, end to end', () => {
 
     if (!view) return;
 
-    // ONE JOURNAL ROW PER MODEL-WRITTEN NODE. The root is the workspace as found and no
-    // model wrote it, so it has no transcript and is not counted.
+    // The root has no model-written transcript.
     const modelWritten = nodes.filter((node) => node.parent_id !== null);
     expect(view.heads).toHaveLength(modelWritten.length);
 
     for (const head of view.heads) {
-      // A READABLE TRANSCRIPT: ordered steps, each with what the node said and what it
-      // called. This is what R13 renders and what makes a node auditable. Read per head,
-      // because the run view carries lifecycle and the journal carries the prose.
+      // Read per head: the run view carries lifecycle, the journal carries prose.
       const steps = journal.readSteps(head.id);
       expect(steps.length).toBeGreaterThan(0);
       const toolNames = steps.flatMap((step) => step.toolCalls.map((call) => call.name));
-      // Every node finishes through its own report, and the journal holds the call.
       expect(toolNames).toContain('report');
-      // The node reported, and the journal holds what it said.
       expect(head.status).toBe('completed');
       expect(head.summary ?? '').not.toBe('');
-      // Its own spend, per node, from the provider's own numbers.
       expect(head.usage.input).toBeGreaterThan(0);
       expect(head.wallClockMs).toBeGreaterThanOrEqual(0);
     }
 
-    // THE FIRST LEVEL READ THE WORKSPACE, and the trace carries the tool's OUTPUT and not
-    // only its name — a trace of names cannot answer why a node concluded what it did.
     const firstLevel = modelWritten.filter((node) => node.depth === 1).map((node) => node.id);
 
     for (const id of firstLevel) {
@@ -459,7 +362,6 @@ describe('a depth-2 swarm of tool-using agents, end to end', () => {
       expect(JSON.stringify(fileStep?.toolCalls)).toContain(REFERENCE_PATH);
     }
 
-    // And exactly one of them asked for a branch, through the tool.
     const proposals = view.heads.flatMap(
       (head) => journal.readSteps(head.id).flatMap(
         (step) => step.toolCalls.filter((call) => call.name === PROPOSE_BRANCH_TOOL),
@@ -468,10 +370,7 @@ describe('a depth-2 swarm of tool-using agents, end to end', () => {
 
     expect(proposals.length).toBeGreaterThanOrEqual(1);
 
-    // THE ISOLATION STATE IS REPORTED RATHER THAN ASSUMED. *Isolation* allows exactly two
-    // states and this test host has no credentialled filesystem to provision, so every
-    // node says `shared-origin-plane` instead of the run implying a boundary it does not
-    // have.
+    // No credentialled filesystem here, so every node reports `shared-origin-plane`.
     const settled = logger.emitted.filter((line) => line.event === 'swarm.node_settled');
     expect(settled.length).toBe(modelWritten.length);
 
@@ -482,11 +381,6 @@ describe('a depth-2 swarm of tool-using agents, end to end', () => {
   });
 
   test('an inheriting child inherits its parents conversation and a fresh child does not', () => {
-    // The two shapes *Inherited context* names, observed where they DIFFER. Every node's
-    // first step is recorded with the number of assistant turns already in front of it: a
-    // `inherit` child opens on its parent's own turns, a `fresh` child opens on the seed
-    // alone. Both carry the parent's report and their own focus, which is what makes them
-    // two values of one axis rather than two mechanisms.
     const { result, journal, nodes, script } = depthTwoRun;
 
     if ('reason' in result) throw new Error(`the run must not refuse: ${result.error}`);
@@ -494,46 +388,34 @@ describe('a depth-2 swarm of tool-using agents, end to end', () => {
     const rootId = nodes.find((node) => node.parent_id === null)?.root_id ?? '';
     const deep = journal.readTree(rootId).filter((row) => row.depth === 2);
     expect(deep.length).toBe(2);
-    // The granted branches were one `inherit` and one `fresh`, and the engine created both
-    // with the FOCUS the proposal named — without it a child is a re-run of its parent.
+    // Without the proposal's focus a child is a re-run of its parent.
     const rationales = deep.map((row) => row.rationale ?? '');
     expect(rationales.some((rationale) => rationale.includes('fewest calls'))).toBe(true);
     expect(rationales.some((rationale) => rationale.includes('a different shape'))).toBe(true);
 
-    // THE DISCRIMINATOR. Four nodes ran: two at depth 1 (which inherit the origin's
-    // conversation, and the suite wires none, so zero), and two at depth 2 — one inheriting,
-    // which sees its parent's turns, and one fresh, which sees none.
+    // Depth 1 inherits nothing (none wired); at depth 2 only the inheriting child sees turns.
     expect(script.inheritedTurns).toHaveLength(4);
     expect(script.inheritedTurns.filter((turns) => turns > 0)).toHaveLength(1);
     expect(script.inheritedTurns.filter((turns) => turns === 0)).toHaveLength(3);
   });
 
   test('the run states what it spent: model calls, per-node steps, and wall clock', () => {
-    // Not a threshold — a DISCLOSURE. A search that cannot say what it cost cannot be
-    // compared to yesterday's, and the numbers below are the ones the report carries.
     const { result, script, wallClockMs, logger } = depthTwoRun;
 
     if ('reason' in result) throw new Error(`the run must not refuse: ${result.error}`);
 
-    // One `doGenerate` per node step, summed across every node.
     expect(script.count()).toBeGreaterThanOrEqual(4);
-    // Per-node steps reach the diagnostics stream, so a node that stalled is visible
-    // without opening its transcript.
     const settled = logger.emitted.filter((line) => line.event === 'swarm.node_settled');
     const steps = settled.map((line) => Number(line.fields.steps));
     expect(steps.every((count) => count >= 2)).toBe(true);
     expect(steps.reduce((sum, count) => sum + count, 0)).toBe(script.count());
-    // The report's own numbers: tokens summed off each node's report, and a duration the
-    // suite can bound from outside.
     expect(result.report.tokens).toBeGreaterThan(0);
     expect(result.report.durationMs).toBeGreaterThan(0);
     expect(result.report.durationMs).toBeLessThanOrEqual(wallClockMs);
   });
 
   test('a refused proposal reaches the node as its next instruction, and it still finishes', () => {
-    // depth 1 with a tree advance: `propose_branch` is absent at build time, because a
-    // request that can only ever be refused must not be offered. The node then finishes
-    // without it — which is the check that the build-time gate does not strand a node.
+    // `propose_branch` is absent at build time; the node must still finish.
     const { result, script } = depthOneRun;
 
     if ('reason' in result) throw new Error(`the run must not refuse: ${result.error}`);
@@ -544,25 +426,14 @@ describe('a depth-2 swarm of tool-using agents, end to end', () => {
   });
 });
 
-/**
- * WHAT A LATER READER SEES OF THE RUN ABOVE.
- *
- * The suite above proves a swarm of agents writes a tree AND a transcript per node.
- * These read the same workspace back through the production read model, because the
- * two stores were what broke it: the list tagged each with one of the removed `fork`
- * verb's two settlements, so this exact run arrived as TWO rows sharing one root id
- * and the canvas handed each row one half. The tree-less half sorts newer, so a
- * caller's dedup kept the row with `tree: []`.
- */
+/** The run above read back through the production read model as one row with tree and transcript. */
 describe('the run a reader gets back', () => {
   test('is ONE run carrying its tree, its transcripts, its params and its task', () => {
     const { rt, result, nodes } = depthTwoRun;
 
     if ('reason' in result) throw new Error(`the run must not refuse: ${result.error}`);
 
-    // The denominators, before anything is claimed about the row: this workspace really
-    // holds both halves. A read model asserted over an empty tree or an empty journal
-    // passes for the wrong reason, which is the defect this repository keeps finding.
+    // Non-empty tree and journal first, so the checks cannot pass vacuously.
     expect(nodes.length).toBeGreaterThan(0);
 
     const journalled = rt.storage.sql<{ n: number }>`
@@ -575,23 +446,18 @@ describe('the run a reader gets back', () => {
     const entry = page.items[0];
     expect(entry.run.hasSearchTree).toBe(true);
     expect(entry.run.hasNodeTranscripts).toBe(true);
-    // Both halves in full, against the two stores the engine wrote.
     expect(entry.tree).toHaveLength(nodes.length);
     expect(entry.head?.heads.length).toBe(journalled);
-    // The TASK, not `label` — which is `agent-nodes` here and is what `recordSplit`
-    // stamps into `head_runs.rationale`, a column that names the split, not the task.
+    // The task, not `label` (which `recordSplit` stamps as the split name).
     expect(entry.run.task).toContain('opaque tokens');
     expect(entry.run.task).not.toBe('agent-nodes');
     expect(entry.head?.rationale).toBe('agent-nodes');
-    // REAL PARAMS, from the ledger row the swarm path writes for exactly this.
     expect(entry.params?.search).toMatchObject({
       branches: 2, maxDepth: 2, budget: 4, mode: 'build',
     });
     expect(entry.params?.transcripts?.branches).toBe(journalled);
-    // A verify-scored run asked no judge, so it honestly claims no ensemble.
     expect(entry.params?.search?.judgeSamplesRequested).toBeNull();
     expect(entry.params?.search?.judgeSamplesRealised).toBeNull();
-    // And the permalink read says the same thing about the same run.
     expect(readExplorationRun(rt.storage.sql, rt.actor, entry.run.id)).toEqual(entry);
   });
 
@@ -605,51 +471,22 @@ describe('the run a reader gets back', () => {
     expect(ledger[0]).toMatchObject({
       engine: 'swarm',
       status: 'converged',
-      // A swarm's budget unit is one child, so the candidates it produced ARE the
-      // expansions it spent and the rest is what it never reached.
+      // A swarm's budget unit is one child.
       iteration: result.report.expansions,
       budget: 2 - result.report.expansions,
     });
-    // `findResumable` cannot reach this row — it is `converged` — and it must not reach a
-    // swarm row that IS still running either. That direction needs a row nothing settled,
-    // so it is proven against the store in unit-mcts-resume.test.ts rather than asserted
-    // vacuously here.
+    // Still-running swarm rows vs `findResumable`: see unit-mcts-resume.test.ts.
   });
 });
 
 /**
- * WHAT THE SEARCH COST ITS CALLER, ACROSS EVERY PATH THAT COULD CHARGE IT.
- *
- * A swarm node's steps debit the mission ledger as they happen — through
- * `SwarmRunDeps.mission`, from inside each node's own loop — and the `agents.swarm`
- * seam then records the spawn. Both look at the same tokens: `report.tokens` is the
- * sum of exactly the calls the port already charged. So the seam that records the
- * spawn must charge no tokens, and the defect this suite exists to make impossible is
- * the one where it does.
- *
- * OVER-CHARGING IS THE FAILURE THAT HIDES ITSELF. A run billed twice reads as a run
- * that cost twice as much, and a cap tripping early on a doubled ledger is
- * indistinguishable from a cap working. So the expected total here is the PROVIDER'S
- * OWN ARITHMETIC — the calls the scripted model actually served, times what it
- * reported for each — and never a figure read back off the ledger under test.
- *
- * TWO LEVELS AND SEVERAL NODES, deliberately: a one-node total is satisfied by any
- * accounting that happens to charge one node once, and the doubling that shipped
- * would have been invisible in it.
- *
- * These runs go through `agents.swarm` rather than `runSwarm`, because the seam that
- * holds the spawn record is the tool dispatch and a test below it cannot see a lump
- * charged above it.
+ * Node steps debit the mission ledger as they run, so the `agents.swarm` spawn record must
+ * charge no tokens. Expected totals come from provider-served calls, never the ledger.
  */
 describe('the mission ledger a search charges', () => {
   const LABEL = 'nightly';
 
-  /**
-   * The suite's own objective as the TOOL takes it: the surface is snake_case and the
-   * type the search reads is not (`tools/swarm-input.ts` owns the mapping). Derived
-   * from {@link objective} rather than restated, so the dispatched search and the
-   * direct one cannot come to measure different things.
-   */
+  /** Snake_case tool form of {@link objective} (`tools/swarm-input.ts` owns the mapping). */
   function wireObjective() {
     const declared = objective();
 
@@ -668,17 +505,13 @@ describe('the mission ledger a search charges', () => {
     };
   }
 
-  /** The same depth-2 agent search, dispatched through `agents.swarm` under a declared
-   *  mission label. Returns the ledger, the script and the run's own report. */
   async function runUnderMission(input: {
     readonly depth: number;
     readonly branches: number;
     readonly tokens?: number;
   }) {
     const { rt, db } = await workspace();
-    // The governor over the workspace's OWN storage and actor, not a second
-    // database beside it: a mission cap is that actor's ledger in that actor's
-    // workspace, and the run being capped writes to this one.
+    // A mission cap is this actor's ledger in this workspace.
     const governor = new MissionGovernor({ storage: rt.storage, actor: rt.actor });
     governor.declare(LABEL, input.tokens === undefined ? {} : { tokens: input.tokens });
     governor.activate([LABEL]);
@@ -702,9 +535,7 @@ describe('the mission ledger a search charges', () => {
       branches: input.branches,
     });
 
-    // Scoped like `run()`'s: the run's search ledger is the CALLER's, and each
-    // node is its own actor over this same database now, so an unscoped read
-    // would fold a node's own tree rows into the caller's count.
+    // Scoped to the caller's actor, as in `run()`.
     const nodes = rt.storage.sql<SearchNode>`
       SELECT * FROM search_nodes WHERE actor_id = ${rt.actor.actorId}
       ORDER BY depth ASC, created_at ASC`;
@@ -723,60 +554,41 @@ describe('the mission ledger a search charges', () => {
   test('charges the provider\'s reported usage exactly once over a two-level search', async () => {
     const { governor, script, nodes, out } = await runUnderMission({ depth: 2, branches: 2 });
 
-    // THE DENOMINATORS, and every one of them is load-bearing. A ledger asserted
-    // against zero calls, one node or one level would pass for the wrong reason — which
-    // is the whole defect class: an over-charge test that passes because nothing was
-    // charged catches nothing.
+    // Non-trivial denominators: an over-charge test with nothing charged proves nothing.
     expect(script.count()).toBeGreaterThan(1);
     expect(nodes.filter((node) => node.depth === 1).length).toBeGreaterThan(1);
     expect(nodes.some((node) => node.depth === 2)).toBe(true);
     expect(out.report.expansions).toBeGreaterThan(2);
 
-    // THE CLAIM. What the provider said it served, summed by the suite, is what the
-    // ledger holds — not twice it, and not one node's worth of it.
     const served = script.count() * CALL_TOKENS;
     expect(served).toBeGreaterThan(0);
     const [mission] = governor.snapshot(LABEL);
     expect(mission?.spent.tokens).toBe(served);
     expect(mission?.calls).toBe(script.count());
-    // ONE SPAWN for one search, whatever the tree underneath it did.
     expect(mission?.spawns).toBe(1);
 
-    // And the run's own report agrees with the ledger, which is the equality a double
-    // bill breaks: the report sums the node reports, the ledger sums the debits, and
-    // they are the same calls counted by two independent accumulators.
+    // Independent accumulators over the same calls; a double bill breaks equality.
     expect(out.report.tokens).toBe(served);
   });
 
   test('an exhausted label stops the search mid-flight, before the level it cannot pay for', async () => {
-    // THE CAP, AND WHY MID-RUN MATTERS. A lump charged after a run cannot decline
-    // anything: by the time the ledger moves, every call is paid for. The cap here is
-    // exactly what the FIRST level reports — two nodes, one call each — so the first
-    // level lands on it and the second is refusable. Nothing but a ledger consulted
-    // while the run is still going can refuse it.
+    // The cap equals the first level's spend, so only a mid-run ledger check refuses level two.
     const cap = CALL_TOKENS * 2;
 
     const { governor, script, nodes, out } = await runUnderMission({
       depth: 2, branches: 2, tokens: cap,
     });
 
-    // The denominator: the search really did issue calls and really did charge them, so
-    // a run that never started cannot pass this as a cap being honoured.
     expect(script.count()).toBeGreaterThan(0);
     const [mission] = governor.snapshot(LABEL);
     expect(mission?.spent.tokens).toBeGreaterThan(0);
     expect(mission?.exhausted).toBe(true);
 
-    // STOPPED SHORT, and it says so. Four expansions were affordable to the SEARCH
-    // budget — two levels of two — and this run made two: the ledger emptied at the end
-    // of the first level and the second never opened. `stop` therefore says `budget`
-    // rather than claiming the space was exhausted.
+    // The ledger emptied after the first level, so `stop` is `budget`.
     expect(out.report.expansions).toBe(2);
     expect(nodes.some((node) => node.depth === 2)).toBe(false);
     expect(out.report.stop).toBe('budget');
 
-    // AND IT STILL CHARGED ONLY WHAT IT SERVED. A cap does not license a lump: the
-    // ledger holds the calls the provider reported and stops there, one call per node.
     expect(mission?.spent.tokens).toBe(script.count() * CALL_TOKENS);
     expect(mission?.spent.tokens).toBe(cap);
   });

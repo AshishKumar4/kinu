@@ -1,14 +1,6 @@
 /**
- * A message typed while the agent works, drawn where the agent read it.
- *
- * The report (#210, images/210_1): the operator typed into a running turn, the
- * thread said "steered mid-turn", and the bubble sat at the very bottom under
- * twenty steps of work the agent had done BEFORE reading it. Reloading moved it
- * to the other extreme — above the whole turn — because a turn is one assistant
- * message and a sibling row has only those two places to go.
- *
- * These hold the property that fixes it: the live placement and the reloaded
- * placement are computed from the same step index, so they agree.
+ * A message typed while the agent works is drawn where the agent read it: live and
+ * reloaded placement come from the same step index, so they agree (#210).
  */
 import { describe, expect, test } from 'bun:test';
 import type { UIMessage } from 'ai';
@@ -21,14 +13,12 @@ import {
 const user = (id: string, text: string): UIMessage =>
   ({ id, role: 'user', parts: [{ type: 'text', text }] });
 
-/** The durable row a landed steer becomes, exactly as `recordLandedSteers`
- *  writes it. */
+/** The durable row a landed steer becomes, as `recordLandedSteers` writes it. */
 const steerRow = (id: string, text: string, atStep: number): UIMessage => ({
   id, role: 'user', parts: [{ type: 'text', text }],
   metadata: { [STEER_METADATA_KEY]: true, [STEER_STEP_METADATA_KEY]: atStep },
 });
 
-/** A turn of `steps` steps, each a `step-start` marker and one line of text. */
 function turn(id: string, steps: number): UIMessage {
   const parts: TranscriptPart[] = [];
 
@@ -48,8 +38,7 @@ const queued = (id: string, text: string): InlineSteer =>
 
 describe('reading a steer row', () => {
   test('a landed steer names its step; an ordinary user message names nothing', () => {
-    // Read off the placement rather than off the index reader: what a row's
-    // metadata says only matters through where the thread then draws it.
+    // Read off the placement: row metadata matters only through where the thread draws it.
     const { entries } = buildTranscript([
       user('u1', 'research flaxdiff'),
       steerRow('steer-a', 'use the swarm for this', 7),
@@ -58,14 +47,11 @@ describe('reading a steer row', () => {
 
     expect(entries.map((entry) => entry.message.id)).toEqual(['u1', 'a1']);
     expect(entries[1].steers.map((steer) => steer.atStep)).toEqual([7]);
-    // The ordinary message stayed a message and collected nothing.
     expect(entries[0].steers).toEqual([]);
   });
 
   test('a steer row written before the index existed keeps its bubble instead of guessing', () => {
-    // Every workspace the operator already has is full of these. Placing them
-    // at a made-up step would claim the model read them somewhere it did not,
-    // so they stay top-level rows and the turn collects nothing.
+    // Legacy rows have no step; placing them at a made-up step would misstate what the model read.
     for (const metadata of [
       { [STEER_METADATA_KEY]: true },
       { [STEER_METADATA_KEY]: true, [STEER_STEP_METADATA_KEY]: -1 },
@@ -83,9 +69,8 @@ describe('reading a steer row', () => {
 
 describe('a steer inside the turn that read it', () => {
   test('the durable row moves into the turn it interrupted, not before it', () => {
-    // The write order is user, steer, assistant: the steer is appended while
-    // the assistant message is still uncommitted, so it lands between them and a
-    // reload that trusted raw row order would draw it above the entire turn.
+    // Write order is user, steer, assistant, so a reload trusting raw row order would draw the
+    // steer above the entire turn.
     const { entries } = buildTranscript([
       user('u1', 'research flaxdiff'),
       steerRow('steer-a', 'use the swarm for this', 3),
@@ -108,8 +93,7 @@ describe('a steer inside the turn that read it', () => {
   });
 
   test('a steer whose turn never persisted an answer is still shown', () => {
-    // The turn errored out after the drain. Attaching it to the NEXT turn would
-    // put the operator's words inside work that had not started when they typed.
+    // Attaching to the next turn would put the operator's words inside work not yet started.
     const { entries } = buildTranscript([
       user('u1', 'go'), steerRow('steer-a', 'and the logs', 2),
     ]);
@@ -125,8 +109,7 @@ describe('the live splice and the reloaded row agree', () => {
     const { entries: liveEntries } = buildTranscript([user('u1', 'go'), streaming], [live('steer-a', 'use the swarm', 3)]);
     const { entries: reloaded } = buildTranscript([user('u1', 'go'), steerRow('steer-a', 'use the swarm', 3), streaming]);
 
-    // Same turn, same step, same words — the bubble does not move when the
-    // socket's copy is replaced by the stored one.
+    // The bubble does not move when the socket's copy is replaced by the stored one.
     expect(liveEntries[1].steers).toEqual(reloaded[1].steers);
     expect(liveEntries.map((entry) => entry.message.id))
       .toEqual(reloaded.map((entry) => entry.message.id));
@@ -142,8 +125,7 @@ describe('the live splice and the reloaded row agree', () => {
   });
 
   test('a queued steer has no position yet, so it trails instead of being placed', () => {
-    // "We took your words" and "the model is reading them" are different facts,
-    // and a queued steer has nowhere honest to sit inside the turn.
+    // "Taken" and "being read" differ; a queued steer has nowhere honest to sit in the turn.
     const { entries, trailing } = buildTranscript(
       [user('u1', 'go'), turn('a1', 6)], [queued('steer-a', 'wait')],
     );
@@ -206,8 +188,7 @@ describe('cutting the turn at the steer', () => {
   });
 
   test('a step the turn never reached puts the steer at the end, not off the list', () => {
-    // The drain records the step it spliced into; an abort can end the turn
-    // before that step writes anything. The end is where it was read.
+    // An abort can end the turn before the spliced step writes anything; the end is where it was read.
     const parts = turn('a1', 2).parts;
     const segments = segmentBySteers(parts, [live('a', 'stop', 9)]);
 
@@ -225,16 +206,14 @@ function partLabel(part: TranscriptPart): string {
 }
 
 describe('the resumable fold', () => {
-  // The pane's shape: everything settled is folded once, and each stream tick
-  // re-folds only the live window on top of it. The property that makes that
-  // legal is that the split point does not exist in the result.
+  // Settled entries fold once and each stream tick re-folds only the live window; that is
+  // legal because the split point does not show in the result.
   const conversation: UIMessage[] = [
     user('u1', 'go'),
     steerRow('steer-a', 'use the swarm', 3),
     turn('a1', 6),
     steerRow('steer-b', 'and the logs', 2),
-    // No assistant row after steer-b: it must orphan identically wherever
-    // the fold was cut, including exactly at it.
+    // No assistant row after steer-b: it must orphan identically wherever the fold was cut.
     user('u2', 'thanks'),
   ];
 
@@ -251,8 +230,7 @@ describe('the resumable fold', () => {
   });
 
   test('extending a fold reuses the settled half\'s entry objects', () => {
-    // The render contract: memo(MessageView) holds across stream ticks exactly
-    // when the settled entries keep referential identity through the re-fold.
+    // memo(MessageView) holds across ticks only if settled entries keep referential identity.
     const stable = extendTranscript(EMPTY_TRANSCRIPT_FOLD, [user('u1', 'go'), turn('a1', 2)]);
     const ticked = extendTranscript(stable, [turn('a2', 1)]);
     expect(ticked.entries[0]).toBe(stable.entries[0]);
@@ -262,15 +240,13 @@ describe('the resumable fold', () => {
   test('extending never reworks the fold it was given', () => {
     const stable = extendTranscript(EMPTY_TRANSCRIPT_FOLD, [user('u1', 'go'), steerRow('steer-a', 'wait', 1)]);
     extendTranscript(stable, [turn('a1', 3)]);
-    // The pending steer still awaits a turn in the ORIGINAL fold: sealing it
-    // orphans the steer, exactly as if the extension had never happened.
+    // Sealing the original fold orphans the pending steer, as if the extension never happened.
     expect(stable.pending.map((steer) => steer.id)).toEqual(['steer-a']);
     expect(sealTranscript(stable).entries.map((entry) => entry.message.id)).toEqual(['u1', 'steer-a']);
   });
 
   test('a live steer is deduplicated against steer rows, and only steer rows', () => {
-    // Negative control for the dedup narrowing: an ordinary message that
-    // happens to share an id with a live steer must not swallow the steer.
+    // Negative control: an ordinary message sharing a live steer's id must not swallow it.
     const fold = extendTranscript(EMPTY_TRANSCRIPT_FOLD, [user('steer-x', 'unrelated'), turn('a1', 2)]);
     const { trailing } = sealTranscript(fold, [queued('steer-x', 'wait')]);
     expect(trailing.map((steer) => steer.id)).toEqual(['steer-x']);

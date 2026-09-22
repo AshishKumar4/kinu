@@ -1,16 +1,6 @@
 /**
- * A DEFINITIVE NODE FAILURE IS NOT A NODE STILL WORKING.
- *
- * One live run left three nodes `running` with no steps after an upstream
- * credential expired, while their siblings recorded the authentication error.
- * The durable requirement: a provider or host error MUST settle the node row and
- * retain its cause, and a flat run MUST return every failed candidate with that
- * reason.
- *
- * Elapsed silence is deliberately not a failure. The shared turn loop has no
- * watchdog and no timeout retry, so this suite invents no small clock to turn a
- * pending provider into an error. Its slow-node arm instead proves that active
- * work may outlive any envelope and still complete.
+ * A provider or host error settles the node row with its cause, and a flat run returns every
+ * candidate with its reason. Elapsed silence is not a failure: the turn loop has no watchdog.
  */
 import { describe, expect, test } from 'bun:test';
 import type { MockLanguageModelV3 } from 'ai/test';
@@ -30,8 +20,6 @@ import type { Objective } from '../src/strategy/objective';
 import type { HeadJournalRow } from '../src/heads/journal';
 import type { SearchNode } from '../src/types/mcts';
 
-/** What the stepping fake answers with at each stage: it reads the reference
- *  first, then reports, then says it has reported. */
 function contentFor({ reported, read }: { reported: boolean; read: boolean }): LanguageModelV3Content[] {
   if (reported) return [{ type: 'text', text: 'Reported: a single linear scan.' }];
 
@@ -58,12 +46,9 @@ function contentFor({ reported, read }: { reported: boolean; read: boolean }): L
   ];
 }
 
-/** The exact string the expired credential produced, kept verbatim: the point of the
- *  terminal write is that a human reading the row learns THIS rather than "errored". */
+/** The expired credential's error, verbatim: the row must carry this, not just "errored". */
 const UPSTREAM = 'Your Cloudflare login is no longer valid. Please run `wrangler login` '
   + '(upstream: Authentication error)';
-
-/* ── A measurable run, small enough that the instrument is not the subject ─── */
 
 const N = 8;
 
@@ -81,7 +66,6 @@ const REFERENCE = `export function solve(input, oracle) {
 }
 `;
 
-/** Where the reference sits in the workspace, so a node has a real file to read. */
 const REFERENCE_PATH = 'candidate/reference.js';
 
 const BODY = `
@@ -92,8 +76,7 @@ const decode = (out) => (out === undefined || out === null ? null : valueOf(out)
 emitTrials([trial({ tokens }, oracle, decode, P.n)]);
 `;
 
-/** One linear scan — what the answering node reports, so the arm that keeps a usable
- *  candidate keeps a real one rather than a string the instrument cannot run. */
+/** One linear scan: a real candidate the instrument can run. */
 const OPTIMAL = `export function solve(input, oracle) {
   const t = input.tokens;
   let best = t[0];
@@ -129,7 +112,6 @@ const BRANCHES = 3;
 
 function config(): SwarmConfig {
   return {
-    // AGENT nodes, which is the only kind that has a journal row to leave lying.
     unit: { kind: 'answer' },
     context: 'fresh',
     expand: 'sample',
@@ -158,15 +140,7 @@ function resolved(): ResolvedSwarm {
   return call;
 }
 
-/**
- * The FLAT preset, resolved through the real resolver: `ideate` at the drill's own
- * width.
- *
- * It measures nothing and ranks nothing — score:'none', advance:'none', carry:'none' —
- * so what it owes its caller is the whole set of answers its nodes produced. A search
- * that returns one of three has under-delivered its own contract however its nodes
- * fared, which is why this arm asks for no objective and asserts no score.
- */
+/** The `ideate` preset via the real resolver: it ranks nothing, so it owes every node's answer. */
 function resolvedIdeate(): ResolvedSwarm {
   const call = resolveSwarm({
     preset: 'ideate',
@@ -183,21 +157,14 @@ function resolvedIdeate(): ResolvedSwarm {
   return call;
 }
 
-/* ── The two providers the measured run actually met ───────────────────────── */
-
-/** Raises the upstream authentication error on every call, exactly as the expired
- *  credential did. Stateless, so one instance serves every arm. */
+/** Raises the upstream authentication error on every call. Stateless. */
 const RAISING_MODEL = scriptedTurnModel({
   provider: 'fake',
   modelId: 'fake-raising',
   doGenerate: () => Promise.reject(new Error(UPSTREAM)),
 });
 
-/**
- * One node answers; every sibling gets the measured upstream authentication
- * error. The answering node is chosen by its own seed rather than a call
- * counter, because siblings run concurrently.
- */
+/** One node answers, siblings get the auth error; chosen by seed, not a call counter, since siblings run concurrently. */
 function oneAnsweringProvider(): MockLanguageModelV3 {
   let chosen: string | null = null;
 
@@ -241,22 +208,14 @@ function oneAnsweringProvider(): MockLanguageModelV3 {
   });
 }
 
-/** What each provider step costs on the swarm's clock: the slow work the
- *  ledger has to carry as elapsed time, without a real pause. */
+/** Per-step cost on the swarm's clock (D19), without a real pause. */
 const STEP_MS = 125;
 
-/** The provider's steps per node: read, report, close. */
 const STEPS_PER_NODE = 3;
 
 /**
- * A multi-step, active provider. It reads the reference, reports, then
- * closes: three answers, each a turn of work the node has to wait for. The
- * point is that no default elapsed envelope cuts work which continues to make
- * progress — a property `no-elapsed-work-deadline` holds on the source, and
- * this run holds on the ledger: every node completes, with no error, however
- * many steps that took, and its wall clock carries the time those steps cost.
- * Each step advances the swarm's clock (D19): the same figure a real pause
- * would put on the row, without a real pause racing a real clock.
+ * A multi-step active provider: no default elapsed envelope may cut work that keeps progressing
+ * (`no-elapsed-work-deadline`); each step advances the swarm's clock (D19).
  */
 function steppingProvider(clock: HandClock): MockLanguageModelV3 {
   return scriptedTurnModel({
@@ -281,8 +240,6 @@ function steppingProvider(clock: HandClock): MockLanguageModelV3 {
     },
   });
 }
-
-/* ── Running one node directly, to reach the transport ─────────────────────── */
 
 interface NodeFixture {
   readonly input: NodeAgentInput;
@@ -311,18 +268,12 @@ function nodeFixture(over?: { readonly runtimeForWorkspace?: NodeAgentDeps['runt
   };
 
   const deps: NodeAgentDeps = {
-    // The node's OWN actor, acquired per node id. `rt` is gone from these deps
-    // for the reason the factory exists: one shared handle would give a whole
-    // wave of nodes one claim ledger and one loop pointer.
+    // The node's own actor, per node id: a shared handle would give a wave one claim ledger and loop pointer.
     hostNode: hostedSeatsOver({ rt, db }).hostNode,
     model: RAISING_MODEL,
     journal,
 
-    // The node's own deadline, which neither arm here reaches: both providers fail or
-    // stall on the first call, so nothing gets far enough to run a clock down. Declared
-    // rather than omitted because a node with no deadline has no clock at all. Taken
-    // from the shared derivation rather than re-multiplied here, so a change to how a
-    // node's envelope is derived reaches this fixture instead of passing it by.
+    // Never reached here, but a node with no deadline has no clock; taken from the shared derivation.
     maxWallClockMs: 60_000,
     logger: createRecordingLogger(),
   };
@@ -332,13 +283,9 @@ function nodeFixture(over?: { readonly runtimeForWorkspace?: NodeAgentDeps['runt
   return { input, deps, journal };
 }
 
-/* ── A node that failed is distinguishable from a node still working ───────── */
-
 describe('a node that failed is not a node still working', () => {
   test('a transport that raises leaves a terminal row with the cause chained', async () => {
-    // A node's own runtime is the backend's to build — a shell and a file plane acting
-    // as the node's credential — and a failure there arrives with no report behind it,
-    // which is the one path that reached neither terminal writer.
+    // A failure building the node's own runtime arrives with no report behind it.
     const { input, deps, journal } = nodeFixture({
       runtimeForWorkspace: () => Promise.reject(new Error(UPSTREAM)),
     });
@@ -351,31 +298,25 @@ describe('a node that failed is not a node still working', () => {
       failure = cause instanceof Error ? cause : null;
     }
 
-    // The failure is a VALUE the search can read, not a swallowed one: it names what we
-    // were doing and keeps the upstream message as its cause.
+    // The failure is a readable value, with the upstream message as its cause.
     expect(failure).not.toBeNull();
     expect(failure?.message).toContain('run node n1');
     const cause = failure?.cause;
     expect(cause instanceof Error ? cause.message : '').toBe(UPSTREAM);
 
-    // The denominator: the row has to EXIST before its status can be asserted, because a
-    // node that was never spawned and a node that was spawned and abandoned are the two
-    // states this whole suite is about telling apart.
+    // The row must exist: never-spawned and spawned-then-abandoned are the states under test.
     const row = journal.readHead('n1');
     expect(row).not.toBeNull();
     expect(row?.status).toBe('errored');
-    // Greater than zero rather than not-null: an absent row would read `undefined` here
-    // and satisfy a not-null assertion, which is the confusion under test.
+    // Greater than zero, not not-null: an absent row reads `undefined` and would pass not-null.
     expect(row?.completed_at).toBeGreaterThan(0);
     expect(row?.error_message).toContain(UPSTREAM);
-    // Absent and not zero: no report came back, so nothing can say what the node spent.
+    // Absent, not zero: no report came back.
     expect(row?.token_input).toBeNull();
   });
 
   test('a provider that raises inside the loop lands the same terminal row', async () => {
-    // The other half of the measured pair — the siblings that errored in about a second.
-    // Their path already reported; asserted here so the two failures are known to land
-    // the SAME readable status rather than one row and one silence.
+    // The siblings land the same readable status.
     const { input, deps, journal } = nodeFixture();
     const run = await runNodeAgent(input, deps);
 
@@ -391,7 +332,6 @@ describe('a node that failed is not a node still working', () => {
 interface SwarmRunResult {
   readonly result: SwarmResult | Refusal;
   readonly rows: readonly HeadJournalRow[];
-  /** The tree the run actually wrote — the same store the live view reads. */
   readonly tree: readonly SearchNode[];
 }
 
@@ -417,9 +357,7 @@ async function runWith(
            error_message, merge_strategy
     FROM head_journal WHERE actor_id = ${rt.actor.actorId} ORDER BY spawned_at`;
 
-  // Scoped like the journal read above: the run's search ledger is the CALLER's
-  // (`initRunLedgers` binds `rt.actor`), and an unscoped `SELECT *` would fold
-  // in every node actor's rows the moment one starts writing its own tree.
+  // Scoped to the caller's actor: an unscoped `SELECT *` would fold in node actors' rows.
   const tree = rt.storage.sql<SearchNode>`
     SELECT * FROM search_nodes WHERE actor_id = ${rt.actor.actorId}
     ORDER BY depth ASC, created_at ASC`;
@@ -437,37 +375,16 @@ describe('a slow level has no default envelope', () => {
 
     for (const row of rows) {
       expect(row.status).toBe('completed');
-      // Every step of this node's own work is on its row: at least its three
-      // steps' worth, so a node that a default envelope had cut short, or a
-      // ledger that recorded a zero, is red here.
+      // At least three steps' worth of wall clock: catches a cut-short node or a zero recording.
       expect(row.wall_clock_ms).toBeGreaterThanOrEqual(STEPS_PER_NODE * STEP_MS);
       expect(row.error_message).toBeNull();
     }
   });
 });
 
-/* ── A flat preset owes its caller every node it ran ───────────────────────── */
-
 /**
- * THE DRILL THIS CLOSES, run on this box on 2026-08-20: `agents action=swarm
- * preset=ideate branches=3 depth=1` against a workers-ai model on a local workspace.
- * Three nodes ran; one reported, and the signed-in proxy's Cloudflare login expired
- * under the other two. The tool result carried `candidates: 1`, `report.expansions: 1`
- * and `report.stop: 'budget'` with `resumed: null`, while the drill workspace's own
- * database held ONE depth-1 `search_nodes` row against THREE `head_journal` rows — one
- * `completed`, two `errored` with "Your Cloudflare login is no longer valid" on each.
- * The caller recovered the other two answers out of workspace files.
- *
- * ONE LINE MADE ALL OF THAT. A node whose report said `errored` was thrown out of
- * `expandChild`, so the barrier read it as a member that never arrived: no candidate, no
- * tree row, no record, and `lost` counting it — which is why `stop` said `budget` about a
- * call that passed no cap. The throw predated `Expansion.incomplete`, the mechanism that
- * already carries an unfinished node without measuring it, and the two disagreed.
- *
- * `ideate` is documented as returning "a set of distinct approaches, unranked", so a
- * 3-branch ideate returning one candidate under-delivers its own contract however its
- * nodes fared. What it owes is every node it ran: the ones that answered with their
- * answers, the ones that did not with their reason.
+ * `ideate` returns "a set of distinct approaches, unranked": every node it ran, answered or not,
+ * must be in the result with its answer or its reason.
  */
 describe('a flat preset returns every node it ran', () => {
   test('a 3-branch ideate returns 3 candidates when the credential dies under two of them', async () => {
@@ -477,9 +394,7 @@ describe('a flat preset returns every node it ran', () => {
 
     if ('reason' in result) throw new Error(`the run must not refuse: ${result.error}`);
 
-    // THE DRILL'S OWN SHAPE, asserted first as the denominator: three nodes ran, one
-    // reported and two met the expired credential. A result of three candidates over a
-    // wave of one would satisfy the claim below for the wrong reason.
+    // Denominator: three nodes, one reported, two met the expired credential.
     expect(rows.length).toBe(BRANCHES);
     expect(rows.filter((row) => row.status === 'completed').length).toBe(1);
     const broken = rows.filter((row) => row.status === 'errored');
@@ -487,35 +402,29 @@ describe('a flat preset returns every node it ran', () => {
 
     for (const row of broken) expect(row.error_message).toContain('Authentication error');
 
-    // THE CONTRACT: every node the search ran is in the result, and in the tree — where
-    // the drill's database had one row for three nodes.
+    // Every node the search ran is in the result and in the tree.
     expect(result.candidates).toHaveLength(BRANCHES);
     expect(result.report.expansions).toBe(BRANCHES);
     expect(tree.filter((node) => node.depth === 1)).toHaveLength(BRANCHES);
 
-    // THE ONE THAT ANSWERED carries its answer and has nothing to explain.
     const answered = result.candidates.filter((candidate) => candidate.incomplete === null);
     expect(answered).toHaveLength(1);
     expect(answered[0]?.artifact).toContain('let best = t[0]');
 
-    // THE TWO THAT BROKE carry the cause, in the RESULT, which is where the drill's
-    // caller could not read it — it went to the workspace for the answers instead.
+    // The broken nodes carry their cause in the result.
     const cut = result.candidates.filter((candidate) => candidate.incomplete !== null);
     expect(cut).toHaveLength(BRANCHES - 1);
 
     for (const candidate of cut) {
       expect(candidate.incomplete).toStartWith('errored after');
       expect(candidate.incomplete).toContain('Authentication error');
-      // Unmeasured rather than measured badly. This preset measures nothing at all, and
-      // a broken node would carry no number under one that did.
+      // Unmeasured: this preset measures nothing.
       expect(candidate.measured).toBeNull();
       expect(candidate.score).toBeNull();
       expect(candidate.unmeasurable).toBeNull();
     }
 
-    // AND `stop` NAMES WHAT ENDED IT. The run spent its whole configured width and had
-    // nothing left to select. `budget` is what sent the drill's reader looking for a cap
-    // the call never passed.
+    // `stop` names what ended it: the width was spent, not a `budget` cap the call never passed.
     expect(result.report.stop).toBe('settled');
   });
 });

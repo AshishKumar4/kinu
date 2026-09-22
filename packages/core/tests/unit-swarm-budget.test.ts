@@ -1,27 +1,9 @@
 /**
- * BUDGET CONSERVATION, and the race that makes it a type instead of a `let`.
- *
- * Specified by docs/EXPLORATION.md — "Budget conservation", which is the rule this file
- * is about: the allocations an arbiter grants to a node's children MUST sum to no more
- * than the parent's remaining budget. Depth and width bound the SHAPE; conservation
- * bounds the SPEND, and without it one branch that keeps proposing eats the run while
- * every individual grant looks legal.
- *
- * WHY THE RACE IS REAL NOW AND WAS NOT BEFORE. A toolless node's proposal was answered
- * in the run loop, one node at a time, so nothing could run between reading the
- * remaining budget and spending it. An AGENT node asks from inside its own tool loop
- * and N of those run concurrently under one `Promise.allSettled`, so two nodes reading
- * the same `remaining` and both being granted is reachable. The audit named it as a
- * hole; these tests are what keeps it closed.
- *
- * THE MUTATION THIS SUITE IS BUILT TO CATCH, stated because a passing test proves
- * nothing unless the failure it excludes is named: replacing `arbitrate`'s
- * decide-and-debit with a read, an `await`, and then a debit — the shape a refactor
- * produces by adding one innocuous `await` inside the critical section. The concurrent
- * test below drives exactly that interleaving, so under the mutation the sum exceeds
- * the budget and it fails. The assertion is on the SUM rather than on any one verdict,
- * because every individual grant looks legal under the mutation and only the total does
- * not.
+ * Budget conservation: an arbiter's grants to a node's children sum to no more than the
+ * parent's remaining budget. Agent nodes propose concurrently, so a read-await-debit
+ * refactor of `arbitrate` would overspend while every individual grant looks legal; the
+ * concurrent tests assert on the sum.
+ * Specified by docs/EXPLORATION.md — "Budget conservation".
  */
 import { describe, expect, test } from 'bun:test';
 import { SwarmBudget } from '../src/strategy/swarm-budget';
@@ -59,10 +41,7 @@ describe('the budget is the only thing that moves the budget', () => {
     expect(budget.remaining).toBe(4);
     expect(budget.take(2)).toBe(2);
     expect(budget.remaining).toBe(2);
-    // A wave wider than what remains runs NARROWER rather than creating children nothing
-    // paid for. A width counter that ran the full width and went negative would be sound
-    // only if the loop stopped there, and it cannot: a granted level may still be owed
-    // after the budget empties.
+    // A wave wider than what remains runs narrower rather than creating unpaid children.
     expect(budget.take(5)).toBe(2);
     expect(budget.remaining).toBe(0);
     expect(budget.take(3)).toBe(0);
@@ -75,9 +54,7 @@ describe('the budget is the only thing that moves the budget', () => {
   });
 
   test('an accepted proposal is DEBITED at arbitration, before the children exist', () => {
-    // A grant that did not debit would let the same room be granted twice. The children
-    // are created later — the engine expands them when selection reaches the node — so
-    // the commitment has to be at the grant.
+    // Children are created later, so the commitment must be at the grant or room is granted twice.
     const budget = new SwarmBudget(6);
 
     const decision = budget.arbitrate({
@@ -88,12 +65,10 @@ describe('the budget is the only thing that moves the budget', () => {
     expect(budget.remaining).toBe(3);
 
     if (decision.kind !== 'granted') return;
-    // The ids are minted with the debit, so the ids a node is told about are the ids the
-    // engine writes rows for.
+    // Ids are minted with the debit, so the node is told the ids the engine writes.
     expect(decision.nodeIds).toHaveLength(3);
     expect(new Set(decision.nodeIds).size).toBe(3);
-    // And the grant carries the branches it paid for: an agent node's proposal exists
-    // only inside the tool call that made it.
+    // An agent node's proposal exists only inside the tool call that made it.
     expect(decision.proposal.branches).toHaveLength(3);
   });
 
@@ -101,7 +76,6 @@ describe('the budget is the only thing that moves the budget', () => {
     const budget = new SwarmBudget(4);
 
     const refused = budget.arbitrate({
-      // At the cap: the children would be depth 2 against a cap of 1.
       config: config(), caps: caps(1, 3), atDepth: 1, proposal: proposal(2),
     });
 
@@ -110,8 +84,7 @@ describe('the budget is the only thing that moves the budget', () => {
   });
 
   test('the arbiter it wraps is unchanged: every policy is still reachable through it', () => {
-    // Conservation is added and nothing else. If wrapping had changed which proposals
-    // pass, the Lean port would no longer read against the shipped arbiter.
+    // Wrapping must not change which proposals pass, or the Lean port no longer matches.
     const decisions = [
       new SwarmBudget(10).arbitrate({
         config: config({ advance: { kind: 'none' } }), caps: caps(1, 3), atDepth: 0, proposal: proposal(2),
@@ -140,14 +113,11 @@ describe('the budget is the only thing that moves the budget', () => {
 
 describe('THE RACE: two nodes proposing at once cannot both be paid from one budget', () => {
   test('concurrent grants SUM to no more than the budget', async () => {
-    // Three children of room, four nodes each asking for two. Exactly one can be paid.
-    // Read the number, await something, subtract, and several are granted — each
-    // grant legal on its own because each saw 3 >= 2.
+    // Three children of room, four asks of two: exactly one can be paid.
     const budget = new SwarmBudget(3);
 
     const ask = async (atDepth: number) => {
-      // The await is the point: it puts a real suspension between the callers, which is
-      // what a tool loop does. Conservation has to survive it.
+      // A real suspension between callers, as a tool loop has.
       await Promise.resolve();
 
       return budget.arbitrate({
@@ -159,15 +129,11 @@ describe('THE RACE: two nodes proposing at once cannot both be paid from one bud
 
     const granted = decisions.flatMap((decision) => (decision.kind === 'granted' ? [decision] : []));
     const total = granted.reduce((sum, decision) => sum + decision.width, 0);
-    // THE INVARIANT, asserted on the sum rather than on the count.
     expect(total).toBeLessThanOrEqual(3);
     expect(budget.remaining).toBe(3 - total);
-    // Sharpness: exactly one of four was paid, so this is not passing because the
-    // arbiter refused everything.
+    // Sharpness: not passing because everything was refused.
     expect(granted).toHaveLength(1);
 
-    // And every refusal names the budget rather than something else, so a node learns
-    // why it was not paid.
     for (const decision of decisions) {
       if (decision.kind === 'granted') continue;
       expect(decision.policy).toBe('budget-exhausted');
@@ -176,9 +142,6 @@ describe('THE RACE: two nodes proposing at once cannot both be paid from one bud
   });
 
   test('a hundred concurrent asks never overspend and never go negative', async () => {
-    // The property rather than one interleaving: whatever order the microtasks resolve
-    // in, what the budget gave up equals what was granted, and it never exceeds the
-    // total.
     const total = 40;
     const budget = new SwarmBudget(total);
 
@@ -203,10 +166,7 @@ describe('THE RACE: two nodes proposing at once cannot both be paid from one bud
   });
 
   test('the depth cap holds at arbitration as well as at selection', () => {
-    // Two independent gates on one number, deliberately: selection excludes a node at
-    // the cap with a WHERE clause, and arbitration refuses one from inside a node's own
-    // tool call. A search whose only depth gate was selection would let an agent node
-    // mint a level past the cap between waves.
+    // Selection alone would let an agent node mint a level past the cap between waves.
     const budget = new SwarmBudget(100);
 
     for (let atDepth = 0; atDepth <= 6; atDepth += 1) {

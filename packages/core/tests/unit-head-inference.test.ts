@@ -1,7 +1,4 @@
-// runHeadInference — the backend-agnostic head loop (re-arch P6b). Drives the
-// real generateText loop with a fake v2 model so the status/summary/usage/steps
-// assembly is locked behind ONE test both backends rely on, rather than sitting
-// inside one backend's host where only that backend could prove it.
+// runHeadInference: the backend-agnostic head loop, driven through the real generateText loop.
 import { REAL_CLOCK } from '../src/types/clock';
 import { describe, test, expect } from 'bun:test';
 import { createTestActors, createTestRuntime, scriptedTurnModel, toolExecute, type ScriptedTurnOptions } from '@kinu.run/test-utils';
@@ -22,8 +19,7 @@ import { CHAT_SESSION_ID } from '../src/session/transcript-schema';
 import { EVIDENCE_BUDGETS, evidenceWindow } from '../src/prompts/evidence-window';
 import { defaultLoopOrigin } from '../src/scaffold/bootstrap';
 
-/** A generateText-driving stub. Returns `answer` as one text step + usage;
- *  finishReason 'stop' so the head ends in a single step (no tool calls). */
+/** One text step, finishReason 'stop', so the head ends in a single step. */
 function fakeHeadModel(answer: string, opts?: { throwError?: string; usage?: { inputTokens: number; outputTokens: number } }): LanguageModel {
   const usage = opts?.usage ?? { inputTokens: 10, outputTokens: 20 };
 
@@ -62,14 +58,7 @@ function headInput(overrides?: Partial<HeadInput>): HeadInput {
   };
 }
 
-/**
- * A head's deps, over a REAL hosted seat.
- *
- * A head IS a logical actor of the workspace, so its handle, its run id, its
- * profile resolution and its own live block all come from the seat the host
- * issues. A bare `runtime` here would be a full kind taking model and tool
- * effects under no identity, with no claim to record them against.
- */
+/** A head's deps over a real hosted seat: a head is a logical actor and needs an identity. */
 const deps = async (
   model: LanguageModel,
   over?: Partial<HeadInferenceDeps>,
@@ -95,9 +84,7 @@ describe('runHeadInference — report assembly', () => {
   });
 
   test('a head summary is the turn\'s answer as the runner selects it, not the last step it saw', async () => {
-    // The runner's one answer rule JOINS a step the provider cut at its output
-    // limit with the continuation that finished it. A head that kept "the last
-    // non-empty step" reported only the continuation's tail as its summary.
+    // A step cut at the output limit is joined with its continuation, not replaced by it.
     let calls = 0;
 
     const model = scriptedTurnModel({
@@ -169,7 +156,6 @@ describe('buildHeadAccumulatorTools', () => {
     expect(capture.evidence[0].body).toBe('X holds');
     expect(capture.evidence[0].id).toMatch(/^ev-/);
     expect(capture.decisions[0].choice).toBe('c');
-    // Each tool also logs a tool call for telemetry.
     expect(capture.toolCalls.map((t) => t.name)).toEqual(['record_evidence', 'record_decision']);
   });
 });
@@ -376,8 +362,7 @@ describe('head prompt + messages', () => {
     expect(sys).toContain('canonical workspace you were forked from');
     expect(sys).not.toContain('private Nimbus workspace');
     expect(sys).not.toContain('nimbus.*');
-    // A head's inheritance is STRUCTURAL: one message per inherited message,
-    // then the task. Not one flattened prose blob.
+    // Inheritance is structural: one message per inherited message, then the task.
     const msgs = buildHeadMessages(input);
     expect(msgs).toHaveLength(2);
     expect(msgs[0]).toEqual({ role: 'user', content: 'the prior user message' });
@@ -407,18 +392,13 @@ describe('buildHeadMessages — a fork inherits real messages, not prose', () =>
     expect(msgs).toHaveLength(multiTurn.length + 1);
     expect(msgs.map((m) => m.role)).toEqual(['user', 'assistant', 'user', 'user']);
 
-    // The assistant turn arrives AS an assistant message — not folded into a
-    // user message's prose, which is what made a fork unwatchable.
     expect(msgs[1]).toEqual({ role: 'assistant', content: 'the lexer looks fine so far' });
 
-    // The task is the LAST message, so it is the live instruction.
     expect(msgs.at(-1)).toEqual({
       role: 'user',
       content: 'Now focus on your assigned task: analyze the parser',
     });
 
-    // Structurally, nothing is flattened: no single message carries more than
-    // its own body, so every inherited turn stays individually addressable.
     for (const [i, inherited] of multiTurn.entries()) {
       expect(msgs[i].content).toBe(inherited.content);
     }
@@ -448,14 +428,11 @@ describe('buildHeadMessages — a fork inherits real messages, not prose', () =>
 
     expect(report.status).toBe('completed');
     expect(prompts).toHaveLength(1);
-    // system prompt, then the inherited turns with their roles intact, then the task.
     expect(prompts[0].map((m) => m.role)).toEqual(['system', 'user', 'assistant', 'user', 'user']);
   });
 
   test("an inherited 'tool' result never reaches the SDK as role:'tool', and keeps its tool identity", () => {
-    // role:'tool' needs a matching preceding assistant tool-call part with the
-    // same toolCallId; a SerializedMessage has no id to match, so emitting one
-    // would make every head request malformed at the provider.
+    // role:'tool' needs a matching assistant tool-call id, which a SerializedMessage lacks.
     const msgs = buildHeadMessages(headInput({
       inheritedContext: [{ id: 't1', role: 'tool', content: 'exit status 0', createdAt: 1, toolName: 'shell' }],
     }));
@@ -505,9 +482,7 @@ async function seededTranscript(count: number, extra?: (history: SessionHistory)
   return { db, history, transcript: history.transcript(CHAT_SESSION_ID) };
 }
 
-/** The parent-conversation cap core hands each spawned head, measured rather
- *  than restated: a transcript far longer than any cap inherits the cap plus
- *  the one omission note, so the read itself says what the cap is. */
+/** The inherited-message cap, measured from an over-long transcript rather than restated. */
 async function measuredInheritedCap(): Promise<number> {
   const seeded = await seededTranscript(400);
   const inherited = await inheritedContextFromTranscript(seeded.transcript);
@@ -520,8 +495,7 @@ async function measuredInheritedCap(): Promise<number> {
 
 describe('inherited context is windowed at READ time, exactly once (C4)', () => {
   test('plain text and SDK text parts inherit the same conversation bytes', () => {
-    // The literal is the contract: an all-text part array serializes to the
-    // plain string, so both backends hand a head the same bytes.
+    // An all-text part array serializes to the plain string, so both backends send the same bytes.
     const inherited: SerializedMessage[] = [{ id: 'ctx-0', role: 'user', content: 'Keep cents exact.', createdAt: 0 }];
 
     expect(inheritedContextFromHistory([{ role: 'user', content: 'Keep cents exact.' }])).toEqual(inherited);
@@ -529,15 +503,10 @@ describe('inherited context is windowed at READ time, exactly once (C4)', () => 
       .toEqual(inherited);
   });
   const cap = EVIDENCE_BUDGETS.inheritedMessage;
-  // A stored assistant body is allowed to run to storedAssistantResponse
-  // (16,000 chars); windowing it only at render time meant every spawned head
-  // held a full-size copy across the facet RPC boundary first.
   const stored = `HEAD-MARK${'x'.repeat(EVIDENCE_BUDGETS.storedAssistantResponse)}TAIL-MARK`;
-  // evidenceWindow keeps both ends and names the gap, so the bound is the
-  // budget plus that single disclosure line — never the stored body.
+  // evidenceWindow keeps both ends plus one disclosure line.
   const bound = cap + 80;
 
-  /** One stored assistant body in a fresh transcript — the row the read caps. */
   const seededStoredBody = async (content: string) => seededTranscript(0, async (history) => {
     await history.record(CHAT_SESSION_ID, { id: 'r1', parentId: null, origin: 'output', message: { role: 'assistant', content } });
   });
@@ -550,7 +519,6 @@ describe('inherited context is windowed at READ time, exactly once (C4)', () => 
     expect(ctx).toHaveLength(1);
     expect(ctx[0].content.length).toBeLessThanOrEqual(bound);
     expect(ctx[0].content.length).toBeLessThan(stored.length / 8);
-    // Head AND tail survive — the window is a window, not a head truncation.
     expect(ctx[0].content.startsWith('HEAD-MARK')).toBe(true);
     expect(ctx[0].content.endsWith('TAIL-MARK')).toBe(true);
     seeded.db.close();
@@ -583,8 +551,7 @@ describe('inherited context is windowed at READ time, exactly once (C4)', () => 
 
     const windowed = inheritedContext[0].content;
 
-    // A second window IS observable on already-windowed text, so the
-    // byte-identity assertion below genuinely detects double application.
+    // A second window is observable, so byte identity below detects double application.
     expect(evidenceWindow(windowed, cap)).not.toBe(windowed);
 
     const msgs = buildHeadMessages(headInput({ inheritedContext }));
@@ -593,14 +560,10 @@ describe('inherited context is windowed at READ time, exactly once (C4)', () => 
 });
 
 describe('inheritedContextFromTranscript — the canonical store, read once for both hosts', () => {
-  /** One actor's canonical session store over a real workspace database, and a
-   *  seeded chat transcript to read a hire's inheritance out of. */
-
   test('the newest rows up to the cap, in order, with the omission note core owes a hire', async () => {
     const cap = await measuredInheritedCap();
 
-    // A row of another session: not a turn the hire inherits, and it does not
-    // count against what it was not told.
+    // Another session's row: neither inherited nor counted as omitted.
     const seeded = await seededTranscript(cap + 5, async (history) => {
       await history.record('side', { id: 'other', parentId: null, origin: 'input', message: { role: 'user', content: 'elsewhere' } });
     });

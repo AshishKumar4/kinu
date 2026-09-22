@@ -1,33 +1,6 @@
-// Merge-back — the four policies by which a settled swarm's work reaches the origin,
-// and the two refusals that carry the correctness.
-//
-// Specified by docs/EXPLORATION.md — "Merge-back" and "The publication seal".
-//
-// EACH POLICY IS ASSERTED WHERE IT CAN ACTUALLY FAIL, not at the derivation. Proving
-// `mergePolicyOf('best') === 'apply-winner'` proves a lookup table; what matters is
-// that `apply-winner` applies ONE member and leaves the other diffs on the floor, that
-// `sequential-rebase` re-verifies a member whose base moved, that a conflict BECOMES a
-// node instead of failing, and that `synthesis` lands nothing. So the derivation gets
-// one small suite and the behaviour gets the rest.
-//
-// TWO TESTS ARE PROVEN THE HARD WAY, because both guard a silent failure rather than a
-// loud one, and a test that would pass with the check deleted is not guarding anything:
-//
-//   1. THE SIZE REFUSAL. A member rides one host transaction; over the bound the
-//      substrate would split it and publish a committed prefix — a torn workspace, not
-//      a failed merge. The refusal is red-proven in `mutation-merge-back.test.ts`:
-//      deleting the pre-flight lets the apply be attempted.
-//   2. THE STALE-VERDICT REFUSAL. A verdict binds the PAIR `(memberDigest,
-//      baseDigest)`. The member digest is near-vacuous — a diff is immutable, so its
-//      digest never moves and a check against it can never fail. The base is the half
-//      that moves, and a rebase moves it for every member after the first. That one
-//      comparison IS `sequential-rebase`'s correctness, so deleting it must turn a test
-//      red, and that is asserted rather than believed.
-//
-// THE FAKE ORIGIN IS ALL-OR-NOTHING ON PURPOSE. `applyMember` stages into a copy and
-// commits, and it RECORDS ONE ENTRY PER CALL. "One host transaction per member" is then
-// a counted assertion — a per-file loop would show up as N transactions — instead of a
-// property the suite takes on trust.
+// Merge-back policies and refusals; the size and stale-verdict refusals are red-proven in
+// mutation-merge-back.test.ts. Specified by docs/EXPLORATION.md — "Merge-back" and
+// "The publication seal".
 import { describe, test, expect } from 'bun:test';
 import { MAX_TX_BLOB_BYTES, MAX_TX_LOGICAL_ROWS } from '@nimbus-sh/core/constants.js';
 import { present } from '@kinu.run/test-utils';
@@ -43,13 +16,11 @@ import {
 import type { PublicationState } from '../src/strategy/objective';
 import type { SwarmCarrySetting } from '../src/strategy/swarm';
 
-/* ── The fake origin: one transaction per call, and it counts them ─────────── */
-
 interface FakeOrigin {
   readonly at: Map<string, string>;
   readonly readOrigin: (path: string) => Promise<string | null>;
   readonly applyMember: MemberApply;
-  /** One entry per `applyMember` CALL. The length is the transaction count. */
+  /** One entry per `applyMember` call; the length is the transaction count. */
   readonly transactions: (readonly MemberFileChange[])[];
 }
 
@@ -63,8 +34,7 @@ function fakeOrigin(initial: Record<string, string> = {}): FakeOrigin {
     readOrigin: async (path) => at.get(path) ?? null,
     applyMember: async (files) => {
       transactions.push(files);
-      // Staged then committed, so a throw mid-way leaves nothing behind — the
-      // property `writeBatch` has and a per-file loop does not.
+      // Staged then committed, so a throw mid-way leaves nothing behind.
       const staged = new Map(at);
 
       for (const file of files) {
@@ -87,9 +57,7 @@ function diffOf(
   return { nodeId, files: [...files].sort((a, b) => a.path.localeCompare(b.path)), provenance };
 }
 
-/** A member whose verdict is bound to the origin AS IT STANDS NOW — the honest case.
- *  Staleness is then produced by moving the origin, which is what a rebase does, and
- *  never by hand-writing a wrong digest. */
+/** Staleness comes only from moving the origin, never a hand-written digest. */
 async function memberOf(
   origin: FakeOrigin,
   nodeId: string,
@@ -124,13 +92,11 @@ interface Harness {
       readonly applyMember?: MemberApply | undefined;
       readonly reverify?: Reverifier;
       readonly spawnMergeNode?: (request: MergeNodeRequest) => Promise<string>;
-      /** What a previous barrier of the same run already landed. */
       readonly settled?: readonly string[];
     },
   ) => Promise<MergeBackReport>;
 }
 
-/** A re-verification that records which member was asked and answers clean. */
 function recordClean(asked: string[]) {
   return async ({ member, baseDigest }: { member: { nodeId: string; diff: Parameters<typeof memberDigestOf>[0] }; baseDigest: string }) => {
     asked.push(member.nodeId);
@@ -161,8 +127,6 @@ function named(log: RecordingLogger, event: string) {
   return log.emitted.filter((line) => line.event === event);
 }
 
-/* ── The derivation (*Merge-back*'s mapping) ──────────────────────────────── */
-
 describe('the policy is derived from settle, never chosen', () => {
   test('each settle shape maps to the policy *Merge-back* derives', () => {
     expect(mergePolicyOf('best')).toBe('apply-winner');
@@ -171,9 +135,7 @@ describe('the policy is derived from settle, never chosen', () => {
     expect(mergePolicyOf('merge')).toBe('synthesis');
   });
 
-  // `synthesis` is the shape that had to survive `fork`'s removal, so its existence is
-  // ASSERTED. A policy list covering the judged settlement and not this one would be an
-  // incomplete list that still typechecked.
+  // `synthesis` must exist: a list missing it would still typecheck.
   test('synthesis is a named policy and not an unhandled settle', () => {
     expect(MERGE_POLICIES).toContain('synthesis');
     expect(mergePolicyOf('merge')).toBe('synthesis');
@@ -182,9 +144,7 @@ describe('the policy is derived from settle, never chosen', () => {
 
   test("the six settle rules and the substrate's preconditions stay distinct lists", () => {
     expect(SETTLE_RULES).toHaveLength(6);
-    // Widened by assignment rather than asserted: the two arrays have disjoint literal
-    // types, so `toContain` would otherwise be comparing types instead of values and
-    // could not fail even if a precondition were added to the spec's list.
+    // Widened by assignment: disjoint literal types would make `toContain` unable to fail.
     const rules: readonly string[] = SETTLE_RULES;
 
     for (const precondition of APPLY_PRECONDITIONS) {
@@ -192,8 +152,6 @@ describe('the policy is derived from settle, never chosen', () => {
     }
   });
 });
-
-/* ── Policy 1: apply-winner ───────────────────────────────────────────────── */
 
 describe('apply-winner', () => {
   test("the winner's diff reaches the origin", async () => {
@@ -212,9 +170,7 @@ describe('apply-winner', () => {
     expect(h.origin.at.get('b.ts')).toBe('added\n');
   });
 
-  // ONE HOST TRANSACTION PER MEMBER, counted. A per-file loop would produce two
-  // transactions here and would tear on the second, which is the whole reason the
-  // size bound exists.
+  // A per-file loop would show two transactions here.
   test('a member rides exactly one transaction, whatever its file count', async () => {
     const h = harness({ 'a.ts': 'old\n' });
 
@@ -230,8 +186,6 @@ describe('apply-winner', () => {
     expect(h.origin.transactions[0]).toHaveLength(3);
   });
 
-  // The discard is the policy, not an accident of the caller's array length. A second
-  // member landing here would be `sequential-rebase` under another name.
   test('every other diff is discarded, even when offered', async () => {
     const h = harness({});
     const winner = await memberOf(h.origin, 'n1', [{ path: 'a.ts', base: null, after: 'won\n' }]);
@@ -244,8 +198,6 @@ describe('apply-winner', () => {
     expect(h.origin.transactions).toHaveLength(1);
   });
 
-  // The skip is `sequential-rebase`'s: the single-apply policies apply the first
-  // member or none, so falling through to a later member here would crown a loser.
   test('a refused winner lands nothing — the losers stay discarded', async () => {
     const h = harness({ 'a.ts': 'A0\n', 'b.ts': 'B0\n' });
     const winner = await memberOf(h.origin, 'n1', [{ path: 'a.ts', base: 'A0\n', after: 'A1\n' }]);
@@ -282,8 +234,6 @@ describe('apply-winner', () => {
   });
 });
 
-/* ── Policy 2: sequential-rebase ──────────────────────────────────────────── */
-
 describe('sequential-rebase', () => {
   test('diffs land in tree order, each onto the result of the last', async () => {
     const h = harness({ 'a.ts': 'A0\n', 'b.ts': 'B0\n' });
@@ -295,19 +245,15 @@ describe('sequential-rebase', () => {
     expect(report.outcomes.map((o) => o.kind)).toEqual(['applied', 'applied']);
     expect(h.origin.at.get('a.ts')).toBe('A1\n');
     expect(h.origin.at.get('b.ts')).toBe('B1\n');
-    // Still one transaction PER MEMBER — the rebase does not fold two members into one
-    // transaction, because then a later failure would roll back an earlier success.
+    // One transaction per member, so a later failure cannot roll back an earlier success.
     expect(h.origin.transactions).toHaveLength(2);
   });
 
-  // THE CENTRAL TEST. A rebase moves the base for every member after the first, so
-  // member two's verdict describes a base the origin no longer holds. With no
-  // re-verification wired, the only fail-closed answer is to refuse.
+  // No re-verification wired, so the fail-closed answer is to refuse.
   test('a member whose base moved is refused when nothing can re-verify it', async () => {
     const h = harness({ 'shared.ts': 'V0\n' });
     const first = await memberOf(h.origin, 'n1', [{ path: 'shared.ts', base: 'V0\n', after: 'V1\n' }]);
-    // Same content, so this is NOT a conflict — the two agree. What has changed is the
-    // base its verdict was issued against, which is exactly rule 4's subject.
+    // Same content: not a conflict, only a moved base (rule 4).
     const second = await memberOf(h.origin, 'n2', [{ path: 'shared.ts', base: 'V0\n', after: 'V1\n' }]);
 
     const report = await h.run('sequential-rebase', [first, second]);
@@ -320,8 +266,6 @@ describe('sequential-rebase', () => {
     expect(outcome.refusal.cause).toBe('verdict-stale');
     expect(outcome.refusal.reason).toBe('unavailable');
     expect(outcome.refusal.error).toContain('stale verdict never applies');
-    // The first member stays applied: atomicity is per member and there is no
-    // cross-member transaction to roll back into.
     expect(h.origin.at.get('shared.ts')).toBe('V1\n');
   });
 
@@ -340,8 +284,6 @@ describe('sequential-rebase', () => {
       reverify: recordClean(asked),
     });
 
-    // Re-verified, and then applied — the rebase is licensed by the re-check, not by
-    // ignoring the staleness.
     expect(asked).toEqual(['n2']);
     expect(report.outcomes.map((o) => o.kind)).toEqual(['applied', 'applied']);
     expect(h.origin.at.get('own.ts')).toBe('O1\n');
@@ -357,9 +299,6 @@ describe('sequential-rebase', () => {
       reverify: recordClean(asked),
     });
 
-    // A sibling that touched no path this member touches does not invalidate its
-    // verdict. A rule that said otherwise would refuse every multi-member settle and
-    // buy no correctness for it.
     expect(asked).toEqual([]);
   });
 
@@ -381,8 +320,6 @@ describe('sequential-rebase', () => {
     expect(outcome.refusal.error).toContain('did not pass');
   });
 
-  // A re-check bound to some OTHER base has not answered the question that was asked.
-  // Accepting it would reintroduce the staleness one level down.
   test('a re-verification bound to a different base does not revalidate the apply', async () => {
     const h = harness({ 'shared.ts': 'V0\n' });
     const first = await memberOf(h.origin, 'n1', [{ path: 'shared.ts', base: 'V0\n', after: 'V1\n' }]);
@@ -445,13 +382,8 @@ describe('sequential-rebase', () => {
   });
 });
 
-/* ── A refusal skips the member, it does not stop the settle ──────────────── */
-
-// THE WALL THAT WAS NOT LOAD-BEARING. `mergeBack` used to break at the first gate
-// refusal, so one unclean member walled off every clean member behind it. A skipped
-// member joins neither `applied` nor the rebase frontier, so each later member's own
-// gate still sees every dependence it could have had on the skipped one — and lands
-// when it has none.
+// A skipped member joins neither `applied` nor the rebase frontier, so later members' gates
+// still see any dependence on it.
 describe('a refused member is skipped, not stopped at', () => {
   test('a clean member lands behind a refused one', async () => {
     const h = harness({ 'a.ts': 'A0\n', 'b.ts': 'B0\n' });
@@ -462,7 +394,6 @@ describe('a refused member is skipped, not stopped at', () => {
       ...dirty, verdict: { ...present(dirty.verdict, "dirty's verdict"), clean: false },
     }, clean]);
 
-    // RED on the old break: the second outcome did not exist and `b.ts` never landed.
     expect(report.outcomes.map((o) => o.kind)).toEqual(['refused', 'applied']);
     expect(h.origin.at.get('b.ts')).toBe('B1\n');
     expect(h.origin.at.get('a.ts')).toBe('A0\n');
@@ -478,12 +409,10 @@ describe('a refused member is skipped, not stopped at', () => {
       ...dirty, verdict: { ...present(dirty.verdict, "dirty's verdict"), clean: false },
     }, clean]);
 
-    // The settle record names the refusal beside the apply that followed it...
     const [first] = report.outcomes;
 
     if (first?.kind !== 'refused') throw new Error('expected a refusal');
     expect(first.refusal.cause).toBe('verdict-unclean');
-    // ...and so does the event stream: a skip is a reported fact, not a silent one.
     expect(named(h.log, 'swarm.merge_refused')).toHaveLength(1);
     expect(named(h.log, 'swarm.merge_refused')[0]?.fields).toMatchObject({
       preset: 'test', policy: 'sequential-rebase', node: 'n1', cause: 'verdict-unclean',
@@ -493,16 +422,13 @@ describe('a refused member is skipped, not stopped at', () => {
   test('a member whose base assumed the skipped one is refused as drift', async () => {
     const h = harness({ 'a.ts': 'A0\n' });
     const skipped = await memberOf(h.origin, 'n1', [{ path: 'a.ts', base: 'A0\n', after: 'A1\n' }]);
-    // Built on top of n1's write: its recorded base is what n1 would have left.
     const onTop = await memberOf(h.origin, 'n2', [{ path: 'a.ts', base: 'A1\n', after: 'A2\n' }]);
 
     const report = await h.run('sequential-rebase', [{
       ...skipped, verdict: { ...present(skipped.verdict, "skipped's verdict"), clean: false },
     }, onTop]);
 
-    // n1 never landed and never joined the rebase frontier, so n2's divergence at
-    // `a.ts` is foreign drift, not a rebase — and applying it would silently discard
-    // whatever the origin still holds there.
+    // n1 never joined the rebase frontier, so n2's divergence at `a.ts` is foreign drift.
     expect(report.outcomes.map((o) => o.kind)).toEqual(['refused', 'refused']);
     const [, outcome] = report.outcomes;
 
@@ -524,8 +450,6 @@ describe('a refused member is skipped, not stopped at', () => {
       ...skipped, verdict: { ...present(skipped.verdict, "skipped's verdict"), clean: false },
     }, dependent]);
 
-    // Dependency order still places n2 after n1, and n1 never lands, so rule 1 names
-    // it — the dependent is refused by name rather than applied incoherently.
     expect(report.order).toEqual(['n1', 'n2']);
     expect(report.outcomes.map((o) => o.kind)).toEqual(['refused', 'refused']);
     const [, outcome] = report.outcomes;
@@ -537,20 +461,13 @@ describe('a refused member is skipped, not stopped at', () => {
   });
 });
 
-/* ── *Dependency order*, and the cycle that has none ──────────────────────── */
-
-// THE ORDER IS THE CLAIM `expand:'aggregate'` MAKES, so it is asserted where it can
-// actually invert: a member set whose dependent is offered FIRST. Rule 1 already refuses
-// a dependent whose dependency has not landed, which is what makes a wrong order visible
-// rather than merely suboptimal — so each test below reads "did the derived order satisfy
-// rule 1", never "did a sort return a permutation".
+// The dependent is offered first, so a wrong order shows as a rule 1 refusal.
 describe('the members are applied in the dependency order they declare', () => {
   test('a dependent offered first is applied last, and rule 1 never fires', async () => {
     const h = harness({ 'a.ts': 'A0\n', 'b.ts': 'B0\n', 'c.ts': 'C0\n' });
     const a = await memberOf(h.origin, 'n1', [{ path: 'a.ts', base: 'A0\n', after: 'A1\n' }]);
     const b = await memberOf(h.origin, 'n2', [{ path: 'b.ts', base: 'B0\n', after: 'B1\n' }]);
 
-    // The fan-in vertex: it consumed both, so its work goes on top of theirs.
     const c = await memberOf(h.origin, 'n3', [{ path: 'c.ts', base: 'C0\n', after: 'C1\n' }], {
       deps: ['n1', 'n2'],
     });
@@ -560,7 +477,6 @@ describe('the members are applied in the dependency order they declare', () => {
     expect(report.order).toEqual(['n1', 'n2', 'n3']);
     expect(report.outcomes.map((o) => o.kind)).toEqual(['applied', 'applied', 'applied']);
     expect(report.stoppedAt).toBeNull();
-    // And the reader can see the order it used without reconstructing it from N events.
     const [settled] = named(h.log, 'swarm.merge_settled');
     expect(settled?.fields.order).toBe('n1,n2,n3');
   });
@@ -570,9 +486,7 @@ describe('the members are applied in the dependency order they declare', () => {
     const a = await memberOf(h.origin, 'n1', [{ path: 'a.ts', base: 'A0\n', after: 'A1\n' }]);
     const b = await memberOf(h.origin, 'n2', [{ path: 'b.ts', base: 'B0\n', after: 'B1\n' }]);
 
-    // Stability is load-bearing rather than tidy: a scored settle offers its incumbent
-    // first, and a sort that reshuffled an unordered set would change which member the
-    // one-member policies apply.
+    // Stable: the one-member policies apply the incumbent a scored settle offers first.
     expect((await h.run('sequential-rebase', [b, a])).order).toEqual(['n2', 'n1']);
   });
 
@@ -583,8 +497,7 @@ describe('the members are applied in the dependency order they declare', () => {
       deps: ['n1'],
     });
 
-    // `n1` is not a member of THIS merge because an earlier barrier of the same run
-    // already applied it. Rule 1 asks whether the dependency has settled, and it has.
+    // `n1` landed in an earlier barrier of the same run.
     const report = await h.run('sequential-rebase', [c], { settled: ['n1'] });
 
     expect(report.outcomes.map((o) => o.kind)).toEqual(['applied']);
@@ -605,8 +518,6 @@ describe('the members are applied in the dependency order they declare', () => {
     if (outcome?.kind !== 'refused') throw new Error('expected a refusal');
     expect(outcome.refusal.cause).toBe('dependency-unsettled');
     expect(outcome.refusal.error).toContain('n1');
-    // A dependency no order can satisfy is rule 1's business, not the ordering's: the
-    // remedy it names is the one a caller can act on.
     expect(outcome.refusal.error).toContain('Order the members');
     expect(h.origin.at.get('c.ts')).toBe('C0\n');
   });
@@ -629,15 +540,11 @@ describe('the members are applied in the dependency order they declare', () => {
     if (outcome?.kind !== 'refused') throw new Error('expected a refusal');
     expect(outcome.refusal.cause).toBe('dependency-cycle');
     expect(outcome.refusal.reason).toBe('bad_input');
-    // THE CYCLE ITSELF, not the fact of one: a refusal that says "there is a cycle"
-    // leaves the reader to find it, and a hang or an arbitrary tie-break would say
-    // nothing at all.
     expect(outcome.refusal.error).toContain('n1 -> n2 -> n1');
     expect(report.stoppedAt).toBe('n1');
     expect(report.order).toEqual([]);
     expect(h.origin.transactions).toHaveLength(0);
     expect(h.origin.at.get('a.ts')).toBe('A0\n');
-    // Still one settle event, so a reader always gets the aggregate line.
     expect(named(h.log, 'swarm.merge_settled')).toHaveLength(1);
     expect(named(h.log, 'swarm.merge_refused')[0]?.fields).toMatchObject({
       node: 'n1', cause: 'dependency-cycle',
@@ -656,9 +563,7 @@ describe('the members are applied in the dependency order they declare', () => {
       deps: ['n2'],
     });
 
-    // `n1` is orderable and the cycle sits behind it. Nothing is applied even so: the
-    // order is a property of the SET, and applying its orderable prefix would publish
-    // half a merge whose remainder can never land.
+    // Order is a property of the set: applying the orderable prefix would publish half a merge.
     const report = await h.run('sequential-rebase', [a, b, c]);
 
     const [outcome] = report.outcomes;
@@ -677,11 +582,7 @@ describe('the members are applied in the dependency order they declare', () => {
       deps: ['n1'],
     });
 
-    // THE RED DIRECTION OF THE ORDER, without touching the source: the same set that
-    // applies cleanly above refuses under the policy that does not reorder, because the
-    // dependent is still first. So the ordering is what makes the fan-in work, and
-    // `apply-winner` keeping the caller's choice of winner is what makes it right that
-    // only one policy reorders.
+    // The same set refuses under `apply-winner`, which does not reorder.
     const winner = await h.run('apply-winner', [c, a]);
     const [outcome] = winner.outcomes;
 
@@ -691,10 +592,7 @@ describe('the members are applied in the dependency order they declare', () => {
   });
 });
 
-/* ── The (memberDigest, baseDigest) pair ──────────────────────────────────── */
-
 describe('the verdict binds a pair, and the base is the half that moves', () => {
-  // The premise of rule 4, stated as a test: the member digest cannot do this job.
   test('the member digest does not move when the origin does', async () => {
     const origin = fakeOrigin({ 'a.ts': 'A0\n' });
     const diff = diffOf('n1', [{ path: 'a.ts', base: 'A0\n', after: 'A1\n' }]);
@@ -736,8 +634,6 @@ describe('the verdict binds a pair, and the base is the half that moves', () => 
   });
 });
 
-/* ── Policy 3: a conflict becomes a node ──────────────────────────────────── */
-
 describe('conflict-spawns-a-merge-node', () => {
   test('two members that changed a path differently produce a merge node', async () => {
     const h = harness({ 'shared.ts': 'V0\n' });
@@ -757,8 +653,6 @@ describe('conflict-spawns-a-merge-node', () => {
     expect(outcome.spawned).toBe('merge-node-1');
   });
 
-  // A conflict DOES NOT FAIL. This is the assertion that separates the policy *Merge-back*
-  // specifies from the obvious wrong implementation, where a collision is an error path.
   test('a conflict is not a refusal', async () => {
     const h = harness({ 'shared.ts': 'V0\n' });
     const first = await memberOf(h.origin, 'n1', [{ path: 'shared.ts', base: 'V0\n', after: 'MINE\n' }]);
@@ -771,8 +665,7 @@ describe('conflict-spawns-a-merge-node', () => {
     expect(report.outcomes.filter((o) => o.kind === 'refused')).toHaveLength(0);
   });
 
-  // NO MODEL RESOLVES A CONFLICT IN PLACE. The origin keeps what the first member
-  // landed; the second member's bytes do not appear, and nothing has been blended.
+  // No model resolves a conflict in place.
   test('nothing is merged in place — the origin is untouched by the conflicting member', async () => {
     const h = harness({ 'shared.ts': 'V0\n' });
     const first = await memberOf(h.origin, 'n1', [{ path: 'shared.ts', base: 'V0\n', after: 'MINE\n' }]);
@@ -799,13 +692,9 @@ describe('conflict-spawns-a-merge-node', () => {
     expect(outcome.request.task).toContain('n1');
     expect(outcome.request.task).toContain('n2');
     expect(outcome.request.task).toContain('shared.ts');
-    // Graded like any other candidate — the merge node gets no trust for having
-    // resolved a conflict.
     expect(outcome.request.task).toContain('graded like any other candidate');
   });
 
-  // AGREEMENT IS NOT A CONFLICT. Two members that wrote the same bytes have not
-  // disagreed, and spawning a node to decide nothing burns a graded node.
   test('two members that wrote identical content do not spawn a merge node', async () => {
     const h = harness({ 'shared.ts': 'V0\n' });
     const first = await memberOf(h.origin, 'n1', [{ path: 'shared.ts', base: 'V0\n', after: 'SAME\n' }]);
@@ -836,8 +725,7 @@ describe('conflict-spawns-a-merge-node', () => {
     const [, outcome] = report.outcomes;
 
     if (outcome?.kind !== 'merge-node') throw new Error('expected a merge node');
-    // Null records that the conflict was found and named but nothing was there to
-    // grade it — which is a different fact from there being no conflict.
+    // Null: the conflict was named but nothing graded it.
     expect(outcome.spawned).toBeNull();
   });
 
@@ -870,8 +758,6 @@ describe('conflict-spawns-a-merge-node', () => {
   });
 });
 
-/* ── Policy 4: synthesis, judge-free ──────────────────────────────────────── */
-
 describe('synthesis', () => {
   test('nothing is applied, because N reports combined is the answer', async () => {
     const h = harness({ 'a.ts': 'A0\n' });
@@ -886,8 +772,6 @@ describe('synthesis', () => {
     expect(h.origin.at.get('a.ts')).toBe('A0\n');
   });
 
-  // NOTHING IS RANKED. Two members that would conflict under any applying policy do
-  // not conflict here, because no one of them is being preferred to the other.
   test('members that would conflict are not ranked and do not spawn a merge node', async () => {
     const h = harness({ 'a.ts': 'A0\n' });
     const one = await memberOf(h.origin, 'n1', [{ path: 'a.ts', base: 'A0\n', after: 'A1\n' }]);
@@ -907,8 +791,6 @@ describe('synthesis', () => {
     expect(report.outcomes).toEqual([]);
   });
 
-  // No judge, so no verdict is required and no score is consulted: an unscored,
-  // unverified member is still part of the combination.
   test('an unscored, unverified member is not refused', async () => {
     const h = harness({});
 
@@ -935,8 +817,6 @@ describe('synthesis', () => {
   });
 });
 
-/* ── The size bound: checked BEFORE apply, refused with the bound named ───── */
-
 describe('the size refusal', () => {
   test('the ceilings come from the substrate rather than a second copy', () => {
     expect(TRANSACTION_BOUNDS.blobBytes).toBe(MAX_TX_BLOB_BYTES);
@@ -961,14 +841,11 @@ describe('the size refusal', () => {
 
     if (outcome?.kind !== 'refused') throw new Error('expected a refusal');
     expect(outcome.refusal.cause).toBe('oversized');
-    // THE BOUND IS NAMED, not merely "too large" — a thousand-tiny-files member and a
-    // one-huge-file member have opposite fixes.
+    // Many tiny files and one huge file have opposite fixes.
     expect(outcome.refusal.error).toContain('blobBytes');
     expect(outcome.refusal.error).toContain(String(MAX_TX_BLOB_BYTES));
   });
 
-  // THE ORDER IS THE POINT. A member checked after the first write has already torn,
-  // so the assertion is that the substrate was never reached at all.
   test('the check happens before the apply, so nothing is written', async () => {
     const h = harness({ 'keep.ts': 'untouched\n' });
 
@@ -1014,8 +891,6 @@ describe('the size refusal', () => {
       preset: 'test', policy: 'apply-winner', node: 'n1', cause: 'oversized',
       bound: 'blobBytes', actual: MAX_TX_BLOB_BYTES + 1, maximum: MAX_TX_BLOB_BYTES,
     });
-    // Its OWN name. A refusal sharing a name with the others could not answer "did
-    // anything nearly tear?", which is the question it exists to make answerable.
     expect(named(h.log, 'swarm.merge_refused')).toHaveLength(0);
   });
 
@@ -1031,8 +906,7 @@ describe('the size refusal', () => {
     expect(report.outcomes[0]?.kind).toBe('applied');
   });
 
-  // A multi-byte character costs more than one byte, and the bound is bytes. Counting
-  // characters would admit a member the substrate then refuses mid-settle.
+  // The bound is bytes, not characters.
   test('the plan counts bytes and not characters', () => {
     const plan = planMemberApply(diffOf('n1', [{ path: 'a.ts', base: null, after: '€' }]));
     expect(plan.blobBytes).toBe(3);
@@ -1044,8 +918,6 @@ describe('the size refusal', () => {
     expect(plan.logicalRows).toBe(1);
   });
 });
-
-/* ── The fallback is never silent ─────────────────────────────────────────── */
 
 describe('an absent atomic write refuses rather than tearing', () => {
   test('no MemberApply is a named refusal, not a per-file loop', async () => {
@@ -1089,12 +961,8 @@ describe('an absent atomic write refuses rather than tearing', () => {
   });
 });
 
-/* ── The settle gate ──────────────────────────────────────────────────────── */
-
 describe('the settle gate', () => {
-  // Provenance and not the node's storage: a diff OBSERVED on the shared plane is
-  // unattributable and its writes already landed in the origin, so there is nothing to
-  // merge back.
+  // A shared-plane diff is unattributable and already landed in the origin.
   test('a diff observed on the shared plane has nothing attributable to merge', async () => {
     const h = harness({});
 
@@ -1112,11 +980,7 @@ describe('the settle gate', () => {
     expect(h.origin.at.has('a.ts')).toBe(false);
   });
 
-  // THE CASE THAT MAKES MERGE-BACK REACHABLE TODAY. A node with no home of its own can
-  // still have produced a perfectly attributable answer, because it REPORTED it — and a
-  // report is the node's by construction, whatever plane it ran on. Gating on the node's
-  // storage instead of the diff's provenance would refuse this and leave the module with
-  // no production caller at all.
+  // Gate on the diff's provenance, not the node's storage.
   test('a reported diff merges even though the node had no private home', async () => {
     const h = harness({ 'candidate/answer.js': 'old\n' });
 
@@ -1159,8 +1023,6 @@ describe('the settle gate', () => {
     expect(report.outcomes.map((o) => o.kind)).toEqual(['applied', 'applied']);
   });
 
-  // "Nobody checked this" is a different fact from "this was checked and failed", and
-  // the two get different causes so a reader can tell them apart.
   test('no verdict and an unclean verdict are different refusals', async () => {
     const h = harness({});
 
@@ -1214,8 +1076,7 @@ describe('the settle gate', () => {
     expect(report.outcomes[0]?.kind).toBe('applied');
   });
 
-  // An undeclared scope is not an empty allow-list: absent means nobody said, and
-  // treating it as "nothing permitted" would refuse every member that declared none.
+  // An undeclared scope means nobody said, not an empty allow-list.
   test('an undeclared scope cannot be escaped', async () => {
     const h = harness({});
 
@@ -1228,8 +1089,7 @@ describe('the settle gate', () => {
     expect(report.outcomes[0]?.kind).toBe('applied');
   });
 
-  // A writer OUTSIDE this settle moved the path. No member of this run wrote it, so it
-  // is not a rebase and applying over it would silently discard whatever changed it.
+  // Applying over a foreign writer would discard its change.
   test('drift from outside the settle refuses', async () => {
     const h = harness({ 'a.ts': 'A0\n' });
     const member = await memberOf(h.origin, 'n1', [{ path: 'a.ts', base: 'A0\n', after: 'A1\n' }]);
@@ -1250,8 +1110,6 @@ describe('the settle gate', () => {
     expect(h.origin.at.get('a.ts')).toBe('someone-else\n');
   });
 
-  // The rebase frontier is what tells the two apart: the SAME divergence at a path an
-  // earlier member landed is the rebase, and rule 4 governs it.
   test('drift at a path this settle rebased is not reported as foreign drift', async () => {
     const h = harness({ 'shared.ts': 'V0\n' });
     const first = await memberOf(h.origin, 'n1', [{ path: 'shared.ts', base: 'V0\n', after: 'V1\n' }]);
@@ -1266,8 +1124,6 @@ describe('the settle gate', () => {
     expect(report.outcomes.map((o) => o.kind)).toEqual(['applied', 'applied']);
   });
 });
-
-/* ── `carry` admission at settle ──────────────────────────────────────────── */
 
 const OPEN: PublicationState = { kind: 'open' };
 
@@ -1285,10 +1141,7 @@ describe('carry admission', () => {
     expect(admitCarry({ carry, score: 0.8, publication: OPEN })).toEqual({ kind: 'admitted' });
   });
 
-  // `elites` carries no threshold of its own — the archive's CELL is its admission —
-  // but it still requires a MEASUREMENT. An unmeasurable candidate is not a
-  // zero-scoring elite, and carrying one seeds the next run from a candidate nobody
-  // scored.
+  // `elites` needs a measurement: unmeasured is not a zero-scoring elite.
   test('an unmeasurable candidate is not carried', () => {
     expect(admitCarry({ carry: { kind: 'elites' }, score: null, publication: OPEN })).toEqual({
       kind: 'refused', cause: 'unmeasurable',
@@ -1307,13 +1160,7 @@ describe('carry admission', () => {
     })).toEqual({ kind: 'admitted' });
   });
 
-  // *The publication seal*, over the surface the settle path actually WRITES: both
-  // publishing carries land in the records store (`swarm-run.ts`'s settle block), so
-  // that is the surface `admitCarry` names — the writer census decides the routing, not
-  // a declaration. A sealed run must not publish however well the candidate scored, so
-  // the seal is checked BEFORE the threshold: a high score is not evidence about which
-  // hypothesis was true. An earlier revision named `experience_library` here while the
-  // run never wrote there; `admitCarry`'s doc carries the correction.
+  // *The publication seal* is checked before the threshold (see `admitCarry`).
   test('a sealed store refuses the carry before the threshold is even consulted', () => {
     const sealed: PublicationState = {
       kind: 'sealed',
@@ -1338,8 +1185,6 @@ describe('carry admission', () => {
   });
 
   test('a recorded re-derivation reopens publication for the carry', () => {
-    // The one edge out of a seal: a floor re-derived with its own proof, not a
-    // retry and not a later candidate that happened to score inside the bound.
     const cleared: PublicationState = {
       kind: 'sealed',
       breach: {
@@ -1390,8 +1235,6 @@ describe('carry admission', () => {
     });
   });
 
-  // One event per member and not one per run: the question a reader has is "why is
-  // yesterday's elite not in the archive", and a per-run count cannot answer it.
   test('every member gets its own decision event', () => {
     const log = createRecordingLogger();
 

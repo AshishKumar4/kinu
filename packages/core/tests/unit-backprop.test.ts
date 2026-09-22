@@ -1,7 +1,4 @@
-/**
- * Unit tests: backpropagation running mean + WITH RECURSIVE CTE.
- * Verifies the running mean formula against the formal spec.
- */
+/** Backpropagation running mean and the WITH RECURSIVE CTE. */
 
 import { describe, test, expect } from 'bun:test';
 import { Database } from 'bun:sqlite';
@@ -10,10 +7,7 @@ import { createTestActors } from '@kinu.run/test-utils';
 import { backpropagate } from '../src/mcts/backpropagation';
 import { initSearchTables } from '../src/mcts/schemas';
 
-/** One search ledger and the actor that owns it. `search_nodes` is keyed
- *  `(actor_id, id)`, so the owner is part of every write and every read here —
- *  a read under another handle finds nothing, which a running mean would
- *  report as an unvisited node rather than as a scoping fault. */
+/** `search_nodes` is keyed `(actor_id, id)`: a read under another handle would look like an unvisited node. */
 function setup() {
   const db = new Database(':memory:');
   const sql = makeSql(db);
@@ -26,8 +20,7 @@ function setup() {
       VALUES (${actor.actorId}, ${node.id}, ${node.parentId ?? null}, ${node.rootId}, 'test', 0, 0)`;
   };
 
-  /** One node's running mean. An absent row is a broken fixture, so it raises
-   *  rather than reading as a node nobody visited. */
+  /** An absent row raises rather than reading as unvisited. */
   const read = (id: string): { value: number; visits: number } => {
     const row = sql<{ value: number; visits: number }>`
       SELECT value, visits FROM search_nodes WHERE actor_id = ${actor.actorId} AND id = ${id}`[0];
@@ -75,7 +68,6 @@ describe('Backpropagation', () => {
 
     backpropagate(sql, actor, 'leaf', 0.9);
 
-    // All three should be updated
     const root = read('root');
     const child = read('child');
     const leaf = read('leaf');
@@ -101,9 +93,8 @@ describe('Backpropagation', () => {
     expect(ids.map(r => r.id)).toEqual(['a', 'b']);
   });
 
-  // NOT a BUG-1 guard: Lean's init_values_equal_at_first_step proves the first
-  // update erases the prior, so no backprop assertion can see value's default.
-  // The prior is guarded behaviourally in unit-initial-value-prior.test.ts.
+  // Not a BUG-1 guard: Lean's init_values_equal_at_first_step proves the first update erases the
+  // prior; see unit-initial-value-prior.test.ts.
   test('running mean from a zero-valued node tracks the reward sequence', () => {
     const { sql, actor, insert, read } = setup();
     insert({ id: 'n', rootId: 'n' });

@@ -1,11 +1,4 @@
-/**
- * The five effect bodies both backends declare through core rather than
- * spelling for themselves: `takes`, `branches`, `turn_record`, `event_drain`
- * and `shadow_trial`. Each was two near-copies that differed only in how the
- * backend named its own storage, and the disposition mapping — what a refusal
- * is, what stays owed — is the part that drifts when two hands maintain it.
- * These pin the mapping at the one body both now construct.
- */
+/** The effect bodies both backends construct through core: pins the disposition mapping. */
 import { describe, expect, test } from 'bun:test';
 import * as v from 'valibot';
 import { Database } from 'bun:sqlite';
@@ -123,19 +116,13 @@ describe('takesTerminalEffect', () => {
     seed('take-second');
     expect(await effect.run({ credited: null, startedAt: 0, takeIds: ['take-second'] }, 'msg-2'))
       .toEqual({ status: 'completed' });
-    // Purged, never claimed: the earlier claimed set is what the surfaces read.
     expect(unclaimedAlternateTakeIds(sql, actor)).toEqual([]);
     expect(latestAlternateTakeSet(sql, actor)?.id).toBe('take-first');
   });
 });
 
 describe('a held owed outcome', () => {
-  // An effect that finds a live carrier already owning the work (a queued
-  // confirming turn, a running branch head) reports `held`. That run was a look,
-  // not a failed attempt: the ledger keeps the attempt count and re-arms at the
-  // base delay instead of doubling the row's backoff for every sweep that lands
-  // while the carrier runs — which, before this, inflated recovery after a crash
-  // toward the ten-minute ceiling for no failure at all.
+  // `held` is a look, not a failed attempt: no attempt counted, re-arm at the base delay.
   test('keeps the attempt count and the base delay across repeated looks', async () => {
     const db = new Database(':memory:');
     const sql = makeSql(db);
@@ -143,8 +130,6 @@ describe('a held owed outcome', () => {
     let now = 1_000;
     const looks = { held: 0, failing: 0 };
 
-    // Two real names, stub bodies: `branches` stands in for the held case and
-    // `takes` for an ordinary undelivered one.
     const effects = {
       branches: terminalEffect({ input: v.object({}), run: () => {
         looks.held += 1;
@@ -177,10 +162,7 @@ describe('a held owed outcome', () => {
       now = row('takes')?.next_attempt_at ?? now;
       await ledger.replayOwed('seq');
       expect(looks).toEqual({ held: step + 1, failing: step + 1 });
-      // Held: no attempt on the books (a look is not one), the next look one
-      // base delay out.
       expect(row('branches')).toEqual({ attempts: 0, next_attempt_at: now + TERMINAL_EFFECT_RETRY_BASE_MS });
-      // Failing: the ordinary schedule, doubling per attempt.
       expect(row('takes')?.attempts).toBe(step + 1);
     }
 

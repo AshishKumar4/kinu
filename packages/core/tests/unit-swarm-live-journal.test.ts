@@ -1,35 +1,6 @@
 /**
- * A SEARCH THAT IS HAPPENING SAYS SO — the swarm's own journal writes announce.
- *
- * THE DEFECT THIS PINS. `LiveHeadJournal`'s whole contract is that "every path
- * into the journal — hosted and unhosted, head and node, top-level and recursive
- * — goes through the instance a backend hands the controller and the node host,
- * so announcing HERE covers all of them". The swarm went through no such
- * instance: `initRunLedgers` built a raw `HeadJournal` of its own, so a node
- * appearing, every step it recorded in this isolate, and its report all landed
- * durably and told nobody. The only swarm write that ever announced was a HOSTED
- * node's step, and only because that one crosses to the parent's
- * `recordHeadStep` — so head liveness was a property of the transport rather
- * than of the search, and the Exploration surface learned about a run it was
- * watching on a poll clock.
- *
- * What that cost a reader, precisely: the transient `head_stream` tail painted
- * the step a node was writing (that seam the swarm DID carry), and the durable
- * step that supersedes it arrived without a push — so the same words sat on
- * screen twice until the reader's own re-read retired them.
- *
- * WHY THE ASSERTIONS READ THE STORE FROM INSIDE THE LISTENER. The claim is not
- * "a callback fired N times"; it is that the announcement RIDES A DURABLE WRITE.
- * So each announcement records what the journal held at that instant, and the
- * test asserts the sequence a node's row actually passed through: appeared and
- * running with no trace, running with a trace, then settled. A wiring test
- * counting calls would pass against an announce loop over ids nobody wrote.
- *
- * The run is the cheapest one that reaches an agent node: `unit:'answer'` with
- * `score`/`advance`/`carry` all `none` — the `ideate` point — so there is no
- * instrument, no judge and no second level, and the model is scripted to report
- * and close. What the node DOES is another suite's subject; that it is journalled
- * out loud is this one's.
+ * The swarm's own journal writes announce (`LiveHeadJournal`). Each announcement records what the
+ * journal held at that instant, so the test asserts the row's durable sequence, not a callback count.
  */
 import { describe, expect, test } from 'bun:test';
 import { scriptedTurnModel } from '@kinu.run/test-utils';
@@ -44,7 +15,6 @@ import { headStatusUnsettled } from '../src/heads/types';
 import type { AnnounceHeadActivity } from '../src/heads/live-journal';
 import type { ResolvedSwarm } from '../src/strategy/swarm';
 
-/** The composition: agent nodes, nothing ranked, one level, two of them. */
 function resolved(): ResolvedSwarm {
   const call = resolveSwarm({
     preset: 'custom',
@@ -70,13 +40,7 @@ function resolved(): ResolvedSwarm {
   return call;
 }
 
-/**
- * A node that reports and closes — two steps, which is the smallest trace that
- * can distinguish "announced its spawn" from "announced a step".
- *
- * Scripted off its OWN turns rather than a shared counter: both nodes are in
- * flight under one `Promise.allSettled`, so a counter would interleave them.
- */
+/** Reports then closes: two steps. Scripted off its own turns, since both nodes run concurrently. */
 function reportingNode() {
   return scriptedTurnModel({
     provider: 'fake',
@@ -102,9 +66,7 @@ function reportingNode() {
           }),
         });
       } else {
-        // A tool call makes the SDK take another step whatever the finish reason
-        // says, so the node's last word has to be prose or it runs to its step
-        // envelope and is reported `budget_exceeded` for having finished.
+        // The last word must be prose: a tool call makes the SDK step again, ending as `budget_exceeded`.
         content.push({ type: 'text', text: 'Reported.' });
         finish = 'stop';
       }
@@ -122,11 +84,9 @@ function reportingNode() {
   });
 }
 
-/** What the journal held for one id at the instant it announced that id. */
 interface Announcement {
   readonly headId: string;
-  /** Null for the RUN's own header row: `recordSplit` writes `head_runs`, which
-   *  is the row that makes a search exist before any node does. */
+  /** Null for the run's own header row, written by `recordSplit` before any node. */
   readonly status: string | null;
   readonly steps: number;
 }
@@ -138,23 +98,14 @@ async function run(announce?: AnnounceHeadActivity) {
 
   const deps: SwarmRunDeps = {
     rt,
-    // A REAL seat per node, over this runtime's own database: `unit:'answer'`
-    // is an agent node, so the run acquires one — and the journal it announces
-    // is read back through `rt.actor` below, so both halves have to be the one
-    // workspace or every read would come back empty.
+    // A real seat per node over this runtime's database; the journal is read back through `rt.actor`.
     hostNode: hostedSeatsOver({ rt, db }).hostNode,
     model: reportingNode(),
     mode: 'build',
     logger: createRecordingLogger(),
   };
 
-  // Assigned rather than spread, and the shape is the point the run itself
-  // depends on: an absent seam must be an ABSENT KEY, because that absence is
-  // exactly what makes the ledgers build the plain journal.
-  //
-  // Every announcement is measured against the store AS IT WAS when the listener
-  // ran, which is what makes this a claim about the write and not about the
-  // callback.
+  // An absent seam must be an absent key: that absence makes the ledgers build the plain journal.
   if (announce !== undefined) {
     Object.assign(deps, {
       announceHeadActivity: (headId: string) => {
@@ -180,29 +131,23 @@ describe('a swarm journals out loud', () => {
     const announced: string[] = [];
     const { seen, nodes, rootId } = await run((headId) => { announced.push(headId); });
 
-    // The run itself is announced before any node is: `recordSplit` is the row
-    // that makes the search exist, and it is the first thing a watching client
-    // can learn about it.
+    // The run's `recordSplit` row is announced before any node.
     expect(announced[0]).toBe(rootId);
 
-    // A node ran at all — otherwise every assertion below is vacuous.
+    // Non-vacuity: a node ran.
     expect(nodes.length).toBeGreaterThan(0);
 
     for (const node of nodes) {
       const forNode = seen.filter((entry) => entry.headId === node.id);
       expect(forNode.length).toBeGreaterThanOrEqual(3);
 
-      // THE SPAWN: the row exists, claims to be executing, and has no trace yet.
-      // This is the announcement that puts a node on the canvas.
+      // Spawn: row exists, running, no trace yet.
       expect(forNode[0]).toEqual({ headId: node.id, status: 'running', steps: 0 });
 
-      // A STEP: the trace grew while the node was still running. This is the
-      // announcement that retires the live tail the `head_stream` frames painted
-      // and re-reads the transcript a reader has open.
+      // Step: the trace grew while running; retires the live `head_stream` tail.
       expect(forNode.some((entry) => entry.status === 'running' && entry.steps > 0)).toBe(true);
 
-      // THE REPORT: the last thing said about this node is that it settled — the
-      // write a reader watching a running branch is waiting for.
+      // Report: the node settled.
       const last = forNode.at(-1);
       expect(last?.steps).toBeGreaterThan(0);
       expect(headStatusUnsettled(last?.status ?? 'running')).toBe(false);
@@ -212,9 +157,7 @@ describe('a swarm journals out loud', () => {
   test('with no listener the same run journals in silence rather than failing', async () => {
     const { nodes, reader } = await run();
 
-    // The seam is OPTIONAL and absence is a backend with nothing watching — not
-    // a degraded run. So the durable half must be identical: the rows, their
-    // traces and their settlement all land.
+    // The seam is optional: without it the durable rows, traces and settlement are identical.
     expect(nodes.length).toBeGreaterThan(0);
 
     for (const node of nodes) {
