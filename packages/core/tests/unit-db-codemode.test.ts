@@ -290,10 +290,11 @@ describe('two actors, one database', () => {
       expect(second.count('labels')).toBe(1);
       // Within one actor it is still unique, and the failure is classified as
       // the caller's input rather than as a transport fault.
-      expect(() => first.apply({ op: 'insert', table: 'labels', rows: [{ id: 'b', label: 'only-one' }] }))
-        .toThrow(/constraint/i);
-      expect(() => first.apply({ op: 'insert', table: 'labels', rows: [{ id: 'a', label: 'other' }] }))
-        .toThrow(/constraint/i);
+
+      for (const row of [{ id: 'b', label: 'only-one' }, { id: 'a', label: 'other' }]) {
+        expect(() => first.apply({ op: 'insert', table: 'labels', rows: [row] })).toThrow(/constraint/i);
+      }
+
       expect(first.count('labels')).toBe(1);
     }
     finally { w.close(); }
@@ -556,17 +557,14 @@ describe('what db cannot reach', () => {
       store.createTable(NOTES);
       store.apply({ op: 'insert', table: 'notes', rows: [{ slug: 'a', body: 'kept' }] });
 
-      expect(() => store.createTable({
-        name: 'notes',
-        scope: 'workspace',
-        columns: [{ name: 'slug', type: 'text', primaryKey: true }],
-      })).toThrow(/already exists/);
-      expect(() => store.createTable({
-        name: 'notes',
-        scope: 'actor',
-        columns: [{ name: 'slug', type: 'integer', primaryKey: true }],
-      })).toThrow(/already exists/);
+      for (const redeclared of [
+        { name: 'notes', scope: 'workspace', columns: [{ name: 'slug', type: 'text', primaryKey: true }] },
+        { name: 'notes', scope: 'actor', columns: [{ name: 'slug', type: 'integer', primaryKey: true }] },
+      ] as const) {
+        expect(() => store.createTable(redeclared)).toThrow(/already exists/);
+      }
       // Column ORDER is part of the shape, because the physical table has one.
+
       expect(() => store.createTable({
         name: 'notes',
         scope: 'actor',

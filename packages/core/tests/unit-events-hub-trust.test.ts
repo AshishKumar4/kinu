@@ -65,42 +65,44 @@ describe('deriveEventTrust', () => {
 
     expect(deriveEventTrust(d)).toBe('authenticated');
   });
-  test('sandbox_cb collapses to min(self, head_trust) — external head launches sandbox', () => {
-    const d: IngressDescriptor = {
-      ingress: 'sandbox_cb', variant: 'process_done',
-      payload: { process_id: 'p', command: 'ls', exit_code: 0, stdout_excerpt: '', stderr_excerpt: '', duration_ms: 0 },
-      launching_head_trust: 'external',
-    };
 
-    expect(deriveEventTrust(d)).toBe('external');
-  });
-  test('sandbox_cb stays self when owner head launches sandbox', () => {
-    const d: IngressDescriptor = {
-      ingress: 'sandbox_cb', variant: 'process_done',
-      payload: { process_id: 'p', command: 'ls', exit_code: 0, stdout_excerpt: '', stderr_excerpt: '', duration_ms: 0 },
-      launching_head_trust: 'owner',
-    };
+  const sandboxes = [
+    { name: 'sandbox_cb collapses to min(self, head_trust) — external head launches sandbox',
+      head: 'external' },
+    { name: 'sandbox_cb stays self when owner head launches sandbox', head: 'owner' },
+  ] as const;
 
-    expect(deriveEventTrust(d)).toBe('owner');
-  });
-  test('peer_async same-owner → authenticated', () => {
-    const d: IngressDescriptor = {
-      ingress: 'peer_async', variant: 'peer_agent',
-      payload: { from_agent_name: 'a', from_user_id: 'u', topic: 't', body: {}, sender_event_id: 'ox1', kinu_mode: 'build' },
-      same_owner: true, receiver_grant_present: false,
-    };
+  for (const sandbox of sandboxes) {
+    test(sandbox.name, () => {
+      const d: IngressDescriptor = {
+        ingress: 'sandbox_cb', variant: 'process_done',
+        payload: { process_id: 'p', command: 'ls', exit_code: 0, stdout_excerpt: '', stderr_excerpt: '', duration_ms: 0 },
+        launching_head_trust: sandbox.head,
+      };
 
-    expect(deriveEventTrust(d)).toBe('authenticated');
-  });
-  test('peer_async cross-owner with grant → external', () => {
-    const d: IngressDescriptor = {
-      ingress: 'peer_async', variant: 'peer_agent',
-      payload: { from_agent_name: 'a', from_user_id: 'u', topic: 't', body: {}, sender_event_id: 'ox1', kinu_mode: 'build' },
-      same_owner: false, receiver_grant_present: true,
-    };
+      expect(deriveEventTrust(d)).toBe(sandbox.head);
+    });
+  }
 
-    expect(deriveEventTrust(d)).toBe('external');
-  });
+  const peers = [
+    { name: 'peer_async same-owner → authenticated',
+      sameOwner: true, grant: false, trust: 'authenticated' },
+    { name: 'peer_async cross-owner with grant → external',
+      sameOwner: false, grant: true, trust: 'external' },
+  ] as const;
+
+  for (const peer of peers) {
+    test(peer.name, () => {
+      const d: IngressDescriptor = {
+        ingress: 'peer_async', variant: 'peer_agent',
+        payload: { from_agent_name: 'a', from_user_id: 'u', topic: 't', body: {}, sender_event_id: 'ox1', kinu_mode: 'build' },
+        same_owner: peer.sameOwner, receiver_grant_present: peer.grant,
+      };
+
+      expect(deriveEventTrust(d)).toBe(peer.trust);
+    });
+  }
+
   test('peer_async cross-owner without grant rejects at ingress', () => {
     const d: IngressDescriptor = {
       ingress: 'peer_async', variant: 'peer_agent',
