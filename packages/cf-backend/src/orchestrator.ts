@@ -158,7 +158,7 @@ import {
   headStatusUnsettled, storedHeadReportStatus,
   STEER_BRANCH_RUN_ID_PREFIX,
   type PendingBranch, type BranchStatusEvent,
-  type ReleaseStatus, type ReleaseToolDeps,
+  type ReleaseStatus, type ReleaseToolDeps, type ReleaseLedger,
   // Release execution engine — the driver beneath the governance ledger
   ReleaseEngine, createSandboxReleaseExec,
   readWorkspaceWork, hasWorkspaceWork, type WorkspaceWork,
@@ -350,6 +350,40 @@ const KINU_TIMER_CALLBACK = '_kinuTimerTick';
 const STALE_SCHEDULE_HORIZON_MS = FIBER_RECOVERY_MAX_AGE_MS;
 
 const ORPHAN_SEAL_MAX_ROWS = 256;
+
+/** One bounded chunk of one executor file transfer, in either direction. The
+ *  transfer id is the route's, fresh per transfer, so two readers of one path
+ *  cannot replace each other's snapshot. */
+export interface ExecutorFileChunkRead {
+  executorId: string;
+  path: string;
+  transferId: string;
+  offset: number;
+  length: number;
+}
+
+export interface ExecutorFileChunkWrite {
+  executorId: string;
+  path: string;
+  transferId: string;
+  offset: number;
+  chunk: Uint8Array;
+  final: boolean;
+  expectedRevision?: VfsRevision;
+}
+
+/** The obligations that arm the terminal-retry wake, and how each reports a
+ *  failure to arm it. */
+const WAKE_ARM_FAILURE = {
+  delegation: {
+    event: 'subordinate.delegation_wake_arm_failed',
+    doing: 'arming the wake that runs an admitted delegation',
+  },
+  reconcile: {
+    event: 'event.delivery_reconcile_failed',
+    doing: 'arming the wake that finishes what a dead activation owed',
+  },
+} as const;
 
 // These windows bound the Activity response. Stored history remains append-only.
 const ACTIVITY_STEP_WINDOW = 400;
@@ -1572,9 +1606,7 @@ export class OrchestratorAgent extends ActorAgent {
    *  replies and owner notifications (SPEC §7.4). The shared outbox creates
    *  its own table on first use, so there is nothing to initialize here. */
   private get emailOutbox(): EmailOutbox {
-    if (!this._emailOutbox) {
-      this._emailOutbox = new EmailOutbox(this.ctx.storage.sql, (at) => this.armTimer(at));
-    }
+    this._emailOutbox ??= new EmailOutbox(this.ctx.storage.sql, (at) => this.armTimer(at));
 
     return this._emailOutbox;
   }
@@ -1623,25 +1655,23 @@ export class OrchestratorAgent extends ActorAgent {
    * reported where every non-turn model call is.
    */
   protected get cacheWarming(): CacheWarmingLane {
-    if (!this._cacheWarming) {
-      this._cacheWarming = new CacheWarmingLane({
-        store: new CacheWarmStore(this.boundSql, this.actorHandle()),
-        // The armed instant is not passed on: `armDurableWake` re-derives the
-        // soonest wake this workspace owes over every source, the warm row now
-        // among them, so one fold decides and one row carries it.
-        wake: () => { this.armDurableWake(); },
-        send: async ({ modelSpec, body }) => {
-          const providers = this.providerRegistry();
-          const provider = providers.registry.get(modelSpec.provider);
+    this._cacheWarming ??= new CacheWarmingLane({
+      store: new CacheWarmStore(this.boundSql, this.actorHandle()),
+      // The armed instant is not passed on: `armDurableWake` re-derives the
+      // soonest wake this workspace owes over every source, the warm row now
+      // among them, so one fold decides and one row carries it.
+      wake: () => { this.armDurableWake(); },
+      send: async ({ modelSpec, body }) => {
+        const providers = this.providerRegistry();
+        const provider = providers.registry.get(modelSpec.provider);
 
-          if (provider?.warmCache === undefined) return null;
+        if (provider?.warmCache === undefined) return null;
 
-          return { usage: await provider.warmCache(modelSpec.modelId, providers.deps, body) };
-        },
-        spend: (report) => { this.reportModelCall(report); },
-        now: () => Date.now(),
-      });
-    }
+        return { usage: await provider.warmCache(modelSpec.modelId, providers.deps, body) };
+      },
+      spend: (report) => { this.reportModelCall(report); },
+      now: () => Date.now(),
+    });
 
     return this._cacheWarming;
   }
@@ -1743,48 +1773,51 @@ export class OrchestratorAgent extends ActorAgent {
   // Receiver: the receivePeerMessage cross-DO RPC below. The agents tool's
   // ask/send/reply actions ride this hub; spawn adds the create-agent path.
   private _peerHub: PeerHub | null = null;
+
+  /** The owner peer messaging acts as, resolved at call time: a toolset built
+   *  before the claim must still see the owner after it. */
+  private requireOwnerUserId(): string {
+    const userId = this.getOwnerUserId();
+
+    if (!userId) throw new Error('Agent has no owner yet — peer messaging needs an owned agent.');
+
+    return userId;
+  }
+
   protected get peerHub(): PeerHub {
-    if (!this._peerHub) {
-      this._peerHub = new PeerHub({
-        sql: this.ctx.storage.sql,
-        log: this.eventLog,
-        replyChannels: this.replyChannels,
-        vfs: () => this.rt.storage.vfs,
-        selfAgentName: () => this.name,
-        selfUserId: () => {
-          const userId = this.getOwnerUserId();
+    this._peerHub ??= new PeerHub({
+      sql: this.ctx.storage.sql,
+      log: this.eventLog,
+      replyChannels: this.replyChannels,
+      vfs: () => this.rt.storage.vfs,
+      selfAgentName: () => this.name,
+      selfUserId: () => this.requireOwnerUserId(),
+      deliver: async (receiverAgentName, msg) => {
+        const stub = this.env.OrchestratorAgent.get(
+          this.env.OrchestratorAgent.idFromName(receiverAgentName),
+        );
 
-          if (!userId) throw new Error('Agent has no owner yet — peer messaging needs an owned agent.');
+        return await stub.receivePeerMessage(msg);
+      },
+      isSameOwner: async (senderUserId) => senderUserId === this.getOwnerUserId(),
+      hasGrant: async (senderAgentName, senderUserId) => {
+        try {
+          const { stub, caller } = await this.userHub();
 
-          return userId;
-        },
-        deliver: async (receiverAgentName, msg) => {
-          const stub = this.env.OrchestratorAgent.get(
-            this.env.OrchestratorAgent.idFromName(receiverAgentName),
-          );
+          return await stub.hasPeerGrant(caller, senderAgentName, senderUserId);
+        } catch (err) {
+          diagnostics.failure('peer.grant_lookup_failed', toKinuError({
+            doing: 'asking the owner UserDO whether a peer grant exists',
+            cause: err,
+            otherwise: 'unavailable',
+          }), { sender: senderAgentName });
 
-          return await stub.receivePeerMessage(msg);
-        },
-        isSameOwner: async (senderUserId) => senderUserId === this.getOwnerUserId(),
-        hasGrant: async (senderAgentName, senderUserId) => {
-          try {
-            const { stub, caller } = await this.userHub();
-
-            return await stub.hasPeerGrant(caller, senderAgentName, senderUserId);
-          } catch (err) {
-            diagnostics.failure('peer.grant_lookup_failed', toKinuError({
-              doing: 'asking the owner UserDO whether a peer grant exists',
-              cause: err,
-              otherwise: 'unavailable',
-            }), { sender: senderAgentName });
-
-            return false;   // default deny on lookup failure
-          }
-        },
-        scheduleDispatch: (at) => this.armTimer(at),
-        onAdmitted: () => { this.orch.scheduleDrain(); },
-      });
-    }
+          return false;   // default deny on lookup failure
+        }
+      },
+      scheduleDispatch: (at) => this.armTimer(at),
+      onAdmitted: () => { this.orch.scheduleDrain(); },
+    });
 
     return this._peerHub;
   }
@@ -1928,12 +1961,20 @@ export class OrchestratorAgent extends ActorAgent {
    * missing is only the arm at admission time.
    */
   private armDelegationWake(): void {
+    this.armOwedWorkWake('delegation');
+  }
+
+  /** Arm the terminal-retry wake outside this turn. `reason` names the
+   *  obligation that asked for it, and how a failure to arm is reported. */
+  private armOwedWorkWake(reason: keyof typeof WAKE_ARM_FAILURE): void {
+    const failure = WAKE_ARM_FAILURE[reason];
+
     this.detachOwned(async () => {
       try {
         await this.scheduleTerminalRetry(Date.now());
       } catch (cause) {
-        diagnostics.failure('subordinate.delegation_wake_arm_failed', toKinuError({
-          doing: 'arming the wake that runs an admitted delegation', cause, otherwise: 'io',
+        diagnostics.failure(failure.event, toKinuError({
+          doing: failure.doing, cause, otherwise: 'io',
         }), { workspace: this.name });
       }
     });
@@ -2421,18 +2462,10 @@ export class OrchestratorAgent extends ActorAgent {
    *  turns — including a pre-claim build — so deps must not capture owner
    *  state at construction). */
   private getPeersToolDeps(): PeersToolDeps {
-    const requireOwner = () => {
-      const userId = this.getOwnerUserId();
-
-      if (!userId) throw new Error('Agent has no owner yet — peer messaging needs an owned agent.');
-
-      return userId;
-    };
-
     /** Same-owner roster check so a typo'd name errors clearly instead of
      *  materializing a fresh unowned DO that rejects the message. */
     const requirePeer = async (agent: string): Promise<void> => {
-      requireOwner();
+      this.requireOwnerUserId();
 
       if (agent === this.name) throw new Error('that is this agent — pick another peer (action:"list")');
       const { stub, caller } = await this.userHub();
@@ -2443,7 +2476,7 @@ export class OrchestratorAgent extends ActorAgent {
 
     return {
       listPeers: async () => {
-        requireOwner();
+        this.requireOwnerUserId();
         const { stub, caller } = await this.userHub();
 
         return teamPeers(this.name, await stub.listActiveWorkspaces(caller));
@@ -2451,22 +2484,22 @@ export class OrchestratorAgent extends ActorAgent {
       ask: async ({ agent, topic, message, mode, signal }) => {
         await requirePeer(agent);
 
-        return this.peerHub.ask({ agent, userId: requireOwner(), topic, message, mode, signal });
+        return this.peerHub.ask({ agent, userId: this.requireOwnerUserId(), topic, message, mode, signal });
       },
       send: async ({ agent, topic, message, mode }) => {
         await requirePeer(agent);
 
-        return this.peerHub.send({ agent, userId: requireOwner(), topic, message, mode });
+        return this.peerHub.send({ agent, userId: this.requireOwnerUserId(), topic, message, mode });
       },
       reply: async ({ eventId, message }) => this.peerHub.reply({ eventId, message }),
       spawnWorkspace: async ({ name, purpose, message, mode, signal }): Promise<PeerSpawnOutcome> => {
-        const userId = requireOwner();
+        const userId = this.requireOwnerUserId();
         const { stub: userDO, caller } = await this.userHub();
         let agentName = name;
         let created = false;
 
         if (!agentName || !(await userDO.hasWorkspace(caller, agentName))) {
-          const workspaceInput = { name: agentName || undefined, purpose };
+          const workspaceInput = { name: agentName === '' ? undefined : agentName, purpose };
           const entry = await createCloudWorkspaceForUser(this.env, userId, userDO, caller, workspaceInput);
           agentName = entry.name;
           created = true;
@@ -2497,11 +2530,39 @@ export class OrchestratorAgent extends ActorAgent {
     };
   }
 
+  /** The release ledger's writes over the owner's UserDO. The release tool and
+   *  the engine beneath it reach the same governed board through these. */
+  private releaseLedgerWrites(): Omit<ReleaseLedger, 'detail'> {
+    return {
+      update: async (changeId, patch) => {
+        const { stub, caller } = await this.userHub();
+
+        return stub.updateReleaseChange(caller, changeId, patch);
+      },
+      transition: async (changeId, to) => {
+        const { stub, caller } = await this.userHub();
+
+        return stub.transitionReleaseChange(caller, changeId, to);
+      },
+      recordCheck: async (changeId, input) => {
+        const { stub, caller } = await this.userHub();
+
+        return stub.recordReleaseCheck(caller, changeId, input);
+      },
+      recordDeployment: async (changeId, input) => {
+        const { stub, caller } = await this.userHub();
+
+        return stub.recordReleaseDeployment(caller, changeId, input);
+      },
+    };
+  }
+
   private getReleaseToolDeps(): ReleaseToolDeps | undefined {
     if (!this.getOwnerUserDO()) return undefined;
     const hub = () => this.userHub();
 
     return {
+      ...this.releaseLedgerWrites(),
       board: async () => {
         const { stub, caller } = await hub();
 
@@ -2517,30 +2578,10 @@ export class OrchestratorAgent extends ActorAgent {
 
         return stub.createReleaseChange(caller, this.name, input);
       },
-      update: async (changeId, patch) => {
-        const { stub, caller } = await hub();
-
-        return stub.updateReleaseChange(caller, changeId, patch);
-      },
-      transition: async (changeId, status) => {
-        const { stub, caller } = await hub();
-
-        return stub.transitionReleaseChange(caller, changeId, status);
-      },
-      recordCheck: async (changeId, input) => {
-        const { stub, caller } = await hub();
-
-        return stub.recordReleaseCheck(caller, changeId, input);
-      },
       requestApproval: async (changeId, approvalType) => {
         const { stub, caller } = await hub();
 
         return stub.requestReleaseApproval(caller, changeId, approvalType);
-      },
-      recordDeployment: async (changeId, input) => {
-        const { stub, caller } = await hub();
-
-        return stub.recordReleaseDeployment(caller, changeId, input);
       },
       engine: this.getReleaseEngine(),
     };
@@ -2561,30 +2602,11 @@ export class OrchestratorAgent extends ActorAgent {
       exec: handle && provider ? createSandboxReleaseExec(handle, provider) : null,
       signal: () => this.currentTurnSignal(),
       ledger: {
+        ...this.releaseLedgerWrites(),
         detail: async (changeId) => {
           const { stub, caller } = await hub();
 
           return stub.getReleaseDetail(caller, changeId);
-        },
-        update: async (changeId, patch) => {
-          const { stub, caller } = await hub();
-
-          return stub.updateReleaseChange(caller, changeId, patch);
-        },
-        transition: async (changeId, to) => {
-          const { stub, caller } = await hub();
-
-          return stub.transitionReleaseChange(caller, changeId, to);
-        },
-        recordCheck: async (changeId, input) => {
-          const { stub, caller } = await hub();
-
-          return stub.recordReleaseCheck(caller, changeId, input);
-        },
-        recordDeployment: async (changeId, input) => {
-          const { stub, caller } = await hub();
-
-          return stub.recordReleaseDeployment(caller, changeId, input);
         },
       },
       // A stored `github` credential (POST /api/user/credentials/github with a
@@ -3291,7 +3313,7 @@ export class OrchestratorAgent extends ActorAgent {
   }
 
   @callable()
-  async listBackgroundJobs(limit: number = 20): Promise<BackgroundJob[]> {
+  async listBackgroundJobs(limit = 20): Promise<BackgroundJob[]> {
     return listBackgroundJobs(this.jobs, limit);
   }
 
@@ -3462,27 +3484,25 @@ export class OrchestratorAgent extends ActorAgent {
   // ever reported as having run — see core's safety/deferred-approval.ts.
   protected _deferrals: DeferredApprovalQueue | null = null;
   protected get deferrals(): DeferredApprovalQueue {
-    if (!this._deferrals) {
-      this._deferrals = new DeferredApprovalQueue({
-        store: new DeferredApprovalStore(this.boundSql, this.actorHandle()),
-        // Read through `this.orch` at DELIVERY time, never captured: this
-        // getter is reachable from the runtime's own construction path.
-        inbox: { send: (signal) => this.orch.inbox.send(signal) },
-        // Where an 'always' answer lands: the same actor_config the approval
-        // MODE lives in, read live by the gate on the very next command.
-        remember: (grants) => { this.config.grantShellApproval(grants); },
-        // A spent grant's row is DELETED, so this run event is the only
-        // durable record that the owner's approval was consumed. Written into
-        // the spending turn's own run log; outside any turn it falls back to
-        // the workspace run so the audit still lands.
-        audit: (record) => {
-          this.eventRecorder.emit(this._currentRunId || WORKSPACE_RUN_ID, {
-            type: 'approval_consumed', ...record,
-          });
-        },
-        announce: (notice) => this.announceDeferral(notice),
-      });
-    }
+    this._deferrals ??= new DeferredApprovalQueue({
+      store: new DeferredApprovalStore(this.boundSql, this.actorHandle()),
+      // Read through `this.orch` at DELIVERY time, never captured: this
+      // getter is reachable from the runtime's own construction path.
+      inbox: { send: (signal) => this.orch.inbox.send(signal) },
+      // Where an 'always' answer lands: the same actor_config the approval
+      // MODE lives in, read live by the gate on the very next command.
+      remember: (grants) => { this.config.grantShellApproval(grants); },
+      // A spent grant's row is DELETED, so this run event is the only
+      // durable record that the owner's approval was consumed. Written into
+      // the spending turn's own run log; outside any turn it falls back to
+      // the workspace run so the audit still lands.
+      audit: (record) => {
+        this.eventRecorder.emit(this._currentRunId || WORKSPACE_RUN_ID, {
+          type: 'approval_consumed', ...record,
+        });
+      },
+      announce: (notice) => this.announceDeferral(notice),
+    });
 
     return this._deferrals;
   }
@@ -3679,17 +3699,7 @@ export class OrchestratorAgent extends ActorAgent {
     // wake, because a reply is external mail and an activation launches no
     // external work, awaited or detached.
     if (sweepsTruncated || this.owedWorkExists()) {
-      this.detachOwned(async () => {
-        try {
-          await this.scheduleTerminalRetry(Date.now());
-        } catch (cause) {
-          diagnostics.failure('event.delivery_reconcile_failed', toKinuError({
-            doing: 'arming the wake that finishes what a dead activation owed',
-            cause,
-            otherwise: 'io',
-          }), { workspace: this.name });
-        }
-      });
+      this.armOwedWorkWake('reconcile');
     }
 
     // A cold activation is the moment the fork journal's `running` heads become
@@ -4183,7 +4193,7 @@ export class OrchestratorAgent extends ActorAgent {
   }
 
   @callable()
-  async getReleaseBoard(limit: number = 20) {
+  async getReleaseBoard(limit = 20) {
     const { stub, caller } = await this.userHub();
 
     return stub.getReleaseBoard(caller, this.name, limit);
@@ -4369,7 +4379,7 @@ export class OrchestratorAgent extends ActorAgent {
    *  has run, newest-updated first, with its status/iteration/budget. Distinct
    *  from getMctsTree's node rows — this is how a caller tells which search is
    *  the latest without inferring it from node ordering. */
-  @callable() async getMctsSearchRuns(limit: number = 20): Promise<MctsSearchRunSummary[]> {
+  @callable() async getMctsSearchRuns(limit = 20): Promise<MctsSearchRunSummary[]> {
     return this.mctsSearchStore.list(limit);
   }
 
@@ -4704,18 +4714,18 @@ export class OrchestratorAgent extends ActorAgent {
       // workspace with no owner account reached no hub, and advising `kinu
       // connect` there sends a person to re-link a machine that was never the
       // problem.
-      if (isWorkspaceUnattachedError(err)) {
+      if (isWorkspaceUnattachedError({ cause: err })) {
         return { available: false, reason: WORKSPACE_HAS_NO_OWNER };
       }
 
-      if (isDeviceNotConnectedError(err)) {
+      if (isDeviceNotConnectedError({ cause: err })) {
         return { available: false, reason: 'no device connected — connect one with `kinu connect`' };
       }
 
       // Several machines are live and the checkpoint plane does not yet name
       // one: an availability answer, in the hub's own words (it names the
       // machines), never a silent pick of whichever came first.
-      if (isDeviceAmbiguityError(err)) {
+      if (isDeviceAmbiguityError({ cause: err })) {
         return { available: false, reason: renderThrownChain({ cause: err }) };
       }
 
@@ -4869,7 +4879,7 @@ export class OrchestratorAgent extends ActorAgent {
    *  core's listScaffoldArchive; keys stay snake_case here because this RPC's
    *  wire shape predates the archive (ScaffoldLineage.tsx reads written_at). */
   @callable()
-  async listScaffoldVersions(limit: number = 20): Promise<ScaffoldVersionView[]> {
+  async listScaffoldVersions(limit = 20): Promise<ScaffoldVersionView[]> {
     return listScaffoldVersions(this.boundSql, this.rt.actor, limit);
   }
 
@@ -4891,7 +4901,7 @@ export class OrchestratorAgent extends ActorAgent {
 
   /** List recent GEPA optimisation runs for the UI. */
   @callable()
-  async getGepaRuns(limit: number = 20): Promise<GepaRunSummary[]> {
+  async getGepaRuns(limit = 20): Promise<GepaRunSummary[]> {
     return listGepaRuns(this.boundSql, this.actorHandle(), limit);
   }
 
@@ -4900,7 +4910,7 @@ export class OrchestratorAgent extends ActorAgent {
   /** The persisted loss curve (replay_evals), newest first. Read-only — the
    *  data a loss chart would render. */
   @callable()
-  async getReplayEvals(limit: number = 50): Promise<ReplayEvalSummary[]> {
+  async getReplayEvals(limit = 50): Promise<ReplayEvalSummary[]> {
     return listReplayEvals(this.boundSql, this.actorHandle(), limit);
   }
 
@@ -5063,7 +5073,7 @@ export class OrchestratorAgent extends ActorAgent {
    *  root_id with its heads (incl. the ordered per-head step trace) + the merged
    *  synthesis — drives the Exploration surface's Branches strip. */
   @callable()
-  async getHeadRuns(limit: number = 20): Promise<HeadRunView[]> {
+  async getHeadRuns(limit = 20): Promise<HeadRunView[]> {
     return this.headJournal.listRuns(limit);
   }
 
@@ -5257,7 +5267,7 @@ export class OrchestratorAgent extends ActorAgent {
    *  Self surface. Wraps FactsStore (otherwise consumed only internally for
    *  prompt injection). */
   @callable()
-  async getFacts(limit: number = 100): Promise<Array<{
+  async getFacts(limit = 100): Promise<Array<{
     key: string; value: unknown; confidence: number; source: string; lastObservedAt: number;
   }>> {
     return this.facts.recentTopK(limit).map((f) => ({
@@ -5556,7 +5566,7 @@ export class OrchestratorAgent extends ActorAgent {
    * every remote caller — browser rpc, the CLI /rpc transport, MCP
    * search_memory — one behavior everywhere.
    */
-  @callable() async searchMemoryHybrid(query: string, limit: number = 10): Promise<HybridHit[]> {
+  @callable() async searchMemoryHybrid(query: string, limit = 10): Promise<HybridHit[]> {
     const lexicalSearchFn = async (q: string, k: number) => {
       const results = await this.rt.memory.search(q, k);
 
@@ -5962,7 +5972,7 @@ export class OrchestratorAgent extends ActorAgent {
    * shared, so two actors really do run commands on the same executor id. The
    * `(actor_id, created_at DESC, id DESC)` index is exactly this read's.
    */
-  async getExecutorOutput(executorId: string, limit: number = 50) {
+  async getExecutorOutput(executorId: string, limit = 50) {
     return this.sql<ExecutorOutputRow>`SELECT id, executor, command,
         substr(stdout, 1, ${EXECUTOR_OUTPUT_CLIP}) AS stdout, length(stdout) AS stdout_len,
         substr(stderr, 1, ${EXECUTOR_OUTPUT_CLIP}) AS stderr, length(stderr) AS stderr_len,
@@ -6221,13 +6231,13 @@ export class OrchestratorAgent extends ActorAgent {
   // assembles, downloads leave as bounded chunks cut from one read. The actor
   // is single-threaded, so the maps below need no lock. HTTP routes close each
   // transfer on final chunk, error, or stream cancellation.
-  private executorFileUploads = new Map<string, {
+  private readonly executorFileUploads = new Map<string, {
     readonly executorId: string;
     readonly path: string;
     readonly expectedRevision: VfsRevision | undefined;
     readonly upload: ExecutorFileUpload;
   }>();
-  private executorFileDownloads = new Map<string, ExecutorFileDownload>();
+  private readonly executorFileDownloads = new Map<string, ExecutorFileDownload>();
 
   async startExecutorFileDownload(
     executorId: string,
@@ -6254,13 +6264,8 @@ export class OrchestratorAgent extends ActorAgent {
   /** One chunk of one HTTP download. The route supplies a fresh transfer id,
    * so a second GET of the same path cannot reuse stale bytes and concurrent
    * readers cannot replace each other's snapshot. */
-  async readExecutorFileChunk(
-    executorId: string,
-    path: string,
-    transferId: string,
-    offset: number,
-    length: number,
-  ): Promise<{ bytes: Uint8Array } | { error: string }> {
+  async readExecutorFileChunk(read: ExecutorFileChunkRead): Promise<{ bytes: Uint8Array } | { error: string }> {
+    const { executorId, path, transferId, offset, length } = read;
     const router = this.rt.executionRouter;
 
     if (!router) return { error: 'no execution router' };
@@ -6289,15 +6294,8 @@ export class OrchestratorAgent extends ActorAgent {
    *  transfer for its path, so a retry after any failure self-heals instead
    *  of appending to stale bytes; ordering and continuity are enforced inside
    *  the transfer itself, never trusted from the caller. */
-  async writeExecutorFileChunk(
-    executorId: string,
-    path: string,
-    transferId: string,
-    offset: number,
-    chunk: Uint8Array,
-    final: boolean,
-    expectedRevision?: VfsRevision,
-  ): Promise<ExecutorWriteResult> {
+  async writeExecutorFileChunk(write: ExecutorFileChunkWrite): Promise<ExecutorWriteResult> {
+    const { executorId, path, transferId, offset, chunk, final, expectedRevision } = write;
     const router = this.rt.executionRouter;
 
     if (!router) return { error: 'no execution router' };
@@ -6484,7 +6482,7 @@ export class OrchestratorAgent extends ActorAgent {
     return getReasoningEffort(actor === undefined ? this.config : this.hostedChild(actor).child.stores.config);
   }
 
-  @callable() async setReasoningEffort<Effort>(effort: Effort, actor?: string) {
+  @callable() async setReasoningEffort(effort: ReasoningEffort | null, actor?: string) {
     return setReasoningEffort(actor === undefined ? this.config : this.hostedChild(actor).child.stores.config, effort);
   }
 
@@ -7088,7 +7086,7 @@ export class OrchestratorAgent extends ActorAgent {
   /** Refinements newest first, plus the debt that would open the next one —
    *  what `/refine` with no argument prints. */
   @callable()
-  async listRefinements(limit: number = 20): Promise<{
+  async listRefinements(limit = 20): Promise<{
     requests: RefinementRequestView[]; debt: EvolutionDebt;
   }> {
     return {
@@ -7387,7 +7385,7 @@ export class OrchestratorAgent extends ActorAgent {
 /** An export cursor arrives from a client, so it is claimed, not trusted:
  *  anything that is not the shape the previous page returned starts a fresh
  *  archive rather than binding junk into the row query. */
-function parseArchiveCursor<Value>(value: Value): ArchiveCursor | null {
+function parseArchiveCursor(value: ArchiveCursor | undefined): ArchiveCursor | null {
   const parsed = v.safeParse(ArchiveCursorSchema, value);
 
   return parsed.success ? parsed.output : null;

@@ -34,7 +34,7 @@
 import { getAgentByName } from "agents";
 import { FILE_CHUNK_BYTES, FILE_TRANSFER_MAX_BYTES, pumpUploadChunks, VfsRevisionSchema, type ExecutorWriteResult, type VfsRevision } from "@kinu.run/core";
 import * as v from 'valibot';
-import type { OrchestratorAgent } from "./orchestrator";
+import type { ExecutorFileChunkRead, ExecutorFileChunkWrite, OrchestratorAgent } from "./orchestrator";
 import { diagnostics, KinuError, toKinuError } from "@kinu.run/core/obs";
 import { err, fileResponseHeaders, json } from "@kinu.run/core";
 
@@ -44,14 +44,9 @@ export interface FilesRouteAgent {
   startExecutorFileDownload(
     executorId: string, path: string, transferId: string,
   ): Promise<{ size: number } | { error: string; reason: 'too_large' | 'unavailable' }>;
-  readExecutorFileChunk(
-    executorId: string, path: string, transferId: string, offset: number, length: number,
-  ): Promise<{ bytes: Uint8Array } | { error: string }>;
+  readExecutorFileChunk(read: ExecutorFileChunkRead): Promise<{ bytes: Uint8Array } | { error: string }>;
   abortExecutorFileDownload(transferId: string): Promise<void>;
-  writeExecutorFileChunk(
-    executorId: string, path: string, transferId: string, offset: number,
-    chunk: Uint8Array, final: boolean, expectedRevision?: VfsRevision,
-  ): Promise<ExecutorWriteResult>;
+  writeExecutorFileChunk(write: ExecutorFileChunkWrite): Promise<ExecutorWriteResult>;
   abortExecutorFileWrite(transferId: string): Promise<void>;
 }
 
@@ -90,7 +85,7 @@ export async function handleFilesRequest(
 
     return expectedRevision === null
       ? err(400, 'If-Match must encode a numeric or string revision')
-      : upload(request, agent, executorId, path, expectedRevision);
+      : upload({ request, agent, executorId, path, expectedRevision });
   }
 
   return download(agent, executorId, path, url);
@@ -115,13 +110,15 @@ function expectedRevisionFrom(request: Request): VfsRevision | undefined | null 
  * both offset continuity and the total, so neither a lying client nor a lying
  * length header reaches the file plane.
  */
-async function upload(
-  request: Request,
-  agent: FilesRouteAgent,
-  executorId: string,
-  path: string,
-  expectedRevision: VfsRevision | undefined,
-): Promise<Response> {
+async function upload(transfer: {
+  request: Request;
+  agent: FilesRouteAgent;
+  executorId: string;
+  path: string;
+  expectedRevision: VfsRevision | undefined;
+}): Promise<Response> {
+  const { request, agent, executorId, path, expectedRevision } = transfer;
+
   if (request.body === null) return err(400, 'request body required');
 
   const overLimit = () => err(
@@ -148,9 +145,9 @@ async function upload(
 
   try {
     const outcome = await pumpUploadChunks(request, async (offset, chunk, final) => {
-      const written = await agent.writeExecutorFileChunk(
+      const written = await agent.writeExecutorFileChunk({
         executorId, path, transferId, offset, chunk, final, expectedRevision,
-      );
+      });
 
       if (!final && 'error' in written) throw new Error(written.error);
       sent = offset + chunk.byteLength;
@@ -217,13 +214,9 @@ async function download(
         return;
       }
 
-      const chunk = await agent.readExecutorFileChunk(
-        executorId,
-        path,
-        transferId,
-        offset,
-        Math.min(FILE_CHUNK_BYTES, opened.size - offset),
-      );
+      const chunk = await agent.readExecutorFileChunk({
+        executorId, path, transferId, offset, length: Math.min(FILE_CHUNK_BYTES, opened.size - offset),
+      });
 
       if ('error' in chunk) {
         await agent.abortExecutorFileDownload(transferId);
