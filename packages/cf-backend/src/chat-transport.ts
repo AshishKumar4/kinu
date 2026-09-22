@@ -141,6 +141,13 @@ function flushSignal(chunk: UIMessageChunk): PartialFlushSignal {
   return chunk.type === 'text-delta' || chunk.type === 'reasoning-delta' || chunk.type === 'tool-input-available' ? 'content' : 'none';
 }
 
+/** The frame a tab draws its whole transcript from: the seed one socket reads
+ *  on connect, and the redraw every socket reads when the conversation moved
+ *  outside its own stream (a turn opening, a turn closing, a walk-back). */
+function transcriptFrame(history: readonly UIMessage[]): string {
+  return JSON.stringify({ type: MessageType.CF_AGENT_CHAT_MESSAGES, messages: history });
+}
+
 /**
  * The frame that CLOSES one chat request, as both rooms send it: the hook's
  * send resolves on it and stops waiting for a stream.
@@ -235,7 +242,7 @@ export class ChatWireTransport implements ChatTransport, ChatRoom {
     const history = await this.wire.history();
 
     if (resume !== null && resume.resumable.hasActiveStream()) resume.handshake.notifyStreamResuming(connection);
-    sendIfOpen(connection, JSON.stringify({ type: MessageType.CF_AGENT_CHAT_MESSAGES, messages: history }));
+    sendIfOpen(connection, transcriptFrame(history));
   }
 
   onClose(connection: Connection): void {
@@ -402,7 +409,7 @@ export class ChatWireTransport implements ChatTransport, ChatRoom {
 
     this.live = { requestId, carried, streamId, accumulator: new StreamAccumulator({ messageId: turn.messageId }), cadence: partialFlushCadence(), taken: false, broken: false };
 
-    if (turn.userTurn) this.wire.broadcast(JSON.stringify({ type: MessageType.CF_AGENT_CHAT_MESSAGES, messages: await this.wire.history() }));
+    if (turn.userTurn) this.wire.broadcast(transcriptFrame(await this.wire.history()));
   }
 
   /** The turn's answer row is durable before this: the done frame and the
@@ -421,7 +428,7 @@ export class ChatWireTransport implements ChatTransport, ChatRoom {
     this.done(live.requestId);
 
     for (const request of live.carried) this.done(request);
-    this.wire.broadcast(JSON.stringify({ type: MessageType.CF_AGENT_CHAT_MESSAGES, messages: history }));
+    this.wire.broadcast(transcriptFrame(history));
   }
 
   async deliver(event: SessionEvent): Promise<void> {
@@ -457,6 +464,14 @@ export class ChatWireTransport implements ChatTransport, ChatRoom {
 
       case 'broadcast':
         this.wire.broadcast(JSON.stringify(event.event));
+
+        return;
+
+      // The walk-back moved the durable head, so what each tab holds is a
+      // conversation that no longer exists. The stored transcript reaches all
+      // of them over the same frame a turn's close sends.
+      case 'history-reverted':
+        this.wire.broadcast(transcriptFrame(await this.wire.history()));
 
         return;
 

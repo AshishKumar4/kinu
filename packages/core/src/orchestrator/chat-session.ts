@@ -83,6 +83,7 @@ import type { SendLanding, SettledSignals } from '../types/signals';
 import type { WorkMode } from '../types/turn';
 import type { JsonObject } from '../utils/json';
 import { PROGRAMMATIC_MESSAGE_ID_PREFIX, stampTurnAuthor, TURN_AUTHOR_METADATA_KEY } from '../utils/ui-message';
+import { REVERT_NEEDS_IDLE } from './actor-session';
 import type { ActorSession, ActorTurnLease, ActorExecutionInput, ActorExecutionResult } from './actor-session';
 import { CompletionGate, COMPLETION_GATE_EVENT } from './completion-gate';
 import type { LandedSteerRow, PendingSendRow, PendingSendStore, UserSteer } from './inbox';
@@ -214,6 +215,10 @@ export type SessionEvent =
   // --no-auto-evolve` pins evolution silent while jobs may still settle.
   | { type: 'background'; event: string; message: string }
   | { type: 'broadcast'; event: BroadcastEvent }
+  /** The conversation now continues from before `entryId`: the durable head
+   *  moved, so every surface reading this session redraws its transcript from
+   *  the store rather than from what it holds. */
+  | { type: 'history-reverted'; entryId: string }
   /** One durable run-event, forwarded live as the recorder writes it. The
    *  run_events table is the agent's instrumentation ledger (nudges, context
    *  budget, refused budgets); a container-scoped database dies with the
@@ -922,6 +927,25 @@ export class ChatSession {
    *  The other verb, {@link interrupt}, hands them back instead. */
   stop(): void {
     this.actorSession.stop();
+  }
+
+  /**
+   * Continue the conversation from before `entryId` — the operator's walk-back,
+   * and the ONE refusal that governs it: this loop's queue and the turn running
+   * on it are what "a turn is in flight" means, and both backends asked the
+   * same question of the same loop before this lived here.
+   *
+   * The event is emitted after the store has moved and the working history has
+   * been re-read, and its delivery is awaited: a surface redraws from the
+   * reverted transcript, so the caller's answer must not arrive before the
+   * redraw was sent.
+   */
+  async revertTo(entryId: string): Promise<void> {
+    await this.actorSession.revertConversation(this.sessionId, entryId, () => {
+      if (this.turnInFlight()) throw new KinuError('denied', REVERT_NEEDS_IDLE);
+    });
+    this.emit({ type: 'history-reverted', entryId });
+    await this.flushEvents();
   }
 
   /** Run any pending event drain to completion NOW, bypassing the ~250ms

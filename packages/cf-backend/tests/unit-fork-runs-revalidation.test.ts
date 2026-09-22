@@ -244,7 +244,7 @@ describe('fork revalidation policy', () => {
     expect(transcript).toContain('import { MessageView } from "@/components/MessageView"');
     expect(transcript).toContain('<MessageView');
 
-    for (const affordance of ['onFork', 'onFeedback', 'onRestoreFiles', 'takesChip']) {
+    for (const affordance of ['onFork', 'onFeedback', 'onRevert', 'takesChip']) {
       expect(transcript).not.toContain(`${affordance}=`);
     }
 

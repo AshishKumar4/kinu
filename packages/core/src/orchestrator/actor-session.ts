@@ -133,6 +133,11 @@ interface ActiveTurn {
   claimSettled: boolean;
 }
 
+/** One refusal, one sentence: the walk-back is refused by whatever sees work in
+ *  flight first — this actor's own turn, or the queue its host's loop holds —
+ *  and the operator reads the same thing either way. */
+export const REVERT_NEEDS_IDLE = 'Stop the turn that is running before you revert the conversation.';
+
 /** A logical actor's mutable execution state, independent of its physical host.
  * The host retains admission, queueing and durable/effect settlement. It may
  * share immutable catalogs, never this actor's context, orchestrator or abort. */
@@ -307,7 +312,7 @@ export class ActorSession {
    */
   async revertConversation(sessionId: string, entryId: string, assertIdle: () => void): Promise<void> {
     this.canonical.revertTo(sessionId, entryId, () => {
-      if (this.inFlight) throw new KinuError('denied', 'Stop the active turn before reverting its conversation');
+      if (this.inFlight) throw new KinuError('denied', REVERT_NEEDS_IDLE);
       assertIdle();
     });
     this.dynamic.reset();
