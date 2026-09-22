@@ -162,6 +162,20 @@ function actionDescription(input: { value: unknown }): string {
 
 const rosterEntry: SubordinateRosterEntry = { name: 'researcher', actorReference: null, birth: null, deleteRequested: false, createdBy: 'orchestrator', status: 'idle', currentTask: null, createdAt: 1000, dismissedAt: null, lifetime: 'durable', taskEventId: null };
 
+interface HandoffEcho {
+  action: string;
+  input: { name: string };
+  delivery: SubordinateDelivery;
+  busy: boolean;
+}
+
+/** Record the call and answer with the handoff its action reports. */
+function echoHandoff(calls: Call[], echo: HandoffEcho) {
+  calls.push({ action: echo.action, input: echo.input });
+
+  return { ok: true as const, name: echo.input.name, ...handoff(echo.delivery, echo.busy) };
+}
+
 const handoff = (delivery: SubordinateDelivery, busy: boolean): SubordinateHandoff => ({
   eventId: `evt-${delivery}`,
   delivery,
@@ -217,22 +231,18 @@ function makeTeam(
 
       return { name: input.name ?? 'researcher', displayName: 'Researcher' };
     },
-    assign: async (input) => {
-      calls.push({ action: 'assign', input });
-
-      return { ok: true, name: input.name, ...handoff('queued', true) };
-    },
+    assign: async (input) => echoHandoff(calls, {
+      action: 'assign', input, delivery: 'queued', busy: true,
+    }),
     knows: async () => true,
     status: async (input) => {
       calls.push({ action: 'status', input });
 
       return { roster: [rosterEntry] };
     },
-    message: async (input) => {
-      calls.push({ action: 'message', input });
-
-      return { ok: true, name: input.name, ...handoff('starts_now', false) };
-    },
+    message: async (input) => echoHandoff(calls, {
+      action: 'message', input, delivery: 'starts_now', busy: false,
+    }),
     dismiss: async (input) => {
       calls.push({ action: 'dismiss', input });
 
@@ -798,37 +808,30 @@ describe('agents tool — subordinate actions', () => {
     expect(result.note).toContain('evt-queued');
   });
 
-  test('a hire against an idle subordinate says the work starts now', async () => {
-    const { deps } = makeTeam({
-      assign: async (input) => ({ ok: true, name: input.name, ...handoff('starts_now', false) }),
+  const hires = [
+    { name: 'a hire against an idle subordinate says the work starts now',
+      delivery: 'starts_now', busy: false, note: 'idle' },
+    { name: 'a hire deduped against work already waiting says so instead of claiming a fresh start',
+      delivery: 'queued', busy: true, note: 'Queued behind' },
+  ] as const;
+
+  for (const hire of hires) {
+    test(hire.name, async () => {
+      const { deps } = makeTeam({
+        assign: async (input) => ({ ok: true, name: input.name, ...handoff(hire.delivery, hire.busy) }),
+      });
+
+      const t = agentsTool({ team: deps });
+
+      const result = v.parse(
+        DeliveryNoteSchema,
+        await t.execute({ action: 'hire', agent: 'researcher', message: 'x' }),
+      );
+
+      expect(result.delivery).toBe(hire.delivery);
+      expect(result.note).toContain(hire.note);
     });
-
-    const t = agentsTool({ team: deps });
-
-    const result = v.parse(
-      DeliveryNoteSchema,
-      await t.execute({ action: 'hire', agent: 'researcher', message: 'x' }),
-    );
-
-    expect(result.delivery).toBe('starts_now');
-    expect(result.note).toContain('idle');
-  });
-
-  test('a hire deduped against work already waiting says so instead of claiming a fresh start', async () => {
-    const { deps } = makeTeam({
-      assign: async (input) => ({ ok: true, name: input.name, ...handoff('queued', true) }),
-    });
-
-    const t = agentsTool({ team: deps });
-
-    const result = v.parse(
-      DeliveryNoteSchema,
-      await t.execute({ action: 'hire', agent: 'researcher', message: 'x' }),
-    );
-
-    expect(result.delivery).toBe('queued');
-    expect(result.note).toContain('Queued behind');
-  });
+  }
 
   test('msg to a roster name injects a conversational note', async () => {
     const { deps, calls } = makeTeam();

@@ -356,18 +356,21 @@ describe('what the model is allowed to answer', () => {
     expect(parseAdvisorReply('{"note":"   ","severity":"concern"}')).toBeNull();
   });
 
-  test('an unknown severity is refused rather than coerced to a default', () => {
-    expect(parseAdvisorReply('{"note":"x","severity":"critical","class":"wrong-work"}')).toBeNull();
-    expect(parseAdvisorReply('{"note":"x","class":"wrong-work"}')).toBeNull();
-  });
-
   // The class is held to the severity's standard for the same reason: an
   // unlabeled note reaches the eval split as an instance whose kind nobody can
   // name, and a judge cannot be told what it is grading.
-  test('an unknown or absent class is refused, exactly as a severity is', () => {
-    expect(parseAdvisorReply('{"note":"x","severity":"nit","class":"style"}')).toBeNull();
-    expect(parseAdvisorReply('{"note":"x","severity":"nit"}')).toBeNull();
-  });
+  const refusedLabels = [
+    { name: 'an unknown severity is refused rather than coerced to a default',
+      replies: ['{"note":"x","severity":"critical","class":"wrong-work"}', '{"note":"x","class":"wrong-work"}'] },
+    { name: 'an unknown or absent class is refused, exactly as a severity is',
+      replies: ['{"note":"x","severity":"nit","class":"style"}', '{"note":"x","severity":"nit"}'] },
+  ] as const;
+
+  for (const refused of refusedLabels) {
+    test(refused.name, () => {
+      for (const reply of refused.replies) expect(parseAdvisorReply(reply)).toBeNull();
+    });
+  }
 
   test('prose around the JSON is tolerated, because models add it', () => {
     expect(parseAdvisorReply(
@@ -519,15 +522,17 @@ describe('a capability reached through codemode counts as used', () => {
     expect(prompt).toContain('did not use: (none recorded)');
   });
 
-  test('the control — a sandbox program reaching nothing leaves the list intact', () => {
-    const prompt = buildAdvisorPrompt(swarmed('await workspace.list(".")'), ['agents']);
-    expect(prompt).toContain('did not use: agents');
-  });
+  const unreached = [
+    { name: 'the control — a sandbox program reaching nothing leaves the list intact',
+      program: 'await workspace.list(".")' },
+    { name: 'a mention in a comment is not a use', program: '// agents.swarm({}) would work here' },
+  ] as const;
 
-  test('a mention in a comment is not a use', () => {
-    const prompt = buildAdvisorPrompt(swarmed('// agents.swarm({}) would work here'), ['agents']);
-    expect(prompt).toContain('did not use: agents');
-  });
+  for (const unused of unreached) {
+    test(unused.name, () => {
+      expect(buildAdvisorPrompt(swarmed(unused.program), ['agents'])).toContain('did not use: agents');
+    });
+  }
 
   test('a shared namespace reports both its capabilities reached, never neither', () => {
     // `shell` and `file` both reach `workspace`, and over-reporting reach cannot
