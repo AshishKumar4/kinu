@@ -218,6 +218,12 @@ export class DeployFakeControl extends WorkerEntrypoint {
     await this.hit('/publish', build);
   }
 
+  /** A Worker a previous run left serving the older build at 100%: what a
+   *  self-update runs against. */
+  async existing(): Promise<void> {
+    await this.hit('/existing');
+  }
+
   private async hit(
     path: string,
     body?: DeployFakeRefusal | DeployFakeServedBuild | DeployFakeStall | DeployFakeWeight | { expiresIn: number },
@@ -249,9 +255,14 @@ export interface UpdatesProbeAnswer {
  */
 export class UpdatesProbe extends WorkerEntrypoint<Env> {
   async hit(method: string, path: string, session: AuthIdentity): Promise<UpdatesProbeAnswer> {
+    // The refresh token this deployment's env carries is the one its last
+    // secret write left, as a Worker's is; before any, the one it is bound with.
+    const plane = await fetch('http://deploy-control.invalid/state', { method: 'POST' });
+    const written = v.parse(DeployFakeStateSchema, await plane.json()).secrets.KINU_SELF_DEPLOY_REFRESH_TOKEN;
+
     const response = await handleUpdatesRequest(
       new Request(`https://kinu.probe.workers.dev${path}`, { method }),
-      this.env,
+      { ...this.env, KINU_SELF_DEPLOY_REFRESH_TOKEN: written ?? this.env.KINU_SELF_DEPLOY_REFRESH_TOKEN },
       session,
     );
 

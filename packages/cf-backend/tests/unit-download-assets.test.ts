@@ -17,6 +17,7 @@ import { BUILTIN_TOOLS, NAMED_SWARM_PRESETS, SWARM_PRESETS } from '@kinu.run/cor
 import { handleCliRequest, type CliRoutesEnv } from '../src/cli/routes';
 import { unreachableKv, unreachableNamespace } from './helpers/bindings';
 import { handleHealthRequest, type AssetFetcher } from '@kinu.run/core';
+import { HealthAnswerSchema } from '@kinu.run/core/deploy';
 import { CLI_DIST_PATHS } from '@kinu.run/core';
 
 const ORIGIN = 'https://kinu.example.com';
@@ -157,6 +158,14 @@ describe('GET /api/health build stamp', () => {
     const body = v.parse(HealthResponseSchema, await response.json());
     expect(body.ok).toBe(true);
     expect(body.build).toEqual(STAMP);
+  });
+
+  // The deploy smoke's proof that its version override reached the staged version.
+  test('names the Worker version that answered, in the shape the deploy smoke reads', async () => {
+    const env = { ...envWithAssets(PUBLISHED), CF_VERSION_METADATA: { id: 'version-7' } };
+    const response = requiredResponse(await handleHealthRequest(new Request(`${ORIGIN}/api/health`), env));
+
+    expect(v.parse(HealthAnswerSchema, await response.json()).versionId).toBe('version-7');
   });
 
   test('is not ok when the deploy shipped no build stamp', async () => {

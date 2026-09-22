@@ -1,7 +1,8 @@
 // The deployment as idempotent steps (docs/SELF-DEPLOY.md): each looks before it creates and
 // records what it established as a fact, since steps may run in different DO activations.
 // API shapes follow Cloudflare's v4 reference. Unmeasured premises: re-declaring migrations on a
-// version upload is refused, and a version upload drops secrets not named in `keep_bindings`.
+// version upload is refused, a version upload drops secrets not named in `keep_bindings`, and a
+// deployment takes a 0% version (wrangler 4.129.0 sends one).
 import * as v from 'valibot';
 import { cloudflareResult, readEnvelope, type CloudflareTransport, type UploadPart } from './cloudflare';
 import {
@@ -37,6 +38,14 @@ const AssetSessionSchema = v.object({
 
 const VersionSchema = v.object({ id: v.string() });
 
+const DeployedVersionSchema = v.object({ version_id: v.string(), percentage: v.number() });
+
+type DeployedVersion = v.InferOutput<typeof DeployedVersionSchema>;
+
+const DeploymentsSchema = v.object({ deployments: v.array(v.object({ versions: v.array(DeployedVersionSchema) })) });
+
+const VERSION_OVERRIDE_HEADER = 'Cloudflare-Workers-Version-Overrides';
+
 const ASSET_CONTENT_TYPES = {
   html: 'text/html', js: 'text/javascript', mjs: 'text/javascript',
   css: 'text/css', json: 'application/json', svg: 'image/svg+xml',
@@ -68,6 +77,7 @@ export function deployPlan(manifest: ReleaseManifest, inputs: DeployInputs): rea
     uploadStep(manifest),
     addressStep(inputs),
     smokeStep(),
+    promoteStep(),
     handoverStep(manifest),
   ];
 }
@@ -433,13 +443,17 @@ function uploadStep(manifest: ReleaseManifest): DeployStep {
 
       context.artifact.held.release(carried.bytes * 2);
 
-      const version = readEnvelope(path, response, VersionSchema);
+      const uploaded = readEnvelope(path, response, VersionSchema);
+      // A first upload answers the script; its deployment names the version.
+      const version = exists ? uploaded.id : servingVersion(await liveDeployment(context), '');
       const peak = context.artifact.held.peak();
 
-      context.facts.set(FACT_VERSION_ID, version.id);
+      if (version === undefined) throw new Error(`${script} was created, and no deployment names its version`);
+
+      context.facts.set(FACT_VERSION_ID, version);
       context.facts.set(FACT_UPLOAD_PEAK, String(peak));
 
-      return `Version ${version.id} uploaded with ${carried.modules.length} module(s), `
+      return `Version ${version} uploaded with ${carried.modules.length} module(s), `
         + `holding ${mebibytes(peak)} at the peak.`;
     },
   };
@@ -479,17 +493,12 @@ function addressStep(inputs: DeployInputs): DeployStep {
       const version = context.facts.get(FACT_VERSION_ID);
 
       if (version !== undefined) {
-        // A version serves no traffic until a deployment points at it; a refusal leaves the old
-        // build serving, so the envelope is checked.
-        await cloudflareResult(
-          context.transport,
-          {
-            method: 'POST',
-            path: `/accounts/${accountId}/workers/scripts/${script}/deployments`,
-            body: { strategy: 'percentage', versions: [{ version_id: version, percentage: 100 }] },
-          },
-          v.object({ id: v.optional(v.string()) }),
-        );
+        const serving = servingVersion(await liveDeployment(context), version);
+
+        // At 0% only the smoke's override reaches it.
+        await deploy(context, serving === undefined
+          ? [{ version_id: version, percentage: 100 }]
+          : [{ version_id: version, percentage: 0 }, { version_id: serving, percentage: 100 }]);
       }
 
       return `Answering on ${context.facts.get(FACT_ADDRESS) ?? ''}.`;
@@ -503,27 +512,48 @@ function smokeStep(): DeployStep {
     title: 'Check it answers',
     async run(context: DeployContext): Promise<string> {
       const address = context.facts.get(FACT_ADDRESS);
+      const version = context.facts.get(FACT_VERSION_ID);
 
       if (address === undefined) throw new Error('no address was bound, so nothing can be checked');
 
-      const response = await context.http(`https://${address}/api/health`);
+      if (version === undefined) throw new Error('no version was uploaded, so nothing can be checked');
+      const url = `https://${address}/api/health`;
+      const response = await context.http(url, { [VERSION_OVERRIDE_HEADER]: `${context.inputs.instanceName}="${version}"` });
 
-      if (!response.ok) {
-        throw new Error(`https://${address}/api/health answered HTTP ${response.status}`);
+      if (!response.ok) throw new Error(`${url} answered HTTP ${response.status}`);
+
+      const { build, versionId } = v.parse(HealthAnswerSchema, await response.json());
+
+      // An unapplied override reaches the serving version, which may be this build.
+      if (versionId !== version) {
+        throw new Error(`${url} was answered by version ${versionId ?? 'unnamed'}, and the version under test is ${version}`);
       }
 
-      const { build } = v.parse(HealthAnswerSchema, await response.json());
-
-      // Checks which build answered: on an update the old version also answers 200.
       if (build === null || build.version !== context.manifest.version || build.sha !== context.manifest.sha) {
         throw new Error(
-          `https://${address}/api/health answers ${build?.version ?? 'an unstamped build'}`
+          `${url} answers ${build?.version ?? 'an unstamped build'}`
           + ` (${build?.sha ?? 'no sha'}), and this release is ${context.manifest.version}`
           + ` (${context.manifest.sha})`,
         );
       }
 
-      return `Health answers ${build.version}.`;
+      return `Version ${version} answers ${build.version}.`;
+    },
+  };
+}
+
+function promoteStep(): DeployStep {
+  return {
+    id: 'promote',
+    title: 'Send it all traffic',
+    async run(context: DeployContext): Promise<string> {
+      const version = context.facts.get(FACT_VERSION_ID);
+
+      if (version === undefined) throw new Error('no version was uploaded, so nothing can take the traffic');
+
+      await deploy(context, [{ version_id: version, percentage: 100 }]);
+
+      return `Version ${version} serves all traffic.`;
     },
   };
 }
@@ -785,13 +815,47 @@ async function scriptExists(transport: CloudflareTransport, accountId: string, s
   return response.status >= 200 && response.status < 300;
 }
 
+async function liveDeployment(context: DeployContext): Promise<readonly DeployedVersion[]> {
+  const listed = await cloudflareResult(
+    context.transport,
+    { method: 'GET', path: `/accounts/${context.inputs.accountId}/workers/scripts/${context.inputs.instanceName}/deployments` },
+    DeploymentsSchema,
+  );
+
+  return listed.deployments.at(0)?.versions ?? [];
+}
+
+function servingVersion(versions: readonly DeployedVersion[], except: string): string | undefined {
+  let serving: DeployedVersion | undefined;
+
+  for (const entry of versions) {
+    if (entry.version_id !== except && (serving === undefined || entry.percentage > serving.percentage)) serving = entry;
+  }
+
+  return serving?.version_id;
+}
+
+async function deploy(context: DeployContext, versions: readonly DeployedVersion[]): Promise<void> {
+  await cloudflareResult(
+    context.transport,
+    {
+      method: 'POST',
+      path: `/accounts/${context.inputs.accountId}/workers/scripts/${context.inputs.instanceName}/deployments`,
+      body: {
+        strategy: 'percentage',
+        versions: versions.map((entry) => ({ version_id: entry.version_id, percentage: entry.percentage })),
+      },
+    },
+    v.object({ id: v.optional(v.string()) }),
+  );
+}
+
 async function objectExists(transport: CloudflareTransport, path: string): Promise<boolean> {
   const response = await transport.request({ method: 'HEAD', path });
 
   return response.status >= 200 && response.status < 300;
 }
 
-/** Migrations only on the first upload. `keep_bindings` keeps secrets not sent here (see file header). */
 async function versionMetadata(
   context: DeployContext,
   manifest: ReleaseManifest,

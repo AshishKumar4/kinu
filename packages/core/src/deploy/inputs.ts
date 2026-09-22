@@ -23,7 +23,8 @@ export interface DeployInputs {
   readonly sandbox: boolean;
 }
 
-const INSTANCE_NAME = /^[a-z0-9][a-z0-9-]{0,54}$/u;
+// Letter first: an RFC 8941 key in the override header.
+const INSTANCE_NAME = /^[a-z][a-z0-9-]{0,54}$/u;
 
 export const DeployInputsSchema: v.GenericSchema<DeployInputs> = v.object({
   accountId: v.pipe(v.string(), v.regex(/^[0-9a-f]{32}$/u)),

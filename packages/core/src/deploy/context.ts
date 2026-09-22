@@ -14,7 +14,7 @@ export interface ArtifactSource {
 }
 
 /** GET only, deliberately narrower than `fetch`. */
-export type HttpGet = (url: string) => Promise<Response>;
+export type HttpGet = (url: string, headers?: Readonly<Record<string, string>>) => Promise<Response>;
 
 /** Secrets for the run only, kept out of the durable ledger. The last step calls `wipe`. */
 export interface DeploySecretVault {

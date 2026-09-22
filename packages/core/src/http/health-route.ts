@@ -9,7 +9,7 @@ import { readBuildStamp } from './deployed-assets';
 
 export async function handleHealthRequest(
   request: Request,
-  env: Parameters<typeof readBuildStamp>[0],
+  env: Parameters<typeof readBuildStamp>[0] & { readonly CF_VERSION_METADATA?: { readonly id: string } },
 ): Promise<Response | null> {
   const url = new URL(request.url);
 
@@ -21,6 +21,7 @@ export async function handleHealthRequest(
   return Response.json({
     ok: build !== null,
     build,
+    versionId: env.CF_VERSION_METADATA?.id ?? null,
     // Counted from registries so a removed feature cannot stay advertised.
     features: {
       builtinTools: BUILTIN_TOOLS.length,

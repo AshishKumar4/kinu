@@ -209,6 +209,7 @@ interface DeployFakeControlRpc extends Rpc.WorkerEntrypointBranded {
   releaseStall(): Promise<void>;
   weigh(weight: DeployFakeWeight): Promise<void>;
   expireGrant(expiresIn: number): Promise<void>;
+  existing(): Promise<void>;
 }
 
 /** A session as the Updates gate reads one: an email, and the two fields that

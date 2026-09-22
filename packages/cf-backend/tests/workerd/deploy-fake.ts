@@ -359,7 +359,8 @@ export interface DeployFakeRefusal {
 }
 
 export const DeployFakeStateSchema = v.object({
-  deployments: v.array(v.string()),
+  servingRelease: v.string(),
+  liveRefresh: v.string(),
   namespaces: v.array(v.string()),
   buckets: v.array(v.string()),
   indexes: v.array(v.string()),
@@ -381,8 +382,11 @@ export const DeployFakeStateSchema = v.object({
 });
 
 export interface DeployFakeState {
-  /** Every version id the deployment pointer was moved to, in order. */
-  readonly deployments: readonly string[];
+  /** The release the version taking the largest share carries: what a request
+   *  that names no version override is answered by. Empty when nothing serves. */
+  readonly servingRelease: string;
+  /** The one refresh token the authorization server still honours. */
+  readonly liveRefresh: string;
   readonly namespaces: readonly string[];
   readonly buckets: readonly string[];
   readonly indexes: readonly string[];
@@ -420,17 +424,23 @@ const ServedBuildSchema = v.object({
   builtAt: v.string(),
 });
 
+/** One entry of a deployment, as the Workers API carries it. */
+const DeployedVersionsSchema = v.array(v.object({ version_id: v.string(), percentage: v.number() }));
+
+type DeployedVersion = v.InferOutput<typeof DeployedVersionsSchema>[number];
+
 interface Held {
   /** What the channel publishes right now. A row that installs two releases in
    *  a row moves this between the two applies. */
   published: DeployFakeServedBuild;
-  /** Every version id a deployment pointer was moved to, in order. Two
-   *  successive releases must leave two entries: an update that uploaded and
-   *  never repointed is the silent no-op this records. */
-  deployments: string[];
-  /** Which release each uploaded version id carries, so `/api/health` can
-   *  answer what the Worker actually serves. */
-  versions: Map<string, string>;
+  /** Every deployment, oldest first; the last one serves. An update that
+   *  uploaded and never moved the traffic leaves the old version serving. */
+  deployments: DeployedVersion[][];
+  /** Which build each version id carries, in upload order, so `/api/health`
+   *  can answer what the Worker actually serves. */
+  versions: Map<string, DeployFakeServedBuild>;
+  /** Rotated on every refresh grant: the token presented is spent. */
+  liveRefresh: string;
   namespaces: string[];
   buckets: string[];
   indexes: string[];
@@ -475,7 +485,8 @@ function fresh(): Held {
   return {
     published: DEPLOY_FAKE_CHANNEL_BUILD,
     deployments: [],
-    versions: new Map<string, string>(),
+    versions: new Map<string, DeployFakeServedBuild>(),
+    liveRefresh: DEPLOY_FAKE_REFRESH_TOKEN,
     namespaces: [],
     buckets: [],
     indexes: [],
@@ -503,7 +514,8 @@ function reset(): void {
 
   held.published = empty.published;
   held.deployments = [];
-  held.versions = new Map<string, string>();
+  held.versions = new Map<string, DeployFakeServedBuild>();
+  held.liveRefresh = empty.liveRefresh;
   held.namespaces = empty.namespaces;
   held.buckets = empty.buckets;
   held.indexes = empty.indexes;
@@ -531,7 +543,8 @@ function reset(): void {
 
 function snapshot(): DeployFakeState {
   return {
-    deployments: [...held.deployments],
+    servingRelease: held.versions.get(servingVersion())?.version ?? '',
+    liveRefresh: held.liveRefresh,
     namespaces: [...held.namespaces],
     buckets: [...held.buckets],
     indexes: [...held.indexes],
@@ -544,6 +557,22 @@ function snapshot(): DeployFakeState {
     expiredCalls: held.expiredCalls,
     footprint: { ...held.footprint },
   };
+}
+
+/** The version a request that names no override reaches: the largest share of the live deployment. */
+function servingVersion(): string {
+  const live = held.deployments.at(-1) ?? [];
+
+  return live.reduce((best, entry) => (entry.percentage > best.percentage ? entry : best), { version_id: '', percentage: -1 })
+    .version_id;
+}
+
+/** The version a request reaches: the one its override names when that one is in the live
+ *  deployment (Cloudflare's version-overrides doc), and otherwise the serving one. */
+function answeringVersion(request: Request): string {
+  const named = /^kinu="(.+)"$/u.exec(request.headers.get('cloudflare-workers-version-overrides') ?? '')?.[1];
+
+  return (held.deployments.at(-1) ?? []).find((entry) => entry.version_id === named)?.version_id ?? servingVersion();
 }
 
 const RefusalSchema = v.object({
@@ -599,7 +628,7 @@ const ExpireSchema = v.object({ expiresIn: v.number() });
  *  plane refuses it rather than answering a state nobody asked to change. */
 const CONTROL_PATHS: readonly string[] = [
   '/reset', '/refuse', '/serve', '/publish', '/state', '/stall', '/stall/reached',
-  '/stall/release', '/weigh', '/expire',
+  '/stall/release', '/weigh', '/expire', '/existing',
 ];
 
 function envelope(result: JsonValue, status = 200): Response {
@@ -732,20 +761,33 @@ async function api(url: URL, request: Request): Promise<Response> {
 
   if (path.endsWith('/subdomain')) return envelope({ enabled: true });
 
-  if (path.endsWith('/deployments')) {
-    // What the pointer now serves. A row asserting "the deployment moved" reads
-    // this, and `/api/health` below answers the release it names.
-    const versions = v.parse(
-      v.object({ versions: v.array(v.object({ version_id: v.string() })) }),
-      body,
-    ).versions;
+  if (path.endsWith('/deployments') && request.method === 'GET') {
+    // Newest first: the reference lists the deployment serving traffic first.
+    return envelope({ deployments: [...held.deployments].reverse().map((versions) => ({ versions: versions.map((entry) => ({ ...entry })) })) });
+  }
 
-    for (const version of versions) held.deployments.push(version.version_id);
+  if (path.endsWith('/deployments')) {
+    const versions = v.parse(DeployedVersionsSchema, body.versions);
+    const unknown = versions.find((entry) => !held.versions.has(entry.version_id));
+
+    // The reference types `version_id` as the id of a version the Worker holds.
+    if (unknown !== undefined) return refusal(400, 10_000, `no version ${unknown.version_id}`);
+    held.deployments.push(versions);
 
     return envelope({ id: `deployment-${String(held.deployments.length)}` });
   }
 
   if (path.endsWith('/secrets')) {
+    const latest = [...held.versions.keys()].at(-1);
+    const live = held.deployments.at(-1) ?? [];
+
+    // A secret edit deploys a copy of the latest version, so it is refused while
+    // that version is not the one deployment serving all traffic (code 10215 in
+    // wrangler 4.129.0's `secret put`; cloudflare/workers-sdk#10585).
+    if (latest !== undefined && !(live.length === 1 && live[0]?.version_id === latest)) {
+      return refusal(400, 10_215, 'Secret edit failed. The latest version of your Worker isn\'t currently deployed.');
+    }
+
     held.secrets.set(named('name'), named('text'));
 
     return envelope({ name: named('name') });
@@ -817,9 +859,15 @@ async function multipart(url: URL, request: Request): Promise<Response> {
   held.creates.push('version');
   const id = `version-${String(held.uploads)}`;
 
-  held.versions.set(id, held.published.version);
+  held.versions.set(id, held.published);
 
-  return envelope({ id });
+  if (request.method === 'POST') return envelope({ id });
+
+  // A script upload deploys what it carried at once and answers with the
+  // script, whose id is its name (the reference's `Upload Worker Module`).
+  held.deployments.push([{ version_id: id, percentage: 100 }]);
+
+  return envelope({ id: path.split('/').at(-1) ?? '' });
 }
 
 /**
@@ -843,23 +891,20 @@ async function token(request: Request): Promise<Response> {
   }
 
   if (grant === 'refresh_token') {
-    // The seed pair's token, or one this server already rotated to: a
-    // deployment that spent a grant and failed mid-update presents the rotated
-    // one on its next attempt, and a server that refused it would make the
-    // retry path untestable rather than safe.
-    const spendable = [DEPLOY_FAKE_REFRESH_TOKEN, DEPLOY_FAKE_ROTATED_REFRESH];
-
-    if (!spendable.includes(form.get('refresh_token') ?? '')) {
-      return Response.json({ error: 'invalid_grant', error_description: 'that refresh token is not one this server issued' }, { status: 400 });
+    // Rotated on every grant: the token presented is spent, so a deployment
+    // that lost the one it was handed cannot update again.
+    if (form.get('refresh_token') !== held.liveRefresh) {
+      return Response.json({ error: 'invalid_grant', error_description: 'that refresh token is spent or was never issued' }, { status: 400 });
     }
 
     held.refreshes += 1;
+    held.liveRefresh = `probe-refresh-token-${String(held.refreshes + 1)}`;
 
     return Response.json({
       // A DIFFERENT access token, so a call that still carries the expired one
       // is visible here as a call this server refuses.
       access_token: DEPLOY_FAKE_REFRESHED_ACCESS_TOKEN,
-      refresh_token: DEPLOY_FAKE_ROTATED_REFRESH,
+      refresh_token: held.liveRefresh,
       expires_in: 3600,
       token_type: 'bearer',
     });
@@ -874,6 +919,8 @@ async function token(request: Request): Promise<Response> {
   if (form.get('code') !== 'probe-code') {
     return Response.json({ error: 'invalid_grant', error_description: 'that authorization code is not one this server issued' }, { status: 400 });
   }
+
+  held.liveRefresh = DEPLOY_FAKE_REFRESH_TOKEN;
 
   return Response.json({
     access_token: DEPLOY_FAKE_ACCESS_TOKEN,
@@ -908,6 +955,13 @@ async function control(url: URL, request: Request): Promise<Response> {
   if (url.pathname === '/weigh') held.weigh = v.parse(WeighSchema, await request.json());
 
   if (url.pathname === '/expire') held.shortGrant = v.parse(ExpireSchema, await request.json()).expiresIn;
+
+  // What a self-update runs against: a Worker a previous run left serving the older build.
+  if (url.pathname === '/existing') {
+    held.scriptExists = true;
+    held.versions.set('version-0', DEPLOY_FAKE_OLDER_BUILD);
+    held.deployments.push([{ version_id: 'version-0', percentage: 100 }]);
+  }
 
   if (!CONTROL_PATHS.includes(url.pathname)) {
     throw new Error(`the deploy fake has no control surface at ${url.pathname}`);
@@ -984,9 +1038,9 @@ export async function deployOutbound(request: Request): Promise<Response> {
     }
   }
 
-  // The deployment's own smoke check, answered as the new Worker would: the
-  // release the LAST deployment pointer named, which is what makes an
-  // unchecked pointer move visible to a smoke step that compares versions.
+  // The deployment's own smoke check, answered as the Worker would: by the
+  // version the request's override names when that one is deployed, and by
+  // the serving version otherwise.
   if (url.pathname === '/api/health' && url.host.endsWith('.workers.dev')) {
     const armed = held.refuseOnce;
 
@@ -996,14 +1050,14 @@ export async function deployOutbound(request: Request): Promise<Response> {
       return new Response('the new Worker is not answering yet', { status: armed.status });
     }
 
-    const pointed = held.deployments.at(-1) ?? '';
-    const serving = held.versions.get(pointed);
+    const version = answeringVersion(request);
+    const build = held.versions.get(version);
 
-    // The product's own body: the stamp under `build` (core/src/http/health-route.ts).
-    if (serving === undefined) return Response.json({ ok: true, build: DEPLOY_FAKE_OLDER_BUILD });
-    const build = serving === held.published.version ? held.published : DEPLOY_FAKE_OLDER_BUILD;
+    if (build === undefined) return new Response('no Worker serves this address', { status: 404 });
 
-    return Response.json({ ok: true, build });
+    // The product's own body: the stamp under `build`, beside the version that
+    // answered (core/src/http/health-route.ts).
+    return Response.json({ ok: true, build, versionId: version });
   }
 
   throw new Error(`the deploy probe reached an unnamed network: ${request.method} ${request.url}`);

@@ -71,6 +71,8 @@ const UNSCOPED_CLI_TOKEN = { ...OWNER, provider: 'cli' };
 
 beforeEach(async () => {
   await env.DEPLOY_FAKE.reset();
+  // A self-update always runs against a Worker that already serves a version.
+  await env.DEPLOY_FAKE.existing();
   // The update ledger is one object under a fixed id, shared by every row in
   // this file. A row that started from the previous row's finished ledger would
   // pass by skipping every step.
@@ -133,6 +135,7 @@ describe('a deployment updating itself', () => {
     expect(snapshot.version).toBe(DEPLOY_FAKE_VERSION);
     expect(snapshot.steps.every((row) => row.state === 'done')).toBe(true);
     expect(made.uploads).toBe(1);
+    expect(made.servingRelease).toBe(DEPLOY_FAKE_VERSION);
     // The deployment spent its OWN refresh token and re-bound the rotated one:
     // a deployment that wrote back the token it already held could update once
     // and never again.
@@ -207,7 +210,7 @@ describe('a deployment updating itself twice', () => {
     const first = await env.DEPLOY_FAKE.state();
 
     expect(first.uploads).toBe(1);
-    expect(first.deployments).toEqual(['version-1']);
+    expect(first.servingRelease).toBe(DEPLOY_FAKE_VERSION);
 
     // The channel publishes the next release, and this deployment now serves
     // the one it just installed.
@@ -230,37 +233,41 @@ describe('a deployment updating itself twice', () => {
     expect(second.state).toBe('done');
     expect(second.version).toBe(NEXT_BUILD.version);
     expect(made.uploads).toBe(2);
-    expect(made.deployments).toEqual(['version-1', 'version-2']);
+    expect(made.servingRelease).toBe(NEXT_BUILD.version);
     // And the deployment holds the token the SECOND refresh handed it.
-    expect(made.secrets.KINU_SELF_DEPLOY_REFRESH_TOKEN).toBe(DEPLOY_FAKE_ROTATED_REFRESH);
+    expect(made.secrets.KINU_SELF_DEPLOY_REFRESH_TOKEN).toBe(made.liveRefresh);
     expect(await hasVaultSecrets()).toBe(false);
   });
 
-  it('writes the rotated refresh token before the plan, so a failed update can still be retried', async () => {
+  it('keeps the old version serving through a failed smoke, and its own key through a retry and the vault expiry', async () => {
+    const stub = env.DEPLOY_RUN_PROBE.get(env.DEPLOY_RUN_PROBE.idFromName(SELF_UPDATE_RUN_ID));
+
     await env.DEPLOY_FAKE.serve(DEPLOY_FAKE_OLDER_BUILD);
-    // The smoke check refuses once: the upload happened, the pointer moved, and
-    // the run failed after the grant was already spent.
     await env.DEPLOY_FAKE.refuseOnce({ path: '/api/health', status: 502, code: 0, message: 'bad gateway' });
     await env.UPDATES_PROBE.hit('POST', '/api/updates/apply', OWNER);
 
     expect((await settled()).state).toBe('failed');
+    expect((await env.DEPLOY_FAKE.state()).servingRelease).toBe(DEPLOY_FAKE_OLDER_BUILD.version);
 
-    // THE POINT: the token that still works is already on the Worker, written
-    // before the first step rather than by the last one. A deployment holding
-    // the spent token here could never update again.
-    expect((await env.DEPLOY_FAKE.state()).secrets.KINU_SELF_DEPLOY_REFRESH_TOKEN)
-      .toBe(DEPLOY_FAKE_ROTATED_REFRESH);
+    // The retry spends the key again while the failed version is still the
+    // Worker's latest, which is when Cloudflare refuses a secret write.
+    await env.DEPLOY_FAKE.refuseOnce({ path: '/api/health', status: 502, code: 0, message: 'bad gateway' });
+    await env.UPDATES_PROBE.hit('POST', '/api/updates/apply', OWNER);
 
-    // Applying again refreshes with the token the run holds — the fake's
-    // authorization server refuses any other — and finishes the same ledger.
+    expect((await settled()).state).toBe('failed');
+    expect(await stub.expireSoon()).toBe(true);
+    expect((await stub.settledAfter(['expired'])).state).toBe('expired');
+
+    // The version answers now. The authorization server honours only the last
+    // rotated token, so this apply refreshes only if the deployment still has it.
     await env.UPDATES_PROBE.hit('POST', '/api/updates/apply', OWNER);
 
     const finished = await settled();
     const made = await env.DEPLOY_FAKE.state();
 
     expect(finished.state).toBe('done');
-    expect(made.uploads).toBe(1);
-    expect(made.deployments).toEqual(['version-1']);
+    expect(made.servingRelease).toBe(DEPLOY_FAKE_VERSION);
+    expect(made.secrets.KINU_SELF_DEPLOY_REFRESH_TOKEN).toBe(made.liveRefresh);
     expect(await hasVaultSecrets()).toBe(false);
   });
 });
