@@ -75,12 +75,25 @@ describe('buildBenchReport', () => {
     expect(report.dev.cases.map((c) => c.taskId)).toEqual(['t1', 't2']);
   });
 
-  test('an unpaired task is an error — a paired design cannot drop half a pair', () => {
-    expect(() => buildBenchReport({
-      runId: 'r1', config: CONFIG, sealed: null, sealAccessOrdinal: null,
-      devAttempts: [attempt('t1', 'baseline', false)],
-    })).toThrow(/unpaired/);
-  });
+  const loneAttempts = [
+    {
+      name: 'an unpaired task is an error — a paired design cannot drop half a pair',
+      variant: 'baseline', passed: false, refusal: /unpaired/,
+    },
+    {
+      name: 'an attempt from an unknown variant is refused',
+      variant: 'someone-else', passed: true, refusal: /unknown variant/,
+    },
+  ] as const;
+
+  for (const lone of loneAttempts) {
+    test(lone.name, () => {
+      expect(() => buildBenchReport({
+        runId: 'r1', config: CONFIG, sealed: null, sealAccessOrdinal: null,
+        devAttempts: [attempt('t1', lone.variant, lone.passed)],
+      })).toThrow(lone.refusal);
+    });
+  }
 
   test('a missing repeat is an error too — a lost attempt would silently change pass^k', () => {
     const config = { ...CONFIG, repeats: 3 };
@@ -114,17 +127,17 @@ describe('buildBenchReport', () => {
     expect(t1).toMatchObject({ taskId: 't1', attempts: 3, passesA: 2, passesB: 3 });
     expect(t2).toMatchObject({ taskId: 't2', attempts: 3, passesA: 0, passesB: 0 });
     // Mean per attempt, so a k=3 row reads against the same per-attempt budget.
-    expect(t2!.tokensA).toBe(300);
-    expect(t2!.modelCallsA).toBe(6);
+    expect(t2.tokensA).toBe(300);
+    expect(t2.modelCallsA).toBe(6);
     // Cost fields are means so a k=3 row reads against the same per-attempt
     // budget a k=1 row does — except the PEAK, which is a maximum: averaging
     // peaks would report a working set no attempt ever reached.
-    expect(t2!.peakPromptTokensA).toBe(9000);
-    expect(t2!.durationMsA).toBe(20);
-    expect(t2!.breachA).toBe('tokens');
+    expect(t2.peakPromptTokensA).toBe(9000);
+    expect(t2.durationMsA).toBe(20);
+    expect(t2.breachA).toBe('tokens');
     expect(report.budgetBreaches).toBe(1);
-    expect(caseIsUnstable(t1!)).toBe(true);
-    expect(caseIsUnstable(t2!)).toBe(false);
+    expect(caseIsUnstable(t1)).toBe(true);
+    expect(caseIsUnstable(t2)).toBe(false);
     // pass@1 counts every attempt; pass^3 counts only clean sweeps.
     expect(report.dev.stats.passAtOneA).toBeCloseTo(1 / 3, 10);
     expect(report.dev.stats.passAllA).toBe(0);
@@ -149,20 +162,13 @@ describe('buildBenchReport', () => {
     });
 
     const [t1] = report.dev.cases;
-    expect(t1!.tokensA).toBeNull();
-    expect(t1!.peakPromptTokensA).toBeNull();
+    expect(t1.tokensA).toBeNull();
+    expect(t1.peakPromptTokensA).toBeNull();
     // The measured arm is untouched, so one row distinguishes unmeasured from
     // genuinely cheap.
-    expect(t1!.tokensB).toBe(100);
+    expect(t1.tokensB).toBe(100);
     expect(renderBenchSummary(report)).toContain('tokens/task A=unreported  B=100');
     expect(renderBenchSummary(report)).toContain('peak prompt tokens A=unreported  B=1000');
-  });
-
-  test('an attempt from an unknown variant is refused', () => {
-    expect(() => buildBenchReport({
-      runId: 'r1', config: CONFIG, sealed: null, sealAccessOrdinal: null,
-      devAttempts: [attempt('t1', 'someone-else', true)],
-    })).toThrow(/unknown variant/);
   });
 
   test('keeps an observed zero model-call count distinct from absent evidence', () => {
@@ -178,31 +184,32 @@ describe('buildBenchReport', () => {
     expect(renderBenchSummary(report)).toContain('model calls/task A=unreported  B=0.0');
   });
 
-  test('a duplicated repeat is refused naming the key — two rows for one slot would average one attempt twice', () => {
-    const config = { ...CONFIG, repeats: 2 };
-    expect(() => buildBenchReport({
-      runId: 'r1', config, sealed: null, sealAccessOrdinal: null,
-      devAttempts: [
-        attempt('t1', 'baseline', true, { repeat: 0 }),
-        attempt('t1', 'baseline', false, { repeat: 0 }),
-        attempt('t1', 'candidate', true, { repeat: 0 }),
-        attempt('t1', 'candidate', true, { repeat: 1 }),
-      ],
-    })).toThrow(/baseline:t1:0/);
-  });
+  const badRepeatSlots = [
+    {
+      name: 'a duplicated repeat is refused naming the key — two rows for one slot would average one attempt twice',
+      passed: false, repeat: 0, refusal: /baseline:t1:0/,
+    },
+    {
+      name: 'an out-of-range repeat is refused — a repeat outside 0..k-1 belongs to no pairing',
+      passed: true, repeat: 7, refusal: /out-of-range repeat 7/,
+    },
+  ] as const;
 
-  test('an out-of-range repeat is refused — a repeat outside 0..k-1 belongs to no pairing', () => {
-    const config = { ...CONFIG, repeats: 2 };
-    expect(() => buildBenchReport({
-      runId: 'r1', config, sealed: null, sealAccessOrdinal: null,
-      devAttempts: [
-        attempt('t1', 'baseline', true, { repeat: 0 }),
-        attempt('t1', 'baseline', true, { repeat: 7 }),
-        attempt('t1', 'candidate', true, { repeat: 0 }),
-        attempt('t1', 'candidate', true, { repeat: 1 }),
-      ],
-    })).toThrow(/out-of-range repeat 7/);
-  });
+  for (const slot of badRepeatSlots) {
+    test(slot.name, () => {
+      const config = { ...CONFIG, repeats: 2 };
+
+      expect(() => buildBenchReport({
+        runId: 'r1', config, sealed: null, sealAccessOrdinal: null,
+        devAttempts: [
+          attempt('t1', 'baseline', true, { repeat: 0 }),
+          attempt('t1', 'baseline', slot.passed, { repeat: slot.repeat }),
+          attempt('t1', 'candidate', true, { repeat: 0 }),
+          attempt('t1', 'candidate', true, { repeat: 1 }),
+        ],
+      })).toThrow(slot.refusal);
+    });
+  }
 });
 
 describe('decideBenchOutcome — rejection by default', () => {
@@ -217,11 +224,20 @@ describe('decideBenchOutcome — rejection by default', () => {
     expect(decision.reason).toContain('0.1250');
   });
 
-  test('a negative held-out effect rejects', () => {
-    const decision = decideBenchOutcome(scorecard(Array.from({ length: 8 }, () => ({ a: true, b: false }))));
-    expect(decision.accept).toBe(false);
-    expect(decision.reason).toContain('not an improvement');
-  });
+  const uniformScorecards = [
+    { name: 'a negative held-out effect rejects', pairs: 8, b: false, refusal: 'not an improvement' },
+    { name: 'variants that never disagreed reject', pairs: 10, b: true, refusal: 'never disagreed' },
+  ] as const;
+
+  for (const uniform of uniformScorecards) {
+    test(uniform.name, () => {
+      const rated = Array.from({ length: uniform.pairs }, () => ({ a: true, b: uniform.b }));
+      const decision = decideBenchOutcome(scorecard(rated));
+
+      expect(decision.accept).toBe(false);
+      expect(decision.reason).toContain(uniform.refusal);
+    });
+  }
 
   test('an improvement over 3 differing pairs rejects on the floor, not on the p-value', () => {
     // 12 tasks, 3 of which differed. "not significant" would imply a design
@@ -260,11 +276,6 @@ describe('decideBenchOutcome — rejection by default', () => {
     expect(decision.caveat).toContain('overestimate');
   });
 
-  test('variants that never disagreed reject', () => {
-    const decision = decideBenchOutcome(scorecard(Array.from({ length: 10 }, () => ({ a: true, b: true }))));
-    expect(decision.accept).toBe(false);
-    expect(decision.reason).toContain('never disagreed');
-  });
 });
 
 describe('renderBenchSummary', () => {
@@ -476,26 +487,26 @@ describe('run mechanics', () => {
       raw: { prompt_tokens: 1234, completion_tokens: 56, total_tokens: 1290 },
     };
 
-    expect(usageTokens(usage)).toBe(1290);
+    expect(usageTokens({ reported: usage })).toBe(1290);
   });
 
   test('usageTokens also reads the normalized plain-number shape', () => {
-    expect(usageTokens({ inputTokens: 10, outputTokens: 5 })).toBe(15);
+    expect(usageTokens({ reported: { inputTokens: 10, outputTokens: 5 } })).toBe(15);
   });
 
   test('usageTokens never returns a non-number, whatever a provider sends', () => {
     // Unreadable is UNMEASURED, not free: undefined travels to the budget caller,
     // which declines to judge it, where a 0 would have read as inside the cap.
     for (const bad of [undefined, null, 'nonsense', 42, {}, { inputTokens: {} }]) {
-      expect(usageTokens(bad)).toBeUndefined();
+      expect(usageTokens({ reported: bad })).toBeUndefined();
     }
 
     // A non-finite figure is discarded, not propagated: the readable half still
     // counts and NaN never reaches an arithmetic comparison.
-    expect(usageTokens({ inputTokens: NaN, outputTokens: 3 })).toBe(3);
-    expect(usageTokens({ inputTokens: Number.POSITIVE_INFINITY, outputTokens: 3 })).toBe(3);
+    expect(usageTokens({ reported: { inputTokens: NaN, outputTokens: 3 } })).toBe(3);
+    expect(usageTokens({ reported: { inputTokens: Number.POSITIVE_INFINITY, outputTokens: 3 } })).toBe(3);
     // A provider that reported zeros reported something, and that is not absence.
-    expect(usageTokens({ inputTokens: 0, outputTokens: 0 })).toBe(0);
+    expect(usageTokens({ reported: { inputTokens: 0, outputTokens: 0 } })).toBe(0);
   });
 
   test('attemptPassed requires every check, and no checks is not a pass', () => {

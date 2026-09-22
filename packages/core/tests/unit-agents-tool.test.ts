@@ -162,6 +162,20 @@ function actionDescription(input: { value: unknown }): string {
 
 const rosterEntry: SubordinateRosterEntry = { name: 'researcher', actorReference: null, birth: null, deleteRequested: false, createdBy: 'orchestrator', status: 'idle', currentTask: null, createdAt: 1000, dismissedAt: null, lifetime: 'durable', taskEventId: null };
 
+interface HandoffEcho {
+  action: string;
+  input: { name: string };
+  delivery: SubordinateDelivery;
+  busy: boolean;
+}
+
+/** Record the call and answer with the handoff its action reports. */
+function echoHandoff(calls: Call[], echo: HandoffEcho) {
+  calls.push({ action: echo.action, input: echo.input });
+
+  return { ok: true as const, name: echo.input.name, ...handoff(echo.delivery, echo.busy) };
+}
+
 const handoff = (delivery: SubordinateDelivery, busy: boolean): SubordinateHandoff => ({
   eventId: `evt-${delivery}`,
   delivery,
@@ -217,22 +231,18 @@ function makeTeam(
 
       return { name: input.name ?? 'researcher', displayName: 'Researcher' };
     },
-    assign: async (input) => {
-      calls.push({ action: 'assign', input });
-
-      return { ok: true, name: input.name, ...handoff('queued', true) };
-    },
+    assign: async (input) => echoHandoff(calls, {
+      action: 'assign', input, delivery: 'queued', busy: true,
+    }),
     knows: async () => true,
     status: async (input) => {
       calls.push({ action: 'status', input });
 
       return { roster: [rosterEntry] };
     },
-    message: async (input) => {
-      calls.push({ action: 'message', input });
-
-      return { ok: true, name: input.name, ...handoff('starts_now', false) };
-    },
+    message: async (input) => echoHandoff(calls, {
+      action: 'message', input, delivery: 'starts_now', busy: false,
+    }),
     dismiss: async (input) => {
       calls.push({ action: 'dismiss', input });
 
@@ -279,7 +289,7 @@ function makePeers(overrides: Partial<PeersToolDeps> = {}) {
 
 describe('agents tool — registration and dep-gating', () => {
   test('hire accepts a birth-time context choice and refuses it on existing agents', async () => {
-    expect(parseAgentsToolInput({ action: 'hire', role: 'researcher', mission: 'Continue', context: 'inherit' }))
+    expect(parseAgentsToolInput({ input: { action: 'hire', role: 'researcher', mission: 'Continue', context: 'inherit' } }))
       .toMatchObject({ context: 'inherit' });
     const { deps } = makeTeam();
     await expect(agentsTool({ team: deps, profile: testProfile }).execute({
@@ -447,8 +457,9 @@ describe('agents tool — the field contract', () => {
     const tool = agentsTool({ team: makeTeam().deps, swarm: swarmDeps(), profile: testProfile });
     expect(propertyDescription({ value: tool.inputSchema }, 'context')).toContain(DELEGATION_CONTEXT_DESCRIPTION);
     expect(propertyDescription({ value: tool.inputSchema }, 'config')).toContain(DELEGATION_CONTEXT_DESCRIPTION);
-    expect(parseAgentsToolInput({ action: 'hire', role: 'researcher', mission: 'Read' })).not.toHaveProperty('context');
-    expect(() => parseAgentsToolInput({ action: 'swarm', task: 'Read', context: 'inherit' })).toThrow('hire');
+    expect(parseAgentsToolInput({ input: { action: 'hire', role: 'researcher', mission: 'Read' } }))
+      .not.toHaveProperty('context');
+    expect(() => parseAgentsToolInput({ input: { action: 'swarm', task: 'Read', context: 'inherit' } })).toThrow('hire');
   });
 
   test('the preset list reaches the model where `preset` is filled, from the one constant', () => {
@@ -798,37 +809,30 @@ describe('agents tool — subordinate actions', () => {
     expect(result.note).toContain('evt-queued');
   });
 
-  test('a hire against an idle subordinate says the work starts now', async () => {
-    const { deps } = makeTeam({
-      assign: async (input) => ({ ok: true, name: input.name, ...handoff('starts_now', false) }),
+  const hires = [
+    { name: 'a hire against an idle subordinate says the work starts now',
+      delivery: 'starts_now', busy: false, note: 'idle' },
+    { name: 'a hire deduped against work already waiting says so instead of claiming a fresh start',
+      delivery: 'queued', busy: true, note: 'Queued behind' },
+  ] as const;
+
+  for (const hire of hires) {
+    test(hire.name, async () => {
+      const { deps } = makeTeam({
+        assign: async (input) => ({ ok: true, name: input.name, ...handoff(hire.delivery, hire.busy) }),
+      });
+
+      const t = agentsTool({ team: deps });
+
+      const result = v.parse(
+        DeliveryNoteSchema,
+        await t.execute({ action: 'hire', agent: 'researcher', message: 'x' }),
+      );
+
+      expect(result.delivery).toBe(hire.delivery);
+      expect(result.note).toContain(hire.note);
     });
-
-    const t = agentsTool({ team: deps });
-
-    const result = v.parse(
-      DeliveryNoteSchema,
-      await t.execute({ action: 'hire', agent: 'researcher', message: 'x' }),
-    );
-
-    expect(result.delivery).toBe('starts_now');
-    expect(result.note).toContain('idle');
-  });
-
-  test('a hire deduped against work already waiting says so instead of claiming a fresh start', async () => {
-    const { deps } = makeTeam({
-      assign: async (input) => ({ ok: true, name: input.name, ...handoff('queued', true) }),
-    });
-
-    const t = agentsTool({ team: deps });
-
-    const result = v.parse(
-      DeliveryNoteSchema,
-      await t.execute({ action: 'hire', agent: 'researcher', message: 'x' }),
-    );
-
-    expect(result.delivery).toBe('queued');
-    expect(result.note).toContain('Queued behind');
-  });
+  }
 
   test('msg to a roster name injects a conversational note', async () => {
     const { deps, calls } = makeTeam();
@@ -985,7 +989,7 @@ describe('agents tool — peer workspace actions', () => {
     expect('timeoutMs' in (calls[0]?.input ?? {})).toBe(false);
 
     expect(() => parseAgentsToolInput({
-      action: 'hire', agent: 'scout', message: 'x', timeout_seconds: 1,
+      input: { action: 'hire', agent: 'scout', message: 'x', timeout_seconds: 1 },
     })).toThrow('unknown field "timeout_seconds"');
     expect(calls).toHaveLength(1);
   });

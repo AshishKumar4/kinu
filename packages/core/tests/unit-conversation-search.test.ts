@@ -6,6 +6,7 @@
 import { describe, test, expect } from 'bun:test';
 import { createTestRuntime } from './helpers';
 import { ConversationSearchStore, invalidateConversationSearchIndex } from '../src/index';
+import { present } from '@kinu.run/test-utils';
 
 function setup() {
   const { rt, stores } = createTestRuntime();
@@ -33,10 +34,10 @@ describe('ConversationSearchStore.search', () => {
 
     const hits = await store.search('postgres');
     expect(hits.length).toBe(2);
-    expect(hits[0]!.messageId).toBe(dense);
-    expect(hits[0]!.conversationId).toBe('b');
-    expect(hits[0]!.role).toBe('assistant');
-    expect(hits[0]!.snippet).toContain('[postgres]');
+    expect(hits[0].messageId).toBe(dense);
+    expect(hits[0].conversationId).toBe('b');
+    expect(hits[0].role).toBe('assistant');
+    expect(hits[0].snippet).toContain('[postgres]');
   });
 
   test('entries recorded after the index exists are indexed by the next search', async () => {
@@ -55,7 +56,7 @@ describe('ConversationSearchStore.search', () => {
     await record('s4', 'user', 'unrelated kubernetes ingress question');
 
     const hits = await store.search('wrangler staging', 5);
-    expect(hits[0]!.messageId).toBe(strict);
+    expect(hits[0].messageId).toBe(strict);
     expect(hits.map((hit) => hit.messageId).slice(1).sort()).toEqual([partialA, partialB].sort());
   });
 
@@ -74,15 +75,16 @@ describe('ConversationSearchStore.scroll', () => {
 
     for (let i = 0; i < 9; i++) ids.push(await record('long', i % 2 === 0 ? 'user' : 'assistant', `message number ${i}`));
 
-    const view = await store.scroll(ids[4]!, 2);
-    expect(view!.conversationId).toBe('long');
-    expect(view!.messages.map((message) => message.content)).toEqual([
+    const view = present(await store.scroll(ids[4], 2), 'the window around the fifth message');
+
+    expect(view.conversationId).toBe('long');
+    expect(view.messages.map((message) => message.content)).toEqual([
       'message number 2', 'message number 3', 'message number 4',
       'message number 5', 'message number 6',
     ]);
-    expect(view!.messages[2]!.anchor).toBe(true);
-    expect(view!.messagesBefore).toBe(2);
-    expect(view!.messagesAfter).toBe(2);
+    expect(view.messages[2].anchor).toBe(true);
+    expect(view.messagesBefore).toBe(2);
+    expect(view.messagesAfter).toBe(2);
   });
 
   test('a window never crosses into another session', async () => {
@@ -91,10 +93,11 @@ describe('ConversationSearchStore.scroll', () => {
     const first = await record('short', 'user', 'first');
     await record('short', 'assistant', 'second');
 
-    const view = await store.scroll(first, 5);
-    expect(view!.messages.map((message) => message.content)).toEqual(['first', 'second']);
-    expect(view!.messagesBefore).toBe(0);
-    expect(view!.messagesAfter).toBe(0);
+    const view = present(await store.scroll(first, 5), 'the window around the first message');
+
+    expect(view.messages.map((message) => message.content)).toEqual(['first', 'second']);
+    expect(view.messagesBefore).toBe(0);
+    expect(view.messagesAfter).toBe(0);
   });
 
   test('returns null for an anchor no entry holds', async () => {
@@ -107,10 +110,12 @@ describe('ConversationSearchStore.scroll', () => {
     const { store, record } = setup();
     const id = await record('chat', 'assistant', 'x'.repeat(5000));
 
-    const capped = await store.scroll(id);
-    expect(capped!.messages[0]!.content).toContain('x'.repeat(700));
-    expect(capped!.messages[0]!.content).toContain('[+4300 chars — pass max_chars to read the full message]');
-    expect((await store.scroll(id, 5, 10_000))!.messages[0]!.content).toBe('x'.repeat(5000));
+    const capped = present(await store.scroll(id), 'the truncated window');
+    const full = present(await store.scroll(id, 5, 10_000), 'the untruncated window');
+
+    expect(capped.messages[0].content).toContain('x'.repeat(700));
+    expect(capped.messages[0].content).toContain('[+4300 chars — pass max_chars to read the full message]');
+    expect(full.messages[0].content).toBe('x'.repeat(5000));
   });
 });
 
@@ -128,10 +133,10 @@ describe('ConversationSearchStore.browse', () => {
 
     const conversations = await store.browse();
     expect(conversations.map((conversation) => conversation.conversationId)).toEqual(['new', 'old']);
-    expect(conversations[1]!.messageCount).toBe(2);
-    expect(conversations[1]!.startedAt).toBe(1000);
-    expect(conversations[1]!.lastActiveAt).toBe(2000);
-    expect(conversations[1]!.preview).toBe('old kickoff question');
+    expect(conversations[1].messageCount).toBe(2);
+    expect(conversations[1].startedAt).toBe(1000);
+    expect(conversations[1].lastActiveAt).toBe(2000);
+    expect(conversations[1].preview).toBe('old kickoff question');
   });
 });
 
@@ -143,7 +148,7 @@ describe('the derived index', () => {
 
     expect((await store.search('topicword')).map((hit) => hit.conversationId)).toEqual(['chat']);
     expect((await store.browse()).map((conversation) => conversation.conversationId)).toEqual(['chat']);
-    expect((await store.scroll(node))!.conversationId).toBe('mcts');
+    expect(present(await store.scroll(node), 'the window around the tree node').conversationId).toBe('mcts');
   });
 
   test('invalidation discards the index and rebuilds it from the canonical store', async () => {

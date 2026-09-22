@@ -114,7 +114,11 @@ function build(donor?: Database, unreadableActor?: string, automatic = false): F
   };
 
   const host = createActorHost({
-    storage: { sql, transactionSync: (write) => db.transaction(write)(), exec: exec.exec },
+    storage: {
+      sql,
+      transactionSync: (write) => db.transaction(write)(),
+      exec: (query, ...bindings) => exec.exec(query, ...bindings),
+    },
     directory,
     installedBuild: 'test-build',
     filesFor: async (bound) => ({
@@ -163,7 +167,15 @@ function contextOf(actor: BoundActor): ContextSelection {
 }
 
 /** The claim object a settle needs, for a turn this test admitted itself. */
-function claimOf(actorId: string, turnId: string, epoch: number, runId: string, context: ContextSelection): ActorTurnClaim {
+interface ClaimSeed {
+  actorId: string;
+  turnId: string;
+  epoch: number;
+  runId: string;
+  context: ContextSelection;
+}
+
+function claimOf({ actorId, turnId, epoch, runId, context }: ClaimSeed): ActorTurnClaim {
   return { actorId, turnId, runId, epoch, workMode: 'build', program: BUILTIN,
     workingRevision: context.revision, workingContextId: context.contextId };
 }
@@ -195,15 +207,15 @@ describe('one workspace database, many logical actors', () => {
 
           for (const index of [0, 1]) {
             const lease = actor.session.beginTurn({ runId: `run-${index}`, turnId: `turn-${index}` }, policy.mode, index);
-            const observe = actor.session.orchestrator.turnExtension.onToolResult;
+            const extension = actor.session.orchestrator.turnExtension;
 
-            if (observe === undefined) throw new Error('the acquired actor has no step observation');
+            if (extension.onToolResult === undefined) throw new Error('the acquired actor has no step observation');
 
             for (let failures = 0; failures < 3; failures++) {
-              await observe({ toolName: 'shell', args: { command: 'bad' }, result: 'failed', success: false, reason: null });
+              await extension.onToolResult({ toolName: 'shell', args: { command: 'bad' }, result: 'failed', success: false, reason: null });
             }
 
-            await observe({ toolName: 'shell', args: { command: 'corrected' }, result: 'done', success: true });
+            await extension.onToolResult({ toolName: 'shell', args: { command: 'corrected' }, result: 'done', success: true });
             actor.session.orchestrator.recordTurn({
               userMessage: `assignment ${index}`, assistantResponse: 'done', toolCalls: [],
               steps: 1, durationMs: 1, feedback: null, hadError: false, turnId: `turn-${index}`,
@@ -381,7 +393,7 @@ describe('one workspace database, many logical actors', () => {
     const a = fx.child('alpha', 'c-alpha', 'subordinate');
     const alpha = await fx.host.acquire(a);
     await alpha.stores.claims.admit({ runId: 'r', turnId: 't', workMode: 'build', program: BUILTIN, context: contextOf(alpha) });
-    alpha.stores.claims.settle(claimOf(a.actorId, 't', 1, 'r', contextOf(alpha)), 'completed');
+    alpha.stores.claims.settle(claimOf({ actorId: a.actorId, turnId: 't', epoch: 1, runId: 'r', context: contextOf(alpha) }), 'completed');
 
     await fx.host.retire(fx.main, { reference: a, name: 'alpha', destroy: false });
     expect(fx.sql<{ n: number }>`SELECT COUNT(*) AS n FROM actor_turn_claims WHERE actor_id = ${a.actorId}`[0]?.n).toBe(1);

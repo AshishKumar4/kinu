@@ -67,13 +67,22 @@ describe('host matching', () => {
     expect(egressHostMatches('api.stripe.com', 'api.github.com')).toBe(false);
   });
 
-  test('a glob spans a label but stays anchored at both ends', () => {
-    expect(egressHostMatches('*.stripe.com', 'api.stripe.com')).toBe(true);
-    // The suffix trick: an unanchored check would let an attacker-controlled
-    // domain that merely CONTAINS the bound host collect the secret.
-    expect(egressHostMatches('api.stripe.com', 'api.stripe.com.attacker.test')).toBe(false);
-    expect(egressHostMatches('*.stripe.com', 'stripe.com.attacker.test')).toBe(false);
-  });
+  // The suffix trick in the second row: an unanchored check would let an
+  // attacker-controlled domain that merely CONTAINS the bound host collect
+  // the secret.
+  const globs = [
+    { name: 'a glob spans a label but stays anchored at both ends',
+      matches: [['*.stripe.com', 'api.stripe.com']],
+      misses: [['api.stripe.com', 'api.stripe.com.attacker.test'], ['*.stripe.com', 'stripe.com.attacker.test']] },
+  ] as const;
+
+  for (const glob of globs) {
+    test(glob.name, () => {
+      for (const [pattern, host] of glob.matches) expect(egressHostMatches(pattern, host)).toBe(true);
+
+      for (const [pattern, host] of glob.misses) expect(egressHostMatches(pattern, host)).toBe(false);
+    });
+  }
 
   test('a dot in the pattern is literal, not a wildcard', () => {
     expect(egressHostMatches('api.stripe.com', 'apiXstripeXcom')).toBe(false);
@@ -240,7 +249,7 @@ describe('inherited approval policy', () => {
 
   test('a facet cannot record a grant — there is nothing to remember with', () => {
     const policy = createInheritedApprovalPolicy(rootSource('strict', []).source);
-    expect(policy.remember).toBeUndefined();
+    expect(policy).not.toHaveProperty('remember');
     expect(policy.requestApproval).toBeUndefined();
   });
 
@@ -336,7 +345,7 @@ describe('scrubbing what comes back', () => {
   });
 
   test('a secret split one byte at a time is still scrubbed', async () => {
-    const out = await pump([...SECRET]);
+    const out = await pump(SECRET.split(''));
     expect(out).toBe(STRIPE.placeholder);
   });
 

@@ -32,6 +32,18 @@ interface ShellToolInput { command: string }
 /** A minimal BackgroundJobRunner double — only the two members the wrapper
  *  reads (`thresholdDeps`, `policy`), over a caller-supplied onThreshold so
  *  each test observes exactly when the wrapper crossed. */
+/** Records the crossing and detaches it under `jobId` — what a real runner reports back. */
+function recordDetach(
+  crossings: string[], detached: Promise<unknown>[], jobId: string,
+): (kind: string, promise: Promise<unknown>) => DetachOutcome {
+  return (kind, promise) => {
+    crossings.push(kind);
+    detached.push(promise);
+
+    return { detached: true, jobId };
+  };
+}
+
 function fakeJobRunner(
   policy: BackgroundPolicy,
   onThreshold: (kind: string, promise: Promise<unknown>) => DetachOutcome,
@@ -78,12 +90,12 @@ function fakeShellTool(command: Promise<void>): ToolSet[string] {
   });
 }
 
-function executeTool<Args>(tools: ToolSet, name: string) {
+function executeTool(tools: ToolSet, name: string) {
   const entry = tools[name];
 
   if (!entry) throw new Error(`Expected ${name} tool to be registered`);
 
-  return toolExecute<Args, TestToolResult>(entry);
+  return toolExecute<ForkInput | ShellToolInput, TestToolResult>(entry);
 }
 
 describe('wrapToolsForBackground — fork is spawn-shaped, run/eval are result-shaped', () => {
@@ -112,7 +124,7 @@ describe('wrapToolsForBackground — fork is spawn-shaped, run/eval are result-s
     const exploration = gate();
     const raw: ToolSet = { agents: fakeForkTool(exploration.held, () => { explored = true; }) };
     const wrapped = wrapToolsForBackground(raw, { jobRunner, mode: () => 'build', backgroundable: BACKGROUNDABLE_TOOLS });
-    const out = await executeTool<ForkInput>(wrapped, 'agents')({ action: 'fork', task: 't' });
+    const out = await executeTool(wrapped, 'agents')({ action: 'fork', task: 't' });
 
     expect(crossings).toEqual(['agents']);
     // Detached on spawn-confirm: the exploration was still running when the
@@ -140,12 +152,7 @@ describe('wrapToolsForBackground — fork is spawn-shaped, run/eval are result-s
 
     const jobRunner = fakeJobRunner(
       { ...BACKGROUND_POLICY['one-shot'], detachAfterMs: 10 },
-      (kind, promise) => {
-        crossings.push(kind);
-        detached.push(promise);
-
-        return { detached: true, jobId: 'job-fork-osh' };
-      },
+      recordDetach(crossings, detached, 'job-fork-osh'),
       timer,
     );
 
@@ -156,7 +163,7 @@ describe('wrapToolsForBackground — fork is spawn-shaped, run/eval are result-s
     const exploration = gate();
     const raw: ToolSet = { agents: fakeForkTool(exploration.held) };
     const wrapped = wrapToolsForBackground(raw, { jobRunner, mode: () => 'build', backgroundable: BACKGROUNDABLE_TOOLS });
-    const pending = executeTool<ForkInput>(wrapped, 'agents')({ action: 'fork', task: 't' });
+    const pending = executeTool(wrapped, 'agents')({ action: 'fork', task: 't' });
     timer.tick();
     exploration.release();
     const out = await pending;
@@ -177,18 +184,13 @@ describe('wrapToolsForBackground — fork is spawn-shaped, run/eval are result-s
 
     const jobRunner = fakeJobRunner(
       { ...BACKGROUND_POLICY['one-shot'], detachAfterMs: 10 },
-      (kind, promise) => {
-        crossings.push(kind);
-        detached.push(promise);
-
-        return { detached: true, jobId: 'job-run' };
-      },
+      recordDetach(crossings, detached, 'job-run'),
       timer,
     );
 
     const command = gate();
     const wrapped = wrapToolsForBackground({ shell: fakeShellTool(command.held) }, { jobRunner, mode: () => 'build', backgroundable: BACKGROUNDABLE_TOOLS });
-    const pending = executeTool<ShellToolInput>(wrapped, 'shell')({ command: 'serve' });
+    const pending = executeTool(wrapped, 'shell')({ command: 'serve' });
     timer.tick();
     const out = await pending;
 
@@ -220,7 +222,7 @@ describe('wrapToolsForBackground — fork is spawn-shaped, run/eval are result-s
     });
 
     const wrapped = wrapToolsForBackground(raw, { jobRunner, mode: () => 'build', backgroundable: BACKGROUNDABLE_TOOLS });
-    const out = await executeTool<ForkInput>(wrapped, 'agents')({ action: 'list' });
+    const out = await executeTool(wrapped, 'agents')({ action: 'list' });
     expect(ran).toBe(true);
     expect(out).toEqual({ subordinates: [] });
   });
@@ -233,19 +235,14 @@ describe('wrapToolsForBackground — fork is spawn-shaped, run/eval are result-s
 
     const jobRunner = fakeJobRunner(
       { ...BACKGROUND_POLICY.interactive, detachAfterMs: 20 },
-      (kind, promise) => {
-        crossings.push(kind);
-        detached.push(promise);
-
-        return { detached: true, jobId: 'job-run' };
-      },
+      recordDetach(crossings, detached, 'job-run'),
       timer,
     );
 
     const command = gate();
     const raw: ToolSet = { shell: fakeShellTool(command.held) };
     const wrapped = wrapToolsForBackground(raw, { jobRunner, mode: () => 'build', backgroundable: BACKGROUNDABLE_TOOLS });
-    const pending = executeTool<ShellToolInput>(wrapped, 'shell')({ command: 'sleep 1' });
+    const pending = executeTool(wrapped, 'shell')({ command: 'sleep 1' });
     timer.tick();
     const out = await pending;
 
@@ -268,7 +265,7 @@ describe('wrapToolsForBackground — fork is spawn-shaped, run/eval are result-s
     // The window never fires: fast work is work that settles first.
     const raw: ToolSet = { shell: fakeShellTool(Promise.resolve()) };
     const wrapped = wrapToolsForBackground(raw, { jobRunner, mode: () => 'build', backgroundable: BACKGROUNDABLE_TOOLS });
-    const out = await executeTool<ShellToolInput>(wrapped, 'shell')({ command: 'ls' });
+    const out = await executeTool(wrapped, 'shell')({ command: 'ls' });
     expect(out).toBe('command output');
   });
 });

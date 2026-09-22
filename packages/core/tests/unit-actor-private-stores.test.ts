@@ -15,7 +15,7 @@
  */
 import { describe, expect, test } from 'bun:test';
 import { Database } from 'bun:sqlite';
-import { createTestActors, type TestActors } from '@kinu.run/test-utils';
+import { createTestActors, present, type TestActors } from '@kinu.run/test-utils';
 import { makeExecRaw, makeSql, makeSqlExec } from './helpers';
 import { initWorkspaceSchema } from '../src/state/workspace-schema';
 import type { ActorHandle } from '../src/identity/actor-handle';
@@ -370,7 +370,7 @@ describe('two actors, one database: the head journal', () => {
     expect(cursor).toBe('h0-s1');
     // The anchor names `h0-s1`, a row id B's trace also has a seq space for but
     // no row of. The walk restarts rather than resuming in someone else's trace.
-    expect(() => b.readStepsPage('h0', { cursor: { after: cursor! } })).toThrow(StaleCursorError);
+    expect(() => b.readStepsPage('h0', { cursor: { after: present(cursor, 'the page cursor') } })).toThrow(StaleCursorError);
     w.close();
   });
 

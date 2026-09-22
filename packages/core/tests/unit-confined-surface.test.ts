@@ -21,6 +21,41 @@ import type { HeadInput } from '../src/heads/types';
 import type { WebSearchProvider } from '../src/web/index';
 import { defaultLoopOrigin } from '../src/scaffold/bootstrap';
 
+interface SurfaceStep {
+  reported: boolean;
+  granted: boolean;
+  proposed: boolean;
+}
+
+/** What the model answers at each stage of the confined surface's handshake. */
+function contentFor(step: SurfaceStep): LanguageModelV3Content[] {
+  if (step.reported) return [{ type: 'text', text: 'Done.' }];
+
+  if (step.granted) {
+    return [{
+      type: 'tool-call',
+      toolCallId: 'report-1',
+      toolName: 'report',
+      input: JSON.stringify({ status: 'completed', content: 'the granted children hold the answer' }),
+    }];
+  }
+
+  if (step.proposed) return [{ type: 'text', text: 'Waiting on the grant.' }];
+
+  return [{
+    type: 'tool-call',
+    toolCallId: 'propose-1',
+    toolName: 'propose_branch',
+    input: JSON.stringify({
+      rationale: 'two threads deserve a budget',
+      branches: [
+        { task: 'angle one', rationale: 'first', context: 'fresh' },
+        { task: 'angle two', rationale: 'second', context: 'fresh' },
+      ],
+    }),
+  }];
+}
+
 const stubWeb: WebSearchProvider = {
   search: async (query: string) => ({ query, results: [], source: 'duckduckgo' as const }),
   fetch: async (url: string) => ({ url, retrievedAt: '', markdown: '' }),
@@ -151,29 +186,7 @@ describe('node proposal merges after the eval finish', () => {
         const granted = text.includes('Granted: 2 children');
         const reported = text.includes('"received":true');
 
-        const content: LanguageModelV3Content[] = reported
-          ? [{ type: 'text', text: 'Done.' }]
-          : granted
-            ? [{
-              type: 'tool-call',
-              toolCallId: 'report-1',
-              toolName: 'report',
-              input: JSON.stringify({ status: 'completed', content: 'the granted children hold the answer' }),
-            }]
-            : proposed
-              ? [{ type: 'text', text: 'Waiting on the grant.' }]
-              : [{
-                type: 'tool-call',
-                toolCallId: 'propose-1',
-                toolName: 'propose_branch',
-                input: JSON.stringify({
-                  rationale: 'two threads deserve a budget',
-                  branches: [
-                    { task: 'angle one', rationale: 'first', context: 'fresh' },
-                    { task: 'angle two', rationale: 'second', context: 'fresh' },
-                  ],
-                }),
-              }];
+        const content = contentFor({ reported, granted, proposed });
 
         return {
           content,

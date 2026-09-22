@@ -44,8 +44,8 @@ describe('openai-compat cancellation', () => {
 
       return new Response(
         new ReadableStream<Uint8Array>({
-          start(controller) {
-            controller.enqueue(encoder.encode(
+          start(stream) {
+            stream.enqueue(encoder.encode(
               sseData('{"choices":[{"index":0,"delta":{"content":"hello"}}]}'),
             ));
 
@@ -55,11 +55,11 @@ describe('openai-compat cancellation', () => {
             if (signal instanceof AbortSignal) {
               if (signal.aborted) {
                 entry.fired = true;
-                controller.close();
+                stream.close();
               } else {
                 signal.addEventListener('abort', () => {
                   entry.fired = true;
-                  controller.close();
+                  stream.close();
                 }, { once: true });
               }
             }

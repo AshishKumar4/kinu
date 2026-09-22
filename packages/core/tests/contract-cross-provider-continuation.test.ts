@@ -28,7 +28,16 @@ import {
   parseJsonObject,
   type ChatEvent, type JsonObject, type ProviderDeps, type AuthResolution,
 } from '../src/index';
-import { createMockFetch, type MockFetchHandle } from '@kinu.run/test-utils';
+import { createMockFetch, type MockFetchHandle, type RecordedRequest } from '@kinu.run/test-utils';
+
+/** Answers each call with the next script, holding the last one once they run out. */
+function replayingScripts(scripts: readonly string[]) {
+  return (_req: RecordedRequest, callIndex: number) => ({
+    status: 200,
+    headers: { 'content-type': 'text/event-stream' },
+    body: scripts[Math.min(callIndex, scripts.length - 1)] ?? '',
+  });
+}
 
 /** What the SOURCE provider named this call. Anthropic's own grammar, and
  *  nothing any other family would mint — which is what makes its presence or
@@ -254,11 +263,7 @@ async function truncatedAnthropicTurn(tools: ToolSet): Promise<{
 
   const mock = createMockFetch([{
     match: 'api.anthropic.com',
-    respond: (_req, callIndex) => ({
-      status: 200,
-      headers: { 'content-type': 'text/event-stream' },
-      body: scripts[Math.min(callIndex, scripts.length - 1)] ?? '',
-    }),
+    respond: replayingScripts(scripts),
   }]);
 
   const deps = makeDeps({
@@ -326,11 +331,7 @@ async function reasonedCompatTurn(tools: ToolSet): Promise<{
 
   const mock = createMockFetch([{
     match: 'compat.example',
-    respond: (_req, callIndex) => ({
-      status: 200,
-      headers: { 'content-type': 'text/event-stream' },
-      body: scripts[Math.min(callIndex, scripts.length - 1)] ?? '',
-    }),
+    respond: replayingScripts(scripts),
   }]);
 
   const deps = makeDeps({

@@ -180,7 +180,7 @@ describe('Stop scopes to the displayed turn', () => {
         detail: v.optional(v.string()),
       })),
       timestamp: v.number(),
-    }), JSON.parse(s.broadcasts[0]!));
+    }), JSON.parse(s.broadcasts[0]));
 
     expect(frame.abortedTools).toBe(1);
   });

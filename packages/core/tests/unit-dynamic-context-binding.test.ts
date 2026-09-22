@@ -8,7 +8,7 @@
 // its context had gone quiet.
 import { describe, test, expect } from 'bun:test';
 import { jsonSchema, tool, type ToolSet } from 'ai';
-import { createTestActors, createTestRuntime } from '@kinu.run/test-utils';
+import { createTestActors, createTestRuntime, present } from '@kinu.run/test-utils';
 import { createInlineCraftStore } from '../src/identity/inline-primitives';
 import { collectDynamicContext, type DynamicContextInput } from '../src/state/dynamic-context';
 import { createAgentStores } from '../src/state/agent-stores';
@@ -42,11 +42,12 @@ function setup(): Fixture {
   const sibling = actors.sibling('sibling');
 
   const files = async () => ({ vfs: rt.storage.vfs, artifactDirectory: '/actor/.kinu/context' });
+  const transactionSync: typeof rt.storage.transactionSync = (write) => rt.storage.transactionSync(write);
 
   return {
     rt,
-    stores: createAgentStores(() => testSql.sql, () => rt.actor, rt.storage.transactionSync, files),
-    sibling: createAgentStores(() => testSql.sql, () => sibling, rt.storage.transactionSync, files),
+    stores: createAgentStores(() => testSql.sql, () => rt.actor, transactionSync, files),
+    sibling: createAgentStores(() => testSql.sql, () => sibling, transactionSync, files),
   };
 }
 
@@ -222,7 +223,7 @@ describe('collectDynamicContext', () => {
     const o = setup();
     expect(collect(o).jobs).toEqual({ items: [], total: 0 });
     o.stores.jobs.create({ id: 'j1', kind: 'shell', workMode: 'build', now: 1 });
-    expect(collect(o).jobs!.items).toHaveLength(1);
+    expect(present(collect(o).jobs, 'the running-jobs block').items).toHaveLength(1);
   });
 });
 

@@ -77,7 +77,7 @@ import {
 import {
   decideRefinementRoute, showRefinementRoute,
 } from '../src/evolution/refinement-skill';
-import { createTestSql } from '@kinu.run/test-utils';
+import { createTestSql, present } from '@kinu.run/test-utils';
 import { createTestRuntime } from './helpers';
 import { RunEventRecorder } from '../src/events/recorder';
 
@@ -212,7 +212,7 @@ function deferredRefiner(...answers: readonly RefinementProposal[]) {
         const mine = Math.min(asks, answers.length) - 1;
 
         if (asks === 1) await gate;
-        const answer = answers[mine]!;
+        const answer = answers[mine];
 
         const outcome: TemporaryRunOutcome = {
           status: 'completed', agent: 'refiner-1', lifetime: 'task', role: 'task',
@@ -411,7 +411,7 @@ function everyOwnerProposal(
         source: section,
         rationale: 'four corrected turns all asked for a shorter answer than the section invites',
       },
-      skillProposal(skill).edits[0]!,
+      skillProposal(skill).edits[0],
     ],
   };
 }
@@ -530,7 +530,7 @@ describe('the refiner — bounded references, prior history, strict typed answer
     const first = await requestRefinement(deps, { trigger: 'explicit', scope: 'workspace' });
     await advanceRefinementLane(deps);
     expect(requests).toHaveLength(1);
-    const brief = requests[0]!.task;
+    const brief = requests[0].task;
 
     // The trajectory it must review.
     expect(brief).toContain('always answer in one line');
@@ -554,7 +554,7 @@ describe('the refiner — bounded references, prior history, strict typed answer
     const secondDeps = fx.deps(second);
     await requestRefinement(secondDeps, { trigger: 'explicit', scope: 'workspace' });
     await advanceRefinementLane(secondDeps);
-    expect(secondRequests[0]!.task).toContain(first.id);
+    expect(secondRequests[0].task).toContain(first.id);
   });
 
   test('the refiner reads context refs itself — only the files this workspace has, at their real paths', async () => {
@@ -578,8 +578,8 @@ describe('the refiner — bounded references, prior history, strict typed answer
     await requestRefinement(deps, { trigger: 'explicit', scope: 'workspace' });
     await advanceRefinementLane(deps);
 
-    expect(requests[0]!.contextRefs).toEqual(['memory/MEMORY.md']);
-    expect(requests[0]!.mode).toBe('plan');
+    expect(requests[0].contextRefs).toEqual(['memory/MEMORY.md']);
+    expect(requests[0].mode).toBe('plan');
 
     // With an AGENTS.md in place it is offered too; nothing absent ever is.
     const withAgentsMd = fixture();
@@ -591,7 +591,7 @@ describe('the refiner — bounded references, prior history, strict typed answer
     const secondDeps = withAgentsMd.deps(second.port);
     await requestRefinement(secondDeps, { trigger: 'explicit', scope: 'workspace' });
     await advanceRefinementLane(secondDeps);
-    expect(second.requests[0]!.contextRefs).toEqual(['memory/MEMORY.md', 'AGENTS.md']);
+    expect(second.requests[0].contextRefs).toEqual(['memory/MEMORY.md', 'AGENTS.md']);
   });
 
   test('an unparsable or off-schema answer refuses the request — it never half-applies', async () => {
@@ -665,7 +665,7 @@ describe('the brief and the schema are one contract', () => {
     await requestRefinement(deps, { trigger: 'explicit', scope: 'workspace' });
     await advanceRefinementLane(deps);
 
-    const brief = requests[0]!.task;
+    const brief = requests[0].task;
     const section = brief.slice(brief.indexOf('## Your answer'));
     expect(section).toContain('## Your answer');
 
@@ -696,7 +696,7 @@ describe('the brief and the schema are one contract', () => {
 
     const opened = await requestRefinement(deps, { trigger: 'explicit', scope: 'workspace' });
     await advanceRefinementLane(deps);
-    const row = createRefinementStore(fx.rt.storage.sql, fx.rt.actor).get(opened.id)!;
+    const row = present(createRefinementStore(fx.rt.storage.sql, fx.rt.actor).get(opened.id), 'the refinement row');
 
     expect(row.stage).toBe('refused');
 
@@ -739,8 +739,12 @@ describe('routing — every typed edit lands in the store that already owns it',
     expect(fx.facts.recall('user.answer_length')?.value).toBe('one line');
     expect(fx.facts.recall('user.answer_length')?.source).toContain(opened.id);
 
-    const row = createRefinementStore(fx.rt.storage.sql, fx.rt.actor).get(opened.id);
-    const route = routeFor(row!.routes, 'fact');
+    const row = present(
+      createRefinementStore(fx.rt.storage.sql, fx.rt.actor).get(opened.id),
+      'the refinement row',
+    );
+
+    const route = routeFor(row.routes, 'fact');
     expect(route.disposition).toBe('applied');
     expect(route.owner).toBe('agent_facts');
     expect(route.target).toBe('user.answer_length');
@@ -770,7 +774,7 @@ describe('routing — every typed edit lands in the store that already owns it',
     expect(fx.facts.recall('user.prefers_rust')).toBeNull();
 
     const route = routeFor(
-      createRefinementStore(fx.rt.storage.sql, fx.rt.actor).get(opened.id)!.routes, 'fact',
+      present(createRefinementStore(fx.rt.storage.sql, fx.rt.actor).get(opened.id), 'the refinement row').routes, 'fact',
     );
 
     expect(route.disposition).toBe('refused');
@@ -798,7 +802,7 @@ describe('routing — every typed edit lands in the store that already owns it',
     await advanceRefinementLane(deps);
 
     const store = createRefinementStore(fx.rt.storage.sql, fx.rt.actor);
-    const row = store.get(opened.id)!;
+    const row = present(store.get(opened.id), 'the refinement row');
     const route = routeFor(row.routes, 'prompt_section');
     expect(route.disposition).toBe('pending_trials');
     expect(route.owner).toBe('prompt_section_versions');
@@ -837,7 +841,7 @@ describe('routing — every typed edit lands in the store that already owns it',
 
     await advanceRefinementLane(deps);
 
-    const row = createRefinementStore(fx.rt.storage.sql, fx.rt.actor).get(opened.id)!;
+    const row = present(createRefinementStore(fx.rt.storage.sql, fx.rt.actor).get(opened.id), 'the refinement row');
     const route = routeFor(row.routes, 'prompt_section');
     expect(route.disposition).toBe('refused');
     expect(route.reason).toContain('no corrected/frustrated turns');
@@ -853,7 +857,7 @@ describe('routing — every typed edit lands in the store that already owns it',
     const opened = await requestRefinement(deps, { trigger: 'explicit', scope: 'workspace' });
     await advanceRefinementLane(deps);
 
-    const row = createRefinementStore(fx.rt.storage.sql, fx.rt.actor).get(opened.id)!;
+    const row = present(createRefinementStore(fx.rt.storage.sql, fx.rt.actor).get(opened.id), 'the refinement row');
     const route = routeFor(row.routes, 'skill');
     expect(route.disposition).toBe('pending_owner_approval');
     expect(route.owner).toBe('instruction_approvals');
@@ -902,7 +906,7 @@ describe('routing — every typed edit lands in the store that already owns it',
       const opened = await requestRefinement(deps, { trigger: 'explicit', scope: 'workspace' });
       await advanceRefinementLane(deps);
 
-      const row = createRefinementStore(fx.rt.storage.sql, fx.rt.actor).get(opened.id)!;
+      const row = present(createRefinementStore(fx.rt.storage.sql, fx.rt.actor).get(opened.id), 'the refinement row');
       const route = routeFor(row.routes, 'skill');
       expect(route.disposition).toBe('refused');
       expect(route.reason).toContain(expected);
@@ -921,7 +925,7 @@ describe('routing — every typed edit lands in the store that already owns it',
     const first = occupied.deps(scriptedRefiner(proposalText(skillProposal(BREVITY_SKILL))).port);
     const a = await requestRefinement(first, { trigger: 'explicit', scope: 'workspace' });
     await advanceRefinementLane(first);
-    const aRoute = routeFor(createRefinementStore(occupied.rt.storage.sql, occupied.rt.actor).get(a.id)!.routes, 'skill');
+    const aRoute = routeFor(present(createRefinementStore(occupied.rt.storage.sql, occupied.rt.actor).get(a.id), 'the refinement row').routes, 'skill');
     expect(aRoute.disposition).toBe('refused');
     expect(aRoute.reason).toContain('already exists');
     expect(await readSkill(occupied.rt, BREVITY_PATH)).toBe(other);
@@ -934,7 +938,7 @@ describe('routing — every typed edit lands in the store that already owns it',
     const second = decided.deps(scriptedRefiner(proposalText(skillProposal(BREVITY_SKILL))).port);
     const b = await requestRefinement(second, { trigger: 'explicit', scope: 'workspace' });
     await advanceRefinementLane(second);
-    const bRoute = routeFor(createRefinementStore(decided.rt.storage.sql, decided.rt.actor).get(b.id)!.routes, 'skill');
+    const bRoute = routeFor(present(createRefinementStore(decided.rt.storage.sql, decided.rt.actor).get(b.id), 'the refinement row').routes, 'skill');
     expect(bRoute.disposition).toBe('refused');
     expect(bRoute.reason).toContain('standing decision');
     expect(await readSkill(decided.rt, BREVITY_PATH)).toBeNull();
@@ -949,7 +953,7 @@ describe('routing — every typed edit lands in the store that already owns it',
     await advanceRefinementLane(deps);
 
     const route = routeFor(
-      createRefinementStore(fx.rt.storage.sql, fx.rt.actor).get(opened.id)!.routes, 'skill',
+      present(createRefinementStore(fx.rt.storage.sql, fx.rt.actor).get(opened.id), 'the refinement row').routes, 'skill',
     );
 
     expect(route.disposition).toBe('refused');
@@ -1027,7 +1031,7 @@ describe('routing — every typed edit lands in the store that already owns it',
     await advanceRefinementLane(deps);
 
     const route = routeFor(
-      createRefinementStore(fx.rt.storage.sql, fx.rt.actor).get(opened.id)!.routes, 'subagent_spec',
+      present(createRefinementStore(fx.rt.storage.sql, fx.rt.actor).get(opened.id), 'the refinement row').routes, 'subagent_spec',
     );
 
     expect(route.disposition).toBe('refused');
@@ -1080,8 +1084,8 @@ describe('routing — every typed edit lands in the store that already owns it',
       SELECT turn_ids FROM refinement_requests`;
 
     expect(stored).toHaveLength(1);
-    expect(JSON.parse(stored[0]!.turn_ids)).toEqual(negatives);
-    expect(stored[0]!.turn_ids).not.toContain('always answer in one line');
+    expect(JSON.parse(stored[0].turn_ids)).toEqual(negatives);
+    expect(stored[0].turn_ids).not.toContain('always answer in one line');
   });
 });
 
@@ -1107,7 +1111,7 @@ describe('scope — local workspace versus global account, stated rather than as
     const opened = await requestRefinement(deps, { trigger: 'explicit', scope: 'workspace' });
     await advanceRefinementLane(deps);
 
-    const row = createRefinementStore(fx.rt.storage.sql, fx.rt.actor).get(opened.id)!;
+    const row = present(createRefinementStore(fx.rt.storage.sql, fx.rt.actor).get(opened.id), 'the refinement row');
     expect(row.stage).toBe('refused');
     expect(row.detail).toContain('account');
     expect(fx.facts.recall('user.answer_length')).toBeNull();
@@ -1193,7 +1197,7 @@ describe('the stage machine — restart, retry, and no duplicate work', () => {
 
     await advanceRefinementLane(deps);
     expect(runs).toBe(1);
-    const row = store.get(opened.id)!;
+    const row = present(store.get(opened.id), 'the refinement row');
     expect(row.routes).toHaveLength(1);
     // A fact-only proposal has nothing to wait for, so it REACHES applied
     // instead of parking in `gated` forever.
@@ -1262,7 +1266,7 @@ describe('the stage machine — restart, retry, and no duplicate work', () => {
 
     const opened = await requestRefinement(deps, { trigger: 'explicit', scope: 'workspace' });
     await advanceRefinementLane(deps);
-    const settledRoutes = store.get(opened.id)!.routes;
+    const settledRoutes = present(store.get(opened.id), 'the refinement row').routes;
     expect(settledRoutes).toHaveLength(3);
 
     // Now re-drive from `planning` once per completed write. Every pass must
@@ -1274,7 +1278,7 @@ describe('the stage machine — restart, retry, and no duplicate work', () => {
       store.resetStalePlanning();
       await advanceRefinementLane(deps);
 
-      const routes = store.get(opened.id)!.routes;
+      const routes = present(store.get(opened.id), 'the refinement row').routes;
       expect(routes).toHaveLength(3);
       expect(routeFor(routes, 'fact').disposition).toBe('applied');
       expect(routeFor(routes, 'prompt_section').disposition).toBe('pending_trials');
@@ -1343,7 +1347,7 @@ describe('two passes at once — the claim, and what recovery may not revoke', (
     expect(second.step).toBe('idle');
     expect(refiner.asks()).toBe(1);
 
-    const row = store.get(opened.id)!;
+    const row = present(store.get(opened.id), 'the refinement row');
     expect(row.routes).toHaveLength(3);
     expect(row.stage).toBe('evaluating');
     expect(fx.facts.all()).toHaveLength(1);
@@ -1381,7 +1385,7 @@ describe('two passes at once — the claim, and what recovery may not revoke', (
     expect(refiner.asks()).toBe(1);
     expect(fx.facts.recall('user.answer_length')?.value).toBe('one line');
     expect(fx.facts.all()).toHaveLength(1);
-    expect(store.get(opened.id)!.routes).toHaveLength(3);
+    expect(present(store.get(opened.id), 'the refinement row').routes).toHaveLength(3);
     expect(listPromptSectionVersions(fx.rt.storage.sql, fx.rt.actor, 50)).toHaveLength(1);
   });
 
@@ -1412,7 +1416,7 @@ describe('two passes at once — the claim, and what recovery may not revoke', (
     refiner.release();
     expect((await revoked).step).toBe('idle');
 
-    const row = store.get(opened.id)!;
+    const row = present(store.get(opened.id), 'the refinement row');
     expect(row.stage).toBe('evaluating');
     expect(row.routes).toHaveLength(3);
     // One write per owner, and every one of them is the SUCCESSOR's.
@@ -1421,7 +1425,7 @@ describe('two passes at once — the claim, and what recovery may not revoke', (
     expect(fx.facts.recall('user.answer_length')).toBeNull();
     const versions = listPromptSectionVersions(fx.rt.storage.sql, fx.rt.actor, 50);
     expect(versions).toHaveLength(1);
-    expect(versions[0]!.source).toBe(`${INCUMBENT.slice(0, -6)}BRIEF.`);
+    expect(versions[0].source).toBe(`${INCUMBENT.slice(0, -6)}BRIEF.`);
     expect(await readSkill(fx.rt, refinementStagingPath(opened.id, 'brevity')))
       .toBe(`${BREVITY_SKILL}\nName the ask.`);
   });
@@ -1462,7 +1466,7 @@ describe('two passes at once — the claim, and what recovery may not revoke', (
     const step = await advanceRefinementLane(deps);
     expect(step.step).toBe('planned');
     expect(asks).toBe(2);
-    const row = store.get(opened.id)!;
+    const row = present(store.get(opened.id), 'the refinement row');
     expect(row.stage).toBe('evaluating');
     expect(row.routes).toHaveLength(3);
     expect(fx.facts.all()).toHaveLength(1);
@@ -1477,7 +1481,7 @@ describe('two passes at once — the claim, and what recovery may not revoke', (
       trigger: 'explicit', scope: 'workspace', turnIds: ['neg-0'], now: 1,
     });
 
-    const claim = store.claim(request.id)!;
+    const claim = present(store.claim(request.id), 'the planning claim');
     expect(claim.held()).toBe(true);
     // Stamped in 1970 and still not stale: the row is held by a pass that is
     // running, and no amount of elapsed time is what ends that.
@@ -1630,7 +1634,7 @@ describe('evolution debt — the automatic trigger, and its visibility', () => {
     });
 
     expect(replayed.created).toBe(false);
-    expect(replayed.request.id).toBe(first!.id);
+    expect(replayed.request.id).toBe(present(first, 'the first debt request').id);
     expect(store.list()).toHaveLength(1);
   });
 
@@ -1718,7 +1722,7 @@ describe('the quote gate — substantive, the user\'s own, and carried into the 
     const opened = await requestRefinement(deps, { trigger: 'explicit', scope: 'workspace' });
     await advanceRefinementLane(deps);
 
-    return routeFor(createRefinementStore(fx.rt.storage.sql, fx.rt.actor).get(opened.id)!.routes, 'fact');
+    return routeFor(present(createRefinementStore(fx.rt.storage.sql, fx.rt.actor).get(opened.id), 'the refinement row').routes, 'fact');
   }
 
   test('a short or few-worded fragment is refused however truly it appears', async () => {
@@ -1752,7 +1756,7 @@ describe('the quote gate — substantive, the user\'s own, and carried into the 
     await advanceRefinementLane(deps);
 
     const route = routeFor(
-      createRefinementStore(fx.rt.storage.sql, fx.rt.actor).get(opened.id)!.routes, 'fact',
+      present(createRefinementStore(fx.rt.storage.sql, fx.rt.actor).get(opened.id), 'the refinement row').routes, 'fact',
     );
 
     expect(route.reason).toContain('always answer in one line');
@@ -1776,7 +1780,7 @@ describe('mixed outcomes settle honestly', () => {
       scope: 'workspace',
       summary: 'a preference and a section',
       edits: [
-        FACT_PROPOSAL.edits[0]!,
+        FACT_PROPOSAL.edits[0],
         {
           kind: 'prompt_section',
           sectionId: TARGET_ID,
@@ -1810,7 +1814,7 @@ describe('mixed outcomes settle honestly', () => {
     expect(activePromptSectionOverrides(fx.rt.storage.sql, fx.rt.actor)[TARGET_ID]).toBeUndefined();
 
     await advanceRefinementLane(deps);
-    const settled = store.get(opened.id)!;
+    const settled = present(store.get(opened.id), 'the refinement row');
     // The fact IS live. Calling the request rolled_back would be a lie about it.
     expect(settled.stage).toBe('applied');
     expect(fx.facts.recall('user.answer_length')?.value).toBe('one line');
@@ -1832,7 +1836,7 @@ describe('the refiner never sees the set its proposal is scored on', () => {
 
     await requestRefinement(deps, { trigger: 'explicit', scope: 'workspace' });
     await advanceRefinementLane(deps);
-    const brief = requests[0]!.task;
+    const brief = requests[0].task;
 
     const split = await buildOutcomeEvalSplit(fx.rt.storage.sql, fx.rt.actor, fx.stores.history.transcript(CHAT_SESSION_ID), EVAL_SIZE);
     expect(split.heldOutNegatives).toBeGreaterThan(0);
@@ -1845,7 +1849,7 @@ describe('the refiner never sees the set its proposal is scored on', () => {
 
     // The train half IS shown — reflection has to have something to fix.
     expect(split.train.length).toBeGreaterThan(0);
-    expect(brief).toContain(split.train[0]!.input);
+    expect(brief).toContain(split.train[0].input);
     expect(brief).toContain('WITHHELD');
   });
 });
@@ -1879,10 +1883,10 @@ describe('evolution debt pages, and never loses an older row', () => {
     const next = evolutionDebt(fx.rt.storage.sql, fx.rt.actor);
     expect(next.owed).toBe(true);
     expect(next.turnIds).toEqual(negatives.slice(12));
-    expect(next.key).not.toBe(first!.turnIds.join(''));
+    expect(next.key).not.toBe(present(first, 'the first debt request').turnIds.join(''));
 
     const second = await refinementDebtRequest(deps);
-    expect(second?.id).not.toBe(first!.id);
+    expect(second?.id).not.toBe(present(first, 'the first debt request').id);
     expect(second?.turnIds).toEqual(negatives.slice(12));
     expect(evolutionDebt(fx.rt.storage.sql, fx.rt.actor).owed).toBe(false);
   });
@@ -2047,7 +2051,7 @@ describe('owner promotion — the approval is what makes a staged skill live', (
     expect(fx.approvals.list()).toEqual([]);
 
     await advanceRefinementLane(deps);
-    const settled = store.get(id)!;
+    const settled = present(store.get(id), 'the refinement row');
     expect(settled.stage).toBe('rolled_back');
     expect(settled.detail).toContain('rejected by you');
   });
@@ -2108,7 +2112,7 @@ describe('owner promotion — the approval is what makes a staged skill live', (
     const mixedDeps = mixed.deps(scriptedRefiner(proposalText({
       scope: 'workspace',
       summary: 'a preference and a skill',
-      edits: [FACT_PROPOSAL.edits[0]!, skillProposal(BREVITY_SKILL).edits[0]!],
+      edits: [FACT_PROPOSAL.edits[0], skillProposal(BREVITY_SKILL).edits[0]],
     })).port);
 
     const mixedReq = await requestRefinement(mixedDeps, {
@@ -2199,13 +2203,13 @@ describe('promotion never half-lands — the read-back is what allows the unlink
   ): () => void {
     const vfs = rt.agentStateVfs ?? rt.storage.vfs;
     const real = vfs.writeFile.bind(vfs);
-    vfs.writeFile = async (target: string, data: string | Uint8Array) => {
-      if (target !== path) return real(target, data);
+    vfs.writeFile = async (written: string, data: string | Uint8Array) => {
+      if (written !== path) return real(written, data);
 
       if (mode === 'throw') throw new Error('disk full');
 
       // A torn write: the file exists and its bytes are not what was handed over.
-      return real(target, `${data instanceof Uint8Array ? '' : data}\ntruncated`);
+      return real(written, `${data instanceof Uint8Array ? '' : data}\ntruncated`);
     };
 
     return () => { vfs.writeFile = real; };
@@ -2240,7 +2244,7 @@ describe('promotion never half-lands — the read-back is what allows the unlink
     expect(await readSkill(fx.rt, path)).toBe(BREVITY_SKILL);
     expect(await discoveredSkillNames(fx.rt)).toEqual([]);
     // The route is untouched, so the request keeps waiting with the reason.
-    expect(store.get(id)!.routes[0]?.disposition).toBe('pending_owner_approval');
+    expect(present(store.get(id), 'the refinement row').routes[0]?.disposition).toBe('pending_owner_approval');
 
     // Repair the plane: the next settle finishes what the approval started.
     repair();
@@ -2265,13 +2269,13 @@ describe('promotion never half-lands — the read-back is what allows the unlink
     // The torn file is NOT deleted — this module does not own it — but the
     // staging is intact, and the mismatch is surfaced rather than trusted.
     expect(await readSkill(fx.rt, path)).toBe(BREVITY_SKILL);
-    expect(store.get(id)!.routes[0]?.disposition).toBe('pending_owner_approval');
+    expect(present(store.get(id), 'the refinement row').routes[0]?.disposition).toBe('pending_owner_approval');
 
     // And the collision persists honestly: a later settle refuses to overwrite
     // bytes that are not the approved ones, and says so.
     stop();
     await advanceRefinementLane(deps);
-    const row = store.get(id)!;
+    const row = present(store.get(id), 'the refinement row');
     expect(row.stage).toBe('evaluating');
     expect(row.detail).toContain('not the approved ones');
     expect(await readSkill(fx.rt, path)).toBe(BREVITY_SKILL);
@@ -2289,7 +2293,7 @@ describe('promotion never half-lands — the read-back is what allows the unlink
     // Their bytes stand, ours stay staged, and the request keeps waiting.
     expect(await readSkill(fx.rt, BREVITY_PATH)).toBe(foreign);
     expect(await readSkill(fx.rt, path)).toBe(BREVITY_SKILL);
-    const row = store.get(id)!;
+    const row = present(store.get(id), 'the refinement row');
     expect(row.stage).toBe('evaluating');
     expect(row.detail).toContain('refusing to overwrite');
   });
@@ -2319,7 +2323,7 @@ describe('promotion never half-lands — the read-back is what allows the unlink
 
     // The rejection stands. Re-routing would have asked the owner again about
     // bytes they already refused.
-    expect(store.get(id)!.routes[0]?.disposition).toBe('rejected');
+    expect(present(store.get(id), 'the refinement row').routes[0]?.disposition).toBe('rejected');
     expect(await readSkill(fx.rt, refinementStagingPath(id, 'brevity'))).toBeNull();
     expect(store.get(id)?.stage).toBe('rolled_back');
   });

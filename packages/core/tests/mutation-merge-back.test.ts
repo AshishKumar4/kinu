@@ -81,7 +81,7 @@ async function mutate(
   // is required above to have matched exactly once — so its export shape is the pristine
   // module's by construction. A dynamic specifier carries no static type, and a wrong
   // rewrite of the import depths throws here rather than producing a wrong shape.
-  return await (import(path) as Promise<MergeBackModule>);
+  return await import(path);
 }
 
 /* ── Fixtures, shared with the behavioural suite's shape ──────────────────── */
@@ -132,12 +132,16 @@ function tearingOrigin(initial: Record<string, string> = {}): Origin & { applyMe
   };
 }
 
+interface MergeMemberSeed {
+  origin: Origin;
+  nodeId: string;
+  files: readonly MemberFileChange[];
+  module?: MergeBackModule;
+  deps?: readonly string[];
+}
+
 async function memberOf(
-  origin: Origin,
-  nodeId: string,
-  files: readonly MemberFileChange[],
-  module: MergeBackModule = pristine,
-  deps: readonly string[] = [],
+  { origin, nodeId, files, module = pristine, deps = [] }: MergeMemberSeed,
 ): Promise<MergeMember> {
   const diff = {
     nodeId,
@@ -189,7 +193,7 @@ function oversizedPair(): readonly MemberFileChange[] {
 describe('the size refusal is load-bearing', () => {
   test('GREEN: with the pre-flight, an oversized member is refused and nothing is written', async () => {
     const origin = tearingOrigin({});
-    const member = await memberOf(origin, 'n1', oversizedPair());
+    const member = await memberOf({ origin, nodeId: 'n1', files: oversizedPair() });
 
     const report = await runWith(pristine, origin, 'apply-winner', [member]);
 
@@ -210,7 +214,7 @@ describe('the size refusal is load-bearing', () => {
     ]]);
 
     const origin = tearingOrigin({});
-    const member = await memberOf(origin, 'n1', oversizedPair(), mutant);
+    const member = await memberOf({ origin, nodeId: 'n1', files: oversizedPair(), module: mutant });
 
     const report = await runWith(mutant, origin, 'apply-winner', [member]);
 
@@ -234,7 +238,7 @@ describe('the size refusal is load-bearing', () => {
     ]]);
 
     const origin = tearingOrigin({});
-    const member = await memberOf(origin, 'n1', oversizedPair(), mutant);
+    const member = await memberOf({ origin, nodeId: 'n1', files: oversizedPair(), module: mutant });
 
     const report = await runWith(mutant, origin, 'apply-winner', [member]);
 
@@ -255,8 +259,8 @@ const STALE_COMPARISON = 'if (member.verdict.baseDigest !== baseDigest) {';
  *  diff. Same content on the shared path, so this is agreement and not a conflict. */
 async function rebasePair(origin: Origin, module: MergeBackModule) {
   return [
-    await memberOf(origin, 'n1', [{ path: 'shared.ts', base: 'V0\n', after: 'V1\n' }], module),
-    await memberOf(origin, 'n2', [{ path: 'shared.ts', base: 'V0\n', after: 'V1\n' }], module),
+    await memberOf({ origin, nodeId: 'n1', files: [{ path: 'shared.ts', base: 'V0\n', after: 'V1\n' }], module }),
+    await memberOf({ origin, nodeId: 'n2', files: [{ path: 'shared.ts', base: 'V0\n', after: 'V1\n' }], module }),
   ];
 }
 
@@ -350,10 +354,10 @@ const DERIVED_ORDER = 'dependencyOrder(members, settled)';
 // thing that decides whether both land is the order.
 async function vertexBeforeParent(origin: Origin, module: MergeBackModule) {
   return [
-    await memberOf(
-      origin, 'vertex', [{ path: 'c.ts', base: 'C0\n', after: 'C1\n' }], module, ['parent'],
-    ),
-    await memberOf(origin, 'parent', [{ path: 'a.ts', base: 'A0\n', after: 'A1\n' }], module),
+    await memberOf({
+      origin, nodeId: 'vertex', files: [{ path: 'c.ts', base: 'C0\n', after: 'C1\n' }], module, deps: ['parent'],
+    }),
+    await memberOf({ origin, nodeId: 'parent', files: [{ path: 'a.ts', base: 'A0\n', after: 'A1\n' }], module }),
   ];
 }
 

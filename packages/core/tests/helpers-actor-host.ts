@@ -179,7 +179,11 @@ export function hostedSeatsOver(input: {
 
       return { vfs: rt.storage.vfs, artifactDirectory: `/actors/${bound.handle.actorId}/.kinu/context` };
     },
-    storage: { sql, transactionSync: rt.storage.transactionSync, exec: exec.exec },
+    storage: {
+      sql,
+      transactionSync: (write) => rt.storage.transactionSync(write),
+      exec: (query, ...bindings) => exec.exec(query, ...bindings),
+    },
     directory,
     installedBuild: 'test-build',
     runtimeFor,

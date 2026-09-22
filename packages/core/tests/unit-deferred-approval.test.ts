@@ -268,9 +268,9 @@ describe('the owner decides, in bulk, and the agent is woken', () => {
 
     expect(decided.map((a) => a.status)).toEqual(['approved']);
     expect(delivered).toHaveLength(1);
-    expect(delivered[0]!.kind).toBe(DEFERRED_APPROVAL_SIGNAL);
-    expect(delivered[0]!.text).toContain('APPROVED, still not run');
-    expect(delivered[0]!.text).toContain(GATED);
+    expect(delivered[0].kind).toBe(DEFERRED_APPROVAL_SIGNAL);
+    expect(delivered[0].text).toContain('APPROVED, still not run');
+    expect(delivered[0].text).toContain(GATED);
     // The approval is a grant, not an execution: nothing ran on the owner's
     // click, and the needs-you queue has stopped asking.
     expect(executed).toEqual([]);
@@ -284,7 +284,7 @@ describe('the owner decides, in bulk, and the agent is woken', () => {
     await queue.decide(['defer-1'], 'denied');
 
     expect(delivered).toHaveLength(1);
-    expect(delivered[0]!.text).toContain('DENIED — do not re-issue');
+    expect(delivered[0].text).toContain('DENIED — do not re-issue');
   });
 
   test('a night of parked actions is ONE decision and ONE wake', async () => {
@@ -302,9 +302,9 @@ describe('the owner decides, in bulk, and the agent is woken', () => {
 
     expect(decided).toHaveLength(5);
     expect(delivered).toHaveLength(1);
-    expect(delivered[0]!.metadata).toMatchObject({ decision: 'approved', count: 5 });
+    expect(delivered[0].metadata).toMatchObject({ decision: 'approved', count: 5 });
 
-    for (const command of ['npm publish a', 'npm publish e']) expect(delivered[0]!.text).toContain(command);
+    for (const command of ['npm publish a', 'npm publish e']) expect(delivered[0].text).toContain(command);
     expect(queue.list()).toEqual([]);
   });
 
@@ -316,10 +316,10 @@ describe('the owner decides, in bulk, and the agent is woken', () => {
     await queue.decide(['defer-1'], 'approved');
     await queue.decide(['defer-2'], 'denied');
 
-    expect(delivered[0]!.text).toContain('APPROVED');
-    expect(delivered[0]!.text).not.toContain('DENIED');
-    expect(delivered[1]!.text).toContain('DENIED');
-    expect(delivered[1]!.text).not.toContain('APPROVED');
+    expect(delivered[0].text).toContain('APPROVED');
+    expect(delivered[0].text).not.toContain('DENIED');
+    expect(delivered[1].text).toContain('DENIED');
+    expect(delivered[1].text).not.toContain('APPROVED');
   });
 
   test('deciding an already-decided action changes nothing and wakes nobody', async () => {
@@ -341,7 +341,7 @@ describe('the owner decides, in bulk, and the agent is woken', () => {
     const decided = await queue.decide(['defer-1', 'defer-1'], 'approved');
 
     expect(decided.map((a) => a.id)).toEqual(['defer-1']);
-    expect(delivered[0]!.metadata).toMatchObject({ count: 1 });
+    expect(delivered[0].metadata).toMatchObject({ count: 1 });
   });
 });
 

@@ -20,7 +20,7 @@ function deviceProvider(poll: Response) {
   const asked: string[] = [];
 
   const client = createCodexOAuthClient(asFetchFunction(async (input: RequestInfo | URL) => {
-    const url = String(input);
+    const url = input instanceof Request ? input.url : String(input);
     asked.push(url);
 
     if (url === POLL_URL) return poll;

@@ -10,6 +10,7 @@ import {
   renderLongHorizonAnswerFile, scoreLongHorizonAnswers,
   type LongHorizonSpec,
 } from '../src/index';
+import { present } from '@kinu.run/test-utils';
 
 const digest: LongHorizonSpec = { mode: 'digest', seed: 11, entries: 120, filler: 60, markers: 5, parts: 1 };
 
@@ -76,8 +77,8 @@ describe('the corpus is a pure function of the spec', () => {
 
 describe('the questions are answerable only from the corpus', () => {
   test('the count answer equals what the entries actually contain', () => {
-    const q = buildLongHorizonQuestions(digest).find((x) => x.id === 'q-count')!;
-    const component = /component: (\w[\w-]*)/.exec(q.text)![1];
+    const q = present(buildLongHorizonQuestions(digest).find((x) => x.id === 'q-count'), 'the q-count question');
+    const component = present(/component: (\w[\w-]*)/.exec(q.text), 'the component the question names')[1];
 
     const expected = generateLongHorizonEntries(digest)
       .filter((e) => e.component === component && e.status === 'fail').length;
@@ -87,16 +88,25 @@ describe('the questions are answerable only from the corpus', () => {
   });
 
   test('the list answer enumerates every planted marker entry', () => {
-    const q = buildLongHorizonQuestions(continuation).find((x) => x.id === 'q-list')!;
+    const q = present(buildLongHorizonQuestions(continuation).find((x) => x.id === 'q-list'), 'the q-list question');
     expect(q.answer.split(', ')).toHaveLength(continuation.markers);
   });
 
   test('the verbatim target is planted in part 1 — the most-compacted part', () => {
-    const q = buildLongHorizonQuestions(continuation).find((x) => x.id === 'q-verbatim')!;
-    const token = /marker: (MARKER-[A-Z0-9]+)/.exec(q.text)![1];
-    const target = generateLongHorizonEntries(continuation).find((e) => e.marker?.token === token)!;
+    const q = present(
+      buildLongHorizonQuestions(continuation).find((x) => x.id === 'q-verbatim'),
+      'the q-verbatim question',
+    );
+
+    const token = present(/marker: (MARKER-[A-Z0-9]+)/.exec(q.text), 'the marker the question names')[1];
+
+    const target = present(
+      generateLongHorizonEntries(continuation).find((e) => e.marker?.token === token),
+      `the entry holding ${token}`,
+    );
+
     expect(target.part).toBe(1);
-    expect(q.answer).toBe(target.marker!.value);
+    expect(q.answer).toBe(present(target.marker, 'the planted marker').value);
   });
 
   test('no ask leaks an answer', () => {
@@ -108,7 +118,7 @@ describe('the questions are answerable only from the corpus', () => {
 
   test('a leaked answer is caught rather than shipped', () => {
     const questions = buildLongHorizonQuestions(digest);
-    const verbatim = questions.find((q) => q.id === 'q-verbatim')!;
+    const verbatim = present(questions.find((q) => q.id === 'q-verbatim'), 'the q-verbatim question');
     expect(longHorizonAsksLeakAnswer([`the value is ${verbatim.answer}`], questions)).toBe(verbatim.answer);
   });
 });
@@ -158,17 +168,17 @@ describe('scoring is exact, deterministic, and all-or-nothing', () => {
     const partial = renderLongHorizonAnswerFile(questions.filter((q) => q.id !== 'q-verbatim'));
     const score = scoreLongHorizonAnswers(questions, partial);
     expect(score.passed).toBe(false);
-    expect(score.results.find((r) => r.id === 'q-verbatim')!.submitted).toBeNull();
+    expect(present(score.results.find((r) => r.id === 'q-verbatim'), 'the q-verbatim result').submitted).toBeNull();
   });
 
   test('prose around the answer is tolerated; a wrong answer inside prose is not', () => {
-    const count = questions.find((q) => q.id === 'q-count')!;
+    const count = present(questions.find((q) => q.id === 'q-count'), 'the q-count question');
     expect(longHorizonAnswerMatches(count, `there are ${count.answer} of them`)).toBe(true);
     expect(longHorizonAnswerMatches(count, `there are ${Number(count.answer) + 1} of them`)).toBe(false);
   });
 
   test('a complete list in any order passes; a short or padded list does not', () => {
-    const list = questions.find((q) => q.id === 'q-list')!;
+    const list = present(questions.find((q) => q.id === 'q-list'), 'the q-list question');
     const ids = list.answer.split(', ');
     expect(longHorizonAnswerMatches(list, [...ids].reverse().join(' '))).toBe(true);
     expect(longHorizonAnswerMatches(list, ids.slice(1).join(', '))).toBe(false);
@@ -176,7 +186,7 @@ describe('scoring is exact, deterministic, and all-or-nothing', () => {
   });
 
   test('verbatim recall is the planted token, not a near miss', () => {
-    const verbatim = questions.find((q) => q.id === 'q-verbatim')!;
+    const verbatim = present(questions.find((q) => q.id === 'q-verbatim'), 'the q-verbatim question');
     expect(longHorizonAnswerMatches(verbatim, `the value was \`${verbatim.answer}\`.`)).toBe(true);
     expect(longHorizonAnswerMatches(verbatim, verbatim.answer.replace(/\d+$/, '99'))).toBe(false);
   });

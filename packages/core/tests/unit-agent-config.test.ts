@@ -493,25 +493,26 @@ describe('the hired assignment a child reads at its turn boundary', () => {
     expect(c.get(AGENT_CONFIG_KEYS.assignedTier)).toBe('deep');
   });
 
-  test('a malformed role_selection row reads as general and is left alone', () => {
-    // An invalid id reads as the default, and the read does NOT overwrite it.
-    const c = setup();
-    c.set(AGENT_CONFIG_KEYS.roleSelection, 'not json');
-    expect(c.getRoleSelection()).toBe('task');
-    expect(c.get(AGENT_CONFIG_KEYS.roleSelection)).toBe('not json');
-  });
+  // An invalid id reads as the default, and the read does NOT overwrite it.
+  const unreadableRoles = [
+    { name: 'a malformed role_selection row reads as general and is left alone', stored: 'not json' },
+    { name: 'an unknown role id still reads as general and the read leaves the row alone', stored: 'Not A Role!!' },
+  ] as const;
+
+  for (const unreadable of unreadableRoles) {
+    test(unreadable.name, () => {
+      const c = setup();
+
+      c.set(AGENT_CONFIG_KEYS.roleSelection, unreadable.stored);
+      expect(c.getRoleSelection()).toBe('task');
+      expect(c.get(AGENT_CONFIG_KEYS.roleSelection)).toBe(unreadable.stored);
+    });
+  }
 
   test('a valid custom id reads as itself', () => {
     const c = setup();
     c.set(AGENT_CONFIG_KEYS.roleSelection, 'field-researcher');
     expect(c.getRoleSelection()).toBe('field-researcher');
-  });
-
-  test('an unknown role id still reads as general and the read leaves the row alone', () => {
-    const c = setup();
-    c.set(AGENT_CONFIG_KEYS.roleSelection, 'Not A Role!!');
-    expect(c.getRoleSelection()).toBe('task');
-    expect(c.get(AGENT_CONFIG_KEYS.roleSelection)).toBe('Not A Role!!');
   });
 
   test('a read never mints a role row; only an explicit selection persists one', () => {

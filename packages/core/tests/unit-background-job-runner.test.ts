@@ -109,6 +109,8 @@ function setup(opts: {
   const notified: Array<{ id: string; status: string }> = [];
   let drainSchedules = 0;
 
+  const policy = opts.policy;
+
   const runnerDeps = {
     store, fiber, inbox: new Inbox(host), eventLog,
     scheduleDrain: () => { drainSchedules++; },
@@ -117,7 +119,7 @@ function setup(opts: {
     onDetached: opts.onDetached,
     onCancelled: opts.onCancelled,
     resume: opts.resume,
-    policy: opts.policy ? () => opts.policy! : undefined,
+    policy: policy === undefined ? undefined : () => policy,
     harvest: opts.harvest,
     scheduleResume: opts.scheduleResume,
   };
@@ -246,7 +248,7 @@ describe('BackgroundJobRunner.detach — settle/fail → wake', () => {
 
     const pending = eventLog.pending();
     expect(pending).toHaveLength(1);
-    expect(buildDrainBatch(pending)?.ids).toEqual([pending[0]!.id]);
+    expect(buildDrainBatch(pending)?.ids).toEqual([pending[0].id]);
     expect(buildDrainBatch(pending)?.text).toContain(id);
     expect(drainSchedules()).toBe(1);
   });

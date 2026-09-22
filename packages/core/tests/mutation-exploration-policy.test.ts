@@ -400,9 +400,16 @@ function originOf(initial: Record<string, string>): Origin {
   };
 }
 
+interface MergeMemberSeed {
+  origin: Origin;
+  module: MergeBackModule;
+  nodeId: string;
+  files: readonly MemberFileChange[];
+  deps?: readonly string[];
+}
+
 async function memberOf(
-  origin: Origin, module: MergeBackModule, nodeId: string,
-  files: readonly MemberFileChange[], deps: readonly string[] = [],
+  { origin, module, nodeId, files, deps = [] }: MergeMemberSeed,
 ): Promise<MergeMember> {
   const diff = { nodeId, files: [...files], provenance: 'private-home' as const };
 
@@ -563,17 +570,20 @@ async function policyFromSettle(mergeBack: MergeBackModule): Promise<void> {
 async function cycleWhateverTheOrder(mergeBack: MergeBackModule): Promise<void> {
   const origin = originOf({ 'a.ts': 'A0\n', 'b.ts': 'B0\n', 'c.ts': 'C0\n' });
 
-  const a = await memberOf(origin, mergeBack, 'n1', [
-    { path: 'a.ts', base: 'A0\n', after: 'A1\n' },
-  ]);
+  const a = await memberOf({
+    origin, module: mergeBack, nodeId: 'n1',
+    files: [{ path: 'a.ts', base: 'A0\n', after: 'A1\n' }],
+  });
 
-  const b = await memberOf(origin, mergeBack, 'n2', [
-    { path: 'b.ts', base: 'B0\n', after: 'B1\n' },
-  ], ['n3']);
+  const b = await memberOf({
+    origin, module: mergeBack, nodeId: 'n2',
+    files: [{ path: 'b.ts', base: 'B0\n', after: 'B1\n' }], deps: ['n3'],
+  });
 
-  const c = await memberOf(origin, mergeBack, 'n3', [
-    { path: 'c.ts', base: 'C0\n', after: 'C1\n' },
-  ], ['n2']);
+  const c = await memberOf({
+    origin, module: mergeBack, nodeId: 'n3',
+    files: [{ path: 'c.ts', base: 'C0\n', after: 'C1\n' }], deps: ['n2'],
+  });
 
   const report = await runMerge(mergeBack, origin, 'sequential-rebase', [a, b, c]);
   const [outcome] = report.outcomes;
@@ -621,81 +631,26 @@ async function honoursACustomBudget(clamp: ClampModule): Promise<void> {
 
 /* ── The mutants, one loader per closure ──────────────────────────────────── */
 
-// THE SHARED GROUND FOR EVERY CAST BELOW: a mutant is the original module's own text with
-// the edits applied, and `writeMutants` requires every edit to have matched exactly once —
-// so its export shape is the pristine module's by construction. A dynamic specifier
+// THE SHARED GROUND FOR EVERY LOADER BELOW: a mutant is the original module's own text
+// with the edits applied, and `writeMutants` requires every edit to have matched exactly
+// once — so its export shape is the pristine module's by construction. A dynamic specifier
 // carries no static type, and a wrong rewrite of the import depths throws at import rather
-// than producing a wrong shape.
+// than producing a wrong shape; each call site annotates the module it asked for.
 
-function mutantArchive(
-  label: string, edits: readonly (readonly [string, string])[],
-): Promise<ArchiveModule> {
-  const at = writeMutants(label, [{ src: 'strategy/archive.ts', edits }]);
+function mutantOf(src: string, label: string, edits: readonly (readonly [string, string])[]) {
+  const at = writeMutants(label, [{ src, edits }]);
 
-  // SAFETY: `archive.ts`'s own text, one matched edit applied, so the export shape is
-  // `pristineArchive`'s by construction.
-  return import(at('strategy/archive.ts')) as Promise<ArchiveModule>;
+  return import(at(src));
 }
 
-/** `objective.ts` is only observable through `records.ts`, so the dependent is copied
- *  unedited and re-pointed at the mutant beside it. */
-function mutantRecords(
-  label: string, edits: readonly (readonly [string, string])[],
-): Promise<RecordsModule> {
+/** A module observable only through a dependent: the dependent is copied unedited and
+ *  re-pointed at the mutant beside it, and it is the dependent that is imported. */
+function mutantThrough(
+  src: string, dependent: string, label: string, edits: readonly (readonly [string, string])[],
+) {
+  const at = writeMutants(label, [{ src, edits }, { src: dependent }]);
 
-  const at = writeMutants(label, [
-    { src: 'strategy/objective.ts', edits },
-    { src: 'strategy/records.ts' },
-  ]);
-
-  // SAFETY: `records.ts`'s own text, unedited, importing the edited `objective.ts` beside
-  // it — so the export shape is `pristineRecords`'s by construction.
-  return import(at('strategy/records.ts')) as Promise<RecordsModule>;
-}
-
-function mutantObjective(
-  label: string, edits: readonly (readonly [string, string])[],
-): Promise<ObjectiveModule> {
-  const at = writeMutants(label, [{ src: 'strategy/objective.ts', edits }]);
-
-  // SAFETY: the mutant is `objective.ts`'s own text with one checked edit applied, and
-  // writeMutants requires that edit to match exactly once, so its export shape is
-  // pristineObjective's by construction. A dynamic import cannot be typed statically.
-  return import(at('strategy/objective.ts')) as Promise<ObjectiveModule>;
-}
-
-function mutantMergeBack(
-  label: string, edits: readonly (readonly [string, string])[],
-): Promise<MergeBackModule> {
-  const at = writeMutants(label, [{ src: 'strategy/merge-back.ts', edits }]);
-
-  // SAFETY: `merge-back.ts`'s own text, one matched edit applied, so the export shape is
-  // `pristineMergeBack`'s by construction.
-  return import(at('strategy/merge-back.ts')) as Promise<MergeBackModule>;
-}
-
-/** `arbitrateBranch` is reached through the budget that debits it, so both travel. */
-function mutantSwarmBudget(
-  label: string, edits: readonly (readonly [string, string])[],
-): Promise<SwarmBudgetModule> {
-  const at = writeMutants(label, [
-    { src: 'strategy/swarm.ts', edits },
-    { src: 'strategy/swarm-budget.ts' },
-  ]);
-
-  // SAFETY: `swarm-budget.ts`'s own text, unedited, importing the edited `swarm.ts` beside
-  // it — so the export shape is `pristineSwarmBudget`'s by construction.
-  return import(at('strategy/swarm-budget.ts')) as Promise<SwarmBudgetModule>;
-}
-
-function mutantClamp(
-  label: string, edits: readonly (readonly [string, string])[],
-): Promise<ClampModule> {
-  const at = writeMutants(label, [{ src: 'tools/clamp.ts', edits }]);
-
-  // SAFETY: `clamp.ts`'s own text, one matched edit applied, so the export shape is
-  // `pristineClamp`'s by construction.
-  return import(at('tools/clamp.ts')) as Promise<ClampModule>;
+  return import(at(dependent));
 }
 
 /* ── The novelty comparison ───────────────────────────────────────────────── */
@@ -710,7 +665,7 @@ describe('the archive novelty comparison is load-bearing', () => {
   // everything it should refuse, and a suite asserting only "a near-copy was refused"
   // stays green through the swap.
   test(`RED: reading the floor as a ceiling turns "${THRESHOLD_IS_A_FLOOR.name}" red`, async () => {
-    const mutant = await mutantArchive('floor-as-ceiling', [
+    const mutant: ArchiveModule = await mutantOf('strategy/archive.ts', 'floor-as-ceiling', [
       [NOVELTY_FLOOR, 'if (nearest !== null && nearest.distance > novelty) {'],
     ]);
 
@@ -726,7 +681,7 @@ describe('the archive novelty comparison is load-bearing', () => {
   // leaves every threshold reading a distance no candidate collided with. Nothing throws
   // and the floor test above still passes, so only this one catches it.
   test(`RED: searching for the farthest occupant turns "${NEAREST_IS_NAMED.name}" red`, async () => {
-    const mutant = await mutantArchive('farthest-occupant', [
+    const mutant: ArchiveModule = await mutantOf('strategy/archive.ts', 'farthest-occupant', [
       [NEAREST_SEARCH,
         'if (nearest === null || distance > nearest.distance) nearest = { occupant, distance };'],
     ]);
@@ -743,7 +698,7 @@ describe('`isBetter` is load-bearing in its direction and in its strictness', ()
   });
 
   test(`RED: swapping the direction arms turns "${DIRECTION_DECIDES.name}" red`, async () => {
-    const mutant = await mutantRecords('direction-swapped', [
+    const mutant: RecordsModule = await mutantThrough('strategy/objective.ts', 'strategy/records.ts', 'direction-swapped', [
       [IS_BETTER,
         "return direction === 'minimise' ? candidate > incumbent : candidate < incumbent;"],
     ]);
@@ -762,7 +717,7 @@ describe('`isBetter` is load-bearing in its direction and in its strictness', ()
   // property can catch this relaxation and no proof will ever be the thing that defends
   // it — the strictness answers to the displacement count, and this is its only gate.
   test(`RED: relaxing the comparison to accept a tie turns "${TIE_DOES_NOT_DISPLACE.name}" red`, async () => {
-    const mutant = await mutantRecords('tie-admitted', [
+    const mutant: RecordsModule = await mutantThrough('strategy/objective.ts', 'strategy/records.ts', 'tie-admitted', [
       [IS_BETTER,
         "return direction === 'minimise' ? candidate <= incumbent : candidate >= incumbent;"],
     ]);
@@ -783,7 +738,7 @@ describe('the publication seal is load-bearing', () => {
   // sealed". It publishes exactly the run §4.4 exists to withhold, and it is invisible
   // to any test that only ever asserts a re-derivation publishes again.
   test(`RED: reading the cleared seal inverted turns "${SEAL_WRITES_NOTHING.name}" red`, async () => {
-    const mutant = await mutantRecords('seal-inverted', [
+    const mutant: RecordsModule = await mutantThrough('strategy/objective.ts', 'strategy/records.ts', 'seal-inverted', [
       [SEAL_CLEARED, "if (state.clearedBy === null) return { kind: 'admitted' };"],
     ]);
 
@@ -802,7 +757,7 @@ describe('the merge policy derivation is load-bearing', () => {
   // typechecks differently, `mergeBack` runs, and a scored settle silently applies every
   // member instead of its one winner.
   test(`RED: pointing 'best' at another real policy turns "${POLICY_FROM_SETTLE.name}" red`, async () => {
-    const mutant = await mutantMergeBack('best-rebases', [
+    const mutant: MergeBackModule = await mutantOf('strategy/merge-back.ts', 'best-rebases', [
       [POLICY_BEST, "case 'best': return 'sequential-rebase';"],
     ]);
 
@@ -824,7 +779,7 @@ describe("the cycle scan's all-or-nothing is load-bearing", () => {
   // which is half a merge published — and it reports `applied`, not a refusal, so nothing
   // downstream can tell.
   test(`RED: skipping the cycle scan turns "${CYCLE_WHATEVER_THE_ORDER.name}" red`, async () => {
-    const mutant = await mutantMergeBack('no-cycle-scan', [
+    const mutant: MergeBackModule = await mutantOf('strategy/merge-back.ts', 'no-cycle-scan', [
       [CYCLE_SCAN, 'if (true) continue;\n\n    const stuck = new Map('],
     ]);
 
@@ -847,7 +802,7 @@ describe('budget arbitration is load-bearing', () => {
   // exists to refuse, `context-conflict` becomes unreachable, and every individual
   // verdict still looks legal.
   test(`RED: inverting the room comparison turns "${EVERY_POLICY_REACHABLE.name}" red`, async () => {
-    const mutant = await mutantSwarmBudget('room-inverted', [
+    const mutant: SwarmBudgetModule = await mutantThrough('strategy/swarm.ts', 'strategy/swarm-budget.ts', 'room-inverted', [
       [BUDGET_ROOM, 'if (remainingChildren > width) {'],
     ]);
 
@@ -867,7 +822,7 @@ describe('the clamp arithmetic is load-bearing', () => {
   // nothing throws: the marker is still honest, the spill still round-trips, and the only
   // observable is a length nobody asserts unless a test pins it.
   test(`RED: giving the tail the whole cap turns "${HONOURS_A_CUSTOM_BUDGET.name}" red`, async () => {
-    const mutant = await mutantClamp('tail-takes-the-cap', [
+    const mutant: ClampModule = await mutantOf('tools/clamp.ts', 'tail-takes-the-cap', [
       [CLAMP_TAIL, 'const tail = text.slice(tailStart(text, DEFAULT_TOOL_RESULT_MAX_CHARS));'],
     ]);
 
@@ -883,7 +838,7 @@ describe('Pareto direction is load-bearing', () => {
   });
 
   test(`RED: weakening a minimise axis turns "${PARETO_DIRECTION.name}" red`, async () => {
-    const mutant = await mutantObjective('pareto-direction-inverted', [
+    const mutant: ObjectiveModule = await mutantOf('strategy/objective.ts', 'pareto-direction-inverted', [
       [PARETO_WEAKER, "if (axis.direction === 'maximise' ? l < r : l < r) return false;"],
     ]);
 

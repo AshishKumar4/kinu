@@ -14,7 +14,7 @@ import {
   EmailInbox, EMAIL_INBOUND_RATE_PER_MIN, initWebhookRateLimitTables, setEmailAllowlist,
   type SqlExec,
 } from '../src/index';
-import { createMemoryVfs } from '@kinu.run/test-utils';
+import { createMemoryVfs, present } from '@kinu.run/test-utils';
 import { makeSqlExec } from './helpers';
 import { createTestActorsOver } from '@kinu.run/test-utils';
 import type { ActorHandle } from '../src/identity/actor-handle';
@@ -144,7 +144,7 @@ describe('email rendering for the LLM', () => {
       now: 1000,
     });
 
-    const event = log.get(id)!;
+    const event = present(log.get(id), 'the published email event');
     const r = renderForLLM(event);
     expect(r.variant).toBe('email');
     expect(r.triggered_by).toBe('email (owner@example.com)');
@@ -158,10 +158,10 @@ describe('email rendering for the LLM', () => {
     initEventsHubTables(sql);
     const log = new EventLog(sql, actor);
     log.publish({ descriptor: emailDescriptor('owner'), now: 1000 });
-    const batch = buildDrainBatch(log.pending());
-    expect(batch).not.toBeNull();
-    expect(batch!.ids).toHaveLength(1);
-    expect(batch!.text).toContain('email (owner@example.com)');
+    const batch = present(buildDrainBatch(log.pending()), 'the drain batch');
+
+    expect(batch.ids).toHaveLength(1);
+    expect(batch.text).toContain('email (owner@example.com)');
   });
 });
 
@@ -181,18 +181,19 @@ describe('email_thread reply channels', () => {
 
     const store = new ReplyChannelStore(sql, actor, { email_thread: dispatcher });
 
-    const id = store.open({
+    const id = present(store.open({
       event_id: 'pending', kind: 'email_thread',
       holder_addr: JSON.stringify({ to: 'owner@example.com' }), payload_policy: 'full',
-    }, 1000)!;
+    }, 1000), 'the opened email thread channel');
 
     store.bindEvent(id, 'evt-1');
 
-    const found = store.findOpenByEvent('evt-1');
-    expect(found?.id).toBe(id);
-    expect(found?.kind).toBe('email_thread');
+    const found = present(store.findOpenByEvent('evt-1'), 'the channel bound to evt-1');
+
+    expect(found.id).toBe(id);
+    expect(found.kind).toBe('email_thread');
     // 24h TTL.
-    expect(found!.ttl_expires_at).toBe(1000 + 24 * 60 * 60 * 1000);
+    expect(found.ttl_expires_at).toBe(1000 + 24 * 60 * 60 * 1000);
 
     const outcome = await store.reply(id, 'answer', 2000);
     expect(outcome).toEqual({ outcome: 'delivered' });
@@ -205,9 +206,9 @@ describe('email_thread reply channels', () => {
     initEventsHubTables(sql);
     const store = new ReplyChannelStore(sql, actor, {});
 
-    const id = store.open({
+    const id = present(store.open({
       event_id: 'e', kind: 'email_thread', holder_addr: '{}', payload_policy: 'full',
-    }, 0)!;
+    }, 0), 'the opened email thread channel');
 
     const outcome = await store.reply(id, 'late', 25 * 60 * 60 * 1000);
     expect(outcome).toEqual({ outcome: 'channel_closed', state: 'expired' });

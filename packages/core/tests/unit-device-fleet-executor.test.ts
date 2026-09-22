@@ -4,6 +4,7 @@
 // `/pc/<name>`. Every test here drives the real provider over a transport
 // double whose snapshot is the fleet the hub would serve.
 import { describe, expect, test } from 'bun:test';
+import * as v from 'valibot';
 import {
   createDeviceTunnelExecutor, deviceMountSegment,
   type DeviceTransport,
@@ -70,6 +71,13 @@ function fleetTransport(devices: readonly DeviceFleetEntry[]): DeviceTransport &
   };
 }
 
+/** A frame's path argument names the rig's home. */
+function onRig(path: JsonValue | undefined): boolean {
+  const named = v.parse(v.string(), path);
+
+  return named === '/home/rig' || named.startsWith('/home/rig/');
+}
+
 describe('the device fleet at the executor surface', () => {
   test('a command addressed to one machine reaches THAT machine and no other', async () => {
     const t = fleetTransport([STUDIO, RIG]);
@@ -107,7 +115,10 @@ describe('the device fleet at the executor surface', () => {
     const provider = createDeviceTunnelExecutor(t);
 
     const offline = answeredRefusal(await provider.tools.exec.execute('ls', { device: 'spare box' }) ?? null);
-    const unknown = parseJsonValue(String(await provider.tools.readFile.execute('/etc/hosts', { device: 'toaster' })));
+
+    const unknown = parseJsonValue(
+      v.parse(v.string(), await provider.tools.readFile.execute('/etc/hosts', { device: 'toaster' })),
+    );
 
     expect(offline?.reason).toBe('unavailable');
     expect(offline?.error).toContain('"spare box"');
@@ -306,7 +317,8 @@ describe('where the file browser lands on a mount', () => {
     const studio = await list('/pc/ashish@studio/');
     expect(studio.path).toBe('/pc/ashish@studio/home/studio');
     // Every frame the landing sent went to the machine the path named.
-    expect(t.sent.map((frame) => frame.deviceId)).toEqual(t.sent.map((frame) => frame.params[0] === '/home/rig' || String(frame.params[0]).startsWith('/home/rig/') ? 'dev-rig' : 'dev-studio'));
+    expect(t.sent.map((frame) => frame.deviceId))
+      .toEqual(t.sent.map((frame) => (onRig(frame.params[0]) ? 'dev-rig' : 'dev-studio')));
     expect(new Set(t.sent.map((frame) => frame.deviceId))).toEqual(new Set(['dev-rig', 'dev-studio']));
   });
 

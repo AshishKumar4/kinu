@@ -281,7 +281,7 @@ describe('repeats — the unit of pairing stays the task', () => {
     // as 12 independent pairs. 2·0.5^12 = 0.00049 — "significant", from four
     // tasks, purely by counting the same task three times.
     const naive = pairedBinaryComparison(
-      spec.flatMap((s, t) => s.a.map((a, r) => ({ taskId: `t${t}-r${r}`, a: [a], b: [s.b[r]!] }))),
+      spec.flatMap((s, t) => s.a.map((a, r) => ({ taskId: `t${t}-r${r}`, a: [a], b: [s.b[r]] }))),
       { seed: 1, iterations: 2000 },
     );
 

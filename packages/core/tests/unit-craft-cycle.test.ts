@@ -15,6 +15,7 @@ import type { CraftLedger } from '../src/craft/in-episode';
 import { CRAFT_INVOCATION_QUALITY, craftInvocationError } from '../src/craft/in-episode';
 import type { JsonValue } from '../src/utils/json';
 import type { ToolOutcome } from '../src/tools/outcome';
+import { present } from '@kinu.run/test-utils';
 
 interface Observation { names: string[]; quality: number }
 
@@ -140,7 +141,7 @@ describe('CraftCycle — the fitness signal', () => {
     block(cycle, 'await workspace.createTool("sum","d","async()=>1"); return tools.sum(1)', { result: '1' });
 
     expect(ledger.observations).toEqual([]);
-    const snap = cycle.snapshot()!;
+    const snap = present(cycle.snapshot(), 'the craft-cycle snapshot');
     expect(snap.crafted).toEqual(['sum']);
     expect(snap.invoked).toEqual(['sum']);
     expect(snap.reused).toEqual([]);
@@ -172,7 +173,7 @@ describe('CraftCycle — the fitness signal', () => {
       result: craftInvocationError('sum', new Error('boom')).message,
     });
     expect(ledger.observations).toEqual([{ names: ['sum'], quality: CRAFT_INVOCATION_QUALITY.raised }]);
-    const snap = cycle.snapshot()!;
+    const snap = present(cycle.snapshot(), 'the craft-cycle snapshot');
     expect(snap.raised).toBe(1);
     expect(snap.returned).toBe(0);
   });
@@ -187,7 +188,7 @@ describe('CraftCycle — the fitness signal', () => {
       result: JSON.stringify({ result: 'recovered', logs: [craftInvocationError('sum', new Error('boom')).message] }),
     });
     expect(ledger.observations).toEqual([{ names: ['sum'], quality: CRAFT_INVOCATION_QUALITY.raised }]);
-    expect(cycle.snapshot()!.returned).toBe(0);
+    expect(present(cycle.snapshot(), 'the craft-cycle snapshot').returned).toBe(0);
   });
 
   test('a failure payload too long to parse is still a failure', () => {
@@ -208,7 +209,7 @@ describe('CraftCycle — the fitness signal', () => {
     cycle.reset(true);
     block(cycle, 'await tools.sum(1); undefinedFn()', { fails: true });
     expect(ledger.observations).toEqual([]);
-    expect(cycle.snapshot()!.invoked).toEqual(['sum']);
+    expect(present(cycle.snapshot(), 'the craft-cycle snapshot').invoked).toEqual(['sum']);
   });
 
   test('a failure a tool caught and RETURNED still counts as a failure', () => {
@@ -231,7 +232,7 @@ describe('CraftCycle — the fitness signal', () => {
       fails: true,
       result: craftInvocationError('sum', new Error('boom')).message,
     });
-    expect(cycle.snapshot()!.dropped).toEqual(['sum']);
+    expect(present(cycle.snapshot(), 'the craft-cycle snapshot').dropped).toEqual(['sum']);
   });
 });
 

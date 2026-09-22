@@ -25,6 +25,10 @@ import type { AgentRuntime, CraftStore, BranchHandle } from '../src/types/agent-
 import type { ActorHandle } from '../src/identity/actor-handle';
 import type { CraftedTool } from '../src/types/craft';
 import { JsonValueSchema, type JsonValue } from '../src/utils/json';
+
+/** What a test may hand the SQL seam as a bound value, before normalization. */
+type TestSqlBinding = JsonValue | ArrayBuffer | Uint8Array | undefined;
+
 import { createInlineMemory, type AgentDatabase } from '../src/identity/inline-primitives';
 import { createWorkspace, workspaceGenerationStorage, type WorkspaceVFS } from '../src/vfs/nimbus-workspace';
 import type { VfsNativeReads } from '../src/vfs/mounts';
@@ -198,8 +202,8 @@ function afterSeed(vfs: WorkspaceVFS, seed: () => Promise<void>): VFS & Pick<Vfs
 /** The workspace filesystem AND its shell over the test database. */
 export function createWorkspaceBundle(db: Database) {
   const sql = {
-    exec<Binding>(query: string, ...bindings: Binding[]) {
-      const bound = bindings.map(nativeSqlBinding);
+    exec(query: string, ...bindings: TestSqlBinding[]) {
+      const bound = bindings.map((value) => nativeSqlBinding({ value }));
       const stmt = db.prepare<NativeWorkspaceSqlRow, SQLQueryBindings[]>(query);
 
       if (/^\s*(SELECT|WITH|PRAGMA)/i.test(query)) return stmt.all(...bound);
@@ -216,7 +220,9 @@ export function createWorkspaceBundle(db: Database) {
   });
 }
 
-function nativeSqlBinding<Binding>(value: Binding): SQLQueryBindings {
+function nativeSqlBinding(binding: { value: unknown }): SQLQueryBindings {
+  const value = binding.value;
+
   if (value instanceof ArrayBuffer) return new Uint8Array(value);
 
   if (value instanceof Uint8Array) return value;
@@ -235,12 +241,12 @@ export function makeAgentDatabase(db: Database): AgentDatabase {
       const statement = db.prepare<T, SQLQueryBindings[]>(query);
 
       return {
-        all: (...params) => statement.all(...params.map(nativeSqlBinding)),
-        run: (...params) => { statement.run(...params.map(nativeSqlBinding)); },
+        all: (...params) => statement.all(...params.map((value) => nativeSqlBinding({ value }))),
+        run: (...params) => { statement.run(...params.map((value) => nativeSqlBinding({ value }))); },
       };
     },
     exec: (query) => { db.exec(query); },
-    run: (query, params = []) => { db.run(query, params.map(nativeSqlBinding)); },
+    run: (query, params = []) => { db.run(query, params.map((value) => nativeSqlBinding({ value }))); },
     transaction: <T>(fn: () => T) => db.transaction(fn),
   };
 }
@@ -357,8 +363,8 @@ export function createMemoryCraftStore(db: Database): CraftStore {
     updatedAt: row.updated_at,
   });
 
-  const rows = <Binding>(query: string, ...bindings: Binding[]): CraftRow[] =>
-    db.query<NativeSqlRow, SQLQueryBindings[]>(query).all(...bindings.map(nativeSqlBinding))
+  const rows = (query: string, ...bindings: TestSqlBinding[]): CraftRow[] =>
+    db.query<NativeSqlRow, SQLQueryBindings[]>(query).all(...bindings.map((value) => nativeSqlBinding({ value })))
       .map((row) => v.parse(CraftRowSchema, row));
 
   return {

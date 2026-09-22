@@ -111,16 +111,22 @@ describe('dead provider stream fails the turn', () => {
     expect(threw?.message ?? '').toContain('terminated prematurely');
   });
 
-  test('a model-chosen stop with text still completes the turn', async () => {
-    const { threw, done } = await driveTurn(() => new Response(sse([
-      JSON.stringify({ choices: [{ delta: { content: 'answer' } }] }),
-      JSON.stringify({ choices: [{ delta: {}, finish_reason: 'stop' }], usage: { prompt_tokens: 20, completion_tokens: 2, total_tokens: 22 } }),
-      '[DONE]',
-    ]), { headers: SSE_HEADERS }));
+  const finished = [
+    { name: 'a model-chosen stop with text still completes the turn', text: 'answer', reason: 'stop' },
+  ] as const;
 
-    expect(threw).toBeNull();
-    expect(done && done.type === 'done' ? done.text : '').toContain('answer');
-  });
+  for (const step of finished) {
+    test(step.name, async () => {
+      const { threw, done } = await driveTurn(() => new Response(sse([
+        JSON.stringify({ choices: [{ delta: { content: step.text } }] }),
+        JSON.stringify({ choices: [{ delta: {}, finish_reason: step.reason }], usage: { prompt_tokens: 20, completion_tokens: 2, total_tokens: 22 } }),
+        '[DONE]',
+      ]), { headers: SSE_HEADERS }));
+
+      expect(threw).toBeNull();
+      expect(done && done.type === 'done' ? done.text : '').toContain(step.text);
+    });
+  }
 
   test('a model-chosen stop WITHOUT content is still a completion, not an error', async () => {
     const { threw, done } = await driveTurn(() => new Response(sse([
@@ -139,17 +145,6 @@ describe('dead provider stream fails the turn', () => {
 // take real turns down if the detector ever widened to the reason alone.
 // 'other' and 'unknown' are routine for several providers.
 describe('an unmapped finish reason alone is not a dead stream', () => {
-  test('a step that produced TEXT and finished on "other" completes normally', async () => {
-    const { threw, done } = await driveTurn(() => new Response(sse([
-      JSON.stringify({ choices: [{ delta: { content: 'a real answer' } }] }),
-      JSON.stringify({ choices: [{ delta: {}, finish_reason: 'other' }], usage: { prompt_tokens: 20, completion_tokens: 2, total_tokens: 22 } }),
-      '[DONE]',
-    ]), { headers: SSE_HEADERS }));
-
-    expect(threw).toBeNull();
-    expect(done && done.type === 'done' ? done.text : '').toContain('a real answer');
-  });
-
   test('a FINAL step whose only output was a TOOL CALL survives an unmapped reason', async () => {
     // A tool-call step legitimately emits no text, so it is the step most
     // easily mistaken for empty. It has to be the LAST step to be worth

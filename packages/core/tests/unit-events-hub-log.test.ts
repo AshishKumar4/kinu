@@ -258,21 +258,20 @@ describe('EventLog.traceEventCount', () => {
 // SQL — and apply it to every caller, including the in-object reads that never
 // cross a boundary. `boundEventQuery` owns the ceiling on what an UNTRUSTED
 // caller may ask for.
-describe('EventLog.query admits only a finite positive integer limit', () => {
-  /** A log holding `count` chat events, which do not dedupe, so every one
-   *  lands. */
-  function seededLog(count: number): EventLog {
-    const { sql, actor } = makeSql();
-    initEventsHubTables(sql);
-    const log = new EventLog(sql, actor);
+/** A log holding `count` chat events, which do not dedupe, so every one lands. */
+function seededLog(count: number): EventLog {
+  const { sql, actor } = makeSql();
+  initEventsHubTables(sql);
+  const log = new EventLog(sql, actor);
 
-    for (let i = 0; i < count; i++) {
-      log.publish({ descriptor: chatDescriptor(`event ${i}`), now: 1000 + i });
-    }
-
-    return log;
+  for (let i = 0; i < count; i++) {
+    log.publish({ descriptor: chatDescriptor(`event ${i}`), now: 1000 + i });
   }
 
+  return log;
+}
+
+describe('EventLog.query admits only a finite positive integer limit', () => {
   test('a negative limit reads one row, never the whole table', () => {
     const log = seededLog(DEFAULT_PAGE + 40);
     expect(log.query({ limit: -1 })).toHaveLength(1);
@@ -328,20 +327,9 @@ describe('EventLog.query admits only a finite positive integer limit', () => {
 });
 
 describe('EventLog.pending admits only a finite positive integer limit', () => {
-  function seededPending(count: number): EventLog {
-    const { sql, actor } = makeSql();
-    initEventsHubTables(sql);
-    const log = new EventLog(sql, actor);
-
-    for (let i = 0; i < count; i++) {
-      log.publish({ descriptor: chatDescriptor(`event ${i}`), now: 1000 + i });
-    }
-
-    return log;
-  }
 
   test('a negative limit reads one row, never the whole table', () => {
-    const log = seededPending(DEFAULT_PAGE + 40);
+    const log = seededLog(DEFAULT_PAGE + 40);
     expect(log.pending({ limit: -1 })).toHaveLength(1);
     expect(log.pending({ limit: -999999 })).toHaveLength(1);
   });
@@ -352,7 +340,7 @@ describe('EventLog.pending admits only a finite positive integer limit', () => {
     // and a non-finite limit is indistinguishable from an absent one. Stating
     // the number here would put a second copy of the policy in the suite.
     const seeded = DEFAULT_PAGE + 40;
-    const log = seededPending(seeded);
+    const log = seededLog(seeded);
     expect(log.pending({ limit: 0 })).toHaveLength(1);
     const unstated = log.pending().length;
     expect(unstated).toBeGreaterThan(1);
@@ -362,7 +350,7 @@ describe('EventLog.pending admits only a finite positive integer limit', () => {
   });
 
   test('an in-object window wider than the untrusted ceiling is honoured', () => {
-    const log = seededPending(UNTRUSTED_CEILING + 60);
+    const log = seededLog(UNTRUSTED_CEILING + 60);
     expect(log.pending({ limit: UNTRUSTED_CEILING + 60 }))
       .toHaveLength(UNTRUSTED_CEILING + 60);
   });

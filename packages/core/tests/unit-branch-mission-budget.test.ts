@@ -112,12 +112,29 @@ function branchingRuntime() {
   return { rt, rollouts: () => rollouts, reflections: () => reflections };
 }
 
+interface SearchOptions {
+  budget?: number;
+  branches?: number;
+  reportModelCall?: ModelCallSink;
+}
+
+/** A branch that reports one approach with no usage, counting each exploration. */
+function countingBranch(explored: () => void): AgentRuntime['spawnBranch'] {
+  return async () => ({
+    explore: async () => {
+      explored();
+
+      return { text: 'an approach', usage: {} };
+    },
+    generateReflection: async () => ({ text: 'no lesson', usage: {} }),
+    release: async () => {},
+  });
+}
+
 async function search(
   rt: AgentRuntime,
   mission: MissionScope | null,
-  budget = 3,
-  branches = 2,
-  reportModelCall?: ModelCallSink,
+  { budget = 3, branches = 2, reportModelCall }: SearchOptions = {},
 ) {
   return runMCTS(rt, createMockSession(), 'choose an approach', {
     budget, branches, judgeSamples: 1, maxEvalLLMCalls: 1,
@@ -151,7 +168,7 @@ describe('an undeclared search is never governed', () => {
     // Not one query, not one write.
     expect(ledger.statements.slice(afterSetup)).toEqual([]);
     // And the exhausted label did not move.
-    expect(governor.snapshot('someone-elses-mission')[0]!.spent.tokens).toBe(5_000);
+    expect(governor.snapshot('someone-elses-mission')[0].spent.tokens).toBe(5_000);
     ledger.db.close();
   });
 
@@ -208,8 +225,8 @@ describe('a declared budget reaches the search between expansions', () => {
     const reflectionTokens = PER_REFLECTION.input + PER_REFLECTION.output;
     expect(seen.filter((t) => t === rolloutTokens).length).toBe(rollouts());
     expect(seen.filter((t) => t === reflectionTokens).length).toBe(reflections());
-    expect(governor.snapshot('mission')[0]!.calls).toBe(rollouts() + reflections());
-    expect(governor.snapshot('mission')[0]!.spent.tokens)
+    expect(governor.snapshot('mission')[0].calls).toBe(rollouts() + reflections());
+    expect(governor.snapshot('mission')[0].spent.tokens)
       .toBe(rollouts() * rolloutTokens + reflections() * reflectionTokens);
     ledger.db.close();
   });
@@ -221,9 +238,9 @@ describe('a declared budget reaches the search between expansions', () => {
     governor.declare('mission', { tokens: 2_000 }, {});
 
     const { rt, rollouts } = branchingRuntime();
-    await search(rt, localMissionScope(governor, ['mission']), 8, 2);
+    await search(rt, localMissionScope(governor, ['mission']), { budget: 8, branches: 2 });
 
-    expect(governor.snapshot('mission')[0]!.exhausted).toBe(true);
+    expect(governor.snapshot('mission')[0].exhausted).toBe(true);
     // Stopped nowhere near the 16 rollouts the budget of 8 would have taken.
     expect(rollouts()).toBeLessThan(6);
 
@@ -260,7 +277,7 @@ describe('a declared budget reaches the search between expansions', () => {
     expect(rollouts()).toBe(0);
     expect(reflections()).toBe(0);
     // Nothing of its own was spent — the guard ran before the first expansion.
-    expect(governor.snapshot('mission')[0]!.spent.tokens).toBe(500);
+    expect(governor.snapshot('mission')[0].spent.tokens).toBe(500);
     ledger.db.close();
   });
 
@@ -277,7 +294,7 @@ describe('a declared budget reaches the search between expansions', () => {
     governor.declare('mission', { tokens: 2_000 }, {});
 
     const { rt } = branchingRuntime();
-    await search(rt, localMissionScope(governor, ['mission']), 8, 2);
+    await search(rt, localMissionScope(governor, ['mission']), { budget: 8, branches: 2 });
 
     expect(exhausted).toEqual(['mission']);
     ledger.db.close();
@@ -290,9 +307,9 @@ describe('a declared budget reaches the search between expansions', () => {
     governor.declare('inner', { tokens: 10_000_000 }, { parent: 'outer' });
 
     const { rt, rollouts } = branchingRuntime();
-    await search(rt, localMissionScope(governor, ['inner']), 8, 2);
+    await search(rt, localMissionScope(governor, ['inner']), { budget: 8, branches: 2 });
 
-    expect(governor.snapshot('outer')[0]!.exhausted).toBe(true);
+    expect(governor.snapshot('outer')[0].exhausted).toBe(true);
     expect(rollouts()).toBeLessThan(6);
     ledger.db.close();
   });
@@ -307,7 +324,7 @@ describe('a declared budget reaches the search between expansions', () => {
 
     await search(rt, localMissionScope(governor, ['mission']));
 
-    const snapshot = governor.snapshot('mission')[0]!;
+    const snapshot = governor.snapshot('mission')[0];
     expect(snapshot.spent.tokens).toBe(0);
     expect(snapshot.calls).toBe(0);
     ledger.db.close();
@@ -324,17 +341,13 @@ describe('a declared budget reaches the search between expansions', () => {
 
     const { rt } = branchingRuntime();
     let explores = 0;
-    rt.spawnBranch = async () => ({ explore: async () => {
-      explores++;
-
-      return { text: 'an approach', usage: {} };
-    }, generateReflection: async () => ({ text: 'no lesson', usage: {} }), release: async () => {} });
+    rt.spawnBranch = countingBranch(() => { explores++; });
 
     await search(rt, localMissionScope(governor, ['mission']));
 
     // Rollouts really ran, so the zero below is a decision and not a vacuum.
     expect(explores).toBeGreaterThan(0);
-    const snapshot = governor.snapshot('mission')[0]!;
+    const snapshot = governor.snapshot('mission')[0];
     expect(snapshot.spent.tokens).toBe(0);
     expect(snapshot.calls).toBe(0);
     ledger.db.close();
@@ -349,7 +362,7 @@ describe('every rollout is reported, labelled or not', () => {
     const reports: ModelCallReport[] = [];
     const { rt, rollouts, reflections } = branchingRuntime();
 
-    await search(rt, null, 3, 2, (report) => reports.push(report));
+    await search(rt, null, { reportModelCall: (report) => reports.push(report) });
 
     // The search really ran, and no ledger was involved — the exact shape whose
     // spend has nowhere to go but the report sink.
@@ -372,19 +385,15 @@ describe('every rollout is reported, labelled or not', () => {
     const reports: ModelCallReport[] = [];
     const { rt } = branchingRuntime();
     let explores = 0;
-    rt.spawnBranch = async () => ({ explore: async () => {
-      explores++;
+    rt.spawnBranch = countingBranch(() => { explores++; });
 
-      return { text: 'an approach', usage: {} };
-    }, generateReflection: async () => ({ text: 'no lesson', usage: {} }), release: async () => {} });
-
-    await search(rt, localMissionScope(governor, ['mission']), 3, 2, (r) => reports.push(r));
+    await search(rt, localMissionScope(governor, ['mission']), { reportModelCall: (r) => reports.push(r) });
 
     expect(explores).toBeGreaterThan(0);
     expect(reports.length).toBeGreaterThanOrEqual(explores);
     expect(reports.every((r) => r.source === 'mcts' && usageTotal(r.usage) === undefined)).toBe(true);
     // Same calls, and the ledger charged none of them.
-    expect(governor.snapshot('mission')[0]!.calls).toBe(0);
+    expect(governor.snapshot('mission')[0].calls).toBe(0);
     ledger.db.close();
   });
 
@@ -398,7 +407,7 @@ describe('every rollout is reported, labelled or not', () => {
       return { text: 'it died', usage: PER_REFLECTION };
     }, release: async () => {} });
 
-    await search(rt, null, 3, 2, (report) => reports.push(report));
+    await search(rt, null, { reportModelCall: (report) => reports.push(report) });
 
     // The reflections on those dead branches DID complete a call and are
     // reported; the explorations never happened and are not.

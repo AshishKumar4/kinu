@@ -53,12 +53,14 @@ describe('isLegalDecision — drop requires authenticated + external events', ()
   });
 });
 
+/** The decision paired with eventOp `handle`, judged for the owner context. */
+function handledIsLegal(decision: Parameters<typeof dec>[0]): boolean {
+  return isLegalDecision(dec(decision, { kind: 'handle' }), ctxOwner);
+}
+
 describe('isLegalDecision — abort / add require eventOp:handle', () => {
   test('abort_all + handle — legal', () => {
-    expect(isLegalDecision(
-      dec({ kind: 'abort_all', reason: 'replan' }, { kind: 'handle' }),
-      ctxOwner,
-    )).toBe(true);
+    expect(handledIsLegal({ kind: 'abort_all', reason: 'replan' })).toBe(true);
   });
   test('abort_all + defer — illegal', () => {
     expect(isLegalDecision(
@@ -100,10 +102,7 @@ describe('isLegalDecision — add rejected after merging begins', () => {
 
 describe('isLegalDecision — merge_now permits handle or defer, not drop', () => {
   test('merge_now + handle — legal', () => {
-    expect(isLegalDecision(
-      dec({ kind: 'merge_now', reason: 'enough' }, { kind: 'handle' }),
-      ctxOwner,
-    )).toBe(true);
+    expect(handledIsLegal({ kind: 'merge_now', reason: 'enough' })).toBe(true);
   });
   test('merge_now + defer — legal', () => {
     expect(isLegalDecision(

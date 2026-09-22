@@ -5,6 +5,11 @@ import {
 } from '../src/index';
 import type { BenchTask } from '../src/index';
 
+/** s5 needed a second attempt; every other task passed first time. */
+function attemptsFor(taskId: string): number {
+  return taskId === 's5' ? 2 : 1;
+}
+
 function task(id: string, overrides: Partial<BenchTask> = {}): BenchTask {
   return {
     id,
@@ -183,8 +188,8 @@ describe('SealedSplit', () => {
 
     const result = await split.validate(async (t) => ({
       ok: t.id !== 's3',
-      attempts: t.id === 's5' ? 2 : 1,
-      passedOnAttempt: t.id === 's3' ? null : t.id === 's5' ? 2 : 1,
+      attempts: attemptsFor(t.id),
+      passedOnAttempt: t.id === 's3' ? null : attemptsFor(t.id),
       detail: '',
     }));
 

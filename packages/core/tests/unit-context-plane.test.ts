@@ -78,7 +78,8 @@ interface Workspace {
 }
 
 function workspace(): Workspace {
-  const { sql, execRaw, close } = createTestSql();
+  const testSql = createTestSql();
+  const { sql, execRaw } = testSql;
   const actors = createTestActors(sql, execRaw);
   initActorClaimTables(execRaw);
   const transactionSync = <T>(write: () => T): T => write();
@@ -99,7 +100,7 @@ function workspace(): Workspace {
       return { handle, claims, history, stores: { claims, events: null } };
     },
     files: vfs,
-    close,
+    close: () => { testSql.close(); },
   };
 }
 
@@ -429,7 +430,8 @@ test('an authorized parent edits a child through the child\'s own store; a sibli
 });
 
 test('a retired actor stops authorising context reads and writes at its own handle', async () => {
-  const { sql, execRaw, close } = createTestSql();
+  const testSql = createTestSql();
+  const { sql, execRaw } = testSql;
   const actors = createTestActors(sql, execRaw);
   initActorClaimTables(execRaw);
   const { vfs: files } = createMemoryVfs();
@@ -454,7 +456,7 @@ test('a retired actor stops authorising context reads and writes at its own hand
 
   live = true;
   expect(staged(bound)).toBeNull();
-  close();
+  testSql.close();
 });
 
 test('the native file tool reads, edits and re-reads the working history over the same plane', async () => {
@@ -546,11 +548,10 @@ test('the owner UI path gets a real conditional write, and a conflicting revisio
 
   if (revision === undefined) throw new Error('the context plane must publish a revision token');
   const served = await readText(vfs, '/context/working.jsonl');
-  const conditional = vfs.writeFileIfRevision;
 
-  if (conditional === undefined) throw new Error('the context plane must offer a conditional write');
+  if (vfs.writeFileIfRevision === undefined) throw new Error('the context plane must offer a conditional write');
 
-  const saved = await conditional.call(vfs, '/context/working.jsonl',
+  const saved = await vfs.writeFileIfRevision('/context/working.jsonl',
     new TextEncoder().encode(served.replace('from the browser', 'edited in the browser')), revision);
 
   expect(saved).toMatchObject({ ok: true });
@@ -558,7 +559,7 @@ test('the owner UI path gets a real conditional write, and a conflicting revisio
 
   // The token the first write consumed no longer describes the file, and a
   // second tab still holding it cannot overwrite what landed.
-  await expect(conditional.call(vfs, '/context/working.jsonl',
+  await expect(vfs.writeFileIfRevision('/context/working.jsonl',
     new TextEncoder().encode(served.replace('from the browser', 'from a stale tab')), revision))
     .rejects.toMatchObject({ verdict: 'stale' });
   ws.close();
@@ -660,7 +661,7 @@ test('a landed edit preserves the recorded tail exactly, with a woven block and 
   // coordinate in THIS array, not in the one the edit replaced.
   expect(request).toHaveLength(6);
   expect(request[5]?.role).toBe('user');
-  expect(String(request[5]?.content)).toContain('a finding proven by execution');
+  expect(v.parse(v.string(), request[5]?.content)).toContain('a finding proven by execution');
 
   // The edit is now the working history, activated at the step that took it,
   // with the tail the turn recorded after it still behind it.

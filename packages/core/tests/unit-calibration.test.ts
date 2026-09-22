@@ -81,7 +81,10 @@ describe('allocateLabelBudget', () => {
       for (const budget of [10, 37, 60, 100, 137]) {
         const quotas = allocateLabelBudget(sizes, budget);
         const drawn = quotas.reduce((a, b) => a + b, 0);
-        expect(`${sizes}/${budget}: ${drawn}`).toBe(`${sizes}/${budget}: ${Math.min(budget, sizes.reduce((a, b) => a + b, 0))}`);
+        const strata = sizes.join(',');
+
+        expect(`${strata}/${budget}: ${drawn}`)
+          .toBe(`${strata}/${budget}: ${Math.min(budget, sizes.reduce((a, b) => a + b, 0))}`);
         expect(quotas.every((q, i) => q >= 0 && q <= sizes[i])).toBe(true);
       }
     }

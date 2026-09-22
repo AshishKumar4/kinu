@@ -13,6 +13,7 @@ import {
 import { createTestRuntime } from './helpers';
 import type { ChatEvent } from '../src/chat';
 import { RunEventRecorder } from '../src/events/recorder';
+import { present } from '@kinu.run/test-utils';
 
 const noOpLlmStream = async function* () { yield { type: 'text-delta', delta: '' } satisfies ChatEvent; };
 
@@ -48,11 +49,10 @@ function makeJudge(
     const currentSlot = a.includes(currentOutput) ? 'a' : 'b';
     const pendingSlot = currentSlot === 'a' ? 'b' : 'a';
 
-    const verdict: JudgeOutput['winner'] =
-      winner === 'current' ? currentSlot : winner === 'pending' ? pendingSlot : 'tie';
+    const wonBy = { current: currentSlot, pending: pendingSlot, tie: 'tie' } as const;
+    const verdict: JudgeOutput['winner'] = wonBy[winner];
 
-    const scoreFor = (slot: 'a' | 'b') =>
-      slot === currentSlot ? (winner === 'current' ? 0.8 : 0.4) : (winner === 'pending' ? 0.8 : 0.4);
+    const scoreFor = (slot: 'a' | 'b') => (slot === verdict ? 0.8 : 0.4);
 
     return { winner: verdict, rationale, scoreA: scoreFor('a'), scoreB: scoreFor('b') };
   };
@@ -119,7 +119,7 @@ describe('runAutoShadowEval', () => {
     expect(result.evaluation?.winner).toBe('pending');
 
     // Verify it was recorded.
-    const pending = getPendingScaffold(rt.storage.sql, rt.actor)!;
+    const pending = present(getPendingScaffold(rt.storage.sql, rt.actor), 'the pending scaffold');
     expect(pending.trialsSoFar).toBe(1);
     expect(pending.pendingWins).toBe(1);
   });
@@ -235,7 +235,7 @@ describe('runAutoShadowEval', () => {
 
     const row = rt.storage.sql<{ current_version: number; pending_version: number }>`
       SELECT current_version, pending_version FROM scaffold_evaluations
-      WHERE actor_id = ${rt.actor.actorId}`[0]!;
+      WHERE actor_id = ${rt.actor.actorId}`[0];
 
     expect(row.pending_version).toBe(3);
     expect(row.current_version).toBe(0); // the live status='current' row, NOT 2
@@ -455,11 +455,11 @@ describe('order-swapped double-win judging', () => {
 
     const row = rt.storage.sql<{ winner: string; current_score: number; pending_score: number }>`
       SELECT winner, current_score, pending_score FROM scaffold_evaluations
-      WHERE actor_id = ${rt.actor.actorId}`[0]!;
+      WHERE actor_id = ${rt.actor.actorId}`[0];
 
     expect(row.winner).toBe('pending');
     expect(row.pending_score).toBe(0.8);
     expect(row.current_score).toBe(0.4);
-    expect(getPendingScaffold(rt.storage.sql, rt.actor)!.pendingWins).toBe(1);
+    expect(present(getPendingScaffold(rt.storage.sql, rt.actor), 'the pending scaffold').pendingWins).toBe(1);
   });
 });
