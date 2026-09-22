@@ -164,7 +164,7 @@ import {
   type PeersToolDeps, type PeerSpawnOutcome, type PeerSendOutcome,
   type EnqueueTurnResult, type ProgrammaticTurn, workModeForTurnMetadata,
   ROOT_DELEGATION_BUDGET, type DelegationBudget,
-  readMission, summarizeSoul, writeSoul, workspaceGenesisSignal,
+  readMission, summarizeSoul, writeSoul, workspaceGenesisSignal, WORKSPACE_CREATED_EVENT,
   // The durable answer an interrupted terminal transition still owes a reply
   // for — read from the transcript, because a recovery has no live turn.
   answersForDrainTurns,
@@ -2746,7 +2746,9 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       taskReminder: input.taskReminder ?? undefined,
       advisor: projectJsonValue({ value: this.advisorSnapshotFor(this.orch.scopedTurn(input.turn), input.reachableTools) }),
       sleepTime: true,
-      autoTitle: { mission },
+      // The genesis turn owes the naming the create left to it: the title the
+      // create stored is a stand-in, and no other turn replaces one.
+      autoTitle: { mission, standIn: input.event === WORKSPACE_CREATED_EVENT },
       autoGepa: true,
       shadowTrial: sampledVersion === null ? undefined : {
         pendingVersion: sampledVersion,
@@ -2858,14 +2860,16 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       }),
 
       auto_title: terminalEffect({
-        input: v.object({ subject: v.string() }),
-        // Once-only at its own boundary: persisting an auto title stamps
-        // `name_origin`, so a replay of a titled workspace changes nothing.
-        run: async ({ subject }) => {
+        input: v.object({ subject: v.string(), standIn: v.optional(v.boolean()) }),
+        // Replayable from the recorded input. A row without `standIn` names only
+        // a placeholder, so its replay over a titled workspace changes nothing;
+        // the genesis row keeps `standIn` through every retry, so a model call
+        // that failed is asked again until a name lands.
+        run: async ({ subject, standIn }) => {
           const unreachable = await this.titlingRefusal();
 
           if (unreachable !== null) return { status: 'owed', detail: unreachable };
-          await this.applyAutoTitle(subject);
+          await this.applyAutoTitle(subject, standIn === true);
 
           return { status: 'completed' };
         },
@@ -3106,8 +3110,8 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
    *  commits through the same propagation an owner rename does — which is
    *  also where the "a manual rename claimed it first" refusal lives (in
    *  UserDO's `name_origin`, not a local copy of it). */
-  protected async persistAutoTitle(displayName: string, origin: NameOrigin): Promise<boolean> {
-    return await this.propagateDisplayName(displayName, origin);
+  protected async persistAutoTitle(displayName: string): Promise<boolean> {
+    return await this.propagateDisplayName(displayName, 'auto');
   }
 
   /**

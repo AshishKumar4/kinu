@@ -2813,8 +2813,8 @@ export class LocalAgentSession implements BackendHost {
 
       auto_title: terminalEffect({
         input: v.object({ subject: v.string() }),
-        // Once-only at its own boundary: persisting an auto title stamps
-        // `name_origin`, after which the plan can no longer match. AWAITED
+        // Once-only at its own boundary: the title it persists is no longer a
+        // placeholder, after which the plan can no longer match. AWAITED
         // rather than detached into a fiber of its own — this row is on the
         // detached lane already, and the close that joins it is what keeps a
         // one-shot process from exiting through the model call.
@@ -3041,8 +3041,8 @@ export class LocalAgentSession implements BackendHost {
 
     if (planWorkspaceTitle(state) === null) return;
     await applyWorkspaceTitle(state, {
-      persist: (name, origin) => {
-        if (!persistAutoTitle(this.config, name, origin)) return false;
+      persist: (name) => {
+        if (!persistAutoTitle(this.config, name)) return false;
         this.broadcast({ type: 'workspace_renamed', displayName: name });
 
         return true;
