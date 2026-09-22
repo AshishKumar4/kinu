@@ -71,6 +71,27 @@ test('a streamed answer joins the working context only when it seals', async () 
   } finally { s.testSql.close(); }
 });
 
+test('a step finishing while the turn settles seals each container once', async () => {
+  // The SDK pipeline finishes the step on its side while the turn loop, whose
+  // consumer just failed, settles on its own: the same containers, reached
+  // from two writers at once. Unserialized, both read the seal flag clear,
+  // both sealed, and the second threw the turn's settle away. Measured on the
+  // cli-backend's consumer-failure turn, 2026-09-22.
+  const s = setup();
+
+  try {
+    const { stream } = await s.turn('t1');
+    await stream.nativePart({ type: 'text-start', id: '0' });
+    await stream.nativePart({ type: 'text-delta', id: '0', text: 'partial answer' });
+    await stream.nativePart({ type: 'text-end', id: '0' });
+    const final: ModelMessage = { role: 'assistant', content: [{ type: 'text', text: 'partial answer' }] };
+
+    await Promise.all([stream.nativeStep([final]), stream.settle()]);
+    expect(s.open()).toEqual([]);
+    expect((await s.history.materialize()).messages.at(-1)).toEqual(final);
+  } finally { s.testSql.close(); }
+});
+
 test('an admission the store refuses seals nothing of a live stream', async () => {
   const s = setup();
 

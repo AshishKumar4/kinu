@@ -211,10 +211,12 @@ describe('LocalAgentSession MCP surface', () => {
 
 describe('LocalAgentSession MCP admission', () => {
   test('a tool larger than the session step allocation is deferred with its arithmetic', async () => {
-    // The fixture's `huge` tool carries ~300KB of description and ~300KB of
-    // schema against a ~53k-token step remainder: its schema alone cannot fit,
-    // and schemas are never truncated, so it defers whole. Red before the
-    // admission: the turn carried all 600KB and nothing reported a bound.
+    // The fixture's `huge` tool carries ~600KB of description and ~600KB of
+    // schema against a ~117k-token step remainder (the 128k stand-in window of
+    // a spec no catalog knows, nothing reserved for an unreported answer, less
+    // the native surface): its schema alone cannot fit, and schemas are never
+    // truncated, so it defers whole. Red before the admission: the turn
+    // carried all 1.2MB and nothing reported a bound.
     let captured: string[] = [];
     const { session, events } = sessionWithModel(capturingModel((tools) => { captured = tools; }));
 

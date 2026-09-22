@@ -137,6 +137,12 @@ export class SessionStream {
   private step = 0;
   private completedMessageCount = 0;
   private nativeProducer = false;
+  /** The writers this stream is fed from — the SDK pipeline's parts and step
+   *  finishes, the turn loop's events, the turn's settle — run one at a time
+   *  in arrival order. Two of them reached one container's seal together when
+   *  a consumer failed mid-stream while the step was still finishing: each
+   *  had read `sealed` false before the other's await returned. */
+  private queue: Promise<void> = Promise.resolve();
   private readonly calls = new Map<string, { messageId: string; part: number }>();
   private sourceOrder = 0;
   private requestId: string;
@@ -162,11 +168,24 @@ export class SessionStream {
     this.ui = this.container('assistant', 2);
   }
 
-  async nativePart(part: TextStreamPart<ToolSet>): Promise<void> {
+  private exclusive<T>(op: () => Promise<T>): Promise<T> {
+    const run = this.queue.then(op);
+    // The next writer waits for this one to settle either way; a failure is
+    // the caller's, delivered through `run`, and never poisons the queue.
+    this.queue = Promise.allSettled([run]).then(() => undefined);
+
+    return run;
+  }
+
+  nativePart(part: TextStreamPart<ToolSet>): Promise<void> {
     this.nativeProducer = true;
 
-    if (isLifecyclePart(part)) return;
+    if (isLifecyclePart(part)) return Promise.resolve();
 
+    return this.exclusive(() => this.writePart(part));
+  }
+
+  private async writePart(part: Exclude<TextStreamPart<ToolSet>, LifecyclePart>): Promise<void> {
     switch (part.type) {
       case 'start-step':
         await this.publish({ container: this.ui, key: 'step-start', descriptor: { type: 'step-start' }, delta: null });
@@ -251,16 +270,23 @@ export class SessionStream {
     }
   }
 
-  async nativeStep(messages: readonly ModelMessage[]): Promise<void> {
+  nativeStep(messages: readonly ModelMessage[]): Promise<void> {
     this.nativeProducer = true;
-    await this.finishStep(messages);
-    await this.nextStep();
+
+    return this.exclusive(async () => {
+      await this.finishStep(messages);
+      await this.nextStep();
+    });
   }
 
   /** Scaffold-authored ChatEvents have no native stream; their explicit calls retain the same pairing rule. */
-  async observe(event: ChatEvent): Promise<void> {
-    if (this.nativeProducer) return;
+  observe(event: ChatEvent): Promise<void> {
+    if (this.nativeProducer) return Promise.resolve();
 
+    return this.exclusive(() => this.observeScaffold(event));
+  }
+
+  private async observeScaffold(event: ChatEvent): Promise<void> {
     if (event.type === 'text-delta' || event.type === 'reasoning-delta') {
       const kind = event.type === 'text-delta' ? 'text' : 'reasoning';
       await this.publish({ container: this.assistant, key: kind, descriptor: { type: kind }, delta: event.delta });
@@ -441,6 +467,12 @@ export class SessionStream {
       const finalParts = v.parse(v.array(JsonObjectSchema), content);
 
       if (container.reference === null && finalParts.length === 0) continue;
+
+      // The turn settled this container before its step finished: a consumer
+      // failed, or the turn was cut, with the final message still in flight.
+      // What streamed is the record, as `settle` says, and a message the
+      // turn no longer runs on has no source to bind.
+      if (container.sealed) continue;
       const parts = await this.reconcile(container, finalParts);
       const sealed = await this.history.messages.prepareContent(parts);
 
@@ -564,9 +596,11 @@ export class SessionStream {
   }
 
   /** The turn ended, however it ended: what streamed is sealed as it stands. */
-  async settle(): Promise<void> {
-    if (!this.history.epochCurrent(this.turnId, this.epoch)) return;
+  settle(): Promise<void> {
+    return this.exclusive(async () => {
+      if (!this.history.epochCurrent(this.turnId, this.epoch)) return;
 
-    for (const container of [this.assistant, this.tool, this.ui]) await this.sealOpen(container);
+      for (const container of [this.assistant, this.tool, this.ui]) await this.sealOpen(container);
+    });
   }
 }

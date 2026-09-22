@@ -24,11 +24,14 @@ server.registerTool(
   },
 );
 
-// Deliberately larger than any session's step allocation — proves the
-// descriptor admission bounds what the model is handed. BOTH the prose and
-// the schema exceed it on their own: the schema is atomic (never truncated),
-// so a tool shaped like this defers whole instead of arriving clamped.
-const OVERSIZED = 'x'.repeat(300_000);
+// Deliberately larger than the test session's whole step allocation — proves
+// the descriptor admission bounds what the model is handed. That session runs
+// a spec no catalog knows: the 128k stand-in window, with nothing reserved for
+// an answer nobody reported (#20), less the native surface. BOTH the prose and
+// the schema exceed it on their own (600k chars is ~150k tokens): the schema
+// is atomic (never truncated), so a tool shaped like this defers whole instead
+// of arriving clamped.
+const OVERSIZED = 'x'.repeat(600_000);
 
 server.registerTool(
   'huge',
