@@ -78,6 +78,13 @@ Default is solo + sidekick (if available). Delegation beyond that must beat the 
 - The AI SDK (`ai`) is required by the core chat driver and is not up for replacement. `@earendil-works/pi-*` is a bench subject only; oh-my-pi (`can1357/oh-my-pi`) is the source for borrowed ideas, cited.
 - Port 3000 is reserved; dev servers bind `0.0.0.0`; wrangler uses `--ip 0.0.0.0`.
 
+## Waste
+Over-engineering that cost CPU, storage or latency and delivered nothing is named here as it is found, with the date and the measurement, so the next design is checked against the list. Add a line when you find one; remove it when the code is gone.
+- 2026-09-21 A streamed answer was one `message_updates` row AND one context revision per token, and every step re-read every row of every past answer: a 500-delta turn cost 6x after twenty long answers, one storage statement per token, and the eval objects spent their 30 s CPU budget on it (D23). Nothing ever read an intermediate cutoff. Rule: a durable record is written once per fact at the granularity a reader needs; a hot path is measured against transcript size before it ships.
+- 2026-09-21 `append` asked `operation IN ('open','content-end')` and walked every update of the part per delta; the two partial indexes existed but a bound parameter or an `IN` defeats a partial index. Rule: a query that must hit a partial index carries the literal in its text, and `EXPLAIN QUERY PLAN` is read before a per-item query ships.
+- 2026-09-21 `_kinuTerminalRetryTick` is scheduled at every activation without `idempotent: true`; a resetting object piled up 16 stale schedules and drained them all in one alarm (production log, `Processing 16 stale "_kinuTerminalRetryTick" schedules in a single alarm cycle`). Open.
+- 2026-09-21 Three hand-rolled outside-click listeners for three menus (sidebar user menu, Drive upload menu, plugin row menu) before one hook replaced them. Rule: the second copy of a behaviour is the moment to name it.
+
 ## Errors and Logs
 - No catch discards its error: do not catch; or wrap and rethrow with `cause`; or handle a domain value and say so. One catch spans one condition. Ask (`tableExists`, `PRAGMA`) instead of catching; no DDL in a catch; no production catch for a test-only condition. `tolerate(op, 'enoent')` / `classify({ cause })` from `@kinu.run/core/obs` for expected absences.
 - Never log a secret or an object you have not looked inside; `ReservedLogField` makes that a compile error. Every log carries a stable dotted event name. `toKinuError` requires an `otherwise`; unknown causes are values, not guessed codes.
