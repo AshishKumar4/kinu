@@ -105,6 +105,7 @@ describe('listProviderCatalog', () => {
         }),
       },
     };
+
     const originalFetch = globalThis.fetch;
     globalThis.fetch = asFetchFunction(async () => new Response(JSON.stringify(MODELS_DEV_API), {
       status: 200, headers: { 'content-type': 'application/json' },

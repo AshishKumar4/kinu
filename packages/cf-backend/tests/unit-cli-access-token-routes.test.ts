@@ -180,8 +180,8 @@ function setupEnv(opts: { sessionMintedAt?: number } = {}) {
 
       return { id: 'trg_1', kind: 'timer_oneshot', nextFireAt: 1 };
     },
-    async createDurableWebhook(opts: { label: string; auth_mode: 'hmac' | 'bearer' | 'mtls' }) {
-      calls.push(`triggers:webhook:${opts.label}`);
+    async createDurableWebhook(webhook: { label: string; auth_mode: 'hmac' | 'bearer' | 'mtls' }) {
+      calls.push(`triggers:webhook:${webhook.label}`);
 
       return {
         trigger_id: 'trg_webhook',
