@@ -191,8 +191,8 @@ describe('SessionWindow — durability past the row', () => {
     win.claim()!.settle();
     const taken = win.takeQueuedReviews(5);
     expect(taken.reviews).toHaveLength(1);
-    win.recordReviewRan(taken.reviews[0]!.id);
-    win.settleReview(taken.reviews[0]!.id);
+    win.recordReviewRan(taken.reviews[0].id);
+    win.settleReview(taken.reviews[0].id);
     // Both lifetimes over: the row the append wrote is gone, so `ON CONFLICT(id)`
     // has nothing left to conflict with.
     expect(rowCount(sql, actor)).toBe(0);
@@ -207,7 +207,7 @@ describe('SessionWindow — durability past the row', () => {
   test('a claimed review whose work already ran is settled by recovery, not re-queued', () => {
     const { win } = open();
     win.append(aTurn(0), { awaitsFollowup: false, now: 1 });
-    const id = win.takeQueuedReviews(5).reviews[0]!.id;
+    const id = win.takeQueuedReviews(5).reviews[0].id;
     // reviewTurn resolved — the turn_outcomes row and the craft EMA moves have
     // landed — and the host was evicted before it could settle the lease.
     win.recordReviewRan(id);
@@ -230,7 +230,7 @@ describe('SessionWindow — durability past the row', () => {
   test('a released row whose work had already run is settled rather than offered', () => {
     const { win } = open();
     win.append(aTurn(0), { awaitsFollowup: false, now: 1 });
-    const id = win.takeQueuedReviews(5).reviews[0]!.id;
+    const id = win.takeQueuedReviews(5).reviews[0].id;
     win.recordReviewRan(id);
     // Some other lane put the lease back — a release, a stale-claim reset on a
     // second host. The review still must not run twice.

@@ -144,7 +144,7 @@ describe('Sleep-time compute', () => {
       currentFacts: [],
     });
 
-    const prompt = judge.prompts[0]!;
+    const prompt = judge.prompts[0];
     expect(prompt.indexOf('first ask')).toBeLessThan(prompt.indexOf('second ask'));
     expect(prompt).toContain('second answer');
     expect(prompt).toContain('workspace.exec, memory.save');

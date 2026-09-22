@@ -1480,7 +1480,7 @@ describe('the structured handoff a report carries', () => {
       findings: ['the gateway already limits per-account, so per-IP double-counts'],
     });
     // The payload is not what the parent reads — this is.
-    expect(renderForLLM(scene.log.pending({ variant: 'subordinate_report' })[0]!).brief).toBe(
+    expect(renderForLLM(scene.log.pending({ variant: 'subordinate_report' })[0]).brief).toBe(
       'completed [re: Map the market.]: Rate limiter landed behind the existing flag.'
       + '\nconcerns:\n  - the 429 budget is a guess — no production trace to size it from'
       + '\nfindings:\n  - the gateway already limits per-account, so per-IP double-counts',
@@ -1499,7 +1499,7 @@ describe('the structured handoff a report carries', () => {
     // every reader has to learn to tell an empty list from a silent one.
     expect(payload.concerns).toBeUndefined();
     expect(payload.open_work).toBeUndefined();
-    expect(renderForLLM(scene.log.pending({ variant: 'subordinate_report' })[0]!).brief)
+    expect(renderForLLM(scene.log.pending({ variant: 'subordinate_report' })[0]).brief)
       .toBe('progress [re: Map the market.]: Mapped 8 of the 14 so far.');
   });
 

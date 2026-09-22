@@ -380,7 +380,7 @@ describe('workspaceSpend', () => {
 
     const payload = v.parse(
       v.object({ usage: UsageSchema, usd: v.number() }),
-      JSON.parse(row!.payload),
+      JSON.parse(row.payload),
     );
 
     expect(Object.keys(payload.usage).sort()).toEqual([...USAGE_FIELDS].sort());
@@ -523,8 +523,8 @@ describe('workspaceSpend — the breakdown', () => {
         ['checkout-fixes', null, 4_100, 3],
         ['sweep', 'checkout-fixes', 4_000, 2],
       ]);
-    expect(spend.missions[1]!.remaining.tokens).toBe(1_000);
-    expect(spend.missions[1]!.exhausted).toBe(false);
+    expect(spend.missions[1].remaining.tokens).toBe(1_000);
+    expect(spend.missions[1].exhausted).toBe(false);
     // The two axes are NOT the same sum, though both now cover the whole life of
     // the workspace: a call sits in exactly one producer row and in every
     // mission label above it, so adding them double-counts.

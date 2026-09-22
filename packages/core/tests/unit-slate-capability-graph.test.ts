@@ -113,7 +113,7 @@ test('the graph renders every binding with members, effects and risk text', () =
       { member: 'mode', effect: 'mutate' },
     ],
   });
-  expect(risk(graph.bindings[3]!.members[1]!)).toEqual([
+  expect(risk(graph.bindings[3].members[1])).toEqual([
     "Changes your agent's task list and role as you. Anyone who opens this share can trigger it.",
     "Changes your agent's task list and role as you. Anyone you named on this share can trigger it.",
   ]);
@@ -254,7 +254,7 @@ test('a path-scoped binding offers only the file members it declares', () => {
   });
 
   // No declared members: the catalog's members, narrowed to the file five.
-  expect(whole.bindings[0]!.members.map((member) => member.member)).toEqual(['readFile']);
+  expect(whole.bindings[0].members.map((member) => member.member)).toEqual(['readFile']);
 
   const declared = parseSlateProject({
     main: 'server.js',
@@ -266,5 +266,5 @@ test('a path-scoped binding offers only the file members it declares', () => {
     catalog: { ...catalog, slates: { declared } },
   });
 
-  expect(narrowed.bindings[0]!.members.map((member) => member.member)).toEqual(['readFile']);
+  expect(narrowed.bindings[0].members.map((member) => member.member)).toEqual(['readFile']);
 });

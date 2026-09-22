@@ -150,7 +150,7 @@ describe('Inbox — the user kind, accepted', () => {
     // key, and nothing was ever queued mid-turn. What IS owed is where the
     // words went — a turn of their own — because the surface that sent them
     // to a running turn learns their landing from this broadcast alone.
-    expect(queued[0]!.idempotencyKey).toBeUndefined();
+    expect(queued[0].idempotencyKey).toBeUndefined();
     expect(broadcasts).toEqual([
       { type: 'steer_status', status: 'turn', steerId: 's1', text: 'nothing is running' },
     ]);
@@ -166,7 +166,7 @@ describe('Inbox — the user kind, accepted', () => {
     ]);
     // The wire shape a surface parses: the event's own key order, not the
     // schema's.
-    expect(Object.keys(raw[0]!)).toEqual(['type', 'status', 'steerId', 'text']);
+    expect(Object.keys(raw[0])).toEqual(['type', 'status', 'steerId', 'text']);
   });
 
   test('durable reset state replaces the process-local user queue in its stored order', async () => {
@@ -356,7 +356,7 @@ describe('Inbox — the user kind, landing in the step', () => {
         ],
       },
     ]);
-    expect(drained[0]!.steers[0]!.files).toEqual(files);
+    expect(drained[0].steers[0].files).toEqual(files);
   });
 });
 
@@ -547,7 +547,7 @@ describe('Inbox — the user kind beside the event kind', () => {
     expect(queued[0]).toMatchObject({
       origin: 'user', steerIds: ['s2'], metadata: { kinuAuthor: 'operator', kinuMode: 'build' },
     });
-    expect(queued[0]!.idempotencyKey).toMatch(/^steer-rerun:.*:build:/);
+    expect(queued[0].idempotencyKey).toMatch(/^steer-rerun:.*:build:/);
   });
 
   test('an interrupt returns users only and leaves a pending event to requeue at settle', async () => {
@@ -564,7 +564,7 @@ describe('Inbox — the user kind beside the event kind', () => {
     inbox.settle({ completed: false });
     await Promise.resolve();
     expect(queued.map((turn) => turn.text)).toEqual(['still owed']);
-    expect(queued[0]!.origin).toBeUndefined();
+    expect(queued[0].origin).toBeUndefined();
   });
 
   test('a failed durable landing restores users AND events ahead of a steer delivered mid-await', async () => {

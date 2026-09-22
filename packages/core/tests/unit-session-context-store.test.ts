@@ -36,7 +36,7 @@ test('message publication rolls back with its membership and can be retried', as
     }, () => s.rt.actor.assertCurrent())).toThrow('crash before membership');
     expect(s.context.entries(selected)).toEqual([]);
     const committed = s.context.commit(selected, 'input', 'turn', () => [{ ...s.messages.insert(prepared, 'input'), entryId: 'input', position: 0 }], () => s.rt.actor.assertCurrent());
-    expect(await s.messages.materialize(s.context.entries(committed)[0]!)).toEqual({ role: 'user', content: 'hello' });
+    expect(await s.messages.materialize(s.context.entries(committed)[0])).toEqual({ role: 'user', content: 'hello' });
   } finally { s.testSql.close(); }
 });
 
@@ -47,10 +47,10 @@ test('stream cutoffs retain partial text while final replacement and late metada
     const prepared = await s.messages.prepare({ role: 'assistant', content: [{ type: 'text', text: '\ud83d' }] }, 'answer');
     let selected = s.context.initialize();
     selected = s.context.commit(selected, 'output', 'turn', () => [{ ...s.messages.insert(prepared, 'output'), entryId: 'answer', position: 0 }], () => s.rt.actor.assertCurrent());
-    const first = s.context.entries(selected)[0]!;
+    const first = s.context.entries(selected)[0];
     const suffix = await PreparedMessageUpdate.prepare({ operation: 'append', part: 0, value: '\ude00' }, s.payloads);
-    selected = s.context.commit(selected, 'output', 'turn', entries => [{ ...s.messages.append('answer', first.sequence, [suffix]), entryId: 'answer', position: entries[0]!.position }], () => s.rt.actor.assertCurrent());
-    const second = s.context.entries(selected)[0]!;
+    selected = s.context.commit(selected, 'output', 'turn', entries => [{ ...s.messages.append('answer', first.sequence, [suffix]), entryId: 'answer', position: entries[0].position }], () => s.rt.actor.assertCurrent());
+    const second = s.context.entries(selected)[0];
     expect(await s.messages.materialize(first)).toEqual({ role: 'assistant', content: [{ type: 'text', text: '\ud83d' }] });
     expect(await s.messages.materialize(second)).toEqual({ role: 'assistant', content: [{ type: 'text', text: '😀' }] });
 
@@ -61,7 +61,7 @@ test('stream cutoffs retain partial text while final replacement and late metada
     ]);
 
     selected = s.context.commit(selected, 'output', 'turn', () => [{ ...s.messages.append('answer', second.sequence, updates), entryId: 'answer', position: 0 }], () => s.rt.actor.assertCurrent());
-    expect(await s.messages.materialize(s.context.entries(selected)[0]!)).toEqual({ role: 'assistant', content: [{ type: 'text', text: 'final' }], providerOptions: { test: { late: true } } });
+    expect(await s.messages.materialize(s.context.entries(selected)[0])).toEqual({ role: 'assistant', content: [{ type: 'text', text: 'final' }], providerOptions: { test: { late: true } } });
     expect(await s.messages.materialize(second)).toEqual({ role: 'assistant', content: [{ type: 'text', text: '😀' }] });
   } finally { s.testSql.close(); }
 });
@@ -78,7 +78,7 @@ test('a sealed message is projected once at its seal and read as one row after',
     const prepared = await s.messages.prepare({ role: 'assistant', content: [{ type: 'text', text: 'a' }] }, 'answer');
     let selected = s.context.initialize();
     selected = s.context.commit(selected, 'output', 'turn', () => [{ ...s.messages.insert(prepared, 'output'), entryId: 'answer', position: 0 }], () => s.rt.actor.assertCurrent());
-    const opened = s.context.entries(selected)[0]!;
+    const opened = s.context.entries(selected)[0];
     const projections = () => s.testSql.db.query<{ n: number }, []>('SELECT count(*) AS n FROM message_projections').get()!.n;
 
     // Open: read from its rows, projected by nobody.
@@ -165,7 +165,7 @@ test('VFS-backed image payloads fail explicitly after file corruption', async ()
   try {
     const image = await s.messages.prepare({ role: 'user', content: [{ type: 'image', image: new Uint8Array([0, 1, 255]) }] }, 'image');
     const selected = s.context.commit(s.context.initialize(), 'input', 'turn', () => [{ ...s.messages.insert(image, 'input'), entryId: 'image', position: 0 }], () => s.rt.actor.assertCurrent());
-    const reference = s.context.entries(selected)[0]!;
+    const reference = s.context.entries(selected)[0];
     expect(await s.messages.materialize(reference)).toEqual({ role: 'user', content: [{ type: 'image', image: new Uint8Array([0, 1, 255]) }] });
     const stored = await s.messages.materializeParts(reference);
     const external = v.parse(v.object({ image: v.object({ $sessionAttachment: v.object({ path: v.string() }) }) }), stored[0]?.value);
@@ -204,7 +204,7 @@ test('staged removal preserves an appended tail and rejects a changed target', a
     const proposals = new SessionProposals(s.rt.storage.sql, s.rt.actor, s.context, write => s.rt.storage.transactionSync(write));
     const prepared = await s.messages.prepare({ role: 'user', content: 'old' }, 'old');
     const base = s.context.commit(s.context.initialize(), 'input', 'turn', () => [{ ...s.messages.insert(prepared, 'input'), entryId: 'old', position: 0 }], assertOwner);
-    const old = s.context.entries(base)[0]!;
+    const old = s.context.entries(base)[0];
     proposals.stage({ id: 'remove', base, author: s.rt.actor.actorId, via: 'session', cause: 'context_transform', turnId: 'turn', changes: [{ entryId: old.entryId, expected: old, replacement: null }] });
     const tail = await s.messages.prepare({ role: 'assistant', content: 'new work' }, 'tail');
     s.context.commit(base, 'output', 'turn', entries => [...entries, { ...s.messages.insert(tail, 'output'), entryId: 'tail', position: 1 }], assertOwner);

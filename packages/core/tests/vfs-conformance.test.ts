@@ -115,7 +115,7 @@ class MemFs {
 const quoted = (cmd: string): string => {
   const all = [...cmd.matchAll(/'([^']*)'/g)];
 
-  return all.length ? all[all.length - 1]![1]! : '';
+  return all.length ? all[all.length - 1][1] : '';
 };
 
 /** The error the SDK raises where this double used to return an exit code —

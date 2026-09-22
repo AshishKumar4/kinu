@@ -141,9 +141,9 @@ describe('readShadowVerdict — the promote/rollback decision grid', () => {
     expect(v.version).toBe(4);
     expect(v.trials.length).toBe(4);
     // Regressions first: the first row is the 'current' winner.
-    expect(v.trials[0]!.winner).toBe('current');
-    expect(v.trials[0]!.task).toBe('cw1');
-    expect(v.trials[0]!.rationale).toBe('regressed');
+    expect(v.trials[0].winner).toBe('current');
+    expect(v.trials[0].task).toBe('cw1');
+    expect(v.trials[0].rationale).toBe('regressed');
     expect(v.summary).toEqual({ trials: 4, pendingWins: 2, currentWins: 1, ties: 1, winRate: 2 / 3 });
   });
 });

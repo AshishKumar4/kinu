@@ -156,7 +156,7 @@ describe('a model-supplied discriminant is refused with its vocabulary', () => {
 
 describe('a well-formed call is unaffected', () => {
   test('the vocabulary check does not stand between the model and a real call', async () => {
-    const exec = surfaceUnder(runtime(), SURFACES[0]!);
+    const exec = surfaceUnder(runtime(), SURFACES[0]);
 
     const added = v.parse(
       v.object({ added: v.array(v.object({ id: v.string() })) }),

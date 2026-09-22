@@ -572,7 +572,7 @@ describe('the run a reader gets back', () => {
 
     const page = readExplorationCanvas(rt.storage.sql, rt.actor);
     expect(page.items).toHaveLength(1);
-    const entry = page.items[0]!;
+    const entry = page.items[0];
     expect(entry.run.hasSearchTree).toBe(true);
     expect(entry.run.hasNodeTranscripts).toBe(true);
     // Both halves in full, against the two stores the engine wrote.
@@ -692,7 +692,7 @@ describe('the mission ledger a search charges', () => {
 
     const provider = createAgentsCodemodeProvider(() => deps);
 
-    const out = await provider.tools.swarm!.execute({
+    const out = await provider.tools.swarm.execute({
       preset: 'custom',
       label: 'agent-nodes',
       task: TASK,

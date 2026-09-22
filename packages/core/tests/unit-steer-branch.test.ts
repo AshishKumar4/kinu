@@ -89,17 +89,17 @@ describe('startBranchHead — one budgeted head over the HeadRuntime seam', () =
     expect(report.status).toBe('completed');
     expect(report.summary).toBe('branch answer');
     expect(spawns).toHaveLength(1);
-    expect(spawns[0]!).toMatchObject({
+    expect(spawns[0]).toMatchObject({
       task: 'try the other approach',
       rationale: BRANCH_RATIONALE,
       rootId: handle.id,
       mergeStrategy: 'best_of',
     });
-    expect(spawns[0]!.budget.maxDepth).toBe(BRANCH_HEAD_BUDGET.maxDepth);
-    expect(spawns[0]!.inheritedContext[0]!.content).toBe('original ask');
+    expect(spawns[0].budget.maxDepth).toBe(BRANCH_HEAD_BUDGET.maxDepth);
+    expect(spawns[0].inheritedContext[0].content).toBe('original ask');
 
     // Journaled like any head run: spawn row + final report status.
-    const row = journal.readHead(spawns[0]!.id)!;
+    const row = journal.readHead(spawns[0].id)!;
     expect(row.status).toBe('completed');
     expect(row.summary).toBe('branch answer');
     expect(journal.readTree(handle.id)).toHaveLength(1);
@@ -220,7 +220,7 @@ describe('settleBranchIntoTakes — honest settle into ONE takes pipeline', () =
     expect(set.candidates[0]).toMatchObject({ text: 'A-style answer', origin: 'live' });
     expect(set.candidates[1]).toMatchObject({ text: 'B-style answer', origin: 'branch' });
     // The live answer is the winner until the user says otherwise.
-    expect(set.winnerNodeId).toBe(set.candidates[0]!.nodeId);
+    expect(set.winnerNodeId).toBe(set.candidates[0].nodeId);
     expect(set.chosenNodeId).toBeNull();
 
     // Already claimed — the turn-end claim sweep finds nothing unclaimed.
@@ -279,13 +279,13 @@ describe('recordTakePick over a branch-sourced set — the pipeline unchanged', 
       liveText: 'A-style answer', branchText: 'B-style answer',
     })!;
 
-    const record = await recordTakePick(sql, actor, transcript, { takeId: set.id, nodeId: set.candidates[1]!.nodeId });
+    const record = await recordTakePick(sql, actor, transcript, { takeId: set.id, nodeId: set.candidates[1].nodeId });
     expect(record.outcome).toBe('corrected');
     expect(record.changedAnswer).toBe(true);
     expect(record.chosen.text).toBe('B-style answer');
 
     const ledger = sql<{ outcome: string; source: string; followup: string | null; turn_id: string }>`
-      SELECT outcome, source, followup, turn_id FROM turn_outcomes`[0]!;
+      SELECT outcome, source, followup, turn_id FROM turn_outcomes`[0];
 
     expect(ledger).toMatchObject({
       outcome: 'corrected', source: 'take_pick', followup: 'B-style answer', turn_id: 'turn-9',
@@ -304,7 +304,7 @@ describe('recordTakePick over a branch-sourced set — the pipeline unchanged', 
       liveText: 'live answer', branchText: 'branch answer',
     })!;
 
-    const record = await recordTakePick(sql, actor, transcript, { takeId: set.id, nodeId: set.candidates[0]!.nodeId });
+    const record = await recordTakePick(sql, actor, transcript, { takeId: set.id, nodeId: set.candidates[0].nodeId });
     expect(record.outcome).toBe('accepted');
     expect(record.changedAnswer).toBe(false);
   });

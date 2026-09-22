@@ -37,8 +37,8 @@ test('each parser refuses the other address grammar', () => {
   expect(shareHost).not.toBeNull();
   expect(previewHost).not.toBeNull();
 
-  const shareLabel = shareHost!.split('.')[0]!;
-  const previewLabel = previewHost!.split('.')[0]!;
+  const shareLabel = shareHost!.split('.')[0];
+  const previewLabel = previewHost!.split('.')[0];
 
   // A share label's first field is ten hex digits — a port the preview grammar
   // refuses — and a preview label's port makes the share's handle field a '-'.

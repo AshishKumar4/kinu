@@ -33,7 +33,7 @@ describe('TaskListStore', () => {
     s.update('t2', { status: 'dropped' }, 2);
     // Minting from MAX(seq), not COUNT(*): a reused id would silently re-label
     // an item the model already referred to in prose.
-    expect(s.add(['three'], null, 3).added[0]!.id).toBe('t3');
+    expect(s.add(['three'], null, 3).added[0].id).toBe('t3');
   });
 
   test('subtasks hang off a parent and nest exactly one level', () => {
@@ -44,11 +44,11 @@ describe('TaskListStore', () => {
 
     const deeper = s.add(['Too deep'], 't2', 3);
     expect(deeper.added).toEqual([]);
-    expect(deeper.rejected[0]!.reason).toContain('subtasks nest one level only');
+    expect(deeper.rejected[0].reason).toContain('subtasks nest one level only');
 
     const tree = s.list();
     expect(tree.length).toBe(1);
-    expect(tree[0]!.subtasks.map((t) => t.id)).toEqual(['t2', 't3']);
+    expect(tree[0].subtasks.map((t) => t.id)).toEqual(['t2', 't3']);
   });
 
   test('an unknown parent is refused with the id that was wrong', () => {
@@ -99,8 +99,8 @@ describe('TaskListStore', () => {
     expect(open.total).toBe(3);
     // t1 itself is done, but it is shown because t3 hangs off it — a subtask
     // rendered without its parent reads as an unrelated item.
-    expect(open.items[0]!.subtasks.map((t) => t.id)).toEqual(['t3']);
-    expect(open.items[1]!.subtasks).toEqual([]);
+    expect(open.items[0].subtasks.map((t) => t.id)).toEqual(['t3']);
+    expect(open.items[1].subtasks).toEqual([]);
 
     s.update('t3', { status: 'done' }, 6);
     expect(s.listOpen().items.map((t) => t.id)).toEqual(['t2']);
@@ -143,7 +143,7 @@ describe('TaskListStore', () => {
     s.add(['one', 'two'], null, 1);
     s.add(['under two'], 't2', 2);
     expect(s.list(2).map((t) => t.id)).toEqual(['t1', 't2']);
-    expect(s.list(2)[1]!.subtasks).toEqual([]);
+    expect(s.list(2)[1].subtasks).toEqual([]);
     expect(s.count()).toBe(3);
   });
   // A workspace whose table predates the status CHECK can hold a value the

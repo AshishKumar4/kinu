@@ -1184,7 +1184,7 @@ describe("score:'judge' reaches the ensemble the tree already owns", () => {
 
     const page = readExplorationCanvas(rt.storage.sql, rt.actor);
     expect(page.items).toHaveLength(1);
-    const entry = page.items[0]!;
+    const entry = page.items[0];
     // The knobs this run ran under, from the ledger row the swarm path writes: without
     // it, `readForkRunParams` answers a swarm with the transcript half alone.
     expect(entry.params?.search).toMatchObject({

@@ -204,7 +204,7 @@ describe('web provider — search', () => {
     expect(res.answer).toBe('A synthesized answer.');
     expect(res.results[0]).toMatchObject({ position: 1, url: 'https://docs.example.com/x', date: '2026-01-02' });
     expect(calls[0].url).toContain('tavily.com');
-    expect(new Headers(calls[0]!.init?.headers).get('authorization')).toContain('tvly-test');
+    expect(new Headers(calls[0].init?.headers).get('authorization')).toContain('tvly-test');
   });
   test('an unreadable Tavily response maps to a non-retriable WebFetchError with cause', async () => {
     const bodies = ['not-json-at-all', JSON.stringify({ results: [{ url: 123 }] })];
@@ -262,7 +262,7 @@ describe('web provider — fetch', () => {
     expect(res.markdown).toBe('# Already Markdown\n\nclean');
     expect(res.title).toBe('Already Markdown'); // first heading when no HTML <title>
     // Markdown-for-Agents Accept header is sent.
-    expect(new Headers(calls[0]!.init?.headers).get('accept')).toContain('text/markdown');
+    expect(new Headers(calls[0].init?.headers).get('accept')).toContain('text/markdown');
   });
 
   test('markdown frontmatter title is extracted', async () => {

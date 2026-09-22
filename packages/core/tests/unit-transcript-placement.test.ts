@@ -57,9 +57,9 @@ describe('reading a steer row', () => {
     ]);
 
     expect(entries.map((entry) => entry.message.id)).toEqual(['u1', 'a1']);
-    expect(entries[1]!.steers.map((steer) => steer.atStep)).toEqual([7]);
+    expect(entries[1].steers.map((steer) => steer.atStep)).toEqual([7]);
     // The ordinary message stayed a message and collected nothing.
-    expect(entries[0]!.steers).toEqual([]);
+    expect(entries[0].steers).toEqual([]);
   });
 
   test('a steer row written before the index existed keeps its bubble instead of guessing', () => {
@@ -76,7 +76,7 @@ describe('reading a steer row', () => {
       ]);
 
       expect(entries.map((entry) => entry.message.id)).toEqual(['old-steer', 'a1']);
-      expect(entries[1]!.steers).toEqual([]);
+      expect(entries[1].steers).toEqual([]);
     }
   });
 });
@@ -93,7 +93,7 @@ describe('a steer inside the turn that read it', () => {
     ]);
 
     expect(entries.map((entry) => entry.message.id)).toEqual(['u1', 'a1']);
-    expect(entries[1]!.steers).toEqual([
+    expect(entries[1].steers).toEqual([
       { id: 'steer-a', text: 'use the swarm for this', atStep: 3, state: 'landed' },
     ]);
   });
@@ -102,8 +102,8 @@ describe('a steer inside the turn that read it', () => {
     const messages = [user('u1', 'hello'), turn('a1', 2)];
     const { entries } = buildTranscript(messages);
     expect(entries).toEqual([
-      { message: messages[0]!, steers: [] },
-      { message: messages[1]!, steers: [] },
+      { message: messages[0], steers: [] },
+      { message: messages[1], steers: [] },
     ]);
   });
 
@@ -115,7 +115,7 @@ describe('a steer inside the turn that read it', () => {
     ]);
 
     expect(entries.map((entry) => entry.message.id)).toEqual(['u1', 'steer-a']);
-    expect(entries[1]!.steers).toEqual([]);
+    expect(entries[1].steers).toEqual([]);
   });
 });
 
@@ -127,7 +127,7 @@ describe('the live splice and the reloaded row agree', () => {
 
     // Same turn, same step, same words — the bubble does not move when the
     // socket's copy is replaced by the stored one.
-    expect(liveEntries[1]!.steers).toEqual(reloaded[1]!.steers);
+    expect(liveEntries[1].steers).toEqual(reloaded[1].steers);
     expect(liveEntries.map((entry) => entry.message.id))
       .toEqual(reloaded.map((entry) => entry.message.id));
   });
@@ -138,7 +138,7 @@ describe('the live splice and the reloaded row agree', () => {
       [live('steer-a', 'use the swarm', 3)],
     );
 
-    expect(entries[1]!.steers.map((steer) => steer.id)).toEqual(['steer-a']);
+    expect(entries[1].steers.map((steer) => steer.id)).toEqual(['steer-a']);
   });
 
   test('a queued steer has no position yet, so it trails instead of being placed', () => {
@@ -148,7 +148,7 @@ describe('the live splice and the reloaded row agree', () => {
       [user('u1', 'go'), turn('a1', 6)], [queued('steer-a', 'wait')],
     );
 
-    expect(entries[1]!.steers).toEqual([]);
+    expect(entries[1].steers).toEqual([]);
     expect(trailing.map((steer) => steer.id)).toEqual(['steer-a']);
   });
 
@@ -158,7 +158,7 @@ describe('the live splice and the reloaded row agree', () => {
       [{ id: 'steer-a', text: 'wait', atStep: null, state: 'landed' }],
     );
 
-    expect(entries[1]!.steers).toEqual([]);
+    expect(entries[1].steers).toEqual([]);
     expect(trailing.map((steer) => steer.id)).toEqual(['steer-a']);
   });
 
@@ -178,10 +178,10 @@ describe('cutting the turn at the steer', () => {
     const segments = segmentBySteers(parts, [live('s', 'wait', 2)]);
 
     expect(segments).toHaveLength(2);
-    expect(segments[0]!.steer).toBeNull();
-    expect(segments[0]!.parts.map(partLabel)).toEqual(['start', 'step 0', 'start', 'step 1']);
-    expect(segments[1]!.steer?.id).toBe('s');
-    expect(segments[1]!.parts.map(partLabel)).toEqual(['start', 'step 2', 'start', 'step 3']);
+    expect(segments[0].steer).toBeNull();
+    expect(segments[0].parts.map(partLabel)).toEqual(['start', 'step 0', 'start', 'step 1']);
+    expect(segments[1].steer?.id).toBe('s');
+    expect(segments[1].parts.map(partLabel)).toEqual(['start', 'step 2', 'start', 'step 3']);
   });
 
   test('no steer leaves the parts in one piece', () => {
@@ -194,7 +194,7 @@ describe('cutting the turn at the steer', () => {
     const segments = segmentBySteers(parts, [live('b', 'second', 3), live('a', 'first', 1)]);
 
     expect(segments.map((segment) => segment.steer?.id ?? null)).toEqual([null, 'a', 'b']);
-    expect(segments[1]!.parts.map(partLabel)).toEqual(['start', 'step 1', 'start', 'step 2']);
+    expect(segments[1].parts.map(partLabel)).toEqual(['start', 'step 1', 'start', 'step 2']);
   });
 
   test('two steers read at the same boundary stay two bubbles', () => {
@@ -202,7 +202,7 @@ describe('cutting the turn at the steer', () => {
     const segments = segmentBySteers(parts, [live('a', 'first', 1), live('b', 'second', 1)]);
 
     expect(segments.map((segment) => segment.steer?.id ?? null)).toEqual([null, 'a', 'b']);
-    expect(segments[1]!.parts).toEqual([]);
+    expect(segments[1].parts).toEqual([]);
   });
 
   test('a step the turn never reached puts the steer at the end, not off the list', () => {
@@ -212,9 +212,9 @@ describe('cutting the turn at the steer', () => {
     const segments = segmentBySteers(parts, [live('a', 'stop', 9)]);
 
     expect(segments).toHaveLength(2);
-    expect(segments[0]!.parts).toHaveLength(4);
-    expect(segments[1]!.steer?.id).toBe('a');
-    expect(segments[1]!.parts).toEqual([]);
+    expect(segments[0].parts).toHaveLength(4);
+    expect(segments[1].steer?.id).toBe('a');
+    expect(segments[1].parts).toEqual([]);
   });
 });
 

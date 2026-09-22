@@ -112,8 +112,8 @@ describe('Inbox — one delivery time: the next step', () => {
     expect(await inbox.prepareStep({ stepNumber: 1, messages: [user('q')] })).toBeUndefined();
     expect(queued).toEqual([{
       text: 'mail from bob',
-      idempotencyKey: cards[0]!.id,
-      metadata: { kinuEvent: 'event_drain', kinuAuthor: 'harness', signalId: cards[0]!.id },
+      idempotencyKey: cards[0].id,
+      metadata: { kinuEvent: 'event_drain', kinuAuthor: 'harness', signalId: cards[0].id },
     }]);
   });
 
@@ -135,9 +135,9 @@ describe('Inbox — one delivery time: the next step', () => {
       kind: 'background_job', text: 'job done',
       metadata: { jobId: 'bgjob-1', status: 'completed' },
     })).toBe('queued');
-    expect(idle.queued[0]!.metadata).toEqual({
+    expect(idle.queued[0].metadata).toEqual({
       kinuEvent: 'background_job', kinuAuthor: 'harness', jobId: 'bgjob-1', status: 'completed',
-      signalId: idle.cards[0]!.id,
+      signalId: idle.cards[0].id,
     });
   });
   test('a producer cannot move its turn under another provenance or rebind its reply', async () => {
@@ -149,9 +149,9 @@ describe('Inbox — one delivery time: the next step', () => {
       kind: 'background_job', text: 'job done', replyTurnId: 'real-turn',
       metadata: { kinuEvent: 'event_drain', drainTurnId: 'other-turn', jobId: 'bgjob-1' },
     })).toBe('queued');
-    expect(idle.queued[0]!.metadata).toEqual({
+    expect(idle.queued[0].metadata).toEqual({
       kinuEvent: 'background_job', drainTurnId: 'real-turn', kinuAuthor: 'harness',
-      jobId: 'bgjob-1', signalId: idle.cards[0]!.id,
+      jobId: 'bgjob-1', signalId: idle.cards[0].id,
     });
   });
 
@@ -224,8 +224,8 @@ describe('Inbox — one delivery time: the next step', () => {
 
     const queuedPath = setup({ turnInFlight: false });
     await queuedPath.inbox.send(wake('drain', { replyTurnId: 'evt-1' }));
-    expect(queuedPath.queued[0]!.metadata).toEqual({
-      kinuEvent: 'event_drain', kinuAuthor: 'harness', drainTurnId: 'evt-1', signalId: queuedPath.cards[0]!.id,
+    expect(queuedPath.queued[0].metadata).toEqual({
+      kinuEvent: 'event_drain', kinuAuthor: 'harness', drainTurnId: 'evt-1', signalId: queuedPath.cards[0].id,
     });
   });
 });
@@ -237,7 +237,7 @@ describe('Inbox — the user\'s card', () => {
 
     // The card exists before the agent has read anything: the event happened.
     expect(cards).toHaveLength(1);
-    const opened = cards[0]!;
+    const opened = cards[0];
     expect(opened).toMatchObject({
       type: 'signal_card', state: 'pending',
       metadata: { kinuEvent: 'event_drain', kinuAuthor: 'harness' },
@@ -264,11 +264,11 @@ describe('Inbox — the user\'s card', () => {
     expect(cards[0]).toMatchObject({ state: 'pending', text: '1 event arrived while you were idle' });
 
     // The backend reads the id off the turn's own metadata and hands it back.
-    const carried = carriedSignalId(queued[0]!);
-    expect(carried).toBe(cards[0]!.id);
+    const carried = carriedSignalId(queued[0]);
+    expect(carried).toBe(cards[0].id);
     inbox.beginTurn(false, carried);
     expect(lifecycle(cards)).toEqual(['pending', 'shown']);
-    expect(cards[1]).toEqual({ type: 'signal_card', id: cards[0]!.id, state: 'shown' });
+    expect(cards[1]).toEqual({ type: 'signal_card', id: cards[0].id, state: 'shown' });
   });
 
   test('a turn nothing delivered flips no card', async () => {
@@ -287,7 +287,7 @@ describe('Inbox — the user\'s card', () => {
     const { inbox, cards } = setup({ turnInFlight: false, enqueue: 'skipped' });
     expect(await inbox.send(wake('drain'))).toBe('undelivered');
     expect(lifecycle(cards)).toEqual(['pending', 'undelivered']);
-    expect(cards[1]!.id).toBe(cards[0]!.id);
+    expect(cards[1].id).toBe(cards[0].id);
   });
 
   test('a re-delivered signal keeps its card and returns it to pending', async () => {
@@ -308,7 +308,7 @@ describe('Inbox — the user\'s card', () => {
     await inbox.send({ kind: 'background_job', text: 't2', metadata: { status: 'completed' } });
     await inbox.prepareStep({ stepNumber: 0, messages: [user('q')] }, [nudge('fork now')]);
     expect(lifecycle(cards)).toEqual(['pending', 'pending', 'shown', 'shown']);
-    expect(cards.map((c) => c.id)).toEqual([cards[0]!.id, cards[1]!.id, cards[0]!.id, cards[1]!.id]);
+    expect(cards.map((c) => c.id)).toEqual([cards[0].id, cards[1].id, cards[0].id, cards[1].id]);
   });
 });
 
@@ -367,8 +367,8 @@ describe('Inbox — settlement', () => {
     await Promise.resolve();
     expect(queued).toEqual([{
       text: 'arrived at the final step',
-      idempotencyKey: cards[0]!.id,
-      metadata: { kinuEvent: 'event_drain', kinuAuthor: 'harness', drainTurnId: 'evt-late', signalId: cards[0]!.id },
+      idempotencyKey: cards[0].id,
+      metadata: { kinuEvent: 'event_drain', kinuAuthor: 'harness', drainTurnId: 'evt-late', signalId: cards[0].id },
     }]);
     // Settle reset the state — the next turn starts clean.
     expect(await inbox.prepareStep({ stepNumber: 0, messages: [user('next')] })).toBeUndefined();
@@ -490,7 +490,7 @@ describe('the workspace genesis signal', () => {
 
     expect(await inbox.send(genesis!)).toBe('queued');
     expect(queued).toHaveLength(1);
-    expect(queued[0]!.metadata?.kinuEvent).toBe(WORKSPACE_CREATED_EVENT);
+    expect(queued[0].metadata?.kinuEvent).toBe(WORKSPACE_CREATED_EVENT);
   });
 
   test('when a turn raced it, it rides that turn\'s next step like any other message', async () => {
@@ -515,9 +515,9 @@ describe('the workspace genesis signal', () => {
     // (no compensate, no redelivery) and withdraws the card it opened.
     expect(await inbox.send(genesis!)).toBe('yielded');
     expect(queued).toHaveLength(1);
-    expect(queued[0]!.yieldsToUserMessage).toBe(true);
-    expect(queued[0]!.metadata?.kinuEvent).toBe(WORKSPACE_CREATED_EVENT);
-    expect(queued[0]!.idempotencyKey).toBeUndefined();
+    expect(queued[0].yieldsToUserMessage).toBe(true);
+    expect(queued[0].metadata?.kinuEvent).toBe(WORKSPACE_CREATED_EVENT);
+    expect(queued[0].idempotencyKey).toBeUndefined();
     expect(lifecycle(cards)).toEqual(['pending', 'undelivered']);
   });
 
@@ -525,7 +525,7 @@ describe('the workspace genesis signal', () => {
     const { inbox, queued } = setup({ turnInFlight: false, messageAdmitted: true });
 
     expect(await inbox.send(wake('mail from bob'))).toBe('queued');
-    expect(queued[0]!.yieldsToUserMessage).toBeUndefined();
+    expect(queued[0].yieldsToUserMessage).toBeUndefined();
   });
 
   test('the genesis offer with nobody speaking still takes its own turn', async () => {
@@ -533,7 +533,7 @@ describe('the workspace genesis signal', () => {
     const genesis = workspaceGenesisSignal('Audit the OAuth callback flow.');
 
     expect(await inbox.send(genesis!)).toBe('queued');
-    expect(queued[0]!.yieldsToUserMessage).toBe(true);
+    expect(queued[0].yieldsToUserMessage).toBe(true);
   });
 
   test('a workspace created with no mission has no first turn to take', () => {

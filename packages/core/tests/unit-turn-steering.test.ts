@@ -146,7 +146,7 @@ describe('repeated-failure trigger', () => {
     await fail(orch, 'shell');
     const nudged = await step(orch, 2, base);
     expect(injected(nudged)).toHaveLength(1);
-    const text = injected(nudged)[0]!;
+    const text = injected(nudged)[0];
     expect(text).toContain('`shell` has failed 3 times in a row');
     expect(text).toContain('read the failure text for the actual cause');
     expect(text).toContain('a different command, a different file');
@@ -168,7 +168,7 @@ describe('repeated-failure trigger', () => {
     await fail(orch, 'shell', 5);
     const at2 = await step(orch, 2, [...base, user('a1'), user('a2')]);
     expect(injected(at2)).toHaveLength(1);
-    expect(at2[4]!.content).toContain(TURN_STEERING_HEADER);
+    expect(at2[4].content).toContain(TURN_STEERING_HEADER);
     expect(lastSteer(orch)?.step).toBe(1);
   });
 
@@ -200,7 +200,7 @@ describe('repeated-call trigger', () => {
     await repeat(orch, 'shell', { command: 'make' });
     const steered = await step(orch, 2, [user('build it')]);
     expect(injected(steered)).toHaveLength(1);
-    const text = injected(steered)[0]!;
+    const text = injected(steered)[0];
     expect(text).toContain('`shell` has run 3 times with the same arguments');
     expect(text).toContain('make');
     expect(text).toContain('change the approach');
@@ -332,7 +332,7 @@ describe('no-progress trigger', () => {
     expect(steered).toHaveLength(1);
     expect(steered[0]).toContain('steps in a row with nothing new');
     expect(steered[0]).toContain('Steps that succeed are not the same as steps that get somewhere');
-    expectNoDelegationNudge(steered[0]!);
+    expectNoDelegationNudge(steered[0]);
     expect(steered[0]).toContain('hint, not an instruction');
     expect(lastSteer(orch)).toEqual({
       trigger: 'no_progress', step: STEPS_WITHOUT_PROGRESS_BEFORE_STEER + 1, converted: false,
