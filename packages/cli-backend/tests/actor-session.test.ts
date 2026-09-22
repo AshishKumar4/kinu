@@ -46,7 +46,7 @@ function sessions() {
     const enqueued: ProgrammaticTurn[] = [];
     // The REAL store bundle, so a turn's claim is written through the same
     // memoized ledger production uses rather than a fixture beside it.
-    const stores = createAgentStores(() => runtime.storage.sql, () => handle, (write) => runtime.storage.transactionSync(write), async () => ({ vfs: runtime.storage.vfs, artifactDirectory: '/actors/' + handle.actorId }));
+    const stores = createAgentStores(() => runtime.storage.sql, () => handle, runtime.storage.transactionSync, async () => ({ vfs: runtime.storage.vfs, artifactDirectory: '/actors/' + handle.actorId }));
 
     const actor: ActorSession = new ActorSession({ history: stores.history, runtime, claims: stores.claims, installedBuild: null, orchestration: {
       engine: new EvolutionEngine(runtime, stores.history, { enabled: false }), eventLog: new EventLog(eventSql, handle),

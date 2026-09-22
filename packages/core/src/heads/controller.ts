@@ -129,7 +129,7 @@ export interface SpawnedHead {
 /** Runtime adapter the controller depends on. */
 export interface HeadRuntime {
   /** Spawn a head and return a handle. Called once per child in SplitRequest.heads. */
-  spawnHead(input: HeadInput): Promise<SpawnedHead>;
+  spawnHead: (input: HeadInput) => Promise<SpawnedHead>;
   /** Run the merge LLM with structured output enforcement. */
   mergeLLM: MergeLLMFn;
   /** Execution-grounding seam — when set, head scores + the merge are grounded

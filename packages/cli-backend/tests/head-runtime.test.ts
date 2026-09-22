@@ -658,7 +658,7 @@ describe('a local head forks the parent runtime (the caffe-fork capability)', ()
 
     const tools = buildHeadToolSet({
       input: aHeadInput(), capture, rt,
-      history: createAgentStores(() => rt.storage.sql, () => rt.actor, write => rt.storage.transactionSync(write),
+      history: createAgentStores(() => rt.storage.sql, () => rt.actor, rt.storage.transactionSync,
         async () => ({ vfs: rt.storage.vfs, artifactDirectory: '/actor/.kinu/context' })).history,
       codemodeTool: { description: 'x', inputSchema: {}, execute: async () => ({ result: 'unused' }) },
       webSearch: stubWeb,

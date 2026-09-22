@@ -77,7 +77,7 @@ async function workspace(): Promise<{ bind: (name: string) => Bound; rt: AgentRu
     });
 
     const runtime: AgentRuntime = { ...rt, actor: handle, identity: { ...rt.identity, id: handle.actorId, name: handle.name } };
-    const stores = createAgentStores(() => runtime.storage.sql, () => handle, (write) => runtime.storage.transactionSync(write), async () => ({ vfs: runtime.storage.vfs, artifactDirectory: '/actors/' + handle.actorId }));
+    const stores = createAgentStores(() => runtime.storage.sql, () => handle, runtime.storage.transactionSync, async () => ({ vfs: runtime.storage.vfs, artifactDirectory: '/actors/' + handle.actorId }));
 
     const actor: ActorSession = new ActorSession({ history: stores.history, runtime, claims: stores.claims, installedBuild: null,
     orchestration: {
@@ -239,7 +239,7 @@ test('a cold reader recovers the claimed program identity and the exact context 
 
   // A SECOND store bundle over the same database, bound to the same issued
   // actor: this is what an activation that did not run the turn can see.
-  const cold = createAgentStores(() => left.runtime.storage.sql, () => left.handle, (write) => left.runtime.storage.transactionSync(write), async () => ({ vfs: left.runtime.storage.vfs, artifactDirectory: '/actors/' + left.handle.actorId }));
+  const cold = createAgentStores(() => left.runtime.storage.sql, () => left.handle, left.runtime.storage.transactionSync, async () => ({ vfs: left.runtime.storage.vfs, artifactDirectory: '/actors/' + left.handle.actorId }));
 
   const claim = cold.claims.read('turn-cold');
   expect(claim).toMatchObject({ turnId: 'turn-cold', epoch: 1, status: 'settled', outcome: 'completed' });
