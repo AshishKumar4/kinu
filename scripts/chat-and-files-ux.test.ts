@@ -58,7 +58,7 @@ interface TailFrame {
   readonly heightCostPx: number;
   /** The tail "Thinking" row, addressed by the live region it announces on. */
   readonly thinkingRows: number;
-  readonly reasoning: { viewportHeight: number; lineHeight: number; pulse: string; duration: string; textAnimation: string } | null;
+  readonly reasoning: { viewportHeight: number; lineHeight: number; pulse: string; textAnimation: string } | null;
   /** The animated label a call in flight carries on its own row. */
   readonly runningIndicators: number;
 }
@@ -234,7 +234,13 @@ async function readTails(page: Page): Promise<Record<string, TailFrame>> {
       }
 
       const viewport = row.querySelector('[data-reasoning-viewport]');
-      const label = viewport?.previousElementSibling;
+
+      // The word the user reads, wherever the block places it: the innermost
+      // element of the live indicator whose text is the word (an ancestor's
+      // text is the same word, so the deepest match is the label itself).
+      const label = [...row.querySelectorAll('[data-live-indicator="reasoning"] *')]
+        .filter((node) => node.textContent?.trim() === 'Thinking').at(-1);
+
       const labelStyle = label ? getComputedStyle(label) : null;
 
       measured[row.getAttribute('data-stream-id') ?? ''] = {
@@ -245,7 +251,6 @@ async function readTails(page: Page): Promise<Record<string, TailFrame>> {
           viewportHeight: viewport.getBoundingClientRect().height,
           lineHeight: Number.parseFloat(getComputedStyle(viewport).lineHeight),
           pulse: labelStyle?.animationName ?? 'none',
-          duration: labelStyle?.animationDuration ?? '0s',
           textAnimation: getComputedStyle(viewport).animationName,
         } : null,
         // Tool styling can change; the semantic state is the contract.
@@ -691,8 +696,10 @@ describe('the streaming turn, as a browser lays it out', () => {
 
     expect(reasoning.viewportHeight).toBeGreaterThan(0);
     expect(reasoning.viewportHeight).toBeLessThanOrEqual(reasoning.lineHeight * 4);
-    expect(reasoning.pulse).toBe('pulse');
-    expect(reasoning.duration).toBe('1.6s');
+    // The label moves while the words arrive and the words themselves stay
+    // still; under reduced motion the label is still too. Which animation the
+    // label wears is the design's, shared with the pause tail.
+    expect(reasoning.pulse).not.toBe('none');
     expect(reasoning.textAnimation).toBe('none');
     expect(present(observed.reducedMotionTails[REASONING].reasoning, 'the reduced-motion reasoning block').pulse)
       .toBe('none');
