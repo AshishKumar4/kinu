@@ -226,7 +226,7 @@ describe('runSecurityFaultCells wire', () => {
       input: Parameters<typeof globalThis.fetch>[0],
       init?: Parameters<typeof globalThis.fetch>[1],
     ): Promise<Response> => {
-      seenUrls.push(String(input));
+      seenUrls.push(input instanceof Request ? input.url : String(input));
       const parsedBody = v.safeParse(v.string(), init?.body);
       const parsedAuth = v.safeParse(v.looseObject({ authorization: v.string() }), init?.headers);
       seenAuthorizations.push(parsedAuth.success ? parsedAuth.output.authorization : null);
@@ -241,12 +241,12 @@ describe('runSecurityFaultCells wire', () => {
     globalThis.fetch = Object.assign(answer, { preconnect: real.preconnect });
 
     try {
-      const { observation: parsed, notes } = await runSecurityFaultCells(
-        { origin: 'https://bench.invalid', token: SECRET },
-        'ab-x',
-        'snapshot-chain',
-        'sec-12345678',
-      );
+      const { observation: parsed, notes } = await runSecurityFaultCells({
+        fixture: { origin: 'https://bench.invalid', token: SECRET },
+        box: 'ab-x',
+        strategy: 'snapshot-chain',
+        nonce: 'sec-12345678',
+      });
 
       expect(parsed.completed).toBe(true);
       expect(parsed.cleanupErrors).toEqual([]);
@@ -273,9 +273,10 @@ describe('runSecurityFaultCells wire', () => {
     globalThis.fetch = Object.assign(answer, { preconnect: real.preconnect });
 
     try {
-      await expect(runSecurityFaultCells(
-        { origin: 'https://bench.invalid', token: SECRET }, 'ab-x', 'snapshot-chain', 'sec-12345678',
-      )).rejects.toThrow(/strategy not deployed/);
+      await expect(runSecurityFaultCells({
+        fixture: { origin: 'https://bench.invalid', token: SECRET },
+        box: 'ab-x', strategy: 'snapshot-chain', nonce: 'sec-12345678',
+      })).rejects.toThrow(/strategy not deployed/);
     } finally {
       globalThis.fetch = real;
     }
@@ -292,9 +293,10 @@ describe('runSecurityFaultCells wire', () => {
     globalThis.fetch = Object.assign(answer, { preconnect: real.preconnect });
 
     try {
-      await expect(runSecurityFaultCells(
-        { origin: 'https://bench.invalid', token: SECRET }, 'ab-x', 'snapshot-chain', 'sec-12345678',
-      )).rejects.toThrow(/reply contract/);
+      await expect(runSecurityFaultCells({
+        fixture: { origin: 'https://bench.invalid', token: SECRET },
+        box: 'ab-x', strategy: 'snapshot-chain', nonce: 'sec-12345678',
+      })).rejects.toThrow(/reply contract/);
     } finally {
       globalThis.fetch = real;
     }

@@ -629,12 +629,12 @@ async function main(): Promise<number> {
         detail: runtimeOk ? appDetail : `${destroyFailures.join('; ')}; ${appDetail}`,
       });
 
-      const workerOk = deleteFixtureWorker(
-        ROOT,
+      const workerOk = deleteFixtureWorker({
+        repoRoot: ROOT,
         configPath,
-        identity.workerName,
+        workerName: identity.workerName,
         log,
-      );
+      });
 
       cleanup.push({
         gate: 'fixture-worker-absent',
@@ -717,7 +717,7 @@ async function main(): Promise<number> {
     origin = /https:\/\/[a-z0-9.-]+\.workers\.dev/.exec(deployed)?.[0] ?? null;
 
     if (origin === null) throw new Error('wrangler deploy returned no workers.dev origin');
-    await awaitTokenAccepted(origin, token, '/shape', log);
+    await awaitTokenAccepted({ origin, token, probePath: '/shape', log });
     // DEPLOYMENT QUIESCENCE, proven before the container is even prepared: the
     // three secrets above each minted a Worker version, and a version rollout
     // resets the Durable Object every cell is measured through.

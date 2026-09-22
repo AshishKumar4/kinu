@@ -27,6 +27,7 @@ import {
   deleteContainerApps, deleteFixtureWorker, describeThrown, publishTeardown,
   runTeardownOnce, runWrangler, WRANGLER_FAILED,
 } from './fixtures/r2-bench/deploy-substrate';
+import type { WorkerDeletion } from './fixtures/r2-bench/deploy-substrate';
 import {
   classifyMaterialization, classifyRun, classifyWritableMmap, classifyWritableMmapControls,
   imageMismatchVerdict, RunIdentitySchema, SANDBOX_IMAGE, SANDBOX_IMAGE_VERSION,
@@ -483,21 +484,9 @@ export interface TeardownHooks extends ReleaseHooks {
   destroyRuntime(): Promise<void>;
 }
 
-/** One Worker deletion: the tree and generated config that name the Worker,
- *  plus the wrangler runner that carries the call. */
-export interface WorkerDeletion {
-  readonly repoRoot: string;
-  readonly configPath: string;
-  readonly workerName: string;
-  readonly log: (message: string) => void;
-  readonly wrangle?: typeof runWrangler;
-}
-
 /** The shared two-route deletion policy, under this probe's own name. */
 export function deleteWorkerBothRoutes(deletion: WorkerDeletion): boolean {
-  const { repoRoot, configPath, workerName, log, wrangle = runWrangler } = deletion;
-
-  return deleteFixtureWorker(repoRoot, configPath, workerName, log, wrangle);
+  return deleteFixtureWorker(deletion);
 }
 
 export const CONTAINER_APP_ABSENCE_ATTEMPTS = 12;

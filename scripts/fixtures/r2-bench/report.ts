@@ -773,13 +773,15 @@ export function renderMarkdown(artifact: RunArtifact): string {
 
   lines.push('### Recommendation');
   lines.push('');
-  lines.push(
-    artifact.admission?.admitted === true
-      ? recommend(artifact, aggregates)
-      : artifact.admission === undefined
-        ? 'RECOMMENDATION REFUSED. This artifact carries no G0–G9 admission decision.'
-        : refusalText(artifact.admission),
-  );
+
+  if (artifact.admission === undefined) {
+    lines.push('RECOMMENDATION REFUSED. This artifact carries no G0–G9 admission decision.');
+  } else if (artifact.admission.admitted) {
+    lines.push(recommend(artifact, aggregates));
+  } else {
+    lines.push(refusalText(artifact.admission));
+  }
+
   lines.push('');
 
   return lines.join('\n');

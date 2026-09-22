@@ -4863,7 +4863,7 @@ async function runSecurityCellsPhase(
 
     const outcome = await retryTransient('security fault cells', async (): Promise<{
       observation: SecurityCellsObservation; notes: string[]; error?: string;
-    }> => await runSecurityFaultCells(fixture, box, strategy, nonce));
+    }> => await runSecurityFaultCells({ fixture, box, strategy, nonce }));
 
     return { observation: outcome.observation, notes: outcome.notes };
   } catch (error) {

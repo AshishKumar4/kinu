@@ -150,7 +150,7 @@ function parseOptions(argv: readonly string[]): Options {
   const value = (name: string, fallback: string): string => {
     const index = argv.indexOf(`--${name}`);
 
-    return index !== -1 && index + 1 < argv.length ? argv[index + 1]! : fallback;
+    return index !== -1 && index + 1 < argv.length ? argv[index + 1] : fallback;
   };
 
   const runId = new Date().toISOString().replace(/[^0-9]/g, '').slice(0, 14);
@@ -239,12 +239,16 @@ const FixtureAckSchema: v.GenericSchema<FixtureAck> = v.object({
   error: v.optional(v.string()),
 });
 
+interface Call<TSchema extends v.GenericSchema> {
+  readonly fixture: Fixture;
+  readonly method: 'GET' | 'POST';
+  readonly path: string;
+  readonly schema: TSchema;
+  readonly body?: FixtureRequest;
+}
+
 async function call<TSchema extends v.GenericSchema>(
-  fixture: Fixture,
-  method: 'GET' | 'POST',
-  path: string,
-  schema: TSchema,
-  body?: FixtureRequest,
+  { fixture, method, path, schema, body }: Call<TSchema>,
 ): Promise<v.InferOutput<TSchema>> {
   const authorization = `Bearer ${fixture.token}`;
 
@@ -312,7 +316,7 @@ const ExecReplySchema: v.GenericSchema<ExecReply> = v.union([
 ]);
 
 async function sh(fixture: Fixture, command: string, timeoutMs: number): Promise<ExecReply> {
-  return await call(fixture, 'POST', '/exec', ExecReplySchema, { command, timeoutMs });
+  return await call({ fixture, method: 'POST', path: '/exec', schema: ExecReplySchema, body: { command, timeoutMs } });
 }
 
 /** The exec's own answer, for a caller with no recovery path: a refusal there is
@@ -466,7 +470,7 @@ async function deployFixture(
 
     if (Date.now() > deadline) throw new Error(`fixture never answered at ${origin} (last status ${probe})`);
     const settle = Promise.withResolvers<void>();
-    setTimeout(settle.resolve, 2_000);
+    setTimeout(() => settle.resolve(), 2_000);
     await settle.promise;
   }
 
@@ -555,7 +559,7 @@ async function bringContainerUp(fixture: Fixture): Promise<string> {
   let last = 'no attempt was made';
 
   for (let attempt = 1; attempt <= attempts; attempt++) {
-    const facts = await call(fixture, 'GET', '/shape', ContainerFactsReplySchema);
+    const facts = await call({ fixture, method: 'GET', path: '/shape', schema: ContainerFactsReplySchema });
 
     if (facts.error === undefined && facts.stdout !== undefined) {
       return attempt === 1 ? facts.stdout : `${facts.stdout}\n(container start took ${attempt} attempts)`;
@@ -566,7 +570,7 @@ async function bringContainerUp(fixture: Fixture): Promise<string> {
 
     if (attempt < attempts) {
       const settle = Promise.withResolvers<void>();
-      setTimeout(settle.resolve, attempt * 15_000);
+      setTimeout(() => settle.resolve(), attempt * 15_000);
       await settle.promise;
     }
   }
@@ -620,8 +624,12 @@ async function installHarness(fixture: Fixture, syncCli: string): Promise<void> 
 
   for (const file of ['stats.ts', 'probe.ts', 'sync.ts']) {
     const content = readFileSync(join(FIXTURE_DIR, file), 'utf8');
-    await call(fixture, 'POST', '/write', FixtureAckSchema, {
-      path: `${CONTAINER_HARNESS_DIR}/${file}`, content,
+    await call({
+      fixture,
+      method: 'POST',
+      path: '/write',
+      schema: FixtureAckSchema,
+      body: { path: `${CONTAINER_HARNESS_DIR}/${file}`, content },
     });
   }
 
@@ -634,17 +642,25 @@ async function installHarness(fixture: Fixture, syncCli: string): Promise<void> 
     // against.
     const hostDir = join(REPO_ROOT, syncCli);
 
+    const uploaded = (name: string): boolean => {
+      if (name === 'tsconfig.json') return true;
+
+      return name.endsWith('.ts') && !name.endsWith('.test.ts');
+    };
+
     const files = readdirSync(hostDir, { withFileTypes: true })
-      .filter((item) => item.isFile()
-        && ((item.name.endsWith('.ts') && !item.name.endsWith('.test.ts')) || item.name === 'tsconfig.json'))
+      .filter((item) => item.isFile() && uploaded(item.name))
       .map((item) => item.name);
 
     if (files.length === 0) throw new Error(`--sync-cli ${syncCli} holds no .ts files`);
 
     for (const file of files) {
-      await call(fixture, 'POST', '/write', FixtureAckSchema, {
-        path: `${dir}/${file}`,
-        content: readFileSync(join(hostDir, file), 'utf8'),
+      await call({
+        fixture,
+        method: 'POST',
+        path: '/write',
+        schema: FixtureAckSchema,
+        body: { path: `${dir}/${file}`, content: readFileSync(join(hostDir, file), 'utf8') },
       });
     }
 
@@ -656,19 +672,26 @@ async function installHarness(fixture: Fixture, syncCli: string): Promise<void> 
   await shOrThrow(fixture, `cd ${CONTAINER_HARNESS_DIR} && bun --version`, 60_000);
 }
 
+interface ProbeRequest {
+  readonly fixture: Fixture;
+  readonly root: string;
+  readonly phases: string;
+  readonly seed: number;
+  readonly options: Options;
+  /** Collect the container facts alongside the measurement. */
+  readonly withFacts?: boolean;
+}
+
 async function runProbe(
-  fixture: Fixture,
-  root: string,
-  phases: string,
-  seed: number,
-  options: Options,
-  withFacts = false,
+  { fixture, root, phases, seed, options, withFacts = false }: ProbeRequest,
 ): Promise<ProbeRun> {
   const command =
     `cd ${CONTAINER_HARNESS_DIR} && bun probe.ts --root ${root} --phase ${phases} --seed ${seed}`
     + (withFacts ? ' --facts' : '');
 
-  if (PROCESS_DRIVEN_PHASES[phases] === true) return await runProbeAsProcess(fixture, root, phases, seed, options);
+  if (PROCESS_DRIVEN_PHASES[phases] === true) {
+    return await runProbeAsProcess({ fixture, root, phase: phases, seed, options });
+  }
 
   const attempts = 3;
   let last = '';
@@ -709,7 +732,7 @@ async function runProbe(
     log(`probe attempt ${attempt}/${attempts} hit a container event (${last.slice(0, 120)}); recovering`);
     // Give the instance time to come back before reinstalling into it.
     const settle = Promise.withResolvers<void>();
-    setTimeout(settle.resolve, attempt * 10_000);
+    setTimeout(() => settle.resolve(), attempt * 10_000);
     await settle.promise;
     await bringContainerUp(fixture);
     await installHarness(fixture, options.syncCli);
@@ -732,6 +755,14 @@ const SpawnReplySchema: v.GenericSchema<SpawnReply> = v.object({
   error: v.optional(v.string()),
 });
 
+interface ProcessProbeRequest {
+  readonly fixture: Fixture;
+  readonly root: string;
+  readonly phase: string;
+  readonly seed: number;
+  readonly options: Options;
+}
+
 /**
  * Run one metric group as a detached process and poll for its result.
  *
@@ -742,23 +773,22 @@ const SpawnReplySchema: v.GenericSchema<SpawnReply> = v.object({
  * instrument for anything whose wall time is minute-scale.
  */
 async function runProbeAsProcess(
-  fixture: Fixture,
-  root: string,
-  phase: string,
-  seed: number,
-  options: Options,
+  { fixture, root, phase, seed, options }: ProcessProbeRequest,
 ): Promise<ProbeRun> {
   const out = `${CONTAINER_HARNESS_DIR}/out-${phase}-${seed}.json`;
   await sh(fixture, `rm -f ${out} ${out}.done`, 60_000);
 
-  const spawned = await call(
-    fixture, 'POST', '/spawn', SpawnReplySchema,
-    {
+  const spawned = await call({
+    fixture,
+    method: 'POST',
+    path: '/spawn',
+    schema: SpawnReplySchema,
+    body: {
       command: `bun ${CONTAINER_HARNESS_DIR}/probe.ts --root ${root} --phase ${phase} `
         + `--seed ${seed} --budget-ms ${options.budgetMs} --out ${out}`,
       cwd: CONTAINER_HARNESS_DIR,
     },
-  );
+  });
 
   if (spawned.error !== undefined || spawned.ok !== true) {
     throw new Error(`could not spawn ${phase}: ${spawned.error ?? 'the route did not confirm a process'}`);
@@ -768,7 +798,7 @@ async function runProbeAsProcess(
 
   for (;;) {
     const settle = Promise.withResolvers<void>();
-    setTimeout(settle.resolve, PROCESS_POLL_MS);
+    setTimeout(() => settle.resolve(), PROCESS_POLL_MS);
     await settle.promise;
 
     const poll = execCompleted(
@@ -816,7 +846,7 @@ const MountReplySchema: v.GenericSchema<MountReply> = v.union([
  *  go away is why the next arm's numbers would be wrong. */
 async function clearMount(fixture: Fixture, mountPath: string): Promise<void> {
   try {
-    await call(fixture, 'POST', '/unmount', FixtureAckSchema, { mountPath });
+    await call({ fixture, method: 'POST', path: '/unmount', schema: FixtureAckSchema, body: { mountPath } });
   } catch (error) {
     log(`unmount ${mountPath} failed: ${error instanceof Error ? error.message : String(error)}`);
   }
@@ -853,11 +883,17 @@ async function bringUp(
     await shOrThrow(fixture, `mkdir -p ${S3FS_CACHE_DIR}`, timeoutMs);
   }
 
-  const cold = await call(fixture, 'POST', '/mount', MountReplySchema, {
-    mountPath: spec.mount.mountPath,
-    prefix: spec.mount.prefix,
-    readOnly: spec.id === 'overlay' ? false : spec.mount.readOnly,
-    s3fsOptions: [...spec.mount.s3fsOptions],
+  const cold = await call({
+    fixture,
+    method: 'POST',
+    path: '/mount',
+    schema: MountReplySchema,
+    body: {
+      mountPath: spec.mount.mountPath,
+      prefix: spec.mount.prefix,
+      readOnly: spec.id === 'overlay' ? false : spec.mount.readOnly,
+      s3fsOptions: [...spec.mount.s3fsOptions],
+    },
   });
 
   if (cold.error !== undefined) return { coldMs: null, warmMs: null, error: cold.error };
@@ -868,13 +904,25 @@ async function bringUp(
 
   // Warm mount: unmount and mount again with identical options. The gap between
   // this and the cold number is what a container restart would pay.
-  await call(fixture, 'POST', '/unmount', FixtureAckSchema, { mountPath: spec.mount.mountPath });
+  await call({
+    fixture,
+    method: 'POST',
+    path: '/unmount',
+    schema: FixtureAckSchema,
+    body: { mountPath: spec.mount.mountPath },
+  });
 
-  const warm = await call(fixture, 'POST', '/mount', MountReplySchema, {
-    mountPath: spec.mount.mountPath,
-    prefix: spec.mount.prefix,
-    readOnly: spec.id === 'overlay' ? false : spec.mount.readOnly,
-    s3fsOptions: [...spec.mount.s3fsOptions],
+  const warm = await call({
+    fixture,
+    method: 'POST',
+    path: '/mount',
+    schema: MountReplySchema,
+    body: {
+      mountPath: spec.mount.mountPath,
+      prefix: spec.mount.prefix,
+      readOnly: spec.id === 'overlay' ? false : spec.mount.readOnly,
+      s3fsOptions: [...spec.mount.s3fsOptions],
+    },
   });
 
   if (spec.id === 'overlay') {
@@ -922,11 +970,17 @@ async function verifyReadOnlyRefusesWrites(
 ): Promise<{ holds: boolean; detail: string }> {
   await clearMount(fixture, R2_MOUNT_PATH);
 
-  const mounted = await call(fixture, 'POST', '/mount', MountReplySchema, {
-    mountPath: R2_MOUNT_PATH,
-    prefix: mountPrefixFor(runId),
-    readOnly: true,
-    s3fsOptions: [...TUNED_S3FS_OPTIONS],
+  const mounted = await call({
+    fixture,
+    method: 'POST',
+    path: '/mount',
+    schema: MountReplySchema,
+    body: {
+      mountPath: R2_MOUNT_PATH,
+      prefix: mountPrefixFor(runId),
+      readOnly: true,
+      s3fsOptions: [...TUNED_S3FS_OPTIONS],
+    },
   });
 
   if (mounted.error !== undefined) {
@@ -1033,6 +1087,39 @@ const OpsReplySchema: v.GenericSchema<OpsReply> = v.object({
   }),
 });
 
+interface RepetitionRequest {
+  readonly fixture: Fixture;
+  readonly armId: string;
+  readonly root: string;
+  readonly rep: number;
+  readonly options: Options;
+}
+
+/** One repetition, phase by phase: the runs that completed, and a note naming
+ *  each phase that did not. */
+async function runRepetition(
+  { fixture, armId, root, rep, options }: RepetitionRequest,
+): Promise<{ runs: ProbeRun[]; notes: string[] }> {
+  const runs: ProbeRun[] = [];
+  const notes: string[] = [];
+
+  for (const phase of options.phases.split(',')) {
+    const withFacts = rep === 0 && runs.length === 0;
+
+    try {
+      runs.push(await runProbe({
+        fixture, root, phases: phase.trim(), seed: options.seed + rep, options, withFacts,
+      }));
+    } catch (error) {
+      const reason = error instanceof Error ? error.message : String(error);
+      log(`arm ${armId}: phase ${phase} failed: ${reason.slice(0, 200)}`);
+      notes.push(`phase ${phase} did not complete on repetition ${rep + 1}: ${reason.slice(0, 300)}`);
+    }
+  }
+
+  return { runs, notes };
+}
+
 async function main(): Promise<number> {
   const options = parseOptions(process.argv.slice(2));
   const runId = /[0-9]{14}/.exec(options.out)?.[0] ?? new Date().toISOString().replace(/[^0-9]/g, '').slice(0, 14);
@@ -1057,9 +1144,13 @@ async function main(): Promise<number> {
     const started = await deployFixture(config.path, token);
 
     try {
-      const purged = await call(
-        started.fixture, 'POST', '/purge', PurgeReplySchema, { prefix: '', whole: true },
-      );
+      const purged = await call({
+        fixture: started.fixture,
+        method: 'POST',
+        path: '/purge',
+        schema: PurgeReplySchema,
+        body: { prefix: '', whole: true },
+      });
 
       log(purged.error === undefined
         ? `purged ${purged.deleted} object(s) in ${purged.passes} pass(es)`
@@ -1118,7 +1209,7 @@ async function main(): Promise<number> {
     for (const spec of specs) {
       log(`arm ${spec.id}: bringing up`);
       // The reply is the tally being cleared, which nothing here reads.
-      await call(fixture, 'POST', '/ops/reset', FixtureAckSchema);
+      await call({ fixture, method: 'POST', path: '/ops/reset', schema: FixtureAckSchema });
       const mount = await bringUp(fixture, spec, options.timeoutMs);
       const reps: ProbeRun[] = [];
       const notes: string[] = [];
@@ -1151,24 +1242,13 @@ async function main(): Promise<number> {
         // ceiling AND isolates failure: a phase that cannot finish on an arm now
         // costs that phase rather than the whole repetition, which is the
         // difference between a gap in a table and an empty column.
-        const merged: ProbeRun[] = [];
+        const merged = await runRepetition({ fixture, armId: spec.id, root, rep, options });
+        notes.push(...merged.notes);
 
-        for (const phase of options.phases.split(',')) {
-          const first = rep === 0 && merged.length === 0;
-
-          try {
-            merged.push(await runProbe(fixture, root, phase.trim(), options.seed + rep, options, first));
-          } catch (error) {
-            const reason = error instanceof Error ? error.message : String(error);
-            log(`arm ${spec.id}: phase ${phase} failed: ${reason.slice(0, 200)}`);
-            notes.push(`phase ${phase} did not complete on repetition ${rep + 1}: ${reason.slice(0, 300)}`);
-          }
-        }
-
-        if (merged.length === 0) throw new Error(`every phase failed on arm ${spec.id}`);
+        if (merged.runs.length === 0) throw new Error(`every phase failed on arm ${spec.id}`);
         reps.push({
-          ...merged[0]!,
-          phases: merged.flatMap((run) => run.phases),
+          ...merged.runs[0],
+          phases: merged.runs.flatMap((run) => run.phases),
         });
       }
 
@@ -1208,11 +1288,14 @@ async function main(): Promise<number> {
         notes.push(`durability was not measured: ${reason.slice(0, 300)}`);
       }
 
-      const ops = (await call(fixture, 'GET', '/ops', OpsReplySchema)).tally;
+      const ops = (await call({ fixture, method: 'GET', path: '/ops', schema: OpsReplySchema })).tally;
 
-      const inv = await call(
-        fixture, 'GET', `/inventory?prefix=${encodeURIComponent(keyPrefix)}`, InventoryReplySchema,
-      );
+      const inv = await call({
+        fixture,
+        method: 'GET',
+        path: `/inventory?prefix=${encodeURIComponent(keyPrefix)}`,
+        schema: InventoryReplySchema,
+      });
 
       await tearDownLayout(fixture, spec, options.timeoutMs);
       layouts.push({
@@ -1262,9 +1345,12 @@ async function main(): Promise<number> {
         // A bucket this run created holds nothing but this run's bytes, so the
         // whole bucket is ours to empty. A pre-existing one is emptied only
         // under the run's own prefix.
-        const purge = await call(fixture, 'POST', '/purge', PurgeReplySchema, {
-          prefix: lease.created ? '' : keyPrefix,
-          whole: lease.created,
+        const purge = await call({
+          fixture,
+          method: 'POST',
+          path: '/purge',
+          schema: PurgeReplySchema,
+          body: { prefix: lease.created ? '' : keyPrefix, whole: lease.created },
         });
 
         if (purge.error === undefined) {
@@ -1274,12 +1360,12 @@ async function main(): Promise<number> {
           teardown['purgeError'] = purge.error;
         }
 
-        const remaining = await call(
+        const remaining = await call({
           fixture,
-          'GET',
-          `/inventory?prefix=${encodeURIComponent(lease.created ? '' : keyPrefix)}`,
-          InventoryReplySchema,
-        );
+          method: 'GET',
+          path: `/inventory?prefix=${encodeURIComponent(lease.created ? '' : keyPrefix)}`,
+          schema: InventoryReplySchema,
+        });
 
         teardown['objectsRemaining'] = remaining.objects;
         teardown['bytesRemaining'] = remaining.bytes;
@@ -1576,8 +1662,8 @@ async function measureDurability(
   runId: string,
 ): Promise<DurabilityVerdict | null> {
   const root = `${spec.root}/durability`;
-  await runProbe(fixture, root, 'seed-durability', options.seed, options);
-  const restart = await call(fixture, 'POST', '/restart', RestartReplySchema);
+  await runProbe({ fixture, root, phases: 'seed-durability', seed: options.seed, options });
+  const restart = await call({ fixture, method: 'POST', path: '/restart', schema: RestartReplySchema });
   // The restart itself has to be VERIFIED, not assumed. A durability verdict
   // whose restart silently failed reads as "the bytes survived a restart" when
   // what it actually shows is "the bytes survived whatever happened" — the same
@@ -1604,7 +1690,7 @@ async function measureDurability(
     }
   }
 
-  const verify = await runProbe(fixture, root, 'verify-durability', options.seed, options);
+  const verify = await runProbe({ fixture, root, phases: 'verify-durability', seed: options.seed, options });
 
   const verdict = verify.phases
     .flatMap((phase) => phase.verdicts)
