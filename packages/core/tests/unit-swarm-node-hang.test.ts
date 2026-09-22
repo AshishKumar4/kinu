@@ -30,6 +30,34 @@ import type { Objective } from '../src/strategy/objective';
 import type { HeadJournalRow } from '../src/heads/journal';
 import type { SearchNode } from '../src/types/mcts';
 
+/** What the stepping fake answers with at each stage: it reads the reference
+ *  first, then reports, then says it has reported. */
+function contentFor({ reported, read }: { reported: boolean; read: boolean }): LanguageModelV3Content[] {
+  if (reported) return [{ type: 'text', text: 'Reported: a single linear scan.' }];
+
+  if (read) {
+    return [{
+      type: 'tool-call',
+      toolCallId: 'report-1',
+      toolName: 'report',
+      input: JSON.stringify({
+        status: 'completed',
+        content: `A single scan is enough.\n\n\`\`\`javascript\n${OPTIMAL}\`\`\``,
+      }),
+    }];
+  }
+
+  return [
+    { type: 'text', text: 'Reading the current implementation first.' },
+    {
+      type: 'tool-call',
+      toolCallId: 'read-1',
+      toolName: 'file',
+      input: JSON.stringify({ action: 'read', path: REFERENCE_PATH }),
+    },
+  ];
+}
+
 /** The exact string the expired credential produced, kept verbatim: the point of the
  *  terminal write is that a human reading the row learns THIS rather than "errored". */
 const UPSTREAM = 'Your Cloudflare login is no longer valid. Please run `wrangler login` '
@@ -239,27 +267,7 @@ function steppingProvider(clock: HandClock): MockLanguageModelV3 {
       const read = prompt.some((message) => message.role === 'tool');
       const reported = prompt.filter((message) => message.role === 'tool').length > 1;
 
-      const content: LanguageModelV3Content[] = reported
-        ? [{ type: 'text', text: 'Reported: a single linear scan.' }]
-        : read
-          ? [{
-            type: 'tool-call',
-            toolCallId: 'report-1',
-            toolName: 'report',
-            input: JSON.stringify({
-              status: 'completed',
-              content: `A single scan is enough.\n\n\`\`\`javascript\n${OPTIMAL}\`\`\``,
-            }),
-          }]
-          : [
-            { type: 'text', text: 'Reading the current implementation first.' },
-            {
-              type: 'tool-call',
-              toolCallId: 'read-1',
-              toolName: 'file',
-              input: JSON.stringify({ action: 'read', path: REFERENCE_PATH }),
-            },
-          ];
+      const content: LanguageModelV3Content[] = contentFor({ reported, read });
 
       return {
         content,

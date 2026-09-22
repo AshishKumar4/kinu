@@ -316,11 +316,11 @@ describe('the delegation depth cap', () => {
       return found;
     };
 
-    const describe = (actorId: string) => rows.get(actorId) ?? null;
-    expect(delegationBudgetOf(describe, row('root'))).toEqual(ROOT_DELEGATION_BUDGET);
-    expect(delegationBudgetOf(describe, row('d1'))).toEqual({ depth: 1, maxDepth: 3 });
-    expect(delegationBudgetOf(describe, row('d2'))).toEqual({ depth: 2, maxDepth: 2 });
-    expect(delegationBudgetOf(describe, row('orphan'))).toEqual({ depth: 1, maxDepth: 3 });
+    const describeActor = (actorId: string) => rows.get(actorId) ?? null;
+    expect(delegationBudgetOf(describeActor, row('root'))).toEqual(ROOT_DELEGATION_BUDGET);
+    expect(delegationBudgetOf(describeActor, row('d1'))).toEqual({ depth: 1, maxDepth: 3 });
+    expect(delegationBudgetOf(describeActor, row('d2'))).toEqual({ depth: 2, maxDepth: 2 });
+    expect(delegationBudgetOf(describeActor, row('orphan'))).toEqual({ depth: 1, maxDepth: 3 });
   });
 });
 
@@ -782,13 +782,14 @@ describe('team action routing', () => {
       const broadcastsBefore = h.broadcasts.length;
       h.failures.add(operation);
 
-      const action = operation === 'spawn'
-        ? h.team.spawn({ mode: 'build', role: 'researcher', mission: 'Mission' })
-        : operation === 'assign'
-          ? h.team.assign({ mode: 'build', name: 'researcher-a1b2c3', task: 'Replacement' })
-          : operation === 'message'
-            ? h.team.message({ mode: 'build', name: 'researcher-a1b2c3', content: 'Continue' })
-            : h.team.dismiss({ name: 'researcher-a1b2c3' });
+      const actions = {
+        spawn: () => h.team.spawn({ mode: 'build', role: 'researcher', mission: 'Mission' }),
+        assign: () => h.team.assign({ mode: 'build', name: 'researcher-a1b2c3', task: 'Replacement' }),
+        message: () => h.team.message({ mode: 'build', name: 'researcher-a1b2c3', content: 'Continue' }),
+        dismiss: () => h.team.dismiss({ name: 'researcher-a1b2c3' }),
+      };
+
+      const action = actions[operation]();
 
       await expect(action).rejects.toMatchObject({ code: 'unavailable' });
 
