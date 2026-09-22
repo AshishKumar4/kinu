@@ -2,6 +2,13 @@ import type { CliRenderer } from '@opentui/core';
 
 /** Kitty OSC 5522's listing/read handshake, including its dot MIME listing.
  * Protocol shapes also exercised by oh-my-pi's enhanced-paste controller. */
+/** How many characters end an OSC reply: BEL, ST, or none (still partial). */
+function terminatorLength(sequence: string): number {
+  if (sequence.endsWith('\x07')) return 1;
+
+  return sequence.endsWith('\x1b\\') ? 2 : 0;
+}
+
 export class ClipboardPaste {
   private readonly stop: () => void;
   private state: {
@@ -36,7 +43,7 @@ export class ClipboardPaste {
 
   private receive(sequence: string): void {
     if (!sequence.startsWith('\x1b]5522;')) return;
-    const end = sequence.endsWith('\x07') ? 1 : sequence.endsWith('\x1b\\') ? 2 : 0;
+    const end = terminatorLength(sequence);
 
     if (end === 0) return;
     const body = sequence.slice(7, -end);

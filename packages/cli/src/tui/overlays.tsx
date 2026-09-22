@@ -386,23 +386,18 @@ export function ModelPickerOverlay({ models, failures, currentSpec, terminal, lo
         onInput={setFilter}
         selectRef={selectRef}
       />
-      {loading ? (
-        <PaletteLine text="Loading models…" width={innerWidth} color={colors.intent.accent} />
-      ) : error ? (
+      {loading && <PaletteLine text="Loading models…" width={innerWidth} color={colors.intent.accent} />}
+      {!loading && error !== null && error !== undefined && (
         <PaletteLine text={error} width={innerWidth} color={colors.intent.danger} />
-      ) : options.length === 0 ? (
+      )}
+      {!loading && (error === null || error === undefined) && options.length === 0 && (
         <PaletteLine
-          text={models.length > 0
-            ? `No models match "${filter.trim()}".`
-            : failureLines.length > 0
-              ? compact
-                ? `${String(failureLines.length)} provider${failureLines.length === 1 ? '' : 's'} unavailable. Resize for details.`
-                : 'Every connected provider failed to list. See below.'
-              : 'No connected model providers. Run kinu provider connect.'}
+          text={emptyModelListText(models.length, failureLines.length, compact, filter.trim())}
           width={innerWidth}
           color={colors.text.muted}
         />
-      ) : (
+      )}
+      {!loading && (error === null || error === undefined) && options.length > 0 && (
         <select
           ref={selectRef}
           focused={false}
@@ -724,7 +719,7 @@ function deviceConsentLayout(
   const commandText = `Command: ${consent.command || '(command)'}`;
 
   const commandRows = commandText.split('\n')
-    .reduce((rows, line) => rows + Math.max(1, Math.ceil([...line].length / commandColumns)), 0);
+    .reduce((rows, line) => rows + Math.max(1, Math.ceil(line.length / commandColumns)), 0);
 
   const preferredHeight = commandRows + 7;
   const maxHeight = Math.max(3, terminal.height - 2);
@@ -868,7 +863,7 @@ export function DeviceConnectOverlay({ prompt, terminal }: DeviceConnectOverlayP
       left={position.left}
       top={position.top}
     >
-      {prompt.phase === 'ask' ? (
+      {prompt.phase === 'ask' && (
         <>
           <WrappedPaletteLine text={prompt.statusLine} width={innerWidth} color={colors.text.primary} />
           <WrappedPaletteLine text={linking} width={innerWidth} color={colors.text.muted} />
@@ -877,7 +872,8 @@ export function DeviceConnectOverlay({ prompt, terminal }: DeviceConnectOverlayP
           <PaletteLine text={`${keybindings.hint('device.ssh')} use this session only`} width={innerWidth} color={colors.intent.accentStrong} />
           <PaletteLine text={`${keybindings.hint('device.dismiss')} don't ask again · ${keybindings.hint('device.not-now')} not now`} width={innerWidth} color={colors.text.muted} />
         </>
-      ) : prompt.phase === 'connecting' ? (
+      )}
+      {prompt.phase === 'connecting' && (
         <>
           <PaletteLine
             text={prompt.session ? 'Connecting this PC for this session…' : 'Connecting this PC…'}
@@ -891,7 +887,8 @@ export function DeviceConnectOverlay({ prompt, terminal }: DeviceConnectOverlayP
           />
           <PaletteLine text={`${keybindings.hint('device.not-now')} stop waiting`} width={innerWidth} color={colors.text.muted} />
         </>
-      ) : (
+      )}
+      {prompt.phase !== 'ask' && prompt.phase !== 'connecting' && (
         <>
           <PaletteLine
             text={`${prompt.ok ? '✓' : '✗'} ${prompt.message}`}
@@ -903,6 +900,17 @@ export function DeviceConnectOverlay({ prompt, terminal }: DeviceConnectOverlayP
       )}
     </PaletteFrame>
   );
+}
+
+/** Why the model list is empty: the filter, a failed provider, or none connected. */
+function emptyModelListText(modelCount: number, failureCount: number, compact: boolean, filter: string): string {
+  if (modelCount > 0) return `No models match "${filter}".`;
+
+  if (failureCount === 0) return 'No connected model providers. Run kinu provider connect.';
+
+  if (compact) return `${String(failureCount)} provider${failureCount === 1 ? '' : 's'} unavailable. Resize for details.`;
+
+  return 'Every connected provider failed to list. See below.';
 }
 
 interface ThemePickerProps {

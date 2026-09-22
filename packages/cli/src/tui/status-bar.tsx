@@ -29,6 +29,13 @@ const IDENTITY_PREFIX = `kinu ${TUI_MARKS.prompt} `;
  * The web's top bar: a strip on the chrome with one hairline under it
  * (`border-b p-border p-sidebar`). Brass brand mark, ink name, dim mode.
  */
+/** The widest label the remaining columns hold, or nothing when neither fits. */
+function widestThatFits(budget: number, full: string, bare: string): string {
+  if (budget >= full.length) return full;
+
+  return budget >= bare.length ? bare : '';
+}
+
 export function StatusBar({ name, mode, model, reasoningEffort, onModelSelect, connected, scaffoldVersion, toolCount, autoEvolve, contextTokens = 0, contextWindow, branchCount = 0, profile }: Props) {
   const width = useSceneWidth();
   const { colors } = useTuiTheme();
@@ -112,11 +119,7 @@ export function StatusBar({ name, mode, model, reasoningEffort, onModelSelect, c
 
   const modelBudget = Math.min(modelIdeal, Math.max(0, available - identityWidth - metadataWidth));
 
-  const modelShown = modelBudget >= modelFull.length
-    ? modelFull
-    : modelBudget >= modelBare.length
-      ? modelBare
-      : '';
+  const modelShown = widestThatFits(modelBudget, modelFull, modelBare);
 
   return (
     <box
