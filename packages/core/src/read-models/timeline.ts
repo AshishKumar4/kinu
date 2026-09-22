@@ -108,9 +108,59 @@ function turnUsageDetail(usage: Usage | undefined): string | undefined {
 }
 
 /** Project a durable RunEvent onto a unified TimelineSpan. */
+/**
+ * Recorded for diagnosis rather than for reading: the timeline shows each as
+ * its own name, so they never reach the switch that renders the rest. A new
+ * event type must be placed here or given an arm; the switch's exhaustiveness
+ * check names it otherwise.
+ */
+type DiagnosisOnlyEvent = Extract<RunEvent, { type:
+  | 'step_partial'
+  | 'model_call'
+  | 'provider_wait'
+  | 'model_operation'
+  | 'db_op'
+  | 'context_edit'
+  | 'context_budget'
+  | 'file_edit'
+  | 'turn_steering'
+  | 'profile_resolution'
+  | 'completion_gate'
+  | 'craft_cycle'
+  | 'execution_recovery'
+  | 'approval_consumed'
+  | 'execution_escalation'
+  | 'budget_exhausted'
+}>;
+
+const DIAGNOSIS_ONLY_EVENTS: ReadonlySet<string> = new Set<DiagnosisOnlyEvent['type']>([
+  'step_partial',
+  'model_call',
+  'provider_wait',
+  'model_operation',
+  'db_op',
+  'context_edit',
+  'context_budget',
+  'file_edit',
+  'turn_steering',
+  'profile_resolution',
+  'completion_gate',
+  'craft_cycle',
+  'execution_recovery',
+  'approval_consumed',
+  'execution_escalation',
+  'budget_exhausted',
+]);
+
+function isDiagnosisOnly(e: RunEvent): e is DiagnosisOnlyEvent {
+  return DIAGNOSIS_ONLY_EVENTS.has(e.type);
+}
+
 export function runEventToSpan(e: RunEvent): TimelineSpan {
   const ts = Date.parse(e.timestamp) || Date.now();
   const base = { ts, source: 'shell' as const, rawType: e.type };
+
+  if (isDiagnosisOnly(e)) return { ...base, kind: 'other', label: e.type };
 
   switch (e.type) {
     case 'run_start':
@@ -147,27 +197,6 @@ export function runEventToSpan(e: RunEvent): TimelineSpan {
       return { ...base, kind: 'llm-turn', label: `Turn ${e.turnIndex} done`, detail: turnUsageDetail(e.usage) };
     case 'run_end':
       return { ...base, kind: e.reason === 'aborted' ? 'abort' : 'other', label: e.reason ? `Run ended (${e.reason})` : 'Run ended', detail: e.error };
-    // Recorded for diagnosis rather than for reading: each is listed so a new
-    // event type is a finding here instead of arriving unnoticed as its own
-    // name. `default` stays for a row written before this union named it.
-    case 'step_partial':
-    case 'model_call':
-    case 'provider_wait':
-    case 'model_operation':
-    case 'db_op':
-    case 'context_edit':
-    case 'context_budget':
-    case 'file_edit':
-    case 'turn_steering':
-    case 'profile_resolution':
-    case 'completion_gate':
-    case 'craft_cycle':
-    case 'execution_recovery':
-    case 'approval_consumed':
-    case 'execution_escalation':
-    case 'budget_exhausted':
-    default:
-      return { ...base, kind: 'other', label: e.type };
   }
 }
 

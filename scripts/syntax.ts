@@ -28,7 +28,7 @@
  * so a parse error here is fatal.
  */
 
-import { type Node, parseSync, type VisitorObject, Visitor, visitorKeys } from 'oxc-parser';
+import { type BinaryExpression, type Node, parseSync, type VisitorObject, Visitor, visitorKeys } from 'oxc-parser';
 import * as v from 'valibot';
 
 /** A parsed node: oxc's own node, plus the spine oxc leaves out. */
@@ -1018,25 +1018,27 @@ export function numericValue(node: SyntaxNode): number | undefined {
   }
 
   if (raw.type !== 'BinaryExpression') return undefined;
+  const arithmetic = ARITHMETIC[raw.operator];
+
+  if (arithmetic === undefined) return undefined;
   const left = numericValue(node.children[0]);
   const right = numericValue(node.children[1]);
 
   if (left === undefined || right === undefined) return undefined;
 
-  switch (raw.operator) {
-    case '*': return finite(left * right);
-    case '/': return finite(left / right);
-    case '+': return finite(left + right);
-    case '-': return finite(left - right);
-    case '**': return finite(left ** right);
-    // Comparisons, bitwise arithmetic and the type tests do not evaluate to a
-    // policy number, and `%` reaches no notation this gate compares.
-    case '!=': case '!==': case '%': case '&': case '<': case '<<': case '<=':
-    case '==': case '===': case '>': case '>=': case '>>': case '>>>': case '^':
-    case 'in': case 'instanceof': case '|':
-      return undefined;
-  }
+  return finite(arithmetic(left, right));
 }
+
+/** The operators a policy number is written with. Comparisons, bitwise
+ *  arithmetic and the type tests do not evaluate to one, and `%` reaches no
+ *  notation this gate compares. */
+const ARITHMETIC: Partial<Record<BinaryExpression['operator'], (left: number, right: number) => number>> = {
+  '*': (left, right) => left * right,
+  '/': (left, right) => left / right,
+  '+': (left, right) => left + right,
+  '-': (left, right) => left - right,
+  '**': (left, right) => left ** right,
+};
 
 const finite = (value: number): number | undefined =>
   Number.isFinite(value) ? value : undefined;

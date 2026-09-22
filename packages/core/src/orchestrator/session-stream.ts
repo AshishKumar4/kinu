@@ -75,6 +75,32 @@ function streamedContent(part: StoredPart): boolean {
   return v.is(v.string(), part.value.text) && part.value.text.length > 0;
 }
 
+/** Lifecycle evidence and input assembly: stream parts that are not
+ *  model-message parts, so the durable record never holds one. A new part
+ *  kind must be placed here or given an arm; the switch's exhaustiveness
+ *  check names it otherwise. */
+type LifecyclePart = Extract<TextStreamPart<ToolSet>, { type:
+  | 'start'
+  | 'finish-step'
+  | 'finish'
+  | 'abort'
+  | 'error'
+  | 'raw'
+  | 'tool-input-start'
+  | 'tool-input-delta'
+  | 'tool-input-end'
+  | 'tool-output-denied'
+}>;
+
+const LIFECYCLE_PARTS: ReadonlySet<string> = new Set<LifecyclePart['type']>([
+  'start', 'finish-step', 'finish', 'abort', 'error', 'raw',
+  'tool-input-start', 'tool-input-delta', 'tool-input-end', 'tool-output-denied',
+]);
+
+function isLifecyclePart(part: TextStreamPart<ToolSet>): part is LifecyclePart {
+  return LIFECYCLE_PARTS.has(part.type);
+}
+
 /** The disagreement between what a provider streamed and the message it
  *  settled on, as one line of evidence. */
 const STREAM_DIVERGED = 'session.stream_final_diverged';
@@ -138,6 +164,8 @@ export class SessionStream {
 
   async nativePart(part: TextStreamPart<ToolSet>): Promise<void> {
     this.nativeProducer = true;
+
+    if (isLifecyclePart(part)) return;
 
     switch (part.type) {
       case 'start-step':
@@ -220,18 +248,6 @@ export class SessionStream {
         return;
       }
 
-      case 'start':
-      case 'finish-step':
-      case 'finish':
-      case 'abort':
-      case 'error':
-      case 'raw':
-      case 'tool-input-start':
-      case 'tool-input-delta':
-      case 'tool-input-end':
-      case 'tool-output-denied':
-        // Lifecycle evidence and input assembly are not model-message parts.
-        return;
     }
   }
 

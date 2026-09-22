@@ -1723,33 +1723,51 @@ export function measureFields(
       }
     });
 
+    /** `deps.field` reads it; `deps.field = …` supplies it — and on the BASE
+     *  too, exactly as a literal annotated with a subtype supplies the base's
+     *  fields. The CLI finishes its turn options that way: `liveTurnOpts` is
+     *  annotated `Omit<ChatOptions, …>` through an alias, and
+     *  `liveTurnOpts.providerReportedTokens = …` is the only supply of that
+     *  field anywhere. */
+    const memberAccess = (node: SyntaxNode, field: string): void => {
+      const receiver = identifierText(node.children[0] ?? node);
+
+      if (receiver === undefined) return;
+
+      for (const binding of typed.get(receiver) ?? []) {
+        if (node.start < binding.from || node.end > binding.to) continue;
+        reads.add(`${binding.type}#${field}`);
+      }
+
+      if (node.parent?.raw.type !== 'AssignmentExpression' || node.parent.raw.left !== node.raw) return;
+
+      for (const binding of typed.get(receiver) ?? []) {
+        for (const type of withBases([binding.type])) supplies.add(`${type}#${field}`);
+      }
+    };
+
+    /** `Object.assign(runDeps, { signal })` — a supply that no annotation
+     *  carries. Two fields of `SwarmRunDeps` are wired exactly this way and
+     *  were false positives until this arm existed. */
+    const objectAssign = (node: SyntaxNode): void => {
+      const [into, ...rest] = node.children.slice(1);
+      const target = into === undefined ? undefined : identifierText(into);
+
+      const types = target === undefined
+        ? []
+        : (typed.get(target) ?? []).map((binding) => binding.type);
+
+      for (const argument of rest) {
+        if (argument.raw.type === 'ObjectExpression') site(types, argument);
+        else for (const type of types) supplies.add(`${type}#${NAMESPACE}`);
+      }
+    };
+
     walk(tree, (node) => {
       const { raw } = node;
 
       if (raw.type === 'MemberExpression' && !raw.computed && raw.property.type === 'Identifier') {
-        const receiver = identifierText(node.children[0] ?? node);
-
-        if (receiver !== undefined) {
-          for (const binding of typed.get(receiver) ?? []) {
-            if (node.start < binding.from || node.end > binding.to) continue;
-            reads.add(`${binding.type}#${raw.property.name}`);
-          }
-        }
-
-        // `deps.field = …` supplies it — and on the BASE too, exactly as a
-        // literal annotated with a subtype supplies the base's fields. The CLI
-        // finishes its turn options that way: `liveTurnOpts` is annotated
-        // `Omit<ChatOptions, …>` through an alias, and
-        // `liveTurnOpts.providerReportedTokens = …` is the only supply of that
-        // field anywhere.
-        if (node.parent?.raw.type === 'AssignmentExpression'
-          && node.parent.raw.left === raw && receiver !== undefined) {
-          for (const binding of typed.get(receiver) ?? []) {
-            for (const type of withBases([binding.type])) {
-              supplies.add(`${type}#${raw.property.name}`);
-            }
-          }
-        }
+        memberAccess(node, raw.property.name);
 
         return;
       }
@@ -1785,23 +1803,10 @@ export function measureFields(
         return;
       }
 
-      // `Object.assign(runDeps, { signal })` — a supply that no annotation
-      // carries. Two fields of `SwarmRunDeps` are wired exactly this way and
-      // were false positives until this arm existed.
       if (raw.type === 'CallExpression' && raw.callee.type === 'MemberExpression'
         && !raw.callee.computed && raw.callee.property.type === 'Identifier'
         && raw.callee.property.name === 'assign') {
-        const [into, ...rest] = node.children.slice(1);
-        const target = into === undefined ? undefined : identifierText(into);
-
-        const types = target === undefined
-          ? []
-          : (typed.get(target) ?? []).map((binding) => binding.type);
-
-        for (const argument of rest) {
-          if (argument.raw.type === 'ObjectExpression') site(types, argument);
-          else for (const type of types) supplies.add(`${type}#${NAMESPACE}`);
-        }
+        objectAssign(node);
 
         return;
       }
