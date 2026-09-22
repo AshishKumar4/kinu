@@ -36,7 +36,7 @@
  *                                  `&panel=providers|mcp|cli` picks which
  *   /gallery.html?frame=app&path=/ → the SHIPPED shell (`Layout`, its rail,
  *                                  the living background) routed to `path`:
- *                                  `/`, `/user/settings` or `/shared`. What the
+ *                                  `/`, `/user/settings` or `/drive`. What the
  *                                  background's contrast is measured on.
  *   /gallery.html?frame=control  → the admin control plane: every tab, the
  *                                  account drilldown and a workspace drilldown.
@@ -4991,6 +4991,11 @@ const LIVE_SHARE: LiveShareRecord = {
 };
 
 const SHARED_LIBRARY: SharedLibrary = {
+  slates: [
+    { id: "issue-triage", title: "Issue triage", workspace: "checkout-fixes", bindings: 4, visibility: "public" },
+    { id: "lighthouse", title: "Landing perf report", workspace: "perf-audit", bindings: 1 },
+    { id: "standup", title: "Standup notes", workspace: "notes", bindings: 2 },
+  ],
   mine: [
     { id: "live-board-1", kind: "live", share: "live-board-1", title: "Issue triage", description: BLUEPRINT_VIEW.description, createdAt: NOW - 864e5, bindings: 4, visibility: "public", workspace: "checkout-fixes", users: [] },
     { id: BLUEPRINT_ID, kind: "blueprint", share: "k7Qm2pV9xRt3aB4c", title: "Issue triage", description: BLUEPRINT_VIEW.description, createdAt: NOW - 3 * 864e5, bindings: 4, workspace: "checkout-fixes", users: ["pat@example.com"] },
@@ -5008,6 +5013,9 @@ const SHARED_LIBRARY: SharedLibrary = {
     { id: "live-status-2", kind: "live", share: "live-status-2", title: "Deploy status board", description: "Every service, its last deploy and who shipped it.", createdAt: NOW - 5 * 864e5, bindings: 2, visibility: "public", workspace: "ops-board", owner: "lee@example.com" },
   ],
 };
+
+/** A Drive with nothing on it: every section shows its own empty line. */
+const EMPTY_LIBRARY: SharedLibrary = { slates: [], mine: [], received: [], public: [], known: [] };
 
 /** The share dialog over the Issue triage slate: the live mode with the
  *  capability graph and one public share already open, or the blueprint mode
@@ -6895,8 +6903,8 @@ async function appShellFrame(): Promise<{ node: React.ReactNode; entries: string
           <Route index element={<HomePage />} />
           <Route path="/user/settings" element={<UserSettingsPage />} />
           <Route path="/workspace/:agentId" element={<div className="h-full" data-gallery-blank />} />
-          <Route path="/shared" element={<DriveRoute />} />
-          <Route path="/shared/*" element={<DriveRoute />} />
+          <Route path={APP_ROUTES.drive} element={<DriveRoute />} />
+          <Route path={APP_ROUTES.driveFolder} element={<DriveRoute />} />
         </Route>
       </Routes>
     ),
@@ -7071,15 +7079,18 @@ async function mount() {
     ["chat-slate", { node: <ChatSlateFrame />, entries: ["/"] }],
     // The Drive's blueprints folder: the shared library, behind the chrome.
     // On its own route, so the rail's primary nav lights Drive and not Home.
-    ["shared", { node: <DrivePageFrame library={SHARED_LIBRARY} workspaces={STOCK_ROSTER.entries} />, entries: ["/shared/blueprints"] }],
+    ["shared", { node: <DrivePageFrame library={SHARED_LIBRARY} workspaces={STOCK_ROSTER.entries} />, entries: [`${APP_ROUTES.drive}/blueprints`] }],
     // The same folder before anything is shared: every list shows its empty line.
     ["shared-empty", {
-      node: <DrivePageFrame library={{ mine: [], received: [], public: [], known: [] }} workspaces={STOCK_ROSTER.entries} />,
-      entries: ["/shared/blueprints"],
+      node: <DrivePageFrame library={EMPTY_LIBRARY} workspaces={STOCK_ROSTER.entries} />,
+      entries: [`${APP_ROUTES.drive}/blueprints`],
     }],
     // The Drive over a seeded tenant (`&path=/projects/ops` opens a folder), and over an empty one.
-    ["drive", { node: <DrivePageFrame />, entries: [`/shared${new URLSearchParams(location.search).get("path") ?? ""}`] }],
-    ["drive-empty", { node: <DrivePageFrame />, entries: [APP_ROUTES.shared] }],
+    ["drive", {
+      node: <DrivePageFrame library={SHARED_LIBRARY} workspaces={STOCK_ROSTER.entries} />,
+      entries: [`${APP_ROUTES.drive}${new URLSearchParams(location.search).get("path") ?? ""}`],
+    }],
+    ["drive-empty", { node: <DrivePageFrame library={EMPTY_LIBRARY} workspaces={STOCK_ROSTER.entries} />, entries: [APP_ROUTES.drive] }],
     // The task indicator mid-wait: the model call is sleeping out the
     // provider's declared window and the bar names it instead of "working".
     ["providerwait", { node: <ProviderWaitFrame />, entries: ["/"] }],

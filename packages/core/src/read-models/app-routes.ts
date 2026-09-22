@@ -35,9 +35,9 @@ export const APP_ROUTES = {
   control: '/control',
   agentSettings: '/settings/:agentId',
   triggers: '/triggers/:agentId',
-  shared: '/shared',
+  drive: '/drive',
   /** The Drive below its root: `*` is the folder path, any depth. */
-  driveFolder: '/shared/*',
+  driveFolder: '/drive/*',
   sharedBlueprint: '/shared/blueprint/:id',
   deploy: '/deploy',
   updates: '/updates',
@@ -94,8 +94,8 @@ export function routeTemplateOf(pathname: string): ReportedRoute {
   }
 
   // A splat template matches whatever is left below its literal prefix, and
-  // only after every exact template declined: `/shared/blueprint/:id` is a
-  // page of its own under the Drive's prefix.
+  // only after every exact template declined, so an exact page under a splat's
+  // prefix keeps its own name.
   for (const template of templates) {
     const wanted = template.split('/');
 
