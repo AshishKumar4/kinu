@@ -2,6 +2,7 @@
 // `Credential` union from ./store but rejects unknown shapes so a bad request
 // can't write garbage into the credential store.
 import * as v from 'valibot';
+import { KinuError } from '../obs/index';
 import { JsonObjectSchema, JsonValueSchema } from '../utils/json';
 import type { Credential } from './store';
 
@@ -30,12 +31,24 @@ const OpenAICompatCredentialSchema = v.object({
 });
 
 export function validateCredential(input: { value: unknown }): Credential {
-  const kind = v.parse(CredentialKindSchema, input.value).kind;
+  // Not `v.parse`: its message quotes the value it received, a credential's
+  // values are its secret, and a stored one that fails reaches logs as a cause.
+  const part = <const TSchema extends v.GenericSchema>(schema: TSchema): v.InferOutput<TSchema> => {
+    const parsed = v.safeParse(schema, input.value);
 
-  if (kind === 'bearer') return v.parse(BearerCredentialSchema, input.value);
+    if (parsed.success) return parsed.output;
+
+    throw new KinuError('bad_input', `not a credential: ${parsed.issues
+      .map((issue) => `${v.getDotPath(issue) ?? 'the value'} must be ${issue.expected ?? 'valid'}`)
+      .join('; ')}`);
+  };
+
+  const kind = part(CredentialKindSchema).kind;
+
+  if (kind === 'bearer') return part(BearerCredentialSchema);
 
   if (kind === 'oauth') {
-    const parsed = v.parse(OAuthCredentialSchema, input.value);
+    const parsed = part(OAuthCredentialSchema);
     const credential: Credential = { kind: 'oauth', accessToken: parsed.accessToken };
 
     if (parsed.refreshToken) credential.refreshToken = parsed.refreshToken;
@@ -47,7 +60,7 @@ export function validateCredential(input: { value: unknown }): Credential {
     return credential;
   }
 
-  const parsed = v.parse(OpenAICompatCredentialSchema, input.value);
+  const parsed = part(OpenAICompatCredentialSchema);
 
   const extraHeaders = parsed.extraHeaders === undefined
     ? undefined

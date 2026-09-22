@@ -8,7 +8,7 @@ import {
   boundRunEventQuery, getRunEvents, initRunEventTables, RunEventRecorder,
   RUN_EVENT_LIMIT_DEFAULT, RUN_EVENT_LIMIT_MAX,
   USAGE_FIELDS, WORKSPACE_RUN_ID,
-  type RunEvent, type Usage,
+  type HeadFileChange, type RunEvent, type Usage,
 } from '../src/index';
 import { present, testActorHandle } from '@kinu.run/test-utils';
 import { isBackgroundHandle } from '../src/jobs/threshold';
@@ -115,6 +115,27 @@ describe('a tool result round-trips as the value the tool returned', () => {
 
     expect(isBackgroundHandle(row.result)).toBe(true);
     expect(row.result).toEqual(handle);
+  });
+
+  test('a head_merge read back off the ledger keeps which changes carry no line counts', () => {
+    const { recorder } = setup();
+
+    const changes: HeadFileChange[] = [
+      { path: 'build', status: 'removed', added: 0, removed: 0, directory: true },
+      { path: 'locked.ts', status: 'changed', added: 0, removed: 0, unreadable: true },
+    ];
+
+    recorder.emit('run-1', {
+      type: 'head_merge', rootId: 'root-1', headCount: 1, headsWithFindings: 1, mergedNarrative: 'merged',
+      fileChanges: [{ id: 'head-1', changes }], blindSpots: [],
+    });
+
+    const [row] = recorder.read('run-1');
+
+    if (row?.type !== 'head_merge') throw new Error('expected the head_merge row');
+
+    // Stripped, both would read as a change of zero lines — a size nobody measured.
+    expect(row.fileChanges[0]?.changes).toEqual(changes);
   });
 });
 

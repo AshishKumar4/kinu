@@ -16,7 +16,7 @@ import { type VectorStore } from './vector-store';
 import { type VfsNativeReads } from '../vfs/mounts';
 import { AGENT_CONFIG_KEYS } from '../config/store';
 import { readTailWithVfsOps } from '../vfs/mounts';
-import type { IndexedChunk, MemoryStore } from "@kinu.run/agent-utils/memory";
+import type { MemoryStore } from "@kinu.run/agent-utils/memory";
 import { diagnostics, toKinuError } from "../obs/index";
 
 /** A chunk FTS5 holds and the vector index does not makes the semantic index
@@ -87,6 +87,11 @@ const MEMORY_VECTOR_BACKFILL_CAP = 512;
  * store is available and the backfill isn't marked done) embed one bounded page
  * of existing chunks, advancing a cursor so a huge table pages across boots
  * without re-embedding. Idempotent — a no-op once the marker is set.
+ *
+ * Rejects when the page cannot be read or embedded, before the cursor or the
+ * marker moves: advancing over a failed page is what let the marker claim a
+ * complete semantic index over content it never indexed. The next boot retries
+ * the same page.
  */
 export async function backfillMemoryVectors(
   store: MemoryStore,
@@ -99,19 +104,7 @@ export async function backfillMemoryVectors(
   if (config.get(AGENT_CONFIG_KEYS.memoryVectorBackfillDone) === 'true') return;
 
   const cursor = config.get(AGENT_CONFIG_KEYS.memoryVectorBackfillCursor) ?? '';
-  let chunks: IndexedChunk[];
-
-  try {
-    chunks = store.allChunksAfter(cursor, cap);
-  } catch (err) {
-    diagnostics.failure('memory.vector_backfill_read_failed', toKinuError({
-      doing: 'reading memory chunks for the vector backfill',
-      cause: err,
-      otherwise: 'io',
-    }), { cursor });
-
-    return;
-  }
+  const chunks = store.allChunksAfter(cursor, cap);
 
   if (chunks.length === 0) {
     config.set(AGENT_CONFIG_KEYS.memoryVectorBackfillDone, 'true');
@@ -119,22 +112,7 @@ export async function backfillMemoryVectors(
     return;
   }
 
-  try {
-    await vectorStore.upsertChunks(chunks);
-  } catch (err) {
-    // Neither the cursor nor the marker may move past a chunk that did not
-    // embed: advancing over a failed page is what let the marker claim a
-    // complete semantic index over content it never indexed. The next boot
-    // retries this same page.
-    diagnostics.failure('memory.vector_backfill_page_failed', toKinuError({
-      doing: 'embedding a page of memory chunks for the vector backfill',
-      cause: err,
-      otherwise: 'unavailable',
-    }), { cursor, chunks: chunks.length });
-
-    return;
-  }
-
+  await vectorStore.upsertChunks(chunks);
   config.set(AGENT_CONFIG_KEYS.memoryVectorBackfillCursor, chunks[chunks.length - 1].id);
 
   if (chunks.length < cap) {

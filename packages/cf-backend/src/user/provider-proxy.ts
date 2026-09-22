@@ -40,16 +40,19 @@ import { errorResponse } from '@kinu.run/core';
 import { json } from '@kinu.run/core';
 import { ownerCaller, type OwnerCapabilityEnv, type UserCaller } from '@kinu.run/core';
 import { validateCredentialKey } from '@kinu.run/core';
-import { renderCauseChain } from '@kinu.run/core/obs';
+import { renderCauseChain, renderThrownChain } from '@kinu.run/core/obs';
 
 export const USER_AI_PROXY_FORWARD_PREFIX = PROVIDER_PROXY_PATH;
 
 /** One proxyable credential, as the client sees it: the key it can name, and
  *  the base URL when only this side knows it (an openai-compat credential
- *  carries its own endpoint). No secret material, ever. */
+ *  carries its own endpoint). No secret material, ever. `failure` is set
+ *  instead when this one credential could not be read: the entry fails, the
+ *  listing does not. */
 export interface ProxyableCredential {
   key: string;
   baseURL?: string;
+  failure?: string;
 }
 
 /** Request headers that must not be replayed upstream: the caller's Kinu
@@ -104,7 +107,14 @@ async function listProxyableCredentials(
 
   for (const { key } of stored) {
     if (PROXY_DENIED_CRED_KEYS.includes(key)) continue;
-    const credentialBase = await userDO.getCredentialBaseURL(owner, key);
+    let credentialBase: string | null;
+
+    try {
+      credentialBase = await userDO.getCredentialBaseURL(owner, key);
+    } catch (cause) {
+      out.push({ key, failure: renderThrownChain({ cause }) });
+      continue;
+    }
 
     if (credentialBase) {
       // The forward route sends to https only, so a credential naming anything
