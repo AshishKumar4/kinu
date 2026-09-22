@@ -193,13 +193,24 @@ interface ProbeCommandBody {
  * valibot schema one layer up, so evidence shapes are checked exactly once. */
 interface RawResponse { status: number; text: string }
 
-async function sendJson(
-  origin: string,
-  token: string,
-  path: string,
-  body: ProbeCommandBody,
-  doFetch: FetchLike = fetch,
-): Promise<RawResponse> {
+/** One call to a fixture route: where it goes, what it carries, and the fetch
+ * that performs it. */
+interface ProbeCall {
+  readonly origin: string;
+  readonly token: string;
+  readonly path: string;
+  readonly body: ProbeCommandBody;
+  readonly doFetch?: FetchLike;
+}
+
+/** A call whose answer is evidence: it parses against this schema or fails. */
+interface ParsedProbeCall<T> extends ProbeCall {
+  readonly schema: v.GenericSchema<T>;
+}
+
+async function sendJson(call: ProbeCall): Promise<RawResponse> {
+  const { origin, token, path, body, doFetch = fetch } = call;
+
   const response = await doFetch(new URL(path, origin), {
     method: 'POST', headers: requestHeaders(token), body: JSON.stringify(body), signal: AbortSignal.timeout(60_000),
   });
@@ -207,43 +218,29 @@ async function sendJson(
   return { status: response.status, text: await response.text() };
 }
 
-async function requestJson<T>(
-  origin: string,
-  token: string,
-  path: string,
-  body: ProbeCommandBody,
-  schema: v.GenericSchema<T>,
-  doFetch: FetchLike = fetch,
-): Promise<{ status: number; parsed: T }> {
-  const raw = await sendJson(origin, token, path, body, doFetch);
+async function requestJson<T>(call: ParsedProbeCall<T>): Promise<{ status: number; parsed: T }> {
+  const raw = await sendJson(call);
 
   try {
-    return { status: raw.status, parsed: v.parse(schema, JSON.parse(raw.text)) };
+    return { status: raw.status, parsed: v.parse(call.schema, JSON.parse(raw.text)) };
   } catch (error) {
     throw new Error(
-      `${path} (${raw.status}) did not return JSON: ${raw.text.slice(0, 300)}`,
+      `${call.path} (${raw.status}) did not return JSON: ${raw.text.slice(0, 300)}`,
       { cause: error },
     );
   }
 }
 
-async function request<T>(
-  origin: string,
-  token: string,
-  path: string,
-  body: ProbeCommandBody,
-  schema: v.GenericSchema<T>,
-  doFetch: FetchLike = fetch,
-): Promise<T> {
-  const { status, parsed } = await requestJson(origin, token, path, body, schema, doFetch);
+async function request<T>(call: ParsedProbeCall<T>): Promise<T> {
+  const { status, parsed } = await requestJson(call);
 
-  if (status < 200 || status >= 300) throw new Error(`${path} failed (${status}): ${JSON.stringify(parsed).slice(0, 800)}`);
+  if (status < 200 || status >= 300) throw new Error(`${call.path} failed (${status}): ${JSON.stringify(parsed).slice(0, 800)}`);
 
   return parsed;
 }
 
 async function exec(origin: string, token: string, command: string, timeoutMs: number): Promise<ExecResponse> {
-  return request(origin, token, '/exec', { command, timeoutMs }, ExecResponseSchema);
+  return request({ origin, token, path: '/exec', body: { command, timeoutMs }, schema: ExecResponseSchema });
 }
 
 async function awaitFixtureReady(origin: string, token: string): Promise<void> {
@@ -311,10 +308,13 @@ export async function bundleFuseProbeSource(): Promise<string> {
 
 async function uploadProbeBundle(origin: string, token: string): Promise<void> {
   const content = Buffer.from(await bundleFuseProbeSource(), 'utf8');
-  await request(origin, token, '/put', {
-    path: '/tmp/fuse-probe/probe.mjs',
-    contentBase64: content.toString('base64'),
-  }, OkSchema);
+  await request({
+    origin,
+    token,
+    path: '/put',
+    body: { path: '/tmp/fuse-probe/probe.mjs', contentBase64: content.toString('base64') },
+    schema: OkSchema,
+  });
 }
 
 /** The probe writes progress before its final JSON. Only the line immediately
@@ -326,7 +326,7 @@ export function parseProbeOutput<T>(stdout: string, schema: v.GenericSchema<T>):
   if (marker === -1 || lines[marker + 1] === undefined) throw new Error(`probe output has no ${RESULT_MARKER} result marker`);
   let parsed: unknown;
 
-  try { parsed = JSON.parse(lines[marker + 1]!); } catch (error) { throw new Error(`probe result JSON invalid: ${describeThrown({ cause: error })}`, { cause: error }); }
+  try { parsed = JSON.parse(lines[marker + 1]); } catch (error) { throw new Error(`probe result JSON invalid: ${describeThrown({ cause: error })}`, { cause: error }); }
 
   return v.parse(schema, parsed);
 }
@@ -344,7 +344,7 @@ export async function destroyRuntime(
   let detail: string;
 
   try {
-    const raw = await sendJson(origin, token, '/destroy', {}, doFetch);
+    const raw = await sendJson({ origin, token, path: '/destroy', body: {}, doFetch });
 
     if (raw.status >= 200 && raw.status < 300) return;
 
@@ -464,7 +464,7 @@ async function wake(origin: string, token: string): Promise<void> {
 async function stopAndProveRestart(origin: string, token: string): Promise<void> {
   const marker = `fuse-probe-restart-${randomUUID()}`;
   await exec(origin, token, `printf %s ${JSON.stringify(marker)} >/tmp/fuse-probe-restart-marker`, 60_000);
-  await request(origin, token, '/stop', {}, OkSchema);
+  await request({ origin, token, path: '/stop', body: {}, schema: OkSchema });
   await wake(origin, token);
 }
 
@@ -483,14 +483,20 @@ export interface TeardownHooks extends ReleaseHooks {
   destroyRuntime(): Promise<void>;
 }
 
+/** One Worker deletion: the tree and generated config that name the Worker,
+ *  plus the wrangler runner that carries the call. */
+export interface WorkerDeletion {
+  readonly repoRoot: string;
+  readonly configPath: string;
+  readonly workerName: string;
+  readonly log: (message: string) => void;
+  readonly wrangle?: typeof runWrangler;
+}
+
 /** The shared two-route deletion policy, under this probe's own name. */
-export function deleteWorkerBothRoutes(
-  repoRoot: string,
-  configPath: string,
-  workerName: string,
-  log: (message: string) => void,
-  wrangle: typeof runWrangler = runWrangler,
-): boolean {
+export function deleteWorkerBothRoutes(deletion: WorkerDeletion): boolean {
+  const { repoRoot, configPath, workerName, log, wrangle = runWrangler } = deletion;
+
   return deleteFixtureWorker(repoRoot, configPath, workerName, log, wrangle);
 }
 
@@ -523,7 +529,7 @@ function liveReleaseHooks(
   return {
     listContainerApps: () => containerAppIds(REPO_ROOT, [containerAppName], console.log),
     deleteContainerApps: () => deleteContainerApps(REPO_ROOT, [containerAppName], console.log),
-    deleteWorker: () => deleteWorkerBothRoutes(REPO_ROOT, configPath, workerName, console.log),
+    deleteWorker: () => deleteWorkerBothRoutes({ repoRoot: REPO_ROOT, configPath, workerName, log: console.log }),
     removeConfig: () => rm(configPath, { force: true }).then(() => undefined),
     sleep: delay,
   };
@@ -683,35 +689,39 @@ export function writableProbeOperationId(runId: string, mutation?: WritableMmapM
 /** Start once and observe until the provider settles it. There is deliberately
  * no elapsed deadline: stage three's process is the authority on completion.
  * Only a signal or the explicit teardown changes that outcome. */
-export async function awaitWritableMmapResult(
-  deployment: Deployment,
-  operationId: string,
-  mutation: WritableMmapMutation | undefined = undefined,
-  doFetch: FetchLike = fetch,
-  sleep: (ms: number) => Promise<void> = delay,
-): Promise<WritableMmapEvidence> {
-  const started = await request(
-    deployment.origin,
-    deployment.token,
-    '/start',
-    { operationId, command: writableProbeCommand(mutation) },
-    ProcessStartSchema,
+export interface WritableMmapRun {
+  readonly deployment: Deployment;
+  readonly operationId: string;
+  readonly mutation?: WritableMmapMutation;
+  readonly doFetch?: FetchLike;
+  readonly sleep?: (ms: number) => Promise<void>;
+}
+
+export async function awaitWritableMmapResult(mmapRun: WritableMmapRun): Promise<WritableMmapEvidence> {
+  const { deployment, operationId, mutation, doFetch, sleep = delay } = mmapRun;
+
+  const started = await request({
+    origin: deployment.origin,
+    token: deployment.token,
+    path: '/start',
+    body: { operationId, command: writableProbeCommand(mutation) },
+    schema: ProcessStartSchema,
     doFetch,
-  );
+  });
 
   if (started.operationId !== operationId) {
     throw new Error(`/start returned operation ${started.operationId}, expected ${operationId}`);
   }
 
   for (;;) {
-    const polled = await request(
-      deployment.origin,
-      deployment.token,
-      '/poll',
-      { operationId },
-      ProcessPollSchema,
+    const polled = await request({
+      origin: deployment.origin,
+      token: deployment.token,
+      path: '/poll',
+      body: { operationId },
+      schema: ProcessPollSchema,
       doFetch,
-    );
+    });
 
     if (polled.operationId !== operationId) {
       throw new Error(`/poll returned operation ${polled.operationId}, expected ${operationId}`);
@@ -745,7 +755,7 @@ async function runWritableProbe(
   operationId: string,
   mutation?: WritableMmapMutation,
 ): Promise<WritableMmapEvidence> {
-  return awaitWritableMmapResult(deployment, operationId, mutation);
+  return awaitWritableMmapResult({ deployment, operationId, mutation });
 }
 
 export async function run(): Promise<FuseProbeArtifact> {
@@ -769,7 +779,7 @@ export async function run(): Promise<FuseProbeArtifact> {
     console.log(`fuse probe origin ${deployment.origin}`);
     await awaitFixtureReady(deployment.origin, token);
     await setupExec(deployment.origin, token, 'mkdir -p /tmp/fuse-probe');
-    identity = await request(deployment.origin, token, '/prepare', {}, RunIdentitySchema);
+    identity = await request({ origin: deployment.origin, token, path: '/prepare', body: {}, schema: RunIdentitySchema });
 
     if (identity.actualVersion !== SANDBOX_IMAGE_VERSION) {
       throw new Error(`container identity mismatch: reports SANDBOX_VERSION ${identity.actualVersion}, configured ${SANDBOX_IMAGE_VERSION}`);
@@ -821,7 +831,7 @@ export async function run(): Promise<FuseProbeArtifact> {
 
     await stopAndProveRestart(deployment.origin, token);
     await setupExec(deployment.origin, token, 'mkdir -p /tmp/fuse-probe');
-    const restartedIdentity = await request(deployment.origin, token, '/prepare', {}, RunIdentitySchema);
+    const restartedIdentity = await request({ origin: deployment.origin, token, path: '/prepare', body: {}, schema: RunIdentitySchema });
 
     if (restartedIdentity.actualVersionDigest !== identity.actualVersionDigest) {
       throw new Error('container restart changed the measured image identity');
