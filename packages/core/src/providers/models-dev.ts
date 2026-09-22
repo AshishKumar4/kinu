@@ -3,7 +3,8 @@ import type {
 } from './types';
 import * as v from 'valibot';
 import { MODEL_INPUT_MODALITIES } from './types';
-import { cloneModelInfos, nonEmptyString, positiveInteger } from './util';
+import { cloneModelInfos, positiveInteger } from './util';
+import { nonEmptyString } from '../utils/json';
 import type { JsonValue } from '../utils/json';
 import { diagnostics, renderThrownChain } from '../obs/index';
 import { knownReasoningEfforts } from './reasoning-effort';

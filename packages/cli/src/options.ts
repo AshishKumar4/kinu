@@ -4,7 +4,7 @@
  */
 import type { CloudWebhookTriggerInput } from './cloud-api';
 import type { JsonObject, JsonValue } from '@kinu.run/core';
-import { JsonObjectSchema } from '@kinu.run/core';
+import { JsonObjectSchema, nonEmptyString } from '@kinu.run/core';
 import * as v from 'valibot';
 
 export const MODEL_OPTION_FLAG = '--model';
@@ -59,9 +59,7 @@ export function asRecord(input: { value: JsonValue }, key: string): JsonObject {
  * record that wrote an empty display name renders its fallback, not a gap.
  */
 export function stringField(record: JsonObject, key: string): string | undefined {
-  const parsed = v.safeParse(v.pipe(v.string(), v.trim(), v.nonEmpty()), record[key]);
-
-  return parsed.success ? parsed.output : undefined;
+  return nonEmptyString({ value: record[key] });
 }
 
 /**

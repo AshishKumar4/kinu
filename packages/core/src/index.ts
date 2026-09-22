@@ -1393,7 +1393,7 @@ export {
 
 export {
   JsonValueSchema, JsonObjectSchema, JsonArraySchema,
-  parseJsonValue, parseJsonObject, parseJsonArray, decodeJsonValue, projectJsonValue,
+  parseJsonValue, parseJsonObject, parseJsonArray, decodeJsonValue, projectJsonValue, nonEmptyString,
   type JsonPrimitive, type JsonObject, type JsonValue,
 } from './utils/json';
 

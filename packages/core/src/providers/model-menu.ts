@@ -5,6 +5,7 @@ import { knownReasoningEfforts, type ReasoningEffort } from './reasoning-effort'
 import { type ProviderFailure } from './registry';
 import { MODEL_CAPABILITIES, type ModelCapability } from './types';
 import * as v from 'valibot';
+import { nonEmptyString } from '../utils/json';
 
 const ModelMenuPayloadSchema = v.object({
   models: v.optional(v.array(v.unknown()), []),
@@ -122,12 +123,12 @@ function normalizeModelEntries(input: { rows: unknown[] }): AgentModelEntry[] {
 
     if (!parsed.success) return [];
     const item = parsed.output;
-    const provider = stringValue({ value: item.provider }) ?? '';
-    const id = stringValue({ value: item.id });
-    const spec = stringValue({ value: item.spec }) ?? (provider && id ? `${provider}/${id}` : null);
+    const provider = nonEmptyString({ value: item.provider }) ?? '';
+    const id = nonEmptyString({ value: item.id });
+    const spec = nonEmptyString({ value: item.spec }) ?? (provider && id ? `${provider}/${id}` : null);
 
     if (!spec) return [];
-    const label = stringValue({ value: item.label }) ?? id ?? spec;
+    const label = nonEmptyString({ value: item.label }) ?? id ?? spec;
     const capabilities = v.safeParse(v.array(v.unknown()), item.capabilities);
 
     const entry: AgentModelEntry = {
@@ -211,12 +212,6 @@ function sharedPrefixLength(left: string, right: string): number {
   while (index < limit && left[index] === right[index]) index++;
 
   return index;
-}
-
-function stringValue(input: { value: unknown }): string | null {
-  const parsed = v.safeParse(v.pipe(v.string(), v.trim(), v.nonEmpty()), input.value);
-
-  return parsed.success ? parsed.output : null;
 }
 
 function numberValue(input: { value: unknown }): number | undefined {

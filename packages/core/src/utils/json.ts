@@ -158,3 +158,11 @@ export function renderIssues(issues: readonly v.BaseIssue<unknown>[]): string {
     })
     .join('; ');
 }
+
+/** The non-empty text a loosely typed field holds, trimmed, or undefined: a
+ *  blank string is a field something filled with nothing. */
+export function nonEmptyString(input: { value: unknown }): string | undefined {
+  const parsed = v.safeParse(v.pipe(v.string(), v.trim(), v.nonEmpty()), input.value);
+
+  return parsed.success ? parsed.output : undefined;
+}

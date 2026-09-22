@@ -6,6 +6,7 @@ import { asFetchFunction } from './fetch-shim';
 import { withRateLimitRetry } from './rate-limit-retry';
 import { evidenceWindow } from '../prompts/evidence-window';
 import * as v from 'valibot';
+import { nonEmptyString } from '../utils/json';
 import {
   KinuError, classifyErrorCode, diagnostics, tolerate, type ErrorCode,
 } from '../obs/index';
@@ -135,12 +136,6 @@ export async function catalogModelInfo(
   const models = await provider.listModels(deps);
 
   return models.find((m) => m.id === modelId) ?? null;
-}
-
-export function nonEmptyString(input: { value: unknown }): string | undefined {
-  const parsed = v.safeParse(v.pipe(v.string(), v.trim(), v.nonEmpty()), input.value);
-
-  return parsed.success ? parsed.output : undefined;
 }
 
 export function positiveInteger(input: { value: unknown }): number | undefined {

@@ -1,5 +1,6 @@
 import { createRoot } from 'react-dom/client';
 import * as v from 'valibot';
+import { requestUrl } from '@/lib/fetch-input';
 
 import { buildCliInstallCommand } from '@kinu.run/core';
 import { LANDING_PROFILE, LANDING_ROSTER } from '@/components/landing/landing-fixtures';
@@ -15,22 +16,6 @@ import './index.css';
  */
 
 const realFetch = window.fetch.bind(window);
-
-const requestUrl = (input: RequestInfo | URL): string => {
-  const parsedInput = v.safeParse(v.string(), input);
-
-  if (parsedInput.success) return parsedInput.output;
-
-  const parsedUrl = v.safeParse(v.instance(URL), input);
-
-  if (parsedUrl.success) return parsedUrl.output.href;
-
-  const parsedRequest = v.safeParse(v.instance(Request), input);
-
-  if (parsedRequest.success) return parsedRequest.output.url;
-
-  return location.href;
-};
 
 window.fetch = Object.assign(
   (input: RequestInfo | URL, init?: Parameters<typeof window.fetch>[1]): Promise<Response> => {

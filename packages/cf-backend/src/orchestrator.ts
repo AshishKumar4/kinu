@@ -16,7 +16,6 @@ import { callable, type AgentContext, type Connection, type ConnectionContext } 
 import { ORCHESTRATOR_RPC_SURFACE, sealRpcSurface } from "./rpc-surface";
 import {
   runExperienceAction, type ExperienceActionDeps, type ExperienceActionInput,
-  type ExperienceEntry, type ExperienceKind, type PublishableCandidate,
   ArchiveCursorSchema,
   createWorkspaceForkSink, createWorkspaceForkSource, workspaceArchiveFiles, writeWorkspaceSoul,
   explorationActorKey, collectDynamicContext, subordinateDelegatesOf,
@@ -243,7 +242,7 @@ import {
   type AgentSignal,
 } from "@kinu.run/core";
 import * as v from 'valibot';
-import { decodeExperienceEntries, decodeExperienceEntry, decodeOptionalExperienceEntry } from './user/experience-wire';
+import { experienceLibraryOver } from './user/experience-wire';
 import {
   ActorAgent,
   TERMINAL_RETRY_CALLBACK,
@@ -508,42 +507,8 @@ export class OrchestratorAgent extends ActorAgent {
     return {
       rt: this.rt,
       facts: this.facts,
-      library: {
-        publish: (candidate: PublishableCandidate): Promise<ExperienceEntry> =>
-          this.publishExperienceEntry(candidate),
-        search: (options: { query?: string; kind?: ExperienceKind; limit?: number }): Promise<ExperienceEntry[]> =>
-          this.searchExperienceLibrary(options),
-        get: (id: string): Promise<ExperienceEntry | null> =>
-          this.getExperienceEntry(id),
-      },
+      library: experienceLibraryOver(() => this.userHub()),
     };
-  }
-
-  /** One owner-library publish through this activation's hub. A method rather
-   *  than a closure so the stub call checks at method depth. */
-  private async publishExperienceEntry(candidate: PublishableCandidate): Promise<ExperienceEntry> {
-    const { stub, caller } = await this.userHub();
-    const published = await stub.publishExperienceWire(caller, candidate);
-
-    return decodeExperienceEntry(published);
-  }
-
-  /** One owner-library search through this activation's hub. */
-  private async searchExperienceLibrary(
-    options: { query?: string; kind?: ExperienceKind; limit?: number },
-  ): Promise<ExperienceEntry[]> {
-    const { stub, caller } = await this.userHub();
-    const found = await stub.searchExperienceWire(caller, options);
-
-    return decodeExperienceEntries(found);
-  }
-
-  /** One owner-library read through this activation's hub. */
-  private async getExperienceEntry(id: string): Promise<ExperienceEntry | null> {
-    const { stub, caller } = await this.userHub();
-    const read = await stub.getExperienceEntryWire(caller, id);
-
-    return decodeOptionalExperienceEntry(read);
   }
 
   /**

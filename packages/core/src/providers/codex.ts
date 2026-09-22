@@ -18,7 +18,8 @@ import type { AuthResolution, ModelProvider, ModelInfo, ModelInputModality } fro
 import { MODEL_INPUT_MODALITIES } from './types';
 import { asFetchFunction } from './fetch-shim';
 import { withRateLimitRetry } from './rate-limit-retry';
-import { authCacheKey, cloneModelInfos, copyHeaders, nonEmptyString, positiveInteger } from './util';
+import { authCacheKey, cloneModelInfos, copyHeaders, positiveInteger } from './util';
+import { nonEmptyString } from '../utils/json';
 import * as v from 'valibot';
 import { CodexOAuthTokenError } from './codex-oauth';
 import { JsonArraySchema, JsonObjectSchema, JsonValueSchema, type JsonValue } from '../utils/json';
