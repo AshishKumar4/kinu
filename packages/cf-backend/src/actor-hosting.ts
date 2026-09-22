@@ -19,7 +19,7 @@ import {
   type ActorHandle, type ActorReference, type AgentOrchestratorDeps, type AgentRuntime,
   type BackendHost, type BroadcastEvent, type ContextEventRecorder,
   type DeferredApprovalChannel, type EnqueueTurnResult,
-  type HeadRuntime, type LoopOrigin, type ModelCallReport,
+  type LoopOrigin, type ModelCallReport,
   type ModelOperationSink, type ModelPricing, type NimbusSandboxHandle, type NodeHomeHost,
   type NodeWorkspace,
   type ProfileAuthorityInputs, type ProgrammaticTurn, type ResolvedTurnProfile,
@@ -74,7 +74,6 @@ export interface WorkspaceHostSeams {
   setTimer(fn: () => Promise<void>, ms: number): void;
   /** Re-derive the root's alarm; a hosted actor has no alarm slot of its own. */
   reconcileDurableWake(): void;
-  headRuntimeFor(bound: BoundActor & { readonly runtime: AgentRuntime }): HeadRuntime | undefined;
   logActivity(actorId: string, event: string, detail?: string): void;
   slate(actor: ActorHandle, operation: SlateOperation): Promise<SlateCallResult>;
   /** The owner's needs-you queue: one per workspace. */
@@ -299,7 +298,6 @@ export function createWorkspaceActorHost(seams: WorkspaceHostSeams): ActorHost {
         turnInFlight: () => seams.turnInFlight(bound),
         setTimer: (fn, ms) => { seams.setTimer(fn, ms); },
         reconcileDurableWake: () => { seams.reconcileDurableWake(); },
-        get headRuntime() { return seams.headRuntimeFor(bound); },
       };
 
       // A failed recording is reported, never thrown: losing an event must not end the turn.

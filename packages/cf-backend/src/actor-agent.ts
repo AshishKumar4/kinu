@@ -2151,7 +2151,6 @@ export abstract class ActorAgent extends Agent<Env> {
   private readonly _drainTimerTasks = new Map<string, AsyncTaskOwner>();
   protected get host(): BackendHost {
     if (!this._host) {
-      const getHeadRuntime = () => this.getCFHeadRuntime();
       const armWake = this.durableWakeOwner();
       this._host = {
         broadcast: (event) => this.broadcast(JSON.stringify(event)),
@@ -2195,8 +2194,6 @@ export abstract class ActorAgent extends Agent<Env> {
             }
           })();
         },
-        // Resolved lazily: heads need the owner for UserDO auth, set by first-turn time.
-        get headRuntime() { return getHeadRuntime(); },
       };
 
       // Assigned rather than spread so an actor with no wake chain leaves the key absent: core reads

@@ -142,7 +142,6 @@ export async function hostedWorkspace(
     turnInFlight: () => false,
     setTimer: () => undefined,
     reconcileDurableWake: () => undefined,
-    headRuntimeFor: () => undefined,
     logActivity: () => undefined,
     slate: () => Promise.resolve({ ok: false, reason: 'unavailable', error: 'no slate host in this fixture' }),
     deferrals: () => undefined,

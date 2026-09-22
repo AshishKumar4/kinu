@@ -251,7 +251,6 @@ export function createLocalOrchestration(input: LocalOrchestrationInput): LocalO
         },
         setTimer: (fn, ms) => { input.session().setTimer(fn, ms); },
         reconcileDurableWake: null,
-        get headRuntime() { return input.session().headRuntime; },
       },
       engine,
       eventLog: input.eventLog,

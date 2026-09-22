@@ -41,7 +41,6 @@
   "packages/core/src/tools/tasks-tool.ts -> packages/core/src/profiles/role-change.ts (value)",
   "packages/core/src/tools/tasks-tool.ts -> packages/core/src/tasks/store.ts (value)",
   "packages/core/src/types/agent-runtime.ts -> packages/core/src/tools/file-ledger.ts (type)",
-  "packages/core/src/types/backend-host.ts -> packages/core/src/heads/controller.ts (type)",
   "packages/core/src/vfs/context-plane.ts -> packages/core/src/orchestrator/actor-claims.ts (type)",
   "packages/core/src/vfs/context-plane.ts -> packages/core/src/tools/file-edit.ts (value)"
 ]

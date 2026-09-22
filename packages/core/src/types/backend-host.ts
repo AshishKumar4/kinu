@@ -1,7 +1,6 @@
 // Loop-level contract a backend fulfils beside AgentRuntime: client fan-out, programmatic turns,
 // head spawning. Only capabilities that differ per backend and have no AgentRuntime home belong here.
 
-import type { HeadRuntime } from '../heads/controller';
 import type { JsonObject } from '../utils/json';
 import type { PlanReview } from './plans';
 
@@ -80,7 +79,5 @@ export interface BackendHost {
      *  re-derives each pass (CLI `runPass`); a no-op would claim an alarm it never arms. */
   reconcileDurableWake?: (() => void) | null;
 
-  /** Head spawner + merge LLM for HeadController. */
-  readonly headRuntime?: HeadRuntime;
 
 }

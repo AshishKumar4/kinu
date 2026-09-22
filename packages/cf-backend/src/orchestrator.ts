@@ -515,7 +515,6 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       },
       setTimer: (fn, ms) => { this.host.setTimer(fn, ms); },
       reconcileDurableWake: () => { this.durableWakeOwner()(); },
-      headRuntimeFor: () => this.getCFHeadRuntime(),
       logActivity: (actorId, event, detail) => { this.logActivity(event, detail === undefined ? actorId : `${actorId} ${detail}`); },
       slate: (actor, operation) => this.slateAs(
         { path: [{ name: actor.name }], cred: ROOT_SLATE_CALLER.cred, workMode: 'build' }, operation,
