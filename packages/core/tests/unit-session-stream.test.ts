@@ -126,3 +126,50 @@ test('a window never splits a surrogate pair across two statements', async () =>
     expect(s.rows()).toEqual([`${'a'.repeat(64)}😀`]);
   } finally { s.testSql.close(); }
 });
+
+test('a reasoning part the final message omits is sealed from the stream that witnessed it', async () => {
+  // The provider streamed the thinking and then left it out of the response
+  // message it settled on. What streamed IS evidence: the answer keeps it.
+  const s = setup();
+
+  try {
+    const { stream } = await s.turn('t1');
+    await stream.nativePart({ type: 'reasoning-start', id: 'r' });
+    await stream.nativePart({ type: 'reasoning-delta', id: 'r', text: 'weighing it up' });
+    await stream.nativePart({ type: 'reasoning-end', id: 'r' });
+    await stream.nativePart({ type: 'text-start', id: '0' });
+    await stream.nativePart({ type: 'text-delta', id: '0', text: 'the answer' });
+    await stream.nativePart({ type: 'text-end', id: '0' });
+    await stream.nativeStep([{ role: 'assistant', content: [{ type: 'text', text: 'the answer' }] }]);
+
+    expect(s.open()).toEqual([]);
+    const answer = (await s.history.materialize()).messages.at(-1);
+    expect(answer).toEqual({ role: 'assistant', content: [
+      { type: 'reasoning', text: 'weighing it up' },
+      { type: 'text', text: 'the answer' },
+    ] });
+  } finally { s.testSql.close(); }
+});
+
+test('a final message that reorders what streamed seals in the final order, without throwing', async () => {
+  const s = setup();
+
+  try {
+    const { stream } = await s.turn('t1');
+    await stream.nativePart({ type: 'text-start', id: '0' });
+    await stream.nativePart({ type: 'text-delta', id: '0', text: 'calling now' });
+    await stream.nativePart({ type: 'text-end', id: '0' });
+    await stream.nativePart({ type: 'tool-call', toolCallId: 'c1', toolName: 'read', input: { path: '/x' } });
+    // The provider settles on the call first and the prose after it.
+    await stream.nativeStep([{ role: 'assistant', content: [
+      { type: 'tool-call', toolCallId: 'c1', toolName: 'read', input: { path: '/x' } },
+      { type: 'text', text: 'calling now' },
+    ] }]);
+
+    expect(s.open()).toEqual([]);
+    expect((await s.history.materialize()).messages.at(-1)).toEqual({ role: 'assistant', content: [
+      { type: 'tool-call', toolCallId: 'c1', toolName: 'read', input: { path: '/x' } },
+      { type: 'text', text: 'calling now' },
+    ] });
+  } finally { s.testSql.close(); }
+});

@@ -1043,24 +1043,20 @@ describe('turn-pipeline correctness wiring', () => {
     expect(actor).not.toContain('.weave(');
   });
 
-  test('the settle spine persists the provider error text into the run_end event', () => {
-    // The loop's runTurn: a failed execution's rendered cause becomes the
-    // run error, which the commit's facts carry into `closeTurnRun` — core's
-    // `classifyRunEnd` seals the reason from the driver's raw facts, including
-    // the last finish reason, so a turn cut mid-work is told from a finished
-    // one. The payload shape is pinned in core's unit-turn-lifecycle tests.
-    const run = loop.slice(loop.indexOf('private async runTurn(item: QueueItem'));
-    const errorCapture = run.indexOf('runError = message.slice(0, 500);');
-    const facts = run.indexOf('errorText: runError ?? undefined,');
-    const lastFinish = run.indexOf('lastFinishReason: this.actorSession.orchestrator.acc.lastFinishReason,', facts);
-    const sealed = run.indexOf('const status = classifyRunEnd(facts).reason;');
-    expect(errorCapture).toBeGreaterThan(-1);
-    expect(facts).toBeGreaterThan(errorCapture);
-    expect(lastFinish).toBeGreaterThan(facts);
-    expect(sealed).toBeGreaterThan(lastFinish);
-    expect(run).toContain('interrupted: input.interrupted,');
-    // The run bracket is the shared core closeTurnRun (turn_end + run_end),
-    // fed those facts; nothing on this backend seals a reason of its own.
+  test('nothing on this backend seals a run reason of its own', () => {
+    // The run bracket is the shared core `closeTurnRun` (turn_end + run_end),
+    // fed the driver's raw facts; `classifyRunEnd` owns the vocabulary. What
+    // this guards is the DIVERGENCE that produced it — a backend picking a
+    // status string itself, which is how one sealed a user Stop as 'error'.
+    //
+    // The ordering inside `runTurn` used to be pinned here by `indexOf` on its
+    // source text: it named `errorText: runError ?? undefined`, the facts
+    // literal and `classifyRunEnd(facts).reason` by spelling. That is an
+    // implementation mirror — it broke when the classification moved ahead of
+    // the answer row (so an incomplete turn's row could carry its own verdict)
+    // without anything about the contract changing. What it claimed to protect
+    // is behaviour, and behaviour is where it is now checked: core's
+    // unit-core-adapter-seams.test.ts drives `classifyRunEnd` on every arm.
     expect(loop).toContain('closeTurnRun(this.eventRecorder,');
     expect(actor).not.toContain('reason: result.status');
     expect(source).not.toContain('reason: result.status');

@@ -1453,7 +1453,7 @@ export class OrchestratorAgent extends ActorAgent {
             await room?.openTurn({ turnId: task.messageId ?? task.sequenceId, messageId: answerId, userTurn: task.messageId !== undefined, carried: [] });
 
             try {
-              const result = await runHostedTask(seams, reference, task, room === null ? undefined : (chunks) => room.observe(chunks));
+              const result = await runHostedTask(seams, reference, task, room === null ? undefined : (chunks, call) => room.observe(chunks, call));
 
               await this.recordHostedChatAnswer(reference, answerId, result.canonicalCompletion);
             } catch (cause) {

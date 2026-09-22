@@ -4,7 +4,7 @@ import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import type { TextUIPart, ToolUIPart, UIMessage } from 'ai';
 import type { JsonObject, JsonValue } from '@kinu.run/core';
-import { callFailed } from '@kinu.run/core';
+import { callFailed, TURN_END_METADATA_KEY } from '@kinu.run/core';
 import { MessageView } from '../src/components/MessageView';
 
 type Part = UIMessage['parts'][number];
@@ -119,17 +119,36 @@ describe('MessageView transcript order', () => {
 describe('MessageView reasoning', () => {
   const thought = 'The migration needs a closer look.\n'.repeat(8) + 'Check the final branch.';
 
-  test('the streaming reasoning tail shows a bounded viewport and pulsing label', () => {
+  test('the streaming reasoning tail shows a bounded viewport of the thought', () => {
     const html = render([{ type: 'reasoning', state: 'streaming', text: thought }], true);
 
     expect(html).toContain('data-reasoning-viewport');
     expect(html).toContain('max-h-[4lh]');
     expect(html).toContain('overflow-y-auto');
-    expect(html).toContain('motion-safe:animate-[pulse_1.6s_ease-in-out_infinite]');
-    expect(html).toContain('motion-reduce:animate-none');
     expect(html).toContain('Check the final branch.');
-    expect(html).not.toContain('p-shimmer-text');
     expect(html).not.toContain('>expand<');
+  });
+
+  test('an inter-step pause and a live reasoning part carry the SAME Thinking affordance', () => {
+    // Two vocabularies for one fact is what made "Thinking" appear, vanish and
+    // reappear across a turn that reasons, pauses and reasons again: the pause
+    // drew a shimmering dotted row and the reasoning drew a bordered block with
+    // a pulsing word, so every transition between them swapped the shape.
+    const pause = render([tool('a', 'file', { action: 'read', path: 'x' })], true);
+    const reasoning = render([{ type: 'reasoning', state: 'streaming', text: thought }], true);
+
+    // The affordance is the element that carries the word, whatever encloses it.
+    const label = (html: string): string => {
+      const end = html.indexOf('Thinking');
+      expect(end).toBeGreaterThan(-1);
+      const start = html.lastIndexOf('<span class="flex items-center gap-2">', end);
+      expect(start).toBeGreaterThan(-1);
+
+      return html.slice(start, end + 'Thinking'.length);
+    };
+
+    expect(label(reasoning)).toContain('Thinking');
+    expect(label(pause)).toBe(label(reasoning));
   });
 
   test('reasoning collapses when settled, when followed by a call, and in history', () => {
@@ -151,9 +170,29 @@ describe('MessageView reasoning', () => {
       expect(html).toContain('aria-expanded="false"');
       expect(html).toContain('>expand<');
       expect(html).not.toContain('data-reasoning-viewport');
-      expect(html).not.toContain('animate-[pulse_1.6s');
       expect(html).not.toContain('Check the final branch.');
     }
+  });
+});
+
+describe('MessageView turn end', () => {
+  test('a turn that stopped with work pending says so, from its own durable row', () => {
+    // The loop ended while the model was still calling tools. Nothing in the
+    // parts says that — the last part is an ordinary settled call — so without
+    // the row's own verdict the transcript reads as a turn that answered, which
+    // is the "session stopped unexpectedly" the owner reported.
+    const stopped: UIMessage = {
+      id: 'turn-1', role: 'assistant',
+      parts: [tool('a', 'shell', { command: 'node server.js' })],
+      metadata: { [TURN_END_METADATA_KEY]: 'incomplete' },
+    };
+
+    const html = renderToStaticMarkup(createElement(MessageView, { message: stopped, isLast: true, isStreaming: false }));
+
+    expect(html).toContain('Stopped before the work was finished');
+
+    // A turn that ended on its own says nothing of the kind.
+    expect(render([tool('a', 'shell', { command: 'node server.js' })])).not.toContain('Stopped before the work was finished');
   });
 });
 

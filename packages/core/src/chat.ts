@@ -127,6 +127,23 @@ export type ChatEvent =
 
 export type ChatToolOutput = Extract<TextStreamPart<ToolSet>, { type: 'tool-result' }>;
 
+/**
+ * Which provider call of a turn a relayed stream belongs to.
+ *
+ * A CALL and a TURN are not the same thing: an answer the provider cut at its
+ * output limit is continued by a second call, and each call is its own SDK
+ * stream with its own `start`, its own part ids and its own end. A relay handed
+ * the second stream on the first stream's state accumulates one on top of the
+ * other — so the boundary is stated rather than inferred, and a relay that
+ * keeps per-stream state renews it here while the ANSWER stays one message.
+ */
+export interface ObservedCall {
+  /** 0 for the turn's first provider call, 1 for the continuation after it. */
+  readonly index: number;
+}
+
+export type ObserveStream = (chunks: ReadableStream<UIMessageChunk>, call: ObservedCall) => Promise<void>;
+
 export interface ChatOptions {
   model: LanguageModel;
   system: string;
@@ -199,8 +216,10 @@ export interface ChatOptions {
    * (`StreamTextResult.teeStream`), so neither consumer starves the other; the
    * loop awaits the reader's return before it settles the turn, so the answer
    * it persists carries every part the transport relayed.
+   *
+   * Called ONCE PER PROVIDER CALL, and told which one — see {@link ObservedCall}.
    */
-  observeStream?: (chunks: ReadableStream<UIMessageChunk>) => Promise<void>;
+  observeStream?: ObserveStream;
   /** Request-level provider options contributed by the caller. They are
    *  merged by provider namespace with the cache options assembled here. */
   providerOptions?: NonNullable<Parameters<typeof streamText>[0]['providerOptions']>;
@@ -935,6 +954,7 @@ export async function* runChat(opts: ChatOptions): AsyncGenerator<ChatEvent> {
   const callModel = async function* (
     request: readonly ModelMessage[],
     stepOffset: number,
+    callIndex: number,
   ): AsyncGenerator<ChatEvent, CallOutcome> {
     // One operation frame per PROVIDER CALL — the continuation below is a
     // second `callModel`, so a turn that hit the output limit opens a second
@@ -1018,7 +1038,7 @@ export async function* runChat(opts: ChatOptions): AsyncGenerator<ChatEvent> {
     // Started before this reader's own loop, so the transport's tee is taken
     // before any chunk flows; awaited in the tail so the turn cannot settle
     // ahead of the last relayed chunk.
-    const observed = opts.observeStream?.(result.toUIMessageStream({ onError: (error) => describeProviderError({ cause: error }) }));
+    const observed = opts.observeStream?.(result.toUIMessageStream({ onError: (error) => describeProviderError({ cause: error }) }), { index: callIndex });
 
     try {
       // Drained to the SDK's own `abort` part rather than broken out of on
@@ -1089,7 +1109,7 @@ export async function* runChat(opts: ChatOptions): AsyncGenerator<ChatEvent> {
     };
   };
 
-  const first = yield* callModel(cache.messages, 0);
+  const first = yield* callModel(cache.messages, 0, 0);
   let steps: readonly StepResult<ToolSet>[] = first.steps;
   let responseMessages: ModelMessage[] = first.produced;
   let interrupted = first.interrupted;
@@ -1123,7 +1143,7 @@ export async function* runChat(opts: ChatOptions): AsyncGenerator<ChatEvent> {
   // still says `length`, so the caller records a turn that ended at the
   // provider's output limit rather than one that answered.
   if (!interrupted && first.finishReason === OUTPUT_LIMIT_REACHED) {
-    const continued = yield* callModel([...cache.messages, ...first.produced], first.steps.length);
+    const continued = yield* callModel([...cache.messages, ...first.produced], first.steps.length, 1);
     steps = [...steps, ...continued.steps];
     responseMessages = [...responseMessages, ...continued.produced];
     interrupted = continued.interrupted;

@@ -446,7 +446,7 @@ export {
 // Chat engine (shared between server and CLI)
 export {
   runChat, INTERRUPTED_TURN, isRateLimitedTurnError,
-  type ChatEvent, type ChatOptions, type ChatToolOutput,
+  type ChatEvent, type ChatOptions, type ChatToolOutput, type ObservedCall, type ObserveStream,
 } from './chat';
 
 // Extension seam (public plugin API — observe + extend a turn)
@@ -2423,7 +2423,7 @@ export {
 } from './read-models/alternate-takes';
 
 export {
-  classifyProgrammaticTurn, messageSignalId, isSteeredMessage, applySignalCard,
+  classifyProgrammaticTurn, messageSignalId, isSteeredMessage, endedMidWork, TURN_END_METADATA_KEY, applySignalCard,
   parseSignalCardEvent, parseDrainedEvents, eventVariantLabel, eventSourceLabel,
   metadataBroadcastEvent,
   type ClassifiedProgrammaticTurn, type SignalCard, type DrainedEvent,

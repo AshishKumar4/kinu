@@ -92,13 +92,14 @@ import type { TerminalTransition, TerminalTransitions } from './terminal-transit
 import {
   applyOverflowRecovery, classifyRunEnd, closeTurnRun, creditedTurnId, openTurnRun,
   owesOutputLimitContinuation, OUTPUT_CONTINUATION_EVENT, persistMeasuredPromptTokens, snapshotCompletedTurn,
-  type CompactionTriggerState, type RunEndFacts, type RunEndReason,
+  type CompactionTriggerState, type RunEndClassification, type RunEndFacts, type RunEndReason,
 } from './turn-lifecycle';
 import type { SessionTranscript, PreparedConversationEntry } from '../session/transcript';
 import { RECOVERY_BACKOFF_CEILING_MS } from '../utils/recovery-backoff';
 import type { MessageReference } from '../session/messages';
 import type { ContextSelection } from '../session/context';
 import { subordinateTurnContext } from '../subordinates/support';
+import { TURN_END_METADATA_KEY } from '../read-models/background-event';
 import { TaskReminders, TASK_REMINDER_EVENT } from '../tasks/reminder';
 import type { TaskListStore } from '../tasks/store';
 import { inheritedAsModelMessage } from '../heads/head-inference';
@@ -173,14 +174,13 @@ const NO_STRANDED_DELIVERY_GRACE = 0;
 /**
  * One response's answer and everything it owes, as one durable commit.
  *
- * `facts` travel rather than the classification, because the run row is sealed
- * AFTER this commit while the roster is frozen inside it. `classifyRunEnd` is a
- * pure function of these facts, so the reason the roster carries and the reason
- * the run row is sealed with cannot disagree: there is one value behind both.
+ * The run end is NOT carried here. `runTurn` classifies it once, before the
+ * answer row is prepared, and both the roster frozen inside this commit and the
+ * run row sealed after it read that one value — so they cannot disagree, and
+ * the mid-work defect the classifier reports is filed once per turn.
  */
 interface CommittedTurn {
   readonly messageId: string;
-  readonly facts: RunEndFacts;
   readonly turn: CompletedTurn;
   readonly owed: readonly OwedEffect[];
   /** What core claims this sequence under. Null for a response whose turn has
@@ -1168,16 +1168,15 @@ export class ChatSession {
    * Seal the in-flight run via the shared core turn-lifecycle bracket.
    * Idempotent per run — clearing the id makes a second call a no-op.
    *
-   * FACTS in, name out. `classifyRunEnd` owns the vocabulary; this method
-   * reports what it saw and returns the reason it was given. Computing
-   * `hadError ? 'error' : 'completed'` here instead would seal a Stop as
-   * `'error'` — an interrupt throws `INTERRUPTED_TURN` and the catch folds that
-   * into `hadError` — while the cloud seals it `'aborted'`, counting the same
-   * user action as a failure on one backend and a choice on the other.
+   * Takes the NAME, not the facts. `classifyRunEnd` owns the vocabulary and
+   * each caller runs it exactly once — it also reports the mid-work defect, so
+   * a second classification of one turn files the same defect twice. Computing
+   * `hadError ? 'error' : 'completed'` at a call site instead would seal a Stop
+   * as `'error'` — an interrupt throws `INTERRUPTED_TURN` and the catch folds
+   * that into `hadError` — while the cloud seals it `'aborted'`, counting the
+   * same user action as a failure on one backend and a choice on the other.
    */
-  private closeRun(facts: RunEndFacts, lease: ActorTurnLease): RunEndReason {
-    const end = classifyRunEnd(facts);
-
+  private closeRun(end: RunEndClassification, lease: ActorTurnLease): RunEndReason {
     // The durable claim closes under the SAME name the run does. It is settled
     // before the early return below, because a second `closeRun` for one run is
     // a no-op on the run row and must not leave the claim open either — and the
@@ -1298,7 +1297,7 @@ export class ChatSession {
       const interrupted = lease.signal.aborted;
 
       if (!interrupted) this.actorSession.orchestrator.acc.hadError = true;
-      this.closeRun({ completed: false, interrupted, errorText: message.slice(0, 500) }, lease);
+      this.closeRun(classifyRunEnd({ completed: false, interrupted, errorText: message.slice(0, 500) }), lease);
       this.emit({ type: 'error', message });
       this.emit({ type: 'turn-end', turn: this.snapshotTurn(item, '') });
     } finally {
@@ -1481,12 +1480,33 @@ export class ChatSession {
       }).enqueueRetry;
     }
 
+    // HOW THIS TURN ENDED, named once and read by everything downstream: the
+    // answer row's metadata, the roster's status, the claim and the run row.
+    // Once, because the classifier also files the mid-work defect, and a turn
+    // classified twice files it twice.
+    const facts: RunEndFacts = {
+      completed: runError === null,
+      interrupted,
+      ...(runError !== null && { errorText: runError }),
+      // Unbounded here (runChat hands `stopWhen` straight to streamText), so
+      // this reads 'stop' on a turn that finished by itself. Reported anyway:
+      // a caller that does pass a real stop condition gets the same honest
+      // seal the cloud loop gets, from the same classifier.
+      lastFinishReason: this.actorSession.orchestrator.acc.lastFinishReason,
+    };
+
+    const end = classifyRunEnd(facts);
+
     const finalText = execution.claim === null ? execution.finalTextReference
       : await this.actorSession.recordTranscriptText(execution.claim, 'answer', fullText, execution.outputReferences);
 
     const preparedAssistant = streamed || !interrupted ? await this.transcript.prepareAssistant({
       id: this.messageId, parentId: this.actorSession.landedSteers.at(-1)?.id ?? lease.turnId,
       turnId: lease.turnId, runId: lease.runId, parts: execution.outputPartReferences, finalText,
+      // The one terminal state a reader cannot infer from the answer itself:
+      // the turn stopped with work still pending, so the row says so and every
+      // surface reading it back — after a reload, in another tab — says so too.
+      ...(end.reason === 'incomplete' && { metadata: { [TURN_END_METADATA_KEY]: end.reason } }),
     }) : null;
 
     // The turn's whole durable record, in ONE commit — see {@link commitTurn}.
@@ -1502,6 +1522,7 @@ export class ChatSession {
       preparedAssistant,
       runError,
       interrupted,
+      end,
       trialContext: execution.admittedMessages,
       reachableTools: Object.keys(prepared.execution.chat.tools ?? {}),
       overflowRetry,
@@ -1525,11 +1546,11 @@ export class ChatSession {
     if (!('committed' in commit)) {
       const message = renderThrownChain({ cause: commit.failure });
       this.actorSession.orchestrator.acc.hadError = true;
-      this.closeRun({
+      this.closeRun(classifyRunEnd({
         completed: false,
         interrupted: false,
         errorText: runError ?? message.slice(0, 500),
-      }, lease);
+      }), lease);
       diagnostics.failure('turn.persist_failed', commit.failure);
       // The answer is not durable, so it is not published as one. The stream's
       // deltas already went out — they are what the operator watched happen —
@@ -1541,7 +1562,7 @@ export class ChatSession {
       return;
     }
 
-    const { facts, turn, owed, transition } = commit.committed;
+    const { turn, owed, transition } = commit.committed;
 
     try {
       // The NEXT turn's measured compaction trigger (core turn-lifecycle).
@@ -1552,7 +1573,7 @@ export class ChatSession {
       // is the accumulator's, byte for byte.
       this.armCacheWarm(prepared);
 
-      this.closeRun(facts, lease);
+      this.closeRun(end, lease);
       // Core drives everything the settled turn causes from here: the in-process
       // guard, the durable claim, the roster, the run and the close are ONE
       // state machine, and this backend supplies only what it owns — the effect
@@ -1580,11 +1601,11 @@ export class ChatSession {
       // Finalization threw, so whatever the stream reported is superseded by a
       // turn that could not be closed out — and an interrupt does not reach
       // here, since `interrupted` is sealed on the arm above.
-      this.closeRun({
+      this.closeRun(classifyRunEnd({
         completed: false,
         interrupted: false,
         errorText: runError ?? message.slice(0, 500),
-      }, lease);
+      }), lease);
       diagnostics.failure(
         'turn.finalization_failed',
         toKinuError({ doing: 'finalizing the turn', cause: err, otherwise: 'io' }),
@@ -1651,6 +1672,8 @@ export class ChatSession {
     readonly preparedAssistant: PreparedConversationEntry | null;
     readonly runError: string | null;
     readonly interrupted: boolean;
+    /** How the turn ended, classified ONCE by the caller — see `closeRun`. */
+    readonly end: RunEndClassification;
     /** The turn's inference history, for the shadow trial's recorded replay. */
     readonly trialContext: readonly ModelMessage[];
     /** The tool surface the turn could reach, for the advisor's snapshot. */
@@ -1692,18 +1715,7 @@ export class ChatSession {
         this.completionGate.settle({ toolCalls: this.actorSession.orchestrator.acc.toolCalls.length });
       }
 
-      const facts: RunEndFacts = {
-        completed: runError === null,
-        interrupted: input.interrupted,
-        errorText: runError ?? undefined,
-        // Unbounded here (runChat hands `stopWhen` straight to streamText), so
-        // this reads 'stop' on a turn that finished by itself. Reported anyway:
-        // a caller that does pass a real stop condition gets the same honest
-        // 'truncated' seal the cloud loop gets, from the same classifier.
-        lastFinishReason: this.actorSession.orchestrator.acc.lastFinishReason,
-      };
-
-      const status = classifyRunEnd(facts).reason;
+      const status = input.end.reason;
       const turn = this.snapshotTurn(item, input.assistantText, messageId);
 
       // The stop-time reminder, decided where the list, the answer and the
@@ -1745,7 +1757,7 @@ export class ChatSession {
         userText: item.text,
         assistantText: input.assistantText,
         completed: runError === null,
-        interrupted: facts.interrupted,
+        interrupted: input.interrupted,
         taskReminder,
         startedAt: input.startedAt,
         trialContext: input.trialContext,
@@ -1773,7 +1785,7 @@ export class ChatSession {
         this.ports.terminal().record(transition, owed);
       });
 
-      return { committed: { messageId, facts, turn, owed, transition } };
+      return { committed: { messageId, turn, owed, transition } };
     } catch (cause) {
       // Classified AT the boundary that caught it rather than stored raw and
       // interpreted later: this is the only place that knows what it was doing.

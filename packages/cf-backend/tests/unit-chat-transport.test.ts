@@ -211,7 +211,7 @@ describe('ChatWireTransport', () => {
       { type: 'start' }, { type: 'start-step' }, { type: 'text-start', id: 't' },
       { type: 'text-delta', id: 't', delta: 'the tools are' },
       { type: 'text-end', id: 't' }, { type: 'finish-step' }, { type: 'finish' },
-    ]));
+    ]), { index: 0 });
     await h.transport.deliver({ type: 'turn-end', turn: { userMessage: 'one more thing', assistantResponse: 'the tools are', toolCalls: [], steps: 1, durationMs: 0, feedback: null, hadError: false, origin: 'user' } });
     landing.resolve('turn');
     expect(await admitted).toBe(true);
@@ -345,7 +345,7 @@ describe('ChatWireTransport', () => {
       { type: 'start' }, { type: 'start-step' }, { type: 'text-start', id: 't' },
       { type: 'text-delta', id: 't', delta: 'hel' }, { type: 'text-delta', id: 't', delta: 'lo' },
       { type: 'text-end', id: 't' }, { type: 'finish-step' }, { type: 'finish' },
-    ]));
+    ]), { index: 0 });
     await h.transport.deliver({ type: 'turn-end', turn: { userMessage: 'hello', assistantResponse: 'hello', toolCalls: [], steps: 1, durationMs: 0, feedback: null, hadError: false, origin: 'user' } });
     await h.land(answered);
 
@@ -384,7 +384,7 @@ describe('ChatWireTransport', () => {
       },
     });
 
-    await h.transport.observe(broken);
+    await h.transport.observe(broken, { index: 0 });
 
     // The tab is told the relay broke, under its own request, before the turn
     // ends — not left with a message that simply stops.
@@ -404,13 +404,88 @@ describe('ChatWireTransport', () => {
     expect(h.broadcasts.at(-1)?.frame.type).toBe('cf_agent_chat_messages');
   });
 
+  test('a chunk the relay cannot place is a classified refusal to the tab, and the turn keeps its own record', async () => {
+    // The `tool-input-start` never reached this relay, so the delta names a
+    // call nothing here has open. Forwarded, the client's own stream reader
+    // throws on it ("Received tool-input-delta for missing tool call with ID
+    // ...") and the whole answer dies in the tab. The relay is what broke.
+    const h = openRequest();
+    const conn = h.connection('c1');
+    const { answered } = await h.open(conn, 'req-1', 'hello');
+    h.history.push({ id: 'input-req-1', role: 'user', parts: [{ type: 'text', text: 'hello' }] });
+    await h.transport.deliver(turnStart('input-req-1', 'msg-1'));
+
+    await h.transport.observe(chunks([
+      { type: 'start' }, { type: 'start-step' }, { type: 'text-start', id: 't' },
+      { type: 'text-delta', id: 't', delta: 'reading it' }, { type: 'text-end', id: 't' },
+      { type: 'tool-input-delta', toolCallId: 'call_01a0c7e6c17f', inputTextDelta: '{"path":' },
+      { type: 'text-start', id: 'u' }, { type: 'text-delta', id: 'u', delta: 'never relayed' },
+    ]), { index: 0 });
+
+    // The tab reads OUR classification of what broke, never the SDK's sentence
+    // about a chunk the client was never meant to be handed.
+    const failed = h.responses().at(-1);
+    expect(failed).toMatchObject({ id: 'req-1', done: false, error: true });
+    expect(failed?.body).toContain('relaying the answer stream');
+    expect(failed?.body).not.toContain('Ensure a "tool-input-start" chunk');
+    // The frame itself never went out, and nothing after it did either: the
+    // relay stops rather than racing on with a stream the client cannot follow.
+    const relayed = h.responses().filter((frame) => frame.error !== true).map((frame) => frame.body ?? '');
+    expect(relayed.some((body) => body.includes('tool-input-delta'))).toBe(false);
+    expect(relayed.some((body) => body.includes('never relayed'))).toBe(false);
+
+    // The turn is untouched: the loop commits its own answer, the request
+    // closes at the turn's end, and no partial is offered as the durable row.
+    expect(h.transport.streamed('msg-1')).toBeNull();
+    await h.transport.deliver({ type: 'turn-end', turn: { userMessage: 'hello', assistantResponse: 'reading it', toolCalls: [], steps: 1, durationMs: 0, feedback: null, hadError: false, origin: 'user' } });
+    await h.land(answered);
+    expect(h.responses().at(-1)).toEqual({ type: 'cf_agent_use_chat_response', id: 'req-1', body: '', done: true });
+    expect(h.broadcasts.at(-1)?.frame.type).toBe('cf_agent_chat_messages');
+  });
+
+  test("a turn's second provider call cannot rename the answer: one message, under the row's id", async () => {
+    // An answer the provider cut at its output limit is continued by a SECOND
+    // provider call, and that call is its own SDK stream — its own `start`,
+    // which carries a message id of the SDK's own minting whenever the caller
+    // configured one. Read on the first stream's state that `start` RENAMES
+    // the answer, and every later chunk, the resume store and the transcript
+    // hand-off then key on an id the loop never persisted.
+    const h = openRequest();
+    const conn = h.connection('c1');
+    const { answered } = await h.open(conn, 'req-1', 'hello');
+    h.history.push({ id: 'input-req-1', role: 'user', parts: [{ type: 'text', text: 'hello' }] });
+    await h.transport.deliver(turnStart('input-req-1', 'msg-1'));
+
+    await h.transport.observe(chunks([
+      { type: 'start' }, { type: 'start-step' }, { type: 'text-start', id: 't' },
+      { type: 'text-delta', id: 't', delta: 'first half' }, { type: 'text-end', id: 't' },
+      { type: 'finish-step' }, { type: 'finish' },
+    ]), { index: 0 });
+    await h.transport.observe(chunks([
+      { type: 'start', messageId: 'sdk-minted-2' }, { type: 'start-step' }, { type: 'text-start', id: 'u' },
+      { type: 'text-delta', id: 'u', delta: ' and the rest' }, { type: 'text-end', id: 'u' },
+      { type: 'finish-step' }, { type: 'finish' },
+    ]), { index: 1 });
+
+    await h.transport.deliver({ type: 'turn-end', turn: { userMessage: 'hello', assistantResponse: 'first half and the rest', toolCalls: [], steps: 2, durationMs: 0, feedback: null, hadError: false, origin: 'user' } });
+    await h.land(answered);
+
+    // Both calls are one answer, under the id the loop persists the row with.
+    const answer = h.transport.answer('msg-1');
+    expect(answer?.id).toBe('msg-1');
+    expect(answer?.parts.filter((part) => part.type === 'text')).toEqual([
+      { type: 'text', text: 'first half', state: 'done' },
+      { type: 'text', text: ' and the rest', state: 'done' },
+    ]);
+  });
+
   test('a reconnecting client is told what is resuming and gets the stored chunks replayed', async () => {
     const h = openRequest();
     const first = h.connection('c1');
     const { answered } = await h.open(first, 'req-1', 'hello');
     await h.transport.deliver(turnStart('input-req-1', 'msg-1'));
     // The first delta flushes the store; the turn is still live.
-    await h.transport.observe(chunks([{ type: 'start' }, { type: 'text-start', id: 't' }, { type: 'text-delta', id: 't', delta: 'par' }]));
+    await h.transport.observe(chunks([{ type: 'start' }, { type: 'text-start', id: 't' }, { type: 'text-delta', id: 't', delta: 'par' }]), { index: 0 });
     expect(h.chunkRows().length).toBeGreaterThan(0);
 
     const second = h.connection('c2');
@@ -440,7 +515,7 @@ describe('ChatWireTransport', () => {
     const conn = h.connection('c1');
     const { answered } = await h.open(conn, 'req-1', 'hello');
     await h.transport.deliver(turnStart('input-req-1', 'msg-1'));
-    await h.transport.observe(chunks([{ type: 'start' }, { type: 'abort' }]));
+    await h.transport.observe(chunks([{ type: 'start' }, { type: 'abort' }]), { index: 0 });
     await h.transport.deliver({ type: 'error', message: INTERRUPTED_TURN });
     await h.transport.deliver({ type: 'turn-end', turn: { userMessage: 'hello', assistantResponse: '', toolCalls: [], steps: 0, durationMs: 0, feedback: null, hadError: false, origin: 'user' } });
     await h.land(answered);

@@ -150,6 +150,22 @@ export function isSteeredMessage(row: { metadata: unknown }): boolean {
   return parsed.success && parsed.output.kinuSteer === true;
 }
 
+/** The key a settled answer's row carries when its turn did not reach an end
+ *  of its own. Written only for the `incomplete` seal — every other reason
+ *  already has a surface of its own (a Stop's abort chunk, a failure's error
+ *  frame), and a second report of the same fact is noise. */
+export const TURN_END_METADATA_KEY = 'kinuTurnEnd';
+
+/** Whether this answer's turn STOPPED WITH WORK PENDING — the loop ended while
+ *  the model was still calling tools, so the answer above it is not the end of
+ *  the work. Read off the durable row, so a reload and a second tab say the
+ *  same thing the live turn did. */
+export function endedMidWork(row: { metadata: unknown }): boolean {
+  const parsed = v.safeParse(v.looseObject({ [TURN_END_METADATA_KEY]: v.optional(v.string()) }), row.metadata);
+
+  return parsed.success && parsed.output[TURN_END_METADATA_KEY] === 'incomplete';
+}
+
 /** One live background-event card: an event that has happened, and whether the
  *  agent has read it yet. */
 export interface SignalCard {

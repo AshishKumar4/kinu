@@ -49,7 +49,7 @@ import {
   type CompactionStateStore, type Logger as CompactionLogger,
 } from "@kinu.run/compaction";
 import { generateText, convertToModelMessages } from "ai";
-import type { LanguageModel, ModelMessage, ToolSet, UIMessageChunk } from "ai";
+import type { LanguageModel, ModelMessage, ToolSet } from "ai";
 import {
   McpToolSurfaceCache,
 } from "./user/mcp";
@@ -6001,7 +6001,7 @@ export abstract class ActorAgent extends Agent<Env> {
       },
       budget: this.budget,
       countInputTokens: assembled.countInputTokens,
-      observeStream: (chunks: ReadableStream<UIMessageChunk>) => this.chatTransport.observe(chunks),
+      observeStream: (chunks, call) => this.chatTransport.observe(chunks, call),
     };
 
     if (assembled.measured.providerReportedTokens !== undefined) {

@@ -167,10 +167,13 @@ describe('classifyRunEnd — a user Stop is aborted on every backend', () => {
     expect('error' in classified).toBe(false);
   });
 
-  test('the vocabulary is exactly three values', () => {
-    expect([...RUN_END_REASONS]).toEqual(['completed', 'aborted', 'error']);
+  test('a turn that stopped with work pending is its own reason, not a completion', () => {
+    // The fourth word exists because the state does: a loop that ended while
+    // the model was still calling tools did not reach an end of its own, and
+    // sealing it 'completed' is what made issue #16 read as a finished turn.
+    expect([...RUN_END_REASONS]).toEqual(['completed', 'aborted', 'error', 'incomplete']);
     const every: readonly RunEndReason[] = RUN_END_REASONS;
-    expect(every).toHaveLength(3);
+    expect(every).toHaveLength(4);
   });
 });
 
@@ -217,14 +220,16 @@ describe('the mid-work invariant is loud when it breaks', () => {
     expect(tripped[0]?.cause).toContain('step ceiling');
   });
 
-  test('the reason it reports is unchanged — the classifier names what the driver saw', () => {
-    // The diagnostic is the visibility. Inventing a status here would put a word
-    // in the ledger for a state no run can reach.
+  test('it is sealed incomplete, and carries no failure text it did not observe', () => {
+    // The diagnostic says the loop is broken; the STATUS says what the turn is.
+    // Sealing it 'completed' told every reader — the UI, the evolution window,
+    // eval triage — that a turn which stopped mid-work had answered.
     const { classified } = classifyWithLog({
       completed: true, interrupted: false, lastFinishReason: TOOL_CALLS_PENDING,
     });
 
-    expect(classified).toEqual({ reason: 'completed' });
+    expect(classified).toEqual({ reason: 'incomplete' });
+    expect('error' in classified).toBe(false);
   });
 
   test('a turn whose last step stopped on its own trips nothing', () => {
