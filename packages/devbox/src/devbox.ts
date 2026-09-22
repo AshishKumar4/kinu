@@ -2437,8 +2437,8 @@ export class Devbox<Env = unknown> extends Sandbox<Env> {
         try {
           await this.unmountBucket(at);
         } catch (error) {
-          // The SDK throws for a path its registry never held, the ordinary case here; any failure is
-          // logged, never fatal to the next mount (`SnapshotChainPorts.unmountStore` states why).
+          // The SDK throws for a path its registry never held, the ordinary case; the patched SDK
+          // releases a held path with no mount. Nothing here may fail the next mount.
           console.log(`[devbox] store mount at ${at} was not released: ${describe({ cause: error })}`);
         }
       },

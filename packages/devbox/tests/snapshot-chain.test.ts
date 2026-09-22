@@ -2397,7 +2397,7 @@ describe('checkpoint — gated on real change, proportional to it', () => {
       expect(outcome.reason).not.toContain('durable storage unreachable');
       expect(outcome.bytes).toBeUndefined();
       expect(record.state).toEqual(chainState({ upperMark: 'stale', at: 1 }));
-      // Both lines are on the console, the only record left once durable storage is unreachable.
+      // Both lines are on the console, which is the only record left.
       expect(record.calls.some(call => call.startsWith(`log:${DEVBOX_WORKDIR} checkpoint failed:`)
         && call.includes('PUT answered 500'))).toBe(true);
       expect(record.calls).toContain(
@@ -2831,7 +2831,7 @@ function fixtureTree(label: string): string {
   return dir;
 }
 
-/** Runs the strategy's own archiver command, so the test exercises the production excludes. */
+/** Runs the strategy's own archiver command and answers what the archive holds and how many source bytes it took. */
 function archiveOf(source: string, excludes: readonly string[]) {
   const archivePath = join(source, '..', `${basename(source)}.sqsh`);
   rmSync(archivePath, { force: true });
@@ -3313,8 +3313,8 @@ describe('a restore that refuses the newest generation recovers from the older o
       expect(state.lastFailure?.reason).toContain('missing from the store');
       expect(state.orphans).toEqual([CHAIN_ID]);
       expect(state.fallback).toBeUndefined();
-      // The mark described an upper this box no longer serves; a stale mark could match it
-      // and the next tick would skip the archive.
+      // The mark described a generation this box no longer serves; a mark that cannot describe
+      // the upper must never match, or the next tick skips the archive.
       expect(state.upperMark).toBeUndefined();
       expect(record.calls.filter(call => call.startsWith('deleteObjects'))).toEqual([]);
     });

@@ -1201,8 +1201,8 @@ describe('the chain arm asks the store for what its record names', () => {
     expect(source).toContain('for (const expectation of expectations) await archive(expectation);');
     expect(source).toContain('found.exists !== true,');
 
-    // The chain branch must not request a delta unconditionally; the slice excludes EXTRACTION's
-    // delta head, whose record cannot have collapsed onto a fresh base.
+    // The chain branch asks for a delta only as the record says; the one unconditional delta head
+    // left is the extraction branch's, whose record cannot have collapsed onto a fresh base.
     const chainBranch = source.slice(
       source.indexOf("if (mode === 'chain') {"),
       source.indexOf('  } else {\n    // The chain in EXTRACTION mode'),

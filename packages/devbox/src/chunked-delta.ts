@@ -22,8 +22,8 @@ export { DELTA_BLOCK_BYTES } from './delta-index';
  *  their bytes. */
 const DELTA_WHOLE_FILE_THRESHOLD = 64 * 1024;
 
-/** A file more than half holes travels whole: block-hashing its zeros costs more than it saves,
- *  and a whole sparse file round-trips its exact hole geometry. */
+/** A file more than half holes travels whole: hashing and copying its zeros costs what the whole
+ *  inode would, and a whole sparse file round-trips its exact hole geometry. */
 const DELTA_SPARSE_WHOLE_FRACTION = 1 / 2;
 
 /** Shell operations per container command. Bounds the round trips of a
@@ -313,7 +313,7 @@ export interface DeltaBaseFact {
   readonly size: number;
 }
 
-/** Output is one line per path, in path order, so no name appears in it; the parser relies on position. */
+/** One line per path, in path order, so no name appears in the output; `ABSENT` marks a path the base lacks. */
 export function deltaBaseStatCommand(paths: readonly string[], lowerBase: string): string {
   const lines = ['# devbox-basestat-v1'];
 
