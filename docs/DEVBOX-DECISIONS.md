@@ -843,6 +843,63 @@ Pins: `packages/cli-backend/tests/local-session.test.ts` "a streamed answer
 mints a revision per step" and `packages/core/tests/unit-session-context-store.test.ts`
 "a sealed message is projected once", both red on the old code.
 
+D23-N. Every instance of the host namespace answers `supervisorOp` with the
+HOSTED RUNTIME (2026-09-21, this commit; the Nimbus upgrade to core 0.12.0,
+worker 0.10.0, fabric 0.7.1, sdk 0.8.1, platform 0.5.1 under them). The host
+forwarded the envelope to `bundle.session().supervisorOp`, which is core's
+bare-workspace handler: it serves the filesystem ops natively and refuses
+every HOST op, the ones `SUPERVISOR_OP_ROUTES` names
+(`@nimbus-sh/core/dist/workspace/supervisor-op.js:103-141`, `fanoutExecute`
+at `:133`). Core 0.12.0 says so in the refusal itself
+(`:281-286`): "'<op>' is a host op, and this handler is a bare workspace's.
+Forward supervisorOp(envelope) to composeHostedRuntime(...).supervisorOp on
+every instance of the host namespace, the siblings Nimbus opens by name
+included (fanout peers, process hosts)."
+
+The siblings are the half that is easy to miss. A resolver layer of five
+packages or more is sharded across sibling objects of the composed namespace
+(`@nimbus-sh/fabric/dist/fanout.js:30` `IN_DO_THRESHOLD = 5`, the names at
+`:153-157` and `:234`, the dispatch at `:250`), and each shard arrives as
+`supervisorOp({ op: 'fanoutExecute' })` on an object of OUR class opened under
+`nbf:npm-resolve-fanout:<doId>:<shard>`. `createHostedWorkspace` composes over
+whatever storage the object holds, so a sibling is a runtime with its own
+empty filesystem — no genesis, no owner, no transcript: Kinu's `ensureSchema`
+runs from `onStart`, and the Agents SDK starts that lifecycle from `fetch`,
+`alarm` and its own internal RPCs only (`agents/dist/src-5W6JNKVb.js:459-460`
+and `durable-object-lifecycle-D6nNQJJd.js:824-836`), never from a plain RPC
+method such as this one.
+
+Measured 2026-09-21 in `/home/mrwhite0racle/Kinu-wt-nimbus-0922` with
+`bunx vitest run tests/workerd/nimbus-git-npm.test.ts` from
+`packages/cf-backend`: 3 pass 1 fail with the workspace answering, the failure
+`resolver-fanout failed at layer 0: peer shard
+nbf:npm-resolve-fanout:9d8e18eb2375:3 (1 task) ... 'fanoutExecute' is a host
+op, and this handler is a bare workspace's (layer width 6, peer-do)`; 4 pass 0
+fail with the runtime answering. The suite installs six packages off the
+fixture registry for exactly that width, and clones over the fixture's git
+smart-HTTP origin.
+
+The `git clone` half of the same 2026-09-21 failure was upstream, not here.
+Worker 0.9.0 minted a facet's supervisor binding with props
+`{ doId, pid, mutationOwner }` (`dist/git/network-facet.js:410`) and its
+entrypoint resolved the host namespace from `hostNamespace()`, its own
+isolate's composition (`dist/session/supervisor-rpc.js:88`), which is empty in
+the isolate workerd serves an entrypoint from — hence `SupervisorRPC:
+env.NIMBUS_SESSION is not a Durable Object namespace` on a clone in a
+correctly composed workspace. 0.10.0 mints `route: hostRoute() ?? undefined`
+into the props and resolves through `hostNamespaceBinding(this.env,
+'SupervisorRPC', props.route)` (`:95`). Every op a clone facet performs is a
+filesystem op, so the clone cases in the suite above are green under both
+handlers; they stay as the end-to-end proof that a facet reaches this object.
+
+A LOCAL-path clone is not a thing this runtime does, at any version: every
+`git clone` is delegated to the network facet
+(`@nimbus-sh/worker/dist/git/commands.js:385`) and the bundled isomorphic-git
+registers `http` and `https` transports only (`GitRemoteManager.getRemoteHelperFor`
+in `dist/git-bundle.generated.js`), so `git clone seed/app-a` is a URL parse
+failure rather than a copy. The suite asserts that refusal by its own words,
+so a host failure can never hide behind it.
+
 ## Measurement contract for a strategy comparison
 
 Vary stored bytes B, file count N, changed bytes D and demanded bytes Q
