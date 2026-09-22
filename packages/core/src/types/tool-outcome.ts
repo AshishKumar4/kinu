@@ -1,6 +1,3 @@
-/** The tool-call outcome contract, declared at the platform layer: the run-event
- *  ledger records it and the tools layer produces it. */
-
 import * as v from 'valibot';
 import { ERROR_CODES } from '../obs/index';
 import { FILE_REFUSAL_REASONS } from './file-edits';
@@ -10,9 +7,7 @@ export const ToolFailureValueSchema = v.object({
   reason: v.nullable(v.picklist([...ERROR_CODES, ...FILE_REFUSAL_REASONS])),
   error: v.string(),
   execution: v.optional(v.object({ exitCode: v.number() })),
-  /** db.batch's refused operation, when one is named — the index is part of
-   *  the refusal a program branches on, like `execution` is part of a
-   *  substrate exit. */
+  /** db.batch's refused operation index, part of the refusal a program branches on. */
   failedIndex: v.optional(v.number()),
 });
 

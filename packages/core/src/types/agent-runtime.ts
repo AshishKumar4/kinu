@@ -1,9 +1,5 @@
-/**
- * AgentRuntime — the one struct the agent core receives.
- * Platform-specific; constructed by either CF or Linux backend.
- *
- * Architecture reference: docs/ARCHITECTURE.md — "Backends and the AgentRuntime contract"
- */
+/** The one struct the agent core receives, constructed per backend. See docs/ARCHITECTURE.md
+ *  "Backends and the AgentRuntime contract". */
 
 import type {
   Storage,
@@ -25,11 +21,9 @@ import type { WorkMode } from './turn';
 import type { TurnFileLedger } from '../tools/file-ledger';
 import type { ActorHandle } from '../identity/actor-handle';
 
-/** A live channel a surface that owns a user (ACP's `session/request_permission`)
- *  offers for 'gate'-tier shell approvals — see AgentRuntime.setShellApprovalChannel. */
+/** Live channel for 'gate'-tier shell approvals (ACP `session/request_permission`). */
 export type RequestShellApproval = (req: ShellApprovalRequest) => Promise<ShellApprovalOutcome | null>;
 
-/** CraftStore interface — matches agent-utils CraftStore API */
 export interface CraftStore {
   create(tool: Omit<CraftedTool, 'createdAt' | 'updatedAt'>): void;
   update(name: string, patch: Partial<CraftedTool>): void;
@@ -39,21 +33,8 @@ export interface CraftStore {
   search(query: string, limit?: number): CraftedTool[];
 }
 
-/**
- * One rollout: the proposal and what it cost. Code is parsed centrally.
- *
- * `usage` is what the provider that served the branch reported. A branch runs
- * where the mission ledger is not: its own facet on cf, its own child process
- * on the CLI, each resolving its own model. Nothing the fork seam wrapped
- * around `rt.llm` sees these calls, so the spend has to travel back with the
- * result — the engine debits it at the seam that already interposes between
- * every rollout (mcts/engine.ts).
- *
- * Optional, and free to report only some of its fields, because a backend that
- * cannot measure a call meters nothing rather than guessing — and because a
- * branch is a single call either way: the engine still refuses to open the next
- * expansion once the ledger is spent.
- */
+/** One rollout and its cost. A branch runs outside the mission ledger, so `usage` travels back
+ *  for the engine to debit; a backend that cannot measure omits it rather than guessing. */
 export interface BranchExploration {
   text: string;
   usage?: Usage;
@@ -65,69 +46,39 @@ export interface BranchReflection {
   usage?: Usage;
 }
 
-/** Everything one rollout is given: the parent's history, its crafted tools,
- *  what it may run, the mode it inherits and the angles its siblings took. */
 export interface BranchExplorationRequest {
   priorHistory: Array<{ role: string; content: string }>;
   craftedTools: CraftedTool[];
   /** What the parent executor can run, in preference order. */
   languages: readonly [string, ...string[]];
-  /** Trusted parent mode. A branch cannot select or downgrade this value. */
+  /** Trusted parent mode; a branch cannot select or downgrade it. */
   mode: WorkMode;
-  /** Distinct solution angles assigned to this branch's siblings in the same
-   *  expansion. Threaded so each branch proposes something DISTINCT (MCTS
-   *  branches explore in parallel and never see a sibling's output). Optional
-   *  so backends/tests that don't enforce diversity still satisfy the type. */
+  /** Angles assigned to siblings in the same expansion; parallel branches never see each
+   *  other's output, so this is how each proposes something distinct. */
   siblings?: readonly string[];
 }
 
-/**
- * A branch EXPLORES and reflects; it deliberately cannot score itself.
- * Scoring happens at the engine seam (mcts/engine.ts) through the grounded
- * evaluator, so no backend can reintroduce same-model self-rating.
- */
+/** A branch explores and reflects but cannot score itself; the engine scores through the
+ *  grounded evaluator, so no backend can reintroduce same-model self-rating. */
 export interface BranchHandle {
   explore(request: BranchExplorationRequest): Promise<BranchExploration>;
-  /**
-   * Write a post-mortem on this branch's own attempt.
-   *
-   * `outcome` is the environment's verdict the engine already read while
-   * scoring — "the proposed code ran and FAILED: …". Omitted when nothing was
-   * executed (prose, plan mode, an unrunnable language): a branch that never
-   * reached the environment has no verdict to be shown, and inventing one
-   * would put a claim nobody observed into MEMORY.md.
-   */
+  /** `outcome` is the environment's verdict from scoring; omitted when nothing executed, so no
+   *  unobserved claim reaches MEMORY.md. */
   generateReflection(task: string, outcome?: string): Promise<BranchReflection>;
   /** Release this creation after its final reflection. Never resolve a new actor by name. */
   release(): Promise<void>;
 }
 
-/** Factory for creating isolated branch agents — injected by the backend */
 export type SpawnBranch = (branchId: string) => Promise<BranchHandle>;
 
-/**
- * MID-FLIGHT eviction of a branch agent: stop it, but KEEP whatever it has
- * recorded. Used while the branch may still be read — the search prunes a node
- * it has stopped selecting, or a cancellation cuts an in-flight expansion
- * short — so it must not destroy state.
- */
+/** Mid-flight eviction: stops the branch but keeps its recorded state, which may still be read. */
 export type AbortBranch = (branchId: string, reason?: string) => Promise<void>;
 
 export interface AgentRuntime {
   readonly actor: ActorHandle;
   storage: Storage;
-  /**
-   * Where this agent's own state lives, when that is not the same tree as
-   * `storage.vfs`. SOUL.md, the scaffold, memory and transcripts are what the
-   * agent knows about ITSELF, and a backend whose canonical file plane is a
-   * shared physical directory must not write them there: peers would overwrite
-   * each other's identity, and the user's project would carry files that are
-   * not the user's.
-   *
-   * Absent when the two coincide — a hosted workspace's plane IS its own
-   * durable filesystem — so every reader spells the fallback
-   * `agentStateVfs ?? storage.vfs` and gets the one right tree either way.
-   */
+  /** The agent's own state (SOUL.md, scaffold, memory, transcripts) when a shared file plane
+   *  must not hold it. Absent when they coincide; readers use `agentStateVfs ?? storage.vfs`. */
   agentStateVfs?: VFS;
   memory: Memory;
   executor: Executor;
@@ -135,76 +86,29 @@ export interface AgentRuntime {
   schedule: Schedule;
   identity: Identity;
   craftStore: CraftStore;
-  /** Second LLM for cross-model judging (different model from the explorer) */
+  /** Cross-model judge, a different model from the explorer. */
   judgeModel?: LLM;
-  /**
-   * The chat vendor's small tier, for MECHANICAL work — outcome
-   * classification, pathology labels, one-sentence reflections, pattern
-   * extraction, sleep-time compression. Same vendor, same credential, cheaper
-   * model, resolved through the account's `fast` tier
-   * (`MODEL_ROUTE_POLICY.fast`).
-   *
-   * Optional, and every reader falls back to `llm`, so a backend that wires
-   * none simply keeps today's behaviour. Never used for user-visible
-   * generation or for anything that authors a scaffold: those stay on the
-   * model the user chose.
-   */
+  /** Same-vendor cheap tier (`MODEL_ROUTE_POLICY.fast`) for mechanical work; readers fall back
+   *  to `llm`. Never for user-visible generation or scaffold authoring. */
   fastLlm?: LLM;
-  /**
-   * The turn reviewer's model (advisor/review.ts). Reviewing work, so its
-   * unset default is the cross-vendor pick — the same reason `judgeModel` is
-   * cross-family, applied to the one producer that speaks into the
-   * conversation.
-   *
-   * Absent when this backend wires no reviewer, and then the advisor lane does
-   * nothing whatever the owner set. That is the state the conformance manifest
-   * declares per root, so a reviewer missing on one backend is a stated fact
-   * rather than a quiet one.
-   */
+  /** Turn reviewer model; defaults cross-vendor. Absent means the advisor lane is inert, as the
+   *  conformance manifest declares per root. */
   advisorLlm?: LLM;
-  /** Platform-specific branch spawning — injected by CF or CLI backend */
   spawnBranch: SpawnBranch;
   abortBranch: AbortBranch;
-  /**
-   * Multi-executor routing. Manages named executor providers (workspace,
-   * nimbus, sandbox, device) for the codemode sandbox. Optional — core
-   * code that doesn't need multi-executor support ignores this field.
-   */
+  /** Named executor providers (workspace, nimbus, sandbox, device) for the codemode sandbox. */
   executionRouter?: ExecutionRouter;
-  /**
-   * The device fleet's transport, where a backend reaches the user's own
-   * machines through a hub (CF). Its cached snapshot is what the dynamic
-   * context reads to tell the model the fleet — every machine by name, with
-   * platform and liveness — once per step and byte-stably. Absent on a
-   * backend whose only machine is the host it runs on (the CLI), which then
-   * renders no fleet: one machine is not a roster.
-   */
+  /** Device-fleet transport (CF); its cached snapshot feeds the dynamic context's fleet roster.
+   *  Absent where the host is the only machine (CLI). */
   deviceTransport?: DeviceTransport;
-  /**
-   * POSIX shell bound to the agent's VFS. Supplied by the backend adapter
-   * (CF: createShell(sqliteFS); CLI: createShell(sqliteFS)). The `shell` tool
-   * reads this directly for workspace-scoped commands; absence degrades to
-   * router-only routing.
-   */
+  /** POSIX shell bound to the agent's VFS; absent degrades the `shell` tool to router-only. */
   shell?: Shell;
-  /**
-   * Shadow-git file checkpoints over REAL filesystems (the local exec cwd /
-   * device project dirs). Backends with host filesystem access supply an
-   * engine; absence simply means no /undo for that backend's file surface.
-   */
+  /** Shadow-git checkpoints over real filesystems; absent means no /undo for that surface. */
   checkpoints?: FileCheckpoints;
-  /**
-   * Attach or detach the interactive channel for 'gate'-tier shell approvals
-   * under 'strict' mode (the CLI's ACP `session/request_permission`).
-   * `shell` and every `executionRouter` provider read it LIVE at exec time
-   * (safety/approval-gate.ts's ShellApprovalPolicy), so attaching/detaching
-   * takes effect on the very next command — no toolset rebuild needed.
-   * Backends with no interactive surface (CF) never call this; 'strict'
-   * parks the action through the host's deferred-approval queue.
-   */
+  /** Read live at exec time, so attaching takes effect on the next command. Backends without an
+   *  interactive surface (CF) never call it; 'strict' parks via the deferred-approval queue. */
   setShellApprovalChannel?: (fn: RequestShellApproval | null) => void;
-  /** Bind the current turn's file ledger after the backend loop exists. The
-   * execution router is built first and reads this provider lazily, so native
-   * `file` and codemode `workspace.*` enforce one read-before-write history. */
+  /** Read lazily by the router, so native `file` and codemode `workspace.*` share one
+   *  read-before-write history. */
   setTurnFileLedgerProvider?: (provider: (() => TurnFileLedger | undefined) | null) => void;
 }
