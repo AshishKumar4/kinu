@@ -1,16 +1,6 @@
 /**
- * The transient half of head liveness: `head_stream` frames.
- *
- * `head_activity` fires on the DURABLE write, so it says nothing for the tens of
- * seconds a step is being produced — an open transcript sat still while its
- * branch was working, which reads exactly like a branch that has stopped. These
- * frames fill that interval and are superseded by the step itself.
- *
- * ONE FRAME IS ONE PROVIDER DELTA. So what is pinned here is preservation, not
- * batching: every delta is forwarded, in the provider's order, with its own kind,
- * and a consumer that concatenates holds the bytes the model emitted. Nothing is
- * held, so nothing can cross a step boundary — the durable row simply replaces
- * what was painted.
+ * The transient half of head liveness: `head_stream` frames, one per provider delta, forwarded in
+ * order with their kind and superseded by the durable step.
  */
 import { REAL_CLOCK } from '../src/types/clock';
 import { describe, test, expect } from 'bun:test';
@@ -27,17 +17,9 @@ import type { HeadInput, HeadStep } from '../src/heads/types';
 import { defaultLoopOrigin } from '../src/scaffold/bootstrap';
 import { hostedSeatsOver } from './helpers-actor-host';
 
-/** One published frame, as a transport would see it. */
 interface Frame { readonly kind: HeadStreamKind; readonly delta: string }
 
-/**
- * A model whose one step emits the given reasoning and prose as ONE delta each.
- *
- * `scriptedTurnModel` replays each content item as start/delta/end stream parts,
- * so this exercises the real `runChat` fullStream path — including the
- * `reasoning-delta` arm, which is the only place a head's thinking is observable
- * before the step lands.
- */
+/** One step emitting the given reasoning and prose as one delta each, through the real `runChat` fullStream. */
 function streamingHead(parts: { reasoning?: string; text: string }): LanguageModel {
   return scriptedTurnModel({
     provider: 'fake',
@@ -59,13 +41,7 @@ function streamingHead(parts: { reasoning?: string; text: string }): LanguageMod
   });
 }
 
-/**
- * A model that emits prose as MANY small deltas, the way a real provider does.
- *
- * Hand-built rather than scripted: `scriptedTurnModel` collapses each content
- * item into a single delta, and the property under test is exactly that a
- * many-delta stream survives with its bytes and its order intact.
- */
+/** Prose as many small deltas (hand-built: `scriptedTurnModel` collapses each item into one delta). */
 function chunkedHead(chunks: readonly string[]): LanguageModel {
   const model = scriptedTurnModel({
     provider: 'fake',
@@ -122,14 +98,7 @@ function headInput(): HeadInput {
   };
 }
 
-/**
- * A head's deps over a REAL hosted actor.
- *
- * The frames under test are produced inside a claimed turn on the actor's own
- * `ActorSession`, so the fixture supplies the actor that turn belongs to —
- * through the production directory, host and session `hostedSeatsOver` builds —
- * rather than a bare runtime with no turn to claim.
- */
+/** A head's deps over a real hosted actor, so the frames come from a claimed turn on its `ActorSession`. */
 async function deps(model: LanguageModel, over?: Partial<HeadInferenceDeps>): Promise<HeadInferenceDeps> {
   const { rt, testSql } = createTestRuntime();
   const seat = await hostedSeatsOver({ rt, db: testSql.db }).seat('head-stream', 'head');
@@ -151,9 +120,7 @@ describe('a running head publishes what it is producing', () => {
     ));
 
     expect(report.status).toBe('completed');
-    // TWO kinds, in the order the provider produced them. A channel that carried
-    // only prose would paint a thinking model as idle for its whole first step,
-    // which is the case the reasoning arm exists for.
+    // Both kinds in provider order: a prose-only channel paints a thinking model as idle.
     expect(frames).toEqual([
       { kind: 'reasoning', delta: 'weighing the two lexers' },
       { kind: 'text', delta: 'the lexer handles UTF-8' },
@@ -161,9 +128,7 @@ describe('a running head publishes what it is producing', () => {
   });
 
   test('every delta is forwarded verbatim and in order, however small', async () => {
-    // PRESERVATION is the contract. The frame boundary is the provider's own, so
-    // a consumer that concatenates holds the bytes the model emitted — no frame
-    // is merged with its neighbour, dropped, reordered or reshaped on the way.
+    // Preservation: no frame merged, dropped, reordered or reshaped.
     const chunks = ['The ', 'lexer ', 'handles ', 'UTF', '-8 ', 'correctly.'];
     const frames: Frame[] = [];
     await runHeadInference(headInput(), await deps(chunkedHead(chunks), {
@@ -176,8 +141,7 @@ describe('a running head publishes what it is producing', () => {
   });
 
   test('an empty delta is not a frame', async () => {
-    // The turn body drops empty text deltas before they are yielded, so a
-    // provider that emits keep-alive chunks cannot make a reader repaint nothing.
+    // Empty text deltas are dropped, so keep-alive chunks repaint nothing.
     const frames: Frame[] = [];
     await runHeadInference(headInput(), await deps(chunkedHead(['', 'answer', '']), {
       reportDelta: (kind, delta) => { frames.push({ kind, delta }); },
@@ -186,10 +150,7 @@ describe('a running head publishes what it is producing', () => {
   });
 
   test('the durable step REPLACES what the frames painted, byte for byte', async () => {
-    // The repair, and it needs no channel of its own. Nothing is held across the
-    // step boundary, so there is no tail to reconcile: the row states exactly
-    // what the frames already said, and the client swaps one for the other when
-    // `head_activity` arrives.
+    // Nothing is held across the step boundary, so the durable row states exactly what the frames said.
     const chunks = ['the lexer ', 'handles ', 'UTF-8'];
     const frames: Frame[] = [];
     const steps: HeadStep[] = [];
@@ -201,16 +162,12 @@ describe('a running head publishes what it is producing', () => {
 
     expect(steps).toHaveLength(1);
     expect(steps[0]?.text).toBe(chunks.join(''));
-    // The two channels agree exactly, which is what makes the swap invisible.
     expect(frames.map((frame) => frame.delta).join('')).toBe(steps[0]?.text);
     expect(report.summary).toBe(chunks.join(''));
   });
 
   test('the durable channel is untouched: the journal still announces its own write', async () => {
-    // The two channels are separate and stay separate. `head_activity` rides the
-    // journal write (LiveHeadJournal) and is what retires a painted frame, so a
-    // transient channel that had somehow replaced it would leave the frame on
-    // screen forever.
+    // `head_activity` stays a separate channel: it retires a painted frame.
     const database = new Database(':memory:');
     const sql = makeSql(database);
     const execRaw = makeExecRaw(database);
@@ -229,16 +186,13 @@ describe('a running head publishes what it is producing', () => {
     }));
 
     expect(frames).toHaveLength(3);
-    // One announcement per durable write, keyed by the branch whose ledger moved.
     expect(announced).toEqual([input.id]);
     expect(journal.readSteps(input.id).map((step) => step.text)).toEqual(['a settled answer']);
     database.close();
   });
 
   test('no sink wired changes nothing about the run', async () => {
-    // The frames are best effort and subordinate, so their absence must be
-    // unobservable in everything durable — which is what lets a backend with
-    // nothing watching wire none.
+    // Frames are best effort: their absence is unobservable in anything durable.
     const withSink = await runHeadInference(headInput(), await deps(
       streamingHead({ reasoning: 'thinking', text: 'answer' }),
       { reportDelta: () => { /* published nowhere */ } },

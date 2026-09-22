@@ -1,41 +1,8 @@
-// The publication seal, over every surface rather than over one table.
-//
-// This is the test that would have caught the audit's top finding. Stating the
-// seal as reachability over RECORDS-STORE writes alone leaves the
-// carry:'artifacts' route through `experience_library` outside it, called
-// publication "separate and unchanged". The Lean statement then VERIFIES and
-// the laundering channel remains, because the theorem quantifies over
-// records-store actions and the laundering channel is not one of them: a true
-// theorem about a false property. A run that breaches its floor could publish
-// cross-workspace while the leaderboard is sealed.
-//
-// So the property is stated over an ENUMERATION and this file holds two legs of
-// it, each of which fails LOUDLY rather than passing by omission:
-//
-//   1. The gate is TOTAL over PUBLICATION_SURFACES. A per-surface exception —
-//      the realistic future defect, `if (surface === 'craft') return admitted` —
-//      shrinks the refused set and goes red.
-//   2. The settle path's egress is CLASSIFIED. Every value import and every
-//      durable write in mcts/convergence.ts is declared as a publication surface
-//      or as disclosure, and the declaration is checked against the source.
-//      `maybeStoreCraftedTool` is in that file today and nobody had classified
-//      it, which is exactly how four live channels went unnoticed.
-//
-// THERE WAS A THIRD LEG and it is worth knowing what it did. It read the seal's
-// own table out of the numbered specification and asserted set-equality with
-// PUBLICATION_SURFACES in both directions, so a surface added to one and not the
-// other failed a test instead of decaying back into prose. That document is gone
-// from this repository, so the leg has no counterparty and was removed rather
-// than weakened: a comparison against a file that cannot be read is not a check.
-// *The publication seal* names PUBLICATION_SURFACES as the governed set instead
-// of restating its members, so there is no second table left to compare against
-// — PUBLICATION_SURFACES is the sole source of truth for the set, and the two
-// legs above are what hold it.
-//
-// What is deliberately NOT asserted: that each live writer calls the gate. The
-// spec does not make that wiring decision and five of the six surfaces have
-// writers with no objective in scope. Leg 2 is what keeps that gap countable.
-//
+// The publication seal over every surface, not one table. Two legs:
+//   1. The gate is total over PUBLICATION_SURFACES: a per-surface exception goes red.
+//   2. Every value import and durable write in mcts/convergence.ts is classified as a
+//      publication surface or as disclosure, checked against the source.
+// Not asserted: that each live writer calls the gate.
 // Specified by docs/EXPLORATION.md — "The publication seal" and "The records
 // store".
 import { describe, expect, test } from 'bun:test';
@@ -94,9 +61,7 @@ function callableSource(text: string): string {
 
 const DISCLOSURE = 'disclosure: ';
 
-/** A classification that is NOT a publication surface. A predicate rather than an
- *  inline `startsWith`, so narrowing does the work an assertion would otherwise
- *  have to claim. */
+/** A classification that is not a publication surface; a type guard so narrowing does the work. */
 function isDisclosure(
   verdict: PublicationSurface | `disclosure: ${string}`,
 ): verdict is `disclosure: ${string}` {
@@ -105,9 +70,7 @@ function isDisclosure(
 
 describe('the seal is total over the enumerated publication surfaces', () => {
   test('a sealed run is refused on EVERY surface, and the refused set is the whole enumeration', () => {
-    // Collected as a set rather than asserted per surface, so a surface added to
-    // the enumeration with a gate exception is a set mismatch rather than an
-    // assertion nobody wrote. Removing one gate makes this red.
+    // Collected as a set so a surface with a gate exception is a set mismatch.
     const refused = new Set<PublicationSurface>();
 
     for (const surface of PUBLICATION_SURFACES) {
@@ -144,39 +107,29 @@ describe('the seal is total over the enumerated publication surfaces', () => {
 
   test('the enumeration has no duplicates and names the cross-workspace channel', () => {
     expect(new Set(PUBLICATION_SURFACES).size).toBe(PUBLICATION_SURFACES.length);
-    // The row the audit found. Its absence is the whole defect, so it is pinned
-    // by name rather than left to the set-equality check to imply.
+    // Pinned by name: the cross-workspace channel.
     expect(PUBLICATION_SURFACES).toContain('experience_library');
   });
 });
 
 describe("the settle path's egress is classified, not discovered", () => {
-  // Every value import and every durable write in the settle path, each declared
-  // as an enumerated publication surface or as DISCLOSURE with its reason. The
-  // seal covers what carries the claim and never what carries the caveat:
-  // suppressing a diagnostic is how a breach goes silent, which is exactly what
-  // *The publication seal*'s disclosure rule is written against.
+  // The seal covers what carries the claim, never what carries the caveat: suppressing a
+  // diagnostic is how a breach goes silent.
   const EGRESS = {
-    // Publication. The winner's approach and its score, vector-indexed, so it is
-    // an input to future inference rather than an artifact a human looks up.
+    // Vector-indexed: an input to future inference.
     'memory.append': 'memory',
     'memory.index': 'memory',
-    // Publication, and the sharpest row: admitted by `winner.value > 0.8`, and a
-    // breach on a minimise objective measures suspiciously cheap, which
-    // normalises HIGH. A breach makes this MORE likely to fire, not less.
+    // A breach on a minimise objective normalises high, so a breach makes this more likely to fire.
     maybeStoreCraftedTool: 'craft',
-    // Publication into a different subsystem's control loop: scaffold error-rate
-    // monitoring reads it, so a laundered score can move a scaffold decision.
+    // Scaffold error-rate monitoring reads it, so a laundered score can move a scaffold decision.
     recordTaskOutcome: 'task_history',
     'INSERT INTO task_history': 'task_history',
-    // Not publication. Turn-scoped and purged when unclaimed, so no later run
-    // can read it (mcts/takes.ts).
+    // Turn-scoped and purged when unclaimed (mcts/takes.ts).
     captureAlternateTakes: 'disclosure: turn-scoped near-ties, purged when unclaimed',
-    // Not publication. The tree is run-keyed history and it is what a
-    // FloorRederivation re-evaluates; sealing it would destroy the recovery path.
+    // FloorRederivation re-evaluates the tree; sealing it would destroy the recovery path.
     abandonSearchTree: 'disclosure: run-keyed tree status, the re-evaluation input',
     'UPDATE search_nodes': 'disclosure: run-keyed tree status, the re-evaluation input',
-    // Reads and pure helpers. Declared so a NEW import cannot arrive unclassified.
+    // Declared so a new import cannot arrive unclassified.
     isCraftable: 'disclosure: predicate, writes nothing',
     findNearTiedRivals: 'disclosure: read over the population',
     selectWinnerByTest: 'disclosure: selection, writes nothing durable',
@@ -186,17 +139,10 @@ describe("the settle path's egress is classified, not discovered", () => {
     isoDate: 'disclosure: pure formatting',
   } satisfies Record<string, PublicationSurface | `disclosure: ${string}`>;
 
-  /** The settle path's entry point. Its own direct writes are collected below as
-   *  table and `memory.*` signatures; it is not an egress of itself. */
+  /** The settle entry point; its direct writes are collected as signatures, not as itself. */
   const ENTRY = 'converge';
 
-  /** What the settle path can actually reach: its value imports, the local
-   *  helpers that write, and the tables it writes directly. Read from the source
-   *  so the declaration cannot drift away from the code.
-   *
-   *  Local helpers matter as much as imports here — `recordTaskOutcome` and
-   *  `abandonSearchTree` are defined in this file, and a census that only read
-   *  imports would have missed `task_history` entirely. */
+  /** Value imports, writing local helpers, and directly written tables, read from source. */
   function observedEgress(): string[] {
     const source = read(SETTLE);
     const found = new Set<string>();
@@ -256,9 +202,7 @@ describe("the settle path's egress is classified, not discovered", () => {
       if (!isDisclosure(verdict)) reached.add(verdict);
     }
 
-    // Three of the six, and every one of them is live code today: the audit
-    // named only `experience_library`, which the settle path does not even reach
-    // directly. Absence here is the defect, so the set is asserted whole.
+    // Asserted whole: absence here is the defect.
     expect([...reached].sort()).toEqual(['craft', 'memory', 'task_history']);
 
     for (const surface of reached) {
@@ -278,8 +222,7 @@ describe("the settle path's egress is classified, not discovered", () => {
 describe('a seal that voids the carry axis says so, with a count', () => {
   test('PUBLISHING_CARRIES is a subset of the axis it narrows', () => {
     for (const carry of PUBLISHING_CARRIES) expect(SWARM_CARRIES).toContain(carry);
-    // The two that publish, and only those: 'none' and 'reflections' write
-    // nothing a later run reads, so a seal cannot void them.
+    // 'none' and 'reflections' write nothing a later run reads.
     expect([...PUBLISHING_CARRIES].sort()).toEqual(['artifacts', 'elites']);
   });
 
@@ -294,10 +237,7 @@ describe('a seal that voids the carry axis says so, with a count', () => {
   });
 
   test('zero suppressed cells is still a suppression — absent is not zero', () => {
-    // Monotone displacement over a cell's best — *The records store* — is why the
-    // count matters at all: a suppressed elite means the NEXT run's carry starts
-    // from a worse one. A run that reached no new best still had its axis voided,
-    // and null would hide that.
+    // A suppressed elite means the next run's carry starts from a worse one; null would hide it.
     const disclosed = carrySuppression(sealed, 'artifacts', 0);
     expect(disclosed).not.toBeNull();
     expect(disclosed?.suppressedCells).toBe(0);

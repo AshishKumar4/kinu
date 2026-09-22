@@ -103,10 +103,8 @@ describe('Pareto advance evidence', () => {
 
 describe('Pareto advance with a publishing carry', () => {
   test('both entry points refuse elites and artifacts as bad_input before anything spends', () => {
-    // A Pareto frontier lives in node evidence as a vector; the records store only
-    // persists scalars, so a publishing carry under advance:"pareto" could never land.
-    // Both gates refuse the tuple outright — the tool surface through `swarmValidity`
-    // and an in-process caller through `regionRefusal`, which `runSwarm` checks first.
+    // The records store persists scalars only, so a publishing carry under advance:"pareto"
+    // is refused by both `swarmValidity` and `regionRefusal`.
     for (const carry of [{ kind: 'elites' } as const, { kind: 'artifacts', threshold: 0.8 } as const]) {
       const call = resolveSwarm({
         preset: 'custom',

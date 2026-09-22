@@ -1,6 +1,4 @@
-/**
- * Unit tests: convergence + BUG-4 all-low-score handling.
- */
+// Convergence and all-low-score handling.
 
 import { describe, test, expect } from 'bun:test';
 import { createTestRuntime, createMockSession } from './helpers';
@@ -10,7 +8,6 @@ import { initScaffoldTables } from '../src/scaffold/schemas';
 import { initAlternateTakesTable, latestAlternateTakeSet, listAlternateTakeSets } from '../src/mcts/takes';
 import type { Executor } from '../src/types/primitives';
 
-/** Code containing FAIL_MARKER fails with `error`, everything else passes. */
 function markerExecutor(error = 'discriminating test failed'): Executor {
   return {
     languages: ['javascript'],
@@ -45,7 +42,6 @@ describe('Convergence', () => {
     expect(result.converged).toBe(true);
     expect(result.winnerId).toBe('winner');
     expect(result.winnerValue).toBeCloseTo(0.85, 2);
-    // A converged result carries no non-convergence reason.
     expect(result.reason).toBeUndefined();
   });
 
@@ -54,7 +50,6 @@ describe('Convergence', () => {
     initSearchTables(rt.storage.execRaw);
     const session = createMockSession();
 
-    // All nodes have value < MIN_ACCEPTABLE_SCORE (0.3)
     void rt.storage.sql`INSERT INTO search_nodes (actor_id, root_id, id, task, value, visits, status)
         VALUES (${rt.actor.actorId}, 'r', 'low1', 'test', 0.15, 3, 'open')`;
     void rt.storage.sql`INSERT INTO search_nodes (actor_id, root_id, id, task, value, visits, status)
@@ -62,21 +57,17 @@ describe('Convergence', () => {
 
     const result = await converge(rt, session, 'r');
     expect(result.converged).toBe(false);
-    // The outcome is CLASSIFIED, not just false: the loop ran and nothing
-    // cleared the floor.
+    // Classified, not just false: the loop ran and nothing cleared the floor.
     expect(result.reason).toBe('no_acceptable_candidate');
     expect(result.trajectory).toHaveLength(0);
 
-    // Failed search closes its open nodes so the next task starts fresh.
     const statuses = rt.storage.sql<{ id: string; status: string }>`
         SELECT id, status FROM search_nodes
         WHERE actor_id = ${rt.actor.actorId} ORDER BY id`;
 
     expect(statuses.map((r) => r.status)).toEqual(['failed', 'failed']);
 
-    // And the close fabricates nothing: a search with no acceptable candidate
-    // has NO terminal row — a terminal node would report a winner the floor
-    // refused, and every read model keys "did this run land an answer" on it.
+    // No terminal row: read models key "did this run land an answer" on it.
     const terminals = rt.storage.sql<{ id: string }>`
         SELECT id FROM search_nodes
         WHERE actor_id = ${rt.actor.actorId} AND status = 'terminal'`;
@@ -84,10 +75,7 @@ describe('Convergence', () => {
     expect(terminals).toHaveLength(0);
   });
 
-  // With no value signal every node carries the same number, so `ORDER BY value
-  // DESC` degenerates to row order: the "winner" is whichever row came back
-  // first, and a shared value clearing minAcceptableScore is no reason to hand
-  // it over as a converged answer.
+  // With no value signal, `ORDER BY value DESC` is row order, so a shared value is no winner.
   test('two DISTINCT approaches scoring identically is not a convergence', async () => {
     const { rt } = createTestRuntime();
     initSearchTables(rt.storage.execRaw);
@@ -102,13 +90,12 @@ describe('Convergence', () => {
         VALUES (${rt.actor.actorId}, 'r', 'b', 'r', 'test task', 0.6, 1, 'open', 1, 'approach B')`;
 
     const result = await converge(rt, session, 'r', { minAcceptable: 0.3, takesEpsilon: 0.1, mode: 'plan' });
-    // 0.6 clears minAcceptableScore, so the score alone would ship it as a winner.
+    // 0.6 clears minAcceptableScore, so the score alone would ship it.
     expect(result.winnerValue).toBeCloseTo(0.6, 10);
     expect(result.converged).toBe(false);
     expect(result.reason).toBe('undifferentiated');
     expect(result.trajectory).toHaveLength(0);
 
-    // Zero signal is also no acceptance: nothing terminal may be fabricated.
     const terminals = rt.storage.sql<{ id: string }>`
         SELECT id FROM search_nodes
         WHERE actor_id = ${rt.actor.actorId} AND status = 'terminal'`;
@@ -116,9 +103,7 @@ describe('Convergence', () => {
     expect(terminals).toHaveLength(0);
   });
 
-  // The guard must not fire on a real result. A genuine ordering — even a very
-  // close one — is what the search is FOR, and the near-tie itself is what the
-  // alternate-takes ledger records rather than a reason to refuse.
+  // A genuine near-tie is recorded as alternate takes, not refused.
   test('a near-tie that is not an exact tie still converges', async () => {
     const { rt } = createTestRuntime();
     initSearchTables(rt.storage.execRaw);
@@ -174,12 +159,10 @@ describe('Convergence', () => {
 
     await converge(rt, session, 'r');
 
-    // The set snapshots the choice the close erased: the rival is now pruned…
     const rival = rt.storage.sql<{ status: string }>`SELECT status FROM search_nodes
       WHERE actor_id = ${rt.actor.actorId} AND id = 'rival'`[0];
 
     expect(rival.status).toBe('pruned');
-    // …but lives on as a comparable take next to the winner.
     const set = latestAlternateTakeSet(rt.storage.sql, rt.actor);
 
     if (!set) throw new Error('expected alternate-takes set');
@@ -189,8 +172,7 @@ describe('Convergence', () => {
 
   test('DO-NOW #3: a near-tied candidate that PASSES the discriminating test wins over the marginally-higher-value argmax that FAILS it', async () => {
     const { rt } = createTestRuntime({
-      // generateAssertionSuite asks for a verification harness — return a js block
-      // so the discriminating test actually runs.
+      // Return a js block so the discriminating test actually runs.
       llmResponses: { 'verification harness': '```js\ncheck();\n```' },
     });
 
@@ -200,16 +182,15 @@ describe('Convergence', () => {
 
     rt.executor = markerExecutor();
 
-    // argmax winner: marginally higher value but its code FAILS the test.
+    // Argmax winner: marginally higher value, but its code fails.
     void rt.storage.sql`INSERT INTO search_nodes (actor_id, root_id, id, task, value, visits, depth, status, observation, code_used, code_language)
         VALUES (${rt.actor.actorId}, 'r', 'argmax', 'test', 0.85, 6, 1, 'open', 'plan A', 'const x = FAIL_MARKER;', 'javascript')`;
-    // near-tied rival (within takesEpsilon=0.1): lower value but its code PASSES.
+    // Near-tied rival (within takesEpsilon=0.1): lower value, but its code passes.
     void rt.storage.sql`INSERT INTO search_nodes (actor_id, root_id, id, task, value, visits, depth, status, observation, code_used, code_language)
         VALUES (${rt.actor.actorId}, 'r', 'passer', 'test', 0.80, 5, 1, 'open', 'plan B', 'const ok = 1;', 'javascript')`;
 
     const result = await converge(rt, session, 'r');
 
-    // The test-passer wins regardless of the marginal value gap.
     expect(result.winnerId).toBe('passer');
 
     const passer = rt.storage.sql<{ status: string }>`SELECT status FROM search_nodes
@@ -232,7 +213,6 @@ describe('Convergence', () => {
     const session = createMockSession();
     rt.executor = markerExecutor('failed');
 
-    // Both pass; argmax has higher value → it stays the winner.
     void rt.storage.sql`INSERT INTO search_nodes (actor_id, root_id, id, task, value, visits, depth, status, observation, code_used, code_language)
         VALUES (${rt.actor.actorId}, 'r', 'argmax', 'test', 0.85, 6, 1, 'open', 'plan A', 'const a = 1;', 'javascript')`;
     void rt.storage.sql`INSERT INTO search_nodes (actor_id, root_id, id, task, value, visits, depth, status, observation, code_used, code_language)
@@ -276,11 +256,7 @@ describe('Convergence', () => {
   });
 });
 
-/**
- * The discriminating suite measures runnable code. A winner with none in the
- * group's language cannot lose to it, and a judge failure keeps the argmax
- * instead of failing the search the suite was meant to settle.
- */
+/** A winner with no code in the group's language cannot lose to the suite; a judge failure keeps the argmax. */
 describe('DO-NOW #3: test-selection fallback keeps the argmax winner', () => {
   test('a prose winner with two code rivals inside epsilon stays the winner', async () => {
     const { rt } = createTestRuntime({
@@ -292,9 +268,7 @@ describe('DO-NOW #3: test-selection fallback keeps the argmax winner', () => {
     const session = createMockSession();
     rt.executor = markerExecutor();
 
-    // Prose argmax winner (no code), two code rivals inside takesEpsilon.
-    // The passing rival never ran against the winner — promoting it would be
-    // a win on a suite the winner never saw.
+    // Prose winner, two code rivals within takesEpsilon: the winner never ran the suite, so no promotion.
     void rt.storage.sql`INSERT INTO search_nodes (actor_id, root_id, id, task, value, visits, depth, status, observation, code_used, code_language)
         VALUES (${rt.actor.actorId}, 'r', 'prose', 'test', 0.85, 6, 1, 'open', 'prose plan', ${null}, ${null})`;
     void rt.storage.sql`INSERT INTO search_nodes (actor_id, root_id, id, task, value, visits, depth, status, observation, code_used, code_language)
@@ -336,8 +310,7 @@ describe('DO-NOW #3: test-selection fallback keeps the argmax winner', () => {
     void rt.storage.sql`INSERT INTO search_nodes (actor_id, root_id, id, task, value, visits, depth, status, observation, code_used, code_language)
         VALUES (${rt.actor.actorId}, 'r', 'rival', 'test', 0.80, 5, 1, 'open', 'plan B', 'const b = 2;', 'javascript')`;
 
-    // `diagnostics` has no injection seam this far inside core, so the
-    // recorded fallback is read where it lands (console.error).
+    // `diagnostics` has no seam here, so the fallback is read from console.error.
     const original = console.error;
     const lines: string[] = [];
     console.error = (...args: unknown[]) => { lines.push(String(args[0])); };

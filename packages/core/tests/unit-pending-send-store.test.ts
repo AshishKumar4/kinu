@@ -1,13 +1,4 @@
-/**
- * PendingSendStore — the ONE pending-send ledger both backends sit over.
- *
- * What is pinned here is the contract a backend composes, not the SQL: a
- * reservation exists before the client hears the send was taken, a retirement
- * spends the row and its attachments together, and `sweepDead`'s NULL
- * semantics keep a backend that writes idle-queued rows from sweeping its own
- * queue as orphans. Each assertion names the observable a restart or a
- * reconnect would read.
- */
+/** PendingSendStore: the pending-send ledger both backends sit over. */
 
 import { describe, expect, test } from 'bun:test';
 import { Database } from 'bun:sqlite';
@@ -53,8 +44,7 @@ describe('PendingSendStore — the reservation', () => {
 
     expect(sends.restore()).toEqual([]);
     expect(sends.files('s-1')).toEqual([]);
-    // The other actor's same-named steer is untouched: the id is an actor's
-    // to spend, never a workspace's.
+    // The id is an actor's to spend.
     expect(other.restore()).toEqual([
       { id: 's-1', turnId: 'turn-9', mode: 'plan', text: 'theirs' },
     ]);
@@ -87,8 +77,7 @@ describe('PendingSendStore — the reads a restart composes', () => {
     sends.reserve({ id: 's-dead', turnId: 'turn-dead', mode: 'build', text: 'turn is gone' });
     sends.reserve({ id: 's-idle', turnId: null, mode: 'build', text: 'queued, nobody owns it' });
 
-    // NULL turn_id <> 'turn-live' is NULL, not TRUE: the idle-queued row must
-    // not be swept as an orphan — it is the queue's record, not a dead turn's.
+    // NULL turn_id <> 'turn-live' is NULL: the idle-queued row is not an orphan.
     expect(sends.sweepDead('turn-live').map((row) => row.id)).toEqual(['s-dead']);
   });
 
@@ -97,15 +86,12 @@ describe('PendingSendStore — the reads a restart composes', () => {
     const sends = store('actor-a');
     sends.reserve({ id: 's-1', turnId: 'turn-1', mode: 'plan', text: 'original words', files: [FILE] });
 
-    // A leftover rerun's id already carries its row: re-admission binds nothing.
     sends.ensureReserved({ id: 's-1', turnId: 'turn-rerun', mode: 'build', text: 'merged words' });
     expect(sends.restore()).toEqual([
       { id: 's-1', turnId: 'turn-1', mode: 'plan', text: 'original words' },
     ]);
     expect(sends.files('s-1')).toEqual([FILE]);
 
-    // An id with no row gets one bound to the admitting turn — the send the
-    // session acknowledged before the queue could admit it.
     sends.ensureReserved({ id: 's-2', turnId: 'turn-rerun', mode: 'build', text: 'merged words' });
     expect(sends.restore().map((row) => row.id)).toEqual(['s-1', 's-2']);
     expect(sends.forTurn('turn-rerun').map((row) => row.id)).toEqual(['s-2']);

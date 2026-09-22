@@ -1,6 +1,4 @@
-// AgentOrchestrator — the backend-agnostic per-turn logic (re-arch P3). Verifies
-// the session-evolution cadence + the event→turn reactor (drain-then-stop) that
-// were extracted from the cf-backend OrchestratorAgent's onChatResponse.
+// AgentOrchestrator: evolution cadence and the event→turn reactor.
 import { describe, test, expect } from 'bun:test';
 import { Database } from 'bun:sqlite';
 import { createTestActors, createTestActorsOver, createTestSql } from '@kinu.run/test-utils';
@@ -35,19 +33,13 @@ function webhook(deliveryId: string, body: JsonObject = { x: 1 }): IngressDescri
   };
 }
 
-/** A stand-in engine over a REAL in-memory session window — the store the
- *  engine owns in production, so the cadence is exercised against the durable
- *  buffer rather than orchestrator-instance state. */
 function fakeEngine(opts?: { enabled?: boolean }) {
   const reviews: Array<{ turn: CompletedTurn; followup: string | null }> = [];
   const sessions: number[] = [];
-  /** One entry per cadence pass that ran the promotion gate's queued trials. */
   const trials: number[] = [];
   const { sql, execRaw } = createTestSql();
   initCompletedTurnTable(execRaw);
   const store = createCompletedTurnStore(sql, createTestActors(sql, execRaw).main);
-  // The crafted-tool ledger the engine owns in production, over a real store,
-  // so the in-episode clock is exercised through the same seam.
   const crafted: string[] = [];
   const observed: Array<{ names: string[]; quality: number }> = [];
 
@@ -75,9 +67,7 @@ function fakeEngine(opts?: { enabled?: boolean }) {
     onSessionComplete: async (s: { turns: CompletedTurn[] }) => { sessions.push(s.turns.length); },
     runDueShadowTrials: async () => { trials.push(Date.now()); },
     recordRecovery: () => {},
-    // The real store, so a deferral is exercised against the durable row and
-    // the drain replays through the SAME reviewTurn above — exactly the
-    // production wiring, settle included.
+    // Real store, so deferral and drain run the production path.
     deferTurnReview: (turn, followup, review) => store.enqueueReview(turn, followup, review),
     runDeferredTurnReviews: async () => {
       const taken = store.takeQueuedReviews(5);
@@ -119,8 +109,6 @@ function fakeHost(opts?: { activeTurn?: boolean }) {
   return { host, enqueued, broadcasts, timers };
 }
 
-/** What a live turn actually absorbed, read back through the seam the backend
- *  reads: one step boundary, then settle. */
 async function absorb(orch: AgentOrchestrator): Promise<readonly AgentSignal[]> {
   const extension = orch.turnExtension;
 
@@ -143,9 +131,7 @@ describe('AgentOrchestrator.recordTurn — session cadence', () => {
 
     for (let i = 0; i < 12; i++) {
       orch.recordTurn(aTurn(i), 'conversation');
-      // The pass claims the window and settles it only once it has run, so a
-      // second pass cannot start while the first is live. Real turns are
-      // minutes apart; the test just lets the pass finish.
+      // The pass holds the window until it has run; let it finish.
       await orch.runDueSessionEvolution();
     }
 
@@ -153,9 +139,7 @@ describe('AgentOrchestrator.recordTurn — session cadence', () => {
     expect(orch.sessionTurnIndex).toBe(2);    // turns 11 and 12 left 2 in the new window
   });
 
-  // The turn's review runs later, and often elsewhere: at the next user message,
-  // or drained from a durable row by a different process. The governor's active
-  // scope is gone by then, so the answer has to be carried by the turn.
+  // The review runs after the governor's scope is gone; the turn must carry it.
   test('the turn carries the mission scope active when it ended, and an unscoped turn carries none', async () => {
     const { engine, reviews } = fakeEngine();
     const { host } = fakeHost();
@@ -172,13 +156,9 @@ describe('AgentOrchestrator.recordTurn — session cadence', () => {
     orch.recordTurn(aTurn(1, 'programmatic'), 'independent_task');
     orch.beginTurn(Date.now(), {});
     orch.recordTurn(aTurn(2, 'programmatic'), 'independent_task');
-    // The recording writes the OBLIGATION with the turn; the durable lane is what
-    // runs it. So the scope is asserted where it now has to survive to — through
-    // storage and out of a claim — rather than off an inline dispatch.
     await orch.settleEvolution();
 
-    // Absent, not `[]`, on the unscoped turn: a review must never be handed a
-    // label, and an empty one is a label-shaped thing to reason about.
+    // Absent, not `[]`: an unscoped review must never get a label.
     expect(reviews.map((r) => [r.turn.turnId, r.turn.missionLabels]))
       .toEqual([['m1', ['checkout-fixes']], ['m2', undefined]]);
   });
@@ -191,11 +171,10 @@ describe('AgentOrchestrator.recordTurn — session cadence', () => {
     for (let i = 0; i < 2; i++) orch.recordTurn(aTurn(i), 'conversation');   // below the interval
     expect(sessions).toEqual([]);
     await orch.settleEvolution();
-    // No session is manufactured out of a 2-turn window, and the last turn's
-    // follow-up may still arrive — so nothing is graded on no evidence.
+    // The last turn's follow-up may still arrive.
     expect(sessions).toEqual([]);
     expect(reviews).toEqual([]);
-    expect(orch.sessionTurnIndex).toBe(2);                    // the window carries over
+    expect(orch.sessionTurnIndex).toBe(2);
   });
 
   test('settleEvolution waits for the evolution the run dispatched', async () => {
@@ -212,12 +191,9 @@ describe('AgentOrchestrator.recordTurn — session cadence', () => {
     const orch = new AgentOrchestrator({ host, engine, eventLog: newEventLog() });
 
     for (let i = 0; i < 4; i++) orch.recordTurn(aTurn(i), 'conversation');
-    orch.recordTurn(aTurn(4), 'conversation');   // reaches the interval → dispatches the pass
-    // The pass recordTurn just started, not a second one.
+    orch.recordTurn(aTurn(4), 'conversation');
     const pass = orch.runDueSessionEvolution();
-    expect(sessions).toEqual([]);            // still in flight
-    // The turn lane settles without waiting for the cadence lane — that is the
-    // whole point: one exec invocation must not own a lifetime cycle's clock.
+    expect(sessions).toEqual([]);
     await orch.settleEvolution();
     expect(sessions).toEqual([]);
     release();
@@ -233,10 +209,9 @@ describe('AgentOrchestrator.recordTurn — session cadence', () => {
 
     for (let i = 0; i < 5; i++) oneShot.recordTurn(aTurn(i), 'independent_task');
     await oneShot.settleEvolution();
-    expect(sessions).toEqual([]);                    // nothing ran in the exec process
-    expect(oneShot.sessionTurnIndex).toBe(5);        // and nothing was consumed
+    expect(sessions).toEqual([]);
+    expect(oneShot.sessionTurnIndex).toBe(5);
 
-    // The daemon (a host that can afford the work) picks up the SAME turns.
     const daemon = new AgentOrchestrator({ host, engine, eventLog });
     await daemon.runDueSessionEvolution();
     expect(sessions).toEqual([5]);
@@ -246,23 +221,19 @@ describe('AgentOrchestrator.recordTurn — session cadence', () => {
   test('a one-shot host DEFERS the turn review — settle waits on nothing, a durable row is owed', async () => {
     const { engine, reviews, store } = fakeEngine();
     const { host } = fakeHost();
-    // A review that never finishes: on a host that joins the lane this is the
-    // whole join, which is exactly why the exec process must not START the
-    // work it cannot afford.
+    // The exec process must not start work it cannot afford.
     engine.reviewTurn = () => new Promise<void>(() => {});
     const orch = new AgentOrchestrator({ host, engine, eventLog: newEventLog(), oneShot: true });
     orch.recordTurn(aTurn(0), 'independent_task');
 
     await orch.settleEvolution();
-    expect(reviews).toEqual([]);                        // nothing ran in the exec process
-    expect(store.countQueuedReviews()).toBe(1);        // and the review is owed, durably
+    expect(reviews).toEqual([]);
+    expect(store.countQueuedReviews()).toBe(1);
   });
 
   test('an interactive host JOINS the inline review until it settles — no elapsed bound', async () => {
     const { engine, store } = fakeEngine();
     const { host } = fakeHost();
-    // The review resolves only when the test releases it; settleEvolution
-    // must still be pending while it runs, then return only once it has run.
     const gate = Promise.withResolvers<void>();
     let reviewed = false;
     engine.reviewTurn = async () => { await gate.promise; reviewed = true; };
@@ -273,14 +244,12 @@ describe('AgentOrchestrator.recordTurn — session cadence', () => {
     let settled = false;
     const settle = orch.settleEvolution().then(() => { settled = true; });
     await Promise.resolve();
-    // JOINED, not abandoned at some bound: the pass is still pending while the
-    // review it claimed is still running.
     expect(settled).toBe(false);
 
     gate.resolve();
     await settle;
     expect(reviewed).toBe(true);
-    expect(store.countQueuedReviews()).toBe(0);   // and the obligation is discharged
+    expect(store.countQueuedReviews()).toBe(0);
   });
 
   test('the deferred review is re-driven at the next open, with the same inputs', async () => {
@@ -292,14 +261,12 @@ describe('AgentOrchestrator.recordTurn — session cadence', () => {
     await exec.settleEvolution();
     expect(reviews).toEqual([]);
 
-    // The next host that can afford the work — the daemon or an interactive
-    // session — drains it through the SAME reviewTurn path.
     const next = new AgentOrchestrator({ host, engine, eventLog });
     expect(await next.runDeferredTurnReviews()).toEqual({ reviewed: 1, refused: [] });
     expect(reviews).toHaveLength(1);
     expect(reviews[0].turn.turnId).toBe('m7');
     expect(reviews[0].followup).toBeNull();
-    expect(store.countQueuedReviews()).toBe(0);       // retired once it ran
+    expect(store.countQueuedReviews()).toBe(0);
   });
 
   test('a one-shot host does not re-drive either — that would only move the cost', async () => {
@@ -311,7 +278,7 @@ describe('AgentOrchestrator.recordTurn — session cadence', () => {
     const nextExec = new AgentOrchestrator({ host, engine, eventLog, oneShot: true });
     expect(await nextExec.runDeferredTurnReviews()).toEqual({ reviewed: 0, refused: [] });
     expect(reviews).toEqual([]);
-    expect(store.countQueuedReviews()).toBe(1);       // still owed, for a host that can pay
+    expect(store.countQueuedReviews()).toBe(1);
   });
 
   test('a deferred review carries the follow-up that grades it, not a re-guess', async () => {
@@ -319,10 +286,9 @@ describe('AgentOrchestrator.recordTurn — session cadence', () => {
     const { host } = fakeHost();
     const eventLog = newEventLog();
     const chat = new AgentOrchestrator({ host, engine, eventLog });
-    chat.recordTurn(aTurn(1), 'conversation');          // parked awaiting a follow-up
+    chat.recordTurn(aTurn(1), 'conversation');
 
-    // A LATER one-shot process picks up that parked turn. Its own prompt is a
-    // different task, so the review is deferred with no follow-up …
+    // A later one-shot process with a different task.
     const exec = new AgentOrchestrator({ host, engine, eventLog, oneShot: true });
     exec.observeUserTurn('unrelated next task', 'independent_task');
     await exec.settleEvolution();
@@ -330,17 +296,14 @@ describe('AgentOrchestrator.recordTurn — session cadence', () => {
     const next = new AgentOrchestrator({ host, engine, eventLog });
     await next.runDeferredTurnReviews();
     expect(reviews).toHaveLength(1);
-    expect(reviews[0].followup).toBeNull();             // … and it stays absent
+    expect(reviews[0].followup).toBeNull();
   });
 
   test('settleEvolution JOINS the turn lane until it settles — background work is never abandoned by the clock', async () => {
     const { engine } = fakeEngine();
     const { host } = fakeHost();
     const orch = new AgentOrchestrator({ host, engine, eventLog: newEventLog() });
-    // Work that finishes only when released: settleEvolution stays pending
-    // for as long as the work runs, then completes. The old bound ABANDONED
-    // this lane and logged `evolution.settle_timed_out` — honest evolution
-    // work killed by a clock.
+    // Evolution work is never abandoned on a clock.
     const gate = Promise.withResolvers<void>();
     let done = false;
     orch.track(gate.promise.then(() => { done = true; }), 'Turn review');
@@ -349,7 +312,7 @@ describe('AgentOrchestrator.recordTurn — session cadence', () => {
     const settle = orch.settleEvolution().then(() => { settled = true; });
     await Promise.resolve();
     expect(done).toBe(false);
-    expect(settled).toBe(false);   // still joined while the work runs
+    expect(settled).toBe(false);
 
     gate.resolve();
     await settle;
@@ -365,17 +328,12 @@ describe('AgentOrchestrator.recordTurn — session cadence', () => {
     orch.observeUserTurn('anything', 'conversation');
     expect(sessions).toEqual([]);
     expect(reviews).toEqual([]);
-    expect(orch.sessionTurnIndex).toBe(0);           // nothing for a later host to evolve
+    expect(orch.sessionTurnIndex).toBe(0);
   });
 });
 
 describe('AgentOrchestrator — the settle’s claimable parts', () => {
-  // The settle runs as a ROSTER of separately claimed rows, so each rule it
-  // once applied inside one call is asked on its own. The lane verdict is what
-  // both backends ask from inside the `improvement_lanes` row; the roster's
-  // completed-Build gate is the same rule spelled where the rows are declared.
-  // Two spellings that could disagree is the drift this pins: the CLI once
-  // queued shadow trials for turns that FAILED while the cloud spine did not.
+  // The lane verdict and the roster's completed-Build gate are one rule and must agree.
   test('the lane verdict and the roster’s own gate agree on every (status, mode)', () => {
     for (const workMode of ['build', 'plan'] as const) {
       for (const status of RUN_END_REASONS) {
@@ -386,8 +344,6 @@ describe('AgentOrchestrator — the settle’s claimable parts', () => {
 
         const predicate = orch.improvementLanesOpen(status);
 
-        // The roster's own gate, read through a row only a completed Build turn
-        // earns: everything after `!completed || workMode === 'plan'` is behind it.
         const owed = declareTerminalRoster({
           messageId: 'answer-1', status, workMode, continuity: 'conversation',
           completed: status === 'completed', userText: 'q', assistantText: 'a',
@@ -398,17 +354,14 @@ describe('AgentOrchestrator — the settle’s claimable parts', () => {
 
         expect({ workMode, status, open: rosterGate })
           .toEqual({ workMode, status, open: predicate });
-        // And the rule itself, so an agreeing pair of WRONG answers still fails.
+        // So an agreeing pair of wrong answers still fails.
         expect(predicate).toBe(status === 'completed' && workMode === 'build');
       }
     }
   });
 
   test('the roster owes the extension end, then the recording, then the drain', () => {
-    // The order the spine runs in, now that it is a roster rather than one call:
-    // the extension's effects (memory writes, compaction state) are part of the
-    // turn the review then reads, and the drain follows the recording so a woken
-    // turn cannot be graded ahead of the turn that woke it.
+    // The drain follows the recording so a woken turn is not graded first.
     const owed = declareTerminalRoster({
       messageId: 'answer-1', status: 'completed', workMode: 'build',
       continuity: 'conversation', completed: true, userText: 'q', assistantText: 'a',
@@ -424,8 +377,6 @@ describe('AgentOrchestrator — the settle’s claimable parts', () => {
   });
 
   test('a turn cut before its first token owes no effect keyed on an answer row', () => {
-    // The row is never written, so its id is empty (the roster's contract);
-    // an announcement, a credit or a reply over it would read back nothing.
     const owed = declareTerminalRoster({
       messageId: '', status: 'aborted', workMode: 'build',
       continuity: 'conversation', completed: false, userText: 'q', assistantText: '',
@@ -438,8 +389,6 @@ describe('AgentOrchestrator — the settle’s claimable parts', () => {
   });
 
   test('the drain the settled turn owes injects one turn for the pending backlog', async () => {
-    // The `event_drain` row's whole body is this method — a roster effect the
-    // settled turn owes, ordered after the recording is in.
     const { engine } = fakeEngine();
     const { host, enqueued } = fakeHost();
     const eventLog = newEventLog();
@@ -452,10 +401,7 @@ describe('AgentOrchestrator — the settle’s claimable parts', () => {
     expect(enqueued).toHaveLength(1);
   });
 
-  // Only the `'error'` arm. A user pressing Stop did not make the agent fail,
-  // and neither did a turn that stopped with work still pending — stamping
-  // either as an error would feed the outcome classifier a negative label
-  // nothing earned.
+  // Stop or pending work must not feed the outcome classifier a negative label.
   test('the recorded turn carries hadError only when the driver said error', () => {
     const recorded: Array<boolean> = [];
     const predicted: Array<boolean> = [];
@@ -465,9 +411,6 @@ describe('AgentOrchestrator — the settle’s claimable parts', () => {
       const { host } = fakeHost();
       const orch = new AgentOrchestrator({ host, engine, eventLog: newEventLog() });
       orch.beginTurn(Date.now(), {});
-      // The `turn_record` row's body is exactly this pair: the rule is asked,
-      // and its answer is what gets recorded, with nothing in between that
-      // could disagree.
       const stamped = orch.recordedTurn(status, aTurn(0));
       predicted.push(stamped.hadError);
       orch.recordTurn(stamped, 'conversation');
@@ -478,9 +421,7 @@ describe('AgentOrchestrator — the settle’s claimable parts', () => {
     expect(predicted).toEqual(recorded);
   });
 
-  // A backend that owes the recording can run it again. The window append is
-  // keyed on the identity it passes, so the cadence — which counts window rows
-  // — is not advanced twice by one turn.
+  // A replay must not advance the cadence twice.
   test('recordTurn under one id twice leaves one window row and one cadence tick', () => {
     const { engine, store } = fakeEngine();
     const { host } = fakeHost();
@@ -504,8 +445,6 @@ describe('AgentOrchestrator — the settle’s claimable parts', () => {
     expect(orch.sessionTurnIndex).toBe(2);
   });
 
-  // The drain is the third sub-effect a backend claims separately, so a replay
-  // of it must not re-deliver a batch already bound to a turn.
   test('draining twice delivers one turn — pending selects only unbound rows', async () => {
     const { engine } = fakeEngine();
     const { host, enqueued } = fakeHost();
@@ -522,9 +461,7 @@ describe('AgentOrchestrator — the settle’s claimable parts', () => {
 });
 
 describe('AgentOrchestrator — the durable session window', () => {
-  // `kinu exec` is one process per turn: a fresh orchestrator every time,
-  // against the same workspace database. The window and the pending review
-  // have to live in that database or headless usage never evolves at all.
+  // One process per turn: state must live in the workspace database.
   test('the window accumulates across orchestrator instances and fires at the interval', async () => {
     const { engine, sessions } = fakeEngine();
     const eventLog = newEventLog();
@@ -536,7 +473,6 @@ describe('AgentOrchestrator — the durable session window', () => {
       last.recordTurn(aTurn(i), 'conversation');
     }
 
-    // recordTurn detaches the cadence pass; join the one it started.
     if (!last) throw new Error('Expected the orchestrator loop to run');
     await last.runDueSessionEvolution();
     expect(sessions).toEqual([5]);
@@ -548,9 +484,7 @@ describe('AgentOrchestrator — the durable session window', () => {
     const { host } = fakeHost();
     new AgentOrchestrator({ host, engine, eventLog }).recordTurn(aTurn(0), 'conversation');
     expect(reviews).toHaveLength(0);
-    // A new process against the same workspace, continuing the SAME
-    // conversation: its user message IS turn 0's follow-up, so the turn is
-    // graded by real signal instead of a constant.
+    // Continuing the conversation: this user message is turn 0's follow-up.
     new AgentOrchestrator({ host, engine, eventLog }).observeUserTurn('that broke the build', 'conversation');
     expect(reviews).toEqual([{ turn: aTurn(0), followup: 'that broke the build' }]);
   });
@@ -561,12 +495,8 @@ describe('AgentOrchestrator — the durable session window', () => {
     const { host } = fakeHost();
     const exec = new AgentOrchestrator({ host, engine, eventLog, oneShot: true });
     exec.recordTurn(aTurn(0), 'independent_task');
-    // Reviewed with NO follow-up — the environment's verdict is the only
-    // evidence, and it is all in already — but DEFERRED rather than run here:
-    // this process is about to exit (see the exit contract).
+    // Deferred rather than run: this process is about to exit.
     expect(reviews).toEqual([]);
-    // Nothing is left waiting, so the next invocation's unrelated prompt has
-    // nothing to be misread as a verdict on.
     new AgentOrchestrator({ host, engine, eventLog, oneShot: true })
       .observeUserTurn('a completely different task', 'independent_task');
     await new AgentOrchestrator({ host, engine, eventLog }).runDeferredTurnReviews();
@@ -578,8 +508,6 @@ describe('AgentOrchestrator — the durable session window', () => {
     const eventLog = newEventLog();
     const { host } = fakeHost();
     new AgentOrchestrator({ host, engine, eventLog }).recordTurn(aTurn(0), 'conversation');
-    // `kinu exec` against the same workspace: its prompt is a fresh task
-    // written by a caller who never saw turn 0's answer.
     new AgentOrchestrator({ host, engine, eventLog, oneShot: true })
       .observeUserTurn('unrelated task', 'independent_task');
     await new AgentOrchestrator({ host, engine, eventLog }).runDeferredTurnReviews();
@@ -593,16 +521,16 @@ describe('AgentOrchestrator — turn-outcome review dispatch', () => {
     const { host } = fakeHost();
     const orch = new AgentOrchestrator({ host, engine, eventLog: newEventLog() });
 
-    orch.observeUserTurn('first message', 'conversation');   // nothing pending yet
+    orch.observeUserTurn('first message', 'conversation');
     expect(reviews).toHaveLength(0);
 
-    orch.recordTurn(aTurn(0), 'conversation');        // turn 0 completes → pending
-    expect(reviews).toHaveLength(0);                  // not reviewed at completion
+    orch.recordTurn(aTurn(0), 'conversation');
+    expect(reviews).toHaveLength(0);
 
     orch.observeUserTurn('actually, that was wrong', 'conversation');
     expect(reviews).toEqual([{ turn: aTurn(0), followup: 'actually, that was wrong' }]);
 
-    orch.observeUserTurn('another message', 'conversation'); // pending consumed
+    orch.observeUserTurn('another message', 'conversation');
     expect(reviews).toHaveLength(1);
   });
 
@@ -611,7 +539,7 @@ describe('AgentOrchestrator — turn-outcome review dispatch', () => {
     const { host } = fakeHost();
     const orch = new AgentOrchestrator({ host, engine, eventLog: newEventLog() });
 
-    orch.recordTurn(aTurn(0), 'conversation');        // user turn pending
+    orch.recordTurn(aTurn(0), 'conversation');
     orch.recordTurn(aTurn(1, 'programmatic'), 'conversation'); // reactor/job-wake turn
     expect(reviews).toEqual([{ turn: aTurn(1, 'programmatic'), followup: null }]);
 
@@ -630,21 +558,19 @@ describe('AgentOrchestrator.drainPendingEvents — the reactor (drain-then-stop)
     const orch = new AgentOrchestrator({ host, engine, eventLog: log });
 
     await orch.drainPendingEvents();
-    expect(enqueued).toHaveLength(1);                    // one batched turn
+    expect(enqueued).toHaveLength(1);
     const turn = enqueued[0];
 
     if (!turn) throw new Error('Expected one event-drain turn');
-    expect(turn.text).toContain('arrived');        // the turn-driving message
+    expect(turn.text).toContain('arrived');
     expect(turn.text).toContain('[webhook]');
-    // The injected turn is marked programmatic and carries the synthetic turn
-    // id the consumed events were bound to — the backend's reply-dispatch key.
+    // The synthetic turn id is the reply-dispatch key.
     expect(turn.metadata?.kinuEvent).toBe('event_drain');
     const drainTurnId = v.parse(v.string(), turn.metadata?.drainTurnId);
-    // d1/d2 share a body → webhook dedupe admits one event; it is bound here.
+    // d1/d2 share a body, so dedupe admits one event.
     const bound = log.query({ turn_id: drainTurnId });
     expect(bound).toHaveLength(1);
 
-    // Events are now consumed → a second drain is a no-op (self-terminates).
     await orch.drainPendingEvents();
     expect(enqueued).toHaveLength(1);
   });
@@ -665,24 +591,18 @@ describe('AgentOrchestrator.drainPendingEvents — the reactor (drain-then-stop)
 
     await orch.drainPendingEvents();
     expect(enqueued).toHaveLength(0);
-    // A second drain finds nothing: consumed events never double-deliver.
     await orch.drainPendingEvents();
     const injected = await absorb(orch);
     expect(injected).toHaveLength(1);
-    // Mid-turn rendering: the live turn is told to fold the events in, not stop.
+    // Mid-turn: fold the events in, not stop.
     expect(injected[0].stepText).toContain('arrived while you were working');
     expect(injected[0].stepText).toContain('[webhook]');
-    // The standalone rendering rides along for the re-delivery fallback.
+    // For the re-delivery fallback.
     expect(injected[0].text).toContain('arrived while you were idle');
-    // Reply-channel binding: the consumed event is bound to the SAME turn id
-    // the signal carries — the backend dispatches the live turn's answer by it.
     const replyTurnId = present(injected[0].replyTurnId, 'the reply turn the signal carries');
     const bound = log.query({ turn_id: replyTurnId });
     expect(bound.map((event) => event.id)).toHaveLength(1);
-    // The delivery is observable (clients get a typed fan-out, not silence):
-    // the user's card exists from the moment the batch was DELIVERED, saying
-    // the agent has not read it yet and carrying the mid-turn rendering — then
-    // the step that took the batch in moves that same card to shown.
+    // The card exists from delivery; the step that takes the batch moves it to shown.
     const cardId = broadcasts[0]?.id;
     expect(broadcasts).toEqual([
       {
@@ -708,8 +628,7 @@ describe('AgentOrchestrator.drainPendingEvents — the reactor (drain-then-stop)
     expect(await absorb(orch)).toHaveLength(0);
     expect(enqueued).toHaveLength(1);
     expect(enqueued[0].metadata?.kinuEvent).toBe('event_drain');
-    // Same card, same moment: the queued path is not a silent one. The turn
-    // this signal starts flips it, and it names that card on its own metadata.
+    // The queued path shows the same card.
     const signalId = v.parse(v.string(), enqueued[0]?.metadata?.signalId);
     expect(broadcasts).toEqual([{
       type: 'signal_card', id: signalId, state: 'pending',
@@ -780,20 +699,19 @@ describe('AgentOrchestrator.scheduleDrain — debounced ingress coalescing', () 
     const { host, enqueued, timers } = fakeHost();
     const orch = new AgentOrchestrator({ host, engine, eventLog: log });
 
-    // The ingress pattern: publish, then scheduleDrain — a burst of three.
     for (let i = 0; i < 3; i++) {
       log.publish({ descriptor: webhook(`d${i}`, { seq: i }), now: i + 1 });
       orch.scheduleDrain();
     }
 
-    expect(timers).toHaveLength(1);                  // calls 2..3 absorbed
-    expect(enqueued).toHaveLength(0);                // nothing drains inside the window
+    expect(timers).toHaveLength(1);
+    expect(enqueued).toHaveLength(0);
 
-    await timers[0].fn();                           // the window fires
-    expect(enqueued).toHaveLength(1);                // ONE coalesced turn…
+    await timers[0].fn();
+    expect(enqueued).toHaveLength(1);
     const drainTurnId = v.parse(v.string(), enqueued[0]?.metadata?.drainTurnId);
     const bound = log.query({ turn_id: drainTurnId });
-    expect(bound).toHaveLength(3);                   // …binding all three events
+    expect(bound).toHaveLength(3);
   });
 
   test('a schedule after the window fired opens a second window → a second turn', async () => {
@@ -817,13 +735,11 @@ describe('AgentOrchestrator.scheduleDrain — debounced ingress coalescing', () 
     const orch = new AgentOrchestrator({ host, engine, eventLog: newEventLog() });
     orch.scheduleDrain();
     await timers[0].fn();
-    expect(enqueued).toHaveLength(0);                // buildDrainBatch null → no enqueueTurn
+    expect(enqueued).toHaveLength(0);
   });
 });
 
 describe('AgentOrchestrator — the in-episode evolution clock', () => {
-  /** Drive one settled `eval` call through the orchestrator's own
-   *  per-turn extension, which is the seam both backends register. */
   async function runBlock(orch: AgentOrchestrator, code: string, failure?: string): Promise<void> {
     await orch.turnExtension.onToolResult?.({
       toolName: 'eval',
@@ -844,7 +760,6 @@ describe('AgentOrchestrator — the in-episode evolution clock', () => {
 
     expect(observed).toHaveLength(1);
     expect(observed[0].names).toEqual(['summarize']);
-    // No turn boundary, no user message, no cadence — the score is already in.
     expect(orch.craft.snapshot()).toEqual({
       crafted: [], invoked: ['summarize'], reused: [], returned: 1, raised: 0, dropped: [],
     });
@@ -925,8 +840,6 @@ describe('AgentOrchestrator — the in-episode evolution clock', () => {
       });
     }
 
-    // Three failures on one tool with no success between fires the repeated_failure steer.
-    // It names the tool and the streak that fired it.
     const steered = orch.steering.steerFor({ stepNumber: 4, messages: [] });
     expect(steered).toMatchObject({ kind: 'turn_steering' });
     expect(steered?.text).toContain('`shell` has failed 3 times in a row');

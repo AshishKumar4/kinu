@@ -1,13 +1,7 @@
 /**
- * A running MCTS search has to be VISIBLE while it runs.
- *
- * `runMCTS` takes an `onProgress` sink and every live caller supplies one:
- * the lifetime evolution cycle passes `config.onMctsProgress` straight into
- * the engine (evolution/engine.ts) and the hosted backend broadcasts from
- * there. These tests pin the engine-side property that makes those broadcasts
- * worth watching: events arrive WHILE the search runs, carrying a tree that
- * has already grown — not one that settles whole at the end. Phase ordering,
- * failure reporting and grounding notices are covered in integration-mcts.
+ * A running MCTS search is visible while it runs: `onProgress` events carry a tree that has
+ * already grown, not one that settles whole at the end. Phase ordering, failure reporting
+ * and grounding notices are covered in integration-mcts.
  */
 import { describe, test, expect } from 'bun:test';
 import { runMCTS } from '../src/mcts/engine';
@@ -17,8 +11,7 @@ import type { MCTSProgressEvent } from '../src/types/mcts';
 import type { AgentRuntime } from '../src/types/agent-runtime';
 import { createTestRuntime, createMockSession } from './helpers';
 
-/** A branch that answers one candidate and reflects on nothing — the search's
- *  shape is what these tests read, never the branch's content. */
+/** Answers one candidate and reflects on nothing; only the search's shape is read. */
 function oneCandidateBranch(): AgentRuntime['spawnBranch'] {
   return async () => ({
     explore: async () => ({ text: 'a candidate approach' }),
@@ -34,12 +27,8 @@ describe('runMCTS reports progress while the search runs', () => {
     initTables(rt);
 
     const events: MCTSProgressEvent[] = [];
-    // Node count observed at the moment each 'iteration-complete' was reported
-    // — proof the broadcast a surface receives carries a tree that is actually
-    // advancing, not one that only settles at the end. Sampled at the END of
-    // the iteration and not at 'evaluate', because a node is recorded with the
-    // observation its evaluation produced: at 'evaluate' the environment has
-    // not answered yet and the children do not exist (mcts/engine.ts).
+    // Node count at each 'iteration-complete', not at 'evaluate': a node is recorded with its
+    // evaluation's observation, so at 'evaluate' the children do not exist yet.
     const nodesAtIteration: number[] = [];
 
     await runMCTS(rt, createMockSession(), 'pick an approach', {
@@ -59,9 +48,7 @@ describe('runMCTS reports progress while the search runs', () => {
     expect(events.length).toBeGreaterThan(0);
     expect(events.some((e) => e.type === 'phase' && e.phase === 'explore')).toBe(true);
     expect(events.some((e) => e.type === 'iteration-complete')).toBe(true);
-    // The first completed iteration has banked the root plus its two branches.
     expect(nodesAtIteration[0]).toBeGreaterThanOrEqual(3);
-    // And the tree keeps growing across iterations rather than arriving whole.
     expect(nodesAtIteration.at(-1)).toBeGreaterThan(nodesAtIteration[0] ?? 0);
   });
 
@@ -75,8 +62,7 @@ describe('runMCTS reports progress while the search runs', () => {
       branches: 1,
     });
 
-    // A sunk call reports convergence with a winner and a banked tree. The
-    // unsunk call must reach that same outcome through the same engine path.
+    // The unsunk call must reach the sunk call's outcome through the same engine path.
     expect(result.converged).toBe(true);
     expect(result.winnerId).not.toBeNull();
     expect(rt.storage.sql<{ n: number }>`SELECT COUNT(*) AS n FROM search_nodes`[0]?.n ?? 0)

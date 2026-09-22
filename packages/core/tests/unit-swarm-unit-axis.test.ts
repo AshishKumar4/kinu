@@ -1,20 +1,6 @@
 /**
- * The `unit` axis, and the axis that took its parameter.
- *
- * A TOOL-USING NODE RUNS, and the bound that could make it look illegal is a bound on
- * the GRADING SIGNAL rather than on the tool surface: nodes share one workspace, so a
- * node cannot be graded on what it CHANGED — every node changed the same tree — but it
- * can be graded on what it REPORTS. `answer` IS that shape, so no separate value names
- * it, and models compose the shape correctly without one.
- *
- * What these tests assert is *One spelling per axis*, held across the cut: the cut
- * spellings are UNREPRESENTABLE rather than merely refused, every declared value
- * resolves, and a tool-using composition starts instead of coming back `unsupported`.
- *
- * The inheritance question a unit-level flag would carry is asked once on the
- * `context` axis, for the caller-to-root edge and every branch edge (*Inherited
- * context*). That is the second half of what is asserted here.
- *
+ * The `unit` axis and the `context` axis that took its parameter: cut spellings are
+ * unrepresentable, every declared value resolves, and a tool-using composition runs.
  * Specified by docs/EXPLORATION.md — "The six axes", "One spelling per axis", "Presets",
  * "Validity over the resolved configuration", "Inherited context" and "Isolation".
  */
@@ -31,13 +17,7 @@ import { runSwarm } from '../src/strategy/swarm-run';
 import { hostedSeatsOver } from './helpers-actor-host';
 import { scriptedTurnModel } from '@kinu.run/test-utils';
 
-/**
- * A bindable objective naming the one registered instrument.
- *
- * Needed wherever a test wants a preset's MEASURED row: `verify` means an instrument,
- * so a call that names none resolves to the row's judged sweep instead — the archive,
- * the tree and the depth cap all arrive with the objective rather than with the name.
- */
+/** Needed for a preset's measured row; without an objective a preset resolves to its judged sweep. */
 const MEASURED = {
   kind: 'scalar' as const, metric: 'oracle calls', unit: 'count',
   direction: 'minimise' as const, scale: 'linear' as const, target: 8,
@@ -53,8 +33,7 @@ const MEASURED = {
   },
 };
 
-/** A composition legal in every respect except the axis under test, so a refusal can
- *  only ever be about `unit` or `context`. */
+/** Legal except for the axis under test, so a refusal can only be about `unit` or `context`. */
 function unitCall(over: { unit: SwarmUnitSetting; context: BranchContext }) {
   return {
     preset: 'custom' as const,
@@ -78,9 +57,7 @@ describe('the unit axis names what a node produces, and nothing else', () => {
     expect([...SWARM_UNITS]).toEqual(['answer', 'thought']);
   });
 
-  /** Where the schema points when it refuses `input`: one dotted path per issue.
-   *  A refusal that names another axis, or none, is a different defect from
-   *  acceptance, and `toThrow()` alone cannot tell the three apart. */
+  /** Dotted path per issue: a refusal naming another axis is a different defect from acceptance. */
   function refusedAt(input: JsonValue): string[] {
     const result = v.safeParse(SwarmConfigSchema, input);
 
@@ -90,12 +67,10 @@ describe('the unit axis names what a node produces, and nothing else', () => {
   }
 
   test('the cut spellings are UNREPRESENTABLE, not merely refused', () => {
-    // The one-spelling guard. `trajectory` named the shape two of the three values
-    // have, and `step` never executed — accepting either beside the current set is the
-    // second spelling *One spelling per axis* exists to prevent.
+    // Accepting a cut value beside the current set is a second spelling.
     expect(refusedAt({ unit: { kind: 'trajectory', inherit: true } })).toEqual(['unit.kind']);
     expect(refusedAt({ unit: { kind: 'step' } })).toEqual(['unit.kind']);
-    // And no unit carries a parameter: inheritance is the `context` axis.
+    // No unit carries a parameter: inheritance is the `context` axis.
     expect(refusedAt({ unit: { kind: 'answer', inherit: true } })).toEqual(['unit.inherit']);
   });
 
@@ -115,9 +90,6 @@ describe('the unit axis names what a node produces, and nothing else', () => {
 });
 
 describe('the surface has SIX axes, and each cut value is refused by its own name', () => {
-  /** A config as a caller might still spell it, INCLUDING the axes and values the
-   *  surface does not have. Named rather than `object`, because the shape these
-   *  tests send is exactly the thing under test. */
   interface CutSpelling {
     readonly unit?: { readonly kind: string };
     readonly observe?: string;
@@ -150,10 +122,8 @@ describe('the surface has SIX axes, and each cut value is refused by its own nam
   test('unit:"generator" is refused by name and sent to the value it always was', () => {
     const error = refusal({ unit: { kind: 'generator' } });
     expect(error).toContain('unit:"generator" was cut');
-    // The honest half: it is not a re-homing, it is a value that never did anything.
     expect(error).toContain('NOTHING EVER READ THE DIFFERENCE');
     expect(error).toContain('unit:{kind:"answer"}');
-    // The survivors still parse, and neither carries a parameter.
     expect(v.parse(SwarmConfigSchema, { unit: { kind: 'answer' } }))
       .toMatchObject({ unit: { kind: 'answer' } });
     expect(v.parse(SwarmConfigSchema, { unit: { kind: 'thought' } }))
@@ -169,7 +139,6 @@ describe('the surface has SIX axes, and each cut value is refused by its own nam
   test('`decorrelate` is refused by name, and says what turning angles off cost', () => {
     const error = refusal({ decorrelate: 'blind' });
     expect(error).toContain('`decorrelate` was cut entirely');
-    // The honest half: all three values behaved identically, AND something was lost.
     expect(error).toContain('behaving identically');
     expect(error).toContain('can no longer be turned OFF');
   });
@@ -178,7 +147,6 @@ describe('the surface has SIX axes, and each cut value is refused by its own nam
     const error = refusal({ expand: 'mutate' });
     expect(error).toContain('expand:"mutate" was cut');
     expect(error).toContain('`context`');
-    // The survivors still parse.
     expect(v.parse(SwarmConfigSchema, { expand: 'sample' })).toMatchObject({ expand: 'sample' });
     expect(v.parse(SwarmConfigSchema, { expand: 'aggregate' })).toMatchObject({ expand: 'aggregate' });
   });
@@ -205,19 +173,14 @@ describe('the surface has SIX axes, and each cut value is refused by its own nam
   });
 
   test("an archive with no rejection test is UNCONSTRUCTIBLE, not refused", () => {
-    // The load-bearing half of the re-homing: there is no validity rule to fail,
-    // because the parse itself has nowhere to put an archive without its novelty test.
+    // No validity rule to fail: the parse has nowhere to put an archive without its novelty test.
     expect(() => v.parse(SwarmConfigSchema, { advance: { kind: 'archive' } })).toThrow();
     expect(v.parse(SwarmConfigSchema, { advance: { kind: 'archive', novelty: 0.6 } }))
       .toMatchObject({ advance: { kind: 'archive', novelty: 0.6 } });
   });
 
   test('the three archive presets resolve, at the CONVERTED Rainbow filter', () => {
-    // Every row declares the threshold the archive arm requires; a row that does not
-    // refuses, and the advertised preset is unusable. τ=0.6 is a similarity CEILING
-    // and this axis is a distance FLOOR, so the row states 1 − 0.6. The conversion is
-    // the point: 0.6 written here unconverted is a stricter archive than the evidence
-    // describes.
+    // τ=0.6 is a similarity ceiling; this axis is a distance floor, so the row states 1 − 0.6.
     for (const preset of ['research', 'audit', 'redteam'] as const) {
       const resolved = resolveSwarm({
         preset, task: 'probe it', key: 'behaviour', objective: MEASURED,
@@ -249,15 +212,7 @@ describe('the surface has SIX axes, and each cut value is refused by its own nam
   });
 
   test('`prove` without a checker takes the judged sweep rather than refusing', () => {
-    // Refusing a `prove` call with no `objective` is the defect: `prove` scores by
-    // `verify`, `verify` needs an instrument, so the shortest legal `prove` call would
-    // be unreachable without authoring a whole spec — and five of the six presets have
-    // the same property. A measured incident spent five of a model's ten steps
-    // collecting those refusals one at a time, and the last of them said the
-    // instrument could not have run in that workspace at all.
-    //
-    // The checker is what `prove` IS, and naming one buys the depth-7 best-first tree
-    // below. Omitting it yields a run rather than a scolding.
+    // A bare `prove` resolves to the judged sweep; naming a checker buys the best-first tree.
     const resolved = resolveSwarm({ preset: 'prove', task: 'show it' });
 
     if ('reason' in resolved) throw new Error(`prove must RESOLVE: ${resolved.error}`);
@@ -266,7 +221,6 @@ describe('the surface has SIX axes, and each cut value is refused by its own nam
     expect(resolved.config.advance).toEqual({ kind: 'none' });
     expect(resolved.caps.depth?.value).toBe(1);
 
-    // And with a checker it is the preset the doctrine describes.
     const checked = resolveSwarm({ preset: 'prove', task: 'show it', objective: MEASURED });
 
     if ('reason' in checked) throw new Error(checked.error);
@@ -288,10 +242,7 @@ describe('the context axis carries the inheritance question, at one spelling', (
   });
 
   test('a resolved configuration is INCOMPLETE without it — an axis, not an option', () => {
-    // The completeness check is behavioural on purpose (`AXES` cannot force the
-    // compiler to notice a new required axis), so this is the assertion that holds the
-    // direction the type cannot: a composition that omits `context` is refused naming
-    // it.
+    // Behavioural on purpose: `AXES` cannot make the compiler notice a new required axis.
     const call = unitCall({ unit: { kind: 'answer' }, context: 'fresh' });
     const { context: _dropped, ...withoutContext } = call.config;
     const resolved = resolveSwarm({ ...call, config: withoutContext });
@@ -301,10 +252,8 @@ describe('the context axis carries the inheritance question, at one spelling', (
   });
 
   test('a named preset supplies it from the row *Presets* fixes, the verifier presets inheriting', () => {
-    // The verifier presets take `inherit` because that is what the cut
-    // `observe:'ancestors'` WAS: a continued conversation carries the ancestor
-    // chain's measurements transitively. `ideate` takes `fresh` — it has no branch
-    // edge at all.
+    // Verifier presets inherit (a continued conversation carries ancestor measurements);
+    // `ideate` has no branch edge, so `fresh`.
     const optimise = resolveSwarm({
       preset: 'optimise',
       task: 'make it faster',
@@ -373,18 +322,12 @@ describe('a tool-using node over a shared workspace is a runnable composition', 
   });
 
   test('a tool-using node run starts — no `unsupported` about a shared workspace', async () => {
-    // Reaching the model at all is the claim: `regionRefusal` is the first thing
-    // `runSwarm` does and it spends nothing, so a refusal would come back before any
-    // call. This model answers once and stops, which is the smallest run that proves
-    // the region opened; what an agent node DOES with its tools is the behavioural
-    // suite's subject, not this one's.
+    // `regionRefusal` runs first and spends nothing, so reaching the model proves the region opened.
     const { rt, testSql } = createTestRuntime();
 
     const result = await runSwarm({
       rt,
-      // `unit:'answer'` is an agent node, so the run acquires one seat per node
-      // — a real one, over this runtime's own database, because a node that got
-      // no actor is exactly the composition this case says must run.
+      // `unit:'answer'` is an agent node: each node acquires a real seat.
       hostNode: hostedSeatsOver({ rt, db: testSql.db }).hostNode,
       model: scriptedTurnModel({
         provider: 'fake',

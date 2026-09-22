@@ -1,31 +1,6 @@
 /**
- * The canvas projection: every run in a workspace, and what each was dispatched
- * with.
- *
- * Four defects these pin, the first two from the owner's own screenshots:
- *
- *   1. "Currently I can choose a run and I only see that tree." The surface read
- *      ONE root, because the scoped read model exists precisely to stop a client
- *      folding an unscoped pile into whichever root it picked. So the fix is a
- *      canvas composed of scoped per-root reads — not the removal of scoping.
- *
- *   2. "the Exploration UI doesnt really differentiate properly between the run
- *      params i.e, if the settle is of mcts or what." A search and a journalled
- *      run carry different knobs; the surface could only say which OUTCOME each
- *      reached.
- *
- *   3. The trees and the run list beside them were bounded SEPARATELY, by
- *      different ordering keys — the run list by when a run started, the trees
- *      by when a search was last written to. Two windows over overlapping sets,
- *      so the canvas could draw a listed run with no tree and hold a tree for a
- *      run it had not listed. The runs now choose the roots, which is why there
- *      is no multi-root read left to disagree with them.
- *
- *   4. A run with BOTH halves — a swarm whose nodes are agents — arrived as two
- *      rows tagged with the removed `fork` verb's two settlements, and the fold
- *      here handed each row one half. The half that won the caller's dedup was
- *      the one with no tree, so a four-row tree and its winner never left the
- *      server. Both halves now travel on the one row the run has.
+ * The canvas projection: every run in a workspace, each composed from scoped per-root reads and
+ * carrying both halves (tree and journal) and its dispatch parameters on one row.
  */
 
 import { describe, test, expect } from 'bun:test';
@@ -50,8 +25,7 @@ function freshDb() {
   initMctsSearchTable(execRaw);
   initHeadsTables(execRaw);
   initSwarmNodeRecords(execRaw);
-  // A REAL actor over this database: every table these read models touch is
-  // actor-private now, so a seeded row only exists for the owner that wrote it.
+  // A real actor: every table read here is actor-private.
   const actor = createTestActors(sql, execRaw).main;
 
   return { db, sql, actor, actorId: actor.actorId };
@@ -60,11 +34,8 @@ function freshDb() {
 function seedSearch(db: Database, actorId: string, run: {
   rootId: string; task: string; at: number; nodes: number;
   config?: Record<string, number | string>; status?: string;
-  /** The ensemble a candidate was OBSERVED to sample, as the engine records it. */
   realised?: number;
 }): void {
-  // The tree is keyed `(actor_id, id)` like every other actor-private ledger,
-  // so the seed names the owner the canvas read below is scoped to.
   const insert = db.query(`INSERT INTO search_nodes
     (actor_id, id, parent_id, root_id, task, action, observation, depth, visits, value, status, created_at)
     VALUES (?, ?, ?, ?, ?, ?, '', ?, 1, 0.5, 'open', ?)`);
@@ -122,9 +93,7 @@ describe('readForkRunParams', () => {
       search: {
         budget: 12, branches: 4, maxDepth: 6, explorationWeight: 0.9,
         judgeSamplesRequested: 3,
-        // No candidate's ensemble was observed on this row, so the realised size is
-        // unknown. Unknown is reported as unknown: echoing the request here is
-        // exactly the claim that made a clamped run read as an honoured one.
+        // No candidate's ensemble was observed, so the realised size is unknown, not the request.
         judgeSamplesRealised: null,
         mode: 'plan',
       },
@@ -132,21 +101,15 @@ describe('readForkRunParams', () => {
     }]);
   });
 
-  // The invisible spend ceiling (2026-08-18). `judgeSamples` is a REQUEST; it
-  // shares one per-evaluation call pool with check generation, so a request the
-  // pool cannot fund runs smaller. A surface showing only the request hides
-  // that entirely.
+  // `judgeSamples` is a request sharing one call pool with check generation, so it can run smaller.
   const ENSEMBLES = [
     {
       name: 'a search that asked for 20 judges and was seen running 3 says both numbers',
       rootId: 'clamped', task: 'twenty judges please', realised: 3,
     },
     {
-      // The realised size is OBSERVED, never predicted. The pool arithmetic gives
-      // the CEILING a request is clamped to (mcts/evaluation.ts judgeCallBudget,
-      // pinned in unit-mcts-evaluation.test.ts), and an evaluation that
-      // short-circuits before judging never reaches it — so a run whose knobs
-      // imply three and whose only candidate sampled one reports one.
+      // Realised size is observed, never predicted (ceiling: mcts/evaluation.ts judgeCallBudget); an
+      // evaluation that short-circuits before judging never reaches it.
       name: 'the realised ensemble is what was seen, not what the knobs imply',
       rootId: 'observed', task: 'short-circuited', realised: 1,
     },
@@ -186,10 +149,7 @@ describe('readForkRunParams', () => {
       .toEqual([['same-search', true, false], ['same-journal', false, true]]);
   });
 
-  // The params half of the same either/or defect. A swarm writes a ledger row AND
-  // journals every node, and these were keyed by root id into one map — so the
-  // transcript entry overwrote the search entry and every swarm reported a strategy
-  // label and no budget, no branches, no depth cap and no judge clamp at all.
+  // A swarm writes both a ledger row and a journal; keyed by root id alone, one overwrites the other.
   test('a run that wrote both stores reports BOTH halves on one entry', () => {
     const { db, sql, actor, actorId } = freshDb();
     seedSearch(db, actorId, {
@@ -214,7 +174,6 @@ describe('readForkRunParams', () => {
   test('a run whose parameters were never recorded is absent, never defaulted', () => {
     const { db, sql, actor, actorId } = freshDb();
     seedSearch(db, actorId, { rootId: 's1', task: 'pruned ledger', at: 1_000, nodes: 1 });
-    // The ledger prunes settled rows; the tree stays forever.
     db.run(`DELETE FROM mcts_search_runs WHERE actor_id = ? AND root_id = 's1'`, [actorId]);
     expect(readForkRunParams(sql, actor, ['s1'])).toEqual([]);
   });
@@ -248,28 +207,20 @@ describe('readExplorationCanvas', () => {
     const page = readExplorationCanvas(sql, actor);
     expect(page.status).toBe('end');
     expect(page.items.map((entry) => entry.run.id)).toEqual(['s2', 'm1', 's1']);
-    // Parameters travel WITH the run, so there is no id to re-associate on and
-    // no way for a row to be labelled with another run's knobs.
     expect(page.items.map((entry) => entry.params?.search !== null)).toEqual([true, false, true]);
     expect(page.items.map((entry) => entry.tree.every((row) => row.root_id === entry.run.id)))
       .toEqual([true, true, true]);
-    // A journal-only run keeps its branches in the journal, so it carries no tree
-    // rows — and carries the journalled run instead. Empty on BOTH halves is what
-    // "this run recorded nothing" means, so the two must not be confusable.
+    // A journal-only run has no tree rows; empty on both halves means the run recorded nothing.
     const journalled = present(page.items.find((entry) => entry.run.id === 'm1'), 'the m1 run on the canvas');
     expect(journalled.tree).toEqual([]);
     expect(journalled.head?.heads.map((head) => head.task)).toEqual(['angle 0', 'angle 1']);
-    // A search-only run's branches ARE its tree; there is no journalled run to fetch.
     expect(page.items.filter((entry) => entry.run.hasSearchTree).map((entry) => entry.head))
       .toEqual([null, null]);
     expect(present(page.items.find((entry) => entry.run.id === 's1'), 'the s1 run on the canvas').tree).toHaveLength(4);
   });
 
-  // THE DEFECT THIS READ MODEL WAS REWRITTEN FOR. One swarm root, both stores
-  // written: the canvas gated each half on a settlement tag, so it delivered two
-  // rows with one half each, and the half that sorted newer — the journal, with no
-  // tree — is the one a caller's dedup keeps. Four tree rows and a 0.71 winner were
-  // dropped before the response was serialised.
+  // One swarm root with both stores written must arrive as one row with both halves, not two rows
+  // of which a caller's dedup keeps the treeless one.
   test('a run that wrote both stores arrives ONCE, carrying both halves', () => {
     const { db, sql, actor, actorId } = freshDb();
     seedSearch(db, actorId, {
@@ -294,13 +245,10 @@ describe('readExplorationCanvas', () => {
       branches: 3,
       winnerScore: 0.71,
     });
-    // Both halves, in full: the tree the search grew AND the transcript of every
-    // node that grew it.
     expect(entry.tree).toHaveLength(4);
     expect(entry.tree.every((row) => row.root_id === 'swarm-1')).toBe(true);
     expect(entry.head?.heads).toHaveLength(3);
-    // And both halves of its parameters: a map keyed by root id alone collapses
-    // them to one.
+    // Both halves of its parameters: a map keyed by root id alone collapses them.
     expect(entry.params?.search).toMatchObject({
       budget: 12, branches: 3, maxDepth: 4,
       judgeSamplesRequested: 5, judgeSamplesRealised: 2,
@@ -308,8 +256,7 @@ describe('readExplorationCanvas', () => {
     expect(entry.params?.transcripts).toEqual({ mergeStrategy: 'best_of', branches: 3 });
   });
 
-  // The invariant the surface may rely on: a half is present on the row exactly
-  // when the run says it has it, so nothing downstream needs a second check.
+  // A half is present exactly when the run says it has it.
   test('every row agrees with its own summary about which halves it has', () => {
     const { db, sql, actor, actorId } = freshDb();
     seedSearch(db, actorId, { rootId: 'tree-only', task: 'a', at: 1_000, nodes: 2 });
@@ -328,11 +275,7 @@ describe('readExplorationCanvas', () => {
 
   test('a journal-only run on a later page still carries its branches', () => {
     const { db, sql, actor, actorId } = freshDb();
-    // It is the OLDEST run here, so it is off page one. The page a run is on
-    // carries both halves of it. Fetching the journalled half as ONE bounded
-    // `getHeadRuns` read taken beside page one is a second window over an
-    // overlapping set: every journalled run behind that window draws as "no
-    // branches were ever written" while the journal holds them.
+    // The oldest run, off page one: a separate bounded journal read would miss it.
     seedSplit(db, actorId, { rootId: 'm1', task: 'journal', at: 1_000, heads: 2, merged: true });
 
     for (let i = 0; i < 4; i++) {
@@ -366,18 +309,13 @@ describe('readExplorationCanvas', () => {
     const page = readExplorationCanvas(sql, actor, null, 1);
     expect(page.items.map((entry) => entry.run.id)).toEqual(['small']);
     expect(page.status).toBe('more');
-    // The page bounds RUNS. Asking for one still delivers that run whole.
     expect(readExplorationCanvas(sql, actor, page.status === 'more' ? page.next : null, 1)
       .items[0].tree).toHaveLength(41);
   });
 
   test('a search still being written cannot displace the run the page shows', () => {
     const { db, sql, actor, actorId } = freshDb();
-    // `growing` STARTED first but is still receiving nodes, so it is the newest
-    // by last write and the oldest by first write. Picking trees by last write
-    // while the run list picks by first write means, at a page of one, the list
-    // shows `settled` and the trees beside it belong to `growing` — a listed
-    // run drawn with no tree, next to a tree for a run that was not listed.
+    // `growing` started first but was written last: roots must be picked by the run list's order, not last write.
     seedSearch(db, actorId, { rootId: 'growing', task: 'still going', at: 1_000, nodes: 1 });
     seedSearch(db, actorId, { rootId: 'settled', task: 'done', at: 5_000, nodes: 1 });
     db.query(`INSERT INTO search_nodes
@@ -393,7 +331,6 @@ describe('readExplorationCanvas', () => {
   test('a run whose parameters are gone says so instead of inventing them', () => {
     const { db, sql, actor, actorId } = freshDb();
     seedSearch(db, actorId, { rootId: 's1', task: 'searched', at: 1_000, nodes: 1 });
-    // The ledger prunes settled rows after a day; the tree stays forever.
     db.run(`DELETE FROM mcts_search_runs WHERE actor_id = ? AND root_id = 's1'`, [actorId]);
 
     const page = readExplorationCanvas(sql, actor);
@@ -473,12 +410,7 @@ describe('Pareto canvas evidence', () => {
     });
   });
 });
-/**
- * The permalink read: ONE run, composed exactly as the page composes it. The
- * drill-down opens a single run by id and carries its dispatch parameters with
- * it — parameters that travel only on the canvas page leave the surface with
- * the most room to show the judge clamp as the one surface that cannot read it.
- */
+/** The permalink read: one run by id, composed exactly as the page composes it, with its parameters. */
 
 describe('readExplorationRun', () => {
   test('answers one run with every half the page would have given it', () => {
@@ -491,7 +423,7 @@ describe('readExplorationRun', () => {
       rootId: 'swarm-1', task: 'cut p99 latency', at: 1_400, heads: 2, rationale: 'optimise',
     });
 
-    // Deliberately off the newest page, so this cannot be the list read in disguise.
+    // Off the newest page, so this is not the list read in disguise.
     for (let i = 0; i < 5; i++) {
       seedSearch(db, actorId, { rootId: `newer-${i}`, task: `newer ${i}`, at: 9_000 + i, nodes: 1 });
     }

@@ -1,10 +1,5 @@
-// The shared turn-context assembly (orchestrator/turn-context.ts) — the ONE
-// ordering both backends run: sanitize → extension onTurnStart → awaited
-// transformContext → turn-local tail. runChat and the cf beforeTurn both
-// delegate here, so these invariants hold on both backends by construction.
-// Dynamic context is NOT assembled here (it is woven per step); the array this
-// produces is what the ledger's frozen positions are measured against, so it
-// must stay free of blocks.
+// The shared turn-context order (orchestrator/turn-context.ts): sanitize → onTurnStart → transformContext
+// → turn-local tail. No dynamic-context blocks: the ledger's frozen positions index this array.
 import { describe, expect, test } from 'bun:test';
 import type { ModelMessage } from 'ai';
 import { Database } from 'bun:sqlite';
@@ -73,8 +68,7 @@ describe('assembleTurnMessages', () => {
   });
 
   test('no dynamic-context block is ever assembled here', async () => {
-    // The step pipeline owns them. A block appearing in the turn's initial
-    // array would be double-counted by the ledger's frozen indices.
+    // A block here would be double-counted by the ledger's frozen indices.
     const out = await assembleTurnMessages({
       ...base(),
       turnLocal: [{ role: 'user', content: 'turn-local' }],
@@ -125,8 +119,7 @@ describe('assembleTurnMessages', () => {
       ...base(),
       history: withFile,
       extensions,
-      // MediaModality excludes 'text' — an empty set is a model that accepts no
-      // attachments at all, which is what strips the PDF below.
+      // An empty modality set accepts no attachments, stripping the PDF.
       attachments: { accepts: new Set<MediaModality>(), vfs: createMemoryVFS(new Database(':memory:')) },
     });
 
@@ -137,10 +130,8 @@ describe('assembleTurnMessages', () => {
   });
 });
 
-// The trigger fields of that same input, measured out of the durable store.
-// Both backends derived these by hand until this owned the order.
+// The trigger fields of that same input, measured from the durable store.
 describe('measureCompactionTrigger', () => {
-  /** The store's read half, recording what the measurement asked it. */
   function reader(tokens: number | null, armed: boolean) {
     const asked: Array<{ key: string; length: number }> = [];
     let flag = armed;

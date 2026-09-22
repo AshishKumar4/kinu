@@ -18,7 +18,6 @@ function setup() {
   const open = () => testSql.db.query<{ message_id: string }, []>('SELECT message_id FROM session_messages WHERE sealed_at IS NULL').all().map(row => row.message_id);
   const rows = () => testSql.db.query<{ text: string }, []>('SELECT text FROM stream_parts ORDER BY part_no, segment').all().map(row => row.text);
 
-  /** A claimed turn with its first step's request consumed: what a stream needs. */
   const turn = async (turnId: string) => {
     const claim = await claims.admit({ runId: `run-${turnId}`, turnId, workMode: 'build', program: BUILTIN, context: selected() });
     const stream = new SessionStream(history, turnId, claim.epoch);
@@ -39,7 +38,6 @@ test('a step cancelled while reasoning seals what it streamed, buffered tail inc
     await stream.nativePart({ type: 'reasoning-start', id: 'r' });
 
     for (const word of ['thinking ', 'hard ', 'about it']) await stream.nativePart({ type: 'reasoning-delta', id: 'r', text: word });
-    // The runner's cancellation path finishes the step with no final message.
     await stream.nativeStep([]);
     expect(s.open()).toEqual([]);
     const answer = (await s.history.materialize()).messages.find(message => message.role === 'assistant');
@@ -48,8 +46,7 @@ test('a step cancelled while reasoning seals what it streamed, buffered tail inc
 });
 
 test('a streamed answer joins the working context only when it seals', async () => {
-  // A context revision names immutable content: an entry the model reads at
-  // one revision reads the same bytes at that revision forever.
+  // A revision names immutable content.
   const s = setup();
 
   try {
@@ -72,11 +69,7 @@ test('a streamed answer joins the working context only when it seals', async () 
 });
 
 test('a step finishing while the turn settles seals each container once', async () => {
-  // The SDK pipeline finishes the step on its side while the turn loop, whose
-  // consumer just failed, settles on its own: the same containers, reached
-  // from two writers at once. Unserialized, both read the seal flag clear,
-  // both sealed, and the second threw the turn's settle away. Measured on the
-  // cli-backend's consumer-failure turn, 2026-09-22.
+  // The SDK pipeline and the failed turn loop settle the same containers concurrently.
   const s = setup();
 
   try {
@@ -93,10 +86,7 @@ test('a step finishing while the turn settles seals each container once', async 
 });
 
 test('a step that finishes after the turn settled keeps the settled record', async () => {
-  // The other order of the race above: the consumer failed and the turn
-  // settled first, then the SDK's step finish arrives with a final message.
-  // What streamed is the record, as `settle` says; the late message neither
-  // re-seals the container nor throws the step away.
+  // The reverse race: a late final message neither re-seals nor throws the step away.
   const s = setup();
 
   try {
@@ -123,7 +113,6 @@ test('an admission the store refuses seals nothing of a live stream', async () =
     const stale = { ...s.selected(), revision: s.selected().revision + 7 };
     await expect(s.claims.admit({ runId: 'run-t2', turnId: 't2', workMode: 'build', program: BUILTIN, context: stale })).rejects.toThrow(KinuError);
     expect(s.open()).toHaveLength(1);
-    // The live stream continues: its rows are still there to extend.
     await stream.nativePart({ type: 'text-end', id: '0' });
     await stream.nativeStep([{ role: 'assistant', content: [{ type: 'text', text: 'live and done' }] }]);
     expect((await s.history.materialize()).messages.at(-1)).toEqual({ role: 'assistant', content: [{ type: 'text', text: 'live and done' }] });
@@ -138,13 +127,11 @@ test('a message a reset activation left open seals at the turn\'s next admission
     await stream.nativePart({ type: 'text-start', id: '0' });
     await stream.nativePart({ type: 'text-delta', id: '0', text: 'cut ' });
     await stream.nativePart({ type: 'text-delta', id: '0', text: 'short' });
-    // The window is in memory; the reset loses it, and the durable row holds
-    // what was written ahead of it: nothing yet, under 64 deltas.
+    // Nothing durable yet under 64 deltas.
     const [open] = s.open();
 
     if (open === undefined) throw new Error('the answer is open');
-    // The activation is gone. Another admission of the same turn supersedes
-    // its epoch; the same admission of a live turn would seal nothing.
+    // A new admission of the same turn supersedes its epoch.
     await s.turn('t1');
     expect(s.open()).toEqual([]);
     expect(s.history.context.entries(s.selected()).some(entry => entry.messageId === open)).toBe(true);
@@ -158,8 +145,7 @@ test('a window never splits a surrogate pair across two statements', async () =>
     const { stream } = await s.turn('t1');
     await stream.nativePart({ type: 'text-start', id: '0' });
 
-    // The first delta opens the part; the next 63 and the high surrogate fill
-    // one window of 64, which is written with the surrogate held back.
+    // The next 63 plus the high surrogate fill one window; the surrogate is held back.
     for (let i = 0; i < 64; i++) await stream.nativePart({ type: 'text-delta', id: '0', text: 'a' });
     await stream.nativePart({ type: 'text-delta', id: '0', text: '\ud83d' });
     expect(s.rows()).toEqual(['a'.repeat(64)]);
@@ -170,8 +156,7 @@ test('a window never splits a surrogate pair across two statements', async () =>
 });
 
 test('a reasoning part the final message omits is sealed from the stream that witnessed it', async () => {
-  // The provider streamed the thinking and then left it out of the response
-  // message it settled on. What streamed IS evidence: the answer keeps it.
+  // Streamed thinking is evidence even when the settled message omits it.
   const s = setup();
 
   try {
@@ -202,7 +187,6 @@ test('a final message that reorders what streamed seals in the final order, with
     await stream.nativePart({ type: 'text-delta', id: '0', text: 'calling now' });
     await stream.nativePart({ type: 'text-end', id: '0' });
     await stream.nativePart({ type: 'tool-call', toolCallId: 'c1', toolName: 'read', input: { path: '/x' } });
-    // The provider settles on the call first and the prose after it.
     await stream.nativeStep([{ role: 'assistant', content: [
       { type: 'tool-call', toolCallId: 'c1', toolName: 'read', input: { path: '/x' } },
       { type: 'text', text: 'calling now' },

@@ -1,11 +1,4 @@
-/**
- * Integration test: full MCTS cycle with real in-memory SQLite.
- * Mock LLM + Executor, but real SQL tables, real UCT, real backprop,
- * real grounded evaluation (engine-seam evaluator, not branch self-rating).
- *
- * Verifies: init → select → expand → evaluate → backpropagate → prune → converge
- * Plus: execution grounding dominates, judge knobs respected, tree shape.
- */
+/** Full MCTS cycle over real SQL tables, UCT and backprop; LLM and executor are mocked. */
 
 import { describe, test, expect } from 'bun:test';
 import * as v from 'valibot';
@@ -20,7 +13,6 @@ import type { Executor, LLM } from '../src/types/primitives';
 import type { BranchHandle } from '../src/types/agent-runtime';
 import { present } from '@kinu.run/test-utils';
 
-/** Executor that fails any code containing FAIL_MARKER, passes the rest. */
 function markerExecutor(): Executor {
   return {
     languages: ['javascript'],
@@ -32,7 +24,6 @@ function markerExecutor(): Executor {
   };
 }
 
-/** A branch that always explores with `text` and reflects with `reflection`. */
 function scriptedBranch(text: string, reflection = 'n/a'): BranchHandle {
   return {
     explore: async () => ({ text }),
@@ -49,7 +40,6 @@ function malformedBranch(): BranchHandle {
   return branch;
 }
 
-/** LLM whose complete() always returns `json` and counts judge-prompt calls. */
 function countingLLM(json: string): LLM & { judgeCalls: () => number } {
   let judgeCalls = 0;
 
@@ -71,14 +61,10 @@ function initTables(rt: ReturnType<typeof createTestRuntime>['rt']) {
 }
 
 describe('MCTS integration', () => {
-  // A branch runs behind a backend seam (facet RPC on cf, forked worker
-  // locally), so a resolved value is still untrusted input. One that resolves
-  // malformed must score 0 like any other failed branch and be reported, not
-  // crash the search after its nodes are already recorded.
+  // A branch's resolved value is untrusted: a malformed one scores 0 and is reported, not thrown.
   test('a branch that resolves a malformed exploration is reported, not fatal', async () => {
     const { rt } = createTestRuntime();
     const failures: string[] = [];
-    // Resolves — but with nothing the engine can read.
     rt.spawnBranch = async () => malformedBranch();
 
     initTables(rt);
@@ -94,7 +80,6 @@ describe('MCTS integration', () => {
 
   test('DO-NOW #1: sibling diversity — each branch in an expansion gets a DISTINCT prompt naming the other branch angles', async () => {
     const { rt } = createTestRuntime();
-    // Capture the siblings arg each branch received in its expansion.
     const seenSiblings: Array<readonly string[]> = [];
     let i = 0;
     rt.spawnBranch = async () => {
@@ -103,8 +88,6 @@ describe('MCTS integration', () => {
       return { explore: async ({ siblings = [] }) => {
         seenSiblings.push(siblings);
 
-        // Echo the received sibling angles into the proposal text so we can
-        // assert downstream that explore actually consumed them.
         return { text: `branch ${idx} differs from: ${siblings.join(' | ')}` };
       }, generateReflection: async () => ({ text: 'n/a' }), release: async () => {} };
     };
@@ -112,16 +95,11 @@ describe('MCTS integration', () => {
     initTables(rt);
     await runMCTS(rt, createMockSession(), 'pick a strategy', { budget: 1, branches: 2 });
 
-    // Two branches in one expansion.
     expect(seenSiblings.length).toBe(2);
-    // Each branch received exactly one sibling angle (the other branch's).
     expect(seenSiblings[0].length).toBe(1);
     expect(seenSiblings[1].length).toBe(1);
-    // The two prompts are DISTINCT — branch 0 differs from branch 1's angle and
-    // vice-versa, so they are not identical near-duplicates.
     expect(seenSiblings[0][0]).not.toBe(seenSiblings[1][0]);
 
-    // And the distinct angles landed in the recorded node observations.
     const observations = rt.storage.sql<SearchNode>`
       SELECT * FROM search_nodes WHERE parent_id IS NOT NULL`.map((n) => n.observation);
 
@@ -139,8 +117,7 @@ describe('MCTS integration', () => {
       },
     });
 
-    // Even branches carry code that PASSES execution; odd branches are prose.
-    // Each expansion pairs one code branch with one prose branch.
+    // Even branches carry passing code, odd branches prose.
     rt.executor = markerExecutor();
     rt.spawnBranch = async () => {
       const i = branchCounter++;
@@ -160,19 +137,14 @@ describe('MCTS integration', () => {
       branches: 2,
     });
 
-    // The passing-code branch (judge 0.5 → 0.6 + 0.4×0.5 = 0.8) wins and clears
-    // the default minAcceptableScore.
+    // Passing code: 0.6 + 0.4×0.5 = 0.8, above the default minAcceptableScore.
     expect(result.converged).toBe(true);
     expect(result.winnerValue).toBeGreaterThan(0.6);
 
-    // Tree should have root + 3 iterations × 2 branches = 7 nodes
     const allNodes = rt.storage.sql<SearchNode>`SELECT * FROM search_nodes`;
-    expect(allNodes.length).toBe(7); // 1 root + 6 children
+    expect(allNodes.length).toBe(7);
 
-    // Execution grounding dominates AND the A5 band loophole is closed: the
-    // prose branch shares an expansion with a code branch, so it is capped at
-    // the FAIL ceiling (0.30×0.5 = 0.15) — it cannot beat a passing code branch
-    // by declining to attempt code.
+    // Prose sharing an expansion with code is capped at the fail ceiling.
     const children = allNodes.filter((n) => n.parent_id !== null);
     const codeBranches = children.filter((n) => n.code_used);
     const proseBranches = children.filter((n) => !n.code_used);
@@ -182,15 +154,13 @@ describe('MCTS integration', () => {
     expect(proseBranches.every((node) => node.code_language === null)).toBe(true);
     const minPassing = Math.min(...codeBranches.map((n) => n.value));
     const maxProse = Math.max(...proseBranches.map((n) => n.value));
-    expect(maxProse).toBeLessThanOrEqual(0.3);   // capped at the fail ceiling
-    expect(minPassing).toBeGreaterThan(maxProse); // passing code dominates
+    expect(maxProse).toBeLessThanOrEqual(0.3);
+    expect(minPassing).toBeGreaterThan(maxProse);
 
-    // Root should have been visited (backprop propagates to ancestors)
     const root = rt.storage.sql<SearchNode>`SELECT * FROM search_nodes WHERE parent_id IS NULL`[0];
     expect(root.visits).toBeGreaterThan(0);
 
-    // Convergence closes the tree: winner terminal, everything else pruned —
-    // nothing stays open to contaminate the next task's UCT selection.
+    // Convergence closes the tree so nothing open leaks into the next task's selection.
     const openNodes = rt.storage.sql<SearchNode>`SELECT * FROM search_nodes WHERE status = 'open'`;
     expect(openNodes.length).toBe(0);
     const terminal = rt.storage.sql<SearchNode>`SELECT * FROM search_nodes WHERE status = 'terminal'`;
@@ -202,8 +172,7 @@ describe('MCTS integration', () => {
     let branchCounter = 0;
 
     const { rt } = createTestRuntime({
-      // Every judge sample scores 0.95 for every candidate — only execution
-      // can separate the branches.
+      // Judges score everything alike; only execution separates the branches.
       llmResponses: { 'scoring ONE candidate': '{"score": 0.95}' },
     });
 
@@ -230,15 +199,12 @@ describe('MCTS integration', () => {
 
     const failing = present(children.find((n) => n.code_used?.includes('FAIL_MARKER')), 'the failing child');
     const passing = present(children.find((n) => !n.code_used?.includes('FAIL_MARKER')), 'the passing child');
-    expect(failing.value).toBeLessThanOrEqual(0.3);   // fail band ceiling
-    expect(passing.value).toBeGreaterThanOrEqual(0.6); // pass band floor
+    expect(failing.value).toBeLessThanOrEqual(0.3);
+    expect(passing.value).toBeGreaterThanOrEqual(0.6);
     expect(result.winnerId).toBe(passing.id);
   });
 
-  // LATS §5.2: the environment's reply to a candidate solution — the assert
-  // suite and the compiler — is added to the context as an OBSERVATION. The
-  // engine already runs the code to pick a score band; these two tests pin that
-  // the verdict reaches the two places the paper puts it, and nowhere else.
+  // LATS §5.2: the environment's verdict is added to the context as an observation.
   test("a failed branch's execution verdict reaches the trajectory its children inherit", async () => {
     const { rt } = createTestRuntime({
       llmResponses: { 'scoring ONE candidate': '{"score": 0.5}' },
@@ -256,15 +222,12 @@ describe('MCTS integration', () => {
 
     if (child.msg_id === null) throw new Error('the expanded branch recorded no message to inherit from');
 
-    // The exact read the next expansion makes (engine.ts: priorHistory).
+    // The read the next expansion makes (engine.ts: priorHistory).
     const inherited = (await session.getHistory(child.msg_id)).map((m) => m.content).join('\n');
     expect(inherited).toContain('FAILED');
     expect(inherited).toContain('marker assertion failed');
-    // The proposal is still there — the observation is added to the action, not
-    // substituted for it.
     expect(inherited).toContain('const broken = FAIL_MARKER;');
-    // And the search_nodes column keeps meaning "the branch's proposal text",
-    // which is what the alternate-takes ledger compares (mcts/takes.ts).
+    // search_nodes keeps the proposal text, which mcts/takes.ts compares.
     expect(child.observation).not.toContain('marker assertion failed');
   });
 
@@ -295,13 +258,11 @@ describe('MCTS integration', () => {
     const session = createMockSession();
     await runMCTS(rt, session, 'implement the widget', { budget: 1, branches: 2 });
 
-    // Judge 0.1 puts both branches under reflectionThreshold (0.35), so both
-    // reflect: the executed one with its verdict, the prose one with none.
+    // Judge 0.1 is under reflectionThreshold, so both branches reflect.
     expect(outcomes.length).toBe(2);
     expect(outcomes.filter((o) => o?.includes('marker assertion failed')).length).toBe(1);
     expect(outcomes.filter((o) => o === undefined).length).toBe(1);
 
-    // A branch that never reached the environment gets no invented observation.
     const prose = rt.storage.sql<SearchNode>`
       SELECT * FROM search_nodes WHERE parent_id IS NOT NULL AND code_used IS NULL`[0];
 
@@ -331,7 +292,6 @@ describe('MCTS integration', () => {
     initTables(rt);
     await runMCTS(rt, createMockSession(), 'no gate task', { budget: 1, branches: 2, judgeSamples: 1 });
 
-    // Every branch is judged by the grounded evaluator — no pre-prune gate.
     expect(candidateCalls).toBe(2);
   });
 
@@ -348,13 +308,10 @@ describe('MCTS integration', () => {
       branches: 2,
       judgeSamples: 1,
     });
-    // 2 branches × 1 judge sample (prose: no assertion-generation call).
     expect(llm.judgeCalls()).toBe(2);
   });
 
-  // The invisible spend ceiling (2026-08-18): a search told `judgeSamples: 20`
-  // ran three-sample ensembles on shipped defaults, and nothing said so. Keyed
-  // on the stable dotted NAME, which is what a spend query would filter on.
+  // The realised ensemble size is reported, keyed on the stable dotted name.
   const isClampLine = (line: string): boolean =>
     line.includes('"event":"mcts.judge_ensemble_clamped"');
 
@@ -363,8 +320,7 @@ describe('MCTS integration', () => {
     const { rt } = createTestRuntime();
     rt.llm = llm;
     rt.judgeModel = llm;
-    // A code-bearing branch: one of its four evaluation calls buys the check
-    // suite, so the twenty-sample request is funded at three.
+    // One of a code branch's evaluation calls buys the check suite.
     rt.spawnBranch = async () => scriptedBranch('approach\n```js\nconst x = 42;\n```');
 
     initTables(rt);
@@ -375,10 +331,8 @@ describe('MCTS integration', () => {
       }),
     );
 
-    // One branch, so the judge-prompt count IS the realised ensemble size.
     expect(llm.judgeCalls()).toBe(3);
 
-    // Fields, not prose: the pair a spend question needs, both scalars.
     const lines = stderr.filter(isClampLine);
     expect(lines).toHaveLength(1);
     expect(JSON.parse(lines[0]).fields).toMatchObject({
@@ -409,9 +363,7 @@ describe('MCTS integration', () => {
   });
 
   test('sequential tasks on one DB do not contaminate each other (fresh root per task)', async () => {
-    // Selection is scoped to the current search's `root_id`, and convergence
-    // closes its winner. A global argmax could otherwise expand a previous
-    // task's high-value open node and spend the new task's budget on it.
+    // Selection is scoped to the current `root_id`; a global argmax would expand a previous task's node.
     const { rt } = createTestRuntime();
     rt.spawnBranch = async () => scriptedBranch('explored');
 
@@ -422,12 +374,10 @@ describe('MCTS integration', () => {
     const second = await runMCTS(rt, createMockSession(), 'second task', { budget: 1, branches: 2 });
     expect(second.converged).toBe(true);
 
-    // Every node created for the second task must hang off the second task's
-    // own root — never under the first task's winner.
     const secondNodes = rt.storage.sql<SearchNode>`
       SELECT * FROM search_nodes WHERE task = 'second task'`;
 
-    expect(secondNodes.length).toBe(3); // 1 root + 2 branches
+    expect(secondNodes.length).toBe(3);
     const secondRoot = present(secondNodes.find((n) => n.parent_id === null), 'the second root');
 
     for (const n of secondNodes) {
@@ -435,14 +385,11 @@ describe('MCTS integration', () => {
       expect(n.parent_id).toBe(secondRoot.id);
     }
 
-    // And the second winner is one of the second task's nodes.
     expect(secondNodes.some((n) => n.id === second.winnerId)).toBe(true);
   });
 
   test('reflections stored in memory on low scores', async () => {
     const { rt } = createTestRuntime({
-      // Judge prompts contain the candidate trajectory — score it very low so
-      // the reflection threshold (0.35) triggers.
       llmResponses: { 'bad approach': '{"score": 0.1}' },
     });
 
@@ -453,10 +400,9 @@ describe('MCTS integration', () => {
     await runMCTS(rt, session, 'Improve test coverage', {
       budget: 1,
       branches: 1,
-      minAcceptableScore: 0.01, // low threshold so convergence succeeds
+      minAcceptableScore: 0.01,
     });
 
-    // Reflection should be in MEMORY.md
     const memory = await rt.memory.read('memory/MEMORY.md');
     expect(memory).toContain('Failure lesson');
     expect(memory).toContain('auth layer is tightly coupled');
@@ -476,8 +422,6 @@ describe('MCTS integration', () => {
     const { rt } = createTestRuntime();
     initTables(rt);
 
-    // A model the catalog DOES price: the refusal must be attributable, so an
-    // operator can tell a real cap from a mispriced one.
     await expect(
       runMCTS(rt, createMockSession(), 'huge task', {
         budget: 1000, branches: 10, maxCostUSD: 0.01,
@@ -488,8 +432,6 @@ describe('MCTS integration', () => {
       }),
     ).rejects.toThrow(/anthropic\/claude-fable-5.*\$10\/1M in/);
 
-    // A model NOBODY priced still gets a ceiling, but the refusal says the
-    // number is a blended guess rather than the model's rate.
     await expect(
       runMCTS(rt, createMockSession(), 'huge task', {
         budget: 1000, branches: 10, maxCostUSD: 0.01,
@@ -503,19 +445,15 @@ describe('MCTS integration', () => {
     initTables(rt);
     rt.spawnBranch = async () => scriptedBranch('a candidate', 'no lesson');
 
-    // The defect: a blended rate refused this at any realistic cap. The catalog
-    // prices the model at zero, so a $0 ceiling is the honest comparison — and
-    // it must pass. `estimatedUSD > maxCostUSD` is 0 > 0, which is false.
+    // The catalog prices the model at zero, so a $0 ceiling must pass.
     const result = await runMCTS(rt, createMockSession(), 'free work', {
       budget: 2, branches: 2, maxCostUSD: 0,
       judgeSamples: 1, maxEvalLLMCalls: 1,
       costModel: () => ({ spec: 'free/model', pricing: { input: 0, output: 0 } }),
     });
 
-    // The refusal this guards against threw before any node was written: a
-    // search that ran records its whole tree and names its winner from it.
     const nodes = rt.storage.sql<SearchNode>`SELECT * FROM search_nodes`;
-    expect(nodes.length).toBe(5); // 1 root + 2 iterations × 2 branches
+    expect(nodes.length).toBe(5);
     expect(nodes.some((node) => node.id === result.winnerId)).toBe(true);
   });
 
@@ -532,7 +470,6 @@ describe('MCTS integration', () => {
     const result = await runMCTS(rt, session, 'impossible task', {
       budget: 1,
       branches: 1,
-      // Use default MIN_ACCEPTABLE_SCORE = 0.3
     });
 
     expect(result.converged).toBe(false);
@@ -570,11 +507,7 @@ describe('MCTS integration', () => {
 });
 
 describe('MCTS branch lifetime', () => {
-  /** Runtime whose spawn/abort/release calls are recorded; branches are real
-   *  handles. Abort and release are tracked SEPARATELY and deliberately: only
-   *  release reclaims a branch's storage, so a test that accepted an abort as
-   *  proof of teardown would pass against the leak these assertions exist to
-   *  catch. */
+  /** Only release reclaims a branch's storage; an abort is not proof of teardown. */
   function trackedBranches(rt: ReturnType<typeof createTestRuntime>['rt']) {
     const spawned: string[] = [];
     const aborted: string[] = [];
@@ -604,7 +537,6 @@ describe('MCTS branch lifetime', () => {
   test('a branch is released even when the iteration throws', async () => {
     const { rt } = createTestRuntime();
     const { spawned, released } = trackedBranches(rt);
-    // Reflection is written to memory; a memory failure aborts the iteration.
     rt.memory.append = async () => { throw new Error('memory offline'); };
 
     initTables(rt);
@@ -635,7 +567,6 @@ describe('MCTS progress reporting', () => {
     expect(iterations.map(e => e.iteration)).toEqual([1, 2]);
     expect(iterations[0].remainingBudget).toBe(1);
     expect(iterations[0].scores.length).toBe(2);
-    // The first thing reported for an iteration is the phase it entered.
     expect(events[0]).toMatchObject({ type: 'phase', phase: 'explore', iteration: 1, branches: 2 });
   });
 
@@ -658,8 +589,7 @@ describe('MCTS progress reporting', () => {
       iteration: 1,
       remainingBudget: 2,
     });
-    // Every event names the search that raised it — that is what lets a
-    // consumer answer it with the right tree when two searches are live.
+    // Lets a consumer route each event to the right tree when two searches are live.
     const rootId = grounding[0]?.rootId;
 
     if (rootId === undefined || rootId.length === 0) throw new Error('grounding event names no search');
@@ -708,8 +638,6 @@ describe('MCTS progress reporting', () => {
       onProgress: (event) => events.push(event),
     });
 
-    // The search finished (nodes recorded, converge ran) instead of dying on an
-    // optional post-scoring model call.
     expect(result.converged).toBe(false);
     expect(rt.storage.sql<SearchNode>`SELECT * FROM search_nodes WHERE parent_id IS NOT NULL`.length).toBe(1);
     expect(events).toContainEqual(expect.objectContaining({
@@ -722,12 +650,7 @@ describe('MCTS progress reporting', () => {
 });
 
 describe('MCTS — the operator\'s stored knobs reach the tree', () => {
-  // The seam the backends inject `AgentConfigStore.getMctsOverrides()` into:
-  // a search started with stored knobs and no explicit budget must run THOSE,
-  // not hardcoded defaults. This ran through `createMCTSStrategy` until that
-  // adapter was deleted for having no production reader; the property it was
-  // really about is the engine's, and `evolution/engine.ts:1193` is the caller
-  // that passes the stored overrides straight in.
+  // Stored knobs apply when no explicit budget is given (`evolution/engine.ts` passes them).
   test('budget and branches decide how much tree gets written', async () => {
     const { rt } = createTestRuntime();
     rt.spawnBranch = async () => scriptedBranch('explored');
@@ -737,7 +660,6 @@ describe('MCTS — the operator\'s stored knobs reach the tree', () => {
       mode: 'build', budget: 2, branches: 1,
     });
 
-    // 1 root + 2 iterations × 1 branch = 3 nodes.
     const nodes = rt.storage.sql<SearchNode>`SELECT * FROM search_nodes WHERE task = 'tuned task'`;
     expect(nodes.length).toBe(3);
   });
@@ -802,7 +724,6 @@ describe('MCTS branch evaluation diagnostics', () => {
       evaluation_json: string | null;
     }>`SELECT parent_id, evaluation_json FROM search_nodes`;
 
-    // The root was never evaluated — no fabricated diagnostics for it.
     expect(rows.filter((r) => r.parent_id === null).map((r) => r.evaluation_json)).toEqual([null]);
 
     const children = rows.filter((r) => r.parent_id !== null)
@@ -811,7 +732,7 @@ describe('MCTS branch evaluation diagnostics', () => {
     expect(children).toHaveLength(2);
 
     const executed = present(children.find((d) => d.grounding === 'execution'), 'the executed child');
-    // The exact key set is the bound: no proposal text and no error text.
+    // The exact key set is the bound: no proposal or error text.
     expect(Object.keys(executed).sort())
       .toEqual(['execution', 'grounding', 'judgeSamplesAttempted', 'judgeSamplesUsed', 'score']);
     expect(Object.keys(present(executed.execution, 'the execution detail')).sort())
@@ -822,7 +743,6 @@ describe('MCTS branch evaluation diagnostics', () => {
       totalChecks: 2,
       assertionsGenerated: true,
     });
-    // Shipped defaults request and realise three samples; all three parsed.
     expect(executed.judgeSamplesAttempted).toBe(3);
     expect(executed.judgeSamplesUsed).toBe(3);
     // FAIL_FLOOR + FAIL_SPAN × (1 / 2) = 0.175.
@@ -855,9 +775,7 @@ describe('MCTS below-floor outcome classification', () => {
     rt.spawnBranch = async () => {
       const i = branchCounter++;
 
-      // One branch fails before evaluation and scores 0. The surviving prose
-      // branch scores 0.75 × 0.2 = 0.15. Both sit below 0.3, and the unequal
-      // values ensure this exercises the floor rather than the exact-tie guard.
+      // Unequal scores exercise the floor rather than the exact-tie guard.
       if (i === 0) return malformedBranch();
 
       return { explore: async () => ({ text: 'approach beta' }), generateReflection: async () => ({ text: 'n/a' }), release: async () => {} };
@@ -870,9 +788,7 @@ describe('MCTS below-floor outcome classification', () => {
     expect(result.converged).toBe(false);
     expect(result.reason).toBe('no_acceptable_candidate');
 
-    // Both nonconverged branches carry bounded evaluator facts. The empty
-    // exploration records "never asked" (0/0); the surviving branch records
-    // three attempted and three usable samples. Those are different failures.
+    // "Never asked" (0/0) and three usable samples are different failures.
     const diagnostics = rt.storage.sql<{ evaluation_json: string }>`
       SELECT evaluation_json FROM search_nodes
       WHERE parent_id IS NOT NULL AND evaluation_json IS NOT NULL`
@@ -898,13 +814,11 @@ describe('MCTS below-floor outcome classification', () => {
     });
     expect(sampled.score).toBeCloseTo(0.15, 10);
 
-    // No terminal row may report a winner that the acceptance floor refused.
     expect(rt.storage.sql<{ id: string }>`
       SELECT id FROM search_nodes WHERE status = 'terminal'`).toHaveLength(0);
     expect(rt.storage.sql<{ id: string }>`
       SELECT id FROM search_nodes WHERE status = 'open'`).toHaveLength(0);
 
-    // The exact classification reaches the run ledger and is never resumable.
     expect(store.list(10)).toHaveLength(1);
     expect(store.list(10)[0]).toMatchObject({
       engine: 'mcts',

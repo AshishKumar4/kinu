@@ -1,11 +1,4 @@
-/**
- * Unit tests: MCTS pruning (WP-A2).
- *
- * The regression this guards: pruning handed only the freshly-expanded children
- * (visits === 1) yet gated on a hardcoded `visits >= 2` can NEVER fire. Pruning
- * scans the full open population and honors the `minVisitsForPrune` config, so
- * a settled low-value node actually reaches status='pruned' mid-search.
- */
+/** MCTS pruning (WP-A2) scans the full open population and honours `minVisitsForPrune`. */
 
 import { describe, test, expect } from 'bun:test';
 import { createTestRuntime } from './helpers';
@@ -30,8 +23,6 @@ function setup() {
 describe('pruneLowValueBranches — population + config-honoring gate', () => {
   test('a settled low-value node reaches status=pruned mid-search', async () => {
     const { sql, rt, aborted } = setup();
-    // Mid-search state: this node was re-selected and backpropagated enough for
-    // its running-mean value to settle below threshold (visits >= 2).
     void sql`INSERT INTO search_nodes (actor_id, root_id, id, task, value, visits, status, branch_agent_key)
         VALUES (${rt.actor.actorId}, 'r', 'doomed', 't', 0.1, 3, 'open', 'agent-doomed')`;
     await pruneLowValueBranches(rt, 'r', 0.25, 2);
@@ -105,8 +96,7 @@ describe('pruneLowValueBranches — one abort failure never ends the sweep', () 
       },
     };
 
-    // The recorded failure lands on console.error — the only sink this far
-    // inside core — so it is read where it lands.
+    // The failure lands on console.error, the only sink this deep in core.
     const original = console.error;
     const lines: string[] = [];
     console.error = (...args: unknown[]) => { lines.push(String(args[0])); };
@@ -117,8 +107,6 @@ describe('pruneLowValueBranches — one abort failure never ends the sweep', () 
       console.error = original;
     }
 
-    // The sweep continued past the throw: both nodes pruned, the survivor
-    // aborted, the failure named rather than propagated.
     const rows = sql<{ id: string; status: string }>`
       SELECT id, status FROM search_nodes ORDER BY id`;
 

@@ -1,42 +1,7 @@
 /**
- * A NODE IS AN ACTOR: IT CAN BACKGROUND WORK, AND ITS TURN CAN END WITH WORK STILL
- * RUNNING.
- *
- * WHAT WAS MISSING, measured on the base of this change: `grep -n
- * "jobRunner|BackgroundJobRunner"` over `strategy/node-agent.ts` and
- * `heads/head-inference.ts` returned NOTHING. `BackgroundJobRunner` was constructed on
- * `ActorAgent` and on the CLI session and nowhere else, so a node held five of the
- * eight builtins and none of the backgrounding contract —
- * `BACKGROUND_POLICY.interactive` says work that crosses 30 s detaches wherever
- * `wakesAfterTurn` holds, and `orchestrator/background-tools.ts` states the rule as
- * "where a wake can arrive it detaches". A node had no wake path, so nothing detached,
- * so a node could only ever be a single turn that had to end by calling `report`.
- *
- * WHAT IS ASSERTED HERE, and each is a separate claim:
- *
- *   1. A slow tool call DETACHES rather than blocking the turn: the model is handed a
- *      handle, and the turn ends.
- *   2. That turn is NOT terminal and NOT abandoned. The node's journal row is still
- *      `running` at that instant, and the loop is waiting rather than reporting.
- *   3. The settled job WAKES the node, which takes a SECOND turn on the same
- *      conversation, with the wake as its last message.
- *   4. ENDING A TURN WITHOUT `report` IS A NORMAL OUTCOME. A node that answers in prose
- *      and holds nothing finishes `completed`, `reportedItself:false`, no error.
- *   5. THE STEP SEQUENCE IS DENSE ACROSS TURNS. `head_steps` is keyed `${id}-s${seq}`,
- *      so a per-turn counter would have the second turn overwrite the first turn's
- *      trace, and the report's count would disagree with the rows.
- *   6. A DETACH COUNTS AS FLOW. The handle is a tool result, so it re-arms the stall
- *      watchdog; a node whose work legitimately went to the background is not cut for
- *      the silence that follows.
- *   7. THE TOOL SURFACE IS PARTITIONED EXACTLY. Every shipped builtin is either on a
- *      node's surface or named in {@link NODE_WITHHELD_TOOLS} with a reason, and the
- *      two together are the whole set — a denominator guard, so a builtin added
- *      upstream fails here instead of silently appearing or silently not.
- *
- * THE POLICY IS A FIXTURE VALUE for the reason every bound in these suites is: a
- * threshold whose only value is 30 s cannot be exercised by a test that has to finish.
- * The RELATIONSHIP asserted — work past the threshold detaches, the turn ends, the wake
- * resumes it — is the one the shipped `interactive` policy runs.
+ * A node can background work, and its turn can end with work still running: the slow call detaches,
+ * the settled job wakes the node for a second turn, and ending a turn without `report` is a normal outcome.
+ * The detach threshold is a fixture value; the shipped `interactive` policy runs the same relationship.
  */
 import { describe, expect, test } from 'bun:test';
 import * as v from 'valibot';
@@ -54,15 +19,11 @@ import {
 import type { NodeAgentDeps, NodeAgentInput, NodeRun } from '../src/strategy/node-agent';
 import { BUILTIN_TOOLS } from '../src/tools/registry';
 
-/** Sub-second so the arms finish; see the header for why a magnitude is a fixture. */
 const DETACH_MS = 60;
 
 const SETTLE_MS = 200;
 
-/** The one long-running tool a node has to hold for any of this to be reachable: a
- *  `prebuiltCodemodeTool` whose work outlives the detach threshold. `settle` is called
- *  by the test at the instant it wants the job to finish, so "after the turn ended" is
- *  an ordering the test controls rather than a race it hopes for. */
+/** A `prebuiltCodemodeTool` whose work outlives the detach threshold; the test calls `settle`. */
 function slowExecuteTool() {
   let release!: () => void;
   const done = new Promise<void>((resolve) => { release = resolve; });
@@ -87,16 +48,9 @@ function slowExecuteTool() {
 }
 
 /**
- * A model that launches long work, ENDS ITS TURN while that work is still running, and
- * reports only once the wake tells it the work finished.
- *
- * Which turn it is in is read off the conversation it was handed rather than off a call
- * counter, so the fixture cannot get out of step with the loop: a tool message means the
- * handle is already in hand and there is nothing to do but stop; a user message naming a
- * background job means the result has landed.
+ * Launches long work, ends its turn while it runs, and reports once woken. The stage is read off the
+ * conversation rather than a call counter, so the fixture cannot get out of step with the loop.
  */
-/** What the detaching node answers at each stage: launch the eval, end the turn
- *  holding live work, report once woken, then close. */
 function detachStageContent(stage: { reported: boolean; woken: boolean; launched: boolean }): LanguageModelV3Content[] {
   if (stage.reported) return [{ type: 'text', text: 'Done.' }];
 
@@ -109,9 +63,7 @@ function detachStageContent(stage: { reported: boolean; woken: boolean; launched
     }];
   }
 
-  // THE TURN ENDS HERE, holding live work. On the base of this change there was
-  // nowhere for it to go from here: no wake could arrive, so this was a node
-  // that had finished without reporting.
+  // The turn ends here, holding live work.
   if (stage.launched) return [{ type: 'text', text: 'Launched it; waiting on the result.' }];
 
   return [{
@@ -122,7 +74,6 @@ function detachStageContent(stage: { reported: boolean; woken: boolean; launched
   }];
 }
 
-/** The factory-form variant: launch, report what the factory ran, then close. */
 function factoryStageContent(stage: { reported: boolean; launched: boolean; sawFactory: boolean }): LanguageModelV3Content[] {
   if (stage.reported) return [{ type: 'text', text: 'Done.' }];
 
@@ -183,8 +134,7 @@ function detachThenReport(seen: string[][], onRequest?: (count: number) => void)
   });
 }
 
-/** Answers in prose and never calls `report` — the outcome a broken node is
- *  otherwise indistinguishable from. */
+/** Answers in prose and never calls `report`. */
 const PROSE_ONLY_MODEL = scriptedTurnModel({
   modelId: 'fake-prose',
   doGenerate: () => ({
@@ -199,24 +149,15 @@ const PROSE_ONLY_MODEL = scriptedTurnModel({
 });
 
 /**
- * Await the runner's OWN signal that a call detached, rather than a duration.
- *
- * The one genuinely real timer in this file is the detach threshold itself: it is a
- * `setTimeout` inside `withBackgroundThreshold`, so a fake clock stops it firing and the
- * arm would pass against a threshold that never crossed. What is NOT guessed at is when
- * it crossed — the runner logs `bg_job_started` the moment it mints the job row, and
- * the fixture's logger resolves this on that event. The registry count read after it
- * is the same row the model's handle names. The only real time paid is the threshold's
- * own sub-second value, and nothing here races it.
+ * Awaits the runner's `bg_job_started` log rather than a duration. The detach threshold is a real
+ * `setTimeout` inside `withBackgroundThreshold`, so a fake clock would stop it firing.
  */
 interface Fixture {
   readonly input: NodeAgentInput;
   readonly deps: NodeAgentDeps;
   readonly journal: HeadJournal;
-  /** How many jobs the workspace registry shows in flight — the FACT that a tool call
-   *  crossed the detach threshold and the turn was released. */
+  /** Jobs in flight in the workspace registry. */
   readonly detached: () => number;
-  /** Resolves when the runner logs `bg_job_started`: the job row exists. */
   readonly jobStarted: () => Promise<void>;
 }
 
@@ -242,13 +183,9 @@ function fixture(over: {
   };
 
   const seats = hostedSeatsOver({ rt, db });
-  /** The actor the node was seated as, captured as `runNodeAgent` acquires it.
-   *  A node is its OWN actor now, so the job it detaches is keyed to that id —
-   *  counting under `rt.actor` reads zero forever, which STALLS the wait below
-   *  instead of failing it, and a stall names no cause. */
+  /** The node's own actor, which keys its detached job; counting under `rt.actor` stalls the wait. */
   let nodeActorId: string | null = null;
 
-  // The recording logger, with one event of the runner's turned into a signal.
   const recording = createRecordingLogger();
   const started = Promise.withResolvers<void>();
 
@@ -309,36 +246,22 @@ describe('a node backgrounds work, ends its turn, and is woken to finish', () =>
 
     const running = runNodeAgent(input, deps);
 
-    // THE FIRST TURN ENDS WITHOUT THE JOB. Waited for by two FACTS rather than a
-    // sleep: the runner's own started event, and the model's second request — the
-    // step that read the handle back — which is the last thing the first turn does
-    // before it stops. A third request cannot appear until the job settles, which
-    // nothing but the line below does.
+    // Waits on two facts, not a sleep: the runner's started event and the model's second request.
     await jobStarted();
     await secondRequest.promise;
     expect(detached()).toBe(1);
-    // ONE launch, and the first turn's two requests: the call, and the step that read the
-    // handle back and chose to stop. The denominator matters — "the turn ended" is a
-    // claim about a turn that really ran, not about a loop that never started — and so
-    // does the ceiling: a third request here would mean the turn had not ended at all.
+    // A third request here would mean the turn had not ended.
     expect(slow.started()).toBe(1);
     expect(prompts).toHaveLength(2);
 
-    // NOT TERMINAL. The row this node opened still reads `running`, which is exactly
-    // what `running` means — spawned, and no report recorded — and it is NOT the
-    // absent-versus-broken confusion, because the node is genuinely working.
     const midFlight = journal.readHead('n1');
     expect(midFlight?.status).toBe('running');
     expect(midFlight?.completed_at).toBeNull();
 
-    // THE WAKE. The job settles after the turn has already ended.
     slow.settle();
     const run: NodeRun = await running;
 
-    // A SECOND TURN RAN, on the SAME conversation — appended, not restarted — and its
-    // last message is the wake. Appended is the load-bearing half: *Inherited context* is
-    // append-only, so the resumed request is a prefix of the one before it and a provider
-    // can cache it.
+    // Appended, not restarted: the resumed request is a prefix of the previous one, so a provider can cache it.
     expect(prompts.length).toBeGreaterThanOrEqual(3);
     const resumed = prompts[2] ?? [];
     const firstTurn = prompts[0] ?? [];
@@ -347,27 +270,21 @@ describe('a node backgrounds work, ends its turn, and is woken to finish', () =>
     expect(resumed.at(-1)).toContain('Background eval job');
     expect(resumed.at(-1)).toContain('completed');
 
-    // AND IT FINISHED. Through its own `report`, which is the terminal condition — not
-    // through running out of steps or out of time.
     expect(run.report.status).toBe('completed');
     expect(run.reportedItself).toBe(true);
     expect(run.candidate).toContain('The sandbox run finished.');
     expect(run.report.errorMessage).toBeUndefined();
 
-    // THE ROW IS TERMINAL NOW, and only now.
     const settled = journal.readHead('n1');
     expect(settled?.status).toBe('completed');
     expect(settled?.completed_at).toBeGreaterThan(0);
 
-    // THE TRACE IS DENSE ACROSS BOTH TURNS. `head_steps` is keyed `${id}-s${seq}`, so a
-    // per-turn counter would collide and the rows would be FEWER than the report's
-    // count — asserted as an equality rather than a floor for exactly that reason.
+    // `head_steps` is keyed `${id}-s${seq}`, so a per-turn counter would collide; hence equality, not a floor.
     const traced = journal.readSteps('n1');
     expect(traced.length).toBe(run.report.stepCount);
     expect(traced.length).toBeGreaterThanOrEqual(2);
 
-    // A DETACH COUNTS AS FLOW: the node was never cut, though it produced no provider
-    // chunk for the whole time the job was in flight.
+    // A detach re-arms the stall watchdog.
     expect(run.report.summary).not.toContain('stalled');
   });
 
@@ -386,22 +303,15 @@ describe('a node backgrounds work, ends its turn, and is woken to finish', () =>
     const run = await running;
     expect(run.report.status).toBe('completed');
 
-    // Read off what the MODEL was handed — the tool message in its own next request —
-    // rather than off the transcript row, because that is the claim: the call returned a
-    // handle and the turn was released, and the model saw exactly that.
+    // Read off the model's next request: the claim is what the model saw.
     const afterLaunch = (prompts[1] ?? []).join(' ');
     expect(afterLaunch).toContain('"background":true');
     expect(afterLaunch).toContain('eval');
-    // Not the real result, which had not been produced yet when that request was built.
     expect(afterLaunch).not.toContain('exit 0');
-    // And the node did NOT run the work twice: one launch, one job.
     expect(slow.started()).toBe(1);
   });
 
   test('ending a turn without calling report is a NORMAL outcome', async () => {
-    // The claim the whole change rests on. A node holding nothing, that answered in
-    // prose and never reported, is `completed` with no error — one turn, no wake, and
-    // nothing anywhere calling it a failure.
     const { input, deps, journal } = fixture({ model: PROSE_ONLY_MODEL });
     const run = await runNodeAgent(input, deps);
 
@@ -409,7 +319,6 @@ describe('a node backgrounds work, ends its turn, and is woken to finish', () =>
     expect(run.reportedItself).toBe(false);
     expect(run.report.errorMessage).toBeUndefined();
     expect(run.candidate).toContain('inner comparison loop');
-    // And it is not rendered as a node that produced nothing.
     expect(run.report.summary).not.toContain('produced no report');
 
     const row = journal.readHead('n1');
@@ -422,42 +331,31 @@ describe("a node's tool surface is partitioned exactly, with a reason on every w
   test('every shipped builtin is either given or withheld by name — nothing is unaccounted for', () => {
     const given = [...NODE_BUILTIN_TOOLS];
     const withheld = Object.keys(NODE_WITHHELD_TOOLS);
-    // THE DENOMINATOR. Both halves are checked against the shipped set, in both
-    // directions, so a builtin added upstream tomorrow fails here rather than silently
-    // appearing on nodes or silently not.
+    // Checked both ways against the shipped set, so a new builtin fails here.
     expect(new Set([...given, ...withheld])).toEqual(new Set(BUILTIN_TOOLS));
     expect(given.length + withheld.length).toBe(BUILTIN_TOOLS.length);
-    // Disjoint: a tool cannot be both given and excused.
     expect(given.filter((name) => withheld.includes(name))).toEqual([]);
   });
 
   test('every withholding states a reason, and the reason is a property of the code', () => {
     for (const [name, reason] of Object.entries(NODE_WITHHELD_TOOLS)) {
-      // Long enough to be an argument rather than a label: the shortest honest reason
-      // here names a store and who shares it.
       expect(reason.length).toBeGreaterThan(40);
       expect(reason).not.toContain('TODO');
       expect(reason).not.toContain('not yet');
       expect(name).not.toBe('');
     }
 
-    // And the reason that must not drift back: `DELEGATION_MAX_DEPTH` governs the hire
-    // ladder, not a node's search depth, so recursion is not the argument for
-    // withholding `agents`.
+    // `DELEGATION_MAX_DEPTH` governs the hire ladder, not a node's search depth.
     expect(NODE_WITHHELD_TOOLS.agents).toContain('search engine');
     expect(NODE_WITHHELD_TOOLS.agents).not.toContain('recursion');
   });
 
   test('a node really does hold the tools it is given and none of the withheld ones', async () => {
-    // Read off a REAL node run rather than the constant, because the constant is a
-    // declaration and the toolset is the fact. The prompt lists what it holds, so the
-    // node itself is the witness.
+    // Read off a real node run: the prompt lists the tools it holds.
     const { input, deps } = fixture({ model: PROSE_ONLY_MODEL });
     const run = await runNodeAgent(input, deps);
     expect(run.report.status).toBe('completed');
-    // `eval` is absent from the surface when no factory is wired, which is the
-    // "absent deps, absent tool" half — so the surface is a SUBSET of what is given and
-    // is disjoint from what is withheld.
+    // `eval` is absent when no factory is wired, so the surface is a subset of what is given.
     const surface: readonly string[] = ['shell', 'file', 'report'];
     const given: readonly string[] = NODE_BUILTIN_TOOLS;
 
@@ -469,13 +367,8 @@ describe("a node's tool surface is partitioned exactly, with a reason on every w
 
 describe('a node resolves a function-form codemodeTool through the finished surface', () => {
   test('function-form dep becomes a working eval, not the NOT CONFIGURED stub', async () => {
-    // The production defect: the search hands `deps.codemodeTool` as a FUNCTION
-    // `(finished) => factory.toolFor(finished)` (exploration builds it over the
-    // actor's factory), and the node handed it raw into `prebuiltCodemodeTool` —
-    // which only accepts a finished Tool. The function failed the entry check,
-    // no factory branch existed on this path, and every hosted node got the
-    // NOT CONFIGURED stub. The sibling builder (`buildHeadToolSet`) already
-    // resolved the function form against the finished surface; the node did not.
+    // `deps.codemodeTool` may be a function of the finished surface; the node must resolve it
+    // as `buildHeadToolSet` does rather than handing it raw to `prebuiltCodemodeTool`.
     const factoryForm = (_finished: ToolSet) => tool({
       description: 'Run code in the sandbox.',
       inputSchema: jsonSchema<{ code: string }>({

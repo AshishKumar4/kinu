@@ -1,11 +1,6 @@
 /**
- * The in-episode craft loop, through its public seam.
- *
- * The cycle only ever sees what a backend's tool hooks hand it — an
- * `eval` call with its code, and that call's result — so every test
- * here drives it exactly as `AgentOrchestrator.turnExtension` does, and
- * asserts on the durable ledger and the turn's run record rather than on
- * anything internal.
+ * The in-episode craft loop driven as `AgentOrchestrator.turnExtension` does, asserting on
+ * the durable ledger and the turn's run record.
  */
 
 import { describe, test, expect } from 'bun:test';
@@ -19,8 +14,7 @@ import { present } from '@kinu.run/test-utils';
 
 interface Observation { names: string[]; quality: number }
 
-/** A ledger over a plain name list, recording every observation. `dropped`
- *  names are reported back the way a below-floor tool would be. */
+/** A ledger over a name list; `dropped` names are reported back like below-floor tools. */
 function fakeLedger(initial: string[] = [], dropped: string[] = []): CraftLedger & {
   tools: string[];
   observations: Observation[];
@@ -40,8 +34,7 @@ function fakeLedger(initial: string[] = [], dropped: string[] = []): CraftLedger
   };
 }
 
-/** One settled `eval` call, as the tool-result hook delivers it —
- *  the call's own args ride along, which is why no pairing is needed. */
+/** One settled `eval` call; its args ride along, so no pairing is needed. */
 function block(cycle: CraftCycle, code: string, opts: { fails?: boolean; result?: string } = {}): void {
   cycle.onToolResult({
     toolName: 'eval',
@@ -57,7 +50,7 @@ describe('CraftCycle — the trigger', () => {
     const cycle = new CraftCycle(ledger, new TurnAccumulator());
     cycle.reset(true);
 
-    // The store changed while the call ran — which is how creation is seen.
+    // Creation is seen as the store changing while the call ran.
     ledger.tools.push('sum');
     block(cycle, 'await workspace.createTool("sum","d","async()=>1")', { result: '{"ok":true}' });
 
@@ -67,9 +60,8 @@ describe('CraftCycle — the trigger', () => {
   });
 
   test('a store that grew without the block asking is not the agent crafting', () => {
-    // The detached turn-outcome review extracts tools of its own
-    // (evolution/engine.ts). A block that never called createTool must not be
-    // credited with whatever landed while it ran.
+    // The detached turn-outcome review (evolution/engine.ts) extracts tools too; a block that
+    // never called createTool must not be credited with them.
     const ledger = fakeLedger();
     const cycle = new CraftCycle(ledger, new TurnAccumulator());
     cycle.reset(true);
@@ -179,8 +171,7 @@ describe('CraftCycle — the fitness signal', () => {
   });
 
   test('a raise the model CAUGHT is still a raise', () => {
-    // The block reports success because the model handled the throw. The stamp
-    // is the evidence about the artifact, not the block's own verdict.
+    // The stamp is evidence about the artifact, not the block's own verdict.
     const ledger = fakeLedger(['sum']);
     const cycle = new CraftCycle(ledger, new TurnAccumulator());
     cycle.reset(true);
@@ -192,9 +183,7 @@ describe('CraftCycle — the fitness signal', () => {
   });
 
   test('a failure payload too long to parse is still a failure', () => {
-    // The seam hands over a bounded prefix, so a verbose failure arrives as
-    // unparseable JSON. Reading it as a success would credit the tool that
-    // just broke.
+    // A bounded prefix makes a verbose failure unparseable JSON; that is not a success.
     const ledger = fakeLedger(['sum']);
     const cycle = new CraftCycle(ledger, new TurnAccumulator());
     cycle.reset(true);
@@ -213,8 +202,7 @@ describe('CraftCycle — the fitness signal', () => {
   });
 
   test('a failure a tool caught and RETURNED still counts as a failure', () => {
-    // The `shell`-tool shape: success:true with an error payload. The repo's one
-    // definition of a failing result (isFailingToolResult) is what decides.
+    // success:true with an error payload: `isFailingToolResult` decides.
     const ledger = fakeLedger(['sum']);
     const cycle = new CraftCycle(ledger, new TurnAccumulator());
     cycle.reset(true);
@@ -238,9 +226,7 @@ describe('CraftCycle — the fitness signal', () => {
 
 describe('CraftCycle — what it refuses to guess at', () => {
   test('several execute calls in one step are each attributed to their own code', () => {
-    // The result carries its own args, so two calls in flight at once are not
-    // ambiguous — which they were when the code had to be paired from the
-    // dispatch hook.
+    // The result carries its own args, so concurrent calls are unambiguous.
     const ledger = fakeLedger(['sum', 'other']);
     const cycle = new CraftCycle(ledger, new TurnAccumulator());
     cycle.reset(true);
@@ -276,8 +262,7 @@ describe('CraftCycle — what it refuses to guess at', () => {
 });
 
 describe('CraftCycle — what the turn reports as crafted-tool use', () => {
-  /** Drive the cycle exactly as AgentOrchestrator does, and read back what the
-   *  turn snapshot and the durable usage row will both see. */
+  /** Drives the cycle as AgentOrchestrator does and reads back the turn snapshot and usage row. */
   function turnUsage(
     ledger: CraftLedger,
     calls: ReadonlyArray<{ toolName: string; code?: JsonValue; result?: string }>,
@@ -307,9 +292,7 @@ describe('CraftCycle — what the turn reports as crafted-tool use', () => {
   });
 
   test('MCP and extension tool calls are not crafted-tool use', () => {
-    // "Any tool call whose name is not built in" is a set crafted tools are
-    // never in — they are codemode-only — so it selects exactly the
-    // MCP/extension names and writes craft scores against them.
+    // Crafted tools are codemode-only, so non-builtin names are exactly MCP/extension tools.
     expect(turnUsage(fakeLedger(['sum']), [
       { toolName: 'mcp__github__create_issue' },
       { toolName: 'some_extension_tool' },

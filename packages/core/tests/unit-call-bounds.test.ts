@@ -57,9 +57,7 @@ describe('the shared turn has no elapsed deadline', () => {
 
 describe('owned work carries no default elapsed deadline', () => {
   test('MCTS judges expose no per-call wall clock', () => {
-    // A judge call is an LLM call: awaited to settlement, however long the
-    // provider takes. The ensemble degrades only on samples that fail to
-    // parse, never on samples that are merely slow.
+    // A judge call is awaited to settlement; the ensemble degrades only on unparseable samples, never slow ones.
     expect('DEFAULT_JUDGE_CALL_TIMEOUT_MS' in evaluation).toBe(false);
   });
 
@@ -71,9 +69,7 @@ describe('owned work carries no default elapsed deadline', () => {
   });
 
   test('scaffold runs expose no turn timeout constant or option field', () => {
-    // Scaffold loops have no elapsed deadline; the run joins the executor to
-    // settlement. The shadow trial's AutoJudgeConfig carries no knob either —
-    // cost is bounded by how many trials are QUEUED, never by starving a run.
+    // No elapsed deadline on scaffold loops: cost is bounded by how many trials are queued.
     expect('SCAFFOLD_TURN_TIMEOUT_MS' in scaffoldExecutor).toBe(false);
 
     type ScaffoldOptions = Parameters<typeof scaffoldExecutor.runScaffold>[0];
@@ -86,8 +82,7 @@ describe('owned work carries no default elapsed deadline', () => {
   });
 
   test('evolution settle exposes no join bound constant or dep field', () => {
-    // settleEvolution JOINS the turn lane with no elapsed bound: background
-    // evolution work is never abandoned by the clock.
+    // Background evolution work is never abandoned by the clock.
     expect('DEFAULT_SETTLE_TIMEOUT_MS' in agentOrchestrator).toBe(false);
 
     type HasSettleTimeout = 'settleTimeoutMs' extends keyof AgentOrchestratorDeps ? true : false;

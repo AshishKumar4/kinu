@@ -1,16 +1,6 @@
-// The settle closes the roster.
-//
-// A cached merge IS a run's settlement: `findResumableRun` treats a run with a
-// `head_merge_results` row as finished, `assembleRun` reports it `completed`,
-// and the fork list reads it as settled. Nothing closed the HEADS in that same
-// transition, so a run could settle with a head row still claiming to execute —
-// and the Exploration surface then described it as `settled · 1 running · 3
-// reported · 1 stopped`, a run that has already answered and is somehow still at
-// work. A head in that state also cannot report any more: the synthesis it would
-// have reported into is already written.
-//
-// The shape under test is the one the gallery photographed (root-merge-1): five
-// heads, three reported, one stopped, one still running when the merge landed.
+// The settle closes the roster: a cached merge is a run's settlement, so no head row may
+// still claim to execute once it lands. Fixture: five heads, three reported, one stopped,
+// one running at merge time.
 import { describe, expect, test } from 'bun:test';
 import { Database } from 'bun:sqlite';
 import { present } from '@kinu.run/test-utils';
@@ -53,8 +43,7 @@ function spawn(id: string): HeadInput {
   };
 }
 
-/** The run as it stands the instant before its merge lands: three heads
- *  reported, one stopped on the provider, one still in flight. */
+/** The instant before the merge lands. */
 function seeded() {
   const db = new Database(':memory:');
   const execRaw = makeExecRaw(db);
@@ -97,8 +86,7 @@ function statuses(sql: SqlExecutor, actorId: string): Record<string, string> {
 
 describe('a run that settles closes every head it did not hear from', () => {
   test('before the merge the roster is honest: one head is still at work', () => {
-    // The denominator. Without this the tests below could pass over a run that
-    // never had a running head at all.
+    // Denominator: the run really had a running head.
     const { sql, journal, actor } = seeded();
     expect(statuses(sql, actor.actorId).h4).toBe('running');
     expect(journal.listLive().items.map((run) => run.running)).toEqual([1]);
@@ -112,8 +100,7 @@ describe('a run that settles closes every head it did not hear from', () => {
     expect(statuses(sql, actor.actorId)).toEqual({
       h0: 'completed', h1: 'completed', h2: 'errored', h3: 'completed', h4: 'aborted',
     });
-    // The roster is what the dynamic context carries into every model step, and
-    // the list is what the reader sees. Neither may still count this head.
+    // The dynamic-context roster and the list must both stop counting this head.
     expect(journal.listLive().items).toEqual([]);
     expect(listForkRuns(sql, actor).items[0].status).toBe('completed');
   });
@@ -158,8 +145,7 @@ describe('a run that settles closes every head it did not hear from', () => {
     journal.cacheMerge(RUN, MERGE, 'synthesize');
 
     expect(statuses(sql, actor.actorId)).toEqual(first);
-    // A head the first pass closed is not touched again: the predicate matches
-    // unfinished rows only, so a re-settle cannot rewrite a real report's time.
+    // Unfinished rows only, so a re-settle cannot rewrite a real report's time.
     expect(sql<{ completed_at: number | null }>`
       SELECT completed_at FROM head_journal
       WHERE actor_id = ${actor.actorId} AND id = 'h0'`[0].completed_at).toBe(closedAt);
@@ -169,10 +155,8 @@ describe('a run that settles closes every head it did not hear from', () => {
   });
 
   test('a recursive split keeps its parent head, which IS the run and is still working', () => {
-    // The exclusion that has to be there: `assembleRun` judges a sub-split by its
-    // parent head's own row, and that head goes on working after its children
-    // merge. Closing it here would report a live run as settled — the same lie in
-    // the other direction.
+    // `assembleRun` judges a sub-split by its parent head's row, which keeps working after its
+    // children merge; closing it would report a live run as settled.
     const { sql, journal, actor } = seeded();
     journal.insertSpawn({ ...spawn(RUN), depth: 0, parentId: null });
     journal.cacheMerge(RUN, MERGE, 'synthesize');

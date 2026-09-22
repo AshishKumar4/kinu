@@ -1,14 +1,7 @@
 /**
- * Unit tests: the envelope a head actually runs in.
- *
- * A head is a FORK of its parent turn — same workspace, same files, same
- * sandbox — so it gets the same open working envelope: no default wall clock,
- * step count, or token pool. A private envelope (a ~5 min clock, a token pool
- * divided by fan-out, and a step guard derived from that pool) is what killed a
- * 6-wide fork of a real audit at 32 steps having produced nothing. These tests
- * lock the envelope open, and lock the bounds that remain to what they actually
- * are: recursion depth, a deadline only a caller can ask for, and cancellation
- * by the spawner.
+ * A head is a fork of its parent turn and runs in the same open envelope: no default wall clock,
+ * step count, or token pool. The remaining bounds are recursion depth, a caller-requested deadline,
+ * and cancellation by the spawner.
  */
 
 import { REAL_CLOCK } from '../src/types/clock';
@@ -25,16 +18,7 @@ import { defaultLoopOrigin } from '../src/scaffold/bootstrap';
 import { hostedSeatsOver } from './helpers-actor-host';
 import type { HostedNodeSeat } from '../src/strategy/node-agent';
 
-/**
- * The hosted actor one head's turn runs on, over ONE workspace database.
- *
- * A head's turn is a claimed turn on the actor's own `ActorSession` now, so the
- * envelope cases supply the actor the turn belongs to rather than a bare
- * runtime. `hostedSeatsOver` is the production path — the real directory issues
- * the actor, the real host binds its handle, stores, runtime and session — so
- * what these tests measure is still the envelope, on the loop that actually
- * runs.
- */
+/** The hosted actor one head's turn runs on, via the production `hostedSeatsOver` path. */
 async function hostedHead(): Promise<HostedNodeSeat> {
   const { rt, testSql } = createTestRuntime();
 
@@ -107,17 +91,11 @@ describe('deriveChildBudget', () => {
   });
 });
 
-/**
- * A model that keeps calling `record_evidence` (so the agentic loop keeps
- * going), reporting a fixed prompt + output per step — the shape of a real head,
- * which re-sends its whole accumulated context every step.
- */
+/** Keeps calling `record_evidence`, re-sending its whole context each step like a real head. */
 function loopingHeadModel(perStep: {
   promptTokens: number; outputTokens: number;
-  /** Mid-flight prose the model emits alongside its tool call each step. */
   text?: string;
-  /** After this many steps the model CHOOSES to stop (text only, finishReason
-   *  'stop') — a head that genuinely finishes. Omitted = loops forever. */
+  /** Steps before the model stops on its own; omitted = loops forever. */
   stopAfterSteps?: number;
 }): LanguageModel {
   let step = 0;
@@ -184,8 +162,6 @@ describe('runHeadInference — a fork works until the work is done', () => {
   test('a head completes 61 steps and reports 305,000 output tokens without a private spend cap', async () => {
     const capture = new HeadCapture();
 
-    // This workload exceeds a 19,200-token envelope and a 32-step guard;
-    // neither is an admission bound on a head's turn.
     const report = await runHeadInference(loopInput(), { ...await hostedHead(), model: loopingHeadModel({
       promptTokens: 40_000, outputTokens: 5_000,
       text: 'Here is what I found.', stopAfterSteps: 60,
@@ -203,8 +179,6 @@ describe('runHeadInference — a fork works until the work is done', () => {
   test('a head spending 28,800 output tokens is not stopped by spend', async () => {
     const capture = new HeadCapture();
 
-    // Eight working steps and the final response consume 9 × 3,200 = 28,800
-    // output tokens; no fan-out-divided token pool stops the head.
     const report = await runHeadInference(loopInput(), { ...await hostedHead(), model: loopingHeadModel({ promptTokens: 20_000, outputTokens: 3_200, stopAfterSteps: 8 }),
     tools: buildHeadAccumulatorTools(capture), capture,
     workspaceLayout: 'shared-workspace', clock: REAL_CLOCK, isAborted: () => false, });
@@ -238,9 +212,7 @@ describe('runHeadInference — a fork works until the work is done', () => {
   test('the spawner abort is the backstop, and it reports itself honestly', async () => {
     const capture = new HeadCapture();
 
-    // No default step bound exists. This caller cancels after the head banked
-    // forty real evidence rows, which exercises the surviving backstop without
-    // teaching an infinite fixture to wait for a guard production removed.
+    // No default step bound exists; the caller cancels after forty evidence rows.
     const report = await runHeadInference(loopInput(), { ...await hostedHead(), model: loopingHeadModel({ promptTokens: 4_000, outputTokens: 1 }),
     tools: buildHeadAccumulatorTools(capture), capture,
     workspaceLayout: 'shared-workspace',
@@ -251,7 +223,6 @@ describe('runHeadInference — a fork works until the work is done', () => {
     expect(report.status).toBe('aborted');
     expect(report.errorMessage).toContain('parent stopped');
     expect(report.summary).toContain('did not complete');
-    // What it genuinely banked is still reported.
     expect(report.summary).toContain('still working');
   });
 });
@@ -269,7 +240,6 @@ describe('runHeadInference — a head that stopped never reports a conclusion it
     abortReason: () => 'the parent cancelled this head', });
 
     expect(report.status).toBe('aborted');
-    // This is the fabrication path: the speculation reached the parent as fact.
     expect(report.summary).not.toContain('sandbox provisioning');
     expect(report.summary).toContain('did not complete');
     expect(report.summary).toContain('still working');
@@ -325,9 +295,7 @@ describe('buildHeadSystemPrompt — the head is told the truth about its envelop
   test('a head with no depth left is not told it may split zero levels', async () => {
     const { buildHeadSystemPrompt } = await import('../src/heads/head-inference');
 
-    // The tool is off the surface entirely at depth 0 (head-tools.ts), so the
-    // prompt must not advertise a recursion allowance of 0 beside it — and the
-    // tool-derived conventions say plainly that recursion is unavailable.
+    // The tool is off the surface at depth 0 (head-tools.ts), so the prompt must not advertise a recursion allowance.
     const prompt = buildHeadSystemPrompt(
       loopInput({ maxDepth: 0 }),
       ['record_evidence', 'record_decision', 'shell'],

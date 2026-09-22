@@ -1,16 +1,4 @@
-/**
- * Unit tests for HeadController — pure-logic split → await → merge orchestration.
- *
- * Uses bun:sqlite for the HeadJournal and a mock HeadRuntime that returns
- * canned reports + canned merge LLM responses. Validates:
- *   - spawn → journal records insert
- *   - await collects reports in order
- *   - wall-clock budget enforces aborts
- *   - merge produces a valid MergeResult
- *   - schema-invalid merge LLM output falls back gracefully
- *   - depth-budget rejection at max-depth
- *   - cached merge round-trips through journal
- */
+/** HeadController split → await → merge, over a bun:sqlite HeadJournal and a canned HeadRuntime. */
 
 import { describe, test, expect } from 'bun:test';
 import { Database, type SQLQueryBindings } from 'bun:sqlite';
@@ -31,8 +19,6 @@ import type { SqlValue } from '../src/types/primitives';
 import { makeSql, makeExecRaw, createTestActor } from './helpers';
 import { defaultLoopOrigin } from '../src/scaffold/bootstrap';
 import { handClock, present } from '@kinu.run/test-utils';
-
-// ── Test runtime wiring ──────────────────────────────────────────────
 
 function newJournal() {
   const db = new Database(':memory:');
@@ -75,7 +61,6 @@ function fakeMergeOutput(narrative: string): MergeOutput {
 
 function buildRuntime(opts: {
   reports?: Record<string, HeadReport>;
-  /** Heads that never report on their own: they hold until aborted. */
   heldTasks?: readonly string[];
   mergeOutput?: MergeOutput;
   mergeThrows?: Error;
@@ -87,9 +72,7 @@ function buildRuntime(opts: {
     async spawnHead(input: HeadInput): Promise<SpawnedHead> {
       spawnedInputs?.push(input);
       const id = input.id;
-      // A held head never reports, aborted or not: the deadline's own
-      // rejection is what ends the race, exactly as a real head still
-      // running past its abort does.
+      // A held head never reports; the deadline's rejection ends the race, as for a real head running past its abort.
       const held = heldTasks.includes(input.task) ? Promise.withResolvers<void>() : undefined;
 
       return {
@@ -122,8 +105,6 @@ const baseRequest: SplitRequest = {
   ],
 };
 
-// ── Tests ────────────────────────────────────────────────────────────
-
 describe('HeadController.run', () => {
   test('propagates trusted Plan mode to every spawned head', async () => {
     const { journal } = newJournal();
@@ -135,9 +116,7 @@ describe('HeadController.run', () => {
       parentHeadId: null,
       inheritedContext: baseContext,
       request: baseRequest,
-      // Each test states the recursion room its scenario spends. One level is
-      // what a split whose heads only report needs: the children inherit zero,
-      // and nothing here splits again.
+      // Each test states the recursion room its scenario spends; one level suffices when heads only report.
       parentBudget: { maxDepth: 1, spawnedAt: Date.now() },
     });
 
@@ -222,9 +201,7 @@ describe('HeadController.run', () => {
   });
 
   test('a head with no authored wall clock runs to completion — no default deadline is invented', async () => {
-    // maxWallClockMs is OPT-IN: a split whose budget carries none must let a
-    // slow head finish. The report lands after a gated delay, and the run
-    // completes with status `completed` — not `budget_exceeded`.
+    // `maxWallClockMs` is opt-in: without it a slow head finishes and the run is `completed`.
     const { sql, journal } = newJournal();
     const gate = Promise.withResolvers<void>();
     const runtime = buildRuntime({});
@@ -287,9 +264,7 @@ describe('HeadController.run', () => {
       parentHeadId: null,
       inheritedContext: baseContext,
       request: { rationale: 'no heads', heads: [] },
-      // Real room, deliberately: the depth check runs first, so a spent budget
-      // here would raise ITS error and this test would never reach the one it
-      // names.
+      // Real room: the depth check runs first, so a spent budget would raise its error instead.
       parentBudget: { maxDepth: 1, spawnedAt: Date.now() },
     })).rejects.toThrow(/no head tasks/i);
   });
@@ -297,7 +272,6 @@ describe('HeadController.run', () => {
   test('aborts heads that exceed wall-clock budget; records budget_exceeded', async () => {
     const { sql, journal } = newJournal();
 
-    // The head holds until aborted; the budget's clock is stepped past it.
     const runtime = buildRuntime({ heldTasks: ['angle A'] });
     const clock = handClock();
     const controller = new HeadController(runtime, journal, clock);
@@ -326,20 +300,10 @@ describe('HeadController.run', () => {
     expect(rows[0]?.error_message).toMatch(/wall-clock/i);
   });
 
-  /**
-   * A head aborted before it could report is the case this whole vocabulary
-   * exists for. The controller writes that head's report itself, and
-   * `{ input: 0, output: 0, total: 0 }` there is a measurement nobody took. The
-   * head may well have burned real tokens before the deadline cut it off, so
-   * every layer below has to be able to say "unknown", including the SQL.
-   */
+  /** A head aborted before reporting has unknown usage, not zero; every layer down to SQL must say so. */
   test('a head aborted before reporting carries no usage, and its reporting sibling still counts', async () => {
     const { sql, journal } = newJournal();
-    // 'angle A' never answers inside the 50ms budget, so the controller
-    // synthesizes its report; 'angle B' answers with the default fake report,
-    // which carries a real provider figure of 100 + 80 under its own spawn id
-    // (a canned report keyed by task would carry a literal id the journal has
-    // no row for, so its usage would never reach the columns below).
+    // 'angle A' misses the 50ms budget; 'angle B' reports 100 + 80 under its own spawn id so the usage reaches the journal columns.
     const runtime = buildRuntime({ heldTasks: ['angle A'] });
     const clock = handClock();
     const controller = new HeadController(runtime, journal, clock);
@@ -357,12 +321,9 @@ describe('HeadController.run', () => {
     clock.advance(51);
     const result = await run;
 
-    // Exactly the sibling's tokens — the aborted head neither added to the
-    // total nor dragged it toward a zero it never earned.
     expect(result.costSummary.totalTokens).toBe(180);
 
-    // Asserted on the COLUMNS, because the durable shape is the claim: a schema
-    // with `DEFAULT 0` on these could not represent "we do not know".
+    // Asserted on the columns: `DEFAULT 0` could not represent unknown.
     const rows = sql<{ status: string; token_input: number | null; token_output: number | null }>`
       SELECT status, token_input, token_output FROM head_journal`;
 
@@ -377,9 +338,7 @@ describe('HeadController.run', () => {
 
   test('a split no head reported on has undefined tokens, never 0 — through the cache too', async () => {
     const { journal } = newJournal();
-    // Both heads are cut off before they report anything. Nothing measured this
-    // split, and the reports the controller writes for them carry no findings,
-    // so it settles down the deterministic empty-split path.
+    // Both heads cut off before reporting, so the split settles down the deterministic empty-split path.
     const runtime = buildRuntime({ heldTasks: ['angle A', 'angle B'] });
     const clock = handClock();
     const controller = new HeadController(runtime, journal, clock);
@@ -400,13 +359,11 @@ describe('HeadController.run', () => {
     expect(result.costSummary.headCount).toBe(2);
     expect(result.costSummary.totalTokens).toBeUndefined();
 
-    // This narrative goes into the parent's context verbatim. "0 tokens" there
-    // tells the agent a failed delegation was free.
+    // This narrative reaches the parent verbatim; "0 tokens" would tell the agent a failed delegation was free.
     expect(result.mergedNarrative).not.toContain('0 tokens');
     expect(result.mergedNarrative).toContain('tokens unreported');
 
-    // The absence survives the durable round-trip: NULL in the column, absent
-    // again on the way back, so a replayed merge makes the same claim.
+    // NULL survives the durable round-trip, so a replayed merge makes the same claim.
     expect(journal.readRun('root-blank')?.merge?.totalTokens).toBeNull();
     expect(journal.readCachedMerge('root-blank')?.costSummary.totalTokens).toBeUndefined();
   });
@@ -436,7 +393,6 @@ describe('HeadController.run', () => {
     expect(result.mergedNarrative).toContain('LLM timeout');
     expect(result.mergedNarrative).toContain('A finding');
     expect(result.mergedNarrative).toContain('B finding');
-    // Decisions still aggregate from heads.
     expect(result.selectedDecisions.length).toBe(2);
   });
 
@@ -450,7 +406,6 @@ describe('HeadController.run', () => {
 
     const runtime: HeadRuntime = {
       spawnHead: spawner.spawnHead,
-      // Returns an output that doesn't match MergeOutputSchema (missing required fields).
       mergeLLM: async () => malformed,
     };
 
@@ -506,8 +461,7 @@ describe('HeadController.run', () => {
   test('records the per-head step trace; listRuns round-trips it', async () => {
     const { journal } = newJournal();
 
-    // Report id must match the spawned input.id for recordReport to land, so
-    // build the report from input.id with an injected step trace.
+    // Report id must match the spawned `input.id` for `recordReport` to land.
     const runtime: HeadRuntime = {
       async spawnHead(input) {
         return {
@@ -533,10 +487,8 @@ describe('HeadController.run', () => {
     const run = present(journal.listRuns(10).find((r) => r.rootId === 'r-steps'), 'the r-steps run');
 
     expect(run.heads).toHaveLength(1);
-    // The trace reaches the journal per step while the head is still running
-    // (HeadInferenceDeps.reportStep), never from the finished report — so a
-    // report claiming two steps must NOT materialize a trace here, or a late
-    // report could overwrite the live rows already written.
+    // The trace reaches the journal per step via `HeadInferenceDeps.reportStep`, never from the finished report,
+    // or a late report could overwrite live rows.
     expect(journal.readSteps(run.heads[0].id)).toHaveLength(0);
   });
 
@@ -568,31 +520,22 @@ describe('HeadController.run', () => {
       parentBudget: { maxDepth: 1, spawnedAt: Date.now() },
     });
 
-    // The run resolves: one head's spawn failure is not the split's failure.
     expect(result.mergedNarrative).toBe('Merged with one survivor.');
     expect(result.costSummary.headCount).toBe(2);
     expect(result.costSummary.headsWithFindings).toBe(1);
-    // Only the survivor banked evidence; the failed head carries none.
     expect(result.evidenceAggregate).toHaveLength(1);
-    // The split event names the head that actually spawned — never the failed one.
     expect(splitIds).toHaveLength(1);
 
     const rows = sql<{ id: string; status: string; error_message: string | null }>`
       SELECT id, status, error_message FROM head_journal`;
 
     expect(rows).toHaveLength(2);
-    // No row is left running: the failed head's row settled errored with its reason.
     expect(rows.find((r) => r.status === 'errored')?.error_message).toContain('spawn blew up');
     expect(rows.find((r) => r.status === 'completed')?.id).toBe(splitIds[0]);
   });
 });
 
-/**
- * A head that stopped without banking anything observed nothing, and its
- * silence must never reach the parent as a fact. A real run merged two
- * budget-starved heads into "the immediate blockage is the sandbox provisioning
- * failure" — a cause nobody had observed, handed to the parent as ground truth.
- */
+/** A head that stopped without banking anything observed nothing; its silence must not reach the parent as a fact. */
 describe('HeadController.merge — an empty head cannot become a finding', () => {
   const emptyReport = (id: string, overrides: Partial<HeadReport> = {}): HeadReport => fakeReport(id, {
     status: 'budget_exceeded',
@@ -633,7 +576,6 @@ describe('HeadController.merge — an empty head cannot become a finding', () =>
     expect(result.mergedNarrative).toContain('budget_exceeded');
     expect(result.mergedNarrative).toContain('stream closed');
     expect(result.mergedNarrative).toContain('do not infer a cause from it');
-    // Nothing was learned, so nothing is asserted.
     expect(result.recommendations).toEqual([]);
     expect(result.unresolvedQuestions).toEqual([]);
     expect(result.selectedDecisions).toEqual([]);
@@ -698,8 +640,7 @@ describe('HeadController.merge — an empty head cannot become a finding', () =>
   test('the cached replay reports the same findings count as the live merge', async () => {
     const { journal } = newJournal();
 
-    // Reports carry the SPAWNED id here so they land on the journal rows the
-    // cached read derives its count from.
+    // Reports carry the spawned id so they land on the rows the cached read counts.
     const runtime: HeadRuntime = {
       async spawnHead(input: HeadInput): Promise<SpawnedHead> {
         return {
@@ -760,7 +701,7 @@ describe('HeadJournal.listLive — the live fork roster', () => {
     for (let i = 0; i < 4; i++) spawn(journal, `root-${i}`, `h${i}`);
     const live = journal.listLive(2);
     expect(live.items).toHaveLength(2);
-    // The bound cut the PAGE, not the truth: four open roots exist.
+    // The bound cut the page, not the count.
     expect(live.total).toBe(4);
     expect(live.items.every((run) => run.rationale === '')).toBe(true);
   });
@@ -781,20 +722,14 @@ describe('HeadJournal.listLive — the live fork roster', () => {
     expect(remaining.some((run) => run.rootId === 'branch-0')).toBe(false);
   });
 
-  // The roster is read on every model step and the journal has no GC, so its
-  // cost must be a function of the OPEN runs, not of everything ever spawned.
-  // Pinned on the PLAN rather than on a stopwatch: the statement is captured
-  // from the journal itself (no second copy of the SQL to drift), and a full
-  // scan of head_journal is the regression this guards. It fails on the
-  // previous `GROUP BY … HAVING running > 0` with "SCAN j USING INDEX …".
+  // The roster is read every model step and the journal has no GC, so its plan must be bounded by open runs;
+  // a full scan of head_journal is the regression. The statement is captured from the journal itself.
   test('the roster does not read the settled journal', () => {
     const db = new Database(':memory:');
     const execRaw = makeExecRaw(db);
     initHeadsTables(execRaw);
     const inner = makeSql(db);
-    // The actor binds over the UNDERLYING executor: the directory's own rows
-    // belong in this same database, and the capture then holds only the
-    // journal's statements.
+    // Bound over the underlying executor so the capture holds only the journal's statements.
     const actor = createTestActor(inner, execRaw, crypto.randomUUID(), 'roster-test');
     const statements: Array<{ text: string; values: SqlValue[] }> = [];
 
@@ -821,14 +756,11 @@ describe('HeadJournal.listLive — the live fork roster', () => {
       total: 1,
     });
 
-    // Two statements: the count and the page. BOTH are bounded by the status
-    // index — neither may scan the settled journal.
+    // The count and the page must both use the status index.
     expect(statements).toHaveLength(2);
 
     for (const { text, values } of statements) {
-      // Bound with the statement's OWN values — the owner predicate is one of
-      // them, and the plan is only honest against the parameters the journal
-      // actually passed.
+      // Bound with the statement's own values; the plan is only honest against the real parameters.
       const bound: SQLQueryBindings[] = values.map((value) =>
         value instanceof ArrayBuffer ? new Uint8Array(value) : value);
 
@@ -843,7 +775,6 @@ describe('HeadJournal.listLive — the live fork roster', () => {
 describe('HeadJournal.listRuns — grouping (the #179 quirk fix)', () => {
   test('a top-level split (synthetic root, all heads parent_id NULL) is ONE run, not N', async () => {
     const { journal } = newJournal();
-    // Default reports (no override) → fakeReport(input.id) so recordReport lands.
     const runtime = buildRuntime({ mergeOutput: fakeMergeOutput('Merged A+B.') });
     const controller = new HeadController(runtime, journal);
     await controller.run({
@@ -855,7 +786,6 @@ describe('HeadJournal.listRuns — grouping (the #179 quirk fix)', () => {
     });
 
     const runs = journal.listRuns(10);
-    // ONE run, never 2 "roots" carrying empty heads.
     expect(runs).toHaveLength(1);
     const run = runs[0];
     expect(run.rootId).toBe('top-root');
@@ -944,31 +874,14 @@ describe('HeadJournal.listRuns — grouping (the #179 quirk fix)', () => {
 
     expect(firstSpawn.budget.maxDepth).toBe(2);     // depth - 1
     expect(firstSpawn.depth).toBe(1);               // 3 - 2 = 1
-    // Fan-out does not divide a child's working room: two siblings each get the
-    // parent's envelope, not half of it.
-    //
-    // A RANGE, not `=== 60_000`. The derivation subtracts the wall clock elapsed
-    // since `spawnedAt`, so exact equality holds only while ZERO milliseconds
-    // pass between this test building the budget and the controller reading the
-    // clock — it was asserting that the machine was idle, not that the envelope
-    // was undivided, and failed ~1 in 7 under load. Half would be 30_000, so
-    // the lower bound is what proves undividedness; the upper bound is what
-    // stops a child being handed more room than its parent.
+    // Fan-out does not divide a child's room. A range, since the derivation subtracts elapsed wall clock:
+    // half would be 30_000, and the upper bound stops a child exceeding its parent.
     expect(firstSpawn.budget.maxWallClockMs).toBeGreaterThan(59_000);
     expect(firstSpawn.budget.maxWallClockMs).toBeLessThanOrEqual(60_000);
   });
 });
 
-/**
- * blind_spots — the merge's negative-space field.
- *
- * Every other merge output is a function of what the heads SAID, so a framing
- * all N heads shared has no field to surface in and gets synthesized into a
- * confident narrative. These lock the carriage rather than the wording: the
- * field's own value is unmeasured and settled by reading `head_merge` rows
- * across real splits — the query and the revert rule are stated with the field
- * itself, in heads/merge-schema.ts.
- */
+/** blind_spots, the merge's negative-space field. These lock its carriage, not its wording; see heads/merge-schema.ts. */
 describe('merge blind spots', () => {
   const withBlindSpots = (...spots: string[]): MergeOutput => ({
     ...fakeMergeOutput('Synthesis.'),
@@ -998,9 +911,7 @@ describe('merge blind spots', () => {
     });
 
     expect(result.blindSpots).toEqual(spots);
-    // The row the falsification query reads.
     expect(events).toEqual([spots]);
-    // And it survives the cache, so a replayed merge does not quietly lose it.
     const cached = journal.readCachedMerge('root-bs');
 
     if (!cached) throw new Error('expected cached merge');
@@ -1009,7 +920,6 @@ describe('merge blind spots', () => {
 
   test('degrades to [] when the merge model omits the key, exactly like the other list fields', async () => {
     const { journal } = newJournal();
-    // A model that answers with only a narrative — the documented degradation.
     const narrativeOnly = fakeMergeOutput('Just a narrative.');
 
     for (const key of ['selected_decisions', 'unresolved_questions', 'recommendations', 'blind_spots']) {
@@ -1049,7 +959,6 @@ describe('merge blind spots', () => {
       parentBudget: { maxDepth: 1, spawnedAt: Date.now() },
     });
 
-    // The merge never reached a model, so it cannot have produced a blind spot.
     expect(result.costSummary.headsWithFindings).toBe(0);
     expect(result.blindSpots).toEqual([]);
   });
@@ -1089,10 +998,8 @@ describe('merge blind spots', () => {
     });
 
     expect(prompt).toContain('blind_spots');
-    // The distinction is the whole point: without it the model refiles the
-    // heads' own open questions here and the field measures nothing.
+    // Without the distinction the model refiles the heads' open questions here.
     expect(prompt).toContain('A question a head RAISED is an unresolved_question');
-    // And an honest empty answer must be reachable, or the field becomes filler.
     expect(prompt).toContain('Return []');
   });
 });

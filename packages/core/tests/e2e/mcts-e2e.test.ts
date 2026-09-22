@@ -1,9 +1,4 @@
-/**
- * E2E test: Real SQLite + Real LLM, full MCTS cycle.
- *
- * Requires env vars: AI_GATEWAY_BASE_URL, AI_GATEWAY_AUTH
- * Skips gracefully if not set.
- */
+/** Real database + real LLM, full MCTS cycle. Skips unless AI_GATEWAY_BASE_URL and AI_GATEWAY_AUTH are set. */
 
 import { describe, test, expect } from 'bun:test';
 import { Database } from 'bun:sqlite';
@@ -167,5 +162,5 @@ describe.skipIf(!isE2EConfigured())('E2E MCTS with real LLM', () => {
 
     if (result.converged) expect(memory).toContain('Successful approach');
     else expect(memory).toContain('Failed task');
-  }); // 10 min — reasoning models take 10-30s per call, AI Gateway has variable latency
+  }); // reasoning models are slow per call
 });
