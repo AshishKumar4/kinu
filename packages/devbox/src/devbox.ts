@@ -37,6 +37,7 @@ import {
   type QuiesceAction,
   type RecoveryRow,
   type RecoveryStage,
+  type ResourceScope,
   type SupervisedProcessSpec,
   openStartBudget, awaitListenerCommand,
   LAST_INTERACTION_KEY,
@@ -2003,11 +2004,7 @@ export class Devbox<Env = unknown> extends Sandbox<Env> {
       }
     }
 
-    return await this.#resources.run(scopes, async () => {
-      await this.ensureReady();
-
-      return await super.readFile(path, options);
-    });
+    return await this.#claimed(scopes, () => super.readFile(path, options));
   }
 
   /** The file stays claimed until the stream's bytes are drained, not until this resolves. */
@@ -2029,48 +2026,37 @@ export class Devbox<Env = unknown> extends Sandbox<Env> {
     content: string | ReadableStream<Uint8Array>,
     options?: { encoding?: string; sessionId?: string },
   ) {
-    return await this.#resources.run(pathScopes({ path, membership: true }), async () => {
-      await this.ensureReady();
-
-      return await super.writeFile(path, content, options);
-    });
+    return await this.#claimed(
+      pathScopes({ path, membership: true }),
+      () => super.writeFile(path, content, options),
+    );
   }
 
   /** `deleteFile` claims the subtree: a path can't reveal it is a directory, and a
    *  plain file's subtree costs nothing since no operation can name a path beneath one. */
   override async deleteFile(path: string, sessionId?: string) {
-    return await this.#resources.run(
+    return await this.#claimed(
       pathScopes({ path, membership: true, recursive: true }),
-      async () => {
-        await this.ensureReady();
-
-        return await super.deleteFile(path, sessionId);
-      },
+      () => super.deleteFile(path, sessionId),
     );
   }
 
   override async renameFile(oldPath: string, newPath: string, sessionId?: string) {
-    return await this.#runMovedResourceOperation(
-      oldPath,
-      newPath,
+    return await this.#claimed(
+      this.#movedScopes(oldPath, newPath),
       () => super.renameFile(oldPath, newPath, sessionId),
     );
   }
 
   override async moveFile(sourcePath: string, destinationPath: string, sessionId?: string) {
-    return await this.#runMovedResourceOperation(
-      sourcePath,
-      destinationPath,
+    return await this.#claimed(
+      this.#movedScopes(sourcePath, destinationPath),
       () => super.moveFile(sourcePath, destinationPath, sessionId),
     );
   }
 
-  #runMovedResourceOperation<Result>(
-    from: string,
-    to: string,
-    operation: () => Promise<Result>,
-  ) {
-    return this.#resources.run(this.#movedScopes(from, to), async () => {
+  #claimed<Result>(scopes: readonly ResourceScope[], operation: () => Promise<Result>): Promise<Result> {
+    return this.#resources.run(scopes, async () => {
       await this.ensureReady();
 
       return await operation();
@@ -2089,44 +2075,28 @@ export class Devbox<Env = unknown> extends Sandbox<Env> {
   override async mkdir(path: string, options?: { recursive?: boolean; sessionId?: string }) {
     // A recursive mkdir really can add an entry to every directory above it, so
     // it is the one operation that claims the whole chain rather than the parent.
-    return await this.#resources.run(
+    return await this.#claimed(
       pathScopes({ path, membership: true, ancestors: options?.recursive === true }),
-      async () => {
-        await this.ensureReady();
-
-        return await super.mkdir(path, options);
-      },
+      () => super.mkdir(path, options),
     );
   }
 
   override async listFiles(path: string, options?: ListFilesOptions) {
-    return await this.#resources.run(
+    return await this.#claimed(
       pathScopes({ path, recursive: options?.recursive === true }),
-      async () => {
-        await this.ensureReady();
-
-        return await super.listFiles(path, options);
-      },
+      () => super.listFiles(path, options),
     );
   }
 
   override async exists(path: string, sessionId?: string) {
-    return await this.#resources.run(pathScopes({ path }), async () => {
-      await this.ensureReady();
-
-      return await super.exists(path, sessionId);
-    });
+    return await this.#claimed(pathScopes({ path }), () => super.exists(path, sessionId));
   }
 
   override async exposePort(
     port: number,
     options: { name?: string; hostname: string; token?: string },
   ) {
-    return await this.#resources.run(portScope(port), async () => {
-      await this.ensureReady();
-
-      return await super.exposePort(port, options);
-    });
+    return await this.#claimed(portScope(port), () => super.exposePort(port, options));
   }
 
   /** Revocation touches only this object's preview rows, never the container, so it skips
