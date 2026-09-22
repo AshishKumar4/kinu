@@ -307,7 +307,7 @@ test('preview tabs deduplicate live slates, fill the surface and keep plans in W
         // One presentation policy: a live actor's arrival is neither labelled
         // nor described as retained, and its review is an explicit navigation.
         expect(await page.$eval('[data-preview-surface]', el => el.textContent)).not.toContain('retained');
-        expect(await page.$eval('[data-preview-surface]', el => el.textContent)).toContain('Review in courier conversation');
+        expect(await page.$eval('[data-preview-surface]', el => el.textContent)).toContain("Review in courier's conversation");
         // A repeat of a reference already seen is not an arrival: the claim is
         // spent for the connection, so no amount of waiting re-opens it. The
         // review under it is a stable mount — give the repeat a full read
@@ -329,7 +329,7 @@ test('preview tabs deduplicate live slates, fill the surface and keep plans in W
         await openPlan(page, 'Worker revision two');
         expect(await page.$eval('[data-plan-owner]', el => el.getAttribute('data-plan-owner'))).toBe('main');
         expect(await page.$('[data-plan-decisions]')).toBeNull();
-        await clickControl(page, 'Review in worker conversation');
+        await clickControl(page, "Review in worker's conversation");
         await page.waitForSelector('[data-plan-owner="worker"]');
         await page.waitForSelector('[data-plan-decisions]');
         await clickControl(page, 'Approve & implement');

@@ -18,7 +18,7 @@ export interface CopyButtonProps {
 const FEEDBACK: Record<CopyStatus, { Icon: Icon; verb: string; tone: string }> = {
   idle: { Icon: CopyIcon, verb: "Copy", tone: "" },
   copied: { Icon: CheckIcon, verb: "Copied", tone: "p-success" },
-  failed: { Icon: WarningCircleIcon, verb: "Couldn't copy", tone: "p-danger" },
+  failed: { Icon: WarningCircleIcon, verb: "Could not copy", tone: "p-danger" },
 };
 
 export function CopyButton({ value, what, size = 12, className }: CopyButtonProps) {

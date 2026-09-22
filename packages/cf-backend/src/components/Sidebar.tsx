@@ -335,7 +335,7 @@ export default function Sidebar({ onCollapse }: { onCollapse?: () => void } = {}
           <button
             onClick={refreshWorkspaces}
             className="w-full text-left px-5 py-2 text-xs p-warning rounded-md p-card-hover transition-colors"
-          >Couldn't load workspaces. Tap to retry.</button>
+          >Could not load workspaces. Retry</button>
         )}
         <ul className="space-y-0.5">
           {workspaces.map((a) => {
@@ -459,7 +459,7 @@ export default function Sidebar({ onCollapse }: { onCollapse?: () => void } = {}
             {profile?.email?.[0]?.toUpperCase() ?? '?'}
           </div>
           <span className="min-w-0 flex-1 truncate p-t-control p-text-4">
-            {profile?.email ?? (profileFailed ? 'Profile unavailable' : 'loading…')}
+            {profile?.email ?? (profileFailed ? 'Could not load your profile' : 'Loading…')}
           </span>
           <GearIcon size={14} className="shrink-0 p-text-4 transition-colors hover:p-accent" />
         </button>
@@ -504,8 +504,8 @@ export default function Sidebar({ onCollapse }: { onCollapse?: () => void } = {}
           </>}
         >
           <p className="text-xs p-text-2 leading-relaxed">
-            Remove <span className="font-medium p-text">{workspaceDisplayTitle(deleteTarget)}</span> and clear its
-            server-side state? This cannot be undone.
+            Remove <span className="font-medium p-text">{workspaceDisplayTitle(deleteTarget)}</span> and delete
+            everything in it? This cannot be undone.
           </p>
           {deleteError && (
             <div className="p-notice-danger text-xs rounded-md px-3 py-2">Could not remove: {deleteError}</div>

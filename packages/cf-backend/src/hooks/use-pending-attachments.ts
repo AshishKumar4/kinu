@@ -184,7 +184,7 @@ export function usePendingAttachments(limitBytes: number): PendingAttachments {
       if (thrown === null || generation !== conversionGeneration.current) return;
       const names = convertible.map((file) => file.name).join(", ");
       const reason = renderThrownChain(thrown);
-      let message = `Couldn't read ${names}: ${reason}`;
+      let message = `Could not read ${names}: ${reason}`;
 
       try {
         diagnostics.event('attachments.conversion_failed', {
@@ -204,9 +204,9 @@ export function usePendingAttachments(limitBytes: number): PendingAttachments {
 
   const refusal = useMemo(() => {
     const capacityRefusal = state.refused.length === 0 ? null : (
-      `Chat attachments are capped at ${String(limitBytes / (1024 * 1024))} MB per message. `
+      `A message can carry ${String(limitBytes / (1024 * 1024))} MB of attachments. `
       + `${state.refused.join(", ")} did not fit. `
-      + `Upload larger files via the Files pane on the Environment tab.`
+      + `Upload larger files in the Files tab.`
     );
 
     if (state.conversionFailure === null) return capacityRefusal;

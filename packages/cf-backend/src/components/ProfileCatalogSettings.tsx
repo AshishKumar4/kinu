@@ -308,7 +308,7 @@ export function ProfileCatalogSettings({ tiersOnly = false }: { tiersOnly?: bool
               })}
             </div>
             <Field inline label="Add a tier"
-              hint="Lowercase letters, digits and hyphens — roles point at the name.">
+              hint="Lowercase letters, digits and hyphens. Roles refer to a tier by this name.">
               <input
                 className={`${selectSmCls} w-56`}
                 placeholder="e.g. review"

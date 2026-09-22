@@ -136,7 +136,7 @@ export function FeedbackModal({ onClose }: { onClose: () => void }) {
           setShot(tooLarge(capture.blob.size)
             ? {
               phase: "failed",
-              reason: `it came to ${String(Math.ceil(capture.blob.size / (1024 * 1024)))} MiB, over the ${String(FEEDBACK_MAX_SCREENSHOT_BYTES >> 20)} MiB limit. Narrow the window and take it again, or send the note alone`,
+              reason: `it came to ${String(Math.ceil(capture.blob.size / (1024 * 1024)))} MiB, over the ${String(FEEDBACK_MAX_SCREENSHOT_BYTES >> 20)} MiB limit. Narrow the window and retake it`,
             }
             : { phase: "ready", capture });
         },
@@ -344,7 +344,7 @@ export function FeedbackModal({ onClose }: { onClose: () => void }) {
    *  under the reporter's cursor. */
   const stop = useCallback(() => {
     inFlight.current?.abort();
-    setSend({ phase: "failed", reason: "You stopped it" });
+    setSend({ phase: "failed", reason: "you stopped it" });
   }, []);
 
   if (send.phase === "sent") {
@@ -462,13 +462,13 @@ export function FeedbackModal({ onClose }: { onClose: () => void }) {
 
         {send.phase === "failed" && (
           <p className="text-xs p-warn" data-feedback-error>
-            Not sent: {send.reason}. Your screenshot and note are still here. Press Retry.
+            Not sent: {send.reason}. Your note and screenshot are still here, so you can retry.
           </p>
         )}
 
         <p className="p-meta p-text-3" data-feedback-consent>
           Sending shares your note, the page address, your account email, and the screenshot if you
-          include one. Your browser blacks out password fields before upload. Use
+          include one. Password fields are blacked out before upload. Use{" "}
           <span className="p-text-2">Hide</span> for anything else.
         </p>
       </Modal>

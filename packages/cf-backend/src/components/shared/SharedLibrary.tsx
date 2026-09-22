@@ -315,7 +315,7 @@ export function SharedLibraryView({ fixture, workspaces }: SharedLibraryProps = 
       {err && (
         <div className="p-notice-danger flex items-center justify-between gap-3 rounded-md px-3 py-2 text-xs">
           <span className="min-w-0 truncate">{err}</span>
-          <button type="button" onClick={refresh} className="shrink-0 underline">retry</button>
+          <button type="button" onClick={refresh} className="shrink-0 underline">Retry</button>
         </div>
       )}
       {library === null && err === null ? (
@@ -323,7 +323,7 @@ export function SharedLibraryView({ fixture, workspaces }: SharedLibraryProps = 
       ) : library !== null && (
         shown.length === 0 ? (
           <p className="py-12 text-center p-text-3">
-            {needle === "" ? EMPTY_COPY[segment] : `Nothing matches “${query.trim()}”`}
+            {needle === "" ? EMPTY_COPY[segment] : `Nothing matches "${query.trim()}"`}
           </p>
         ) : (
           <ul data-share-grid className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">

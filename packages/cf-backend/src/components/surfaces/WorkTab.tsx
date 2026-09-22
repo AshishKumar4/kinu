@@ -311,8 +311,8 @@ function WorkReview({ item, owner, rpc, planRpc, onReviewActor, resource, onRetr
           className="inline-flex items-center gap-1.5 rounded-md px-2 py-1 text-xs p-accent transition-colors hover:p-elevated">
           <ArrowLeftIcon size={12} /> Back to Work
         </button>
-        {!mine && <span className="p-meta p-text-3">Read-only — {item.owner.name}'s plan
-          {onReviewActor && <button type="button" className="ml-2 p-accent" onClick={() => void onReviewActor(item.owner.name)}>Review in {item.owner.name} conversation</button>}
+        {!mine && <span className="p-meta p-text-3">Read-only: {item.owner.name}'s plan
+          {onReviewActor && <button type="button" className="ml-2 p-accent" onClick={() => void onReviewActor(item.owner.name)}>Review in {item.owner.name}'s conversation</button>}
         </span>}
       </div>
       {resource.status === "error" && (
@@ -482,7 +482,7 @@ function WorkJournal({ journal, filter, onFilter, view, seenAt, seenError, resou
         )}
         {seenError && (
           <div className="text-xs p-warning p-card rounded-lg px-3 py-1.5">
-            Couldn't mark the changelog as seen: {seenError}
+            Could not mark the changelog as seen: {seenError}
           </div>
         )}
 
