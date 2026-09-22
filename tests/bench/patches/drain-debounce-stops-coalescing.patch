@@ -1,10 +1,10 @@
 diff --git a/packages/core/src/orchestrator/drain-scheduler.ts b/packages/core/src/orchestrator/drain-scheduler.ts
-index 35b3a44..8ea40fa 100644
+index d4b9d31ee..024569806 100644
 --- a/packages/core/src/orchestrator/drain-scheduler.ts
 +++ b/packages/core/src/orchestrator/drain-scheduler.ts
-@@ -38,7 +38,6 @@ export class DrainScheduler {
-    *  Disarms BEFORE draining so an event landing mid-drain (after the drain's
-    *  pending-select) arms a fresh window rather than being silently absorbed. */
+@@ -20,7 +20,6 @@ export class DrainScheduler {
+ 
+   /** Disarms before draining so an event landing mid-drain arms a fresh window. */
    schedule(): void {
 -    if (this.armed) return;
      this.armed = true;

@@ -1,11 +1,11 @@
 diff --git a/packages/core/src/heads/controller.ts b/packages/core/src/heads/controller.ts
-index dce88db72..4cc0468d8 100644
+index 7fa9bd5c3..caa0a65f5 100644
 --- a/packages/core/src/heads/controller.ts
 +++ b/packages/core/src/heads/controller.ts
-@@ -480,7 +480,7 @@ export class HeadController {
+@@ -338,7 +338,7 @@ export class HeadController {
+         if (!g) return { ...base, score: NO_GROUNDED_SIGNAL, grounding: 'judge' };
  
-         // A head that never completed produced no trustworthy outcome — floor it
-         // without a judge call so it ranks below a head that ran.
+         // A head that never completed is floored without a judge call.
 -        if (r.status !== 'completed') return { ...base, score: 0, grounding: 'judge' };
 +        if (r.status !== 'completed') return { ...base, score: NO_GROUNDED_SIGNAL, grounding: 'judge' };
  

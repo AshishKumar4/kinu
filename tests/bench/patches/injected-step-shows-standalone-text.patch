@@ -1,13 +1,13 @@
 diff --git a/packages/core/src/orchestrator/inbox.ts b/packages/core/src/orchestrator/inbox.ts
-index 562ffdc86..b09f8a8a5 100644
+index 476537b40..77d687ccb 100644
 --- a/packages/core/src/orchestrator/inbox.ts
 +++ b/packages/core/src/orchestrator/inbox.ts
-@@ -651,7 +651,7 @@ export class Inbox implements AgentInbox {
+@@ -636,7 +636,7 @@ export class Inbox implements AgentInbox {
    }
  }
  
 -const stepBody = (signal: AgentSignal): string => signal.stepText ?? signal.text;
 +const stepBody = (signal: AgentSignal): string => signal.text;
  
- /** The turn metadata a signal carries: its `kinuEvent` provenance, the
-  *  reply binding its source rows are bound to, and the producer's own.
+ /** Producer metadata spreads first so the inbox owns `kinuEvent`/`drainTurnId`; the author stamp goes last. */
+ const turnMetadata = (signal: AgentSignal): JsonObject => {

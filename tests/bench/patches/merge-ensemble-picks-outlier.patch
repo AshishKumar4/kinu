@@ -1,10 +1,10 @@
 diff --git a/packages/core/src/heads/controller.ts b/packages/core/src/heads/controller.ts
-index dce88db72..9cda2f6e0 100644
+index 7fa9bd5c3..95cb0519e 100644
 --- a/packages/core/src/heads/controller.ts
 +++ b/packages/core/src/heads/controller.ts
-@@ -685,7 +685,7 @@ export class HeadController {
+@@ -507,7 +507,7 @@ export class HeadController {
+     const medianScore = median(usable.map((x) => x.score));
  
-     // Pick the sample whose score is closest to the median.
      const winner = usable.reduce((best, cur) =>
 -      Math.abs(cur.score - medianScore) < Math.abs(best.score - medianScore) ? cur : best,
 +      Math.abs(cur.score - medianScore) > Math.abs(best.score - medianScore) ? cur : best,

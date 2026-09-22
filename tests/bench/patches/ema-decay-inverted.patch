@@ -1,8 +1,8 @@
 diff --git a/packages/core/src/craft/ema.ts b/packages/core/src/craft/ema.ts
-index 08a2eca94..5c2c43abc 100644
+index 41451098c..bfc9f6aa7 100644
 --- a/packages/core/src/craft/ema.ts
 +++ b/packages/core/src/craft/ema.ts
-@@ -42,7 +42,7 @@ export function effectiveScore(
+@@ -28,7 +28,7 @@ export function effectiveScore(
    if (lastUsedAtMs <= 0) return score;
    const daysSince = (now - lastUsedAtMs) / MS_PER_DAY;
  
@@ -10,4 +10,4 @@ index 08a2eca94..5c2c43abc 100644
 +  return score * Math.pow(0.5, halfLifeDays / daysSince);
  }
  
- /**
+ /** The single injection policy, shared by core and the CF eval sandbox so they cannot drift. */

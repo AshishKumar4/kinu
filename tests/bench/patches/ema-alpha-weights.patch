@@ -1,8 +1,8 @@
 diff --git a/packages/core/src/craft/ema.ts b/packages/core/src/craft/ema.ts
-index 663c7b0..00d5fd6 100644
+index 41451098c..823fcc55c 100644
 --- a/packages/core/src/craft/ema.ts
 +++ b/packages/core/src/craft/ema.ts
-@@ -18,7 +18,7 @@ export function emaUpdate(
+@@ -15,7 +15,7 @@ export function emaUpdate(
    newObs: number,
    alpha = DEFAULT_CONFIG.craftStore.emaAlpha,
  ): number {
@@ -10,4 +10,4 @@ index 663c7b0..00d5fd6 100644
 +  return alpha * oldScore + (1 - alpha) * newObs;
  }
  
- /**
+ /** Half-life decay; a never-used tool (last_used_at = 0) keeps its stored score. */
