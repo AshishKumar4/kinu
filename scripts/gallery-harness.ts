@@ -50,7 +50,7 @@ export interface Gallery {
    *  at `withGallery`'s teardown or by the deploy ladder at the gate's
    *  deadline, which names the gate; `gate:test-clocks` refuses a per-call
    *  `{ timeout }` in the suites. */
-  newPage(): Promise<Page>;
+  readonly newPage: () => Promise<Page>;
   /** `http://127.0.0.1:<port>` — this run's server, never another worktree's. */
   readonly origin: string;
 }

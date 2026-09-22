@@ -3773,8 +3773,9 @@ describe('the workspace inspector at the actual WorkspacePage boundary', () => {
           }
         };
 
-        const add = EventTarget.prototype.addEventListener;
-        const remove = EventTarget.prototype.removeEventListener;
+        const proto: Pick<EventTarget, 'addEventListener' | 'removeEventListener'> = EventTarget.prototype;
+        const add = proto.addEventListener;
+        const remove = proto.removeEventListener;
 
         EventTarget.prototype.addEventListener = function (type, listener, options) {
           tally(this, type, 1);

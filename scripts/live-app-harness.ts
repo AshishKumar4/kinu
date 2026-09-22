@@ -131,7 +131,7 @@ export async function deleteWorkspace(origin: string, name: string): Promise<voi
 export interface LiveApp {
   readonly browser: Browser;
   /** A page with no clock, as in the gallery harness. */
-  newPage(): Promise<Page>;
+  readonly newPage: () => Promise<Page>;
   /** `http://127.0.0.1:<port>` — this run's dev server. */
   readonly origin: string;
   /** The directory this run's Durable Objects, KV and R2 live in: a scratch

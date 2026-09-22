@@ -44,7 +44,7 @@ export interface SyntaxNode {
 export interface Parsed {
   readonly root: SyntaxNode;
   /** 1-based line of a byte offset. */
-  lineAt(offset: number): number;
+  readonly lineAt: (offset: number) => number;
 }
 
 interface Building {

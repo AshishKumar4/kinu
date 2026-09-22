@@ -1175,7 +1175,8 @@ describe('the standalone landing runs', () => {
         // `gpu` in navigator is the capability itself; GPUAdapter is only
         // declared to pages where the flag landed, so reading it bare would
         // throw on a lane without WebGPU.
-        const requestDevice = 'gpu' in navigator ? GPUAdapter.prototype.requestDevice : undefined;
+        const adapter: Pick<GPUAdapter, 'requestDevice'> | undefined = 'gpu' in navigator ? GPUAdapter.prototype : undefined;
+        const requestDevice = adapter?.requestDevice;
 
         if (requestDevice !== undefined) {
           GPUAdapter.prototype.requestDevice = async function (this: GPUAdapter, descriptor?: GPUDeviceDescriptor) {

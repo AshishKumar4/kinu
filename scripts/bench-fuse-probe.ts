@@ -471,11 +471,12 @@ async function stopAndProveRestart(origin: string, token: string): Promise<void>
 /** How much account-side resource deletion can be driven. Injectable so the
  *  order and replay properties are provable offline. */
 export interface ReleaseHooks {
-  listContainerApps(): Array<{ id: string; name: string }>;
+  /** Passed on to `awaitContainerAppAbsent`, so a plain function, not a method. */
+  listContainerApps: () => Array<{ id: string; name: string }>;
   deleteContainerApps(): string[];
   deleteWorker(): boolean;
   removeConfig(): Promise<void>;
-  sleep(ms: number): Promise<void>;
+  sleep: (ms: number) => Promise<void>;
 }
 
 export interface TeardownHooks extends ReleaseHooks {

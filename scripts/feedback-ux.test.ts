@@ -423,7 +423,9 @@ async function recordSerialized(page: Page): Promise<void> {
   await page.evaluateOnNewDocument(() => {
     const seen: string[] = [];
     window.__serialized = seen;
-    const real = XMLSerializer.prototype.serializeToString;
+    const serializer: Pick<XMLSerializer, 'serializeToString'> = XMLSerializer.prototype;
+    const real = serializer.serializeToString;
+
     XMLSerializer.prototype.serializeToString = function record(node: Node): string {
       const markup = real.call(this, node);
       seen.push(markup);
@@ -865,7 +867,9 @@ async function run(): Promise<Observed> {
     // Break the PNG encoder underneath `capturePage`, so the capture rejects
     // with this chain and nothing else on the page is touched.
     await broken.evaluate((outer: string, inner: string) => {
-      const original = HTMLCanvasElement.prototype.toBlob;
+      const canvas: Pick<HTMLCanvasElement, 'toBlob'> = HTMLCanvasElement.prototype;
+      const original = canvas.toBlob;
+
       window.__restoreCapture = () => { HTMLCanvasElement.prototype.toBlob = original; };
 
       HTMLCanvasElement.prototype.toBlob = () => { throw new Error(outer, { cause: new Error(inner) }); };
@@ -1519,7 +1523,8 @@ test('a capture completed after screenshot opt-out cannot attach to the report',
     await serveFeedback(page);
     await page.goto(`${origin}/gallery.html?frame=feedback`, { waitUntil: 'networkidle0' });
     await page.evaluate(() => {
-      const encode = HTMLCanvasElement.prototype.toBlob;
+      const canvas: Pick<HTMLCanvasElement, 'toBlob'> = HTMLCanvasElement.prototype;
+      const encode = canvas.toBlob;
       const held: (() => Promise<void>)[] = [];
       window.__heldFeedbackEncodes = 0;
       HTMLCanvasElement.prototype.toBlob = function (callback, type, quality) {
