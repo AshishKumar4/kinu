@@ -265,7 +265,7 @@ describe('AI proxy model → upstream selection', () => {
     expect(captured[0].headers.get('authorization')).not.toContain(SESSION_TOKEN);
   });
 
-  test('the staging eval identity streams over the direct Workers AI binding', async () => {
+  test('the eval identity streams over the direct Workers AI binding', async () => {
     const { env, directRuns } = setupEnv({ evalService: true });
 
     const res = await handleCliRequest(chatRequest(AI_TOKEN, {

@@ -132,7 +132,7 @@ function isImmutableImageReference(reference: string): boolean {
  *  full one: a shape that admitted more would start answering other questions,
  *  and a key present but wrongly shaped fails the parse instead of reading as
  *  absent — a config this cannot read is not a config it may pass. */
-const DeploymentSchema = v.object({
+const WranglerSchema = v.object({
   upload_source_maps: v.optional(v.boolean()),
   containers: v.optional(v.array(v.object({
     class_name: v.string(),
@@ -140,47 +140,17 @@ const DeploymentSchema = v.object({
   }))),
 });
 
-const WranglerSchema = v.object({
-  ...DeploymentSchema.entries,
-  env: v.optional(v.record(v.string(), DeploymentSchema)),
-});
-
-type Deployment = readonly [name: string, block: v.InferOutput<typeof DeploymentSchema>];
-
-/**
- * Every environment a deploy can publish, production first.
- *
- * Derived from the file rather than listed here, so an environment added
- * tomorrow is covered the day it is added. That is the failure shape this whole
- * file guards: a second deployment nobody re-checked.
- */
-function deployments(): readonly Deployment[] {
-  const config = parseJsonc(
-    readFileSync(join(REPO_ROOT, WRANGLER), 'utf8'), WranglerSchema, WRANGLER,
-  );
-
-  return [['production', config], ...Object.entries(config.env ?? {})];
-}
-
-const DEPLOYMENTS = deployments();
-
-const EACH = DEPLOYMENTS.map((deployment) => [deployment[0], deployment[1]] as const);
+const CONFIG = parseJsonc(readFileSync(join(REPO_ROOT, WRANGLER), 'utf8'), WranglerSchema, WRANGLER);
 
 describe('the sandbox container image is pinned', () => {
-  test('the deployment is measured', () => {
-    // Named rather than counted: every assertion below iterates, so a
-    // deployment silently dropped from the config would pass them vacuously.
-    expect(DEPLOYMENTS.map(([name]) => name)).toEqual(['production']);
-  });
+  test('the Worker runs the pinned digest and names no tag', () => {
+    const images = (CONFIG.containers ?? []).map((container) => container.image);
 
-  test.each(EACH)('%s runs the pinned digest and names no tag', (name, block) => {
-    const images = (block.containers ?? []).map((container) => container.image);
-
-    expect(images.length, `${name} declares no container`).toBeGreaterThan(0);
+    expect(images.length, 'the Worker declares no container').toBeGreaterThan(0);
 
     for (const image of images) {
-      expect(isImmutableImageReference(image), `${name} runs a re-pointable image`).toBe(true);
-      expect(image, `${name} runs an image the release record does not declare`).toBe(PINNED_IMAGE);
+      expect(isImmutableImageReference(image), 'the Worker runs a re-pointable image').toBe(true);
+      expect(image, 'the Worker runs an image the release record does not declare').toBe(PINNED_IMAGE);
     }
   });
 
@@ -212,8 +182,8 @@ describe('the sandbox container image is pinned', () => {
 });
 
 describe("the deployed Worker's stack traces are readable", () => {
-  test.each(EACH)('%s uploads its source maps', (name, block) => {
-    expect(block.upload_source_maps, `${name} would report minified stacks`).toBe(true);
+  test('the Worker uploads its source maps', () => {
+    expect(CONFIG.upload_source_maps, 'the Worker would report minified stacks').toBe(true);
   });
 
   // The decision, called — not the text that expresses it. A source-text
@@ -229,11 +199,9 @@ describe("the deployed Worker's stack traces are readable", () => {
     expect(plugins.length, `${VITE_CONFIG} declares no environment-scoped plugin`).toBe(1);
     const [sourceMaps] = plugins;
 
-    // The worker environment is named after the worker (`kinu`, and
-    // `kinu_staging` under CLOUDFLARE_ENV=staging), so the hook must decide by
-    // what an environment is NOT rather than by naming them.
+    // The worker environment is named after the worker (`kinu`), so the hook
+    // decides by what an environment is NOT rather than by naming it.
     expect(sourceMaps?.configEnvironment('kinu')).toEqual({ build: { sourcemap: true } });
-    expect(sourceMaps?.configEnvironment('kinu_staging')).toEqual({ build: { sourcemap: true } });
     // A map in `dist/client` is original TypeScript published on the public
     // origin, so the client is the one environment that must not get one.
     expect(sourceMaps?.configEnvironment('client')).toBeNull();

@@ -84,9 +84,9 @@ fi
 EVAL_TOKEN_FILE="$HOME/.config/kinu/eval-service-token"
 if [ ! -r "$EVAL_TOKEN_FILE" ]; then
   echo "REFUSING: no eval-service credential at $EVAL_TOKEN_FILE." >&2
-  echo "Mint one against staging and write it there:" >&2
-  echo "  kinu auth --origin https://staging.kinu.run" >&2
-  echo "  kinu tokens create --name tbench --scopes ai.proxy" >&2
+  echo "Mint one and write its accessToken there:" >&2
+  echo "  KINU_EVAL_WEB_IDENTITY=... bun scripts/eval-session-mint.ts" >&2
+  echo "  (writes ~/.config/kinu/eval-session/config.json)" >&2
   exit 2
 fi
 KINU_EVAL_TOKEN="$(cat "$EVAL_TOKEN_FILE")"
@@ -116,7 +116,7 @@ exec harbor run \
   "${TASK_FLAGS[@]}" \
   -m "$MODEL" \
   --ak "evolve=$EVOLVE" \
-  --allow-agent-host staging.kinu.run \
+  --allow-agent-host kinu.run \
   --jobs-dir "$JOBS_DIR" \
   --job-name "$JOB_NAME" \
   -n "$CONCURRENCY" \

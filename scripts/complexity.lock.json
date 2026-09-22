@@ -1,7 +1,7 @@
 {
   "measuredAt": "2026-09-22",
-  "files": 2545,
-  "functions": 62845,
+  "files": 2546,
+  "functions": 62782,
   "ceiling": 108,
   "line": 33,
   "inventory": [
@@ -82,10 +82,6 @@
       "complexity": 42
     },
     {
-      "key": "scripts/infra-manifest.ts#draftsFor",
-      "complexity": 42
-    },
-    {
       "key": "scripts/platform-catalog.ts#auditSchema",
       "complexity": 42
     },
@@ -107,6 +103,10 @@
     },
     {
       "key": "scripts/bench-pilot.ts#validatePilotReport",
+      "complexity": 41
+    },
+    {
+      "key": "scripts/infra-manifest.ts#draftsFor",
       "complexity": 41
     },
     {

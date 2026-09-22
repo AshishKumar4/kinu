@@ -228,7 +228,7 @@ describe('EvolutionEngine.reviewTurn — the outcome signal', () => {
   // refused every promotion would pass the first half alone.
   test('an execution verdict grades the turn but promotes no reusable procedure', async () => {
     const pattern = JSON.stringify({
-      name: 'rotate_staging_keys', description: 'rotate staging keys',
+      name: 'rotate_deploy_keys', description: 'rotate staging keys',
       params: { type: 'object', properties: {}, required: [] },
       code: 'async (args) => ({ ok: true })',
     });
@@ -257,7 +257,7 @@ describe('EvolutionEngine.reviewTurn — the outcome signal', () => {
     const [byUser] = listTurnOutcomes(asked.rt.storage.sql, asked.rt.actor);
     expect(byUser.source).toBe('classifier');
     expect(asked.rt.storage.sql<{ name: string }>`SELECT name FROM crafted_tools`.map((r) => r.name))
-      .toEqual(['rotate_staging_keys']);
+      .toEqual(['rotate_deploy_keys']);
   });
 
   test('a headless turn that errored is graded corrected — but does NOT corroborate lessons', async () => {

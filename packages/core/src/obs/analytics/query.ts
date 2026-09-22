@@ -34,14 +34,12 @@
  * Text in, text out. Nothing here reads an environment, touches a binding or
  * makes a request: the control plane owns the transport, the credential and the
  * not-configured arm, and it must be able to render "analytics not configured"
- * without this module existing at runtime. The one deployment fact a query
- * cannot avoid — WHICH dataset — arrives as `datasetSuffix`, an argument, and is
- * resolved through `analyticsDataset` so the name is still declared once.
+ * without this module existing at runtime.
  */
 import { assertQuantileLevel } from './limits';
 import {
   AGENT_METRICS_SCHEMA, CONTROL_PLANE_OPS_SCHEMA,
-  analyticsDataset, blobColumn, doubleColumn, indexColumn,
+  blobColumn, doubleColumn, indexColumn,
   type AnalyticsSchema, type BlobName, type DoubleName,
 } from './schemas';
 
@@ -104,16 +102,6 @@ interface QueryMetric {
 
 interface WeightedQuery<S extends AnalyticsSchema> {
   readonly schema: S;
-  /**
-   * Which deployment's copy of the dataset to read: '' for production,
-   * '_staging' for staging.
-   *
-   * REQUIRED, for the reason `since` is required. Staging binds its own datasets
-   * and shares production's account, so a caller who forgets this does not get
-   * an empty panel — it gets production's numbers under a staging heading, which
-   * is the one answer worse than no answer.
-   */
-  readonly datasetSuffix: string;
   /** Blob slots to group by, in order. Reported under their own slot names. */
   readonly groupBy: readonly BlobName<S>[];
   readonly metrics: readonly QueryMetric[];
@@ -157,7 +145,7 @@ function buildWeightedQuery<S extends AnalyticsSchema>(query: WeightedQuery<S>):
 
   const lines = [
     `SELECT ${selected.join(', ')}`,
-    `FROM ${analyticsDataset(schema, query.datasetSuffix)}`,
+    `FROM ${schema.dataset}`,
     `WHERE ${predicates.join(' AND ')}`,
   ];
 
@@ -225,16 +213,11 @@ const PANEL_ROW_LIMIT = 50;
  * unrecoverable from the dataset. `adminOps` ignores it: a different dataset with
  * a different index, where the same string would match nothing and a silently
  * empty panel is worse than an unfiltered one.
- *
- * `datasetSuffix` is what makes these queries read the deployment they are asked
- * from rather than production. It is threaded onto every panel here, so a new
- * panel cannot be added without one.
  */
 export function controlPlaneMetricsQueries(
-  opts: { sinceHours: number; datasetSuffix: string; workspaceDigest?: string },
+  opts: { sinceHours: number; workspaceDigest?: string },
 ): ControlPlaneMetricQueries {
   const since = `'${Math.max(1, Math.trunc(opts.sinceHours))}' HOUR`;
-  const { datasetSuffix } = opts;
   const agent = AGENT_METRICS_SCHEMA;
   const ops = CONTROL_PLANE_OPS_SCHEMA;
   const workspace = opts.workspaceDigest;
@@ -251,7 +234,7 @@ export function controlPlaneMetricsQueries(
 
   return {
     turns: buildWeightedQuery({
-      schema: agent, datasetSuffix,
+      schema: agent,
       groupBy: ['outcome', 'code'],
       metrics: [
         { as: 'turns', expression: weightedCount() },
@@ -264,7 +247,7 @@ export function controlPlaneMetricsQueries(
       orderBy: 'turns',
     }),
     latency: buildWeightedQuery({
-      schema: agent, datasetSuffix,
+      schema: agent,
       groupBy: ['model'],
       metrics: [
         { as: 'turns', expression: weightedCount() },
@@ -277,7 +260,7 @@ export function controlPlaneMetricsQueries(
       limit: PANEL_ROW_LIMIT,
     }),
     tokens: buildWeightedQuery({
-      schema: agent, datasetSuffix,
+      schema: agent,
       groupBy: ['provider', 'model'],
       metrics: [
         { as: 'calls', expression: weightedCount() },
@@ -295,7 +278,7 @@ export function controlPlaneMetricsQueries(
       limit: PANEL_ROW_LIMIT,
     }),
     toolFailures: buildWeightedQuery({
-      schema: agent, datasetSuffix,
+      schema: agent,
       groupBy: ['tool', 'outcome', 'code'],
       metrics: [
         { as: 'calls', expression: weightedCount() },
@@ -307,7 +290,7 @@ export function controlPlaneMetricsQueries(
       limit: PANEL_ROW_LIMIT,
     }),
     firstToken: buildWeightedQuery({
-      schema: agent, datasetSuffix,
+      schema: agent,
       groupBy: ['provider', 'model'],
       metrics: [
         { as: 'turns', expression: weightedCount() },
@@ -325,7 +308,7 @@ export function controlPlaneMetricsQueries(
       limit: PANEL_ROW_LIMIT,
     }),
     adminOps: buildWeightedQuery({
-      schema: ops, datasetSuffix,
+      schema: ops,
       groupBy: ['operation', 'outcome'],
       metrics: [
         { as: 'operations', expression: weightedCount() },

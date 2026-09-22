@@ -5,8 +5,8 @@
  *   GET  /api/user/ai/v1/models
  *
  * Fronts the caller's stored Cloudflare credential in production, so local
- * agents use the same account as cloud agents. A staging or local deployment
- * with `DEV_USER_EMAIL` uses the platform AI Gateway binding for Workers AI
+ * agents use the same account as cloud agents. A deployment with
+ * `DEV_USER_EMAIL` (the eval service account, or local dev) uses the platform AI Gateway binding for Workers AI
  * models; this lets the isolated eval-service account run without borrowing a
  * person's Cloudflare login. Auth is the standard CLI bearer (interactive
  * `ptc_…` session tokens, or scoped `pta_…` access tokens carrying
@@ -14,7 +14,7 @@
  *
  * The body's `model` field selects the upstream:
  *   @cf/...          → production: the user's Workers AI account
- *                      development/staging: the platform AI Gateway binding
+ *                      with DEV_USER_EMAIL: the platform AI Gateway binding
  *   {author}/{model} → the user's AI Gateway
  *
  * Streaming responses pass through without buffering. Production failures use
