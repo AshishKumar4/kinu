@@ -341,24 +341,19 @@ describe('subordinate wiring', () => {
 });
 
 describe('a dismissed agent keeps its conversation reachable', () => {
-  /** The roster row a chat surface enumerates, for a child that was hired and
-   *  then dismissed. Dismissal gives up employability; it explicitly keeps the
+  /** A child hired and then dismissed through the two controls a chat surface
+   *  offers. Dismissal gives up employability; it explicitly keeps the
    *  conversation ("Its conversation is kept, not deleted"), so the row a
    *  surface reads has to survive it. */
   async function dismissedChild() {
     const parent = orchestratorHarness();
-    const name = 'quiet-harbor-1a4e20';
+    // An added agent inherits the workspace's purpose, so the workspace has to
+    // have one — the same order the owner does it in.
+    await parent.agent.setSoul('# Purpose\n\nBuild the chess app.');
 
-    const child = await hostedSubordinateHarness(parent, {
-      name, displayName: 'Quiet Harbor', nameOrigin: 'user', mission: 'Build the chess app', roleId: 'task',
-    });
+    const { name } = await parent.agent.createSubordinateAgent();
 
-    parent.agent.harnessRoster().create({
-      name, actorReference: { ...child.actor.reference }, birth: null, deleteRequested: false,
-      createdBy: 'user', status: 'idle', currentTask: null, createdAt: 1, dismissedAt: null,
-      lifetime: 'durable', taskEventId: null,
-    });
-    parent.agent.harnessRoster().dismiss(name, 200);
+    await parent.agent.dismissSubordinate(name);
 
     return { parent, name };
   }

@@ -105,8 +105,10 @@ describe('TurnContextMeter', () => {
     // The system + tools ride every request; only the messages grew.
     expect(first?.segments.filter((s) => s.plane !== 'messages'))
       .toEqual(second?.segments.filter((s) => s.plane !== 'messages') ?? []);
-    expect(present(second, 'the second reading').measuredChars)
-      .toBeGreaterThan(present(first, 'the first reading').measuredChars);
+    const firstChars = present(first, 'the first reading').measuredChars;
+    const secondChars = present(second, 'the second reading').measuredChars;
+
+    expect(secondChars).toBeGreaterThan(firstChars);
   });
 
   test('take() drains, so a step never reports the previous step\'s request', () => {

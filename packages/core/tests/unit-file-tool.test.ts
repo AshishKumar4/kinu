@@ -1081,17 +1081,21 @@ describe('a bulk read is bounded where it is produced', () => {
     return v.parse(JsonObjectSchema, JSON.parse(spilled[1]));
   };
 
-  /** The most names one listing answers with. Stated here rather than imported:
-   *  the ceiling is the bulk-read answer size this tree gives a model (the same
-   *  1000 `db-codemode.ts` pages a SELECT at), and a test that imports the
-   *  number agrees with whatever the source says instead of pinning it. */
-  const LIST_CEILING = 1_000;
+  const plainNames = (count: number): string[] =>
+    Array.from({ length: count }, (_, at) => `f${String(at)}.ts`);
 
   test('a directory the agent does not control is cut at the entry ceiling', async () => {
-    const body = await listed(Array.from({ length: LIST_CEILING * 3 }, (_, at) => `f${String(at)}`));
+    const big = await listed(plainNames(3_000));
+    const bigger = await listed(plainNames(9_000));
+    const shown = v.parse(v.array(v.string()), big.entries);
 
-    expect(v.parse(v.array(v.string()), body.entries)).toHaveLength(LIST_CEILING);
-    expect(body.truncated).toEqual({ shown: LIST_CEILING, total: LIST_CEILING * 3 });
+    // An absolute cap rather than a share of what was there: three times the
+    // directory answers with the same names and says so, because the size of a
+    // listing is not the agent's choice and not the tool's.
+    expect(shown.length).toBeLessThan(3_000);
+    expect(v.parse(v.array(v.string()), bigger.entries)).toEqual(shown);
+    expect(big.truncated).toEqual({ shown: shown.length, total: 3_000 });
+    expect(bigger.truncated).toEqual({ shown: shown.length, total: 9_000 });
   });
 
   test('the byte ceiling bites on its own — few entries, enormous names', async () => {
@@ -1099,12 +1103,13 @@ describe('a bulk read is bounded where it is produced', () => {
     const body = await listed(wide);
     const shown = v.parse(v.array(v.string()), body.entries);
 
-    // Well inside the entry ceiling and well past the byte one, so the entry
-    // count cannot be what stopped it.
     expect(shown.length).toBeLessThan(wide.length);
-    expect(shown.length).toBeLessThan(LIST_CEILING);
     expect(body.truncated).toEqual({ shown: shown.length, total: wide.length });
+    // The control: the same COUNT of ordinary names comes back whole, so the
+    // entry ceiling is not what cut the listing above.
+    expect(await listed(plainNames(wide.length))).toEqual({ path: '/d', entries: plainNames(wide.length) });
   });
+
   test('a listing that fits is whole, and says nothing about truncation', async () => {
     const body = await listed(['a.ts', 'b.ts']);
     expect(body.entries).toEqual(['a.ts', 'b.ts']);

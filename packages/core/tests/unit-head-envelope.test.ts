@@ -85,8 +85,10 @@ describe('deriveChildBudget', () => {
     const parent: HeadBudget = { maxDepth: 3, maxWallClockMs: 60_000, spawnedAt: now - 40_000 };
     const child = deriveChildBudget(parent, now);
     expect(child.maxWallClockMs).toBe(20_000);
-    expect(child.spawnedAt + present(child.maxWallClockMs, "the child's wall-clock ceiling"))
-      .toBeLessThanOrEqual(parent.spawnedAt + present(parent.maxWallClockMs, "the parent's wall-clock ceiling"));
+    const childCeiling = present(child.maxWallClockMs, "the child's wall-clock ceiling");
+    const parentCeiling = present(parent.maxWallClockMs, "the parent's wall-clock ceiling");
+
+    expect(child.spawnedAt + childCeiling).toBeLessThanOrEqual(parent.spawnedAt + parentCeiling);
   });
 
   test('a 3-deep recursive split keeps every descendant under the requested deadline', () => {

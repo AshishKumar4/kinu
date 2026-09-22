@@ -395,8 +395,10 @@ describe('the panel report', () => {
     const coherence = report.standIn?.conditions[1];
     expect(coherence?.met).toBe(false);
     expect(coherence?.detail).toContain('panel');
-    expect(present(report.kappa.humanEnsemble, 'the human-ensemble κ').value)
-      .toBeLessThan(present(report.kappa.humanClassifier, 'the human-classifier κ').value);
+    const humanEnsemble = present(report.kappa.humanEnsemble, 'the human-ensemble κ').value;
+    const humanClassifier = present(report.kappa.humanClassifier, 'the human-classifier κ').value;
+
+    expect(humanEnsemble).toBeLessThan(humanClassifier);
   });
 
   test('splits become unclear, are counted, and cost the panel its recall', async () => {
