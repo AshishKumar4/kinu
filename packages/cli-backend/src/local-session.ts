@@ -3166,38 +3166,7 @@ export class LocalAgentSession implements BackendHost {
       try {
         await closing;
       } catch (cause) {
-        const failure = toKinuError({
-          doing: "recording that a settled turn's effects had all reported",
-          cause,
-          otherwise: 'io',
-        });
-
-        // RELEASED. A sequence this process still holds is one every later
-        // sweep skips, which is the one way this design wedges. The rows stay
-        // owed either way, and the next start is what comes back for them.
-        this.terminal.leave(transition);
-        diagnostics.failure('turn.terminal_transition_close_failed', failure, {
-          turnId: transition.turnId, messageId: transition.messageId,
-        });
-
-        // RE-ARMED, exactly as the Durable Object's close does. The close
-        // carries the ledger's own final wake, so this rejection can BE that
-        // wake failing — and the fiber is about to delete itself. Without this
-        // the rows stay owed with nothing left to come back for them until the
-        // whole session is restarted.
-        try {
-          await this.terminal.armRecovery(transition, { cause });
-        } catch (recoveryCause) {
-          diagnostics.failure(
-            'turn.terminal_transition_recovery_failed',
-            toKinuError({
-              doing: "re-arming a settled turn's effects after their close failed",
-              cause: recoveryCause,
-              otherwise: 'unavailable',
-            }),
-            { turnId: transition.turnId, messageId: transition.messageId },
-          );
-        }
+        await this.terminal.closeFailed(transition, { cause });
       }
     });
   }

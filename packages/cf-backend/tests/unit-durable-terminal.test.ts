@@ -951,6 +951,22 @@ describe('an interrupted terminal sequence replays its suffix and repeats nothin
   });
 
   /**
+   * A close that rejects while the activation lives on must hand its sequence
+   * back: one this activation still held is skipped by every later sweep and
+   * alarm, which is the one way the ledger wedges.
+   */
+  test('a close that rejects releases its sequence to the next sweep', async () => {
+    const harness = orchestratorHarness();
+    turns(harness).open('u-rejected-close');
+    harness.agent.harnessArmTerminalFault('auto_gepa', 'before');
+
+    await turns(harness).settle({ messageId: 'a-rejected-close' });
+    await harness.agent.harnessTerminalReported();
+
+    expect(harness.agent.harnessSequencesInFlight()).toBe(0);
+  });
+
+  /**
    * A row this build cannot interpret — written by a build whose effect set was
    * different. It must be REFUSED by name: guessing at its input would be worse,
    * and dropping it would leave the outer transition closed over work nobody

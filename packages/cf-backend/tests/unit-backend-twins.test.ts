@@ -80,17 +80,14 @@ const KNOWN_TWINS: readonly string[] = [
   // means is the backend's, because the surfaces differ — a device tunnel and an
   // SMTP channel are not one implementation.
   'terminalEffectTable',
-  // The WAKE: a Durable Object writes a schedule row the platform fires; a CLI
-  // process has no alarm at all and its carrier is the next start. Neither can be
-  // expressed in the other's terms, which is the whole reason the port exists.
+  // The WAKE: a Durable Object writes Agents SDK schedule rows
+  // (`schedule`/`listSchedules`/`cancelSchedule`) its alarm fires; a CLI
+  // process arms `setTimeout(...).unref()` and its durable carrier is the next
+  // start. Neither can be expressed in the other's terms.
   'scheduleTerminalRetry',
-  // What keeps the runtime alive for a detached close: a durable fiber on the DO,
-  // the process lifetime on the CLI. Core decides WHEN the transition may close;
-  // this decides what is still running when it does.
-  'holdTerminalClose',
-  // The platform fan-out itself: cf's is the Durable Object's socket
-  // broadcast minus its terminal sockets, the CLI's is one frontend listener.
-  // Neither carries logic the other could share.
+  // Not one method under two bodies: cf overrides the Agents SDK's
+  // `Agent.broadcast(message, without)` over `getConnections()` tags, the CLI
+  // emits a typed event to its one frontend listener.
   'broadcast',
   // The seam itself, not duplication: each backend describes the inference
   // surface a candidate scaffold runs on (its ToolSet, its history, its
@@ -134,6 +131,10 @@ const SHARED_TRANSPORTS = {
   // Both construct core's one lifecycle object over their own storage, effect
   // table, clock and wake. The state machine inside it is shared by definition.
   terminal: 'TerminalTransitions',
+  // The carrier is the platform's — an Agents SDK `runFiber` chain on the DO, a
+  // process-tracked fiber on the CLI; what a rejected close means (release,
+  // record, re-arm) is core's one rule.
+  holdTerminalClose: '.closeFailed',
   // Both gather their own readings — an accumulator's takes, a pending branch
   // list, a scaffold candidate — and hand them to core's ONE declaration, which
   // owns the order, the lanes, the keys and the gates.

@@ -2038,30 +2038,9 @@ export abstract class ActorAgent extends Agent<Env> {
           await close();
         });
       } catch (cause) {
-        // RELEASED on a handled rejection. An eviction needs no cleanup — nothing
-        // runs after it — but a rejection that leaves this isolate alive with the
-        // sequence still marked in flight makes every retry alarm and recovery
-        // fiber skip it forever, which is the one way this design can wedge.
-        this.terminal.leave(transition);
-        diagnostics.failure('turn.terminal_transition_close_failed', toKinuError({
-          doing: "recording that a settled turn's effects had all reported",
-          cause,
-          otherwise: 'io',
-        }), { turnId: transition.turnId, messageId: transition.messageId });
-
-        // RE-ARMED, for the reason the initial arm is. The close carries the
-        // ledger's own final wake, so this rejection can BE that wake failing —
-        // and the fiber is about to be disposed. Without this the rows stay owed
-        // with the alarm that would have carried them already spent.
-        try {
-          await this.terminal.armRecovery(transition, { cause });
-        } catch (recoveryCause) {
-          diagnostics.failure('turn.terminal_transition_recovery_failed', toKinuError({
-            doing: 're-arming the terminal transition after its close failed',
-            cause: recoveryCause,
-            otherwise: 'io',
-          }), { turnId: transition.turnId, messageId: transition.messageId });
-        }
+        // An eviction needs no cleanup — nothing runs after it; a rejection
+        // that leaves this isolate alive does.
+        await this.terminal.closeFailed(transition, { cause });
       } finally {
         if (this._terminalReportedOwner === owner) {
           this._terminalReportedOwner = null;
