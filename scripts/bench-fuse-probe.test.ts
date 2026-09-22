@@ -235,7 +235,7 @@ test('writable mmap evidence passes only as an all-or-nothing barrier proof', ()
 });
 
 test('writable negative mutations each become typed mmap-not-linearizable NO_GOs', () => {
-  const controls: ReadonlyArray<readonly [Stage3Report['mutation'], Partial<Stage3Report>]> = [
+  const mutationFailures: ReadonlyArray<readonly [Stage3Report['mutation'], Partial<Stage3Report>]> = [
     ['reply-before-log', { loggedBeforeReply: false, linearizable: false }],
     ['fence-closes-request-loop', { requestLoopServedAfterFence: false, postStore: false, linearizable: false }],
     ['omit-msync', { msyncCalled: false, linearizable: false }],
@@ -246,7 +246,7 @@ test('writable negative mutations each become typed mmap-not-linearizable NO_GOs
     ['skip-recovery', { journalPendingEmpty: false, recoveryAbortDurable: false, pendingEffectExcluded: false, linearizable: false }],
   ];
 
-  for (const [mutation, failure] of controls) {
+  for (const [mutation, failure] of mutationFailures) {
     const verdict = classifyWritableMmap(stage3({ mutation, ...failure }));
     expect(verdict.outcome).toBe('no_go');
     expect(verdict.noGo[0]?.kind).toBe('mmap-not-linearizable');
@@ -294,11 +294,11 @@ test('classifier rejects an event stream that contradicts closed admission', () 
 });
 
 test('driver persists every live mutation exit/report pair before stage one', () => {
-  const controls = DRIVER_SOURCE.indexOf('const writableControls: WritableMmapControl[] = []');
+  const controlsDeclared = DRIVER_SOURCE.indexOf('const writableControls: WritableMmapControl[] = []');
   const loop = DRIVER_SOURCE.indexOf('for (const mutation of [');
   const firstStage = DRIVER_SOURCE.indexOf("probe.mjs stage1");
-  expect(controls).toBeGreaterThanOrEqual(0);
-  expect(loop).toBeGreaterThan(controls);
+  expect(controlsDeclared).toBeGreaterThanOrEqual(0);
+  expect(loop).toBeGreaterThan(controlsDeclared);
   expect(firstStage).toBeGreaterThan(loop);
 
   for (const mutation of [
@@ -478,10 +478,10 @@ test('FuseProbeBox wiring: super-first onStart proof, typed mismatch, process-ow
 test('container restart reinstalls the immutable probe before stage two', () => {
   const restart = DRIVER_SOURCE.indexOf('await stopAndProveRestart');
   const reupload = DRIVER_SOURCE.indexOf('await uploadProbeBundle', restart);
-  const stage2 = DRIVER_SOURCE.indexOf('probe.mjs stage2', restart);
+  const stage2Exec = DRIVER_SOURCE.indexOf('probe.mjs stage2', restart);
   expect(restart).toBeGreaterThan(-1);
   expect(reupload).toBeGreaterThan(restart);
-  expect(stage2).toBeGreaterThan(reupload);
+  expect(stage2Exec).toBeGreaterThan(reupload);
 });
 
 test('driver waits for authenticated propagation before container setup', () => {
@@ -535,6 +535,12 @@ function recordingHooks(options: { destroyFails?: boolean; workerDeleteFails?: b
   };
 }
 
+/** A start the /destroy, /stop and /prepare cases never observe: those routes
+ *  start no process. */
+const unstartedProcess: ProbeBox['startProcess'] = async () => ({
+  id: 'unused', status: 'completed', exitCode: 0, getLogs: async () => ({ stdout: '', stderr: '' }),
+});
+
 test('/destroy is the teardown route and /stop stays restart-evidence-only', async () => {
   const calls: string[] = [];
 
@@ -549,7 +555,7 @@ test('/destroy is the teardown route and /stop stays restart-evidence-only', asy
       actualVersion: SANDBOX_IMAGE_VERSION,
       actualVersionDigest: sha256Hex(new TextEncoder().encode(SANDBOX_IMAGE_VERSION)),
     }),
-    startProcess: async () => ({ id: 'unused', status: 'completed', exitCode: 0, getLogs: async () => ({ stdout: '', stderr: '' }) }),
+    startProcess: unstartedProcess,
     getProcess: async () => null,
   };
 
@@ -653,19 +659,18 @@ test('process control request schemas are closed and the writable driver uses st
 
   const deployment = { ...unitDeployment, origin: 'https://fixture.example' };
 
-  const evidence = await awaitWritableMmapResult(
+  const evidence = await awaitWritableMmapResult({
     deployment,
-    'fuse-run-42-positive',
-    undefined,
-    async (input) => {
-      requests.push(new URL(String(input)).pathname);
+    operationId: 'fuse-run-42-positive',
+    doFetch: async (input) => {
+      requests.push(new URL(input instanceof Request ? input.url : input).pathname);
 
       return requests.at(-1) === '/start'
         ? new Response(JSON.stringify({ operationId: 'fuse-run-42-positive', status: 'running', exitCode: null, started: true }))
         : completed.clone();
     },
-    async () => undefined,
-  );
+    sleep: async () => undefined,
+  });
 
   expect(evidence).toEqual({ exitCode: 0, report });
   expect(requests).toEqual(['/start', '/poll']);
@@ -709,7 +714,7 @@ test('/prepare returns evidence under the shared RunIdentity contract', async ()
     stop: async () => undefined,
     destroy: async () => undefined,
     prepare: async () => evidence,
-    startProcess: async () => ({ id: 'unused', status: 'completed', exitCode: 0, getLogs: async () => ({ stdout: '', stderr: '' }) }),
+    startProcess: unstartedProcess,
     getProcess: async () => null,
   };
 
@@ -806,7 +811,7 @@ test('worker deletion treats an already-absent Worker as success on both routes'
   const absentOnFirstRoute = (): string =>
     'WRANGLER_FAILED: A request to the Cloudflare API failed. workers.api.error.script_not_found [code: 10021]';
 
-  expect(deleteWorkerBothRoutes('/repo', '/cfg.jsonc', 'w', log, absentOnFirstRoute)).toBe(true);
+  expect(deleteWorkerBothRoutes({ repoRoot: '/repo', configPath: '/cfg.jsonc', workerName: 'w', log, wrangle: absentOnFirstRoute })).toBe(true);
 
   // A different failure falls back to the second route, whose explicit
   // absence is also success.
@@ -820,11 +825,11 @@ test('worker deletion treats an already-absent Worker as success on both routes'
       : 'WRANGLER_FAILED: could not find script w';
   };
 
-  expect(deleteWorkerBothRoutes('/repo', '/cfg.jsonc', 'w', log, absentOnFallbackRoute)).toBe(true);
+  expect(deleteWorkerBothRoutes({ repoRoot: '/repo', configPath: '/cfg.jsonc', workerName: 'w', log, wrangle: absentOnFallbackRoute })).toBe(true);
   expect(calls).toBe(2);
 
   const alwaysFails = (): string => 'WRANGLER_FAILED: something else exploded';
-  expect(deleteWorkerBothRoutes('/repo', '/cfg.jsonc', 'w', log, alwaysFails)).toBe(false);
+  expect(deleteWorkerBothRoutes({ repoRoot: '/repo', configPath: '/cfg.jsonc', workerName: 'w', log, wrangle: alwaysFails })).toBe(false);
 });
 
 test('a mismatched image identity censors every measured cell and names the mismatch', () => {

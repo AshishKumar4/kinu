@@ -135,7 +135,9 @@ try {
 
   do {
     const page = v.parse(ObjectsSchema, await (await api(`/workers/durable_objects/namespaces/${namespace}/objects?limit=1000${cursor ? `&cursor=${encodeURIComponent(cursor)}` : ''}`)).json());
-    page.result.forEach((object) => objectIds.add(object.id));
+
+    for (const object of page.result) objectIds.add(object.id);
+
     cursor = page.result_info?.cursor ?? '';
   } while (cursor);
 

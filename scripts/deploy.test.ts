@@ -1145,7 +1145,7 @@ describe("one deploy path", () => {
   // a trailing `# wrangler deploy` comment reads as an invocation here, and a
   // publish assembled from variables reads as none.
   test("no shell script but the deploy script publishes", () => {
-    const executable = (file: string): string => readRepositoryFile(REPO_ROOT, file)
+    const commandLines = (file: string): string => readRepositoryFile(REPO_ROOT, file)
       .split("\n")
       .filter((line) => !line.trimStart().startsWith("#"))
       .join("\n");
@@ -1154,14 +1154,14 @@ describe("one deploy path", () => {
     expect(shellScripts.length, "the shell corpus collapsed").toBeGreaterThan(5);
     // Non-vacuity: the known publishing site is in the corpus, and this reading
     // of it really does contain the publish this rule is about.
-    expect(executable(SHELL_PUBLISHER), "the deploy script stopped publishing")
+    expect(commandLines(SHELL_PUBLISHER), "the deploy script stopped publishing")
       .toContain("npx wrangler deploy");
 
     for (const file of shellScripts) {
       if (file === SHELL_PUBLISHER) continue;
 
       for (const command of PUBLISH_COMMANDS) {
-        expect(executable(file), `${file} publishes with \`${command}\`; the deploy path is ${SHELL_PUBLISHER}`)
+        expect(commandLines(file), `${file} publishes with \`${command}\`; the deploy path is ${SHELL_PUBLISHER}`)
           .not.toContain(command);
       }
     }

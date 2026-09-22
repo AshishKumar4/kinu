@@ -416,17 +416,23 @@ function paragraphAround(text: string, index: number): string {
   return text.slice(before === -1 ? 0 : before, after === -1 ? text.length : after);
 }
 
+/** One citation as written, and where in which file it was written. */
+interface CitationSite {
+  readonly file: string;
+  readonly cites: string;
+  readonly text: string;
+  readonly index: number;
+}
+
 /** Is this exact citation, at this site, a declared illustration whose paragraph
  *  reads like documentation? Both halves are required: the declaration alone is a
  *  skip, and the prose alone would let any unenrolled placeholder through. */
-function isIllustrative(
-  file: string, cites: string, text: string, index: number, seen: Citations,
-): boolean {
-  const declared = seen.illustrative.get(file)?.some((entry) => entry.cites === cites);
+function isIllustrative(site: CitationSite, seen: Citations): boolean {
+  const declared = seen.illustrative.get(site.file)?.some((entry) => entry.cites === site.cites);
 
   if (declared !== true) return false;
 
-  return DOCUMENTING_PROSE.test(paragraphAround(text, index));
+  return DOCUMENTING_PROSE.test(paragraphAround(site.text, site.index));
 }
 
 /**
@@ -441,7 +447,7 @@ export function auditCitations(file: string, text: string, seen: Citations): str
   const flat = text.replace(/^[ \t]*\*[ \t]?/gm, '');
 
   for (const match of flat.matchAll(LEAN_PATH)) {
-    if (isIllustrative(file, citedToken(flat, match), flat, match.index, seen)) {
+    if (isIllustrative({ file, cites: citedToken(flat, match), text: flat, index: match.index }, seen)) {
       seen.illustrativeSites += 1;
       continue;
     }
@@ -462,7 +468,7 @@ export function auditCitations(file: string, text: string, seen: Citations): str
   // `check-traceability.mjs` already range-checks its own `tsRef`s this way, so the
   // Lean side gets the same treatment rather than a weaker one.
   for (const match of flat.matchAll(CITED_LINE)) {
-    if (isIllustrative(file, citedToken(flat, match), flat, match.index, seen)) continue;
+    if (isIllustrative({ file, cites: citedToken(flat, match), text: flat, index: match.index }, seen)) continue;
     const module = resolveCitation(match[1], seen, findings);
 
     if (module === null) continue;   // already reported by the module scan above

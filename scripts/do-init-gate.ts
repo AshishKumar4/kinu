@@ -102,9 +102,17 @@ const root = new URL('..', import.meta.url).pathname;
  *  decided by the member name and the base class the hook belongs to. */
 function declaredDurableObjects(): string[] {
   const text = readFileSync(`${root}packages/cf-backend/wrangler.jsonc`, 'utf8');
+  const names: string[] = [];
+
+  for (const match of text.matchAll(/"class_name"\s*:\s*"(?<className>\w+)"/g)) {
+    const className = match.groups?.className;
+
+    // A match that captured no name names no class, so it proves nothing here.
+    if (className !== undefined) names.push(className);
+  }
 
   // Deduped: the `migrations` block names every class a second time.
-  return [...new Set([...text.matchAll(/"class_name"\s*:\s*"(\w+)"/g)].map(([, name]) => name!))].sort();
+  return [...new Set(names)].sort();
 }
 
 export interface Violation {
@@ -430,7 +438,7 @@ function containerStartBounds(body: SyntaxNode): string[] {
   const reasons: string[] = [];
 
   if (returned.length !== 1
-    || (memberCalleeName(returned[0]!) ?? '').replace(/^#/, '') !== 'restoreInStartGate') {
+    || (memberCalleeName(returned[0]) ?? '').replace(/^#/, '') !== 'restoreInStartGate') {
     reasons.push('must return this.#restoreInStartGate(): the sole budgeted restore path');
   }
 
@@ -487,6 +495,18 @@ function unprovenEntries(
   return violations;
 }
 
+/** Which rule a member is held to, decided by the member name first — the
+ *  recovery hooks are awaited in the same gate whatever the base is — and then
+ *  by the base class for the two `onStart` populations. A member no rule
+ *  governs has no hook. */
+function ruleFor(member: string, startHook: HookKind): HookKind | undefined {
+  if (RECOVERY_HOOKS.includes(member)) return 'recovery';
+
+  if (member === 'onStart') return startHook;
+
+  return undefined;
+}
+
 export function auditFile(
   file: string,
   text: string,
@@ -513,12 +533,7 @@ export function auditFile(
 
       if (name === undefined) continue;
 
-      // Which rule this member is held to, decided by the member name first —
-      // the recovery hooks are awaited in the same gate whatever the base is —
-      // and then by the base class for the two `onStart` populations.
-      const hook: HookKind | undefined = RECOVERY_HOOKS.includes(name)
-        ? 'recovery'
-        : name === 'onStart' ? startHook : undefined;
+      const hook = ruleFor(name, startHook);
 
       if (hook === undefined) continue;
       const line = parsed.lineAt(member.start);
@@ -716,13 +731,14 @@ export function auditBlockBodies(sources: ReadonlyMap<string, string>): Violatio
     if (node.raw.type !== 'CallExpression') return;
     const called = (memberCalleeName(node) ?? identifierCalleeName(node) ?? '').replace(/^#/, '');
     const args = node.raw.arguments;
-    (parameters.get(called) ?? []).forEach((parameter, index) => {
-      if (!parameter) return;
+
+    for (const [index, parameter] of (parameters.get(called) ?? []).entries()) {
+      if (!parameter) continue;
       const argument = node.children.find(child => child.start === args[index]?.start);
       const body = argument && isFunctionLike(argument) ? blockBodyOf(argument) ?? argument : undefined;
 
       if (body) methods.set(parameter, [...methods.get(parameter) ?? [], body]);
-    });
+    }
   });
   const violations: Violation[] = [];
 

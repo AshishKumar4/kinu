@@ -90,12 +90,12 @@ export interface WorkloadTotals {
 const percentile = (sorted: readonly number[], q: number): number => {
   if (sorted.length === 0) return 0;
 
-  if (sorted.length === 1) return sorted[0]!;
+  if (sorted.length === 1) return sorted[0];
   // Nearest-rank on the sorted sample. No interpolation, because an interpolated
   // p95 over six ticks invents a value between two real measurements.
   const rank = Math.ceil(q * sorted.length);
 
-  return sorted[Math.min(sorted.length, Math.max(1, rank)) - 1]!;
+  return sorted[Math.min(sorted.length, Math.max(1, rank)) - 1];
 };
 
 
@@ -217,8 +217,8 @@ export function decide(
     ratios[workload] = sumFor(chainArm, workload) / candidate;
   }
 
-  const git = ratios['git']!;
-  const npm = ratios['npm']!;
+  const git = ratios['git'];
+  const npm = ratios['npm'];
   const measured = `git ${git.toFixed(2)}x, npm ${npm.toFixed(2)}x`;
 
   if (git >= 10 && npm >= 3) {
@@ -263,7 +263,7 @@ export function sqliteFinding(ticks: readonly TickRecord[], dbBytes: number): st
       + 'so the re-ship ratio is unknown on this arm';
   }
 
-  const median = perTick.slice().sort((a, b) => a - b)[Math.floor(perTick.length / 2)]!;
+  const median = perTick.slice().sort((a, b) => a - b)[Math.floor(perTick.length / 2)];
 
   if (dbBytes <= 0) {
     return `median ${(median / 1024 / 1024).toFixed(1)} MiB PUT per rewrite tick; the database size was not measured, `

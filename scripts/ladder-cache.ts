@@ -123,10 +123,20 @@ export type EnvReader = (name: string) => string | undefined;
 
 export const ambientEnv: EnvReader = (name) => process.env[name];
 
+/** Everything one key is taken over. */
+export interface KeyPreimage {
+  readonly run: string;
+  readonly closure: Derived;
+  readonly tools: ToolVersions;
+  readonly repo: Repo;
+  readonly env?: EnvReader;
+}
+
 /** The key: sha256 over the run, the closure's bytes, the declared
  *  environment values and the toolchain. Environment VALUES enter the
  *  preimage only, so a secret named on a row never lands in the store. */
-export function keyFor(run: string, closure: Derived, tools: ToolVersions, repo: Repo, env: EnvReader = ambientEnv): string {
+export function keyFor(preimage: KeyPreimage): string {
+  const { run, closure, tools, repo, env = ambientEnv } = preimage;
   const hash = createHash('sha256');
   hash.update(`run\0${run}\0`);
   hash.update(`tools\0${JSON.stringify(tools)}\0`);
@@ -148,12 +158,23 @@ export type Plan =
   | { readonly kind: 'miss'; readonly key: string; readonly closure: Derived }
   | { readonly kind: 'uncacheable'; readonly closure: Exclude<Closure, Derived> };
 
-export function planGate(run: string, inputs: Inputs, repo: Repo, tools: ToolVersions, store: Store): Plan {
-  const closure = deriveClosure(run, inputs, repo);
+/** One gate row against one tree: the command, the inputs its row declares,
+ *  the tree those inputs resolve against, the toolchain its verdict stands on,
+ *  and the store holding the proofs. */
+export interface GateCacheRequest {
+  readonly run: string;
+  readonly inputs: Inputs;
+  readonly repo: Repo;
+  readonly tools: ToolVersions;
+  readonly store: Store;
+}
+
+export function planGate(gate: GateCacheRequest): Plan {
+  const closure = deriveClosure(gate.run, gate.inputs, gate.repo);
 
   if (closure.kind !== 'derived') return { kind: 'uncacheable', closure };
-  const key = keyFor(run, closure, tools, repo);
-  const entry = store.lookup(key);
+  const key = keyFor({ run: gate.run, closure, tools: gate.tools, repo: gate.repo });
+  const entry = gate.store.lookup(key);
 
   if (entry === undefined) return { kind: 'miss', key, closure };
 
@@ -166,27 +187,23 @@ export function planGate(run: string, inputs: Inputs, repo: Repo, tools: ToolVer
  *  returned. */
 export function recordGreen(
   plan: Extract<Plan, { kind: 'miss' }>,
-  run: string,
-  inputs: Inputs,
-  repo: Repo,
-  tools: ToolVersions,
-  store: Store,
+  gate: GateCacheRequest,
   result: { readonly seconds: number; readonly revision: string },
 ): string | undefined {
-  const after = deriveClosure(run, inputs, repo);
+  const after = deriveClosure(gate.run, gate.inputs, gate.repo);
 
   if (after.kind !== 'derived') return `closure became ${after.kind} during the run`;
-  const key = keyFor(run, after, tools, repo);
+  const key = keyFor({ run: gate.run, closure: after, tools: gate.tools, repo: gate.repo });
 
   if (key !== plan.key) return 'the closure changed while the gate ran; its verdict names no tree';
 
-  store.record(key, {
-    run,
+  gate.store.record(key, {
+    run: gate.run,
     revision: result.revision,
     seconds: Math.round(result.seconds * 100) / 100,
     recordedAt: new Date().toISOString(),
     closureSize: after.files.length,
-    tools,
+    tools: gate.tools,
   });
 
   return undefined;

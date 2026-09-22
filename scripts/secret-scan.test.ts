@@ -202,7 +202,7 @@ describe('reachable history', () => {
 
     const red = await scanHistory({ repoRoot: fixture.repo, adjudications: [] });
     expect(red.findings).toEqual([expected]);
-    expect(Object.keys(red.findings[0]!).sort()).toEqual(['count', 'detector', 'oid', 'path', 'refClass']);
+    expect(Object.keys(red.findings[0]).sort()).toEqual(['count', 'detector', 'oid', 'path', 'refClass']);
     expect(JSON.stringify(red)).not.toContain(fixture.secret);
     expect(red.stats.refs).toBe(2);
     expect(red.stats.objects).toBeGreaterThan(0);

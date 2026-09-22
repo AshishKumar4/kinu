@@ -316,7 +316,12 @@ async function observe(
       return observedRow(resource, await accessScope(
         resource.name, claimedHosts(environment).wildcards, CONTROL_PLANE_ACCESS_PATHS,
       ));
-    default:
+    // No lookup in this file reaches these three. `unobservableRow` answers for
+    // each one: the manual check from UNOBSERVABLE, or an UNDECLARED blind spot
+    // when nothing declares one.
+    case 'account':
+    case 'ai-gateway':
+    case 'cron':
       return unobservableRow(resource);
   }
 }
@@ -496,16 +501,21 @@ function remedy(entry: Row, phase: Phase): string {
     + 'before the upload and rejects it after, when the deploy has had its chance to create it.';
 }
 
-/** Pure, so the self-test drives every branch without a Cloudflare account. The
+/** Everything one audit judges: the manifest, what was observed of it, what the
+ *  environment supplies, and the classified values no product source reads. The
  *  `phase` default is the strict one: a caller that has not thought about phases
  *  gets the gate. */
-export function audit(
-  infrastructure: Infrastructure,
-  rows: readonly Row[],
-  supplied: readonly SupplyRow[],
-  unreadFields: readonly string[],
-  phase: Phase = 'full',
-): Audit {
+export interface AuditRequest {
+  readonly infrastructure: Infrastructure;
+  readonly rows: readonly Row[];
+  readonly supplied: readonly SupplyRow[];
+  readonly unreadFields: readonly string[];
+  readonly phase?: Phase;
+}
+
+/** Pure, so the self-test drives every branch without a Cloudflare account. */
+export function audit(request: AuditRequest): Audit {
+  const { infrastructure, rows, supplied, unreadFields, phase = 'full' } = request;
   const findings: string[] = [];
   const notes: string[] = [];
 
@@ -810,7 +820,7 @@ async function main(): Promise<number> {
 
   const sources = readMatching(isProductSource);
   const unread = [...SUPPLY.keys()].filter((name) => readSites(name, sources).length === 0);
-  const verdict = audit(infrastructure, rows, supplied, unread, phase);
+  const verdict = audit({ infrastructure, rows, supplied, unreadFields: unread, phase });
 
   const fields = envFields();
 

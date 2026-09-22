@@ -38,11 +38,11 @@ export const EMPTY_SUMMARY: Summary = {
 export function percentile(sorted: readonly number[], q: number): number {
   if (sorted.length === 0) return 0;
 
-  if (sorted.length === 1) return sorted[0]!;
+  if (sorted.length === 1) return sorted[0];
   const rank = Math.ceil(q * sorted.length);
   const index = Math.min(sorted.length - 1, Math.max(0, rank - 1));
 
-  return sorted[index]!;
+  return sorted[index];
 }
 
 export function summarize(values: readonly number[]): Summary {
@@ -59,11 +59,11 @@ export function summarize(values: readonly number[]): Summary {
 
   return {
     n,
-    min: sorted[0]!,
+    min: sorted[0],
     p50: percentile(sorted, 0.5),
     p95: percentile(sorted, 0.95),
     p99: percentile(sorted, 0.99),
-    max: sorted[n - 1]!,
+    max: sorted[n - 1],
     mean,
     stddev,
     cv: mean === 0 ? 0 : stddev / mean,

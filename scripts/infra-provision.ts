@@ -37,7 +37,8 @@
 import { createInterface } from 'node:readline/promises';
 import { randomBytes } from 'node:crypto';
 import {
-  type Observation, authenticated, deployment, kvNamespace, r2, secretNames, vectorize, why,
+  type Deployment, type Observation, authenticated, deployment, kvNamespace, r2, secretNames,
+  vectorize, why,
   wrangler,
 } from './infra-cloudflare';
 import {
@@ -65,6 +66,18 @@ interface Step {
   readonly detail: string;
 }
 
+/** What one environment's Worker says about itself, for the report line. */
+function deploymentNote(live: Deployment): string {
+  if (live.state === 'deployed') return `deployed, version ${live.versionId}`;
+
+  if (live.state === 'absent') {
+    return 'not deployed yet — its Durable Object namespaces, container, routes and cron do not '
+      + 'exist until it is';
+  }
+
+  return `could not be read — ${live.reason}`;
+}
+
 /** Whether an existing resource is really there, per kind. Provision and verify
  *  ask the same questions of the same seam — a provisioner with its own idea of
  *  "exists" is a second answer nothing compares. */
@@ -78,7 +91,26 @@ function look(resource: Resource): Observation {
       return vectorize(resource.name, geometry.dimensions, geometry.metric);
     }
 
-    default:
+    // Named one by one rather than left to a `default`: a resource kind this
+    // program cannot look up is a fact about the seam, and a kind added later
+    // has to arrive here and be answered rather than fall quietly into
+    // "unknown".
+    case 'access-application':
+    case 'access-organization':
+    case 'access-policy':
+    case 'access-scope':
+    case 'account':
+    case 'ai-gateway':
+    case 'binding':
+    case 'container':
+    case 'cron':
+    case 'custom-domain':
+    case 'dns-record':
+    case 'durable-object':
+    case 'email-routing':
+    case 'wildcard-dns':
+    case 'worker':
+    case 'zone-route':
       return { state: 'unknown', reason: `no lookup is implemented for a ${resource.kind} resource` };
   }
 }
@@ -280,14 +312,7 @@ async function main(): Promise<number> {
     const live = deployment(environment.wranglerEnv);
     deployed.set(environment.key, live.state === 'deployed');
 
-    const note = live.state === 'deployed'
-      ? `deployed, version ${live.versionId}`
-      : live.state === 'absent'
-        ? 'not deployed yet — its Durable Object namespaces, container, routes and cron do not '
-          + 'exist until it is'
-        : `could not be read — ${live.reason}`;
-
-    console.log(`  ${environment.key} (${environment.workerName}): ${note}`);
+    console.log(`  ${environment.key} (${environment.workerName}): ${deploymentNote(live)}`);
   }
 
   console.log('  A bare `wrangler deploy` is not a substitute: it skips the CLI-asset check and '

@@ -167,26 +167,33 @@ describe('ladder-closure — what a closure holds', () => {
     expect(closure.kind === 'derived' ? closure.env : []).toEqual(['ALPHA', 'BETA', 'DELTA', 'GAMMA']);
   });
 
-  test('a computed key bound to a same-file string constant is a literal read', () => {
-    const repo = fixture({ 'scripts/g.ts': "const NAME = 'GAMMA';\nexport const OTHER = 'DELTA';\nexport const g = [process.env[NAME], process.env[OTHER]];" });
-    const closure = deriveClosure('bun scripts/g.ts', DERIVED, repo);
-    expect(closure.kind === 'derived' ? closure.env : ['refused']).toEqual(['DELTA', 'GAMMA']);
-  });
+  /** What one program's text says it reads from the environment, and what the
+   *  walker must take from it. */
+  const environmentReads: readonly { name: string; source: string; env: readonly string[] }[] = [
+    {
+      name: 'a computed key bound to a same-file string constant is a literal read',
+      source: "const NAME = 'GAMMA';\nexport const OTHER = 'DELTA';\nexport const g = [process.env[NAME], process.env[OTHER]];",
+      env: ['DELTA', 'GAMMA'],
+    },
+    {
+      name: 'destructuring the environment reads exactly the named keys',
+      source: 'const { PATH, HOME } = process.env;\nexport const g = [PATH, HOME];',
+      env: ['HOME', 'PATH'],
+    },
+    {
+      name: 'a write to the environment is not a read',
+      source: "process.env.HOME = '/x';\ndelete process.env.OTHER;\nexport const g = 1;",
+      env: [],
+    },
+  ];
 
-  test('destructuring the environment reads exactly the named keys', () => {
-    const repo = fixture({ 'scripts/g.ts': 'const { PATH, HOME } = process.env;\nexport const g = [PATH, HOME];' });
-    const closure = deriveClosure('bun scripts/g.ts', DERIVED, repo);
-    expect(closure.kind === 'derived' ? closure.env : ['refused']).toEqual(['HOME', 'PATH']);
-  });
-
-  test('a write to the environment is not a read', () => {
-    const repo = fixture({
-      'scripts/g.ts': "process.env.HOME = '/x';\ndelete process.env.OTHER;\nexport const g = 1;",
+  for (const reading of environmentReads) {
+    test(reading.name, () => {
+      const repo = fixture({ 'scripts/g.ts': reading.source });
+      const closure = deriveClosure('bun scripts/g.ts', DERIVED, repo);
+      expect(closure.kind === 'derived' ? closure.env : ['refused']).toEqual(reading.env);
     });
-
-    const closure = deriveClosure('bun scripts/g.ts', DERIVED, repo);
-    expect(closure.kind === 'derived' ? closure.env : ['refused']).toEqual([]);
-  });
+  }
 
   test('a declared read widens the closure by the tracked files it names', () => {
     const repo = fixture({

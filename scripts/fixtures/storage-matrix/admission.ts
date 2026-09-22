@@ -628,7 +628,7 @@ export function refusalText(verdict: AdmissionVerdict): string {
  */
 export function cleanupEvidenceFromReport(report: CleanupReport): CleanupEvidence {
   const byGate = new Map(report.checks.map((row) => [row.gate, row]));
-  const okOr = (gate: CleanupGateId): boolean => byGate.get(gate)?.ok ?? false;
+  const okOr = (gateId: CleanupGateId): boolean => byGate.get(gateId)?.ok ?? false;
 
   return {
     attempted: true,
@@ -676,6 +676,21 @@ export interface R2RecordExtras {
  *  control there fails the compile here instead of silently ranking it. */
 const NATIVE_CONTROL: LayoutId = 'native';
 
+/** The POSIX verdicts a layout's repetitions failed to hold, named once each. */
+function brokenSemantics(layout: RunArtifact['layouts'][number]): Set<string> {
+  const broken = new Set<string>();
+
+  for (const run of layout.reps) {
+    for (const phase of run.phases) {
+      for (const verdictRow of phase.verdicts) {
+        if (!verdictRow.holds) broken.add(verdictRow.name);
+      }
+    }
+  }
+
+  return broken;
+}
+
 function armFromLayout(layout: RunArtifact['layouts'][number]): ArmEvidence {
   const failed = layout.mountError !== null
     ? [`mount refused: ${layout.mountError}`]
@@ -687,15 +702,7 @@ function armFromLayout(layout: RunArtifact['layouts'][number]): ArmEvidence {
     // The control runs on the container disk by design; every mounted arm must
     // hold the same POSIX verdicts the control held, per repetition, or G2
     // refuses the arm.
-    const broken = new Set<string>();
-
-    for (const run of layout.reps) {
-      for (const phase of run.phases) {
-        for (const verdictRow of phase.verdicts) {
-          if (!verdictRow.holds) broken.add(verdictRow.name);
-        }
-      }
-    }
+    const broken = brokenSemantics(layout);
 
     for (const name of broken) failed.push(name);
     semanticsPassed = broken.size === 0;

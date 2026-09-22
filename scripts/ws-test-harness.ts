@@ -11,6 +11,7 @@
 
 import * as v from "valibot";
 import { BUILTIN_TOOLS, JsonValueSchema, parseJsonValue, type JsonValue } from "../packages/core/src/index";
+import { renderThrownChain } from "../packages/core/src/obs/index";
 
 const BASE_URL = process.argv[2] ?? "http://localhost:5173";
 
@@ -65,10 +66,6 @@ function fail(name: string, detail?: string) {
   failCount++;
   const extra = detail ? ` — ${detail}` : "";
   console.log(`FAIL: ${name}${extra}`);
-}
-
-function errorMessage<Failure>(error: Failure): string {
-  return error instanceof Error ? error.message : String(error);
 }
 
 function wsUrl(): string {
@@ -130,9 +127,9 @@ function connect(): Promise<WebSocket> {
         resolve(ws);
       }
     });
-    ws.addEventListener("error", (ev) => {
+    ws.addEventListener("error", () => {
       clearTimeout(timer);
-      reject(new Error(`WebSocket error: ${ev}`));
+      reject(new Error(`WebSocket error on ${wsUrl()}`));
     });
     ws.addEventListener("close", () => {
       clearTimeout(timer);
@@ -206,9 +203,7 @@ function chat(ws: WebSocket, text: string, timeoutMs = TIMEOUT_MS): Promise<{ bo
       }
 
       // The full message list comes after the stream completes
-      if (msg.type === "cf_agent_chat_messages" && bodies.length > 0) {
-        if (streamDone) finish();
-      }
+      if (msg.type === "cf_agent_chat_messages" && bodies.length > 0 && streamDone) finish();
     });
 
     const userMessage = {
@@ -244,7 +239,7 @@ async function testHttpGetMessages() {
       fail("HTTP GET /get-messages", `status=${resp.status}`);
     }
   } catch (error) {
-    fail("HTTP GET /get-messages", errorMessage(error));
+    fail("HTTP GET /get-messages", renderThrownChain({ cause: error }));
   }
 }
 
@@ -258,7 +253,7 @@ async function testRpcGetAgentStatus(ws: WebSocket) {
       fail("RPC getAgentStatus", `unexpected shape: ${JSON.stringify(result).slice(0, 200)}`);
     }
   } catch (error) {
-    fail("RPC getAgentStatus", errorMessage(error));
+    fail("RPC getAgentStatus", renderThrownChain({ cause: error }));
   }
 }
 
@@ -274,7 +269,7 @@ async function testRpcGetToolList(ws: WebSocket) {
       fail("RPC getToolList", `builtIn=${JSON.stringify(result.builtIn)}`);
     }
   } catch (error) {
-    fail("RPC getToolList", errorMessage(error));
+    fail("RPC getToolList", renderThrownChain({ cause: error }));
   }
 }
 
@@ -283,25 +278,17 @@ async function testRpcGetEvolutionEvents(ws: WebSocket) {
     const result = await rpc(ws, "getEvolutionEvents", v.array(JsonValueSchema), [10]);
     pass("RPC getEvolutionEvents", `${result.length} events`);
   } catch (error) {
-    fail("RPC getEvolutionEvents", errorMessage(error));
+    fail("RPC getEvolutionEvents", renderThrownChain({ cause: error }));
   }
 }
 
-async function testRpcGetMctsTree(ws: WebSocket) {
+/** An RPC that answers with a list, reported by the count and what it counts. */
+async function testRpcList(ws: WebSocket, method: string, counted: string) {
   try {
-    const result = await rpc(ws, "getMctsTree", v.array(JsonValueSchema));
-    pass("RPC getMctsTree", `${result.length} nodes`);
+    const result = await rpc(ws, method, v.array(JsonValueSchema));
+    pass(`RPC ${method}`, `${result.length} ${counted}`);
   } catch (error) {
-    fail("RPC getMctsTree", errorMessage(error));
-  }
-}
-
-async function testRpcGetExecutors(ws: WebSocket) {
-  try {
-    const result = await rpc(ws, "getExecutors", v.array(JsonValueSchema));
-    pass("RPC getExecutors", `${result.length} executors`);
-  } catch (error) {
-    fail("RPC getExecutors", errorMessage(error));
+    fail(`RPC ${method}`, renderThrownChain({ cause: error }));
   }
 }
 
@@ -315,7 +302,7 @@ async function testRpcGetAvailableModels(ws: WebSocket) {
       fail("RPC getAvailableModels", `unexpected: ${JSON.stringify(result).slice(0, 200)}`);
     }
   } catch (error) {
-    fail("RPC getAvailableModels", errorMessage(error));
+    fail("RPC getAvailableModels", renderThrownChain({ cause: error }));
   }
 }
 
@@ -344,7 +331,7 @@ async function testChatStreaming(ws: WebSocket) {
       fail("Chat response not empty", "concatenated body is empty");
     }
   } catch (error) {
-    fail("Chat streams back", errorMessage(error));
+    fail("Chat streams back", renderThrownChain({ cause: error }));
     fail("Chat response not empty", "skipped — depends on chat streaming");
   }
 }
@@ -376,7 +363,7 @@ async function testChatToolCalls(ws: WebSocket) {
       fail("Chat tool calls appear in stream", `no tool indicators in ${allBody.length} chars of stream`);
     }
   } catch (error) {
-    fail("Chat tool calls appear in stream", errorMessage(error));
+    fail("Chat tool calls appear in stream", renderThrownChain({ cause: error }));
   }
 }
 
@@ -400,7 +387,7 @@ async function testWorkspaceReadFile(ws: WebSocket) {
       fail("file.read", `marker absent from ${allBody.length} response characters`);
     }
   } catch (error) {
-    fail("file.read", errorMessage(error));
+    fail("file.read", renderThrownChain({ cause: error }));
   }
 }
 
@@ -423,7 +410,7 @@ async function testWorkspaceWriteFile(ws: WebSocket) {
       fail("file.write + file.read round-trip", `marker absent from ${allBody.length} response characters`);
     }
   } catch (error) {
-    fail("file.write + file.read round-trip", errorMessage(error));
+    fail("file.write + file.read round-trip", renderThrownChain({ cause: error }));
   }
 }
 
@@ -443,7 +430,7 @@ async function testMemorySave(ws: WebSocket) {
       fail("memory.save", "MEMORY.md does not contain the saved marker");
     }
   } catch (error) {
-    fail("memory.save", errorMessage(error));
+    fail("memory.save", renderThrownChain({ cause: error }));
   }
 }
 
@@ -455,7 +442,7 @@ async function testClearConversation(ws: WebSocket) {
     await new Promise(r => setTimeout(r, 500));
     pass("Clear conversation", "sent cf_agent_chat_clear");
   } catch (error) {
-    fail("Clear conversation", errorMessage(error));
+    fail("Clear conversation", renderThrownChain({ cause: error }));
   }
 }
 
@@ -479,7 +466,7 @@ async function main() {
     ws = await connect();
     pass("WebSocket connect", `connected to ${wsUrl()}`);
   } catch (error) {
-    fail("WebSocket connect", errorMessage(error));
+    fail("WebSocket connect", renderThrownChain({ cause: error }));
     console.log(`\nDONE: ${passCount} passed, ${failCount} failed`);
     process.exit(failCount > 0 ? 1 : 0);
   }
@@ -487,8 +474,8 @@ async function main() {
   await testRpcGetAgentStatus(ws);
   await testRpcGetToolList(ws);
   await testRpcGetEvolutionEvents(ws);
-  await testRpcGetMctsTree(ws);
-  await testRpcGetExecutors(ws);
+  await testRpcList(ws, "getMctsTree", "nodes");
+  await testRpcList(ws, "getExecutors", "executors");
   await testRpcGetAvailableModels(ws);
 
   // §3 — Chat (requires LLM)

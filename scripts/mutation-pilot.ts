@@ -197,6 +197,16 @@ function isGuard(node: SyntaxNode): boolean {
   return only !== undefined && EXITS.has(only.type);
 }
 
+/** One edit the generator found: the span, what replaces it, and the node the
+ *  enclosing name is read off. */
+interface MutantEdit {
+  readonly node: SyntaxNode;
+  readonly operator: Operator;
+  readonly start: number;
+  readonly end: number;
+  readonly after: string;
+}
+
 /**
  * Every mutant one file offers.
  *
@@ -209,7 +219,7 @@ export function mutantsIn(file: string, text: string): Mutant[] {
   const parsed = parse(file, text);
   const found: Mutant[] = [];
 
-  const add = (node: SyntaxNode, operator: Operator, start: number, end: number, after: string) => {
+  const add = ({ node, operator, start, end, after }: MutantEdit) => {
     found.push({
       id: `${file}:${parsed.lineAt(start)}:${operator}`,
       file,
@@ -230,12 +240,12 @@ export function mutantsIn(file: string, text: string): Mutant[] {
       const test = node.children.find((child) => child.raw === raw.test);
 
       if (test !== undefined) {
-        add(node, 'negate-condition', test.start, test.end, `!(${text.slice(test.start, test.end)})`);
+        add({ node, operator: 'negate-condition', start: test.start, end: test.end, after: `!(${text.slice(test.start, test.end)})` });
       }
 
       // The guard as a whole: dropping it asks whether anything depends on the
       // early exit, which negating the condition cannot ask.
-      if (isGuard(node)) add(node, 'drop-guard', node.start, node.end, ';');
+      if (isGuard(node)) add({ node, operator: 'drop-guard', start: node.start, end: node.end, after: ';' });
 
       return;
     }
@@ -260,13 +270,13 @@ export function mutantsIn(file: string, text: string): Mutant[] {
 
       if (at === -1) return;
       const start = left.end + at;
-      add(
+      add({
         node,
-        raw.type === 'BinaryExpression' ? 'boundary' : 'logic',
+        operator: raw.type === 'BinaryExpression' ? 'boundary' : 'logic',
         start,
-        start + raw.operator.length,
-        swapped,
-      );
+        end: start + raw.operator.length,
+        after: swapped,
+      });
     }
   });
 
@@ -640,9 +650,15 @@ if (import.meta.main) {
   const only = value('--only');
   const budget = Number(value('--budget') ?? BUDGET);
 
-  const selected = only !== undefined
-    ? all.filter((mutant) => mutant.id === only)
-    : (argv.includes('--all') ? all : select(all, budget));
+  const chooseMutants = (): Mutant[] => {
+    if (only !== undefined) return all.filter((mutant) => mutant.id === only);
+
+    if (argv.includes('--all')) return all;
+
+    return select(all, budget);
+  };
+
+  const selected = chooseMutants();
 
   if (selected.length === 0) throw new Error(`no mutant matches --only ${String(only)}`);
 
@@ -655,7 +671,7 @@ if (import.meta.main) {
 
     console.log(`${all.length} mutants over ${files.size} files in ${SCOPE.join(', ')}`);
 
-    for (const [operator, count] of [...byOperator].sort()) {
+    for (const [operator, count] of [...byOperator].sort(([a], [b]) => a.localeCompare(b))) {
       console.log(`  ${operator.padEnd(18)} ${count}`);
     }
 

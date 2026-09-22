@@ -60,6 +60,21 @@ function drawnRows(page: Page): Promise<{ name: string; text: string; buttons: n
   })));
 }
 
+/** Capture the tabs a row opens: a real `window.open` navigation would hang
+ *  the fixture, so the capture writes each URL into the same localStorage
+ *  pocket the fixture uses, newest last. */
+async function captureOpenedTabs(page: Page): Promise<void> {
+  await page.evaluate(() => {
+    localStorage.setItem('gallery-mcp-opened', '');
+    window.open = (url?: string | URL) => {
+      localStorage.setItem('gallery-mcp-opened',
+        `${localStorage.getItem('gallery-mcp-opened') ?? ''}${String(url)}\n`);
+
+      return null;
+    };
+  });
+}
+
 /** The names in the Installed strip, in the order it draws them. */
 function installedStrip(page: Page): Promise<string[]> {
   return page.$$eval('[data-installed-strip] [data-installed]',
@@ -95,19 +110,7 @@ describe('MCP presets', () => {
         expect(await presetStatus(page, 'cloudflare')).toBe('Not added');
         expect(await presetStatus(page, 'google')).toBe('Not added');
 
-        // The authorize tab: a real `window.open` navigation would hang the
-        // fixture, so the capture replaces it — into the same localStorage
-        // pocket the fixture uses — and the assertion reads what the row
-        // would have opened.
-        await page.evaluate(() => {
-          localStorage.setItem('gallery-mcp-opened', '');
-          window.open = (url?: string | URL) => {
-            localStorage.setItem('gallery-mcp-opened',
-              `${localStorage.getItem('gallery-mcp-opened') ?? ''}${String(url)}\n`);
-
-            return null;
-          };
-        });
+        await captureOpenedTabs(page);
 
         // Cloudflare is the OAuth preset: one click posts the add.
         await page.click('[data-plugin-source="cloudflare"] [data-plugin-add]');
@@ -208,15 +211,7 @@ describe('MCP presets', () => {
 
         expect(await page.$('[data-plugin-source="google"]')).toBeNull();
 
-        await page.evaluate(() => {
-          localStorage.setItem('gallery-mcp-opened', '');
-          window.open = (url?: string | URL) => {
-            localStorage.setItem('gallery-mcp-opened',
-              `${localStorage.getItem('gallery-mcp-opened') ?? ''}${String(url)}\n`);
-
-            return null;
-          };
-        });
+        await captureOpenedTabs(page);
 
         // GitHub's add is a sign-in, not a token prompt: no field opens and
         // the add posts the preset id alone.

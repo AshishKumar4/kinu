@@ -104,9 +104,9 @@ async function serveControl(browserPage: Page, fixture: Fixture): Promise<Probe>
       .filter((candidate) => suffix === candidate || suffix.startsWith(`${candidate}/`))
       .sort((a, b) => b.length - a.length)[0];
 
-    const answer = key === undefined ? undefined : fixture[key];
+    const routeAnswer = key === undefined ? undefined : fixture[key];
 
-    if (answer === undefined) {
+    if (routeAnswer === undefined) {
       await request.respond({
         status: 404, contentType: 'application/json', body: JSON.stringify({ error: 'Not found' }),
       });
@@ -114,7 +114,7 @@ async function serveControl(browserPage: Page, fixture: Fixture): Promise<Probe>
       return;
     }
 
-    const { status, body } = await answer(url);
+    const { status, body } = await routeAnswer(url);
     await request.respond({
       status, contentType: 'application/json', body: JSON.stringify(body),
     });
@@ -236,6 +236,14 @@ function detailBody(over: Record<string, JsonValue>): JsonValue {
   };
 }
 
+/** The workspaces fixture a drilldown reads twice: the list on the collection
+ *  path, then the clicked row's own detail, with `over` overriding its panels. */
+function workspacesFixture(over: Record<string, JsonValue>): Answer {
+  return (url) => url.pathname.endsWith('/workspaces')
+    ? answer(200, { status: 'end', items: [workspaceRow()] })
+    : answer(200, detailBody(over));
+}
+
 /** Open the drilldown the way an operator does: click the list row, then wait
  *  for the panel grid the read produces. Network idle is not readiness — the
  *  intercepted answer settles before React commits. */
@@ -285,7 +293,7 @@ async function waitForEnabled(browserPage: Page, label: string): Promise<void> {
  * caller can assert what the operator was shown before they agreed.
  */
 async function confirmControl(
-  browserPage: Page, open: string, answer: string,
+  browserPage: Page, open: string, confirmLabel: string,
 ): Promise<string> {
   await waitForEnabled(browserPage, open);
 
@@ -295,9 +303,9 @@ async function confirmControl(
   const shown = await browserPage.evaluate(() =>
     document.querySelector('[role="dialog"]')?.textContent ?? '');
 
-  await waitForEnabled(browserPage, answer);
+  await waitForEnabled(browserPage, confirmLabel);
 
-  if (!await clickButton(browserPage, answer)) throw new Error(`the ${open} dialog offered no ${answer}`);
+  if (!await clickButton(browserPage, confirmLabel)) throw new Error(`the ${open} dialog offered no ${confirmLabel}`);
   await browserPage.waitForSelector('[role="dialog"]', { hidden: true });
 
   return shown;
@@ -554,9 +562,7 @@ describe('the control plane in a browser', () => {
       await serveControl(browserPage, {
         overview: page(200, OVERVIEW),
         users: page(200, { status: 'end', items: [userRow(OTHER_ID, 'owner@example.com', 3_000)] }),
-        workspaces: (url) => url.pathname.endsWith('/workspaces')
-          ? answer(200, { status: 'end', items: [workspaceRow()] })
-          : answer(200, detailBody({})),
+        workspaces: workspacesFixture({}),
       });
       // Reached the way an operator reaches it: the workspaces list, then the
       // row. Clicking a row is what supplies the owning account, and the plane
@@ -594,12 +600,10 @@ describe('the control plane in a browser', () => {
 
       const probe = await serveControl(browserPage, {
         overview: page(200, OVERVIEW),
-        workspaces: (url) => url.pathname.endsWith('/workspaces')
-          ? answer(200, { status: 'end', items: [workspaceRow()] })
-          : answer(200, detailBody({
-            jobs: { status: 'ok', value: [JOB] },
-            approvals: { status: 'ok', value: [APPROVAL] },
-          })),
+        workspaces: workspacesFixture({
+          jobs: { status: 'ok', value: [JOB] },
+          approvals: { status: 'ok', value: [APPROVAL] },
+        }),
         actions: page(200, { outcome: 'ok', detail: 'done' }),
       });
 
@@ -640,9 +644,7 @@ describe('the control plane in a browser', () => {
 
       const probe = await serveControl(browserPage, {
         overview: page(200, OVERVIEW),
-        workspaces: (url) => url.pathname.endsWith('/workspaces')
-          ? answer(200, { status: 'end', items: [workspaceRow()] })
-          : answer(200, detailBody({})),
+        workspaces: workspacesFixture({}),
         actions: page(200, { outcome: 'ok', detail: 'done' }),
       });
 

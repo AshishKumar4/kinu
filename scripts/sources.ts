@@ -185,7 +185,7 @@ export function enumerateRepository(repoRoot: string): Enumeration {
 /** Every file in this repository a gate may hold to a standard, memoised over
  *  the repository this module sits in. */
 export function trackedFiles(): readonly string[] {
-  if (enumerated === undefined) enumerated = enumerateRepository(root).files;
+  enumerated ??= enumerateRepository(root).files;
 
   return enumerated;
 }
@@ -741,14 +741,16 @@ class BufferedHistoryBytes {
   }
 
   async discard(bytes: number): Promise<void> {
-    while (bytes > 0) {
+    let remaining = bytes;
+
+    while (remaining > 0) {
       await this.ensure(1);
       const chunk = this.chunks[0];
 
       if (chunk === undefined) throw new Error('sources: history byte buffer lost data it ensured');
-      const count = Math.min(chunk.byteLength, bytes);
+      const count = Math.min(chunk.byteLength, remaining);
       this.available -= count;
-      bytes -= count;
+      remaining -= count;
 
       if (count === chunk.byteLength) this.chunks.shift();
       else this.chunks[0] = chunk.subarray(count);

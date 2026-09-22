@@ -362,9 +362,10 @@ if (import.meta.main) {
     process.exit(0);
   }
 
-  const code = report(
-    GATE, reconcile(keys, LOCK), detail, 'bun scripts/undeclared-imports.ts --lock', measured,
-  );
+  const code = report({
+    gate: GATE, ratchet: reconcile(keys, LOCK), detail,
+    lockCommand: 'bun scripts/undeclared-imports.ts --lock', measured,
+  });
 
   if (code === 0) {
     console.log(`  ${String(keys.length)} locked edge(s) still resolve only through hoisting`);

@@ -40,6 +40,7 @@ import * as v from 'valibot';
 import { assertMeasured, finding } from './gate-ratchet';
 import { DEADLINE_EXIT_CODE, runUnderDeadline } from './deadline';
 import { CACHE_BLIND_SPOTS, defaultStoreDirectory, planGate, recordGreen, storeAt, toolVersions } from './ladder-cache';
+import type { GateCacheRequest, Plan } from './ladder-cache';
 import { auditClosure } from './ladder-audit';
 import { deriveClosure, repoAt } from './ladder-closure';
 import type { Inputs } from './ladder-closure';
@@ -3091,6 +3092,19 @@ function printMatrix(): void {
   }
 }
 
+/** Record one green run, and name the cache's reason when it declines. */
+function recordProof(
+  plan: Extract<Plan, { kind: 'miss' }>,
+  gate: GateCacheRequest,
+  result: { readonly seconds: number; readonly revision: string },
+): boolean {
+  const refused = recordGreen(plan, gate, result);
+
+  if (refused !== undefined) console.log(`      not recorded: ${refused}`);
+
+  return refused === undefined;
+}
+
 if (import.meta.main) {
   // A CLOSED REPORTING CHANNEL IS NOT A FAILED TIER.
   //
@@ -3402,7 +3416,7 @@ if (import.meta.main) {
 
   for (const [index, gate] of gates.entries()) {
     console.log(`\n── ${tier} ${String(index + 1)}/${String(gates.length)}: ${gate.run}`);
-    const plan = caching ? planGate(gate.run, gate.inputs, repo, tools, store) : undefined;
+    const plan = caching ? planGate({ run: gate.run, inputs: gate.inputs, repo, tools, store }) : undefined;
 
     if (plan?.kind === 'hit') {
       console.log(
@@ -3435,12 +3449,15 @@ if (import.meta.main) {
     if (outcome.exitCode === 0) {
       console.log(`ok  ${gate.run}  (${seconds.toFixed(1)}s)`);
 
-      if (plan?.kind === 'miss') {
-        const refused = recordGreen(plan, gate.run, gate.inputs, repoAt(root, (run, files) => claims(run, files)), tools, store, { seconds, revision });
+      // Only a miss re-enumerates the tree: `recordGreen` re-derives the
+      // closure from what is on disk NOW, and no other path reads it.
+      const proofRecorded = plan?.kind === 'miss' && recordProof(
+        plan,
+        { run: gate.run, inputs: gate.inputs, repo: repoAt(root, (run, files) => claims(run, files)), tools, store },
+        { seconds, revision },
+      );
 
-        if (refused === undefined) recorded.push(gate.run);
-        else console.log(`      not recorded: ${refused}`);
-      }
+      if (proofRecorded) recorded.push(gate.run);
 
       continue;
     }

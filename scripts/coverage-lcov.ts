@@ -54,13 +54,18 @@ export interface LcovRecord {
   readonly raw: string;
 }
 
-function serialize(
-  file: string,
-  lines: readonly LineDatum[],
-  functions: readonly FunctionDatum[],
-  branches: readonly BranchDatum[],
-  declared: DeclaredTotals,
-): string {
+/** One file's coverage as it goes into a tracefile: the per-item records, and
+ *  the totals a producer declared without them. */
+interface FileCoverage {
+  readonly file: string;
+  readonly lines: readonly LineDatum[];
+  readonly functions: readonly FunctionDatum[];
+  readonly branches: readonly BranchDatum[];
+  readonly declared: DeclaredTotals;
+}
+
+function serialize(coverage: FileCoverage): string {
+  const { file, lines, functions, branches, declared } = coverage;
   const lineHits = lines.filter((d) => d.count > 0).length;
   const fnFound = functions.length > 0 ? functions.length : declared.functionsFound;
   const fnHits = functions.length > 0 ? functions.filter((d) => d.count > 0).length : declared.functionsHit;
@@ -122,7 +127,7 @@ export function parseLcov(text: string): LcovRecord[] {
       lines: { data: lines, found: lines.length, hit: lines.filter((d) => d.count > 0).length },
       functions: { data: functions, found: fnFound, hit: fnHit },
       branches: { data: branches, found: brFound, hit: brHit },
-      raw: serialize(file, lines, functions, branches, declared),
+      raw: serialize({ file, lines, functions, branches, declared }),
     });
     file = undefined;
     lines = [];
@@ -274,7 +279,7 @@ export function mergeLcov(records: readonly LcovRecord[]): LcovRecord[] {
       lines: { data: lineData, found: lines.size, hit: lineData.filter((d) => d.count > 0).length },
       functions: { data: functionData, found: totals.functionsFound, hit: totals.functionsHit },
       branches: { data: branchData, found: totals.branchesFound, hit: totals.branchesHit },
-      raw: serialize(record.file, lineData, functionData, branchData, totals),
+      raw: serialize({ file: record.file, lines: lineData, functions: functionData, branches: branchData, declared: totals }),
     });
   }
 

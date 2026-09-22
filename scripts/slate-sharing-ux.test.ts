@@ -144,7 +144,11 @@ describe('slate sharing surfaces', () => {
             await shared.$eval('[aria-label="Search shared"]', (input) => {
               // React owns the value: only the native setter plus an input
               // event moves its tracker.
-              Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value')!.set!.call(input, '');
+              const setValue = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value')?.set?.bind(input);
+
+              if (setValue === undefined) throw new Error('HTMLInputElement.prototype has no value setter');
+
+              setValue('');
               input.dispatchEvent(new Event('input', { bubbles: true }));
             });
             await showSegment(shared, 'all');

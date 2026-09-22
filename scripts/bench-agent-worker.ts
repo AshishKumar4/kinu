@@ -43,14 +43,12 @@ async function main(): Promise<void> {
 
   if (fresh) mkdirSync(dirname(input.dbPath), { recursive: true });
   const db = new Database(input.dbPath);
-  // SAFETY: The CLI backend owns this bun:sqlite adapter boundary; the same Database instance is its production input.
-  const backendDb = db as never;
   db.exec('PRAGMA journal_mode = WAL');
 
   if (fresh) {
     // A v0 workspace: bootstrap scaffold, empty memory, empty CraftStore, no
     // lessons. This is the "stateless" arm's starting point, and it is one call.
-    await createWorkspace(backendDb, { name: input.workspaceName, purpose: input.purpose, llm: meteredLLM });
+    await createWorkspace(db, { name: input.workspaceName, purpose: input.purpose, llm: meteredLLM });
     // `initSearchTables` and `initScaffoldTables` seed the search and scaffold
     // tables for the stateless arm's starting point.
     const sql = makeSql(db);
@@ -61,14 +59,14 @@ async function main(): Promise<void> {
     initCraftedToolsTables(sql);
   }
 
-  const { rt } = await openWorkspaceCLI(backendDb, input.dbPath, { llm: meteredLLM });
+  const { rt } = await openWorkspaceCLI(db, input.dbPath, { llm: meteredLLM });
 
   let steps = 0;
   let hadError = false;
 
   session = new LocalAgentSession({
     rt,
-    db: backendDb,
+    db,
     model: benchChatModel(meteredLLM),
     onEvent: (event: SessionEvent) => {
       if (event.type === 'turn-end') {

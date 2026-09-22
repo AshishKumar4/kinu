@@ -21,7 +21,12 @@ import { pollCliAuth, startCliAuth } from '../packages/cli/src/cloud-api';
 
 const persistedPath = `${homedir()}/.config/kinu/eval-session/config.json`;
 
-const origin = process.env[EVAL_IDENTITY_ENV.origin]?.trim() || EVAL_DEPLOYMENT_ORIGIN;
+// An origin set to blank names no target, so it reads as absent.
+const originFromEnv = process.env[EVAL_IDENTITY_ENV.origin]?.trim();
+
+const origin = originFromEnv === undefined || originFromEnv.length === 0
+  ? EVAL_DEPLOYMENT_ORIGIN
+  : originFromEnv;
 
 const target = evalTargetVerdict(origin);
 

@@ -245,11 +245,7 @@ function roleOf(node: SyntaxNode): string | undefined {
   if (parent === undefined) return undefined;
   const { raw } = parent;
 
-  if (raw.type === 'Property' && raw.value === node.raw) {
-    const key = declaredName(parent);
-
-    return key === undefined ? undefined : key;
-  }
+  if (raw.type === 'Property' && raw.value === node.raw) return declaredName(parent);
 
   if (raw.type === 'PropertyDefinition' && raw.value === node.raw) return declaredName(parent);
 
@@ -474,12 +470,12 @@ if (import.meta.main) {
     const count = writeLock(survey.drifts.map((d) => d.key), LOCK);
     console.log(`policy-drift: locked ${String(count)} duplication(s) — ${measured}`);
   } else {
-    process.exit(report(
-      'policy-drift',
-      reconcile(survey.drifts.map((d) => d.key), LOCK),
-      new Map(survey.drifts.map((d) => [d.key, d.detail])),
-      'bun scripts/policy-drift.ts --lock',
+    process.exit(report({
+      gate: 'policy-drift',
+      ratchet: reconcile(survey.drifts.map((d) => d.key), LOCK),
+      detail: new Map(survey.drifts.map((d) => [d.key, d.detail])),
+      lockCommand: 'bun scripts/policy-drift.ts --lock',
       measured,
-    ));
+    }));
   }
 }

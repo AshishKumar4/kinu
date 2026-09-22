@@ -165,9 +165,9 @@ describe('the workspace frame names an untitled workspace the same way', () => {
         title?.dispatchEvent(new MouseEvent('click', { bubbles: true }));
       }, UNTITLED);
       await page.waitForSelector('input[placeholder]');
-      const renamePlaceholder = await page.$eval('input[placeholder]', (input) => input.getAttribute('placeholder'));
+      const placeholder = await page.$eval('input[placeholder]', (input) => input.getAttribute('placeholder'));
 
-      return { ...partial, renamePlaceholder };
+      return { ...partial, renamePlaceholder: placeholder };
     }));
   });
   test('the workspace frame says Untitled workspace, never the slug', () => {

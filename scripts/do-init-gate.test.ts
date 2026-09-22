@@ -1,5 +1,7 @@
 import { describe, expect, test } from 'bun:test';
 
+import { present } from '@kinu.run/test-utils';
+
 import { readSources } from './sources';
 import { audit, auditFile, MODEL_SINKS } from './do-init-gate';
 
@@ -131,15 +133,6 @@ describe('DO init-gate — port-proven, budgeted container restore', () => {
       .toContain('no port-proven startAndWaitForPorts({ports: this.defaultPort}) entry');
   });
 
-  test('a second plain-start entry cannot hide beside the proven entry', () => {
-    const source = containerFixture().replace(
-      'start(): Promise<void>',
-      'unsafe(): Promise<void> { return super.start(); } start(): Promise<void>',
-    );
-
-    expect(reasons(source)).toContain('super.start bypasses control-listener proof before onStart');
-  });
-
   test('a timer inside the raced work is legal', () => {
     expect(reasons(containerFixture('await runRestoreStep(25_000, () => scheduler.wait(50), () => {});')))
       .toEqual([]);
@@ -165,24 +158,47 @@ describe('DO init-gate — port-proven, budgeted container restore', () => {
       .toContain('must bound the hook with `runRestoreStep`');
   });
 
-  test('the hook cannot restore directly', () => {
-    const source = containerFixture().replace(
-      'return this.#restoreInStartGate();', "return this.exec('probe');",
-    );
+  // One edit to the passing fixture each, and every refusal that edit must draw.
+  const MUTATIONS = [
+    {
+      name: 'a second plain-start entry cannot hide beside the proven entry',
+      anchor: 'start(): Promise<void>',
+      replacement: 'unsafe(): Promise<void> { return super.start(); } start(): Promise<void>',
+      refusals: ['super.start bypasses control-listener proof before onStart'],
+    },
+    {
+      name: 'the hook cannot restore directly',
+      anchor: 'return this.#restoreInStartGate();',
+      replacement: "return this.exec('probe');",
+      refusals: [
+        'must return this.#restoreInStartGate(): the sole budgeted restore path',
+        'reaches `exec` outside the budgeted restore path',
+      ],
+    },
+    {
+      name: 'a detached hook is refused',
+      anchor: 'onStart(): Promise<void> { return this.#restoreInStartGate(); }',
+      replacement: 'onStart(): void { void this.#restoreInStartGate(); }',
+      refusals: [
+        'must annotate `: Promise<void>` explicitly (found `void`)',
+        'must return this.#restoreInStartGate(): the sole budgeted restore path',
+      ],
+    },
+    {
+      name: 'the removed storage-only marker cannot defer restoration again',
+      anchor: 'return this.#restoreInStartGate();',
+      replacement: 'void BOUNDED_STORAGE_ONLY; return this.#noteContainerStart();',
+      refusals: ['must return this.#restoreInStartGate(): the sole budgeted restore path'],
+    },
+  ] as const;
 
-    expect(reasons(source)).toContain('must return this.#restoreInStartGate(): the sole budgeted restore path');
-    expect(reasons(source)).toContain('reaches `exec` outside the budgeted restore path');
-  });
+  for (const mutation of MUTATIONS) {
+    test(mutation.name, () => {
+      const found = reasons(containerFixture().replace(mutation.anchor, mutation.replacement));
 
-  test('a detached hook is refused', () => {
-    const source = containerFixture().replace(
-      'onStart(): Promise<void> { return this.#restoreInStartGate(); }',
-      'onStart(): void { void this.#restoreInStartGate(); }',
-    );
-
-    expect(reasons(source)).toContain('must annotate `: Promise<void>` explicitly (found `void`)');
-    expect(reasons(source)).toContain('must return this.#restoreInStartGate(): the sole budgeted restore path');
-  });
+      for (const refusal of mutation.refusals) expect(found).toContain(refusal);
+    });
+  }
 
   test('an async hook is refused so it cannot add an unbudgeted await', () => {
     const source = containerFixture().replace(
@@ -192,15 +208,6 @@ describe('DO init-gate — port-proven, budgeted container restore', () => {
 
     expect(reasons(source).some(reason => reason.includes('declared `async`'))).toBe(true);
     expect(reasons(source).some(reason => reason.includes('awaits in its own scope'))).toBe(true);
-  });
-
-  test('the removed storage-only marker cannot defer restoration again', () => {
-    const source = containerFixture().replace(
-      'return this.#restoreInStartGate();',
-      'void BOUNDED_STORAGE_ONLY; return this.#noteContainerStart();',
-    );
-
-    expect(reasons(source)).toContain('must return this.#restoreInStartGate(): the sole budgeted restore path');
   });
 
   test('the Sandbox lineage includes indirect subclasses', () => {
@@ -234,7 +241,7 @@ describe('DO init-gate purity — the SDK-awaited recovery hook', () => {
    * turn it queues ENDS) and `replayOwedTerminalSequences` (SMTP round trips and
    * waits on another agent's live head) — all inside `blockConcurrencyWhile`.
    */
-  const SHIPPED = `export class ActorAgent extends Think {
+  const SHIPPED_RECOVERY = `export class ActorAgent extends Think {
     override async onFiberRecovered(ctx: FiberRecoveryContext): Promise<FiberRecoveryResult> {
       return recoverLaneFiber(this.fiberLanes, ctx);
     }
@@ -247,7 +254,7 @@ describe('DO init-gate purity — the SDK-awaited recovery hook', () => {
   }`;
 
   test('the shipped defect is reported, on both of its independent grounds', () => {
-    const found = reasons(SHIPPED);
+    const found = reasons(SHIPPED_RECOVERY);
     expect(found).toHaveLength(2);
     expect(found[0]).toContain('async');
     // The one that matters, and the one no `await` check could reach: the awaits
@@ -543,84 +550,71 @@ export class A extends Agent {
     expect(found[0]).toContain('not on the admitted init-await list');
   });
 
-  test('an admitted await inside a LOOP is not one admitted await', () => {
-    // The admission is "bounded work owed once at the start of the object's
-    // life". A loop spells the admitted text exactly and holds the gate N
-    // times, so the spelling check alone would license unbounded work.
-    const found = reasons(`
-export class A extends Agent {
-  async onStart(): Promise<void> {
-    for (const _ of this.pending()) {
+  // Each body below is a legal `async onStart` under every spelling check, and
+  // each holds the gate anyway — one hold per entry, named by the refusal it owes.
+  const UNSEEN_HOLDS = [
+    {
+      name: 'an admitted await inside a LOOP is not one admitted await',
+      // The admission is "bounded work owed once at the start of the object's
+      // life". A loop spells the admitted text exactly and holds the gate N
+      // times, so the spelling check alone would license unbounded work.
+      body: `    for (const _ of this.pending()) {
       await this.hostedWorkspace().bundle.session();
-    }
-  }
-}
-`);
+    }`,
+      reason: 'inside a loop',
+    },
+    {
+      name: '`for await` holds the gate with no AwaitExpression to find',
+      // `for await (… of …)` is a ForOfStatement carrying `await: true`: it awaits
+      // once per iteration and contains no AwaitExpression node at all, so an
+      // await scan reads the body as await-free. Same family as the adopted
+      // return — a gate hold the spelling rule cannot see.
+      body: `    await this.hostedWorkspace().bundle.session();
+    for await (const row of this.remoteRows()) { void row; }`,
+      reason: 'for await',
+    },
+    {
+      name: '`await using` holds the gate with no AwaitExpression either',
+      // The other node that carries its await in a `kind` rather than an
+      // expression: `await using res = …` awaits the disposal protocol.
+      body: `    await this.hostedWorkspace().bundle.session();
+    await using lease = this.remoteLease();`,
+      reason: 'await using lease',
+    },
+    {
+      name: '`async` with nothing admitted to hold is refused outright',
+      // The shape that satisfies every other rule: no await, no return, and a
+      // detached `.then` chain doing the work — `async` paid for, the synchronous
+      // population's rules (`: void`, no own-scope await) opted out of, and
+      // nothing admitted held.
+      body: '    void this.hostedWorkspace().bundle.session().then(() => { this.ready = true; });',
+      reason: 'holding no admitted init await',
+    },
+  ] as const;
 
-    expect(found).toHaveLength(1);
-    expect(found[0]).toContain('inside a loop');
-  });
-
-  test('`for await` holds the gate with no AwaitExpression to find', () => {
-    // `for await (… of …)` is a ForOfStatement carrying `await: true`: it awaits
-    // once per iteration and contains no AwaitExpression node at all, so an
-    // await scan reads the body as await-free. Same family as the adopted
-    // return — a gate hold the spelling rule cannot see.
-    const found = reasons(`
+  for (const hold of UNSEEN_HOLDS) {
+    test(hold.name, () => {
+      const found = reasons(`
 export class A extends Agent {
   async onStart(): Promise<void> {
-    await this.hostedWorkspace().bundle.session();
-    for await (const row of this.remoteRows()) { void row; }
+${hold.body}
   }
 }
 `);
 
-    expect(found).toHaveLength(1);
-    expect(found[0]).toContain('for await');
-  });
-
-  test('`await using` holds the gate with no AwaitExpression either', () => {
-    // The other node that carries its await in a `kind` rather than an
-    // expression: `await using res = …` awaits the disposal protocol.
-    const found = reasons(`
-export class A extends Agent {
-  async onStart(): Promise<void> {
-    await this.hostedWorkspace().bundle.session();
-    await using lease = this.remoteLease();
+      expect(found).toHaveLength(1);
+      expect(found[0]).toContain(hold.reason);
+    });
   }
-}
-`);
-
-    expect(found).toHaveLength(1);
-    expect(found[0]).toContain('await using lease');
-  });
-
-  test('`async` with nothing admitted to hold is refused outright', () => {
-    // The shape that satisfies every other rule: no await, no return, and a
-    // detached `.then` chain doing the work — `async` paid for, the synchronous
-    // population's rules (`: void`, no own-scope await) opted out of, and
-    // nothing admitted held.
-    const found = reasons(`
-export class A extends Agent {
-  async onStart(): Promise<void> {
-    void this.hostedWorkspace().bundle.session().then(() => { this.ready = true; });
-  }
-}
-`);
-
-    expect(found).toHaveLength(1);
-    expect(found[0]).toContain('holding no admitted init await');
-  });
 
   test('cut the wire: an UNADMITTED await in the real async gate goes red', () => {
     // Against the real file, not a fixture — one await added in memory. The
     // gate is legitimately async now (the admitted workspace boot), so the
     // wire to cut is an await that is NOT on the pinned list.
     const file = 'packages/cf-backend/src/orchestrator.ts';
-    const real = SOURCES.get(file);
-    expect(real).toBeDefined();
+    const real = present(SOURCES.get(file), `the ${file} source`);
 
-    const widened = real!.replace(
+    const widened = real.replace(
       '      await this.hostedWorkspace().bundle.session();',
       '      await this.hostedWorkspace().bundle.session();\n      await this.runDueSessionEvolution();',
     );
@@ -628,7 +622,7 @@ export class A extends Agent {
     expect(widened).not.toBe(real);
     const { violations } = auditFile(file, widened);
     expect(violations.map((v) => v.owner)).toContain('OrchestratorAgent');
-    expect(violations[0]!.reason).toContain('not on the admitted init-await list');
+    expect(violations[0].reason).toContain('not on the admitted init-await list');
   });
 
   test('the real hook continuation is budgeted and its entry proves the control port', () => {
@@ -648,7 +642,7 @@ export class A extends Agent {
     ['detached hook', 'return this.#restoreInStartGate();', 'void this.#restoreInStartGate();', 'must return this.#restoreInStartGate()'],
   ])('cut the real wire: %s', (_name, from, to, reason) => {
     const file = 'packages/devbox/src/devbox.ts';
-    const real = SOURCES.get(file)!;
+    const real = present(SOURCES.get(file), `the ${file} source`);
     const changed = real.replaceAll(from, to);
     expect(changed).not.toBe(real);
     expect(auditFile(file, changed).violations.some(value => value.reason.includes(reason))).toBe(true);
@@ -659,10 +653,9 @@ export class A extends Agent {
     // replay's own promise instead of the classification. It is not `async` and
     // contains no `await`, so only the hand-off rule can see it.
     const file = 'packages/cf-backend/src/actor-agent.ts';
-    const real = SOURCES.get(file);
-    expect(real).toBeDefined();
+    const real = present(SOURCES.get(file), `the ${file} source`);
 
-    const inlined = real!.replace(
+    const inlined = real.replace(
       'return Promise.resolve(classifyRecoveredFiber(this.fiberLanes, ctx));',
       'return this.terminal.replayOwedAndRearm();',
     );
@@ -670,15 +663,14 @@ export class A extends Agent {
     expect(inlined).not.toBe(real);
     const { violations } = auditFile(file, inlined);
     expect(violations.map((v) => `${v.owner}.${v.member}`)).toEqual(['ActorAgent.onFiberRecovered']);
-    expect(violations[0]!.reason).toContain('must hand its work to `classifyRecoveredFiber`');
+    expect(violations[0].reason).toContain('must hand its work to `classifyRecoveredFiber`');
   });
 
   test('cut the wire: making the real classifier async goes red', () => {
     const file = 'packages/cf-backend/src/fiber-recovery.ts';
-    const real = SOURCES.get(file);
-    expect(real).toBeDefined();
+    const real = present(SOURCES.get(file), `the ${file} source`);
 
-    const widened = real!.replace(
+    const widened = real.replace(
       'export function classifyRecoveredFiber(', 'export async function classifyRecoveredFiber(',
     );
 
@@ -695,13 +687,12 @@ export class A extends Agent {
     // detached immediately above it stays legal, which is the discrimination
     // the whole rule rests on.
     const file = 'packages/cf-backend/src/orchestrator.ts';
-    const real = SOURCES.get(file);
-    expect(real).toBeDefined();
+    const real = present(SOURCES.get(file), `the ${file} source`);
 
     const anchor = '    const sweepsTruncated = this.maintenanceSweeps();\n';
     expect(real).toContain(anchor);
 
-    const respawned = real!.replace(anchor, `${anchor}    if (this.getOwnerUserId()) {
+    const respawned = real.replace(anchor, `${anchor}    if (this.getOwnerUserId()) {
       this.detachOwned(async () => {
         await this.hydrateTitle();
         const soul = await readSoul(this.rt.storage.vfs);
@@ -713,6 +704,6 @@ export class A extends Agent {
     expect(respawned).not.toBe(real);
     const { violations } = auditFile(file, respawned);
     expect(violations.map((v) => `${v.owner}.${v.member}`)).toEqual(['OrchestratorAgent.onStart']);
-    expect(violations[0]!.reason).toContain('reaches `maybeAutoTitle`');
+    expect(violations[0].reason).toContain('reaches `maybeAutoTitle`');
   });
 });

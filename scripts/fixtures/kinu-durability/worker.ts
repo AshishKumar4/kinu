@@ -55,8 +55,28 @@ const CommandSchema = v.object({
 
 type ProbeCommand = v.InferOutput<typeof CommandSchema>;
 
+/** What this forwarder answers with on a route whose product method returns
+ *  nothing of its own, and on a refusal. */
+interface ProbeAck {
+  readonly ok?: true;
+  readonly urlToken?: string;
+  readonly decided?: string;
+  readonly error?: string;
+}
+
+/** Every reply the probe serializes: one product method's own result, or this
+ *  forwarder's acknowledgement. */
+type ProbeReply =
+  | ProbeAck
+  | Awaited<ReturnType<KinuSandbox["checkpointNow"]>>
+  | Awaited<ReturnType<KinuSandbox["startSupervised"]>>
+  | Awaited<ReturnType<KinuSandbox["listSupervised"]>>
+  | Awaited<ReturnType<KinuSandbox["listSchedules"]>>
+  | Awaited<ReturnType<KinuSandbox["devboxState"]>>
+  | (Awaited<ReturnType<KinuSandbox["exec"]>> & { readonly wallMs: number });
+
 /** One probe reply: the sandbox method's own result, serialized verbatim. */
-function json<T>(data: T, status = 200): Response {
+function json(data: ProbeReply, status = 200): Response {
   return Response.json(data, { status });
 }
 

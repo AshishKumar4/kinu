@@ -72,7 +72,9 @@ describe('ephemeral Worker deletion', () => {
       _options?: WranglerOptions,
     ): string => outputs.shift() ?? `${WRANGLER_FAILED}: no response`;
 
-    expect(deleteFixtureWorker('/repo', '/tmp/config', 'worker', () => {}, wrangle)).toBe(true);
+    expect(deleteFixtureWorker({
+      repoRoot: '/repo', configPath: '/tmp/config', workerName: 'worker', log: () => {}, wrangle,
+    })).toBe(true);
   });
 
   test('authentication and network failures never prove Worker absence', () => {

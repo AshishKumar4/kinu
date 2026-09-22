@@ -79,18 +79,20 @@ interface ObservedPlan {
   readonly settled: SettledPlan;
 }
 
-async function openFrame(
-  newPage: Gallery['newPage'],
-  origin: string,
-  frame: string,
-  mode: Mode,
-  viewport: { width: number; height: number },
-  params: Record<string, string> = {},
-): Promise<Page> {
+/** The gallery frame a row opens: the fixture's name, the theme it boots in,
+ *  the viewport it is measured at, and any query the fixture itself reads. */
+interface FrameRequest {
+  readonly frame: string;
+  readonly mode: Mode;
+  readonly viewport: { readonly width: number; readonly height: number };
+  readonly params?: Record<string, string>;
+}
+
+async function openFrame(newPage: Gallery['newPage'], origin: string, request: FrameRequest): Promise<Page> {
   const page = await newPage();
-  await page.setViewport(viewport);
-  await page.evaluateOnNewDocument((nextMode: Mode) => localStorage.setItem('theme', nextMode), mode);
-  const query = new URLSearchParams({ frame, ...params });
+  await page.setViewport(request.viewport);
+  await page.evaluateOnNewDocument((nextMode: Mode) => localStorage.setItem('theme', nextMode), request.mode);
+  const query = new URLSearchParams({ frame: request.frame, ...request.params });
   await page.goto(`${origin}/gallery.html?${query.toString()}`, { waitUntil: 'networkidle0' });
 
   return page;
@@ -104,7 +106,7 @@ async function readActionStrip(page: Page, selector: string): Promise<ActionStri
 }
 
 async function observeDesktop(newPage: Gallery['newPage'], origin: string, mode: Mode): Promise<DesktopPlan> {
-  const page = await openFrame(newPage, origin, 'planreview', mode, { width: 1280, height: 900 });
+  const page = await openFrame(newPage, origin, { frame: 'planreview', mode, viewport: { width: 1280, height: 900 } });
   await page.waitForSelector('[data-plan-review-root]');
   const strip = await readActionStrip(page, ACTION_STRIP);
 
@@ -116,8 +118,9 @@ async function observeDesktop(newPage: Gallery['newPage'], origin: string, mode:
     const plan = document.querySelector<HTMLElement>('[data-plan-document]');
     const code = document.querySelector<HTMLElement>('[data-plan-document] pre');
     const scroll = document.querySelector<HTMLElement>('[data-plan-scroll]');
+    const root = document.querySelector<HTMLElement>('[data-plan-review-root]');
 
-    if (!title || !section || !body || !plan || !code || !scroll) throw new Error('plan fixture did not render its document contract');
+    if (!title || !section || !body || !plan || !code || !scroll || !root) throw new Error('plan fixture did not render its document contract');
 
     return {
       mode: document.documentElement.dataset.mode,
@@ -131,7 +134,7 @@ async function observeDesktop(newPage: Gallery['newPage'], origin: string, mode:
       railInitiallyOpen: document.querySelector('[data-annotation-panel="true"]') !== null,
       codeLabel: getComputedStyle(code, '::before').content.replace(/^['"]|['"]$/g, ''),
       codeBackground: getComputedStyle(code).backgroundColor,
-      pageBackground: getComputedStyle(document.querySelector<HTMLElement>('[data-plan-review-root]')!).backgroundColor,
+      pageBackground: getComputedStyle(root).backgroundColor,
       codeBorder: getComputedStyle(code).borderTopStyle,
       codeOverflow: getComputedStyle(code).overflowX,
       overflow: document.documentElement.scrollWidth - innerWidth,
@@ -161,7 +164,7 @@ async function observeDesktop(newPage: Gallery['newPage'], origin: string, mode:
 }
 
 async function observeMobile(newPage: Gallery['newPage'], origin: string): Promise<MobilePlan> {
-  const page = await openFrame(newPage, origin, 'planreview', 'dark', { width: 390, height: 844 });
+  const page = await openFrame(newPage, origin, { frame: 'planreview', mode: 'dark', viewport: { width: 390, height: 844 } });
   await page.waitForSelector('[data-plan-review-root]');
   await page.$eval('[data-plan-document] pre', (code) => code.scrollIntoView({ block: 'center' }));
 
@@ -200,7 +203,7 @@ async function observeMobile(newPage: Gallery['newPage'], origin: string): Promi
 }
 
 async function observeWorkspace(newPage: Gallery['newPage'], origin: string): Promise<WorkspacePlan> {
-  const page = await openFrame(newPage, origin, 'workspacepage', 'dark', { width: 1280, height: 900 });
+  const page = await openFrame(newPage, origin, { frame: 'workspacepage', mode: 'dark', viewport: { width: 1280, height: 900 } });
   await page.waitForSelector('[data-composer-root]');
   await page.waitForFunction(() => document.querySelectorAll('[data-panel]').length === 2);
   await page.click('[aria-label="Work"]');
@@ -270,7 +273,10 @@ async function observePromotion(
   variant: string,
   settle?: string,
 ): Promise<PromotedPlan> {
-  const page = await openFrame(newPage, origin, 'planreview', 'dark', { width: 1280, height: 900 }, { plan: variant });
+  const page = await openFrame(
+    newPage, origin,
+    { frame: 'planreview', mode: 'dark', viewport: { width: 1280, height: 900 }, params: { plan: variant } });
+
   const highlightWarnings: string[] = [];
   const unpaintable = new AbortController();
   page.on('console', (message) => {
@@ -321,7 +327,10 @@ async function observePromotion(
 }
 
 async function observeSettled(newPage: Gallery['newPage'], origin: string): Promise<SettledPlan> {
-  const page = await openFrame(newPage, origin, 'planreview', 'dark', { width: 1280, height: 900 }, { plan: 'read-only' });
+  const page = await openFrame(
+    newPage, origin,
+    { frame: 'planreview', mode: 'dark', viewport: { width: 1280, height: 900 }, params: { plan: 'read-only' } });
+
   await page.waitForSelector('[data-plan-document] [data-block-id]');
   const status = await page.$eval('[data-plan-status]', (badge) => badge.textContent ?? '');
   const strip = await readActionStrip(page, ACTION_STRIP);

@@ -94,29 +94,41 @@ describe('the declaration is measurable', () => {
 describe('the verdict, in every direction it claims', () => {
   const fence = 'core/heads/journal#markInterrupted:spawnedBefore-bound';
 
-  test('pristine green and mutant red is the ONLY proved shape', () => {
-    expect(proved({ fence, pristineExit: 0, mutantExit: 1, output: 'expect(received)' })).toBe(true);
-  });
+  const verdicts: { readonly name: string; readonly result: FenceResult; readonly proved: boolean }[] = [
+    {
+      name: 'pristine green and mutant red is the ONLY proved shape',
+      result: { fence, pristineExit: 0, mutantExit: 1, output: 'expect(received)' },
+      proved: true,
+    },
+    {
+      // The whole point. A fence whose strip leaves its owner passing is a fence
+      // nothing guards: the next refactor removes it and no suite notices.
+      name: 'GREEN WITH THE MUTATION is a failure — the finding that matters',
+      result: { fence, pristineExit: 0, mutantExit: 0, output: '2 pass' },
+      proved: false,
+    },
+    {
+      // Otherwise the gate passes vacuously on a broken sandbox: every owner
+      // fails, every mutant fails, and every fence reads proved. That is the
+      // false green this gate would have shipped with — measured, when the
+      // sparse checkout omitted `packages/test-utils` and the preload could not
+      // load: all four owners failed for a reason unrelated to any fence.
+      name: 'a red PRISTINE baseline is a failure, not a proved fence',
+      result: { fence, pristineExit: 1, mutantExit: 1, output: 'cannot find module' },
+      proved: false,
+    },
+    {
+      // A hung or unrunnable owner is indistinguishable from a pass unless the
+      // gate refuses to read `null` as a failure.
+      name: 'a mutant that never SETTLED is neither red nor proved',
+      result: { fence, pristineExit: 0, mutantExit: null, output: 'timed out' },
+      proved: false,
+    },
+  ];
 
-  test('GREEN WITH THE MUTATION is a failure — the finding that matters', () => {
-    // The whole point. A fence whose strip leaves its owner passing is a fence
-    // nothing guards: the next refactor removes it and no suite notices.
-    expect(proved({ fence, pristineExit: 0, mutantExit: 0, output: '2 pass' })).toBe(false);
-  });
-
-  test('a red PRISTINE baseline is a failure, not a proved fence', () => {
-    // Otherwise the gate passes vacuously on a broken sandbox: every owner
-    // fails, every mutant fails, and every fence reads proved. That is the
-    // false green this gate would have shipped with — measured, when the
-    // sparse checkout omitted `packages/test-utils` and the preload could not
-    // load: all four owners failed for a reason unrelated to any fence.
-    expect(proved({ fence, pristineExit: 1, mutantExit: 1, output: 'cannot find module' }))
-      .toBe(false);
-  });
-
-  test('a mutant that never SETTLED is neither red nor proved', () => {
-    // A hung or unrunnable owner is indistinguishable from a pass unless the
-    // gate refuses to read `null` as a failure.
-    expect(proved({ fence, pristineExit: 0, mutantExit: null, output: 'timed out' })).toBe(false);
-  });
+  for (const verdict of verdicts) {
+    test(verdict.name, () => {
+      expect(proved(verdict.result)).toBe(verdict.proved);
+    });
+  }
 });

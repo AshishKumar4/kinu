@@ -48,7 +48,7 @@ export const describeThrown = ({ cause }: { cause: unknown }): string =>
 
 export const delay = async (ms: number): Promise<void> => {
   const settle = Promise.withResolvers<void>();
-  setTimeout(settle.resolve, ms);
+  setTimeout(() => settle.resolve(), ms);
   await settle.promise;
 };
 
@@ -192,6 +192,16 @@ export function deleteContainerApps(
   });
 }
 
+/** The tree and generated config that name the Worker, plus the wrangler runner
+ *  that carries the two delete calls. */
+export interface WorkerDeletion {
+  readonly repoRoot: string;
+  readonly configPath: string;
+  readonly workerName: string;
+  readonly log: (message: string) => void;
+  readonly wrangle?: typeof runWrangler;
+}
+
 /**
  * Remove the fixture Worker, trying both routes.
  *
@@ -200,13 +210,9 @@ export function deleteContainerApps(
  * the first try. A teardown with one route leaks whenever that route is the one
  * that breaks.
  */
-export function deleteFixtureWorker(
-  repoRoot: string,
-  configPath: string,
-  workerName: string,
-  log: (message: string) => void,
-  wrangle: typeof runWrangler = runWrangler,
-): boolean {
+export function deleteFixtureWorker(deletion: WorkerDeletion): boolean {
+  const { repoRoot, configPath, workerName, log, wrangle = runWrangler } = deletion;
+
   const configured = wrangle(
     repoRoot,
     ['delete', '--config', configPath, '--force'],
@@ -270,6 +276,16 @@ export function armSignalTeardown(log: (message: string) => void): void {
   }
 }
 
+/** The origin and path the readiness probe calls, and the token it must see
+ *  accepted there. */
+export interface TokenReadiness {
+  readonly origin: string;
+  readonly token: string;
+  readonly probePath: string;
+  readonly log: (message: string) => void;
+  readonly deadlineMs?: number;
+}
+
 /**
  * Wait until the deployment accepts THIS run's token.
  *
@@ -280,13 +296,9 @@ export function armSignalTeardown(log: (message: string) => void): void {
  * unauthenticated probe stays as a security assertion, and readiness is an
  * AUTHORIZED 200.
  */
-export async function awaitTokenAccepted(
-  origin: string,
-  token: string,
-  probePath: string,
-  log: (message: string) => void,
-  deadlineMs = 180_000,
-): Promise<void> {
+export async function awaitTokenAccepted(readiness: TokenReadiness): Promise<void> {
+  const { origin, token, probePath, log, deadlineMs = 180_000 } = readiness;
+
   const probe = async (headers?: Record<string, string>): Promise<number | 'unreachable'> => {
     const init: RequestInit = { signal: AbortSignal.timeout(15_000) };
 

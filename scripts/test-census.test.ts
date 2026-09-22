@@ -79,9 +79,27 @@ function probeInputs(): CensusInputs {
 const inputs = probeInputs();
 
 /** One fixture's findings for one category, as `line what` strings. */
-function found(category: Category, body: string): string[] {
+function found(category: Category, body: string): readonly string[] {
   return measureFile(PROBE, body, inputs).findings[category]
     .map((finding) => `${finding.what}`);
+}
+
+/** One fixture for a category: the shape, and exactly what the census must say
+ *  about it. */
+interface CategoryCase {
+  readonly name: string;
+  readonly source: string;
+  readonly expected: readonly string[];
+}
+
+function describeCategory(category: Category, cases: readonly CategoryCase[]): void {
+  describe(category, () => {
+    for (const fixture of cases) {
+      test(fixture.name, () => {
+        expect(found(category, fixture.source)).toEqual(fixture.expected);
+      });
+    }
+  });
 }
 
 /* ── 1 + 2: red on the shape, green on its corrected form ─────────────── */
@@ -201,49 +219,54 @@ describe('mirror', () => {
   });
 });
 
-describe('private_reach', () => {
-  test('RED: a bracket reach to a member production declares private', () => {
-    expect(found('private_reach', `
+describeCategory('private_reach', [
+  {
+    name: 'RED: a bracket reach to a member production declares private',
+    source: `
       import { Orchestrator } from '../src/budget';
       test('settling twice is idempotent', () => {
         const agent = new Orchestrator();
         agent['settleTurn']('t-1');
         expect(agent.publicRead()).toBe(1_800_000);
       });
-    `)).toEqual(['bracket reach to a non-public member']);
-  });
-
-  test('RED: a harness bridge that forwards to a protected member', () => {
-    expect(found('private_reach', `
+    `,
+    expected: ['bracket reach to a non-public member'],
+  },
+  {
+    name: 'RED: a harness bridge that forwards to a protected member',
+    source: `
       import { harness } from './helpers/harness';
       test('a settled turn clears its checkpoint', async () => {
         const agent = harness();
         await agent.harnessSettle('t-1');
         expect(agent.publicRead()).toBe(1_800_000);
       });
-    `)).toEqual(['harness bridge to a non-public member']);
-  });
-
-  test('GREEN: the same state read through the public method', () => {
-    expect(found('private_reach', `
+    `,
+    expected: ['harness bridge to a non-public member'],
+  },
+  {
+    name: 'GREEN: the same state read through the public method',
+    source: `
       import { Orchestrator } from '../src/budget';
       test('the wake is readable', () => {
         expect(new Orchestrator().publicRead()).toBe(1_800_000);
       });
-    `)).toEqual([]);
-  });
-
-  test('SILENT: a Record lookup by string key', () => {
+    `,
+    expected: [],
+  },
+  {
     // The 22-row false-positive class: `headers['authorization']` and
     // `BACKGROUNDABLE_TOOLS['agents']` are dictionary reads, not private reaches.
-    expect(found('private_reach', `
+    name: 'SILENT: a Record lookup by string key',
+    source: `
       test('the header is sent', () => {
         expect(request.headers['authorization']).toBe('Bearer x');
         expect(BACKGROUNDABLE_TOOLS['agents']?.completion).toBe('spawn');
       });
-    `)).toEqual([]);
-  });
-});
+    `,
+    expected: [],
+  },
+]);
 
 describe('internal_mock versus external_seam_mock', () => {
   test('RED: mock.module of a module in this repository', () => {
@@ -290,43 +313,48 @@ describe('internal_mock versus external_seam_mock', () => {
   });
 });
 
-describe('tautology_suspect', () => {
-  test('RED: the expected side computed by the code under test', () => {
-    expect(found('tautology_suspect', `
+describeCategory('tautology_suspect', [
+  {
+    name: 'RED: the expected side computed by the code under test',
+    source: `
       import { clampToBudget } from '../src/budget';
       test('clamping is stable', () => {
         expect(clampToBudget('abc')).toBe(clampToBudget('abc'));
       });
-    `)).toEqual(['expected side computed by the code under test']);
-  });
-
-  test('RED: a test whose only assertion is toBeDefined', () => {
-    expect(found('tautology_suspect', `
+    `,
+    expected: ['expected side computed by the code under test'],
+  },
+  {
+    name: 'RED: a test whose only assertion is toBeDefined',
+    source: `
       import { clampToBudget } from '../src/budget';
       test('clamping works', () => {
         expect(clampToBudget('abc')).toBeDefined();
       });
-    `)).toEqual(['weak-only test']);
-  });
-
-  test('GREEN: an independently derived expected value', () => {
-    expect(found('tautology_suspect', `
+    `,
+    expected: ['weak-only test'],
+  },
+  {
+    name: 'GREEN: an independently derived expected value',
+    source: `
       import { clampToBudget } from '../src/budget';
       test('a prompt is cut at the budget', () => {
         expect(clampToBudget('x'.repeat(5000))).toHaveLength(4096);
       });
-    `)).toEqual([]);
-  });
-
-  test('SILENT: toThrow carrying the message it expects', () => {
-    expect(found('tautology_suspect', `
+    `,
+    expected: [],
+  },
+  {
+    name: 'SILENT: toThrow carrying the message it expects',
+    source: `
       import { clampToBudget } from '../src/budget';
       test('an empty prompt is refused by name', () => {
         expect(() => clampToBudget('')).toThrow('a prompt cannot be empty');
       });
-    `)).toEqual([]);
-  });
-});
+    `,
+    expected: [],
+  },
+]);
 
 describe('assertion_free and silent_skip', () => {
   test('RED: a test with no assertion at all', () => {

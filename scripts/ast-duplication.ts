@@ -302,13 +302,13 @@ if (import.meta.main) {
   } else {
     const detail = new Map(groups.map((g) => [g.key, describe(g)]));
 
-    const code = report(
-      'ast-duplication',
-      reconcile(groups.map((g) => g.key), LOCK),
+    const code = report({
+      gate: 'ast-duplication',
+      ratchet: reconcile(groups.map((g) => g.key), LOCK),
       detail,
-      'bun scripts/ast-duplication.ts --lock',
+      lockCommand: 'bun scripts/ast-duplication.ts --lock',
       measured,
-    );
+    });
 
     if (code === 0) {
       for (const spot of BLIND_SPOTS) console.log(`  blind: ${spot}`);

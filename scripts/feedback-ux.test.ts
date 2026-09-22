@@ -153,12 +153,20 @@ async function recordSubmissions(page: Page): Promise<void> {
       if (url.endsWith(endpoint) && body instanceof FormData) {
         const shot = body.get('screenshot');
 
+        // The text fields as text: only the screenshot is a file, so a file
+        // under one of these names is a field the page never sent.
+        const text = (field: string): string => {
+          const value = body.get(field);
+
+          return value === null || value instanceof File ? '' : value;
+        };
+
         const record: Submission = {
           fields: [...body.keys()],
-          note: String(body.get('note') ?? ''),
-          route: String(body.get('route') ?? ''),
-          workspace: String(body.get('workspace') ?? ''),
-          annotated: String(body.get('annotated') ?? ''),
+          note: text('note'),
+          route: text('route'),
+          workspace: text('workspace'),
+          annotated: text('annotated'),
           screenshot: shot instanceof File ? { size: shot.size, type: shot.type, name: shot.name } : null,
           outcome: 'pending',
         };
@@ -209,7 +217,7 @@ async function serveFeedback(page: Page, options: { attempts?: readonly Attempt[
     const Real = WebSocket;
 
     const Stub = function (url: string, protocols?: string | string[]) {
-      const wanted = protocols === undefined ? [] : Array.isArray(protocols) ? protocols : [protocols];
+      const wanted = protocols === undefined ? [] : [protocols].flat();
 
       if (wanted.includes('vite-hmr')) {
         return { readyState: 3, close() { /* never opened */ }, send() { /* never opened */ },
@@ -330,6 +338,14 @@ async function posted(page: Page, count: number): Promise<void> {
   );
 }
 
+/** Two frames of the page's own clock, so a reading taken after it is of a
+ *  moment that has passed rather than of one that had not arrived. */
+async function twoFrames(page: Page): Promise<void> {
+  await page.evaluate(() => new Promise<void>((resolve) => {
+    requestAnimationFrame(() => { requestAnimationFrame(() => { resolve(); }); });
+  }));
+}
+
 /** Which job the footer's escape is currently doing: `stop` or `close`. */
 async function cancelHook(page: Page): Promise<string> {
   return page.$eval('[data-feedback-cancel]', (node) => node.getAttribute('data-feedback-cancel') ?? '');
@@ -423,7 +439,9 @@ async function recordSerialized(page: Page): Promise<void> {
   await page.evaluateOnNewDocument(() => {
     const seen: string[] = [];
     window.__serialized = seen;
-    const real = XMLSerializer.prototype.serializeToString;
+    const serializer: Pick<XMLSerializer, 'serializeToString'> = XMLSerializer.prototype;
+    const real = serializer.serializeToString;
+
     XMLSerializer.prototype.serializeToString = function record(node: Node): string {
       const markup = real.call(this, node);
       seen.push(markup);
@@ -865,7 +883,9 @@ async function run(): Promise<Observed> {
     // Break the PNG encoder underneath `capturePage`, so the capture rejects
     // with this chain and nothing else on the page is touched.
     await broken.evaluate((outer: string, inner: string) => {
-      const original = HTMLCanvasElement.prototype.toBlob;
+      const canvas: Pick<HTMLCanvasElement, 'toBlob'> = HTMLCanvasElement.prototype;
+      const original = canvas.toBlob;
+
       window.__restoreCapture = () => { HTMLCanvasElement.prototype.toBlob = original; };
 
       HTMLCanvasElement.prototype.toBlob = () => { throw new Error(outer, { cause: new Error(inner) }); };
@@ -1045,11 +1065,7 @@ async function run(): Promise<Observed> {
     // refusing it, because a stray key must not tear down a report mid-write.
     // The way out is the footer button, and it is the next thing pressed.
     await stalledPage.keyboard.press('Escape');
-    // Two frames, so "it stayed open" is a reading of a moment that has passed
-    // rather than of one that had not arrived.
-    await stalledPage.evaluate(() => new Promise<void>((resolve) => {
-      requestAnimationFrame(() => { requestAnimationFrame(() => { resolve(); }); });
-    }));
+    await twoFrames(stalledPage);
 
     const whileSending = {
       cancelHook: await cancelHook(stalledPage),
@@ -1088,9 +1104,7 @@ async function run(): Promise<Observed> {
     // two readings are of the same kind: a dialog still present here is one
     // that refused, not one that had not caught up.
     await stalledPage.keyboard.press('Escape');
-    await stalledPage.evaluate(() => new Promise<void>((resolve) => {
-      requestAnimationFrame(() => { requestAnimationFrame(() => { resolve(); }); });
-    }));
+    await twoFrames(stalledPage);
     const closedAfterStop = await stalledPage.$('[data-feedback-note]') === null;
     // Every POST this page made, and how each ENDED. Read on the spot: the
     // recorder above writes a request's outcome before the rejection reaches
@@ -1519,7 +1533,8 @@ test('a capture completed after screenshot opt-out cannot attach to the report',
     await serveFeedback(page);
     await page.goto(`${origin}/gallery.html?frame=feedback`, { waitUntil: 'networkidle0' });
     await page.evaluate(() => {
-      const encode = HTMLCanvasElement.prototype.toBlob;
+      const canvas: Pick<HTMLCanvasElement, 'toBlob'> = HTMLCanvasElement.prototype;
+      const encode = canvas.toBlob;
       const held: (() => Promise<void>)[] = [];
       window.__heldFeedbackEncodes = 0;
       HTMLCanvasElement.prototype.toBlob = function (callback, type, quality) {

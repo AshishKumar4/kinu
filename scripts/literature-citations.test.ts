@@ -118,67 +118,90 @@ describe('a compute-dependent claim under a bare adjective', () => {
   });
 });
 
-describe('a hedge the source states and our prose drops', () => {
-  test("Self-MoA's own `up to` may not be deleted", () => {
-    const found = audit('Self-MoA 2502.00674 Table 4 puts quality over diversity by 3.2×.');
-    expect(found).toHaveLength(1);
-    expect(found[0]).toContain('without the source\'s own "up to"');
-  });
+/**
+ * One rule per row, in both directions: the prose it must refuse with the words
+ * the refusal carries, and the prose it must leave alone.
+ */
+const NUMBER_RULES = [
+  {
+    rule: 'a hedge the source states and our prose drops',
+    refused: {
+      name: "Self-MoA's own `up to` may not be deleted",
+      prose: 'Self-MoA 2502.00674 Table 4 puts quality over diversity by 3.2×.',
+      refusal: 'without the source\'s own "up to"',
+    },
+    passed: [
+      {
+        name: 'and passes when the hedge is kept',
+        prose: 'Self-MoA 2502.00674 Table 4 puts quality over diversity by up to 3.2×.',
+      },
+    ],
+  },
+  {
+    rule: 'a unit whose twin says something else',
+    refused: {
+      name: 'a bare CL-Bench percentage does not say whether it is the level or the gain',
+      // Read as the level, 25.4% puts the leader above the 22.3% the register records
+      // for it and states no gain at all — the shape of the Chen defect this rule was
+      // written for, in the one surviving register entry that still has it.
+      prose: "CL-Bench's leader reaches 25.4% on the public leaderboard.",
+      refusal: 'has a confusable twin',
+    },
+    passed: [
+      {
+        name: 'and passes once the unit is named',
+        prose: "CL-Bench's leader reaches 25.4% gain over the stateless arm.",
+      },
+      {
+        name: 'the unit is named once and then argued, so the window carries it',
+        // Read over the paragraph rather than the sentence on purpose: an author names the
+        // quantity and then reasons about it in sentences that do not repeat the noun.
+        // `docs/BENCH.md` is exactly this, and dropping the word from the whole paragraph
+        // is what makes the live site red.
+        prose: "CL-Bench's leader reaches 22.3% normalized reward and 25.4%."
+          + ' A gain near zero is the normal outcome, not a harness bug.',
+      },
+    ],
+  },
+  {
+    rule: 'a locator that does not hold the number',
+    refused: {
+      name: 'prose naming Table 4 for a Table 1 number is refused',
+      prose: 'Self-MoA 2502.00674 Table 4 puts Mixed-MoA at 59.1.',
+      refusal: 'which the register locates at Table 1',
+    },
+    passed: [
+      {
+        name: 'the same number under its own locator passes',
+        prose: 'Self-MoA 2502.00674 Table 1 puts Mixed-MoA at 59.1.',
+      },
+      {
+        name: 'two locators in one sentence are not compared, and this is a stated blind spot',
+        // `59.1` lives in Table 1 and the quality-over-diversity ratio in Table 4. Which
+        // number belongs to which is not readable from the text, so a comparison here
+        // would be a guess dressed as a check.
+        prose: 'Self-MoA 2502.00674 Table 1 and Table 4 put Mixed-MoA at 59.1 with quality'
+          + ' dominating diversity by up to 3.2×.',
+      },
+    ],
+  },
+];
 
-  test('and passes when the hedge is kept', () => {
-    expect(audit(
-      'Self-MoA 2502.00674 Table 4 puts quality over diversity by up to 3.2×.',
-    )).toEqual([]);
-  });
-});
+for (const { rule, refused, passed } of NUMBER_RULES) {
+  describe(rule, () => {
+    test(refused.name, () => {
+      const found = audit(refused.prose);
+      expect(found).toHaveLength(1);
+      expect(found[0]).toContain(refused.refusal);
+    });
 
-describe('a unit whose twin says something else', () => {
-  test('a bare CL-Bench percentage does not say whether it is the level or the gain', () => {
-    // Read as the level, 25.4% puts the leader above the 22.3% the register records
-    // for it and states no gain at all — the shape of the Chen defect this rule was
-    // written for, in the one surviving register entry that still has it.
-    const found = audit("CL-Bench's leader reaches 25.4% on the public leaderboard.");
-    expect(found).toHaveLength(1);
-    expect(found[0]).toContain('has a confusable twin');
+    for (const clean of passed) {
+      test(clean.name, () => {
+        expect(audit(clean.prose)).toEqual([]);
+      });
+    }
   });
-
-  test('and passes once the unit is named', () => {
-    expect(audit("CL-Bench's leader reaches 25.4% gain over the stateless arm.")).toEqual([]);
-  });
-
-  test('the unit is named once and then argued, so the window carries it', () => {
-    // Read over the paragraph rather than the sentence on purpose: an author names the
-    // quantity and then reasons about it in sentences that do not repeat the noun.
-    // `docs/BENCH.md` is exactly this, and dropping the word from the whole paragraph
-    // is what makes the live site red.
-    expect(audit(
-      "CL-Bench's leader reaches 22.3% normalized reward and 25.4%."
-      + ' A gain near zero is the normal outcome, not a harness bug.',
-    )).toEqual([]);
-  });
-});
-
-describe('a locator that does not hold the number', () => {
-  test('prose naming Table 4 for a Table 1 number is refused', () => {
-    const found = audit('Self-MoA 2502.00674 Table 4 puts Mixed-MoA at 59.1.');
-    expect(found).toHaveLength(1);
-    expect(found[0]).toContain('which the register locates at Table 1');
-  });
-
-  test('the same number under its own locator passes', () => {
-    expect(audit('Self-MoA 2502.00674 Table 1 puts Mixed-MoA at 59.1.')).toEqual([]);
-  });
-
-  test('two locators in one sentence are not compared, and this is a stated blind spot', () => {
-    // `59.1` lives in Table 1 and the quality-over-diversity ratio in Table 4. Which
-    // number belongs to which is not readable from the text, so a comparison here
-    // would be a guess dressed as a check.
-    expect(audit(
-      'Self-MoA 2502.00674 Table 1 and Table 4 put Mixed-MoA at 59.1 with quality'
-      + ' dominating diversity by up to 3.2×.',
-    )).toEqual([]);
-  });
-});
+}
 
 describe('a withdrawn number', () => {
   test('re-asserting it as live is refused', () => {
@@ -273,42 +296,51 @@ describe('the false positives that shaped the corpus decision', () => {
 });
 
 describe('a comment block ends where its author ended it', () => {
-  test('a citation does not reach a comment on the far side of code', () => {
-    // The defect this closes, as it stood in `strategy/swarm.ts`: comments joined by
-    // a SINGLE newline are one paragraph, and `SENTENCE_BREAK` cannot break before a
-    // digit, so a comment opening on `1` was swallowed by the citing sentence six
-    // lines above it. The prose had to be reworded to land the swarm preset table.
-    expect(auditSource([
-      '/**',
-      ' * Self-MoA (2502.00674) found the homogeneous ensemble beat the mixed one 65.7 vs',
-      ' * 59.1 with the proposer count and topology held fixed.',
-      ' */',
-      'export const POINTS = {',
-      "  ideate: { expand: 'sample', advance: 'none' },",
-      '  // 1 BY CONSTRUCTION rather than by choice: `advance` selects nothing, so there',
-      '  // is no second level to reach.',
-      '  depth: 1,',
-      '};',
-    ].join('\n'))).toEqual([]);
-  });
+  const ENDINGS = [
+    {
+      name: 'a citation does not reach a comment on the far side of code',
+      // The defect this closes, as it stood in `strategy/swarm.ts`: comments joined by
+      // a SINGLE newline are one paragraph, and `SENTENCE_BREAK` cannot break before a
+      // digit, so a comment opening on `1` was swallowed by the citing sentence six
+      // lines above it. The prose had to be reworded to land the swarm preset table.
+      lines: [
+        '/**',
+        ' * Self-MoA (2502.00674) found the homogeneous ensemble beat the mixed one 65.7 vs',
+        ' * 59.1 with the proposer count and topology held fixed.',
+        ' */',
+        'export const POINTS = {',
+        "  ideate: { expand: 'sample', advance: 'none' },",
+        '  // 1 BY CONSTRUCTION rather than by choice: `advance` selects nothing, so there',
+        '  // is no second level to reach.',
+        '  depth: 1,',
+        '};',
+      ],
+    },
+    {
+      name: "nor does one block comment's citation reach the next block's numbers",
+      // Two members of one interface, documented separately. The closing delimiter leaves
+      // a bare `/` on its own line, which is not a sentence start either, so a reader that
+      // split on sentence starts would take these two docblocks as one.
+      lines: [
+        'export interface RunScaffoldGepaOpts {',
+        '  /**',
+        '   * Self-MoA (2502.00674) measured 65.7 vs 59.1 with the topology held fixed.',
+        '   */',
+        '  seed?: string;',
+        '  /**',
+        '   * Must be at least 50 characters per gate 1.',
+        '   */',
+        '  rationale?: string;',
+        '}',
+      ],
+    },
+  ];
 
-  test("nor does one block comment's citation reach the next block's numbers", () => {
-    // Two members of one interface, documented separately. The closing delimiter leaves
-    // a bare `/` on its own line, which is not a sentence start either, so a reader that
-    // split on sentence starts would take these two docblocks as one.
-    expect(auditSource([
-      'export interface RunScaffoldGepaOpts {',
-      '  /**',
-      '   * Self-MoA (2502.00674) measured 65.7 vs 59.1 with the topology held fixed.',
-      '   */',
-      '  seed?: string;',
-      '  /**',
-      '   * Must be at least 50 characters per gate 1.',
-      '   */',
-      '  rationale?: string;',
-      '}',
-    ].join('\n'))).toEqual([]);
-  });
+  for (const ending of ENDINGS) {
+    test(ending.name, () => {
+      expect(auditSource(ending.lines.join('\n'))).toEqual([]);
+    });
+  }
 
   test('but contiguous line comments are ONE unit, or the fix costs real coverage', () => {
     // The guard on the one-character version of this fix. Separating EVERY comment
@@ -584,23 +616,32 @@ describe('the two corpora do not meet', () => {
   // into a single sentence and the unregistered `41.7` is refused beside Self-MoA.
   // A politely punctuated fixture proves nothing here: sentence reach alone would
   // separate it whether the corpora were pooled or not.
-  test('a citation in a comment does not reach a number inside a literal', () => {
-    // A LINE comment on purpose: a block comment's closing delimiter would leave a
-    // `*/` that `SENTENCE_BREAK` cuts at, which separates the two texts by accident
-    // rather than by design. A `//` run has no delimiter, so this is the shape that
-    // actually leaks if the corpora are pooled.
-    expect(auditSource([
-      '// Self-MoA (2502.00674) found the homogeneous ensemble beat the mixed one 65.7 vs',
-      '// 59.1 with the proposer count and topology held fixed.',
-      "export const NOTE = 'the live default is 41.7 on every preset';",
-    ].join('\n'))).toEqual([]);
-  });
+  const SEPARATED = [
+    {
+      name: 'a citation in a comment does not reach a number inside a literal',
+      // A LINE comment on purpose: a block comment's closing delimiter would leave a
+      // `*/` that `SENTENCE_BREAK` cuts at, which separates the two texts by accident
+      // rather than by design. A `//` run has no delimiter, so this is the shape that
+      // actually leaks if the corpora are pooled.
+      lines: [
+        '// Self-MoA (2502.00674) found the homogeneous ensemble beat the mixed one 65.7 vs',
+        '// 59.1 with the proposer count and topology held fixed.',
+        "export const NOTE = 'the live default is 41.7 on every preset';",
+      ],
+    },
+    {
+      name: "nor does a citation inside a literal reach the code's comments",
+      lines: [
+        '// the live default of 41.7 is ours',
+        "export const NOTE = 'Self-MoA (2502.00674) measured 65.7 vs 59.1 with the topology'",
+        "  + ' held fixed.';",
+      ],
+    },
+  ];
 
-  test("nor does a citation inside a literal reach the code's comments", () => {
-    expect(auditSource([
-      '// the live default of 41.7 is ours',
-      "export const NOTE = 'Self-MoA (2502.00674) measured 65.7 vs 59.1 with the topology'",
-      "  + ' held fixed.';",
-    ].join('\n'))).toEqual([]);
-  });
+  for (const separated of SEPARATED) {
+    test(separated.name, () => {
+      expect(auditSource(separated.lines.join('\n'))).toEqual([]);
+    });
+  }
 });

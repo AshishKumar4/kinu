@@ -284,13 +284,13 @@ if (import.meta.main) {
   } else {
     const detail = new Map(unreachable.map((e) => [keyOf(e), describe(e)]));
 
-    const code = report(
-      'reachability',
-      reconcile(unreachable.map(keyOf), LOCK),
+    const code = report({
+      gate: 'reachability',
+      ratchet: reconcile(unreachable.map(keyOf), LOCK),
       detail,
-      'bun scripts/reachability.ts --lock',
+      lockCommand: 'bun scripts/reachability.ts --lock',
       measured,
-    );
+    });
 
     if (code === 0) {
       for (const spot of BLIND_SPOTS) console.log(`  blind: ${spot}`);

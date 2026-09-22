@@ -285,33 +285,46 @@ async function settled(page: Page): Promise<void> {
   });
 }
 
+/** One frame, at one width, in one palette — the unit a page is opened for. */
+interface FrameShot {
+  readonly frame: (typeof FRAMES)[number];
+  readonly width: (typeof WIDTHS)[number];
+  readonly mode: (typeof MODES)[number];
+  readonly origin: string;
+}
+
+async function readFrame(newPage: Gallery['newPage'], shot: FrameShot): Promise<FrameGeometry> {
+  const page = await newPage();
+
+  try {
+    await page.setViewport({ width: shot.width, height: 1238 });
+    await page.emulateMediaFeatures([{ name: 'prefers-color-scheme', value: shot.mode }]);
+    await page.goto(`${shot.origin}/gallery.html?frame=${shot.frame}`, { waitUntil: 'networkidle0' });
+    // The scene, not the document: a frame that threw during render
+    // resolves `networkidle0` with an empty body, which is exactly the
+    // state this file exists to stop being green.
+    await page.waitForSelector('g.mcts-band');
+    await page.waitForSelector('[data-tree-legend]');
+
+    if (shot.frame === 'forkmerge') {
+      await page.waitForSelector('[data-tree-card]');
+    }
+
+    await settled(page);
+
+    return await readGeometry(page);
+  } finally {
+    await page.close();
+  }
+}
+
 async function readGeometryFrames(newPage: Gallery['newPage'], origin: string): Promise<Geometry> {
   const observed: Geometry = {};
 
   for (const frame of FRAMES) {
     for (const width of WIDTHS) {
       for (const mode of MODES) {
-        const page = await newPage();
-
-        try {
-          await page.setViewport({ width, height: 1238 });
-          await page.emulateMediaFeatures([{ name: 'prefers-color-scheme', value: mode }]);
-          await page.goto(`${origin}/gallery.html?frame=${frame}`, { waitUntil: 'networkidle0' });
-          // The scene, not the document: a frame that threw during render
-          // resolves `networkidle0` with an empty body, which is exactly the
-          // state this file exists to stop being green.
-          await page.waitForSelector('g.mcts-band');
-          await page.waitForSelector('[data-tree-legend]');
-
-          if (frame === 'forkmerge') {
-            await page.waitForSelector('[data-tree-card]');
-          }
-
-          await settled(page);
-          observed[key(frame, width, mode)] = await readGeometry(page);
-        } finally {
-          await page.close();
-        }
+        observed[key(frame, width, mode)] = await readFrame(newPage, { frame, width, mode, origin });
       }
     }
   }
