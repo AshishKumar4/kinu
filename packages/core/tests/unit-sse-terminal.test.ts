@@ -10,7 +10,7 @@
  */
 import { describe, test, expect } from 'bun:test';
 import { handClock } from '@kinu.run/test-utils';
-import { withSseTerminal, SSE_CONTENT_IDLE_MS } from '../src/providers/sse-terminal';
+import { withSseTerminal } from '../src/providers/sse-terminal';
 import { asFetchFunction } from '../src/providers/fetch-shim';
 import type { Clock } from '../src/types/clock';
 
@@ -291,8 +291,36 @@ describe('withSseTerminal', () => {
   });
 });
 
+/** A producer that sends nothing at all — the case neither case below reaches —
+ *  run to its stall, answering with the window it was given up after and what
+ *  the upstream was asked.
+ *
+ *  The window is MEASURED here rather than imported: a stream's start counts as
+ *  content, so the first deadline a reader arms is one whole window wide, and
+ *  `tick()` steps the hand clock onto that deadline and fires it alone. A case
+ *  that imported the number would agree with whatever the source says; this one
+ *  reads what the terminal actually armed. */
+async function silentProducerStall(): Promise<{ window: number; calls: readonly string[] }> {
+  const clock = handClock();
+  const upstream = scripted();
+  const response = await throughClock(upstream, clock);
+  const reader = (response.body ?? new ReadableStream<Uint8Array>()).getReader();
+  const stalled = readMessage(reader);
+
+  await clock.whenArmed(1);
+  clock.tick();
+  await expect(stalled).rejects.toMatchObject({ code: 'timeout' });
+
+  return { window: clock.now(), calls: upstream.calls };
+}
+
 describe('a producer that holds the socket open without sending content', () => {
+  test('a producer that sends nothing at all is given up on, and the upstream cancelled', async () => {
+    expect((await silentProducerStall()).calls).toEqual(['cancelled']);
+  });
+
   test('a keepalive comment does not reset the content deadline, and the stall is named', async () => {
+    const { window } = await silentProducerStall();
     const clock = handClock();
     const upstream = scripted();
     const response = await throughClock(upstream, clock);
@@ -303,24 +331,25 @@ describe('a producer that holds the socket open without sending content', () => 
     upstream.enqueue(sseData('{"content":"hello"}'));
     expect(await content).toBe(sseData('{"content":"hello"}'));
 
-    // One millisecond short of the window, with the producer sending SSE
-    // framing only. A comment line is the keepalive every OpenAI-dialect
-    // gateway sends; it reaches the consumer, and it buys the producer no
-    // time at all.
+    // A minute into the window, with the producer sending SSE framing only. A
+    // comment line is the keepalive every OpenAI-dialect gateway sends; it
+    // reaches the consumer, and it buys the producer no time at all.
     const keepalive = readMessage(reader);
 
     await clock.whenArmed(2);
-    clock.advance(SSE_CONTENT_IDLE_MS - 1);
+    clock.advance(60_000);
     upstream.enqueue(': keepalive\n\n');
     expect(await keepalive).toBe(': keepalive\n\n');
 
     const stalled = readMessage(reader);
 
     await clock.whenArmed(3);
-    clock.advance(1);
+    clock.tick();
 
-    // The last CONTENT frame is what the window was measured from, so the
-    // error names that instant rather than the keepalive's.
+    // Fired one whole window after the CONTENT frame at 0, not one window after
+    // the keepalive: the deadline never moved, and the error names the instant
+    // it was measured from.
+    expect(clock.now()).toBe(window);
     await expect(stalled).rejects.toMatchObject({
       code: 'timeout',
       message: expect.stringContaining(new Date(0).toISOString()),
@@ -329,6 +358,7 @@ describe('a producer that holds the socket open without sending content', () => 
   });
 
   test('content keeps the stream alive however long it runs', async () => {
+    const { window } = await silentProducerStall();
     const clock = handClock();
     const upstream = scripted();
     const response = await throughClock(upstream, clock);
@@ -343,9 +373,9 @@ describe('a producer that holds the socket open without sending content', () => 
 
       armed += 1;
       await clock.whenArmed(armed);
-      clock.advance(SSE_CONTENT_IDLE_MS - 1);
-      upstream.enqueue(sseData(`{"content":"${frame}"}`));
-      expect(await next).toBe(sseData(`{"content":"${frame}"}`));
+      clock.advance(window - 1);
+      upstream.enqueue(sseData(`{"content":"${String(frame)}"}`));
+      expect(await next).toBe(sseData(`{"content":"${String(frame)}"}`));
     }
 
     expect(upstream.calls).toHaveLength(0);

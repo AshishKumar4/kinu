@@ -363,9 +363,13 @@ function cloudflareCallbackEnv() {
       _caller: UserCaller, tokenHash: string, expiresAt: number, identity: BrowserSessionIdentity,
     ) { sessions.set(tokenHash, { expiresAt, identity }); },
     async verifyBrowserSession(_caller: UserCaller, tokenHash: string) {
+      // The registered row is the whole answer: dropping expired sessions is
+      // the real object's rule (`user-do.ts` deletes rows past `expires_at`,
+      // and `unit-auth-session-revocation.test.ts` drives it), and every
+      // request here presents the cookie the callback has just minted.
       const row = sessions.get(tokenHash);
 
-      return row && row.expiresAt > Date.now() ? { identity: row.identity } : null;
+      return row ? { identity: row.identity } : null;
     },
     async revokeBrowserSession(_caller: UserCaller, tokenHash: string) { sessions.delete(tokenHash); },
     async setCredential(_caller: UserCaller, key: string, credential: OAuthCredential) {

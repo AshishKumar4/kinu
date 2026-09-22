@@ -30,7 +30,7 @@ import { diagnostics, toKinuError } from "@kinu.run/core/obs";
 import { escapeHtml } from "@kinu.run/core";
 import { containPreviewResponse, sandboxPreviewLabelOf } from "@kinu.run/core";
 import { isKinuSandboxId } from "@kinu.run/core";
-import { sandboxPreviewExposed, type PreviewHostEnv } from "@kinu.run/core";
+import { sandboxPreviewExposed, type PreviewSuffixEnv } from "@kinu.run/core";
 import type { KvStore } from "@kinu.run/agent-utils";
 import { sanitizePreviewRequestHeaders } from "./lib/preview-request";
 import type { KinuSandbox } from "./kinu-sandbox";
@@ -89,7 +89,7 @@ function refusePreview(code: string, error: string, status: number): Response {
  * `runtime.ts` all state that already, and this module used to hand the SDK an
  * `undefined` namespace to resolve rather than saying so.
  */
-export interface SandboxPreviewEnv extends PreviewHostEnv {
+export interface SandboxPreviewEnv extends PreviewSuffixEnv {
   Sandbox?: DurableObjectNamespace<KinuSandbox>;
   AUTH_KV?: KvStore;
 }

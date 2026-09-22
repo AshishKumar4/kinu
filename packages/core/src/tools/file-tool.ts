@@ -46,20 +46,20 @@ import { RESIDENT_TEXT_MAX_BYTES } from '../vfs/mounts';
  * so the spill file holds slightly more than the transcript, and neither holds
  * a directory.
  */
-export const FILE_LIST_MAX_ENTRIES = 1_000;
+const FILE_LIST_MAX_ENTRIES = 1_000;
 
 /** The most CHARACTERS of names one `list` answers with, for the directory
  *  whose entries are few and enormous. Both ceilings are real: the entry count
  *  bounds an ordinary wide directory and this bounds a pathological one, and a
  *  listing that tripped neither is returned whole. */
-export const FILE_LIST_MAX_CHARS = RESIDENT_TEXT_MAX_BYTES;
+const FILE_LIST_MAX_CHARS = RESIDENT_TEXT_MAX_BYTES;
 
 /** The most BYTES one `search` reads of the file it scans. The same budget
  *  every bounded view in this tree spends on text it makes resident
  *  (`vfs/mounts.ts`), applied here because search read the file WHOLE — a log
  *  the agent did not write became an allocation the size of that log inside
  *  the object that holds the workspace. */
-export const FILE_SEARCH_MAX_BYTES = RESIDENT_TEXT_MAX_BYTES;
+const FILE_SEARCH_MAX_BYTES = RESIDENT_TEXT_MAX_BYTES;
 
 /**
  * The entries a listing answers with, and what it says when it kept back the

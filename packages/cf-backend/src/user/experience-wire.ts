@@ -36,16 +36,16 @@ function experienceEntryOf(row: v.InferOutput<typeof ExperienceEntryWireSchema>)
   return { ...row, payload };
 }
 
-export function decodeExperienceEntry(wire: string): ExperienceEntry {
+function decodeExperienceEntry(wire: string): ExperienceEntry {
   return experienceEntryOf(v.parse(ExperienceEntryWireSchema, decodeJsonWire(wire)));
 }
 
-export function decodeExperienceEntries(wire: string): ExperienceEntry[] {
+function decodeExperienceEntries(wire: string): ExperienceEntry[] {
   return v.parse(v.array(ExperienceEntryWireSchema), decodeJsonWire(wire)).map(experienceEntryOf);
 }
 
 /** `null` crosses as the JSON text `null`: an entry nobody published. */
-export function decodeOptionalExperienceEntry(wire: string): ExperienceEntry | null {
+function decodeOptionalExperienceEntry(wire: string): ExperienceEntry | null {
   const decoded = decodeJsonWire(wire);
 
   return decoded === null ? null : experienceEntryOf(v.parse(ExperienceEntryWireSchema, decoded));

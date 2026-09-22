@@ -131,12 +131,12 @@ export const OUTPUT_LIMIT_REACHED = 'length';
  * cannot arrive; if it ever can, the SDK giving it a word of its own is the
  * repair, not a predicate here that guesses which kind of `other` it saw.
  */
-export const PROVIDER_NAMED_NO_END = 'other';
+const PROVIDER_NAMED_NO_END = 'other';
 
 /** What the ledger says when a run ended on {@link PROVIDER_NAMED_NO_END}. The
  *  text a person reads in the run history, so it says what happened to the
  *  answer rather than naming a finish reason. */
-export const STREAM_ENDED_UNNAMED =
+const STREAM_ENDED_UNNAMED =
   'The model stream ended without naming a finish reason: the connection stopped producing '
   + 'before the model said it was done, so the answer recorded for this turn is what had '
   + 'arrived by then rather than the whole of it.';

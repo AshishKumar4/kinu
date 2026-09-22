@@ -1,6 +1,6 @@
 {
-  "measuredAt": "2026-09-18",
-  "total": 236,
+  "measuredAt": "2026-09-22",
+  "total": 226,
   "files": {
     "packages/cf-backend/tests/helpers/kv.ts": {
       "clock-compare": 1
@@ -122,8 +122,8 @@
       "sleep": 1
     },
     "packages/cli/tests/device-connect.test.ts": {
-      "clock-compare": 4,
-      "sleep": 10,
+      "clock-compare": 3,
+      "sleep": 9,
       "test-timeout": 20
     },
     "packages/cli/tests/exec-process-lifecycle.test.ts": {

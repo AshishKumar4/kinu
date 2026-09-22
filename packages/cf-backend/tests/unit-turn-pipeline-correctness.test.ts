@@ -1048,15 +1048,8 @@ describe('turn-pipeline correctness wiring', () => {
     // fed the driver's raw facts; `classifyRunEnd` owns the vocabulary. What
     // this guards is the DIVERGENCE that produced it — a backend picking a
     // status string itself, which is how one sealed a user Stop as 'error'.
-    //
-    // The ordering inside `runTurn` used to be pinned here by `indexOf` on its
-    // source text: it named `errorText: runError ?? undefined`, the facts
-    // literal and `classifyRunEnd(facts).reason` by spelling. That is an
-    // implementation mirror — it broke when the classification moved ahead of
-    // the answer row (so an incomplete turn's row could carry its own verdict)
-    // without anything about the contract changing. What it claimed to protect
-    // is behaviour, and behaviour is where it is now checked: core's
-    // unit-core-adapter-seams.test.ts drives `classifyRunEnd` on every arm.
+    // Every arm of the classification itself is driven behaviourally in core's
+    // unit-core-adapter-seams.test.ts.
     expect(loop).toContain('closeTurnRun(this.eventRecorder,');
     expect(actor).not.toContain('reason: result.status');
     expect(source).not.toContain('reason: result.status');

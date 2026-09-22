@@ -30,7 +30,7 @@ import { KinuError } from '../obs/index';
  * the discrimination the number rests on, in unit-sse-terminal.test.ts:
  * keepalive framing does not restart it and content does.
  */
-export const SSE_CONTENT_IDLE_MS = 10 * 60_000;
+const SSE_CONTENT_IDLE_MS = 10 * 60_000;
 
 /** The race's non-read arm. A symbol rather than a flag so the read result and
  *  the stall cannot be confused by a producer sending a value that looks like

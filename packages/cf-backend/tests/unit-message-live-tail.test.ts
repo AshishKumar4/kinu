@@ -14,7 +14,7 @@ import { describe, test, expect } from 'bun:test';
 import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import type { ReasoningUIPart, TextUIPart, ToolUIPart, UIMessage } from 'ai';
-import { liveTail, threadLiveTail, turnLiveness, type TurnLiveness } from '@kinu.run/core';
+import { threadLiveTail, turnLiveness, type TurnLiveness } from '@kinu.run/core';
 import { ChatLiveTail, MessageView } from '../src/components/MessageView';
 import { Composer } from '../src/components/Composer';
 
@@ -47,10 +47,16 @@ const text = (content: string, state?: TextUIPart['state']): TextUIPart =>
 const reasoning = (content: string, state?: ReasoningUIPart['state']): ReasoningUIPart =>
   state === undefined ? { type: 'reasoning', text: content } : { type: 'reasoning', text: content, state };
 
-describe('liveTail', () => {
+/** The tail a live assistant row paints, asked the one way the surfaces ask it.
+ *  The per-message reading is not a public name of its own: a thread decides
+ *  liveness and the row's parts answer the rest. */
+const tailOf = (parts: readonly Part[]) =>
+  threadLiveTail({ last: { role: 'assistant', parts: [...parts] }, liveness: { kind: 'live', turnId: 't1' } });
+
+describe('the tail of a live assistant row', () => {
   test('the caret rides the text part the stream is still writing', () => {
     const part = text('half a sen', 'streaming');
-    expect(liveTail([part])).toEqual({ kind: 'text', part });
+    expect(tailOf([part])).toEqual({ kind: 'text', part });
   });
 
   test('a turn whose prose is finished and whose calls are done is thinking, not writing', () => {
@@ -63,29 +69,29 @@ describe('liveTail', () => {
       tool('b', 'output-available'),
     ];
 
-    expect(liveTail(parts)).toEqual({ kind: 'thinking' });
+    expect(tailOf(parts)).toEqual({ kind: 'thinking' });
   });
 
   test('a call in flight owns the indicator — nothing is added after it', () => {
     // Its own row already carries a live dot. A second indicator below it
     // would claim two things are happening.
     for (const state of ['input-streaming', 'input-available'] as const) {
-      expect(liveTail([text('Running the suite.', 'done'), tool('a', state)]))
+      expect(tailOf([text('Running the suite.', 'done'), tool('a', state)]))
         .toEqual({ kind: 'tool' });
     }
   });
 
   test('streaming reasoning points at its own block rather than adding a row', () => {
     const part = reasoning('SAVE20 fails and SAVE10 does not, so', 'streaming');
-    expect(liveTail([part])).toEqual({ kind: 'reasoning', part });
+    expect(tailOf([part])).toEqual({ kind: 'reasoning', part });
   });
 
   test('closed reasoning with nothing after it is thinking', () => {
-    expect(liveTail([reasoning('Settled on the guard.', 'done')])).toEqual({ kind: 'thinking' });
+    expect(tailOf([reasoning('Settled on the guard.', 'done')])).toEqual({ kind: 'thinking' });
   });
 
   test('a turn with no parts yet is thinking — the pre-first-token window', () => {
-    expect(liveTail([])).toEqual({ kind: 'thinking' });
+    expect(tailOf([])).toEqual({ kind: 'thinking' });
   });
 
   test('a part the stream never closed is treated as the one being written', () => {
@@ -93,13 +99,13 @@ describe('liveTail', () => {
     // the stream never said, and this is only ever asked of an OPEN stream, so
     // the honest reading is "still arriving" — never a caret that vanishes.
     const part = text('no state field');
-    expect(liveTail([part])).toEqual({ kind: 'text', part });
+    expect(tailOf([part])).toEqual({ kind: 'text', part });
   });
 
   test('a file part does not claim the tail — it is not a stream position', () => {
     const part = text('Here is the chart', 'streaming');
     const parts: Part[] = [part, { type: 'file', mediaType: 'image/png', url: 'data:,' }];
-    expect(liveTail(parts)).toEqual({ kind: 'text', part });
+    expect(tailOf(parts)).toEqual({ kind: 'text', part });
   });
 });
 

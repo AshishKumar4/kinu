@@ -12,9 +12,7 @@ import * as v from 'valibot';
 import { applyFileEdits, formatFileSlice, type FileEditFailure } from '../src/tools/file-edit';
 import { scanFileWindow } from '../src/tools/file-scan';
 import { TurnFileLedger } from '../src/tools/file-ledger';
-import {
-  createFileTool, FILE_LIST_MAX_ENTRIES, FILE_SEARCH_MAX_BYTES, type FileToolInput,
-} from '../src/tools/file-tool';
+import { createFileTool, type FileToolInput } from '../src/tools/file-tool';
 import { SPILL_DIRS, TurnContextBudget } from '../src/context-budget';
 import { JsonObjectSchema } from '../src/utils/json';
 import { makeVfsError } from '../src/vfs/errno';
@@ -1083,11 +1081,21 @@ describe('a bulk read is bounded where it is produced', () => {
     return v.parse(JsonObjectSchema, JSON.parse(spilled[1]));
   };
 
-  test('a directory the agent does not control is cut at the entry ceiling', async () => {
-    const body = await listed(Array.from({ length: FILE_LIST_MAX_ENTRIES * 3 }, (_, at) => `f${String(at)}`));
+  const plainNames = (count: number): string[] =>
+    Array.from({ length: count }, (_, at) => `f${String(at)}.ts`);
 
-    expect(v.parse(v.array(v.string()), body.entries)).toHaveLength(FILE_LIST_MAX_ENTRIES);
-    expect(body.truncated).toEqual({ shown: FILE_LIST_MAX_ENTRIES, total: FILE_LIST_MAX_ENTRIES * 3 });
+  test('a directory the agent does not control is cut at the entry ceiling', async () => {
+    const big = await listed(plainNames(3_000));
+    const bigger = await listed(plainNames(9_000));
+    const shown = v.parse(v.array(v.string()), big.entries);
+
+    // An absolute cap rather than a share of what was there: three times the
+    // directory answers with the same names and says so, because the size of a
+    // listing is not the agent's choice and not the tool's.
+    expect(shown.length).toBeLessThan(3_000);
+    expect(v.parse(v.array(v.string()), bigger.entries)).toEqual(shown);
+    expect(big.truncated).toEqual({ shown: shown.length, total: 3_000 });
+    expect(bigger.truncated).toEqual({ shown: shown.length, total: 9_000 });
   });
 
   test('the byte ceiling bites on its own — few entries, enormous names', async () => {
@@ -1095,12 +1103,13 @@ describe('a bulk read is bounded where it is produced', () => {
     const body = await listed(wide);
     const shown = v.parse(v.array(v.string()), body.entries);
 
-    // Well inside the entry ceiling and well past the byte one, so the entry
-    // count cannot be what stopped it.
     expect(shown.length).toBeLessThan(wide.length);
-    expect(shown.length).toBeLessThan(FILE_LIST_MAX_ENTRIES);
     expect(body.truncated).toEqual({ shown: shown.length, total: wide.length });
+    // The control: the same COUNT of ordinary names comes back whole, so the
+    // entry ceiling is not what cut the listing above.
+    expect(await listed(plainNames(wide.length))).toEqual({ path: '/d', entries: plainNames(wide.length) });
   });
+
   test('a listing that fits is whole, and says nothing about truncation', async () => {
     const body = await listed(['a.ts', 'b.ts']);
     expect(body.entries).toEqual(['a.ts', 'b.ts']);
@@ -1118,7 +1127,8 @@ describe('a bulk read is bounded where it is produced', () => {
     const body = v.parse(JsonObjectSchema, await call({ action: 'search', path: 'big.log', query: 'NEEDLE' }));
 
     expect(body.matches).toEqual([{ line: 1, text: 'NEEDLE' }]);
-    expect(body.truncated).toEqual({ shown: FILE_SEARCH_MAX_BYTES, total: (head + hit).length });
+    // The budget the search shares with every other bounded resident read.
+    expect(body.truncated).toEqual({ shown: RESIDENT_TEXT_MAX_BYTES, total: (head + hit).length });
   });
 
   test('a file that fits is searched whole, and says nothing about truncation', async () => {
