@@ -48,11 +48,13 @@ function sandbox(): Sandbox {
   // its own copy would agree with production by construction and could not
   // catch it being wrong. Absent, this suite must not run at all rather than
   // measure a torn write that reports success.
-  const transactionSync = localTransactions(db).storage?.transactionSync;
+  const transactions = localTransactions(db).storage;
 
-  if (transactionSync === undefined) {
+  if (transactions === undefined) {
     throw new Error('the local workspace exposes no synchronous transaction, so batch atomicity cannot be measured');
   }
+
+  const transactionSync = <T>(write: () => T): T => transactions.transactionSync(write);
 
   const sql = schemaSql.sql;
   initWorkspaceSchema(schemaSql);

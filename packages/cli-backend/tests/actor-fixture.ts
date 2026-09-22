@@ -66,8 +66,8 @@ export function localTestActorHost(
     },
     storage: {
       sql: parent.storage.sql,
-      transactionSync: parent.storage.transactionSync,
-      exec: exec.exec,
+      transactionSync: (write) => parent.storage.transactionSync(write),
+      exec: (query, ...bindings) => exec.exec(query, ...bindings),
     },
     directory,
     installedBuild: null,
@@ -208,7 +208,7 @@ export function headLoopSeams(rt: AgentRuntime, runId = 'fixture-run', handle: A
     workspaceId: identity.id, ownerUserId: identity.owner_user_id ?? '',
   });
 
-  const stores = createAgentStores(() => rt.storage.sql, () => handle, rt.storage.transactionSync, async () => ({ vfs: rt.storage.vfs, artifactDirectory: '/actors/' + handle.actorId }));
+  const stores = createAgentStores(() => rt.storage.sql, () => handle, (write) => rt.storage.transactionSync(write), async () => ({ vfs: rt.storage.vfs, artifactDirectory: '/actors/' + handle.actorId }));
 
   const session: ActorSession = new ActorSession({ history: stores.history, runtime,
   claims: stores.claims,
