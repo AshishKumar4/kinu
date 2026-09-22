@@ -574,16 +574,18 @@ describe('LocalAgentSession.send — a user turn', () => {
     expect(rows[1]!.content).toBe('hello there');
   });
 
-  test('a streamed answer mints a revision per step and a row per window, and the next step reads all of it', async () => {
-    // Every delta used to commit the working context, one revision and one
-    // membership row per token, and write one update row per token: a long
-    // answer cost deltas times entries in row traffic, and on a Durable
-    // Object that spent the 30 s CPU budget (2026-09-21, D23). A delta
-    // extends one message; deltas reach the rows in windows of 64; the
-    // context's cutoff for the message moves once, at the step's end.
+  test('a streamed answer holds one stream row per part while open and none once sealed, and the next step reads all of it', async () => {
+    // An answer accumulates in ONE row per open part, extended in windows of
+    // 64 deltas, and is committed once into its message row at the step's
+    // end (D24). A row or a context revision per token is the row traffic
+    // that spent a Durable Object's 30 s CPU budget (2026-09-21, D23).
     const usage = { inputTokens: 5, outputTokens: 7, totalTokens: 12 };
     const prompts: PromptMessage[][] = [];
     const words = Array.from({ length: 300 }, (_, i) => `w${i}`);
+    const { db, rt } = workspaceRuntime();
+    const streamRows = () => db.query<{ n: number }, []>('SELECT count(*) AS n FROM stream_parts').get()?.n ?? -1;
+    const answerRows = () => db.query<{ n: number }, []>("SELECT count(*) AS n FROM stream_parts WHERE message_id IN (SELECT message_id FROM session_messages WHERE origin = 'output')").get()?.n ?? -1;
+    let openRows = -1;
 
     const model = new TestLanguageModelV2({
       provider: 'fake',
@@ -591,16 +593,32 @@ describe('LocalAgentSession.send — a user turn', () => {
       doStream: async (options) => {
         prompts.push(options.prompt);
 
-        return {
-          stream: new ReadableStream({
-            start(controller) {
-              controller.enqueue({ type: 'stream-start', warnings: [] });
-              controller.enqueue({ type: 'text-start', id: '0' });
+        const chunks: LanguageModelV2StreamPart[] = [
+          { type: 'stream-start', warnings: [] },
+          { type: 'text-start', id: '0' },
+          ...words.map((word): LanguageModelV2StreamPart => ({ type: 'text-delta', id: '0', delta: `${word} ` })),
+          { type: 'text-end', id: '0' },
+          { type: 'finish', finishReason: 'stop', usage },
+        ];
 
-              for (const word of words) controller.enqueue({ type: 'text-delta', id: '0', delta: `${word} ` });
-              controller.enqueue({ type: 'text-end', id: '0' });
-              controller.enqueue({ type: 'finish', finishReason: 'stop', usage });
-              controller.close();
+        let at = 0;
+
+        return {
+          // Pulled one chunk at a time: the pull for a chunk runs after the
+          // chunks before it were persisted, so the two hundredth delta sees
+          // the answer open and written at least three windows.
+          stream: new ReadableStream({
+            pull(controller) {
+              const chunk = chunks[at++];
+
+              if (chunk === undefined) {
+                controller.close();
+
+                return;
+              }
+
+              if (at === 202 && openRows < 0) openRows = answerRows();
+              controller.enqueue(chunk);
             },
           }),
           response: { headers: {} },
@@ -608,23 +626,25 @@ describe('LocalAgentSession.send — a user turn', () => {
       },
     });
 
-    const { db, session, events } = setup('unused', model);
+    const { session, events } = setup('unused', model, { rt, db });
     await session.send('say a lot');
+    expect(openRows).toBe(1);
     const turnId = turnStarts(events)[0]?.turnId;
-    // The user row's join, the answer's join, and the answer's final cutoff.
+    // The user row's join and the answer's join; the seal moves no membership.
     expect(db.query<{ cause: string }, [string]>('SELECT cause FROM context_revisions WHERE turn_id = ? ORDER BY revision').all(turnId ?? '').map((row) => row.cause))
-      .toEqual(['input', 'output', 'output']);
+      .toEqual(['input', 'output']);
 
-    // 300 deltas in windows of 64: at most six appends on the text part,
-    // plus its open and its end — never a row per token.
-    const answerRows = db.query<{ n: number }, []>(
-      "SELECT count(*) AS n FROM message_updates WHERE part_no = 0 AND message_id IN (SELECT message_id FROM session_messages WHERE role = 'assistant' AND origin = 'output')",
-    ).get()!.n;
+    // Sealed: the answer is its message row's content, and no stream row remains.
+    expect(streamRows()).toBe(0);
 
-    expect(answerRows).toBeLessThanOrEqual(8);
+    const answer = db.query<{ sealed_at: number | null; content_json: string | null }, []>(
+      "SELECT sealed_at, content_json FROM session_messages WHERE role = 'assistant' AND origin = 'output'",
+    ).get();
 
-    // The next turn's model call carries the WHOLE streamed answer: the
-    // cutoff the context pinned at the step's end is its final sequence.
+    expect(answer?.sealed_at).not.toBeNull();
+    expect(answer?.content_json).toContain(words.map((word) => `${word} `).join(''));
+
+    // The next turn's model call carries the WHOLE streamed answer.
     await session.send('and again');
     const prior = prompts[1]!.filter((message) => message.role === 'assistant');
     const seen = prior.flatMap((message) => message.content).filter((part) => part.type === 'text').map((part) => part.text).join('');

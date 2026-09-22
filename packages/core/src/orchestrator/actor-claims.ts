@@ -76,6 +76,9 @@ export class ActorClaimStore {
 
   async admit(input: { readonly runId: string; readonly turnId: string; readonly workMode: WorkMode; readonly program: ActorProgramIdentity; readonly context: ContextSelection }): Promise<ActorTurnClaim> {
     this.actor.assertCurrent();
+    // A message still open belongs to a stream that never sealed it: an
+    // activation that reset mid-answer. This admission supersedes that epoch.
+    await this.history.sealAbandoned();
     const previous = this.read(input.turnId);
     const epoch = (previous?.epoch ?? 0) + 1;
 
