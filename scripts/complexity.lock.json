@@ -1,9 +1,9 @@
 {
-  "measuredAt": "2026-09-18",
-  "files": 2484,
-  "functions": 61136,
+  "measuredAt": "2026-09-22",
+  "files": 2546,
+  "functions": 62748,
   "ceiling": 125,
-  "line": 35,
+  "line": 33,
   "inventory": [
     {
       "key": "packages/cli/src/slash-commands.ts#executeSlashCommand",
@@ -14,10 +14,6 @@
       "complexity": 108
     },
     {
-      "key": "packages/cf-backend/src/user/routes.ts#handleUserRequest",
-      "complexity": 105
-    },
-    {
       "key": "packages/core/src/strategy/swarm-run.ts#runSwarm",
       "complexity": 87
     },
@@ -26,47 +22,27 @@
       "complexity": 76
     },
     {
-      "key": "scripts/fixtures/fuse-probe/probe.ts#runDaemon",
-      "complexity": 72
-    },
-    {
       "key": "packages/cf-backend/src/gallery.tsx#mount",
-      "complexity": 67
-    },
-    {
-      "key": "packages/cli/src/tui/chat-app.tsx#ChatScene",
-      "complexity": 67
+      "complexity": 60
     },
     {
       "key": "packages/core/src/mcts/engine.ts#runMCTS>fiber",
-      "complexity": 59
-    },
-    {
-      "key": "scripts/sandbox-durability-probe.ts#run",
-      "complexity": 59
-    },
-    {
-      "key": "packages/core/src/strategy/swarm-scoring.ts#scoreExpansion",
-      "complexity": 55
-    },
-    {
-      "key": "scripts/fixtures/r2-bench/report.ts#renderMarkdown",
-      "complexity": 52
+      "complexity": 58
     },
     {
       "key": "packages/core/src/strategy/swarm-setup.ts#seedResumedSearch",
       "complexity": 51
     },
     {
-      "key": "packages/devbox/bench/worker.ts#fetch",
+      "key": "scripts/fixtures/r2-bench/report.ts#renderMarkdown",
       "complexity": 51
     },
     {
-      "key": "packages/cli/src/commands/setup.ts#setupCommand",
-      "complexity": 18
+      "key": "packages/devbox/bench/worker.ts#fetch",
+      "complexity": 49
     },
     {
-      "key": "scripts/literature-citations.ts#auditProse",
+      "key": "packages/cli/src/tui/chat-app.tsx#ChatScene",
       "complexity": 48
     },
     {
@@ -78,11 +54,7 @@
       "complexity": 46
     },
     {
-      "key": "packages/cli/src/tui/home-app.tsx#HomeScene",
-      "complexity": 46
-    },
-    {
-      "key": "packages/core/src/evolution/engine.ts#EvolutionEngine.reviewTurn",
+      "key": "packages/core/src/strategy/swarm-scoring.ts#scoreExpansion",
       "complexity": 46
     },
     {
@@ -90,27 +62,27 @@
       "complexity": 46
     },
     {
-      "key": "scripts/bench-devbox-strategies.ts#render",
-      "complexity": 46
-    },
-    {
-      "key": "scripts/bench-r2-workspace.ts#main",
+      "key": "scripts/literature-citations.ts#auditProse",
       "complexity": 46
     },
     {
       "key": "packages/cf-backend/src/components/surfaces/PlanReviewView.tsx#PlanReviewView",
-      "complexity": 45
+      "complexity": 43
     },
     {
       "key": "scripts/do-init-gate.ts#auditFile>walk",
-      "complexity": 45
+      "complexity": 43
     },
     {
-      "key": "packages/cf-backend/src/user/user-do.ts#UserDO.deviceRpc",
-      "complexity": 44
+      "key": "packages/core/src/evolution/engine.ts#EvolutionEngine.reviewTurn",
+      "complexity": 42
     },
     {
       "key": "scripts/bench-payload-transports.ts#main",
+      "complexity": 42
+    },
+    {
+      "key": "scripts/bench-r2-workspace.ts#main",
       "complexity": 42
     },
     {
@@ -122,7 +94,19 @@
       "complexity": 42
     },
     {
+      "key": "packages/cf-backend/src/user/user-do.ts#UserDO.deviceRpc",
+      "complexity": 41
+    },
+    {
       "key": "packages/cli/src/commands/run.ts#runCloudRpcCommand",
+      "complexity": 41
+    },
+    {
+      "key": "packages/cli/src/tui/home-app.tsx#HomeScene",
+      "complexity": 41
+    },
+    {
+      "key": "scripts/bench-devbox-strategies.ts#render",
       "complexity": 41
     },
     {
@@ -131,10 +115,6 @@
     },
     {
       "key": "packages/cf-backend/src/feedback/submit.ts#handleFeedbackSubmission",
-      "complexity": 40
-    },
-    {
-      "key": "packages/cli/src/config.ts#deriveLLMConfigFromProviderCredentials",
       "complexity": 40
     },
     {
@@ -150,15 +130,11 @@
       "complexity": 40
     },
     {
-      "key": "scripts/wired.ts#measureFields>walk#3",
-      "complexity": 40
-    },
-    {
       "key": "scripts/axis-ergonomics/report.ts#score",
       "complexity": 39
     },
     {
-      "key": "packages/cli/src/commands/debug.ts#printHumanSummary",
+      "key": "packages/cli/src/config.ts#deriveLLMConfigFromProviderCredentials",
       "complexity": 38
     },
     {
@@ -170,15 +146,7 @@
       "complexity": 38
     },
     {
-      "key": "packages/cf-backend/src/components/surfaces/FileViewer.tsx#FileViewer",
-      "complexity": 37
-    },
-    {
       "key": "packages/cf-backend/src/gallery.tsx#DriveFrame>filesRpc",
-      "complexity": 37
-    },
-    {
-      "key": "packages/cli/src/cc-transcript.ts#mineSession",
       "complexity": 37
     },
     {
@@ -190,10 +158,6 @@
       "complexity": 37
     },
     {
-      "key": "packages/core/src/release/engine.ts#ReleaseEngine.rollback",
-      "complexity": 37
-    },
-    {
       "key": "packages/core/src/strategy/swarm.ts#swarmValidity",
       "complexity": 37
     },
@@ -202,19 +166,7 @@
       "complexity": 37
     },
     {
-      "key": "packages/cf-backend/src/components/MessageView.tsx#ToolCallBlock",
-      "complexity": 36
-    },
-    {
-      "key": "packages/cf-backend/src/components/surfaces/changelog-entries.tsx#ChangelogEntryCard",
-      "complexity": 36
-    },
-    {
       "key": "packages/cf-backend/src/hooks/use-kinu.ts#useKinu>useEffect#7>handler",
-      "complexity": 36
-    },
-    {
-      "key": "packages/cf-backend/src/server.ts#route",
       "complexity": 36
     },
     {
@@ -242,7 +194,15 @@
       "complexity": 35
     },
     {
-      "key": "packages/devbox/src/snapshot-chain.ts#snapshotChainStorage>attachChainOnce",
+      "key": "packages/cf-backend/src/server.ts#route",
+      "complexity": 35
+    },
+    {
+      "key": "packages/cli/src/cc-transcript.ts#mineSession",
+      "complexity": 35
+    },
+    {
+      "key": "packages/core/src/release/engine.ts#ReleaseEngine.rollback",
       "complexity": 35
     },
     {
@@ -264,6 +224,70 @@
     {
       "key": "tests/evals/kinu-tasks.eval.ts#open>afterTurnOne",
       "complexity": 35
+    },
+    {
+      "key": "packages/cli/src/commands/debug.ts#printHumanSummary",
+      "complexity": 34
+    },
+    {
+      "key": "packages/core/src/tools/file-tool.ts#createFileDispatcher>fn",
+      "complexity": 34
+    },
+    {
+      "key": "packages/core/src/vfs/context-plane.ts#contextFiles>document",
+      "complexity": 34
+    },
+    {
+      "key": "packages/devbox/tests/support/delta-shell.ts#DeltaShell.line",
+      "complexity": 34
+    },
+    {
+      "key": "scripts/bench-devbox-strategies.ts#judgeChainCut",
+      "complexity": 34
+    },
+    {
+      "key": "scripts/bench-devbox-strategies.ts#readChainCutCell",
+      "complexity": 34
+    },
+    {
+      "key": "tests/first-run/share-capability-cut.first-run.ts#describe>liveTest>run",
+      "complexity": 34
+    },
+    {
+      "key": "packages/cf-backend/src/components/MessageView.tsx#ToolCallBlock",
+      "complexity": 33
+    },
+    {
+      "key": "packages/cf-backend/src/components/surfaces/WorkSurface.tsx#WorkSurface",
+      "complexity": 33
+    },
+    {
+      "key": "packages/cf-backend/src/user/mcp.ts#validateMcpServerInput",
+      "complexity": 33
+    },
+    {
+      "key": "packages/cli/src/cloud-agent-client.ts#CloudAgentClient.handleMessage",
+      "complexity": 33
+    },
+    {
+      "key": "packages/cli/src/commands/run.ts#runLocalRpcCommand",
+      "complexity": 33
+    },
+    {
+      "key": "packages/devbox/src/chunked-delta.ts#planDeltaPublication",
+      "complexity": 33
+    },
+    {
+      "key": "scripts/ladder-closure.ts#resolveForm",
+      "complexity": 33
+    },
+    {
+      "key": "scripts/wired.ts#findEntrypoints>walk#2",
+      "complexity": 33
+    },
+    {
+      "key": "tests/evals/kinu-tasks.eval.ts#slateFixtureServer>fetch",
+      "complexity": 33
     }
   ]
 }
