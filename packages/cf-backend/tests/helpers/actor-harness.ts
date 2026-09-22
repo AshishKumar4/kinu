@@ -528,7 +528,7 @@ export class HarnessOrchestratorAgent extends OrchestratorAgent {
   }
   /** Told each lease the loop hands a preparation: the turn's ids and its
    *  abort signal, which a suite that stops the turn reads the cause off. */
-  private _leaseObservers: Array<(lease: ActorTurnLease) => void> = [];
+  private readonly _leaseObservers: Array<(lease: ActorTurnLease) => void> = [];
   harnessObserveLease(observe: (lease: ActorTurnLease) => void): void { this._leaseObservers.push(observe); }
   protected override async prepareTurn(item: ChatTurnInput, lease: ActorTurnLease): Promise<PreparedTurn> {
     for (const observe of this._leaseObservers) observe(lease);
@@ -1007,7 +1007,7 @@ export class HarnessOrchestratorAgent extends OrchestratorAgent {
    *  order — a thrown admission, a refusal, a durable status — the outcomes a
    *  producer's retry policy is pinned on. Exhausted, the loop's own admission
    *  answers again. Every admission asked, scripted or not, is recorded. */
-  private _scriptedAdmissions: Array<() => Promise<EnqueueTurnResult>> = [];
+  private readonly _scriptedAdmissions: Array<() => Promise<EnqueueTurnResult>> = [];
   readonly harnessAdmissionsAsked: ProgrammaticTurn[] = [];
   harnessScriptAdmissions(answers: Array<() => Promise<EnqueueTurnResult>>): void {
     this._scriptedAdmissions.push(...answers);
@@ -1294,8 +1294,17 @@ const SILENT_SIDE_MODEL: LanguageModel = scriptedTurnModel({
   }),
 });
 
+/** The recorded call and the assembly around it, as one turn's model call. */
+interface RecordedCall {
+  readonly request: ScriptedTurnOptions;
+  readonly model: LanguageModel;
+  readonly identity: SettledTurn;
+  readonly tools: ToolSet;
+  readonly history: readonly ModelMessage[];
+}
+
 /** What one turn's model call was given, read off the recorded request. */
-function requestView(request: ScriptedTurnOptions, model: LanguageModel, identity: SettledTurn, tools: ToolSet, history: readonly ModelMessage[]): PreparedRequest {
+function requestView({ request, model, identity, tools, history }: RecordedCall): PreparedRequest {
   const system = request.prompt.filter((message) => message.role === 'system')
     .map((message) => message.content).join('\n');
 
@@ -1536,7 +1545,7 @@ export function chatSessionTurns(agent: HarnessOrchestratorAgent): TurnHarness {
     const parked = {
       request: request === null
         ? { identity, messages: [], prompt: [], system: undefined, model, tools: {}, activeTools: undefined, providerOptions: undefined }
-        : requestView(request, model, identity, agent.harnessPreparedTools(), agent.harnessAdmittedHistory()),
+        : requestView({ request, model, identity, tools: agent.harnessPreparedTools(), history: agent.harnessAdmittedHistory() }),
       answer, landed, identity,
     };
 
@@ -1634,7 +1643,7 @@ export function chatSessionTurns(agent: HarnessOrchestratorAgent): TurnHarness {
       const landed: Promise<SendLanding> = (agent.harnessChatLoop.pumpPromise ?? Promise.resolve()).then(() => 'turn' as const);
 
       const parked: ParkedTurn = {
-        request: requestView(request, model, identity, agent.harnessPreparedTools(), agent.harnessAdmittedHistory()),
+        request: requestView({ request, model, identity, tools: agent.harnessPreparedTools(), history: agent.harnessAdmittedHistory() }),
         answer, landed, identity,
       };
 
@@ -1657,7 +1666,7 @@ export function chatSessionTurns(agent: HarnessOrchestratorAgent): TurnHarness {
       const landed: Promise<SendLanding> = (agent.harnessChatLoop.pumpPromise ?? Promise.resolve()).then(() => 'turn' as const);
 
       const parked: ParkedTurn = {
-        request: requestView(request, model, identity, agent.harnessPreparedTools(), agent.harnessAdmittedHistory()),
+        request: requestView({ request, model, identity, tools: agent.harnessPreparedTools(), history: agent.harnessAdmittedHistory() }),
         answer, landed, identity,
       };
 
@@ -1721,7 +1730,7 @@ export interface ActorHarness<T> {
   readonly agent: T;
   readonly db: Database;
   /** All user tables currently in the actor's storage. */
-  tableNames(): string[];
+  tableNames: () => string[];
   /** Every prompt the scripted sleep-time model was asked, in order — the
    *  oracle for WHETHER a run happened and WHAT evidence it read. Empty and
    *  never appended to unless {@link orchestratorHarness} was given
@@ -1774,17 +1783,14 @@ export function makeCtx(db: Database, id = 'harness-actor'): AgentContext {
       delete: async (key: string) => kv.delete(key),
       // The facet manager's launch journal and port reservations: listed by
       // prefix, claimed inside a transaction, synced after a release.
-      list: async <T,>(options: { prefix: string }): Promise<Map<string, T>> => {
+      list: async (options: { prefix: string }): Promise<Map<string, JsonValue>> => {
         const entries = new Map<string, JsonValue>();
 
         for (const [key, value] of kv) {
           if (key.startsWith(options.prefix)) entries.set(key, value);
         }
 
-        // SAFETY: the storage list contract types each row by the caller's T,
-        // which the untyped stand-in rows cannot name; `never` keeps the Map
-        // assignable to every T.
-        return entries as Map<string, never>;
+        return entries;
       },
       transaction: async <T,>(body: (txn: {
         get(key: string): Promise<JsonValue | undefined>;
@@ -1957,14 +1963,13 @@ export function makeEnv(
           }),
         };
 
+        const owned = (prop: string | symbol): prop is keyof typeof ownerPlane => prop in ownerPlane;
+
         return new Proxy(ownerPlane, {
           get: (target, prop) => {
             if (prop === 'then') return undefined;
 
-            if (prop in target) {
-              // SAFETY: the `prop in target` guard makes the key one of the owner plane's own members.
-              return target[prop as keyof typeof target];
-            }
+            if (owned(prop)) return target[prop];
 
             return async () => { throw new Error(`harness UserDO: ${String(prop)} is not reachable under bun`); };
           },
@@ -1990,16 +1995,21 @@ export function makeEnv(
   return env as Env;
 }
 
-function instantiate<T extends object>(
-  Actor: new (ctx: AgentContext, env: Env) => T,
-  db: Database,
-  parent?: HarnessOrchestratorAgent,
-  userPlane?: RecordedUserPlaneCalls,
-  world?: HarnessActorWorld,
-  parentNamespace?: HarnessParentNamespace,
+/** Everything beyond the class and the database that shapes one harness. */
+interface ActorInstantiation {
+  readonly db: Database;
+  readonly parent?: HarnessOrchestratorAgent;
+  readonly userPlane?: RecordedUserPlaneCalls;
+  readonly world?: HarnessActorWorld;
+  readonly parentNamespace?: HarnessParentNamespace;
   /** A suite's own env, whole, in place of the harness one: the parent
    *  namespace a facet reaches over RPC, the sandbox binding its runtime reads. */
-  env?: Env,
+  readonly env?: Env;
+}
+
+function instantiate<T extends object>(
+  Actor: new (ctx: AgentContext, env: Env) => T,
+  { db, parent, userPlane, world, parentNamespace, env }: ActorInstantiation,
 ): ActorHarness<T> {
   const builtEnv = env ?? makeEnv(parent, userPlane, world, parentNamespace);
   const agent = new Actor(makeCtx(db), builtEnv);
@@ -2067,7 +2077,7 @@ export function orchestratorHarness(
     readonly sleepTimeModel?: SleepTimeUpdate;
   },
 ): ActorHarness<HarnessOrchestratorAgent> {
-  const harness = instantiate(HarnessOrchestratorAgent, new Database(':memory:'), undefined, userPlane, world, undefined, env);
+  const harness = instantiate(HarnessOrchestratorAgent, { db: new Database(':memory:'), userPlane, world, env });
   ensureActorSchema(harness.agent);
   harness.db.prepare(
     'UPDATE workspace_identity SET owner_user_id = ? WHERE id = ?',
@@ -2099,7 +2109,7 @@ export function orchestratorHarness(
 export function halfBornOrchestratorHarness(
   world?: HarnessActorWorld,
 ): ActorHarness<HarnessOrchestratorAgent> {
-  return instantiate(HarnessOrchestratorAgent, new Database(':memory:'), undefined, undefined, world);
+  return instantiate(HarnessOrchestratorAgent, { db: new Database(':memory:'), world });
 }
 
 /**
@@ -2147,7 +2157,7 @@ export async function reactivateOrchestratorHarness(
     readonly beforeStart?: (agent: HarnessOrchestratorAgent) => void;
   },
 ): Promise<ActorHarness<HarnessOrchestratorAgent>> {
-  const harness = instantiate(HarnessOrchestratorAgent, db, undefined, userPlane, opts?.world, undefined, opts?.env);
+  const harness = instantiate(HarnessOrchestratorAgent, { db, userPlane, world: opts?.world, env: opts?.env });
 
   // BEFORE `onStart`, because `onStart` is what starts the recovery under test:
   // a skew or fault armed after it would arrive too late to affect the pass it

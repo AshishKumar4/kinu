@@ -28,6 +28,7 @@ import type { UserCaller } from '@kinu.run/core';
 import { Database } from 'bun:sqlite';
 import { initControlPlaneSchema } from '@kinu.run/core/control-plane/store';
 import { indexPublicShare as indexRow, listPublicShares as listRows, forgetPublicShare as forgetRow } from '@kinu.run/core/control-plane';
+import { present } from '@kinu.run/test-utils';
 
 function answered<Schema extends v.GenericSchema>(result: SlateAnswer<unknown>, schema: Schema): v.InferOutput<Schema> {
   if (!result.ok) throw new Error(result.reason + ': ' + result.error);
@@ -132,11 +133,11 @@ async function twoUserWorld(): Promise<World> {
     ControlPlaneDO: { idFromName: (name: string) => name, get: () => controlPlane },
     OrchestratorAgent: {
       idFromName: (name: string) => name,
-      get: (id: string) => agents.get(id)!,
+      get: (id: string) => present(agents.get(id), `the OrchestratorAgent stub ${id}`),
     },
     UserDO: {
       idFromName: (name: string) => name,
-      get: (id: string) => users.get(id)!.userDO,
+      get: (id: string) => present(users.get(id), `the UserDO stub ${id}`).userDO,
     },
   });
 
@@ -166,7 +167,7 @@ const jsonBody = async <Schema extends v.GenericSchema>(res: Response, schema: S
 
 const cleanups: (() => void)[] = [];
 
-afterEach(() => { while (cleanups.length > 0) cleanups.pop()!(); });
+afterEach(() => { for (const cleanup of cleanups.splice(0)) cleanup(); });
 
 const sharePublic = (world: World, visibility: 'users' | 'public', fork?: boolean) => world.owner.agent.slate({
   op: 'share', id: 'issues', visibility, approved: [], fork,
@@ -339,8 +340,8 @@ test('D2: a public blueprint publish lands on the shared index a stranger reads'
 
   if (!committed.ok) throw new Error(`commit refused: ${committed.reason}: ${committed.error}`);
 
-  const latest = answered(await world.owner.agent.slate({ op: 'history', id: 'issues' }),
-    v.object({ versions: v.array(v.object({ id: v.string() })) })).versions.at(-1)!;
+  const latest = present(answered(await world.owner.agent.slate({ op: 'history', id: 'issues' }),
+    v.object({ versions: v.array(v.object({ id: v.string() })) })).versions.at(-1), 'the latest committed version');
 
   const published = await sharedRequest(world.env, identityOf(OWNER_ID, 'owner@example.test'),
     post('/api/shared/publish', { workspace: 'issues-owner', slate: 'issues', version: latest.id, public: true }));
@@ -369,8 +370,8 @@ test('D2: a public blueprint publish lands on the shared index a stranger reads'
   if (closedResp === null || closedResp.status !== 201) throw new Error(`the fork-closed share was refused: ${closedResp?.status}`);
   const closed = (await jsonBody(closedResp, v.object({ share: v.object({ id: v.string() }) }))).share;
 
-  const relisted = await jsonBody((await sharedRequest(world.env, identityOf(VIEWER_ID, 'pat@example.test'),
-    new Request('https://app.test/api/shared', { method: 'GET' })))!, v.object({
+  const relisted = await jsonBody(present(await sharedRequest(world.env, identityOf(VIEWER_ID, 'pat@example.test'),
+    new Request('https://app.test/api/shared', { method: 'GET' })), 'the /api/shared listing'), v.object({
     public: v.array(v.looseObject({ id: v.string(), kind: v.string() })),
   }));
 

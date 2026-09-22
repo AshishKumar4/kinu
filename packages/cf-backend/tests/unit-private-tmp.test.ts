@@ -97,7 +97,7 @@ async function openFixture(): Promise<Fixture> {
     workspace,
     host,
     storageKeys: () => [...sql.exec("SELECT path FROM inodes WHERE path LIKE 'tmp%'")]
-      .map((row) => String(row.path)).sort(),
+      .map((row) => v.parse(v.string(), row.path)).sort(),
     confine: (cred, name) => {
       // A guest cannot provision its own root: a per-agent chown is uid-0 only.
       const root = workspace.vfs.as(ROOT);

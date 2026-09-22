@@ -11,6 +11,7 @@ import {
   entryRevision, fileTextEditable, nextTreeCache, putFileBytes, sandboxedHtml,
   textRenderOf, viewerKindOf,
 } from "@kinu.run/core";
+import { requestUrl } from './helpers/fetch-input';
 
 describe("sortDirEntries", () => {
   test("dirs before files, alphabetical within each group", () => {
@@ -159,13 +160,15 @@ function makeTree(seed: Record<string, string>, opts: { native?: boolean; unlink
       const prefix = path === "/" ? "/" : `${path}/`;
 
       for (const key of [...files.keys(), ...dirs]) {
-        if (key.startsWith(prefix)) names.add(key.slice(prefix.length).split("/")[0]!);
+        if (key.startsWith(prefix)) names.add(key.slice(prefix.length).split("/")[0]);
       }
 
       return [...names];
     },
     stat: async (path) => {
-      if (files.has(path)) return { size: files.get(path)!.length, mtimeMs: 1_724_500_000_000, isDir: false };
+      const stored = files.get(path);
+
+      if (stored !== undefined) return { size: stored.length, mtimeMs: 1_724_500_000_000, isDir: false };
 
       return dirs.has(path) ? { size: 0, mtimeMs: 0, isDir: true } : null;
     },
@@ -427,7 +430,7 @@ describe("putFileBytes", () => {
     // here: Bun-types' shape carries a `preconnect` member that a bare function
     // literal lacks, and the shim attaches the no-op the SDK never calls.
     globalThis.fetch = asFetchFunction((url, init) => {
-      calls.push({ url: String(url), init });
+      calls.push({ url: requestUrl(url), init });
 
       return Promise.resolve(reply);
     });
@@ -439,8 +442,8 @@ describe("putFileBytes", () => {
     const calls = answering(Response.json({ ok: true }));
     await putFileBytes("/api/workspaces/ws/files?executor=workspace&path=/a.txt", "hello");
     expect(calls).toHaveLength(1);
-    expect(calls[0]!.init?.method).toBe("PUT");
-    expect(calls[0]!.init?.body).toBe("hello");
+    expect(calls[0].init?.method).toBe("PUT");
+    expect(calls[0].init?.body).toBe("hello");
   });
 
   test("the route's own 413 words reach the reader", async () => {

@@ -22,7 +22,7 @@
 import { DurableObject } from 'cloudflare:workers';
 import {
   bindActorHandle, initRunEventTables, RunEventRecorder, WORKSPACE_RUN_ID,
-  type ActorHandle, type SpendSource, type SqlExecutor, type Usage,
+  type ActorHandle, type SpendSource, type SqlExecutor, type SqlValue, type Usage,
 } from '@kinu.run/core';
 
 /** One producer's row, flattened for the RPC boundary — a `Map` is not
@@ -37,15 +37,9 @@ export interface ProbeTally {
 }
 
 export class SpendProbeDO extends DurableObject<Cloudflare.Env> {
-  // SAFETY: the same assertion `bindAgentSql` (runtime.ts:113) makes, at the
-  // same boundary and for the same reason. `SqlExecutor` and the platform's
-  // `sql.exec` are one tagged-template protocol; `SqlExecutor` additionally
-  // admits ArrayBuffer, which Durable Object SQLite binds at runtime and does
-  // not type, so the FUNCTION is asserted once rather than each row it returns.
-  // The Agents SDK is not hosted in this worker, which is why the bridge is here.
-  private readonly sql = ((
-    query: TemplateStringsArray, ...values: SqlStorageValue[]
-  ) => this.ctx.storage.sql.exec(query.join('?'), ...values).toArray()) as SqlExecutor;
+  private readonly sql: SqlExecutor = <Row,>(
+    query: TemplateStringsArray, ...values: SqlValue[]
+  ): Row[] => this.ctx.storage.sql.exec<Row & Record<string, SqlStorageValue>>(query.join('?'), ...values).toArray();
 
   /** This probe's own actor. `run_events` is actor-scoped, and the probe writes
    *  and sums the same rows, so one bound identity serves both halves; there is

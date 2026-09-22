@@ -87,7 +87,7 @@ describe('the work journal', () => {
     // A cancelled job can carry a null settledAt; falling back to createdAt is
     // what keeps it in the feed instead of sorting it to the epoch.
     const rows = buildJournal([job({ id: 'j', status: 'cancelled', createdAt: 400, settledAt: null })], [], []);
-    expect(rows[0]!.at).toBe(400);
+    expect(rows[0].at).toBe(400);
   });
 
   test('keys are stable across re-reads, so a poll does not re-key and re-animate the feed', () => {

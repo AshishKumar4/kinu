@@ -62,7 +62,15 @@ function setup() {
   return { env, ctx, notified, pending };
 }
 
-async function call(env: Env, ctx: ExecutionContext, path: string, method: string, body?: JsonValue) {
+interface UserApiCall {
+  readonly env: Env;
+  readonly ctx: ExecutionContext;
+  readonly path: string;
+  readonly method: string;
+  readonly body?: JsonValue;
+}
+
+async function call({ env, ctx, path, method, body }: UserApiCall) {
   return handleUserRequest(new Request(`https://kinu.example.com/api/user${path}`, {
     method,
     headers: { 'content-type': 'application/json' },
@@ -73,7 +81,7 @@ async function call(env: Env, ctx: ExecutionContext, path: string, method: strin
 describe('credential-change fanout to agent DOs', () => {
   test('setting a credential notifies every enumerated agent', async () => {
     const { env, ctx, notified, pending } = setup();
-    const res = await call(env, ctx, '/credentials/openai.api', 'POST', { kind: 'bearer', token: 'sk-x' });
+    const res = await call({ env, ctx, path: '/credentials/openai.api', method: 'POST', body: { kind: 'bearer', token: 'sk-x' } });
     expect(res?.status).toBe(200);
     await Promise.all(pending);
     expect(notified).toEqual(['jarvis', 'old-bot']);
@@ -81,15 +89,15 @@ describe('credential-change fanout to agent DOs', () => {
 
   test('deleting a credential notifies agents', async () => {
     const { env, ctx, notified, pending } = setup();
-    await call(env, ctx, '/credentials/openai.api', 'DELETE');
+    await call({ env, ctx, path: '/credentials/openai.api', method: 'DELETE' });
     await Promise.all(pending);
     expect(notified).toEqual(['jarvis', 'old-bot']);
   });
 
   test('codex disconnect and successful poll notify agents', async () => {
     const { env, ctx, notified, pending } = setup();
-    await call(env, ctx, '/codex', 'DELETE');
-    await call(env, ctx, '/codex/poll', 'POST', {});
+    await call({ env, ctx, path: '/codex', method: 'DELETE' });
+    await call({ env, ctx, path: '/codex/poll', method: 'POST', body: {} });
     await Promise.all(pending);
     expect(notified).toEqual(['jarvis', 'old-bot', 'jarvis', 'old-bot']);
   });

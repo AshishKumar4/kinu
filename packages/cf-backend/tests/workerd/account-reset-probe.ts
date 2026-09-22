@@ -59,17 +59,7 @@ export class AccountResetProbeDO extends UserDO {
   }
 
   private async workspaceTarget(workspace: string): Promise<ClaimTarget> {
-    // SAFETY: the durableObjects binding declares the production
-    // OrchestratorAgent under its own name, and every picked member is one the
-    // production class declares; the plain fetch pick first is the narrowing
-    // slate-durability-probe applies for the same TS2589 reason.
-    const raw: Pick<Fetcher, 'fetch'> = await getAgentByName<ProbeEnv, ProductionOrchestrator>(
-      this.env.OrchestratorAgent as DurableObjectNamespace<ProductionOrchestrator>, workspace,
-    );
-
-    // SAFETY: `raw` is the stub for the bound production class, which declares
-    // both members ClaimTarget names.
-    return raw as ClaimTarget;
+    return getAgentByName<ProbeEnv, ProductionOrchestrator>(this.env.OrchestratorAgent, workspace);
   }
 
   /** A lived-in account: two owned workspaces with minted capabilities, a

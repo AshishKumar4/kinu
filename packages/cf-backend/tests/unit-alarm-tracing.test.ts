@@ -113,7 +113,7 @@ describe('alarm tick tracing', () => {
     // served two wakes" from "the object was reconstructed" — and no span spans
     // both, because there is no span object that outlives its callback.
     const ordinals = new Set(spans.map((span) => span.attributes.get(SPAN_ATTR_INVOCATION)));
-    expect([...ordinals].sort()).toEqual([1, 2]);
+    expect([...ordinals].sort((a, b) => Number(a) - Number(b))).toEqual([1, 2]);
     const generations = new Set(spans.map((span) => span.attributes.get(SPAN_ATTR_ISOLATE_GEN)));
     expect([...generations]).toEqual([1]);
   });

@@ -35,6 +35,7 @@ import {
 } from '../src/cli/rpc-gate';
 import { sha256Hex } from '@kinu.run/core';
 import type { Connection } from 'agents';
+import { requestUrl } from './helpers/fetch-input';
 
 const USER_ID = '0123456789abcdef0123456789abcdef';
 
@@ -205,7 +206,7 @@ describe('a credential the owner moved while a provider was answering', () => {
    *  every test in this block is about. */
   function tokenEndpoint(during: () => Promise<void>, body: CodexTokens): void {
     globalThis.fetch = asFetchFunction(async (input: RequestInfo | URL) => {
-      if (String(input) !== CODEX_TOKEN_URL) throw new Error(`unexpected fetch: ${String(input)}`);
+      if (requestUrl(input) !== CODEX_TOKEN_URL) throw new Error(`unexpected fetch: ${requestUrl(input)}`);
       await during();
 
       return new Response(JSON.stringify(body), {
@@ -259,7 +260,7 @@ describe('a credential the owner moved while a provider was answering', () => {
     const owner = await testOwner();
     await connectedCodex(harness);
     globalThis.fetch = asFetchFunction(async (input: RequestInfo | URL) => {
-      if (String(input) !== CODEX_TOKEN_URL) throw new Error(`unexpected fetch: ${String(input)}`);
+      if (requestUrl(input) !== CODEX_TOKEN_URL) throw new Error(`unexpected fetch: ${requestUrl(input)}`);
       await harness.userDO.setCredential(owner, CODEX_CRED_KEY, {
         kind: 'oauth', accessToken: 'access-from-owner', refreshToken: 'refresh-from-owner',
       });
@@ -293,7 +294,7 @@ describe('a device-code sign-in the owner superseded', () => {
     duringExchange?: () => Promise<void>;
   }): void {
     globalThis.fetch = asFetchFunction(async (input: RequestInfo | URL) => {
-      const url = String(input);
+      const url = requestUrl(input);
 
       const json = (body: CodexTokens | CodexUserCode | CodexApproval): Response => new Response(JSON.stringify(body), {
         status: 200, headers: { 'content-type': 'application/json' },

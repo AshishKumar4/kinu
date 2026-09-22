@@ -627,14 +627,14 @@ abstract class Middle extends ThirdPartyBase {
 const callableRegistry = new WeakMap<object, string>();
 
 class Leaf extends Middle {
-  #secret = 'hidden';
+  readonly #secret = 'hidden';
   constructor() {
     super();
     callableRegistry.set(this.markedCallable, 'metadata');
     sealRpcSurface(this, ['publicApi', 'markedCallable', 'overridable']);
   }
   private leafInternal(): string { return this.#secret; }
-  markedCallable(): string { return 'callable'; }
+  markedCallable(this: void): string { return 'callable'; }
   override overridable(): string { return `leaf -> ${super.overridable()}`; }
   selfCheck() {
     return {
@@ -686,7 +686,7 @@ describe('sealRpcSurface', () => {
   test('sealed members stay invisible to enumeration', () => {
     const leaf = new Leaf();
     expect(Object.keys(leaf)).toEqual([]);
-    expect(Object.keys({ ...leaf })).toEqual([]);
+    expect(Object.keys(Object.assign({}, leaf))).toEqual([]);
   });
 
   test('a surface entry the class does not have is ignored, not trusted', async () => {

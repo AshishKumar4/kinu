@@ -16,6 +16,8 @@ import { CloudflareOAuthTokenError, refreshCloudflareCredential } from '@kinu.ru
 import { asFetchFunction, createChatModel, reasoningEffortOptions, type JsonObject } from '@kinu.run/core';
 import * as v from 'valibot';
 import { createDirectWorkersAIFetch } from '@kinu.run/core';
+import { requestBodyText, requestUrl } from './helpers/fetch-input';
+import { present } from '@kinu.run/test-utils';
 
 
 /** What a rejected `generateText` hands back: the AI SDK's error, whose
@@ -49,7 +51,7 @@ test('configured effort reaches the native Workers AI binding through its SDK tr
   } };
 
   // SAFETY: this constructed fixture provides Ai.run, and the adapter calls no other member of the binding.
-  const fetch = createDirectWorkersAIFetch(binding as Ai);
+  const fetch = createDirectWorkersAIFetch(binding);
 
   const model = createChatModel({ kind: 'openai-compat', name: 'workers-ai',
     modelId: '@cf/moonshotai/kimi-k2.6', baseURL: 'https://fixture.invalid/v1', headers: {}, fetch });
@@ -64,8 +66,8 @@ describe('Workers AI credential refresh', () => {
   test('refresh merges rotated tokens into the stored credential shape', async () => {
     const originalFetch = globalThis.fetch;
     globalThis.fetch = asFetchFunction(async (input: RequestInfo | URL, init?: RequestInit) => {
-      expect(String(input)).toBe('https://dash.cloudflare.com/oauth2/token');
-      const body = new URLSearchParams(String(init?.body));
+      expect(requestUrl(input)).toBe('https://dash.cloudflare.com/oauth2/token');
+      const body = new URLSearchParams(await requestBodyText(input, init));
       expect(body.get('grant_type')).toBe('refresh_token');
       expect(body.get('refresh_token')).toBe('cf-refresh-1');
 
@@ -141,7 +143,7 @@ describe('Workers AI credential refresh', () => {
     const stub = userCredentialSource({
       getAuthHeaders: async (key: string, opts?: { forceRefresh?: boolean }) => {
         if (key !== 'cloudflare.oauth') return null;
-        authCalls.push(!!opts?.forceRefresh);
+        authCalls.push(Boolean(opts?.forceRefresh));
 
         return { authorization: opts?.forceRefresh ? 'Bearer cf-fresh' : 'Bearer cf-stale' };
       },
@@ -242,7 +244,7 @@ describe('Workers AI credential refresh', () => {
     });
 
     const reg = createAgentProviderRegistry({ env: {}, userDO: dead });
-    expect(await reg.registry.get('workers-ai')!.isAvailable(reg.deps)).toBe(false);
+    expect(await present(reg.registry.get('workers-ai'), 'the workers-ai provider').isAvailable(reg.deps)).toBe(false);
 
     // …while a credential UserDO can still serve (fresh or silently
     // refreshed) keeps Workers AI advertised — no CTA.
@@ -254,7 +256,7 @@ describe('Workers AI credential refresh', () => {
     });
 
     const reg2 = createAgentProviderRegistry({ env: {}, userDO: alive });
-    expect(await reg2.registry.get('workers-ai')!.isAvailable(reg2.deps)).toBe(true);
+    expect(await present(reg2.registry.get('workers-ai'), 'the workers-ai provider').isAvailable(reg2.deps)).toBe(true);
   });
 
   test('UserDO refreshes expiring Cloudflare credentials and persists the rotation', () => {

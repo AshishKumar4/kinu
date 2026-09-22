@@ -19,6 +19,7 @@ import {
 } from '@kinu.run/core';
 import type { UserCaller } from '@kinu.run/core';
 import * as v from 'valibot';
+import { requestBodyText, requestUrl } from './helpers/fetch-input';
 
 const USER_ID = '0123456789abcdef0123456789abcdef';
 
@@ -170,9 +171,9 @@ function captureUpstream(respond: (seen: CapturedUpstream) => Response): Capture
   const captured: CapturedUpstream[] = [];
   globalThis.fetch = asFetchFunction(async (input: RequestInfo | URL, init?: RequestInit) => {
     const seen: CapturedUpstream = {
-      url: String(input),
+      url: requestUrl(input),
       headers: new Headers(init?.headers),
-      body: parseJsonObject(String(init?.body)),
+      body: parseJsonObject(await requestBodyText(input, init)),
     };
 
     captured.push(seen);
@@ -427,7 +428,7 @@ describe('AI proxy model listing', () => {
   test('GET /models lists the proxy-served wire ids in OpenAI list shape', async () => {
     const { env } = setupEnv({ gatewayId: 'byok-gw', token: `t-${Math.random()}` });
     globalThis.fetch = asFetchFunction(async (input: RequestInfo | URL) => {
-      const url = String(input);
+      const url = requestUrl(input);
 
       if (url.startsWith('https://models.dev/')) {
         return Response.json({

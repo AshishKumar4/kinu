@@ -6,6 +6,7 @@
 // between "consent let it through" and "consent did nothing" disappears. So the
 // default responder answers the way the daemon does, and a suite that needs a
 // misbehaving machine passes its own.
+import * as v from 'valibot';
 import {
   DEVICE_CANCEL_METHOD, type JsonValue,
 } from '@kinu.run/core';
@@ -27,7 +28,7 @@ export function daemon(frame: DeviceFrame): JsonValue {
   if (frame.method === 'which') return { present: [] };
 
   if (frame.method === DEVICE_CANCEL_METHOD) {
-    return { requestId: String(frame.params[0]), cancelled: 'terminated' };
+    return { requestId: v.parse(v.string(), frame.params[0]), cancelled: 'terminated' };
   }
 
   return { stdout: 'ok', stderr: '', exitCode: 0 };

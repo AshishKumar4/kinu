@@ -194,11 +194,11 @@ async function body(response: Response | null | undefined) {
   return v.parse(payloadSchema, await response.json());
 }
 
-/** What `body` answered AND what the diagnostic sink was told while it ran.
+/** What `run` answered AND what the diagnostic sink was told while it ran.
  *  Both from one seam: a case asserts the client's answer as well as the fleet
  *  row, and returning the value is what keeps the response properly typed
  *  instead of assigned out through a widened binding. */
-async function recorded<T>(body: () => Promise<T>): Promise<{
+async function recorded<T>(run: () => Promise<T>): Promise<{
   readonly value: T;
   readonly logs: readonly RecordedLog[];
 }> {
@@ -206,7 +206,7 @@ async function recorded<T>(body: () => Promise<T>): Promise<{
   const restore = setDiagnosticsSink(logger);
 
   try {
-    return { value: await body(), logs: logger.emitted };
+    return { value: await run(), logs: logger.emitted };
   } finally {
     restore();
   }

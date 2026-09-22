@@ -16,6 +16,7 @@ import type {
 // importing the module under test") — the import below is deliberately
 // dynamic. Same shape as unit-actor-facet-substrate.test.ts.
 import { mockAgentsSdk } from "./helpers/agents-sdk";
+import { present } from "@kinu.run/test-utils";
 
 mockAgentsSdk();
 
@@ -203,7 +204,7 @@ function put(body: BodyInit | Uint8Array, headers: Record<string, string> = {}):
 }
 
 async function collect(response: Response): Promise<Uint8Array> {
-  const reader = response.body!.getReader();
+  const reader = present(response.body, 'the response body stream').getReader();
   const chunks: Uint8Array[] = [];
 
   for (;;) {
@@ -231,14 +232,14 @@ describe("files route — PUT", () => {
     const response = await route(put(whole), harness);
     expect(response.status).toBe(200);
     expect(v.parse(OkReplySchema, await response.json())).toEqual({ ok: true });
-    expect([...harness.files.get("/home/user/blob.bin")!]).toEqual([...whole]);
+    expect([...present(harness.files.get("/home/user/blob.bin"), "the uploaded blob.bin")]).toEqual([...whole]);
   });
 
   test("an exact multiple of the chunk size is the boundary case and works", async () => {
     const harness = makeAgent();
     const whole = patternBytes(3 * FILE_CHUNK_BYTES);
     expect((await route(put(whole), harness)).status).toBe(200);
-    expect(harness.files.get("/home/user/blob.bin")!.byteLength).toBe(whole.byteLength);
+    expect(present(harness.files.get("/home/user/blob.bin"), "the uploaded blob.bin").byteLength).toBe(whole.byteLength);
   });
 
   test("one byte past the total limit is a 413 that writes nothing and aborts", async () => {
@@ -315,7 +316,7 @@ describe("files route — PUT", () => {
     const harness = makeAgent();
     const whole = patternBytes(FILE_TRANSFER_MAX_BYTES);
     expect((await route(put(whole), harness)).status).toBe(200);
-    expect(harness.files.get("/home/user/blob.bin")!.byteLength).toBe(FILE_TRANSFER_MAX_BYTES);
+    expect(present(harness.files.get("/home/user/blob.bin"), "the uploaded blob.bin").byteLength).toBe(FILE_TRANSFER_MAX_BYTES);
   });
 
   test("the whole body is never buffered at the edge: arrayBuffer would be a defect", async () => {
@@ -325,7 +326,7 @@ describe("files route — PUT", () => {
       value: () => { throw new Error("route buffered the whole body"); },
     });
     expect((await route(request, harness)).status).toBe(200);
-    expect(harness.files.get("/home/user/blob.bin")!.byteLength).toBe(FILE_CHUNK_BYTES + 9);
+    expect(present(harness.files.get("/home/user/blob.bin"), "the uploaded blob.bin").byteLength).toBe(FILE_CHUNK_BYTES + 9);
   });
 
   test("an expected revision writes atomically when it still matches", async () => {

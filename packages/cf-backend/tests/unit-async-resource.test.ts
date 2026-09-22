@@ -15,7 +15,7 @@ describe('async resource transitions', () => {
   });
 
   test('a failure is never an empty result', () => {
-    const state = loadFailed(LOADING, new Error('boom'));
+    const state = loadFailed(LOADING, { cause: new Error('boom') });
     expect(state.status).toBe('error');
     expect(state).toMatchObject({ message: 'boom', last: null });
     expect(lastValue(state)).toBeNull();
@@ -23,16 +23,16 @@ describe('async resource transitions', () => {
 
   test('a failure carries the last loaded value so a blip cannot blank a view', () => {
     const ready = loadSucceeded([1, 2, 3]);
-    const state = loadFailed(ready, new Error('offline'));
+    const state = loadFailed(ready, { cause: new Error('offline') });
     expect(lastValue(state)).toEqual([1, 2, 3]);
     // …and keeps carrying it across a second failure.
-    expect(lastValue(loadFailed(state, new Error('offline again')))).toEqual([1, 2, 3]);
+    expect(lastValue(loadFailed(state, { cause: new Error('offline again') }))).toEqual([1, 2, 3]);
   });
 
   test('revalidating and retrying keep the last loaded value on screen', () => {
     expect(beginLoad(loadSucceeded([1]))).toEqual({ status: 'ready', value: [1] });
-    expect(beginLoad(loadFailed(LOADING, 'nope'))).toEqual({ status: 'loading' });
-    const stale = loadFailed(loadSucceeded([1]), 'offline');
+    expect(beginLoad(loadFailed(LOADING, { cause: 'nope' }))).toEqual({ status: 'loading' });
+    const stale = loadFailed(loadSucceeded([1]), { cause: 'offline' });
     expect(beginLoad(stale)).toBe(stale);
     expect(lastValue(beginLoad(stale))).toEqual([1]);
   });
@@ -44,11 +44,11 @@ describe('async resource transitions', () => {
   });
 
   test('error text survives non-Error rejections', () => {
-    expect(describeError(new Error('rpc closed'))).toBe('rpc closed');
-    expect(describeError('string reason')).toBe('string reason');
-    expect(describeError(new Error(''))).toBe('request failed');
-    expect(describeError(undefined)).toBe('request failed');
-    expect(describeError({ code: 500 })).toBe('request failed');
+    expect(describeError({ cause: new Error('rpc closed') })).toBe('rpc closed');
+    expect(describeError({ cause: 'string reason' })).toBe('string reason');
+    expect(describeError({ cause: new Error('') })).toBe('request failed');
+    expect(describeError({ cause: undefined })).toBe('request failed');
+    expect(describeError({ cause: { code: 500 } })).toBe('request failed');
   });
 
   test('a mapped resource keeps the read state and maps only what is on screen', () => {
@@ -60,10 +60,10 @@ describe('async resource transitions', () => {
 
     // A failure passes through with its message, but the stale value it still
     // carries is the mapped one — the view reads `last`, not the old shape.
-    const stale = loadFailed(loadSucceeded([1, 2, 3]), new Error('offline'));
+    const stale = loadFailed(loadSucceeded([1, 2, 3]), { cause: new Error('offline') });
     expect(mapResource(stale, lengths)).toEqual({ status: 'error', message: 'offline', last: 3 });
 
-    const cold = loadFailed<number[], Error>(LOADING, new Error('offline'));
+    const cold = loadFailed<number[]>(LOADING, { cause: new Error('offline') });
     expect(mapResource(cold, lengths)).toEqual({ status: 'error', message: 'offline', last: null });
   });
 });

@@ -23,6 +23,8 @@ import { makeKv } from './helpers/kv';
 import { TEST_CREDENTIAL_ENCRYPTION_KEY } from './helpers/user-do';
 import type { BrowserSessionIdentity } from '../src/user/user-do';
 import type { UserCaller } from '@kinu.run/core';
+import { requestUrl } from './helpers/fetch-input';
+import { present } from '@kinu.run/test-utils';
 
 const root = join(import.meta.dir, '..');
 
@@ -156,7 +158,7 @@ describe('auth and desktop security invariants', () => {
   test('Cloudflare OAuth token attachment stores an account-backed Workers AI credential', async () => {
     const originalFetch = globalThis.fetch;
     globalThis.fetch = asFetchFunction(async (input) => {
-      expect(String(input)).toBe('https://api.cloudflare.com/client/v4/accounts');
+      expect(requestUrl(input)).toBe('https://api.cloudflare.com/client/v4/accounts');
 
       return new Response(JSON.stringify({
         success: true,
@@ -185,7 +187,7 @@ describe('auth and desktop security invariants', () => {
   test('Cloudflare OAuth token attachment accepts access-token-only responses', async () => {
     const originalFetch = globalThis.fetch;
     globalThis.fetch = asFetchFunction(async (input) => {
-      expect(String(input)).toBe('https://api.cloudflare.com/client/v4/accounts');
+      expect(requestUrl(input)).toBe('https://api.cloudflare.com/client/v4/accounts');
 
       return new Response(JSON.stringify({
         success: true,
@@ -580,7 +582,7 @@ async function cloudflareSignIn(env: Env, tokenJson: JsonValue, userResult: Json
     expect(installPage?.status).toBe(200);
     expect(installPage?.headers.get('content-type')).toContain('text/html');
     expect(installPage?.headers.get('content-security-policy')).toContain('https://static.cloudflareinsights.com');
-    const html = await installPage!.text();
+    const html = await present(installPage, 'the /install response').text();
     expect(html).toContain('Install the Kinu.run CLI');
     expect(html).toContain('curl -fsSL');
     expect(html).toContain('https://kinu.example.com/install.sh');
@@ -593,7 +595,7 @@ async function cloudflareSignIn(env: Env, tokenJson: JsonValue, userResult: Json
     const installScript = await handleCliRequest(new Request('https://kinu.example.com/install.sh'), PUBLIC_ROUTE_ENV);
     expect(installScript?.status).toBe(200);
     expect(installScript?.headers.get('content-type')).toContain('text/x-shellscript');
-    const script = await installScript!.text();
+    const script = await present(installScript, 'the /install.sh response').text();
     expect(script).toContain('#!/usr/bin/env bash');
     expect(script).toContain('KINU_REFRESH_CLI=1 "$BIN_PATH" --help');
     expect(script).toContain('setup --origin "$KINU_ORIGIN" --account-only');
@@ -607,13 +609,13 @@ async function cloudflareSignIn(env: Env, tokenJson: JsonValue, userResult: Json
 
     expect(installScriptHead?.status).toBe(200);
     expect(installScriptHead?.headers.get('content-type')).toContain('text/x-shellscript');
-    expect(await installScriptHead!.text()).toBe('');
+    expect(await present(installScriptHead, 'the HEAD /install.sh response').text()).toBe('');
   });
 
   test('the CLI launcher takes the deployed build artifacts and verifies both checksums', async () => {
     const shim = await handleCliRequest(new Request('https://kinu.example.com/downloads/kinu'), PUBLIC_ROUTE_ENV);
     expect(shim?.status).toBe(200);
-    const script = await shim!.text();
+    const script = await present(shim, 'the /downloads/kinu response').text();
     expect(script).toContain('CLI_DIR="$CLI_ROOT/current"');
     expect(script).toContain('KINU_ORIGIN="${KINU_ORIGIN:-https://kinu.example.com}"');
     expect(script).toContain('/downloads/kinu-cli-${KINU_OS}-${KINU_ARCH}.tar.gz');
@@ -638,7 +640,7 @@ async function cloudflareSignIn(env: Env, tokenJson: JsonValue, userResult: Json
 
     expect(shimHead?.status).toBe(200);
     expect(shimHead?.headers.get('content-type')).toContain('text/x-shellscript');
-    expect(await shimHead!.text()).toBe('');
+    expect(await present(shimHead, 'the HEAD /downloads/kinu response').text()).toBe('');
   });
 
   test('supervise automation copy matches the live timer reactor', () => {

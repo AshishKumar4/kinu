@@ -21,6 +21,7 @@ import {
   messageSignalId, parseDrainedEvents, parseSignalCardEvent, type SignalCard,
 } from '@kinu.run/core';
 import { parse, walk, type SyntaxNode } from '../../../scripts/syntax';
+import { present } from '@kinu.run/test-utils';
 
 describe('programmatic turn provenance', () => {
   test('reactor drains and background-job wakes are not the user talking', () => {
@@ -82,11 +83,11 @@ describe('programmatic turn provenance', () => {
   // ever drift, the workspace's first turn silently renders as a message the
   // owner never typed. So the assertion uses the core constant, not a literal.
   test('the workspace\'s own first turn is not the owner speaking', () => {
-    const genesis = workspaceGenesisSignal('Audit the OAuth callback flow.');
-    expect(genesis).not.toBeNull();
-    expect(classifyProgrammaticTurn({ kinuEvent: genesis!.kind, signalId: 'sig-1' }))
+    const genesis = present(workspaceGenesisSignal('Audit the OAuth callback flow.'), 'the workspace genesis signal');
+
+    expect(classifyProgrammaticTurn({ kinuEvent: genesis.kind, signalId: 'sig-1' }))
       .toEqual({ kind: 'workspace_created' });
-    expect(genesis!.kind).toBe(WORKSPACE_CREATED_EVENT);
+    expect(genesis.kind).toBe(WORKSPACE_CREATED_EVENT);
   });
 });
 
@@ -262,13 +263,13 @@ function webhookEvent(id = 'ev-1') {
 
 describe('drained event parsing', () => {
   test('a subordinate report is recovered as variant / source / brief', () => {
-    const batch = buildDrainBatch([event({
+    const batch = present(buildDrainBatch([event({
       ...EVENT_BASE,
       id: 'ev-1',
       ingress: 'subordinate',
       variant: 'subordinate_report',
       payload: { from_subordinate: 'surface-auditor', status: 'progress', task: 'Audit the CLI', content: 'Found 3 gaps', kinu_mode: 'build', sequence_id: 'u-1/a-1' },
-    })])!;
+    })]), 'the drain batch');
 
     expect(parseDrainedEvents(batch.text)).toEqual([{
       variant: 'subordinate_report',
@@ -279,7 +280,7 @@ describe('drained event parsing', () => {
   });
 
   test('the instruction line is dropped, and every event in a batch is kept', () => {
-    const batch = buildDrainBatch([
+    const batch = present(buildDrainBatch([
       webhookEvent('a'),
       event({
         ...EVENT_BASE,
@@ -289,18 +290,18 @@ describe('drained event parsing', () => {
           body_text: 'exit 1', message_id: null, in_reply_to: null, references: null, attachments: [],
         },
       }),
-    ])!;
+    ]), 'the drain batch');
 
     const parsed = parseDrainedEvents(batch.text);
     expect(batch.text.startsWith('2 events arrived while you were idle')).toBe(true);
     expect(parsed).toHaveLength(2);
     expect(parsed.map((e) => e.variant)).toEqual(['webhook', 'email']);
-    expect(parsed[1]!.source).toBe('email (ops@example.com)');
-    expect(parsed[1]!.brief).toBe('"Deploy failed": exit 1');
+    expect(parsed[1].source).toBe('email (ops@example.com)');
+    expect(parsed[1].brief).toBe('"Deploy failed": exit 1');
   });
 
   test('a peer ask is flagged as awaiting a reply, and the hint stays out of the brief', () => {
-    const batch = buildDrainBatch([event({
+    const batch = present(buildDrainBatch([event({
       ...EVENT_BASE,
       id: 'p1', ingress: 'peer_async', variant: 'peer_agent',
       payload: {
@@ -308,21 +309,21 @@ describe('drained event parsing', () => {
         sender_event_id: 'out-1', reply_expected: true, kinu_mode: 'build',
         sequence_id: 'seq-1',
       },
-    })])!;
+    })]), 'the drain batch');
 
     const [parsed] = parseDrainedEvents(batch.text);
-    expect(parsed!.replyExpected).toBe(true);
-    expect(parsed!.source).toBe('peer agent (atlas)');
-    expect(parsed!.brief).toBe('schema: "which shape?"');
-    expect(parsed!.brief).not.toContain('peers(');
+    expect(parsed.replyExpected).toBe(true);
+    expect(parsed.source).toBe('peer agent (atlas)');
+    expect(parsed.brief).toBe('schema: "which shape?"');
+    expect(parsed.brief).not.toContain('peers(');
   });
 
   test('a colon inside the source label does not swallow the brief', () => {
-    const batch = buildDrainBatch([event({
+    const batch = present(buildDrainBatch([event({
       ...EVENT_BASE,
       id: 't1', ingress: 'timer_alarm', variant: 'timer',
       payload: { label: 'background-job-wake:job-7', trigger_id: 'x', scheduled_fire_at: 0 },
-    })])!;
+    })]), 'the drain batch');
 
     expect(parseDrainedEvents(batch.text)).toEqual([{
       variant: 'timer',
@@ -336,7 +337,7 @@ describe('drained event parsing', () => {
     // A REPORT, because an assignment never reaches a drain: `wakesADrain`
     // excludes `subordinate_task`, the delegation runner owns it, and a report
     // up is the multi-line sender-written body the reactor does still render.
-    const batch = buildDrainBatch([event({
+    const batch = present(buildDrainBatch([event({
       ...EVENT_BASE,
       id: 's1', ingress: 'subordinate', variant: 'subordinate_report' as const,
       payload: {
@@ -344,10 +345,10 @@ describe('drained event parsing', () => {
         content: 'Report line one.\nReport line two.',
         sequence_id: 'seq-1', kinu_mode: 'build',
       },
-    })])!;
+    })]), 'the drain batch');
 
     const [parsed] = parseDrainedEvents(batch.text);
-    expect(parsed!.brief).toBe('completed: Report line one.\nReport line two.');
+    expect(parsed.brief).toBe('completed: Report line one.\nReport line two.');
   });
 
   test('text that is not a drain listing yields nothing to fabricate a card from', () => {
@@ -373,8 +374,8 @@ describe('the card lifecycle', () => {
   });
 
   const apply = (events: JsonValue[]): readonly SignalCard[] =>
-    events.reduce<readonly SignalCard[]>((cards, event) => {
-      const parsed = parseSignalCardEvent(event);
+    events.reduce<readonly SignalCard[]>((cards, row) => {
+      const parsed = parseSignalCardEvent(row);
 
       return parsed ? applySignalCard(cards, parsed) : cards;
     }, []);
@@ -410,8 +411,8 @@ describe('the card lifecycle', () => {
   test('cards keep arrival order and are bounded', () => {
     const many = apply(Array.from({ length: 60 }, (_, i) => opened(`s${i}`)));
     expect(many).toHaveLength(50);
-    expect(many[0]!.id).toBe('s10');
-    expect(many.at(-1)!.id).toBe('s59');
+    expect(many[0].id).toBe('s10');
+    expect(present(many.at(-1), 'the last card').id).toBe('s59');
   });
 
   test('a frame that is not a well-formed card event is not one', () => {
@@ -456,17 +457,16 @@ describe('the cloud backend selects its background policy per turn', () => {
   });
 
   test('both unwatched populations are one-shot; only real chat is interactive', () => {
-    const surface = /protected turnSurface\(\): InvocationSurface \{([\s\S]*?)\n  \}/.exec(actor);
-    expect(surface).not.toBeNull();
+    const surface = present(/protected turnSurface\(\): InvocationSurface \{([\s\S]*?)\n  \}/.exec(actor), 'the turnSurface() body');
     // A CLI one-shot invocation AND a signal-driven autonomous turn both have
     // nobody watching a stream. Continuity alone misses the whole autonomous
     // population — the population the one-shot policy was measured on — and
     // the event metadata alone misses `kinu exec` against a cloud
     // workspace. The discriminators are the ones every other decision already
     // reads; there is no third notion of "autonomous".
-    expect(surface![1]).toContain('turnUserMessageEvent');
-    expect(surface![1]).toContain("_turnContinuity === 'independent_task'");
-    expect(surface![1]).toContain("'interactive'");
-    expect(surface![1]).toContain("'one-shot'");
+    expect(surface[1]).toContain('turnUserMessageEvent');
+    expect(surface[1]).toContain("_turnContinuity === 'independent_task'");
+    expect(surface[1]).toContain("'interactive'");
+    expect(surface[1]).toContain("'one-shot'");
   });
 });

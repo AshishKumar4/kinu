@@ -41,6 +41,30 @@ export class SlateChainProbe extends WorkerEntrypoint {
   }
 }
 
+const DEFAULT_SLATE_SOURCE = [
+  'import { SlateObject } from "kinu:slate";',
+  'export class Slate extends SlateObject {',
+  '  envKeys() { return Object.keys(this.env); }',
+  '  async greet(name: string) {',
+  '    const count = (await this.storage.get("count")) ?? 0;',
+  '    await this.storage.put("count", count + 1);',
+  '    const echo = await this.env.PEER.echo(name);',
+  '    return `hello ${name} #${count + 1} [${echo.chain.join(">")}]`;',
+  '  }',
+  '  async fetch() { return new Response("not found", { status: 404 }); }',
+  '}',
+].join('\n');
+
+/** What a probe run varies about the authored slate it boots. */
+interface SlateStart {
+  readonly source?: string;
+  readonly bindChain?: boolean;
+  readonly cred?: VfsCred;
+  readonly browser?: string;
+  readonly project?: Record<string, JsonValue>;
+  readonly app?: { port: number } | null;
+}
+
 export class SlateProcessProbeDO extends DurableObject<Cloudflare.Env> {
   /** The live app invocations, exactly as `SlateHost` keeps them. Static
    *  because `SlateChainProbe` answers outside this object. */
@@ -114,28 +138,17 @@ export class SlateProcessProbeDO extends DurableObject<Cloudflare.Env> {
    * host mints — the declared `PEER` plus the reserved `__storage` every slate
    * carries whether it declares one or not, bound to this DO's own stub.
    */
-  async start(source = [
-    'import { SlateObject } from "kinu:slate";',
-    'export class Slate extends SlateObject {',
-    '  envKeys() { return Object.keys(this.env); }',
-    '  async greet(name: string) {',
-    '    const count = (await this.storage.get("count")) ?? 0;',
-    '    await this.storage.put("count", count + 1);',
-    '    const echo = await this.env.PEER.echo(name);',
-    '    return `hello ${name} #${count + 1} [${echo.chain.join(">")}]`;',
-    '  }',
-    '  async fetch() { return new Response("not found", { status: 404 }); }',
-    '}',
-  ].join('\n'), bindChain = true, cred: VfsCred = CRED_SESSION_USER,
-  browser?: string, project: Record<string, JsonValue> = { main: 'server.ts' },
-  app: { port: number } | null = { port: 8789 }): Promise<void> {
+  async start({
+    source = DEFAULT_SLATE_SOURCE, bindChain = true, cred = CRED_SESSION_USER,
+    browser, project = { main: 'server.ts' }, app = { port: 8789 },
+  }: SlateStart = {}): Promise<void> {
     await this.stop();
     const root = '/home/user/slates/notes';
     const files = this.vfs.as(CRED_KERNEL);
     files.mkdir(root, { recursive: true });
-    files.writeFile(`${root}/${project.main ?? 'server.ts'}`, source);
+    files.writeFile(`${root}/${v.parse(v.string(), project.main ?? 'server.ts')}`, source);
 
-    if (browser !== undefined) files.writeFile(`${root}/${project.browser ?? 'browser.ts'}`, browser);
+    if (browser !== undefined) files.writeFile(`${root}/${v.parse(v.string(), project.browser ?? 'browser.ts')}`, browser);
 
     const storageStub = this.env.SLATE_PROCESS_PROBE.get(this.ctx.id);
 
@@ -182,7 +195,7 @@ export class SlateProcessProbeDO extends DurableObject<Cloudflare.Env> {
   }
 
   async compileProbe(source: string, cred: VfsCred = CRED_SESSION_USER) {
-    try { await this.start(source, false, cred); }
+    try { await this.start({ source, bindChain: false, cred }); }
     catch (cause) {
       if (!(cause instanceof KinuError)) throw cause;
 
@@ -221,10 +234,7 @@ export class SlateProcessProbeDO extends DurableObject<Cloudflare.Env> {
         // aborts the read-loop, and doing it here — not at transport end — is
         // the difference between a rejection capnweb observes and one workerd
         // reports as unhandled.
-        // SAFETY: `RpcStub` always carries a `Symbol.dispose` hook for its
-        // session (capnweb's RpcStub constructor sets it) — the interface
-        // merely doesn't declare it.
-        (stub as { [Symbol.dispose](): void })[Symbol.dispose]();
+        stub[Symbol.dispose]();
       }
     } catch (cause) {
       return { ok: false, error: renderThrownChain({ cause }) };

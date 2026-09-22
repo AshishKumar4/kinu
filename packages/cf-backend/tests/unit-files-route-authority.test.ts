@@ -87,7 +87,7 @@ const OkReplySchema = v.object({ ok: v.literal(true) });
  *  that PASSED consent could not be told from one that was stopped. */
 function daemon(files: Map<string, string>) {
   return (frame: DeviceFrame): JsonValue => {
-    const path = String(frame.params[0] ?? '');
+    const path = v.parse(v.string(), frame.params[0] ?? '');
     const body = files.get(path);
 
     switch (frame.method) {
@@ -103,7 +103,7 @@ function daemon(files: Map<string, string>) {
 
         return { success: true };
       case 'writeFile': {
-        const raw = String(frame.params[1] ?? '');
+        const raw = v.parse(v.string(), frame.params[1] ?? '');
         files.set(path, v.is(Base64WriteSchema, frame.params[2]) ? atob(raw) : raw);
 
         return { success: true };
@@ -260,14 +260,14 @@ async function seam(options: {
       return actor.agent;
     },
     fileFrames: () => user.deviceFrames.filter((frame) => Object.hasOwn(FILE_METHODS, frame.method)),
-    fetch: (url, session, init) => worker.fetch(new Request(url, {
-      ...init,
-      headers: {
-        ...init?.headers,
-        cookie: `${SESSION_COOKIE_NAME}=${encodeURIComponent(session)}`,
-        origin: ORIGIN,
-      },
-    }), env, ctx),
+    fetch: (url, session, init) => {
+      const headers = new Headers(init?.headers);
+
+      headers.set('cookie', `${SESSION_COOKIE_NAME}=${encodeURIComponent(session)}`);
+      headers.set('origin', ORIGIN);
+
+      return worker.fetch(new Request(url, { ...init, headers }), env, ctx);
+    },
     files: (input) => {
       const url = new URL(`${ORIGIN}/api/workspaces/${input.workspace}/files`);
       url.searchParams.set('executor', input.executor ?? 'workspace');

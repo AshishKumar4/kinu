@@ -8,6 +8,7 @@
 import { describe, test, expect } from 'bun:test';
 import { createTestUserDO, testOwner } from './helpers/user-do';
 import { asFetchFunction } from '@kinu.run/core';
+import { requestBodyText, requestUrl } from './helpers/fetch-input';
 
 const CODEX_TOKEN_URL = 'https://auth.openai.com/oauth/token';
 
@@ -15,8 +16,8 @@ describe('UserDO Codex credential revocation', () => {
   test('a revoked refresh token drops the credential and refuses the call', async () => {
     const originalFetch = globalThis.fetch;
     globalThis.fetch = asFetchFunction(async (input, init) => {
-      expect(String(input)).toBe(CODEX_TOKEN_URL);
-      const body = new URLSearchParams(String(init?.body));
+      expect(requestUrl(input)).toBe(CODEX_TOKEN_URL);
+      const body = new URLSearchParams(await requestBodyText(input, init));
       expect(body.get('grant_type')).toBe('refresh_token');
       expect(body.get('refresh_token')).toBe('rt-revoked');
 

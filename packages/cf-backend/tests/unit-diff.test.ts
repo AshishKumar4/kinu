@@ -1,5 +1,6 @@
 import { describe, test, expect } from "bun:test";
 import { diffLines, computeWorkspaceDiff, parseGitDiff, MAX_LINES_PER_FILE } from "@kinu.run/core";
+import { present } from "@kinu.run/test-utils";
 
 describe("diffLines", () => {
   test("identical input is all context, zero changes", () => {
@@ -50,9 +51,9 @@ describe("computeWorkspaceDiff", () => {
     ]);
     // c.ts unchanged → omitted.
     expect(diff.find((f) => f.path === "c.ts")).toBeUndefined();
-    expect(diff.find((f) => f.path === "a.ts")!.added).toBe(1);
-    expect(diff.find((f) => f.path === "d.ts")!.added).toBe(1);
-    expect(diff.find((f) => f.path === "b.ts")!.removed).toBe(1);
+    expect(present(diff.find((f) => f.path === "a.ts"), "the a.ts diff entry").added).toBe(1);
+    expect(present(diff.find((f) => f.path === "d.ts"), "the d.ts diff entry").added).toBe(1);
+    expect(present(diff.find((f) => f.path === "b.ts"), "the b.ts diff entry").removed).toBe(1);
   });
 
   test("identical baseline/current = no changes", () => {

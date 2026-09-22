@@ -1,6 +1,7 @@
 // createHubDeviceTransport — the device runtime's cached/authoritative status
 // over the user-level device hub. This is what beforeTurn refreshes so the
 import { describe, expect, test } from 'bun:test';
+import * as v from 'valibot';
 import {
   nextDeviceRequestId, isDeviceNotConnectedError, isWorkspaceUnattachedError,
   NO_DEVICE_CONNECTED, WORKSPACE_HAS_NO_OWNER, type DeviceStatus, type JsonValue,
@@ -25,8 +26,8 @@ function fakeHub(status: () => DeviceStatus): DeviceHubClient & { rpcCalls: RpcC
   return {
     rpcCalls,
     deviceRuntimeStatus: async () => status(),
-    deviceRpc: async (caller, method, params, opts) => {
-      rpcCalls.push([method, params, opts, caller]);
+    deviceRpc: async (rpcCaller, method, params, opts) => {
+      rpcCalls.push([method, params, opts, rpcCaller]);
 
       return JSON.stringify({ stdout: 'ok', stderr: '', exitCode: 0 });
     },
@@ -138,8 +139,8 @@ describe('createHubDeviceTransport', () => {
     try { await transport.rpc('exec', ['ls']); }
     catch (caught) { unattached = caught instanceof Error ? caught : new Error(String(caught)); }
 
-    expect(isDeviceNotConnectedError(unattached)).toBe(true);
-    expect(isWorkspaceUnattachedError(unattached)).toBe(true);
+    expect(isDeviceNotConnectedError({ cause: unattached })).toBe(true);
+    expect(isWorkspaceUnattachedError({ cause: unattached })).toBe(true);
 
     // The denominator: a hub that answers, with no device on it, is the OTHER
     // condition and must not read as unattached.
@@ -153,7 +154,7 @@ describe('createHubDeviceTransport', () => {
     try { await unlinked.rpc('exec', ['ls']); }
     catch (caught) { hubRefusal = caught instanceof Error ? caught : new Error(String(caught)); }
 
-    expect(isWorkspaceUnattachedError(hubRefusal)).toBe(false);
+    expect(isWorkspaceUnattachedError({ cause: hubRefusal })).toBe(false);
   });
 
   test('rpc outcomes re-seed the snapshot: success → connected, hub rejection → offline', async () => {
@@ -232,7 +233,7 @@ describe('createHubDeviceTransport', () => {
 
     const [method, params, opts] = requiredCall(hub.rpcCalls, 0);
     expect(method).toBe('exec');
-    expect(String(params[0])).toContain('make');
+    expect(v.parse(v.string(), params[0])).toContain('make');
     expect(opts?.requestId).toBe(requestId);
     // A call that needs no cancellation handle sends none, and the tunnel mints
     // its own — one authority, not two.

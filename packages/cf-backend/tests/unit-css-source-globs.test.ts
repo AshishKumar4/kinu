@@ -40,7 +40,7 @@ interface GlobScan {
 function sourceGlobs(cssPath: string): string[] {
   const text = readFileSync(cssPath, 'utf8');
 
-  return [...text.matchAll(/@source\s+"([^"]+)"/g)].map((m) => m[1]!);
+  return [...text.matchAll(/@source\s+"([^"]+)"/g)].map((m) => m[1]);
 }
 
 /** Split a glob into the longest literal prefix directory and the pattern

@@ -42,7 +42,7 @@ describe('buildTree', () => {
 
     expect(tree.id).toBe('new-root');
     expect(tree.children).toHaveLength(1);
-    expect(tree.children[0]!.children[0]!.id).toBe('new-a1');
+    expect(tree.children[0].children[0].id).toBe('new-a1');
   });
 
   test('a stray orphan never outranks a true root, whatever its age', () => {

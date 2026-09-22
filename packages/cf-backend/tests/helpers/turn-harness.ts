@@ -33,7 +33,7 @@ export interface PreparedRequest {
    *  history plus what the step pipeline spliced in. */
   readonly prompt: readonly ModelMessage[];
   readonly system: string | undefined;
-  readonly model: LanguageModel | string | undefined;
+  readonly model: LanguageModel | undefined;
   readonly tools: ToolSet;
   readonly activeTools: readonly string[] | undefined;
   readonly providerOptions: ChatOptions['providerOptions'];

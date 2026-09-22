@@ -77,7 +77,7 @@ function setupEnv() {
       };
     },
     async listCredentials(_caller: UserCaller) {
-      return [...stored.entries()].map(([key, v]) => ({ key, kind: v.kind, createdAt: 1, updatedAt: 2 }));
+      return [...stored.entries()].map(([key, record]) => ({ key, kind: record.kind, createdAt: 1, updatedAt: 2 }));
     },
     async setCredential(_caller: UserCaller, key: string, credential: { kind?: string }) {
       if (key === 'cloudflare.ai-gateway') throw new Error('cloudflare.ai-gateway is derived from your Cloudflare login and cannot be stored directly.');

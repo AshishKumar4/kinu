@@ -51,10 +51,10 @@ function harness(landing: HarnessLanding = 'turn', loadHistory?: () => Promise<U
 
   /** A socket the SDK's protocol helpers can drive. */
   const connection = (id: string): Connection => {
-    const sent: string[] = [];
-    frames.set(id, sent);
+    const socketFrames: string[] = [];
+    frames.set(id, socketFrames);
 
-    const partialSocket: Pick<Connection, 'id' | 'send'> = { id, send: (frame: string) => { sent.push(frame); } };
+    const partialSocket: Pick<Connection, 'id' | 'send'> = { id, send: (frame: string) => { socketFrames.push(frame); } };
     // SAFETY: this constructed fixture implements `id` and `send`. The SDK
     // helpers the transport composes (`sendIfOpen`, the resume handshake) read
     // no other member of a connection.

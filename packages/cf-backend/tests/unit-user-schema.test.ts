@@ -63,7 +63,7 @@ describe('UserDO schema bootstrap', () => {
     initUserTables(sqlExec(db));
 
     const has = (u: string, a: string) =>
-      !!db.prepare(`SELECT 1 FROM user_peer_grants WHERE sender_user_id = ? AND sender_agent_name = ?`).get(u, a);
+      Boolean(db.prepare(`SELECT 1 FROM user_peer_grants WHERE sender_user_id = ? AND sender_agent_name = ?`).get(u, a));
 
     const grant = db.prepare(
       `INSERT INTO user_peer_grants (sender_user_id, sender_agent_name, created_at) VALUES (?, ?, ?)

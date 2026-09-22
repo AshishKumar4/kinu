@@ -8,6 +8,7 @@
 import { describe, expect, test } from 'bun:test';
 
 import { highlightCode } from '../src/components/surfaces/code-highlighter';
+import { present } from '@kinu.run/test-utils';
 
 describe('highlightCode', () => {
   test('a known grammar comes back as coloured token spans', async () => {
@@ -15,7 +16,7 @@ describe('highlightCode', () => {
 
     expect(result.html).not.toBeNull();
     // Shiki emits one <span style="color:…"> per token; flat text has none.
-    const tokens = result.html!.match(/<span style="color:#/g) ?? [];
+    const tokens = present(result.html, 'the highlighted markup').match(/<span style="color:#/g) ?? [];
     expect(tokens.length).toBeGreaterThan(1);
     // …and the source survives inside the markup, not a paraphrase of it.
     expect(result.html).toContain('const');

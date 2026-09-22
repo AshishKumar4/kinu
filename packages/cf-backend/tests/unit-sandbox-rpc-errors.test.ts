@@ -37,6 +37,7 @@ import { newMessagePortRpcSession } from 'capnweb';
 import { createSandboxExecutor, isVfsError, sandboxFiles } from '@kinu.run/core';
 import type { KinuSandbox } from '../src/kinu-sandbox';
 import { adaptCloudflareSandbox } from '../src/sandbox-exec-lane';
+import { present } from '@kinu.run/test-utils';
 
 /** The SDK's thrown shape, structurally: `name` set in the constructor and
  *  `errorResponse` as an own enumerable prop (sandbox-CPj2jsbz.js:15-17 and
@@ -134,9 +135,9 @@ function rpcBox(store: Map<string, string>): KinuSandbox {
   };
 
   const listFiles = async (path: string) => ({
-    files: [...store.keys()]
-      .filter((key) => key.startsWith(`${path}/`))
-      .map((key) => ({ name: key.slice(path.length + 1), type: 'file', size: store.get(key)!.length })),
+    files: [...store.entries()]
+      .filter(([key]) => key.startsWith(`${path}/`))
+      .map(([key, content]) => ({ name: key.slice(path.length + 1), type: 'file', size: content.length })),
   });
 
   return Object.create({
@@ -247,8 +248,10 @@ describe('the rpc lane restores the shape core translates', () => {
     const lane = adaptCloudflareSandbox(rpcBox(new Map()), async () => {}, null);
     const executor = createSandboxExecutor(lane);
 
-    await executor.files!.writeFile('/workspace/first-run-mount.mjs', 'export const ok = 1;\n');
-    expect(await executor.files!.readFile('/workspace/first-run-mount.mjs', { encoding: 'utf8' }))
+    const files = present(executor.files, "the sandbox executor's file plane");
+
+    await files.writeFile('/workspace/first-run-mount.mjs', 'export const ok = 1;\n');
+    expect(await files.readFile('/workspace/first-run-mount.mjs', { encoding: 'utf8' }))
       .toBe('export const ok = 1;\n');
   });
 });

@@ -218,7 +218,7 @@ function threadOverTicks(windows: readonly (readonly UIMessage[])[]): RenderedTi
   function Probe(): null {
     const [tick, setTick] = useState(0);
     const at = Math.min(tick, windows.length - 1);
-    const { transcript, thread } = useChatThread(rpc, windows[at]!, true);
+    const { transcript, thread } = useChatThread({ rpc, live: windows[at], seeded: true });
     threads.push(thread);
     transcripts.push(transcript);
 
@@ -249,7 +249,7 @@ describe('the chat pane performs the staged derivation (KINU-072)', () => {
     // A pane that re-derives per RENDER rather than per input change pays for
     // the whole turn again on any unrelated parent update.
     const meter: Meter = { reads: 0 };
-    const window = tokenTicks(meter, 1)[0]!;
+    const window = tokenTicks(meter, 1)[0];
     meter.reads = 0;
     sealTranscript(extendTranscript(EMPTY_TRANSCRIPT_FOLD, window), NO_STEERS);
     const oneFold = meter.reads;

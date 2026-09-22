@@ -33,7 +33,7 @@ import {
   bindActorHandle, createAppDataStore, createDbCodemodeProvider, initWorkspaceSchema,
   RunEventRecorder, WORKSPACE_RUN_ID,
   WorkspaceActorDirectory,
-  type ActorHandle, type AppDataStore, type CodemodeProvider, type SqlExec, type SqlExecutor,
+  type ActorHandle, type AppDataStore, type CodemodeProvider, type SqlExec, type SqlExecutor, type SqlValue,
 } from '@kinu.run/core';
 import { KinuSandboxExecutor } from '../../src/codemode-sandbox';
 
@@ -58,16 +58,9 @@ export interface DbProbeAnswer {
 }
 
 export class DbCapabilityProbeDO extends DurableObject<Cloudflare.Env> {
-  // SAFETY: the same assertion `bindAgentSql` (runtime.ts) makes, at the same
-  // boundary and for the same reason. `SqlExecutor` and the platform's
-  // `sql.exec` are one tagged-template protocol; `SqlExecutor` additionally
-  // admits `boolean`, which this store never binds (every value it writes is
-  // text, integer, real, blob or null), and `ArrayBuffer`, which Durable Object
-  // SQLite binds at runtime and does not type. The Agents SDK is not hosted in
-  // this worker, which is why the bridge is here.
-  private readonly sql = ((
-    query: TemplateStringsArray, ...values: SqlStorageValue[]
-  ) => this.ctx.storage.sql.exec(query.join('?'), ...values).toArray()) as SqlExecutor;
+  private readonly sql: SqlExecutor = <Row,>(
+    query: TemplateStringsArray, ...values: SqlValue[]
+  ): Row[] => this.ctx.storage.sql.exec<Row & Record<string, SqlStorageValue>>(query.join('?'), ...values).toArray();
 
   private readonly execRaw = (ddl: string): void => { this.ctx.storage.sql.exec(ddl); };
 

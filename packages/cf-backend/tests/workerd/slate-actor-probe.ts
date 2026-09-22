@@ -140,7 +140,8 @@ export class SlateActorProbeRoot extends Agent<ProbeEnv> {
     // surface plus fetch. `getAgentByName` constructed it over the
     // `OrchestratorAgent` binding, and the `Pick` rejects a name the class
     // does not declare, so the narrowed view cannot name a method the target
-    // lacks.
+    // lacks. The direct annotation is TS2589 — the SDK's stub mapping over the
+    // production class exceeds TypeScript's instantiation depth.
     const target = raw as Pick<Fetcher, 'fetch'> & Pick<ProductionOrchestrator, 'claimOwner' | 'slateBindingDispatch'>;
     // The positive control: the stub works, the object bootstrapped its
     // directory row, and the read model below has a handle to answer with.
@@ -153,12 +154,8 @@ export class SlateActorProbeRoot extends Agent<ProbeEnv> {
     // rather than to this root (whose chain does not carry the method and
     // would answer vacuously). `false` here is only meaningful beside the hop
     // above answering: a deleted method is also absent.
-    // SAFETY: `Object.create(ProductionOrchestrator.prototype)` returns an
-    // object whose prototype IS that prototype by construction, and the SDK
-    // declares `getCallableMethods` to start at `Object.getPrototypeOf(this)`
-    // and read its own WeakMap, so the call returns the registry answer a live
-    // instance returns. That one member is all this receiver is used for.
-    const browserCallable = (Object.create(ProductionOrchestrator.prototype) as Agent<never>).getCallableMethods().has('slateBindingDispatch');
+    const bare: Agent<never> = Object.create(ProductionOrchestrator.prototype);
+    const browserCallable = bare.getCallableMethods().has('slateBindingDispatch');
 
     return { answer, browserCallable };
   }

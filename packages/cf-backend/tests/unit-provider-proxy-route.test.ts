@@ -14,6 +14,7 @@ import { handleCliRequest } from '../src/cli/routes';
 import { asFetchFunction } from '@kinu.run/core';
 import type { UserCaller } from '@kinu.run/core';
 import * as v from 'valibot';
+import { requestBodyText, requestUrl } from './helpers/fetch-input';
 
 const USER_ID = '0123456789abcdef0123456789abcdef';
 
@@ -120,14 +121,14 @@ interface Upstream { url: string; method: string; headers: Headers; body: string
 function captureUpstream(respond: () => Response): Upstream[] {
   const captured: Upstream[] = [];
   globalThis.fetch = asFetchFunction(async (input: RequestInfo | URL, init?: RequestInit) => {
-    const url = String(input);
+    const url = requestUrl(input);
 
     if (url.startsWith('https://models.dev/')) return Response.json(CATALOG);
     captured.push({
       url,
       method: init?.method ?? 'GET',
       headers: new Headers(init?.headers),
-      body: init?.body instanceof ArrayBuffer ? new TextDecoder().decode(init.body) : String(init?.body ?? ''),
+      body: await requestBodyText(input, init),
     });
 
     return respond();

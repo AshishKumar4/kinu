@@ -130,7 +130,7 @@ function recordedTerminal(): RecordedTerminal {
     calls,
     terminal: {
       attachTerminal: async (ws) => { calls.push(`attach:${socketId(ws)}`); },
-      terminalFrame: async (ws, frame) => { calls.push(`frame:${socketId(ws)}:${String(frame)}`); },
+      terminalFrame: async (ws, frame) => { calls.push(`frame:${socketId(ws)}:${v.parse(v.string(), frame)}`); },
       terminalClose: (ws) => { calls.push(`close:${socketId(ws)}`); },
     },
   };

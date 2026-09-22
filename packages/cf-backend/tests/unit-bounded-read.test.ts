@@ -36,7 +36,7 @@ function streamed(chunks: readonly Uint8Array[], headers: Record<string, string>
         return;
       }
 
-      controller.enqueue(chunks[pulled]!);
+      controller.enqueue(chunks[pulled]);
       pulled += 1;
     },
     cancel() { pulled = chunks.length; },

@@ -42,7 +42,7 @@ describe('reachability of the root policy read', () => {
   test('every root method the facet policy calls is on the RPC surface', () => {
     const source = readFileSync(`${root}src/runtime.ts`, 'utf8');
     const block = source.slice(source.indexOf('async function fetchRootApprovalPolicy'));
-    const called = [...block.slice(0, 900).matchAll(/\broot\.(\w+)\(/g)].map(([, name]) => name!);
+    const called = [...block.slice(0, 900).matchAll(/\broot\.(\w+)\(/g)].map(([, name]) => name);
     expect(called.length).toBeGreaterThan(0);
     expect([...new Set(called)].filter((name) => !ORCHESTRATOR_RPC_SURFACE.includes(name))).toEqual([]);
   });
@@ -231,7 +231,7 @@ describe('a facet holds the root set, or a subset of it', () => {
 
   test('a facet can never record a grant, so it cannot widen itself', () => {
     const policy = createInheritedApprovalPolicy(source('strict', null).deps);
-    expect(policy.remember).toBeUndefined();
+    expect(policy).not.toHaveProperty('remember');
   });
 
   test('an unreachable root narrows the facet rather than unleashing it', async () => {

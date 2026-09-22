@@ -45,6 +45,7 @@ import {
 import {
   adminDenialMessage, adminDenialStatus, authorizeAdmin, isControlPlaneOperator,
 } from '../src/control-plane/admin-caller';
+import { requestUrl } from './helpers/fetch-input';
 
 /** The header Cloudflare Access sets, spelled independently of the production
  *  constant on purpose. A shared import would let a rename pass both sides; an
@@ -119,11 +120,8 @@ beforeAll(async () => {
   // answering, so a test that accidentally depends on the network fails loudly
   // instead of reaching Cloudflare from a unit suite.
   //
-  // SAFETY: the cast is to the platform's own `fetch` type and nothing wider —
-  // the real signature carries overloads and a `preconnect` member this stub
-  // has no use for, and jose calls it with exactly `(url, init)`.
-  const stub = ((input: RequestInfo | URL): Promise<Response> => {
-    const url = input instanceof URL ? input.href : input instanceof Request ? input.url : input;
+  const answerCerts = (input: RequestInfo | URL): Promise<Response> => {
+    const url = requestUrl(input);
     const match = Object.entries(sets).find(([certsUrl]) => certsUrl === url);
 
     if (match === undefined) throw new Error(`unexpected fetch in a unit test: ${url}`);
@@ -132,9 +130,13 @@ beforeAll(async () => {
     return Promise.resolve(new Response(JSON.stringify({ keys }), {
       status: 200, headers: { 'content-type': 'application/json' },
     }));
-  }) as typeof globalThis.fetch;
+  };
 
-  globalThis.fetch = stub;
+  // `preconnect` is bun's own extension to the global; nothing under test opens
+  // a connection, so it says so rather than reaching the network.
+  globalThis.fetch = Object.assign(answerCerts, {
+    preconnect: (): void => { throw new Error('unexpected preconnect in a unit test'); },
+  });
 });
 
 afterAll(() => { globalThis.fetch = realFetch; });
@@ -154,8 +156,8 @@ interface Claims {
 
 async function token(key: SigningKey, claims: Claims = {}): Promise<string> {
   const now = Math.floor(Date.now() / 1000);
-  const identity = { type: 'app', country: 'US' };
-  const payload = claims.email === null ? identity : { ...identity, email: claims.email ?? OPERATOR };
+  const appClaims = { type: 'app', country: 'US' };
+  const payload = claims.email === null ? appClaims : { ...appClaims, email: claims.email ?? OPERATOR };
 
   let jwt = new SignJWT(payload)
     .setProtectedHeader({ alg: 'RS256', kid: key.kid, typ: 'JWT' })

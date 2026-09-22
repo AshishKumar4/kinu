@@ -627,8 +627,8 @@ export function mockAgentsSdk(): void {
            WHERE class = ? ORDER BY created_at, name`,
           cls.name,
         ).toArray().map((row) => ({
-          className: String(row.class),
-          name: String(row.name),
+          className: v.parse(v.string(), row.class),
+          name: v.parse(v.string(), row.name),
           createdAt: Number(row.created_at),
         }));
       }

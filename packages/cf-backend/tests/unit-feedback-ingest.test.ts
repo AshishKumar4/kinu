@@ -24,6 +24,7 @@ import {
   FEEDBACK_MAX_USER_AGENT_CHARS,
   type FeedbackRecord,
 } from '@kinu.run/core';
+import { present } from '@kinu.run/test-utils';
 
 const ME: AuthIdentity = { userId: 'user-7', email: 'me@example.com', sub: 'sub-7' };
 
@@ -47,7 +48,7 @@ function be32(value: number): number[] {
 }
 
 function chunk(type: string, data: readonly number[]): number[] {
-  const typed = [...type].map((ch) => ch.charCodeAt(0));
+  const typed = [...new TextEncoder().encode(type)];
 
   return [...be32(data.length), ...typed, ...data, ...be32(crc32(new Uint8Array([...typed, ...data])))];
 }
@@ -228,7 +229,7 @@ interface BodySource {
 }
 
 /**
- * A body that ARRIVES in `chunk`-sized pieces, with the producer's own pulls and
+ * A body that ARRIVES in `sliceSize`-sized pieces, with the producer's own pulls and
  * cancellation observable. A request built over this declares no length, which
  * is the shape a chunked or HTTP/2 upload actually has.
  *
@@ -236,7 +237,7 @@ interface BodySource {
  * strategy pre-fills one chunk the moment the stream is constructed, which reads
  * as the handler having touched a body it never opened.
  */
-function chunked(bytes: Uint8Array, chunk: number) {
+function chunked(bytes: Uint8Array, sliceSize: number) {
   const source: BodySource = { pulls: 0, delivered: 0, reachedEnd: false, cancelled: false };
   let at = 0;
 
@@ -251,7 +252,7 @@ function chunked(bytes: Uint8Array, chunk: number) {
         return;
       }
 
-      const slice = bytes.slice(at, Math.min(at + chunk, bytes.length));
+      const slice = bytes.slice(at, Math.min(at + sliceSize, bytes.length));
       at += slice.length;
       source.delivered += slice.length;
       controller.enqueue(slice);
@@ -334,7 +335,7 @@ describe('what the endpoint refuses', () => {
     const huge = pngPart(new Uint8Array(FEEDBACK_MAX_SCREENSHOT_BYTES + 1024));
     const response = await routeFeedback(submit({ note: 'see image', screenshot: huge }), ME, rec.deps);
     expect(response?.status).toBe(413);
-    expect((await replyOf(response!)).error).toContain('note');
+    expect((await replyOf(present(response, 'the feedback response'))).error).toContain('note');
     expect(rec.objects.size).toBe(0);
     expect(rec.rows).toEqual([]);
     expect(rec.marks[0]).toMatchObject({ rejectReason: 'too_large', screenshotBytes: FEEDBACK_MAX_SCREENSHOT_BYTES + 1024 });
@@ -415,7 +416,7 @@ describe('what the endpoint refuses', () => {
       submit({ note: 'x', screenshot: pngPart(realPng()) }), ME, rec.deps);
 
     expect(response?.status).toBe(503);
-    expect((await replyOf(response!)).error).toContain('note');
+    expect((await replyOf(present(response, 'the feedback response'))).error).toContain('note');
     expect(rec.marks[0]?.rejectReason).toBe('storage_unavailable');
   });
 });
@@ -450,9 +451,9 @@ describe('how much of a body it will read', () => {
 
   test('a chunked oversize body is abandoned mid-upload: cancelled, never read to EOF, nothing written', async () => {
     const rec = recorder();
-    const chunk = 64 * 1024;
-    const { contentType, bytes } = rawMultipart(FEEDBACK_MAX_REQUEST_BYTES + chunk * 8);
-    const { body, source } = chunked(bytes, chunk);
+    const sliceSize = 64 * 1024;
+    const { contentType, bytes } = rawMultipart(FEEDBACK_MAX_REQUEST_BYTES + sliceSize * 8);
+    const { body, source } = chunked(bytes, sliceSize);
 
     const response = await routeFeedback(
       new Request(URL_, { method: 'POST', headers: { 'content-type': contentType }, body }), ME, rec.deps);
@@ -465,7 +466,7 @@ describe('how much of a body it will read', () => {
     expect(source.reachedEnd).toBe(false);
     expect(source.delivered).toBeLessThan(bytes.length);
     // At most the chunk carrying the first excess byte, and no more.
-    expect(source.delivered).toBeLessThanOrEqual(FEEDBACK_MAX_REQUEST_BYTES + chunk);
+    expect(source.delivered).toBeLessThanOrEqual(FEEDBACK_MAX_REQUEST_BYTES + sliceSize);
     // And nothing downstream ran: no object, no row, exactly one marker.
     expect(rec.objects.size).toBe(0);
     expect(rec.rows).toEqual([]);
@@ -541,7 +542,7 @@ describe('what the endpoint stores', () => {
     }), ME, rec.deps);
 
     expect(response?.status).toBe(201);
-    expect(await replyOf(response!)).toEqual({ id: 'id-1' });
+    expect(await replyOf(present(response, 'the feedback response'))).toEqual({ id: 'id-1' });
     expect(rec.objects.size).toBe(0);
     expect(rec.rows).toEqual([{
       id: 'id-1',
@@ -578,17 +579,17 @@ describe('what the endpoint stores', () => {
 
   test('metadata chunks are gone from the bytes that reach storage', async () => {
     const rec = recorder();
-    const secret = [...'lat 51.5 lon -0.1'].map((ch) => ch.charCodeAt(0));
+    const secret = [...new TextEncoder().encode('lat 51.5 lon -0.1')];
     const withExif = realPng([chunk('eXIf', secret), chunk('tEXt', secret)]);
     // Present going in, so the assertion below is about the strip and not about
     // a fixture that never carried anything.
     expect(Buffer.from(withExif).includes(Buffer.from(secret))).toBe(true);
 
     await routeFeedback(submit({ note: 'x', screenshot: pngPart(withExif) }), ME, rec.deps);
-    const stored = rec.objects.get('feedback/user-7/id-1.png');
-    expect(stored).toBeDefined();
-    expect(Buffer.from(stored!).includes(Buffer.from(secret))).toBe(false);
-    expect(stored!.length).toBeLessThan(withExif.length);
+    const stored = present(rec.objects.get('feedback/user-7/id-1.png'), 'the stored screenshot object');
+
+    expect(Buffer.from(stored).includes(Buffer.from(secret))).toBe(false);
+    expect(stored.length).toBeLessThan(withExif.length);
   });
 
   test('over-long text is clamped at the edge, not rejected', async () => {
@@ -660,7 +661,7 @@ describe('when the object store refuses the write', () => {
     // NOT a throw. Uncaught, this was a platform 500 with no marker and no row —
     // a lost report invisible to the rate that exists to count lost reports.
     expect(response?.status).toBe(503);
-    expect((await replyOf(response!)).error).toContain('note');
+    expect((await replyOf(present(response, 'the feedback response'))).error).toContain('note');
     expect(rec.rows).toEqual([]);
     expect(rec.objects.size).toBe(0);
     // Nothing to orphan: the object was never written, so nothing is deleted.
@@ -690,7 +691,7 @@ describe('the analytics marker', () => {
       screenshot: pngPart(realPng()),
     }), ME, rec.deps);
 
-    const mark = rec.marks.at(-1)!;
+    const mark = present(rec.marks.at(-1), 'the last analytics mark');
     expect(mark).toMatchObject({
       outcome: 'accepted',
       rejectReason: '',
@@ -715,7 +716,7 @@ describe('the analytics marker', () => {
     for (const route of ['/', `/workspace/${slug}`, `/mcts/${slug}`, `/settings/${slug}`, '/user/settings', `/triggers/${slug}`]) {
       const rec = recorder();
       await routeFeedback(submit({ note: 'x', route }), ME, rec.deps);
-      seen.push(rec.marks.at(-1)!.routeFamily);
+      seen.push(present(rec.marks.at(-1), 'the last analytics mark').routeFamily);
     }
 
     // Families, never slugs: `/settings/:agent` and `/user/settings` are both
@@ -826,7 +827,7 @@ describe('the workspace a report claims to be about', () => {
     }), ME, rec.deps);
 
     expect(response?.status).toBe(403);
-    expect((await replyOf(response!)).error).toMatch(/not one of yours/u);
+    expect((await replyOf(present(response, 'the feedback response'))).error).toMatch(/not one of yours/u);
     expect(rec.rows).toEqual([]);
     // The gate runs BEFORE the bytes are stored, so a refused report never pays
     // for an object that would then have to be cleaned up.
@@ -867,7 +868,7 @@ describe('the workspace a report claims to be about', () => {
     // 503 and not 403: the reporter did nothing wrong, and the report is worth
     // sending again in a moment.
     expect(response?.status).toBe(503);
-    expect((await replyOf(response!)).error).toMatch(/could not be confirmed/u);
+    expect((await replyOf(present(response, 'the feedback response'))).error).toMatch(/could not be confirmed/u);
     expect(rec.rows).toEqual([]);
     expect(rec.objects.size).toBe(0);
     expect(rec.marks[0]).toMatchObject({ outcome: 'rejected', rejectReason: 'workspace_unverified' });

@@ -65,7 +65,7 @@ function block(selector: string) {
   }
 
   return Object.fromEntries(
-    [...INDEX_CSS.slice(open, i).matchAll(/(--[a-z0-9-]+)\s*:\s*([^;]+);/g)].map((m) => [m[1]!, m[2]!.trim()]),
+    [...INDEX_CSS.slice(open, i).matchAll(/(--[a-z0-9-]+)\s*:\s*([^;]+);/g)].map((m) => [m[1], m[2].trim()]),
   );
 }
 
@@ -196,7 +196,7 @@ describe('public shell tokens are the app palette', () => {
     // other does not.
     const app = block(':root')['--font-display'];
     expect(app).toBeString();
-    expect(publicPage({ title: 't', body: '' })).toContain(`--font-display:${app!.replaceAll(', ', ',')}`);
+    expect(publicPage({ title: 't', body: '' })).toContain(`--font-display:${app.replaceAll(', ', ',')}`);
   });
 
   test('both faces lead with the shipped webfonts in both stylesheets', () => {

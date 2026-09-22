@@ -1,6 +1,7 @@
 // The dust the hero settles for where the copy stacks: what the backdrop
 // claims — deterministic, slow, faint — must hold before any canvas draws it.
 import { describe, expect, test } from 'bun:test';
+import * as v from 'valibot';
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 
@@ -62,7 +63,7 @@ function recordingSurface(): DustSurface & Recording {
     arc: () => undefined,
     fill: () => {
       surface.fills += 1;
-      styles.push(String(surface.fillStyle));
+      styles.push(v.parse(v.string(), surface.fillStyle));
       ops.push('fill');
     },
   };

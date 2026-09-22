@@ -22,7 +22,7 @@ import {
   WORKSPACE_RUN_ID,
   type RunEvent,
 } from '@kinu.run/core';
-import { sqlOver } from '@kinu.run/test-utils';
+import { sqlOver, present } from '@kinu.run/test-utils';
 import { openWorkspaceMainActor } from '@kinu.run/core';
 import { declareShadowCandidate, orchestratorHarness } from './helpers/actor-harness';
 import type { AgentProviderRegistry } from '../src/providers/agent-registry';
@@ -202,18 +202,18 @@ describe('runOutcomeEnsemble — the judges write their operation lifecycle', ()
 
     for (const [operationId, rows] of byId) {
       expect(rows.map((r) => r.phase).sort()).toEqual(['end', 'start']);
-      const end = rows.find((r) => r.phase === 'end')!;
+      const end = present(rows.find((r) => r.phase === 'end'), `the end row of operation ${operationId}`);
       expect(end.operationId).toBe(operationId);
       expect(end.outcome).toBe('ok');
       expect(end.usage).toEqual({ input: 41, output: 7 });
       expect(end.source).toBe('judge');
       expect(end.op).toBe('complete');
       // Both rows of one operation name the same judge spec.
-      expect(new Set(rows.map((r) => r.spec))).toEqual(new Set([rows[0]!.spec]));
+      expect(new Set(rows.map((r) => r.spec))).toEqual(new Set([rows[0].spec]));
     }
 
     // Both families ran: six of the twelve operation rows name each judge.
-    expect(operations.map((r) => r.spec).sort()).toEqual([
+    expect(operations.map((r) => r.spec).sort((a, b) => String(a).localeCompare(String(b)))).toEqual([
       'fake-a/m1', 'fake-a/m1', 'fake-a/m1', 'fake-a/m1', 'fake-a/m1', 'fake-a/m1',
       'fake-b/m1', 'fake-b/m1', 'fake-b/m1', 'fake-b/m1', 'fake-b/m1', 'fake-b/m1',
     ]);
@@ -274,10 +274,10 @@ describe('suggestWorkspaceTitle — the fast-model naming pass', () => {
     const ensembleSql = sqlOver(harness.db);
     const operations = operationsOf(new RunEventRecorder(ensembleSql, openWorkspaceMainActor(ensembleSql)));
     expect(operations.map((e) => e.phase)).toEqual(['start', 'end']);
-    expect(operations[0]!.operationId).toBe(operations[1]!.operationId);
+    expect(operations[0].operationId).toBe(operations[1].operationId);
     expect(operations.every((e) => e.source === 'fast' && e.op === 'complete')).toBe(true);
-    expect(operations[1]!.outcome).toBe('ok');
-    expect(operations[1]!.usage).toEqual({ input: 41, output: 7 });
+    expect(operations[1].outcome).toBe('ok');
+    expect(operations[1].usage).toEqual({ input: 41, output: 7 });
     // The spec is KNOWN: the route resolved it from the profile, so it is the
     // same string the model was built from. A seam that resolves a model behind
     // a cache cannot say which one, which leaves the one row that prices the

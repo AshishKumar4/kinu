@@ -23,7 +23,7 @@ import { PortRegistry } from '@nimbus-sh/core/runtime/port-registry.js';
 import { probeFacetManager } from './facet-manager';
 import {
   bindActorHandle, initWorkspaceSchema, MissionGovernor,
-  type JsonValue, type ShareViewerClaim, type SlateCallResult, type SqlExec, type SqlExecutor,
+  type JsonValue, type ShareViewerClaim, type SlateCallResult, type SqlExec, type SqlExecutor, type SqlValue,
 } from '@kinu.run/core';
 import { initSlateLiveShareTables } from '@kinu.run/core/slates';
 import { SlateHost } from '../../src/slates/host';
@@ -83,15 +83,9 @@ export class SlateShareProbeDO extends DurableObject<Cloudflare.Env> {
     // bridge is the one `bindAgentSql` (src/runtime.ts) makes, hosted where the
     // Agents SDK is not.
 
-    // SAFETY: the same assertion `bindAgentSql` (runtime.ts) makes, at the same
-    // boundary and for the same reason. `SqlExecutor` and the platform's
-    // `sql.exec` are one tagged-template protocol; `SqlExecutor` additionally
-    // admits `boolean`, which the schema inits never bind, and `ArrayBuffer`,
-    // which Durable Object SQLite binds at runtime and does not type. The
-    // Agents SDK is not hosted in this worker, which is why the bridge is here.
-    const sql = ((
-      query: TemplateStringsArray, ...values: SqlStorageValue[]
-    ) => ctx.storage.sql.exec(query.join('?'), ...values).toArray()) as SqlExecutor;
+    const sql: SqlExecutor = <Row,>(
+      query: TemplateStringsArray, ...values: SqlValue[]
+    ): Row[] => ctx.storage.sql.exec<Row & Record<string, SqlStorageValue>>(query.join('?'), ...values).toArray();
 
     const exec: SqlExec = {
       exec: (query, ...bindings) => ctx.storage.sql.exec(query, ...bindings),
@@ -201,11 +195,7 @@ export class SlateShareProbeDO extends DurableObject<Cloudflare.Env> {
 
     const probe = v.is(v.string(), raw) ? raw : JSON.stringify(raw ?? null);
 
-    // SAFETY: `RpcStub` always carries a `Symbol.dispose` hook for its session
-    // (capnweb's constructor sets it) — the interface merely does not declare it.
-    const disposable = stub as { [Symbol.dispose](): void };
-
-    disposable[Symbol.dispose]();
+    stub[Symbol.dispose]();
 
     return { probe, mutateError };
   }

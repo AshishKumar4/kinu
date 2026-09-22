@@ -337,9 +337,9 @@ describe('durable device request ownership', () => {
     const harness = await deviceHarness();
 
     const seam = {
-      transferDeviceRequestToBackgroundJob: harness.userDO.transferDeviceRequestToBackgroundJob,
-      cancelDeviceRequestsForBackgroundJob: harness.userDO.cancelDeviceRequestsForBackgroundJob,
-      acknowledgeDeviceRequest: harness.userDO.acknowledgeDeviceRequest,
+      transferDeviceRequestToBackgroundJob: harness.userDO.transferDeviceRequestToBackgroundJob.bind(harness.userDO),
+      cancelDeviceRequestsForBackgroundJob: harness.userDO.cancelDeviceRequestsForBackgroundJob.bind(harness.userDO),
+      acknowledgeDeviceRequest: harness.userDO.acknowledgeDeviceRequest.bind(harness.userDO),
     };
 
     for (const [name, member] of Object.entries(seam)) {
@@ -507,7 +507,7 @@ describe('durable device request ownership', () => {
 
     const harness = await deviceHarness('ashish@studio', (frame) => {
       if (frame.method === DEVICE_CANCEL_METHOD) {
-        return { requestId: String(frame.params[0]), cancelled: 'unknown' };
+        return { requestId: v.parse(v.string(), frame.params[0]), cancelled: 'unknown' };
       }
 
       if (frame.method === DEVICE_EXEC_ACK_METHOD && !ackWorks) {
@@ -1091,9 +1091,7 @@ describe('asking for a machine when there is none', () => {
     })).rejects.toThrow(NO_DEVICE_CONNECTED);
     expect(harness.unavailableNotices.map((n) => n.workspace)).toEqual([WORKSPACE]);
 
-    // SAFETY: the table this commit adds carries exactly (agent_name); the
-    // SELECT names that one column, so every row has it.
-    const pending = harness.db.query('SELECT agent_name FROM device_notice_pending ORDER BY agent_name ASC').all() as Array<{ agent_name: string }>;
+    const pending = harness.db.query<{ agent_name: string }, []>('SELECT agent_name FROM device_notice_pending ORDER BY agent_name ASC').all();
     expect(pending.map((row) => row.agent_name)).toEqual([WORKSPACE]);
     const { token: deviceToken } = await harness.userDO.registerDevice(owner, 'studio');
 

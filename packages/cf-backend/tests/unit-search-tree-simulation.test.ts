@@ -50,7 +50,7 @@ describe('the search tree grows deterministically', () => {
     const frame = run(417, 12).frame();
     const layers = new Set(strokesOf(frame).map((row) => row[11]));
 
-    expect([...layers].sort()).toEqual([0, 1, 2]);
+    expect([...layers].sort((a, b) => a - b)).toEqual([0, 1, 2]);
 
     for (const row of strokesOf(frame)) {
       const [, y0, , , , y1, t, width, glow, , alpha] = row;

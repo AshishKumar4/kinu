@@ -37,7 +37,7 @@ function importChain(entry: string, seen = new Set<string>()): Set<string> {
   seen.add(entry);
 
   for (const [, rel] of readFileSync(entry, 'utf8').matchAll(/@import\s+"(\.[^"]+)"/g)) {
-    importChain(resolve(dirname(entry), rel!), seen);
+    importChain(resolve(dirname(entry), rel), seen);
   }
 
   return seen;
@@ -47,7 +47,7 @@ function importChain(entry: string, seen = new Set<string>()): Set<string> {
 function declaredProperties(path: string, prefix: RegExp): Set<string> {
   const text = readFileSync(path, 'utf8');
 
-  return new Set([...text.matchAll(/(--[a-z0-9-]+)\s*:/g)].map((m) => m[1]!).filter((p) => prefix.test(p)));
+  return new Set([...text.matchAll(/(--[a-z0-9-]+)\s*:/g)].map((m) => m[1]).filter((p) => prefix.test(p)));
 }
 
 /** Colour-bearing families only. Kumo's `--text-*` size scale and its raw
@@ -92,8 +92,8 @@ describe('Kumo token coverage', () => {
     const text = readFileSync(INDEX_CSS, 'utf8');
 
     const literal = [...text.matchAll(/(--(?:color|text-color)-kumo-[a-z0-9-]+)\s*:\s*([^;]+);/g)]
-      .filter(([, , value]) => !value!.includes('var(--c-') && !/^\s*(transparent|inherit|currentColor)\s*$/.test(value!))
-      .map(([, prop, value]) => `${prop}: ${value!.trim()}`);
+      .filter(([, , value]) => !value.includes('var(--c-') && !/^\s*(transparent|inherit|currentColor)\s*$/.test(value))
+      .map(([, prop, value]) => `${prop}: ${value.trim()}`);
 
     // Even the mode-specific drop shadow goes through the semantic role. A
     // light-mode override then changes the role, never Kumo's mapping.

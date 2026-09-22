@@ -21,6 +21,7 @@ import { createWorkersAIProvider } from '@kinu.run/core';
 import { createMyGatewayProvider } from '@kinu.run/core';
 import { createAIGatewayProvider, resolvePlatformGateway } from '@kinu.run/core';
 import { platformGatewayEnv, stubAiBinding, TEST_GATEWAY_URL } from './helpers/platform-gateway';
+import { requestUrl } from './helpers/fetch-input';
 
 const providerDeps = (env: Parameters<typeof resolvePlatformGateway>[0]) => ({
   env,
@@ -89,7 +90,7 @@ describe('gateway binding transport', () => {
 
     expect(result.text).toBe('BINDING');
     expect(stub.runs).toHaveLength(1);
-    const run = stub.runs[0]!;
+    const run = stub.runs[0];
     expect(run.gateway).toBe('test-gateway');
     expect(run.provider).toBe('workers-ai');
     expect(run.endpoint).toBe('v1/chat/completions');
@@ -117,7 +118,7 @@ describe('gateway binding transport', () => {
 
     expect(text).toBe('BINDING');
     expect(stub.runs).toHaveLength(1);
-    expect(stub.runs[0]!.query).toMatchObject({ stream: true });
+    expect(stub.runs[0].query).toMatchObject({ stream: true });
   });
 
   test('auth headers are never forwarded — a forwarded one would answer 401', async () => {
@@ -135,7 +136,7 @@ describe('gateway binding transport', () => {
       body: JSON.stringify({ model: 'm', messages: [] }),
     });
 
-    const headers = stub.runs[0]!.headers;
+    const headers = stub.runs[0].headers;
     expect(headers).not.toHaveProperty('authorization');
     expect(headers).not.toHaveProperty('cf-aig-authorization');
     // Gateway control headers that are NOT credentials must still get through.
@@ -155,9 +156,9 @@ describe('gateway binding transport', () => {
       body: JSON.stringify({ model: 'm', messages: [{ role: 'user', content: 'hi' }] }),
     }));
 
-    expect(stub.runs[0]!.endpoint).toBe('v1/chat/completions');
-    expect(stub.runs[0]!.query).toMatchObject({ model: 'm' });
-    expect(stub.runs[0]!.headers).not.toHaveProperty('authorization');
+    expect(stub.runs[0].endpoint).toBe('v1/chat/completions');
+    expect(stub.runs[0].query).toMatchObject({ model: 'm' });
+    expect(stub.runs[0].headers).not.toHaveProperty('authorization');
   });
 
   test('a query string stays on the endpoint, as the wire would have carried it', async () => {
@@ -169,7 +170,7 @@ describe('gateway binding transport', () => {
       body: JSON.stringify({ model: 'm' }),
     });
 
-    expect(stub.runs[0]!.endpoint).toBe('v1/chat/completions?beta=1');
+    expect(stub.runs[0].endpoint).toBe('v1/chat/completions?beta=1');
   });
 
   test('an abort signal reaches the binding so a cancelled turn stops upstream work', async () => {
@@ -183,7 +184,7 @@ describe('gateway binding transport', () => {
       signal: controller.signal,
     });
 
-    expect(stub.runs[0]!.signal).toBe(controller.signal);
+    expect(stub.runs[0].signal).toBe(controller.signal);
   });
 
   test('a provider error comes back as the response, not as a thrown transport fault', async () => {
@@ -273,7 +274,7 @@ describe('platform gateway availability', () => {
 
     expect(result.text).toBe('BINDING');
     expect(stub.runs).toHaveLength(1);
-    expect(stub.runs[0]!.headers).not.toHaveProperty('authorization');
+    expect(stub.runs[0].headers).not.toHaveProperty('authorization');
   });
 });
 
@@ -313,7 +314,7 @@ describe('user-billed providers stay off the platform binding', () => {
       getAuth: async () => userAuth,
       hasCredential: async () => true,
       fetch: asFetchFunction(async (input: RequestInfo | URL, init?: RequestInit) => {
-        seen.push({ url: String(input), authorization: new Headers(init?.headers).get('authorization') });
+        seen.push({ url: requestUrl(input), authorization: new Headers(init?.headers).get('authorization') });
 
         return Response.json(completion);
       }),

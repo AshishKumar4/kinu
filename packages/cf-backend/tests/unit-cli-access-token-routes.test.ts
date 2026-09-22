@@ -216,10 +216,11 @@ function setupEnv(opts: { sessionMintedAt?: number } = {}) {
 }
 
 function req(token: string, path: string, init: RequestInit = {}) {
-  return new Request(`https://kinu.example.com${path}`, {
-    ...init,
-    headers: { authorization: `Bearer ${token}`, ...init.headers },
-  });
+  const headers = new Headers(init.headers);
+
+  headers.set('authorization', `Bearer ${token}`);
+
+  return new Request(`https://kinu.example.com${path}`, { ...init, headers });
 }
 
 const jsonInit = (body: JsonValue, method = 'POST'): RequestInit => ({

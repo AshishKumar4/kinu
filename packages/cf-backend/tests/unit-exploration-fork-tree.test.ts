@@ -23,6 +23,7 @@ import { describe, test, expect } from 'bun:test';
 import type { HeadRunView } from '@kinu.run/core';
 import { explorationForkTree, type MctsRow } from '@kinu.run/core';
 import type { ForkNode, ForkNodeLifecycle } from '@kinu.run/core';
+import { present } from '@kinu.run/test-utils';
 
 const ROOT = 'root-1';
 
@@ -68,24 +69,23 @@ function vertices(node: ForkNode | null): ForkNode[] {
 
 describe('explorationForkTree — a running swarm', () => {
   test('five running nodes and a root-only tree draw six vertices', () => {
-    const tree = explorationForkTree({
+    const tree = present(explorationForkTree({
       tree: [rootRow()],
       head: journal([
         head('n1', 'running'), head('n2', 'running'), head('n3', 'running'),
         head('n4', 'running'), head('n5', 'running'),
       ]),
-    });
+    }), 'the folded fork tree');
 
-    expect(tree).not.toBeNull();
-    expect(tree!.id).toBe(ROOT);
+    expect(tree.id).toBe(ROOT);
     expect(vertices(tree)).toHaveLength(6);
-    expect(tree!.children.map((child) => child.id).sort())
+    expect(tree.children.map((child) => child.id).sort())
       .toEqual(['n1', 'n2', 'n3', 'n4', 'n5']);
   });
 
   test('a running node carries no score and no rollout count', () => {
-    const tree = explorationForkTree({ tree: [rootRow()], head: journal([head('n1', 'running')]) });
-    const node = tree!.children[0]!;
+    const tree = present(explorationForkTree({ tree: [rootRow()], head: journal([head('n1', 'running')]) }), 'the folded fork tree');
+    const node = tree.children[0];
     expect(node.status).toBe('running');
     // The lie the incident's "0%" root told. A node that has reported nothing
     // has earned no number, and null is how this view spells that.
@@ -97,45 +97,45 @@ describe('explorationForkTree — a running swarm', () => {
     // A node that reported has BOTH halves under one id. The tree row is the
     // engine's own settled statement about it, so it decides — and the node
     // appears once, not twice.
-    const tree = explorationForkTree({
+    const tree = present(explorationForkTree({
       tree: [rootRow(), settledRow('n1', 0.71)],
       head: journal([head('n1', 'completed'), head('n2', 'running')]),
-    });
+    }), 'the folded fork tree');
 
     expect(vertices(tree)).toHaveLength(3);
-    const settled = tree!.children.find((child) => child.id === 'n1')!;
+    const settled = present(tree.children.find((child) => child.id === 'n1'), 'the n1 vertex');
     expect(settled.value).toBe(0.71);
     expect(settled.visits).toBe(1);
     expect(settled.status).toBe('open');
-    expect(tree!.children.find((child) => child.id === 'n2')!.value).toBeNull();
+    expect(present(tree.children.find((child) => child.id === 'n2'), 'the n2 vertex').value).toBeNull();
   });
 
   test('a journalled node hangs under its own parent, not under the root', () => {
     // A depth-2 node's parent is a node, and flattening it to the root is the
     // shape a deeper search would be misdrawn in.
-    const tree = explorationForkTree({
+    const tree = present(explorationForkTree({
       tree: [rootRow(), settledRow('n1', 0.4)],
       head: journal([
         head('n1', 'completed'),
         head('n1a', 'running', { parentId: 'n1', depth: 2 }),
       ]),
-    });
+    }), 'the folded fork tree');
 
-    const parent = tree!.children.find((child) => child.id === 'n1')!;
+    const parent = present(tree.children.find((child) => child.id === 'n1'), 'the n1 vertex');
     expect(parent.children.map((child) => child.id)).toEqual(['n1a']);
-    expect(parent.children[0]!.depth).toBe(2);
+    expect(parent.children[0].depth).toBe(2);
   });
 
   test('a node whose parent is not in either half still reaches the canvas', () => {
     // Dropping it would be the same silent loss at a smaller scale, so it
     // attaches to the root rather than vanishing.
-    const tree = explorationForkTree({
+    const tree = present(explorationForkTree({
       tree: [rootRow()],
       head: journal([head('orphan', 'running', { parentId: 'gone', depth: 3 })]),
-    });
+    }), 'the folded fork tree');
 
     expect(vertices(tree)).toHaveLength(2);
-    expect(tree!.children[0]!.id).toBe('orphan');
+    expect(tree.children[0].id).toBe('orphan');
   });
 
   test('a run with journalled nodes and no tree at all still folds', () => {
@@ -199,28 +199,28 @@ function productionCensus(): HeadRunView {
 
 describe('explorationForkTree — the run as production held it', () => {
   test('fifteen journalled nodes and a root-only tree draw sixteen vertices', () => {
-    const tree = explorationForkTree({ tree: [rootRow()], head: productionCensus() });
+    const tree = present(explorationForkTree({ tree: [rootRow()], head: productionCensus() }), 'the folded fork tree');
     expect(productionCensus().heads).toHaveLength(15);
     expect(vertices(tree)).toHaveLength(16);
     // Not one of them was drawn. The run header counted fifteen from the same
     // response, which is how the two numbers came to contradict each other on one
     // screen.
-    expect(tree!.children).toHaveLength(15);
+    expect(tree.children).toHaveLength(15);
   });
 
   test('the two finished candidates reach the canvas with their answers', () => {
-    const tree = explorationForkTree({ tree: [rootRow()], head: productionCensus() });
-    const finished = tree!.children.filter((child) => child.status === 'open');
+    const tree = present(explorationForkTree({ tree: [rootRow()], head: productionCensus() }), 'the folded fork tree');
+    const finished = tree.children.filter((child) => child.status === 'open');
     expect(finished.map((child) => child.id).sort())
       .toEqual(['cbf7hl3o5n0r52j716zeh', 'q5ghadns41o1shnpl3vfh']);
-    expect(finished[0]!.observation).toContain('mcp.ts:229');
+    expect(finished[0].observation).toContain('mcp.ts:229');
   });
 
   test('the dead rows are drawn dead — six aborted and two errored, none of them live', () => {
-    const tree = explorationForkTree({ tree: [rootRow()], head: productionCensus() });
+    const tree = present(explorationForkTree({ tree: [rootRow()], head: productionCensus() }), 'the folded fork tree');
     const byStatus = new Map<string, number>();
 
-    for (const child of tree!.children) {
+    for (const child of tree.children) {
       byStatus.set(child.status, (byStatus.get(child.status) ?? 0) + 1);
     }
 
@@ -235,9 +235,9 @@ describe('explorationForkTree — the run as production held it', () => {
   });
 
   test('no node claims a score, because none of these rows carries one', () => {
-    const tree = explorationForkTree({ tree: [rootRow()], head: productionCensus() });
+    const tree = present(explorationForkTree({ tree: [rootRow()], head: productionCensus() }), 'the folded fork tree');
 
-    for (const child of tree!.children) {
+    for (const child of tree.children) {
       expect(child.value).toBeNull();
       expect(child.visits).toBeNull();
     }

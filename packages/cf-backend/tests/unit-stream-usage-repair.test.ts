@@ -280,7 +280,7 @@ describe('cached-usage repair through the direct binding pass', () => {
     // its argument to that one member before calling anything — every other
     // member of `Ai` is unreachable from this transport, so the assertion is
     // over a surface the callee provably never touches.
-    return createDirectWorkersAIFetch(ai as Ai);
+    return createDirectWorkersAIFetch(ai);
   }
 
   async function streamedText(body: string): Promise<string> {

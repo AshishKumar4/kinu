@@ -23,6 +23,7 @@ import {
 } from '../src/components/surfaces/fork-runs';
 import { explorationForkTree } from '@kinu.run/core';
 import { isCompeted, principalVariation, maxVisits } from '@kinu.run/core';
+import { present } from '@kinu.run/test-utils';
 
 function summary(over: Partial<ForkRunSummary> = {}): ForkRunSummary {
   return {
@@ -274,7 +275,7 @@ describe('fork permalink selection', () => {
 /** A run with journalled nodes and no search rows, folded the one way every
  *  fork surface folds a run. */
 function journalTree(run: HeadRunView) {
-  return explorationForkTree({ tree: [], head: run })!;
+  return present(explorationForkTree({ tree: [], head: run }), 'the folded fork tree');
 }
 
 describe('a merge is a tree of depth 1', () => {
@@ -320,7 +321,7 @@ describe('a merge is a tree of depth 1', () => {
     }));
 
     expect(tree.status).toBe('running');
-    expect(tree.children[0]!.status).toBe('running');
+    expect(tree.children[0].status).toBe('running');
   });
 
   test('the merge narrative rides on the root, where the root is what is selected', () => {

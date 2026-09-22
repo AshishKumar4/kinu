@@ -20,7 +20,7 @@ function fixture() {
 
   if (!decided.ok) throw new Error(decided.error);
 
-  return { rt, db, plans, plan: decided.plan, taskList: new TaskListStore(rt.storage.sql, rt.actor, rt.storage.transactionSync) };
+  return { rt, db, plans, plan: decided.plan, taskList: new TaskListStore(rt.storage.sql, rt.actor, rt.storage.transactionSync.bind(rt.storage)) };
 }
 
 test('native and asynchronous codemode tasks retain their approved revision without attributing other actors or old tasks', async () => {

@@ -165,7 +165,7 @@ describe("/pc/connect upgrade", () => {
     const response = await handlePcRequest(connectRequest(CONNECT_URL), makeEnv(userDO));
     expect(await response.text()).toBe("socket accepted");
     expect(userDO.fetched.length).toBe(1);
-    expect(userDO.fetched[0]!.url).toBe(CONNECT_URL);
+    expect(userDO.fetched[0].url).toBe(CONNECT_URL);
   });
 
   test("a malformed user or ticket is refused before any namespace lookup", async () => {

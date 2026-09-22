@@ -63,7 +63,7 @@ function reporter(initial: LiveRefreshErrors = {}) {
 
   return {
     get errors() { return errors; },
-    report(source: LiveRefreshSource, message: string | null) {
+    report: (source: LiveRefreshSource, message: string | null) => {
       const next = { ...errors };
 
       if (message === null) delete next[source];
@@ -78,7 +78,7 @@ function consentReporter(initial: ReadonlyMap<string, string> = new Map()) {
 
   return {
     get errors() { return errors; },
-    report(consentId: string, message: string | null) {
+    report: (consentId: string, message: string | null) => {
       const next = new Map(errors);
 
       if (message === null) next.delete(consentId);

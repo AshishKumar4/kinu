@@ -63,7 +63,9 @@ function rows(norm: ParityNormalizer, raw: ParityRows): JsonValue {
       id: norm.text(row.id), parentId: row.parentId === null ? null : norm.text(row.parentId), role: row.role,
       content: norm.json(parse(row.content)),
     })),
-    pendingSteers: raw.pendingSteers.map((row) => ({ id: norm.text(row.id), turnId: norm.text(row.turnId), mode: row.mode, text: row.text })),
+    pendingSteers: raw.pendingSteers.map((row) => ({
+      id: norm.text(row.id), turnId: row.turnId === null ? null : norm.text(row.turnId), mode: row.mode, text: row.text,
+    })),
     pendingSteerFiles: raw.pendingSteerFiles.map((row) => ({ steerId: norm.text(row.steerId), filename: row.filename, mediaType: row.mediaType, url: row.url })),
     agentLog: raw.agentLog.map((row) => ({
       id: norm.opaque(row.id, 'log'), kind: row.kind, turnId: row.turnId === null ? null : norm.text(row.turnId),

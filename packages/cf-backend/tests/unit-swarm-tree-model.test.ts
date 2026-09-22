@@ -10,6 +10,7 @@ import {
   NODE_R_MAX, nodeRadius, principalVariation, subtreeCount, terminalForkNode, treeStats,
   viewNoteFor,
 } from '@kinu.run/core';
+import { present } from '@kinu.run/test-utils';
 
 let seq = 0;
 
@@ -103,11 +104,11 @@ describe('stored tree fields', () => {
       }],
     };
 
-    const tree = explorationForkTree({ tree: [root], head });
+    const tree = present(explorationForkTree({ tree: [root], head }), 'the folded fork tree');
 
     expect(tree).toMatchObject({ id: 'root', depth: 0 });
-    expect(tree!.children[0]).toMatchObject({ id: 'deep', depth: 3, status: 'running' });
-    expect(treeStats(tree!)).toEqual({ nodes: 2, depth: 3 });
+    expect(tree.children[0]).toMatchObject({ id: 'deep', depth: 3, status: 'running' });
+    expect(treeStats(tree)).toEqual({ nodes: 2, depth: 3 });
   });
 });
 
@@ -256,7 +257,14 @@ describe('labels', () => {
   // that the clip is decided by the ROOM; measuring a proportional face here
   // would make every expected string an assertion about Chrome's metrics.
   const perChar = (text: string) => text.length * 10;
-  const wide = (text: string) => [...text].reduce((sum, ch) => sum + (ch === 'W' ? 20 : 5), 0);
+
+  const wide = (text: string): number => {
+    let width = 0;
+
+    for (const ch of text) width += ch === 'W' ? 20 : 5;
+
+    return width;
+  };
 
   test('a label that fits its room is not touched', () => {
     expect(clipToWidth('abcd', 40, perChar)).toBe('abcd');

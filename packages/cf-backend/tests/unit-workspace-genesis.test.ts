@@ -78,7 +78,7 @@ describe('the workspace takes its own first turn', () => {
 
     const ran = (await turnsRun(harness.agent));
     expect(ran).toHaveLength(1);
-    const turn = ran[0]!;
+    const turn = ran[0];
     expect(turn.provenance.kinuEvent).toBe(WORKSPACE_CREATED_EVENT);
     expect(turn.provenance[SIGNAL_ID_METADATA_KEY]).toMatch(/^sig-/);
     expect(turn.text).toContain('first turn');
@@ -96,8 +96,8 @@ describe('the workspace takes its own first turn', () => {
     const request = await next;
     await turns.settle({ messageId: 'a-genesis', text: 'ok' });
 
-    expect((await turnsRun(harness.agent))[0]!.text).not.toContain('OAuth');
-    expect((await turnsRun(harness.agent))[0]!.text).not.toContain(MISSION);
+    expect((await turnsRun(harness.agent))[0].text).not.toContain('OAuth');
+    expect((await turnsRun(harness.agent))[0].text).not.toContain(MISSION);
     expect(requestText(request.prompt)).not.toContain(MISSION);
     harness.db.close();
   });
@@ -172,8 +172,8 @@ describe('the workspace takes its own first turn', () => {
 
     const ran = (await turnsRun(harness.agent));
     expect(ran).toHaveLength(1);
-    expect(ran[0]!.text).toContain('first turn');
-    expect(ran[0]!.provenance.kinuEvent).toBe(WORKSPACE_CREATED_EVENT);
+    expect(ran[0].text).toContain('first turn');
+    expect(ran[0].provenance.kinuEvent).toBe(WORKSPACE_CREATED_EVENT);
     expect(activityEvents(harness.db)).not.toContain('genesis.yielded_to_message');
     harness.db.close();
   });
@@ -198,8 +198,8 @@ describe('the workspace takes its own first turn', () => {
     expect(activityEvents(harness.db)).not.toContain('genesis.yielded_to_message');
     const ran = (await turnsRun(harness.agent));
     expect(ran).toHaveLength(2);
-    expect(ran[0]!.provenance.kinuEvent).toBe(WORKSPACE_CREATED_EVENT);
-    expect(ran[1]!.text).toBe('Late but admitted.');
+    expect(ran[0].provenance.kinuEvent).toBe(WORKSPACE_CREATED_EVENT);
+    expect(ran[1].text).toBe('Late but admitted.');
     expect((await harness.agent.harnessTranscript.history()).filter((message) => message.role === 'assistant')).toHaveLength(2);
     harness.db.close();
   });

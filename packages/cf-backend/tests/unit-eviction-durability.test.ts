@@ -424,7 +424,7 @@ describe('the post-turn lanes', () => {
     ).all();
 
     expect(events).toHaveLength(1);
-    expect(events[0]!.message).toContain('mcts');
+    expect(events[0].message).toContain('mcts');
 
     await agent.harnessJoinDetachedFibers();
     expect(await agent.observeRuntime().memory.read('memory/MEMORY.md'))
@@ -538,7 +538,7 @@ describe('a sandbox lifecycle failure', () => {
     });
 
     expect(texts).toHaveLength(1);
-    const text = texts[0]!;
+    const text = texts[0];
     // The consequence the agent has to act on, then the evidence.
     expect(text).toContain('attach stage');
     expect(text).toContain('Verify the workspace contents');

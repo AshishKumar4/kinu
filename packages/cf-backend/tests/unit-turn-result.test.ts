@@ -9,13 +9,14 @@ import { MessageView } from '../src/components/MessageView';
 
 type Part = UIMessage['parts'][number];
 
-function tool(
-  id: string,
-  name: string,
-  input: JsonObject,
-  state: 'input-available' | 'output-available' | 'output-error' = 'output-available',
-  output: JsonValue = 'ok',
-): ToolUIPart {
+/** How a part settled: the default is a call that answered `'ok'`. */
+interface ToolPartResult {
+  readonly state?: 'input-available' | 'output-available' | 'output-error';
+  readonly output?: JsonValue;
+}
+
+function tool(id: string, name: string, input: JsonObject, result: ToolPartResult = {}): ToolUIPart {
+  const { state = 'output-available', output = 'ok' } = result;
   const type: `tool-${string}` = `tool-${name}`;
 
   if (state === 'output-available') return { type, toolCallId: id, state, input, output };
@@ -68,7 +69,7 @@ describe('MessageView transcript order', () => {
     const html = render([
       text('Reading the migration.'),
       tool('a', 'file', { action: 'read', path: 'before.sql' }),
-      tool('b', 'file', { action: 'read', path: 'missing.sql' }, 'output-error'),
+      tool('b', 'file', { action: 'read', path: 'missing.sql' }, { state: 'output-error' }),
       tool('c', 'file', { action: 'read', path: 'after.sql' }),
     ]);
 
@@ -87,9 +88,9 @@ describe('MessageView transcript order', () => {
 
   test('a provision refusal does not expand its explanatory panel by default', () => {
     const html = render([
-      tool('a', 'shell', { command: 'cat missing.sql' }, 'output-available', JSON.stringify({
+      tool('a', 'shell', { command: 'cat missing.sql' }, { output: JSON.stringify({
         error: 'runtime_not_provisioned', runtime: 'sandbox', message: 'nope',
-      })),
+      }) }),
     ]);
 
     expect(html).toContain('Failed');
@@ -101,7 +102,7 @@ describe('MessageView transcript order', () => {
     const html = render([
       text('The first read completed.'),
       tool('a', 'file', { action: 'read', path: 'before.sql' }),
-      tool('b', 'agents', { action: 'hire', agent: 'reviewer' }, 'output-error'),
+      tool('b', 'agents', { action: 'hire', agent: 'reviewer' }, { state: 'output-error' }),
       text('Continuing with the next step.'),
     ]);
 
@@ -137,7 +138,7 @@ describe('MessageView reasoning', () => {
       {
         parts: [
           { type: 'reasoning', state: 'done', text: thought },
-          tool('a', 'file', { action: 'read', path: 'migration.sql' }, 'input-available'),
+          tool('a', 'file', { action: 'read', path: 'migration.sql' }, { state: 'input-available' }),
         ],
         streaming: true,
       },
@@ -176,7 +177,7 @@ describe('MessageView tool prominence', () => {
   test('arbitrary codemode result fields remain unknown, rendered quietly', () => {
     for (const effect of ['read', 'mutate']) {
       const html = render([
-        tool('program', 'eval', { code: 'return await inspect()' }, 'output-available', { result: { effect } }),
+        tool('program', 'eval', { code: 'return await inspect()' }, { output: { result: { effect } } }),
       ]);
 
       expect(html).toContain('data-tool-effect="unknown"');
@@ -201,7 +202,7 @@ describe('MessageView tool prominence', () => {
     const html = render([
       tool('a', 'file', { action: 'read' }),
       tool('b', 'file', { action: 'read' }),
-      tool('running', 'file', { action: 'read' }, 'input-available'),
+      tool('running', 'file', { action: 'read' }, { state: 'input-available' }),
     ], true);
 
     const rows = await buttonAttributes(html, 'running');
@@ -230,17 +231,17 @@ describe('buttonAttributes', () => {
 
 describe('tool failure protocol', () => {
   test('a provision refusal counts as failed', () => {
-    const part = tool('a', 'shell', {}, 'output-available', JSON.stringify({
+    const part = tool('a', 'shell', {}, { output: JSON.stringify({
       error: 'runtime_not_provisioned', runtime: 'sandbox', message: 'nope',
-    }));
+    }) });
 
     expect(callFailed(part)).toBe(true);
   });
 
   test('error-shaped data from a completed call is not a failure', () => {
-    const part = tool('a', 'file', {}, 'output-available', {
+    const part = tool('a', 'file', {}, { output: {
       error: 'old_text not found or not unique — the file changed since the last read',
-    });
+    } });
 
     expect(callFailed(part)).toBe(false);
   });
@@ -248,7 +249,7 @@ describe('tool failure protocol', () => {
   test('tool output that reads like a pass never becomes a check line', () => {
     const html = render([
       text('Suite is green.'),
-      tool('a', 'shell', { command: 'bun test' }, 'output-available', '920 pass, 0 fail'),
+      tool('a', 'shell', { command: 'bun test' }, { output: '920 pass, 0 fail' }),
     ]);
 
     expect(html).not.toContain('Check passed');

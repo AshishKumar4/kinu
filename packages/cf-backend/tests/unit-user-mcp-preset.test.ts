@@ -4,6 +4,7 @@
 // suite runs against — `queueMcpAuthUrl` is the only new seam, standing in for
 // the authorization redirect the harness cannot perform.
 import { Database } from 'bun:sqlite';
+import * as v from 'valibot';
 import { describe, expect, test } from 'bun:test';
 import {
   createTestUserDO, sqlExec, testOwner,
@@ -13,6 +14,7 @@ import {
   liveMcpTransport, queueMcpAuthUrl, recordedMcpServers, resetRecordedMcp, seedSdkMcpServer,
 } from './helpers/agents-sdk';
 import { auth } from '@modelcontextprotocol/sdk/client/auth.js';
+import { requestBodyText } from './helpers/fetch-input';
 
 // Imported AFTER the helper's mock registration (see `mockAgentsSdk`): mcp.ts
 // binds the provider class at load, so a static import here would hold the
@@ -78,7 +80,7 @@ describe('an MCP preset add', () => {
     expect(row?.preset_id).toBe('github');
     expect(row?.name).toBe('GitHub');
     // Sealed at rest: the column holds ciphertext, not the token.
-    expect(String(row?.headers)).not.toContain('ghp_test');
+    expect(v.parse(v.string(), row?.headers)).not.toContain('ghp_test');
 
     const [listed] = await h.userDO.userMcp_list(await testOwner());
     expect(listed?.presetId).toBe('github');
@@ -287,7 +289,7 @@ describe('a cold activation over a preset row', () => {
     );
 
     const [row] = sqlExec(first.db).exec(`SELECT id FROM user_mcp_servers`).toArray();
-    const id = String(row?.id);
+    const id = v.parse(v.string(), row?.id);
 
     // The SDK's own row as a pre-provider build wrote it: plaintext headers,
     // a stale dynamically-registered client id, and the callback URL a row in
@@ -357,7 +359,7 @@ describe('the registered-app provider against the real SDK auth flow', () => {
       }
 
       if (entry.url === 'https://mcp.example/token') {
-        entry.body = new URLSearchParams(String(init?.body ?? ''));
+        entry.body = new URLSearchParams(await requestBodyText(url, init));
         entry.authHeader = new Headers(init?.headers).get('authorization');
 
         return new Response(JSON.stringify({

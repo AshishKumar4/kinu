@@ -57,7 +57,7 @@ describe('the Activity log pane renders the rows the snapshot already carried', 
     // `logActivity` writes 0 when no turn was in flight (`_turnT0 > 0 ? … : 0`),
     // so 0 means "outside a turn" and not "took no time". Printing `0 ms` would
     // be the plausible-zero this whole panel refuses.
-    const html = render([LOG[0]!]);
+    const html = render([LOG[0]]);
     expect(html).toContain('—');
     expect(html).not.toContain('0 ms');
     expect(html).toContain('no elapsed time to report');
@@ -79,6 +79,6 @@ describe('the Activity log pane renders the rows the snapshot already carried', 
 
   test('the row count and its order are stated, so a truncated window is visible', () => {
     expect(render(LOG)).toContain('4 rows · newest first');
-    expect(render([LOG[0]!])).toContain('1 row · newest first');
+    expect(render([LOG[0]])).toContain('1 row · newest first');
   });
 });

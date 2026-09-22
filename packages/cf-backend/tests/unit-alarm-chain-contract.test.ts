@@ -199,11 +199,11 @@ describe('the Kinu timer rides the SDK scheduler', () => {
     for (const source of [commented, stringy]) {
       const [body] = alarmMethods(source);
       expect(body).toBeDefined();
-      expect(/\bsuper\s*\.\s*alarm\s*\(/.test(stripCommentsAndStrings(body!))).toBe(false);
+      expect(/\bsuper\s*\.\s*alarm\s*\(/.test(stripCommentsAndStrings(body))).toBe(false);
     }
 
     const real = `class Good extends Agent<Env> {\n  async alarm() {\n    await super.alarm(); // chained\n  }\n}`;
     const [goodBody] = alarmMethods(real);
-    expect(/\bsuper\s*\.\s*alarm\s*\(/.test(stripCommentsAndStrings(goodBody!))).toBe(true);
+    expect(/\bsuper\s*\.\s*alarm\s*\(/.test(stripCommentsAndStrings(goodBody))).toBe(true);
   });
 });

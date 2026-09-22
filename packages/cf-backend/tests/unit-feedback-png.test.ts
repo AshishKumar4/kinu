@@ -32,7 +32,7 @@ function be32(value: number): number[] {
 
 /** One well-formed chunk: length, type, data, CRC over type+data. */
 function chunk(type: string, data: readonly number[] = []): number[] {
-  const typed = [...type].map((ch) => ch.charCodeAt(0));
+  const typed = [...new TextEncoder().encode(type)];
   const crc = crc32(new Uint8Array([...typed, ...data]));
 
   return [...be32(data.length), ...typed, ...data, ...be32(crc)];
@@ -110,7 +110,7 @@ describe('sanitizePng — what it accepts', () => {
 
 describe('sanitizePng — metadata never survives', () => {
   test('text, EXIF and timestamp chunks are dropped and the pixels are not', () => {
-    const secret = [...'GPS: 51.5,-0.1'].map((ch) => ch.charCodeAt(0));
+    const secret = [...new TextEncoder().encode('GPS: 51.5,-0.1')];
 
     const out = accepted(sanitizePng(png(
       chunk('IHDR', ihdr(2, 2)),
@@ -179,7 +179,7 @@ describe('sanitizePng — what it refuses', () => {
   test('bytes appended after IEND — the shape a payload smuggled past a viewer takes', () => {
     const bytes = new Uint8Array([
       ...png(chunk('IHDR', ihdr(1, 1)), PIXELS, chunk('IEND')),
-      ...[...'<?php echo 1;'].map((ch) => ch.charCodeAt(0)),
+      ...new TextEncoder().encode('<?php echo 1;'),
     ]);
 
     expect(sanitizePng(bytes)).toMatchObject({ fault: 'bad-structure' });

@@ -71,12 +71,8 @@ const ReplayBodySchema = v.looseObject({ max_tokens: v.number(), stream: v.optio
  *  The pool's probes hold `ctx.storage.sql` directly rather than an Agents-SDK
  *  `Agent`, so `bindAgentSql` (which binds THAT protocol) does not fit. */
 function doSqlExecutor(sql: SqlStorage): SqlExecutor {
-  // SAFETY: constructed — the sole caller is `CacheWarmProbeDO` below, and the
-  // sole holder is `CacheWarmStore`, whose every statement binds a number, a
-  // string or null from its own columns; `SqlStorage.exec` accepts all three.
-  // The widening admits ArrayBuffer, which no statement in that store passes.
-  return ((strings: TemplateStringsArray, ...values: SqlValue[]) =>
-    sql.exec(strings.join('?'), ...values as SqlStorageValue[]).toArray()) as SqlExecutor;
+  return <Row,>(strings: TemplateStringsArray, ...values: SqlValue[]): Row[] =>
+    sql.exec<Row & Record<string, SqlStorageValue>>(strings.join('?'), ...values).toArray();
 }
 
 /**

@@ -15,7 +15,8 @@
 import { describe, expect, test } from 'bun:test';
 import { writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { scratchDir } from '@kinu.run/test-utils';
+import { present, scratchDir } from '@kinu.run/test-utils';
+import * as v from 'valibot';
 import { SLATE_SERVER_MODULE } from '@kinu.run/core/slates';
 import { slateRunnerSource } from '../src/slates/resident';
 import { slateBatchStub } from '../src/slates/rpc-transport';
@@ -72,11 +73,9 @@ async function loadRunner(dir: string, application: string): Promise<RunnerClass
   writeFileSync(join(dir, 'runner.js'),
     slateRunnerSource([], undefined).replace('"cloudflare:workers"', '"./cf-stub.js"'));
 
-  // SAFETY: `runner.js` is `slateRunnerSource`'s own output, which declares
-  // `export class NimbusProcess` unconditionally; bun's loader cannot see it.
-  const mod = await import(join(dir, 'runner.js')) as { NimbusProcess: RunnerClass };
+  const mod: { NimbusProcess?: RunnerClass } = await import(join(dir, 'runner.js'));
 
-  return mod.NimbusProcess;
+  return present(mod.NimbusProcess, "the runner module's NimbusProcess export");
 }
 
 /** The `ctx`/`env` the fabric hands the object: `ctx.storage` for `this.sql`,
@@ -138,7 +137,7 @@ describe('a re-created runner instance', () => {
     expect(first.headers.get('x-slate-runner')).toBeNull();
     // SAFETY: `PING_APP` above is the fixture this test file constructs —
     // its fetch answers `Response.json({ message: 'pong' })` on /ping.
-    expect(await first.json() as { message: string }).toEqual({ message: 'pong' });
+    expect(await first.json<{ message: string }>()).toEqual({ message: 'pong' });
     expect(slateStarts()).toBe(base + 1);
 
     const second = await runner.fetch(get('/ping'));
@@ -191,9 +190,7 @@ describe('a re-created runner instance', () => {
       expect((await stub.ping()).starts).toBe(before + 1);
       expect(slateStarts()).toBe(before + 1);
     } finally {
-      // SAFETY: `getRemoteMain` returns the session's RpcStub, which is
-      // always disposable; the generic surface cannot name the symbol.
-      (stub as { [Symbol.dispose](): void })[Symbol.dispose]();
+      stub[Symbol.dispose]();
     }
   });
 
@@ -219,16 +216,14 @@ describe('a re-created runner instance', () => {
     expect(failed.status).toBe(503);
     expect(failed.headers.get('x-slate-runner')).toBe('start-failed');
 
-    // SAFETY: the 503 body is the refusal the runner itself builds —
-    // `{reason, error}`, the shape the host's previewUnavailable sends.
-    const body = await failed.json() as { reason: string; error: string };
+    const body = v.parse(v.object({ reason: v.string(), error: v.string() }), await failed.json());
 
     expect(body.reason).toContain('must export class Slate');
     expect(body.error).toBe(body.reason);
 
-    // SAFETY: `promote` is constructed into `application.js` by `loadRunner`
-    // above — this test file owns that module's text, so the member exists.
-    (await import(join(dir, 'application.js')) as { promote(): void }).promote();
+    const application: { promote?: () => void } = await import(join(dir, 'application.js'));
+
+    present(application.promote, "the application module's promote export")();
 
     const retried = await runner.fetch(get('/ping'));
 
