@@ -20,7 +20,7 @@ import type { ToolSet } from 'ai';
 import * as v from 'valibot';
 import type { Memory, VFS, VfsRevision } from '../types/primitives';
 import type { TurnContextBudget } from '../context-budget';
-import { isVfsError, vfsAddressingHint } from '../vfs/errno';
+import { isVfsError, vfsAddressingHint, type VfsErrorCode } from '../vfs/errno';
 import { ensureDir, vfsDirname } from '../utils/vfs-helpers';
 import { memoryIndexPath } from '../memory/note';
 import {
@@ -103,6 +103,16 @@ function failure(reason: FileToolFailureReason, error: string): never {
  * compare-and-set refusal as `io` would tell the model the filesystem broke,
  * when what happened is that its base moved and it needs to read again.
  */
+/** Which refusal a VFS errno is: an absent path, a permission wall, or the
+ *  filesystem itself failing. */
+function editOutcomeReason(code: VfsErrorCode): FileEditOutcomeReason {
+  if (code === 'ENOENT') return 'missing';
+
+  if (code === 'EACCES' || code === 'EPERM') return 'denied';
+
+  return 'io';
+}
+
 async function vfsFailure(vfs: VFS, input: { error: unknown }, action: string, path: string): Promise<{
   reason: FileEditOutcomeReason;
   error: string;
@@ -126,8 +136,7 @@ async function vfsFailure(vfs: VFS, input: { error: unknown }, action: string, p
     return { reason: 'io', error: `${action} ${path} failed: ${renderThrownChain({ cause: err })}` };
   }
 
-  const reason: FileEditOutcomeReason = err.code === 'ENOENT' ? 'missing'
-    : err.code === 'EACCES' || err.code === 'EPERM' ? 'denied' : 'io';
+  const reason = editOutcomeReason(err.code);
 
   // ENOENT and EISDIR are the model's own addressing mistakes, and the hint
   // names this agent's real roots. Everything else (a reserved mount, an
@@ -287,7 +296,9 @@ export function createFileDispatcher(deps: FileToolDeps): (input: FileToolInput)
 
         const slice = formatFileSlice(scanned.window, { path, limit: args.limit, maxChars });
 
-        ledger.observeRange(path, scanned.fingerprint, slice.first, slice.last, slice.total, scanned.revision);
+        ledger.observeRange(path, {
+          fingerprint: scanned.fingerprint, first: slice.first, last: slice.last, total: slice.total, revision: scanned.revision,
+        });
         budget.admit(slice.output.length);
 
         if (slice.omitted > 0) {

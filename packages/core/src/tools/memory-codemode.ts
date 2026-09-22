@@ -66,8 +66,20 @@ const TYPES_FACTS = `
  * tool. Whether remember/recall/forget exist is read once at construction —
  * a FactsStore is wired for a runtime's whole lifetime, never mid-session.
  */
+/** One positional argument a `memory.*` member reads as text. An omitted
+ *  argument is empty; an object gets a refusal naming the member rather than
+ *  `[object Object]` stored as the note. */
+function textArgument(argument: { readonly value: unknown; readonly where: string }): string {
+  if (argument.value === undefined || argument.value === null) return '';
+  const parsed = v.safeParse(v.string(), argument.value);
+
+  if (!parsed.success) throw new KinuError('bad_input', `${argument.where} takes a string`);
+
+  return parsed.output;
+}
+
 export function createMemoryCodemodeProvider(deps: () => MemoryToolDeps): CodemodeProvider {
-  const hasFacts = !!deps().facts;
+  const hasFacts = deps().facts !== undefined;
 
   const dispatch = (action: string) => (...args: unknown[]) => branchableToolCall(async (): Promise<JsonValue> => {
     const d = deps();
@@ -75,9 +87,9 @@ export function createMemoryCodemodeProvider(deps: () => MemoryToolDeps): Codemo
 
     switch (action) {
       case 'save':
-        return decodeMemoryResult({ pending: run({ action: 'save', content: String(args[0] ?? '') }) });
+        return decodeMemoryResult({ pending: run({ action: 'save', content: textArgument({ value: args[0], where: 'memory.save(content)' }) }) });
       case 'search':
-        return decodeMemoryResult({ pending: run({ action: 'search', query: String(args[0] ?? '') }) });
+        return decodeMemoryResult({ pending: run({ action: 'search', query: textArgument({ value: args[0], where: 'memory.search(query)' }) }) });
       case 'conversations': {
         const options = v.safeParse(SessionOptionsSchema, args[0] ?? {});
 
@@ -94,7 +106,7 @@ export function createMemoryCodemodeProvider(deps: () => MemoryToolDeps): Codemo
         return decodeMemoryResult({
           pending: run({
             action: 'remember',
-            key: String(args[0] ?? ''),
+            key: textArgument({ value: args[0], where: 'memory.remember(key)' }),
             value: args[1],
             confidence: confidence.output,
           }),
@@ -102,9 +114,9 @@ export function createMemoryCodemodeProvider(deps: () => MemoryToolDeps): Codemo
       }
 
       case 'recall':
-        return decodeMemoryResult({ pending: run({ action: 'recall', key: String(args[0] ?? '') }) });
+        return decodeMemoryResult({ pending: run({ action: 'recall', key: textArgument({ value: args[0], where: 'memory.recall(key)' }) }) });
       case 'forget':
-        return decodeMemoryResult({ pending: run({ action: 'forget', key: String(args[0] ?? '') }) });
+        return decodeMemoryResult({ pending: run({ action: 'forget', key: textArgument({ value: args[0], where: 'memory.forget(key)' }) }) });
       default:
         throw new KinuError('bad_input', `unknown memory action '${action}'`);
     }

@@ -183,7 +183,7 @@ function renderInputType(action: AgentsToolAction, deps: AgentsToolDeps): string
   const variants = agentsActionInputVariantsFor(deps, action);
 
   const input = variants.length === 1
-    ? renderInputVariant(variants[0]!.fields, variants[0]!)
+    ? renderInputVariant(variants[0].fields, variants[0])
     : variants.map(variant => renderInputVariant(variant.fields, variant)).join('\n  | ');
 
   return `${memberDoc(action, deps)}
@@ -294,7 +294,7 @@ export function createAgentsCodemodeProvider(deps: () => AgentsToolDeps): Codemo
         let input;
 
         try {
-          input = parseAgentsToolInput(candidate);
+          input = parseAgentsToolInput({ input: candidate });
         } catch (error) {
           return { success: false, reason: 'bad_input', error: `agents.${action}: ${renderThrownChain({ cause: error })}` };
         }

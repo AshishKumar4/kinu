@@ -147,18 +147,27 @@ async function runReleaseEngineAction(ctx: ReleaseEngineContext): Promise<Releas
 
       return await engine.preview(ctx.args.changeId, {
         port: ctx.args.port,
-        startCommand: ctx.args.startCommand || undefined,
+        startCommand: ctx.args.startCommand === '' ? undefined : ctx.args.startCommand,
       });
     case 'deploy':
       if (!ctx.args.deployment?.environment) return { error: 'deploy requires deployment.environment (local | staging | production)' };
 
       return await engine.deploy(ctx.args.changeId, {
         environment: ctx.args.deployment.environment,
-        command: ctx.args.deployment.command || undefined,
+        command: ctx.args.deployment.command === '' ? undefined : ctx.args.deployment.command,
       });
     case 'rollback':
       return await engine.rollback(ctx.args.changeId, ctx.args.deployment?.command ? { command: ctx.args.deployment.command } : undefined);
-    default:
+    // The ledger actions, named rather than defaulted: this dispatcher runs the
+    // engine half, and `runReleaseLedgerAction` has already taken these.
+    case 'bind_source':
+    case 'board':
+    case 'create':
+    case 'record_check':
+    case 'record_deployment':
+    case 'request_approval':
+    case 'transition':
+    case 'update':
       return { error: `unknown engine action: ${ctx.args.action}` };
   }
 }

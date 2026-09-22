@@ -15,7 +15,7 @@
  * read as `edit, /a/b.ts, [{"old":"…` there and `Edited b.ts — 3 replacements`
  * on the web. One vocabulary, one home, both surfaces.
  */
-import { JsonObjectSchema, type JsonObject } from '../utils/json';
+import { JsonObjectSchema, type JsonObject, type JsonValue } from '../utils/json';
 import { redactSecrets } from '../events/hub/visibility';
 import * as v from 'valibot';
 
@@ -73,7 +73,7 @@ const READING_ACTIONS: ReadonlyMap<string, ReadonlySet<string>> = new Map([
  * codemode programs have no authenticated per-call effect receipt on this
  * interface; their source and arbitrary output cannot establish one.
  */
-export function toolCallEffect<Input>(toolName: string, input: Input): ToolCallEffect {
+export function toolCallEffect(toolName: string, input: JsonValue | undefined): ToolCallEffect {
   const parsed = v.safeParse(JsonObjectSchema, input);
 
   if (!parsed.success) return 'unknown';
@@ -109,7 +109,7 @@ function quoted(value: string, max: number = MAX): string {
 }
 
 function words(...parts: Array<string | undefined>): string {
-  return parts.filter((p): p is string => !!p).join(" ");
+  return parts.filter((part): part is string => part !== undefined && part !== "").join(" ");
 }
 
 /** `<action> <target> — "<body>"`, dropping whichever halves are absent. */
@@ -381,10 +381,15 @@ function argv(command: string): string[] {
   const parts = command.trim().split(/\s+/).filter(Boolean);
   let i = 0;
 
-  while (i < parts.length && (/^[A-Z_][A-Z0-9_]*=/.test(parts[i]!) || parts[i] === "sudo" || parts[i] === "env")) i++;
+  while (i < parts.length && (/^[A-Z_][A-Z0-9_]*=/.test(parts[i]) || parts[i] === "sudo" || parts[i] === "env")) i++;
   const rest = parts.slice(i);
 
-  if (rest.length > 0) rest[0] = rest[0]!.split("/").pop()!;
+  if (rest.length > 0) {
+    // `split` always yields at least one segment, so the last one IS the
+    // command name whether or not the word carried a path.
+    const segments = rest[0].split("/");
+    rest[0] = segments[segments.length - 1];
+  }
 
   return rest;
 }
@@ -409,18 +414,18 @@ const RUN_VERBS: ReadonlyArray<readonly [test: (word: string) => boolean, verb: 
 
 /** What a shell command is for, from its own argv. */
 export function describeCommand(command: string): string {
-  const words = argv(command);
+  const commandWords = argv(command);
 
-  if (words.length === 0) return "";
+  if (commandWords.length === 0) return "";
 
   // Every git verb reads fine as "Git <verb>", and flattening them all to one
   // phrase would lose the only thing the operator cares about.
-  if (words[0] === "git" && words[1]) return `Git ${words[1]}`;
+  if (commandWords[0] === "git" && commandWords[1]) return `Git ${commandWords[1]}`;
 
   // A runner and the tool it drives both sit in front of the verb
   // (`bunx wrangler deploy`, `npm run build`), so look a few words in — but
   // only a few, or a path argument starts deciding what the command was for.
-  for (const word of words.slice(0, 3)) {
+  for (const word of commandWords.slice(0, 3)) {
     for (const [test, verb] of RUN_VERBS) if (test(word)) return verb;
   }
 
@@ -444,8 +449,18 @@ const MEMORY_VERBS = new Map(Object.entries({
 /** The last path segment — the part a person reads. */
 function basename(path: string): string {
   const trimmed = path.replace(/\/+$/, "");
+  const segments = trimmed.split("/");
+  const last = segments[segments.length - 1];
 
-  return trimmed.split("/").pop() || trimmed;
+  // A path that is only separators has no segment to read; show what was given.
+  return last === "" ? trimmed : last;
+}
+
+/** The `web` tool says which half it ran by which argument it carried. */
+function describeWeb(input: JsonObject): string {
+  if (str(input, "action") === "fetch") return "Fetched a page";
+
+  return str(input, "query") ? "Searched the web" : "";
 }
 
 function describeAgents(input: JsonObject): string {
@@ -502,7 +517,7 @@ const DESCRIBERS = new Map<string, ToolDescriber>(Object.entries({
   agents: describeAgents,
   memory: (input) => MEMORY_VERBS.get(str(input, "action")) ?? "",
   tasks: (input) => TASK_VERBS.get(str(input, "action")) ?? "",
-  web: (input) => (str(input, "action") === "fetch" ? "Fetched a page" : str(input, "query") ? "Searched the web" : ""),
+  web: describeWeb,
   web_search: () => "Searched the web",
   web_fetch: () => "Fetched a page",
   eval: (input) => codemodeIntent(str(input, "code")) || "Ran a tool program",
@@ -536,7 +551,7 @@ const DESCRIBERS = new Map<string, ToolDescriber>(Object.entries({
  * shows the tool name and the argument summary alone, which is the honest
  * fallback for an MCP or crafted tool whose contract we do not know.
  */
-export function describeToolCall<Input>(toolName: string, input: Input): string {
+export function describeToolCall(toolName: string, input: JsonValue | undefined): string {
   const parsed = v.safeParse(JsonObjectSchema, input);
 
   if (!parsed.success) return "";
@@ -565,7 +580,7 @@ function summarizeUnknownTool(input: JsonObject): string {
  * arguments. Empty when the arguments carry nothing worth showing (a bare
  * `agents({action:'list'})` still yields "list"; a call with no input yields "").
  */
-export function summarizeToolCall<Input>(toolName: string, input: Input): string {
+export function summarizeToolCall(toolName: string, input: JsonValue | undefined): string {
   const parsed = v.safeParse(JsonObjectSchema, input);
 
   if (!parsed.success) return "";

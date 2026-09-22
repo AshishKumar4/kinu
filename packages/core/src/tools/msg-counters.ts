@@ -153,11 +153,11 @@ export async function countedMsgSend<Result>(
 
   try {
     const result = await send();
-    emitSent(fact, read(result), started, concurrent, sequence);
+    emitSent(fact, read(result), { started, concurrent, sequence });
 
     return result;
   } catch (cause) {
-    emitSent(fact, { outcome: 'failed' }, started, concurrent, sequence);
+    emitSent(fact, { outcome: 'failed' }, { started, concurrent, sequence });
     throw cause;
   } finally {
     inflight -= 1;
@@ -175,13 +175,15 @@ export async function countedMsgSend<Result>(
  * when this line was written, and the rest of that wait is recoverable only by
  * joining `message_id` to the receiver's line.
  */
-function emitSent(
-  fact: MsgSendFact,
-  result: MsgSendResult,
-  started: number,
-  concurrent: number,
-  sequence: number,
-): void {
+/** Where one send sat in the turn: when it began, how many were in flight beside
+ *  it, and which number it was. */
+interface MsgSendPosition {
+  readonly started: number;
+  readonly concurrent: number;
+  readonly sequence: number;
+}
+
+function emitSent(fact: MsgSendFact, result: MsgSendResult, position: MsgSendPosition): void {
   const at = nowMs();
   diagnostics.event('agents.msg.sent', {
     action: fact.action,
@@ -190,10 +192,10 @@ function emitSent(
     target: fact.target,
     outcome: result.outcome,
     message_id: result.messageId ?? '',
-    wait_ms: at - started,
+    wait_ms: at - position.started,
     chars: fact.chars,
-    sent: sequence,
-    inflight: concurrent,
+    sent: position.sequence,
+    inflight: position.concurrent,
     at,
   });
 }

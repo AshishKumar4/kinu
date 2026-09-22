@@ -56,8 +56,8 @@ const program = new AsyncLocalStorage<ProgramInvocation>();
 const ProgramFailuresSchema = v.object({ failures: v.array(BindingFailureSchema) });
 
 /** Only eval produces this outer envelope; authored return data is nested under result. */
-export function successfulToolOutcome<Output>(name: string, output: Output): Extract<ToolOutcome, { success: true }> {
-  const parsed = name === 'eval' ? v.safeParse(ProgramFailuresSchema, output) : null;
+export function successfulToolOutcome(name: string, result: { output: unknown }): Extract<ToolOutcome, { success: true }> {
+  const parsed = name === 'eval' ? v.safeParse(ProgramFailuresSchema, result.output) : null;
 
   return parsed?.success ? { success: true, failures: parsed.output.failures } : { success: true };
 }
@@ -86,7 +86,9 @@ export function bindProgramCall<Args extends unknown[]>(
         ? v.safeParse(v.object({ ...ToolFailureValueSchema.entries, success: v.optional(v.literal(false), false) }), value)
         : null;
 
-      const failure = parsed.success ? parsed.output : legacy?.success ? legacy.output : null;
+      const strict = parsed.success ? parsed.output : null;
+      const recovered = legacy?.success === true ? legacy.output : null;
+      const failure = strict ?? recovered;
 
       if (failure === null) return value;
       const input = v.safeParse(v.object({ action: v.string() }), args[0]);

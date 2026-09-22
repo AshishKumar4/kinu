@@ -295,9 +295,11 @@ export function createAgentSelfProvider(host: AgentSelfHost): CodemodeProvider {
           // cumulative row rather than starting a fresh one.
           const limits = readMissionLimits(opts);
 
-          const missionLabel = limits
-            ? (opts.budget_label?.trim() || `schedule-${nanoid()}`)
-            : undefined;
+          const declaredLabel = opts.budget_label?.trim();
+          let missionLabel: string | undefined;
+
+          // A blank label names no sub-ledger; the generated one keeps it addressable.
+          if (limits) missionLabel = declaredLabel === undefined || declaredLabel === '' ? `schedule-${nanoid()}` : declaredLabel;
 
           try {
             const budget = limits && missionLabel ? host.budget.declare(missionLabel, limits) : undefined;
