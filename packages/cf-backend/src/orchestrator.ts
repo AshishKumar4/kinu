@@ -6551,6 +6551,14 @@ export class OrchestratorAgent extends ActorAgent {
   }
 
 
+  /** Continue the chat from before `entryId`, on the context the actor held
+   *  there. The walk-back and the refusal are core's; the reverted transcript
+   *  reaches every open tab as the session event this emits. */
+  @callable()
+  async revertConversation(entryId: string): Promise<void> {
+    await this.chatLoop.revertTo(entryId);
+  }
+
   // ── Fork RPCs ──────────────────────────────────────────────────
 
   /**
@@ -6565,14 +6573,6 @@ export class OrchestratorAgent extends ActorAgent {
    *
    * See docs/WORKSPACES.md for the full spec.
    */
-  /** Continue the chat from before `entryId`, on the context the actor held there. */
-  @callable()
-  async revertConversation(entryId: string): Promise<void> {
-    await this.actorSession.revertConversation(CHAT_SESSION_ID, entryId, () => {
-      if (this.chatLoop.turnInFlight()) throw new KinuError('denied', 'Stop the active turn before reverting its conversation');
-    });
-  }
-
   @callable()
   async forkAgent(
     untilMessageId: string,

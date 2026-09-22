@@ -11,7 +11,7 @@
  * reasoning blocks that expand, tool calls with real input/output panels and
  * language-aware code fences, failure detection, and markdown prose, none of
  * which a second renderer would keep in step. The user affordances are removed
- * by NOT passing them: `onFork`, `onFeedback`, `onRestoreFiles` and `takesChip`
+ * by NOT passing them: `onFork`, `onFeedback`, `onRevert` and `takesChip`
  * are optional, every step is `role: 'assistant'`, and a branch has no user
  * turns to draw in the first place.
  *

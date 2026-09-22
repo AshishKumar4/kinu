@@ -707,7 +707,7 @@ function SteeredMark({ state }: { state: "queued" | "landed" }) {
 // historical messages keep referential identity across stream ticks and skip
 // re-rendering (and re-parsing their markdown) entirely.
 export const MessageView = memo(function MessageView({
-  message, isLast, isStreaming, onFork, onFeedback, feedback, onRestoreFiles, takesChip,
+  message, isLast, isStreaming, onFork, onFeedback, feedback, onRevert, takesChip,
   signalState, steers,
 }: {
   message: UIMessage;
@@ -719,9 +719,10 @@ export const MessageView = memo(function MessageView({
   signalState?: CardState;
   /** Called with the message id when user clicks "Fork from here". */
   onFork?: (messageId: string) => void;
-  /** Restore device files to the shadow-git checkpoint taken before this
-   *  turn (user messages only — the turn's checkpoint is keyed on them). */
-  onRestoreFiles?: (messageId: string) => void;
+  /** Walk the conversation back to before this turn (user messages only — a
+   *  turn is keyed on the message that opened it). The surface asks what else
+   *  the walk-back may take with it; this reports the press. */
+  onRevert?: (messageId: string) => void;
   /** Called with the message id + new feedback when user clicks 👍 / 👎.
    *  Pass null to clear. Rejects on RPC failure. */
   onFeedback?: (messageId: string, feedback: 'positive' | 'negative' | null) => Promise<void>;
@@ -792,11 +793,12 @@ export const MessageView = memo(function MessageView({
               <GitBranchIcon size={12} />
             </button>
           )}
-          {!isLive && onRestoreFiles && message.id && (
+          {!isLive && onRevert && message.id && (
             <button
-              onClick={() => onRestoreFiles(message.id)}
+              onClick={() => onRevert(message.id)}
+              data-revert-turn={message.id}
               className="absolute -left-9 top-8 opacity-0 group-hover:opacity-100 focus-visible:opacity-100 transition-opacity flex items-center gap-1 p-text-3 hover:p-text px-1.5 py-0.5 rounded-sm"
-              title="Restore files to before this turn"
+              title="Revert to before this turn"
             >
               <ClockCounterClockwiseIcon size={12} />
             </button>

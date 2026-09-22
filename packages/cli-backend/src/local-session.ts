@@ -1573,9 +1573,7 @@ export class LocalAgentSession implements BackendHost {
   /** Continue the chat from before `entryId`: core's one walk-back, refused
    *  while this session's loop holds a turn. */
   revertConversation(entryId: string): Promise<void> {
-    return this.actorSession.revertConversation(this.sessionId, entryId, () => {
-      if (this.chat.turnInFlight()) throw new KinuError('denied', 'Stop the active turn before reverting its conversation');
-    });
+    return this.chat.revertTo(entryId);
   }
 
   /** Fold the history at this point: the next turn's context transform runs

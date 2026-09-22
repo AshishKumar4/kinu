@@ -950,6 +950,83 @@ describe('LocalAgentSession.send — a user turn', () => {
   });
 });
 
+/**
+ * The walk-back — the operator's "revert to before this turn".
+ *
+ * The twin of the cf case in `unit-actor-control-plane.test.ts`: one core
+ * method (`ChatSession.revertTo`) and one observable — the conversation ends
+ * before the named message, on disk and in what the next turn reads — reached
+ * through each backend's own transport. The refusal is the same rule too: the
+ * queue and the running turn belong to the loop, so the loop answers, and
+ * neither backend decides it for itself.
+ */
+describe('LocalAgentSession — the walk-back', () => {
+  /** Answers at once until `held`, then holds the turn open until release. */
+  function heldAfter(held: number, answer: string) {
+    const gate = Promise.withResolvers<void>();
+    const base = fakeModel(answer);
+    let calls = 0;
+
+    const model = new TestLanguageModelV2({
+      provider: base.provider,
+      modelId: base.modelId,
+      doGenerate: base.doGenerate,
+      doStream: async (options) => {
+        if (++calls > held) await gate.promise;
+
+        return base.doStream(options);
+      },
+    });
+
+    return { model, release: gate.resolve };
+  }
+
+  test('the conversation ends before the message it names, and the next turn reads the same', async () => {
+    let observed: PromptMessage[] = [];
+    const { rt, session } = setup('unused', historyCapturingModel('answered', (messages) => { observed = messages; }));
+
+    await session.send('first ask');
+    await session.send('second ask');
+    const second = (await transcript(rt)).filter((row) => row.role === 'user').at(-1);
+
+    if (second === undefined) throw new Error('the fixture recorded no user entry');
+    await session.revertConversation(second.id);
+
+    expect((await transcript(rt)).map((row) => row.content)).toEqual(['first ask', 'answered']);
+
+    // The durable head moved AND the working history was re-read: a revert
+    // that moved only the rows would send the removed exchange to the model.
+    await session.send('what did I say?');
+    await session.end();
+    const read = observed.map(messageText).filter((text) => !isDynamicBlock(text) && !isWorkspaceInstructions(text));
+
+    expect(read).toContain('first ask');
+    expect(read.at(-1)).toBe('what did I say?');
+    expect(read.some((text) => text.includes('second ask'))).toBe(false);
+  });
+
+  test('a turn in flight refuses the walk-back and keeps the conversation', async () => {
+    const { model, release } = heldAfter(1, 'answered');
+    const { rt, session, events } = setup('unused', model);
+
+    await session.send('first ask');
+    const first = (await transcript(rt)).filter((row) => row.role === 'user').at(-1);
+
+    if (first === undefined) throw new Error('the fixture recorded no user entry');
+    const held = session.send('second ask');
+    await waitFor(() => events.filter((event) => event.type === 'turn-start').length === 2);
+
+    await expect(session.revertConversation(first.id)).rejects.toThrow(/Stop the turn that is running/);
+
+    release();
+    await held;
+    await session.end();
+
+    expect((await transcript(rt)).map((row) => row.content))
+      .toEqual(['first ask', 'answered', 'second ask', 'answered']);
+  });
+});
+
 describe('LocalAgentSession — tool success/error + cache telemetry fidelity', () => {
   /** step 1: calls the `memory` save tool (which will throw via a stubbed
    *  runtime), finishing with the caller-supplied usage; step 2: answers text. */

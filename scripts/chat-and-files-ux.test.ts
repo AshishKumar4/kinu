@@ -1760,6 +1760,85 @@ describe('terminal workspace denial at the actual WorkspacePage boundary', () =>
 });
 
 /**
+ * The walk-back, at the actual WorkspacePage boundary.
+ *
+ * The owner pressed the per-message affordance on a workspace with no device
+ * and was told `File history is unavailable: no device connected`. The one
+ * revert the product can always perform — the conversation — was never
+ * offered, so the control read as broken.
+ *
+ * This drives the shipped page: the real MessageView affordance, the real
+ * dialog, the real `useKinu` socket edge. The revert's own redraw arrives the
+ * way the Durable Object sends it, as a transcript frame the fixture pushes
+ * back, so what is asserted is a transcript the client re-read rather than one
+ * a click removed locally.
+ */
+describe('the walk-back at the actual WorkspacePage boundary', () => {
+  /** The user turns on screen, in order: one affordance per user message, so
+   *  this list IS where the conversation ends. */
+  const turnsOnScreen = (page: Page): Promise<string[]> => page.$$eval(
+    '[data-revert-turn]',
+    (buttons) => buttons.map((button) => button.getAttribute('data-revert-turn') ?? ''),
+  );
+
+  const dialogActions = (page: Page): Promise<string[]> => page.$$eval(
+    '[data-revert-action]',
+    (buttons) => buttons.map((button) => (button.textContent ?? '').trim()),
+  );
+
+  const openDialog = async (page: Page, origin: string, search: string): Promise<void> => {
+    await page.setViewport({ width: 1280, height: 1000 });
+    await page.goto(`${origin}/gallery.html?frame=workspacepage&transcript=revert${search}`, { waitUntil: 'networkidle0' });
+    await page.waitForSelector('[data-revert-turn="rv-u2"]');
+    await page.click('[data-revert-turn="rv-u2"]');
+    await page.waitForSelector('[data-revert-dialog="ready"]');
+  };
+
+  test('one action with no device connected, and the transcript ends before that message', async () => {
+    await withGallery(async ({ newPage, origin }) => {
+      const page = await newPage();
+      await openDialog(page, origin, '');
+
+      expect(await turnsOnScreen(page)).toEqual(['rv-u1', 'rv-u2']);
+      expect(await dialogActions(page)).toEqual(['Revert conversation']);
+
+      const dialog = await page.$eval('[role="dialog"]', (element) => element.textContent ?? '');
+      expect(dialog).toContain('Revert the conversation to before this message?');
+      expect(dialog).toContain('Files in the workspace, sandbox and your devices stay as they are.');
+      // The report itself: a workspace with no device must not be told its
+      // file history is missing for pressing revert.
+      expect(dialog).not.toContain('File history is unavailable');
+      await page.screenshot({ path: join(TAB_SHOTS, 'revert-conversation-dialog.png') });
+
+      await page.click('[data-revert-action="conversation"]');
+      await page.waitForFunction(
+        () => document.querySelector('[data-revert-turn="rv-u2"]') === null,
+      );
+
+      expect(await turnsOnScreen(page)).toEqual(['rv-u1']);
+      const body = await page.evaluate(() => document.body.innerText);
+      expect(body).toContain('Add the coupon-kind regression test');
+      expect(body).not.toContain('read its rules from the campaign table');
+      expect(body).not.toContain('File history is unavailable');
+      await page.close();
+    });
+  });
+
+  test('a device holding this turn’s checkpoint adds the second action', async () => {
+    await withGallery(async ({ newPage, origin }) => {
+      const page = await newPage();
+      await openDialog(page, origin, '&checkpoints=1');
+
+      expect(await dialogActions(page)).toEqual([
+        'Revert conversation and device files', 'Revert conversation',
+      ]);
+      await page.screenshot({ path: join(TAB_SHOTS, 'revert-with-device-files-dialog.png') });
+      await page.close();
+    });
+  });
+});
+
+/**
  * KINU-060. The real FilesSurface opens a preview whose FIRST RPC is held by
  * the fixture transport. A fixture mutation changes the listing's revision;
  * actual Refresh causes FileViewer/useAsyncResource to start its new request,
