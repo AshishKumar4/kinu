@@ -380,7 +380,8 @@ export function mapConnectionStatus(state: string | undefined): McpConnectionSta
   }
 }
 
-/** `appConfigured` is only meaningful for `oauth-app` presets: whether env carries both client credentials. */
+/** `appConfigured` is only meaningful for `oauth-app` presets: whether env carries both client
+ *  credentials. */
 export interface McpPresetAvailability {
   readonly id: McpPresetId;
   readonly appConfigured: boolean;

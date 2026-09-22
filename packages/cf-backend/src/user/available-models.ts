@@ -1,7 +1,5 @@
-/**
- * Model menu and connectable-provider catalog for HTTP clients.
- * The provider registry is the source of truth for models; models.dev for which providers a BYO key can connect.
- */
+/** Model menu and connectable-provider catalog for HTTP clients. The provider registry is the
+ *  source of truth for models; models.dev for which providers a BYO key can connect. */
 import {
   catalogCredKey, listModelsDevProviders, modelsDevCompatBaseURL,
   type ModelsDevProviderInfo, type ProviderFailure, type ReasoningEffort,
