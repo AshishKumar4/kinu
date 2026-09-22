@@ -49,7 +49,7 @@ export interface StreamPartInput {
 /** UTF-16 units one `stream_parts` row holds before the part continues in
  *  the next segment: at most three UTF-8 bytes each, so a row stays under
  *  the payload inline bound and far under the platform's row limit. */
-export const STREAM_SEGMENT_CHARS = 262_144;
+const STREAM_SEGMENT_CHARS = 262_144;
 
 interface MessageRow { role: string; native_content_kind: 'string' | 'parts'; envelope_json: string; sealed_at: number | null; content_json: string | null; content_path: string | null; content_digest: string | null }
 

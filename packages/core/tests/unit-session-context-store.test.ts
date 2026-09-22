@@ -2,7 +2,8 @@ import { expect, test } from 'bun:test';
 import * as v from 'valibot';
 import { createTestRuntime } from '@kinu.run/test-utils';
 import { initSessionContextTables } from '../src/session/schema';
-import { SessionMessages, STREAM_SEGMENT_CHARS } from '../src/session/messages';
+import { SessionMessages } from '../src/session/messages';
+import { PLATFORM_CATALOG } from '../src/platform-catalog';
 import { SessionPayloads } from '../src/session/payload';
 import { SessionContext } from '../src/session/context';
 import { SessionProposals } from '../src/session/proposals';
@@ -83,8 +84,11 @@ test('an accumulating part never puts one row over the platform limit and seals 
     const window = 'r'.repeat(300_000);
 
     for (let i = 0; i < 4; i++) s.messages.streamAppend('long', 0, window);
+    // The bound the segments protect: a row of UTF-16 units, at most three
+    // UTF-8 bytes each, stays inside the platform's row limit.
     const widest = s.testSql.db.query<{ n: number }, []>('SELECT MAX(length(text)) AS n FROM stream_parts').get()?.n ?? -1;
-    expect(widest).toBeLessThanOrEqual(STREAM_SEGMENT_CHARS);
+    expect(widest * 3).toBeLessThan(PLATFORM_CATALOG['do.sqlite.row_bytes'].limit.value);
+    expect(widest).toBeLessThan(300_000);
     expect(await s.messages.materialize({ messageId: 'long' })).toEqual({ role: 'assistant', content: [{ type: 'reasoning', text: window.repeat(4) }] });
     const parts = await s.messages.openParts('long');
 
