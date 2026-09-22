@@ -83,7 +83,7 @@ export async function daemonCommand(action: string | undefined, agent?: string):
 
   if (sub === 'logs') {
     const tail = readDaemonLogTail(LOG_PATH, 120);
-    console.log(tail === null ? DIM(`No daemon log at ${LOG_PATH}`) : tail);
+    console.log(tail ?? DIM(`No daemon log at ${LOG_PATH}`));
 
     return;
   }

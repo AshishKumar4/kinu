@@ -142,7 +142,7 @@ export async function setupCommand(opts: {
     // Without a terminal there is nothing to ask — fall through to the
     // honest instruction paths below instead of letting readline hang on
     // a pipe (the `curl | bash` installer freeze).
-    const shouldLogin = opts.yes || (canPrompt() && await confirm('Sign in and attach Cloudflare Workers AI permissions now?', true));
+    const shouldLogin = opts.yes === true || (canPrompt() && await confirm('Sign in and attach Cloudflare Workers AI permissions now?', true));
 
     if (shouldLogin) {
       await authCommand({ origin: opts.origin });

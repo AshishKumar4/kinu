@@ -11,6 +11,7 @@ import { join, resolve } from 'node:path';
 import { afterEach, describe, expect, test } from 'bun:test';
 import { tolerate } from '@kinu.run/core/obs';
 import * as v from 'valibot';
+import { present } from '@kinu.run/test-utils';
 
 const repoRoot = resolve(__dirname, '../../..');
 
@@ -107,7 +108,7 @@ describe('kinu daemon restart', () => {
     // the replacement. `kill(pid, 0)` cannot say this — a dead-but-unreaped
     // daemon reads alive, and that timing is the reaper's, not the product's.
     expect(readPid(home)).toBe(after);
-    expect(isAlive(after!)).toBe(true);
+    expect(isAlive(present(after, 'the daemon pid after the restart'))).toBe(true);
     expect(runDaemon(home, 'status').stdout).toContain(`running pid ${after}`);
   });
 
@@ -120,7 +121,7 @@ describe('kinu daemon restart', () => {
     expect(restart.stdout).toContain('was not running');
     const pid = readPid(home);
     expect(pid).not.toBeNull();
-    expect(isAlive(pid!)).toBe(true);
+    expect(isAlive(present(pid, 'the daemon pid'))).toBe(true);
   });
 
   test('an unknown action lists restart among the usable ones', () => {
@@ -155,7 +156,7 @@ describe('kinu daemon stop', () => {
   test('reports the stopped pid, clears the pidfile, and is honest when nothing runs', () => {
     const home = makeHome();
     runDaemon(home, 'start');
-    const pid = readPid(home)!;
+    const pid = present(readPid(home), 'the recorded daemon pid');
 
     const stopped = runDaemon(home, 'stop');
 

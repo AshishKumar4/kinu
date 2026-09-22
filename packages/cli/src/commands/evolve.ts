@@ -27,7 +27,7 @@ export async function evolveCommand(name: string, opts: {
   }
 
   const local = requireLocalAgent(name);
-  name = local.name;
+  const workspace = local.name;
   const dbPath = local.dbPath;
 
   // Use core's `DEFAULT_CONFIG.mcts` defaults unless the operator overrides
@@ -49,7 +49,7 @@ export async function evolveCommand(name: string, opts: {
 
   console.log('');
   console.log(`${BRAND} ${DIM('— Evolution')}`);
-  console.log(`  ${DIM('Agent:')}    ${ACCENT(name)}`);
+  console.log(`  ${DIM('Agent:')}    ${ACCENT(workspace)}`);
   console.log(`  ${DIM('Budget:')}   ${budget} iterations, ${branches} branches`);
   console.log(`  ${DIM('Mission:')}  ${info.purpose.slice(0, 60)}`);
   console.log('');

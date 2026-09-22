@@ -254,17 +254,20 @@ export function GuidedOnboarding(props: {
       })))
   ), [registry]);
 
-  const choices = activeStep === 'location'
-    ? (['cloud', 'local', 'both'] as const)
-    : activeStep === 'connection'
-      ? providers.map((state) => state.descriptor.id)
-      : activeStep === 'theme'
-        ? themeChoices.map((choice) => choice.label)
-        : activeStep === 'keymap'
-          ? KEYMAP_PRESET_IDS
-          : activeStep === 'workspace'
-            ? props.roles.map((role) => role.id)
-            : [];
+  /** The rows the active step offers, in the order they are shown. */
+  function stepChoices(): readonly string[] {
+    switch (activeStep) {
+      case 'location': return ['cloud', 'local', 'both'];
+      case 'connection': return providers.map((state) => state.descriptor.id);
+      case 'theme': return themeChoices.map((choice) => choice.label);
+      case 'keymap': return KEYMAP_PRESET_IDS;
+      case 'workspace': return props.roles.map((role) => role.id);
+      case 'tiers':
+      case null: return [];
+    }
+  }
+
+  const choices = stepChoices();
 
   const activate = useCallback(() => {
     if (readiness === null || activeStep === null) return;

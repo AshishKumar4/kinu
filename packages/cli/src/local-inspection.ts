@@ -1131,7 +1131,7 @@ function getLocalStatus(db: SqliteDb): LocalStatus {
   // listing that mutated every workspace it walked past would be wrong twice
   // over, so `writeSoul` keeps this one line current instead (identity/soul.ts).
   const mission = hasIdentity
-    ? get<{ mission: string | null }>(db, `SELECT mission FROM workspace_identity LIMIT 1`)?.mission?.trim() || null
+    ? get<{ mission: string | null }>(db, `SELECT mission FROM workspace_identity LIMIT 1`)?.mission?.trim() ?? null
     : null;
 
   return {

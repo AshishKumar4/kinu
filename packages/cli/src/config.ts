@@ -950,7 +950,8 @@ export function resolveMcpServers(): Record<string, McpServerConfig> {
 
 function deriveLLMConfigFromProviderCredentials(file: KinuConfig, model: string | undefined): LLMProviderConfig | null {
   const providerModel = model ?? preferredModelFromCredentials(file);
-  const hasCodexCredential = Boolean(process.env.CODEX_ACCESS_TOKEN || file.providers?.codex?.accessToken || file.providers?.codex?.refreshToken);
+  const hasCodexCredential = [process.env.CODEX_ACCESS_TOKEN, file.providers?.codex?.accessToken, file.providers?.codex?.refreshToken]
+    .some((token) => token !== undefined && token !== '');
 
   if (hasCodexCredential && (!providerModel || providerModel.startsWith('codex/') || !providerModel.includes('/'))) {
     return {

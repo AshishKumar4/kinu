@@ -3,7 +3,7 @@ import { join } from 'node:path';
 import { createTestRenderer } from '@opentui/core/testing';
 import { createRoot, flushSync } from '@opentui/react';
 import { describe, expect, test } from 'bun:test';
-import { scratchDir } from '@kinu.run/test-utils';
+import { present, scratchDir } from '@kinu.run/test-utils';
 import { TUI_ADVERTISED_HINTS, TUI_MARKS } from '@kinu.run/core';
 
 import {
@@ -197,7 +197,7 @@ describe('TUI product registries', () => {
   test('every built-in theme meets contrast, and one that does not is refused', () => {
     expect(() => createThemeRegistry(BUILTIN_TUI_THEMES)).not.toThrow();
 
-    const dark = BUILTIN_TUI_THEMES.find((theme) => theme.id === 'kinu-dark')!;
+    const dark = present(BUILTIN_TUI_THEMES.find((theme) => theme.id === 'kinu-dark'), 'the kinu-dark theme');
 
     const invisible: TuiThemeDefinition = {
       ...dark,
@@ -229,7 +229,7 @@ describe('TUI product registries', () => {
       id: 'paper-custom',
       label: 'Paper custom',
       appearance: 'light',
-      colors: BUILTIN_TUI_THEMES.find((theme) => theme.id === 'kinu-light')!.colors,
+      colors: present(BUILTIN_TUI_THEMES.find((theme) => theme.id === 'kinu-light'), 'the kinu-light theme').colors,
     });
 
     expect(parseCustomTheme(valid, 'paper-custom.json').id).toBe('paper-custom');

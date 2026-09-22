@@ -115,7 +115,8 @@ export async function localDoor(action: string | undefined, opts: { origin?: str
  * that is being rewritten underneath it.
  */
 async function install(opts: { origin?: string; port?: string }): Promise<void> {
-  const origin = opts.origin?.trim() || 'https://kinu.run';
+  const trimmedOrigin = opts.origin?.trim();
+  const origin = trimmedOrigin === undefined || trimmedOrigin === '' ? 'https://kinu.run' : trimmedOrigin;
   const port = readPort(opts.port);
   const layout = layoutOf();
 

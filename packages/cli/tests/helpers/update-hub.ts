@@ -203,7 +203,7 @@ export function startUpdateHub(opts: UpdateHubOptions): UpdateHub {
 
         // Production's accept: a second socket for the device replaces the first.
         for (const earlier of sockets) {
-          if (earlier.closed === null) earlier.closed = 'hub';
+          earlier.closed ??= 'hub';
         }
 
         for (const other of openSockets) {

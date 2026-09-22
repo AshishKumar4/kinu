@@ -47,7 +47,7 @@ function UserMessage({ content, attachments, steered, branched }: { content: str
         {attachments?.map((label, index) => (
           <text key={label || index}><span fg={colors.text.muted}>+ {label}</span></text>
         ))}
-        {(steered || branched) && (
+        {(steered === true || branched === true) && (
           <text><span fg={colors.text.muted}>{steered ? '↪ steered mid-turn' : '⎇ branched'}</span></text>
         )}
       </box>

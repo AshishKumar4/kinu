@@ -12,6 +12,7 @@ import {
 } from "@kinu.run/core";
 import { tolerate } from "@kinu.run/core/obs";
 import * as v from "valibot";
+import { present } from '@kinu.run/test-utils';
 
 /** Bytes to assertable text. Decoration and line endings are the invoking
  *  terminal talking, not the CLI's answer: both production deploys failed on
@@ -688,7 +689,7 @@ function startMockLlm(answer: string, usage: JsonObject | null = { prompt_tokens
     },
   });
 
-  return { port: server.port!, stop: () => server.stop(true) };
+  return { port: present(server.port, 'the mock server port'), stop: () => server.stop(true) };
 }
 
 /** Like startMockLlm, but the first `calls` streamed responses are the SAME
@@ -753,7 +754,7 @@ function startToolLoopMockLlm(
     },
   });
 
-  return { port: server.port!, stop: () => server.stop(true) };
+  return { port: present(server.port, 'the mock server port'), stop: () => server.stop(true) };
 }
 
 function startFailingLlm() {
@@ -765,7 +766,7 @@ function startFailingLlm() {
     },
   });
 
-  return { port: server.port!, stop: () => server.stop(true) };
+  return { port: present(server.port, 'the mock server port'), stop: () => server.stop(true) };
 }
 
 /** 200 OK, then an OpenAI-shaped error object in the SSE body — the shape a
@@ -791,7 +792,7 @@ function startInBandErrorLlm(payload: JsonValue) {
     },
   });
 
-  return { port: server.port!, stop: () => server.stop(true) };
+  return { port: present(server.port, 'the mock server port'), stop: () => server.stop(true) };
 }
 
 /** The Kinu worker as far as the CLI's provider registry cares: a model
@@ -808,7 +809,7 @@ function startEmptyModelMenuOrigin() {
     },
   });
 
-  return { port: server.port!, stop: () => server.stop(true) };
+  return { port: present(server.port, 'the mock server port'), stop: () => server.stop(true) };
 }
 
 describe("kinu create — an unusable model is named at creation", () => {

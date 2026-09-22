@@ -39,7 +39,9 @@ export async function chatCommand(
   opts: ChatCommandOptions,
 ): Promise<void> {
   // No name: let user pick from existing agents
-  if (!name) {
+  let chosen = name;
+
+  if (chosen === undefined || chosen === '') {
     if (!opts.classic && process.stdin.isTTY && process.stdout.isTTY) {
       // Lazy: opentui captures the terminal — it must never load on
       // non-TUI command paths (e.g. the installer's setup prompts).
@@ -59,10 +61,12 @@ export async function chatCommand(
     }
 
     if (agents.length === 1) {
-      name = agents[0].name;
+      chosen = agents[0].name;
     } else {
       console.log(`\n${DIM('Select a workspace:')}`);
-      agents.forEach((a, i) => console.log(`  ${ACCENT(String(i + 1))} ${a.label}`));
+
+      for (const [i, a] of agents.entries()) console.log(`  ${ACCENT(String(i + 1))} ${a.label}`);
+
       console.log('');
       const answer = await ask('Workspace #');
       const idx = parseInt(answer, 10) - 1;
@@ -72,11 +76,11 @@ export async function chatCommand(
         process.exit(1);
       }
 
-      name = agents[idx].name;
+      chosen = agents[idx].name;
     }
   }
 
-  const target = requireAgentTarget(name);
+  const target = requireAgentTarget(chosen);
 
   if (target.mode === 'local') ensureLocalDaemonRunning();
   installTurnDiagnostics();

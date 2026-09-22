@@ -206,7 +206,7 @@ export async function createCliAgent(input: CreateCliAgentInput): Promise<Create
       mode: 'cloud',
       displayName: agent.displayName,
       cloudName: agent.name,
-      alias: input.alias || undefined,
+      alias: input.alias === '' ? undefined : input.alias,
     });
     const aliasPath = input.alias ? writeAliasShim(agent.name, input.alias) : undefined;
 
@@ -333,7 +333,7 @@ export async function createCliAgent(input: CreateCliAgentInput): Promise<Create
     name,
     mode: 'local',
     localName: name,
-    alias: input.alias || undefined,
+    alias: input.alias === '' ? undefined : input.alias,
     cwd,
     workspaceId,
     // The database's own durable id from `workspace_identity`, so a ref

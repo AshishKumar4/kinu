@@ -260,7 +260,7 @@ function clearDefaultModelPrefixes(prefixes: readonly string[]): void {
     delete config.model;
   });
 
-  if (cleared) console.log(DIM(`  Cleared the default model (${cleared}).`));
+  if (cleared !== null) console.log(DIM(`  Cleared the default model (${cleared}).`));
 }
 
 /** `normalizeProvider`, but undefined instead of throwing. */

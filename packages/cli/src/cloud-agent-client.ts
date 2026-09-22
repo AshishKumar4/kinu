@@ -1028,7 +1028,8 @@ export class CloudAgentClient implements AgentClient {
     if (payload.error) {
       if (this.stoppingTurnIds.has(payload.id)) return;
       this.activeTurns.delete(payload.id);
-      const message = payload.body || 'Cloud agent stream failed.';
+      const body = payload.body ?? '';
+      const message = body === '' ? 'Cloud agent stream failed.' : body;
       this.emit({ type: 'error', message });
       active.settle(true);
 

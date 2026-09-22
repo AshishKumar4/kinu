@@ -24,6 +24,7 @@ import { createAcpAgent } from '../src/acp/agent';
 import { createCliSession } from '../src/session';
 import type { AgentClient, AgentClientEvent, AgentPrompt, AgentSendResult } from '../src/agent-client';
 import * as v from 'valibot';
+import { present } from '@kinu.run/test-utils';
 
 const TURN: AgentSendResult = { landed: 'turn', text: '', toolCalls: [], steps: 1, durationMs: 1, hadError: false };
 
@@ -396,7 +397,7 @@ describe('kinu acp — permission', () => {
         await newSession(ctx);
 
         // The adapter installed the channel; drive it as the shell tool would.
-        return fake.approval!({
+        return present(fake.approval, 'the fake client approval hook')({
           command: 'sudo systemctl restart nginx',
           executor: 'device',
           review: { decision: 'gate', hits: [{ decision: 'gate', rule: 'sudo', explanation: 'root' }] },
@@ -416,7 +417,7 @@ describe('kinu acp — permission', () => {
       async (ctx) => {
         await newSession(ctx);
 
-        return fake.approval!({
+        return present(fake.approval, 'the fake client approval hook')({
           command: 'rm -rf build',
           executor: 'device',
           review: { decision: 'gate', hits: [] },
@@ -436,7 +437,7 @@ describe('kinu acp — permission', () => {
       async (ctx) => {
         await newSession(ctx);
 
-        return fake.approval!({
+        return present(fake.approval, 'the fake client approval hook')({
           command: 'sudo reboot', executor: 'device', review: { decision: 'gate', hits: [] },
         });
       },

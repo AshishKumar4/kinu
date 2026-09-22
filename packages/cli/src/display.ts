@@ -180,7 +180,7 @@ export function createTurnStatus(opts: { hold?: () => boolean; tty?: boolean } =
     resume() {
       if (label === null || !tty) return;
 
-      if (!timer) timer = setInterval(draw, 80);
+      timer ??= setInterval(draw, 80);
       draw();
     },
   };
