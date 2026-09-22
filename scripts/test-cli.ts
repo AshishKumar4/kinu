@@ -19,6 +19,7 @@ const ISOLATED = [
 ] as const;
 
 const SUBPROCESS_HEAVY = [
+  'device-connect.test.ts',
   'label-command.test.ts',
   'local-model-resolver.test.ts',
   'local-run-events.test.ts',
