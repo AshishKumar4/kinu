@@ -85,12 +85,17 @@ function idleBody(): JsonValue {
   return { observedAt: Date.now(), activity: 'idle', decisionsWaiting: 0, hasUpdates: false, latestRun: null, primarySlate: null };
 }
 
-/** The mode the tissue reports, with the read model's poll behind it. */
-async function waitForMode(page: Page, mode: string, timeoutMs = 20_000): Promise<void> {
+/** The mode the tissue reports, with the read model's poll behind it. A frozen
+ *  picture ages only by the `step` of tissue seconds each poll advances it. */
+async function waitForMode(page: Page, mode: string, step = 0): Promise<void> {
   await page.waitForFunction(
-    (wanted) => window.__kinuAppBackground?.mode() === wanted,
-    { timeout: timeoutMs, polling: 100 },
-    mode,
+    (wanted: string, dt: number) => {
+      if (dt > 0) window.__kinuAppBackground?.advance?.(dt);
+
+      return window.__kinuAppBackground?.mode() === wanted;
+    },
+    { timeout: 20_000, polling: 100 },
+    mode, step,
   );
 }
 
@@ -308,7 +313,9 @@ describe('the living background', () => {
 
   test('follows the overview read model through idle, working and attention', async () => {
     await withGallery(async (gallery) => {
-      const page = await freshPage(gallery, '&path=/');
+      // Frozen: the flash ages by the steps below, never by the frames a loaded
+      // machine delivers late (each frame advances at most 0.05 s of tissue time).
+      const page = await freshPage(gallery, '&path=/', 'dark', true);
 
       try {
         await liveBackground(page);
@@ -330,9 +337,17 @@ describe('the living background', () => {
         await setOverview(page, 'checkout-fixes', {
           observedAt: Date.now(), activity: 'working', decisionsWaiting: 1, hasUpdates: false, latestRun: null, primarySlate: null,
         });
-        await waitForMode(page, 'attention');
-        await waitForMode(page, 'working', 3_000);
+        await waitForMode(page, 'attention', 1 / 60);
 
+        const afterFlash = await page.evaluate(() => {
+          const handle = window.__kinuAppBackground;
+
+          for (let i = 0; i < 120; i += 1) handle?.advance?.(1 / 60);
+
+          return handle?.mode();
+        });
+
+        expect(afterFlash).toBe('working');
         await page.screenshot({ path: join(SHOTS, 'following.png'), fullPage: false });
       } finally {
         await page.close();
