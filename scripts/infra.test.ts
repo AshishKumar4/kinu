@@ -14,8 +14,8 @@
 
 import { describe, expect, test } from 'bun:test';
 import {
-  CONTROL_PLANE_ACCESS_PATHS, type InfraEnvironment, type Infrastructure, type Resource, SUPPLY,
-  UNCAPTURED, UNOBSERVABLE, claimedHosts, deriveInfrastructure, envFields, exclusiveTo, readSites,
+  CONTROL_PLANE_ACCESS_PATHS, type InfraWorker, type Infrastructure, type Resource, SUPPLY,
+  UNCAPTURED, UNOBSERVABLE, claimedHosts, deriveInfrastructure, envFields, readSites,
   requiredIn, supplyCensus, vectorizeGeometry,
 } from './infra-manifest';
 import {
@@ -31,23 +31,14 @@ import { isProductSource, readMatching } from './sources';
 
 const infrastructure = deriveInfrastructure();
 
-/** The auth store for one environment. Named by NAMESPACE ID, the way the
- *  manifest names it: `kv_namespaces` carries no title (see UNCAPTURED) and both
- *  environments bind the same AUTH_KV, so the id is the only thing that keeps
- *  one deployment's sessions from another's. */
-function authStore(environment: string): Resource {
-  const found = infrastructure.resources.find((resource) =>
-    resource.kind === 'kv' && resource.environments.includes(environment));
+const { worker } = infrastructure;
 
-  if (found === undefined) throw new Error(`fixture lost ${environment}'s auth store`);
+/** The auth store. Named by NAMESPACE ID, the way the manifest names it:
+ *  `kv_namespaces` carries no title (see UNCAPTURED). */
+function authStore(): Resource {
+  const found = infrastructure.resources.find((resource) => resource.kind === 'kv');
 
-  return found;
-}
-
-function environmentNamed(key: string): InfraEnvironment {
-  const found = infrastructure.environments.find((entry) => entry.key === key);
-
-  if (found === undefined) throw new Error(`fixture lost the ${key} environment`);
+  if (found === undefined) throw new Error('fixture lost the auth store');
 
   return found;
 }
@@ -61,7 +52,7 @@ describe('the inventory is derived from the manifest, not written beside it', ()
     // A derivation that produced nothing would make every assertion below
     // vacuous — the exact shape this repository's ladder exists to refuse.
     expect(infrastructure.resources.length).toBeGreaterThan(20);
-    expect(infrastructure.environments.map((environment) => environment.key)).toEqual(['production']);
+    expect(worker.workerName).toBe('kinu');
     expect(infrastructure.accountId).not.toBe('');
 
     const ids = infrastructure.resources.map((resource) => resource.id);
@@ -75,7 +66,7 @@ describe('the inventory is derived from the manifest, not written beside it', ()
     expect(ids).toContain('wildcard-dns.*.kinu.run');
     expect(ids).toContain('email-routing.kinu.run');
     expect(ids).toContain('durable-object.kinu:KinuSandbox');
-    expect(authStore('production').environments).toEqual(['production']);
+    expect(authStore().binding).toBe('AUTH_KV');
     expect(new Set(ids).size).toBe(ids.length);
   });
 
@@ -85,7 +76,7 @@ describe('the inventory is derived from the manifest, not written beside it', ()
       infrastructure.resources.find((resource) => resource.id === id)?.required;
 
     // AUTH_KV is not optional in Env; BACKUP_BUCKET and MEMORY_VECTORS are.
-    expect(authStore('production').required).toBe(true);
+    expect(authStore().required).toBe(true);
     expect(required('r2.kinu-backups')).toBe(false);
     expect(required('vectorize.kinu-memory')).toBe(false);
     // And the derivation actually consulted Env rather than defaulting: the
@@ -114,110 +105,96 @@ describe('the inventory is derived from the manifest, not written beside it', ()
   });
 });
 
-describe('the supply census is pinned to `Env`, one environment at a time', () => {
-  const production = environmentNamed('production');
-
-  /** The same manifest with one environment's `vars` edited — the whole fixture
-   *  the union defect needs, because a per-environment census is exactly what a
-   *  one-environment omission is invisible to otherwise. */
-  function withVars(
-    edit: (environment: InfraEnvironment) => ReadonlyMap<string, string>,
-    only?: string,
-  ): Infrastructure {
-    return {
-      ...infrastructure,
-      environments: infrastructure.environments.map((environment) =>
-        only === undefined || environment.key === only
-          ? { ...environment, vars: new Map(edit(environment)) }
-          : environment),
-    };
+describe('the supply census is pinned to `Env`', () => {
+  /** The same manifest with the Worker's `vars` edited. */
+  function withVars(edit: (vars: ReadonlyMap<string, string>) => ReadonlyMap<string, string>): Infrastructure {
+    return { ...infrastructure, worker: { ...worker, vars: new Map(edit(worker.vars)) } };
   }
 
   test('SUPPLY classifies exactly the values no binding and no var supplies', () => {
     expect(supplyDrift(infrastructure)).toEqual([]);
-    expect(supplyCensus(production).length).toBeGreaterThan(5);
+    expect(supplyCensus(worker).length).toBeGreaterThan(5);
   });
 
+  test('a classified value the Worker supplies itself is a stale entry', () => {
+    const supplied = withVars((vars) => new Map([...vars, ['ANALYTICS_SQL_API_TOKEN', 'set-as-a-var']]));
 
-
-  test('a classified value that every environment supplies is a stale entry', () => {
-    const everywhere = withVars((environment) =>
-      new Map([...environment.vars, ['ANALYTICS_SQL_API_TOKEN', 'set-as-a-var']]));
-
-    const drift = supplyDrift(everywhere);
+    const drift = supplyDrift(supplied);
     expect(drift).toHaveLength(1);
     expect(drift[0]).toStartWith('ANALYTICS_SQL_API_TOKEN');
-    expect(drift[0]).toContain('every environment');
+    expect(drift[0]).toContain('supplied by a binding or a var');
   });
 
-  test('ordinary config vars are checked, per environment, against that environment', () => {
-    // A `config-var` entry is checked against the environment it belongs to.
+  test('an unclassified value nothing supplies is drift', () => {
+    const removed = withVars((vars) => new Map([...vars].filter(([name]) => name !== 'EMAIL_DOMAIN')));
+
+    const drift = supplyDrift(removed);
+    expect(drift).toHaveLength(1);
+    expect(drift[0]).toStartWith('EMAIL_DOMAIN');
+    expect(drift[0]).toContain('classified in no SUPPLY entry');
+  });
+
+  test('ordinary config vars are checked against the Worker\'s vars', () => {
     // `continue`ing the loop on every `config-var` entry would leave nothing
-    // checking them at all, in any environment.
+    // checking them at all.
     const listed = { state: 'present', detail: 'fixture', names: [] } as const;
 
-    const verdictOf = (environment: InfraEnvironment, name: string): string | undefined =>
-      supplyRows(environment, listed).find((entry) => entry.name === name)?.verdict;
+    const verdictOf = (name: string): string | undefined =>
+      supplyRows(worker, listed).find((entry) => entry.name === name)?.verdict;
 
     // A var the deployment sets is supplied, so it is not in the census at all;
     // a governed config-var it leaves unset is checked and reads absent.
-    expect(verdictOf(production, 'EMAIL_DOMAIN')).toBeUndefined();
-    expect(verdictOf(production, 'GOOGLE_OAUTH_CLIENT_ID')).toBe('absent');
+    expect(verdictOf('EMAIL_DOMAIN')).toBeUndefined();
+    expect(verdictOf('GOOGLE_OAUTH_CLIENT_ID')).toBe('absent');
     // A secret is never satisfied by a var: a plaintext secret in the config is
     // a misconfiguration, not a pass.
-    expect(verdictOf(production, 'CREDENTIAL_ENCRYPTION_KEY')).toBe('absent');
+    expect(verdictOf('CREDENTIAL_ENCRYPTION_KEY')).toBe('absent');
   });
 
-  test('a required value missing from one environment fails that environment by name', () => {
+  test('a required value missing fails by name', () => {
     const held = (names: readonly string[]) => ({ state: 'present', detail: 'fixture', names } as const);
+    const named = (entry: string): boolean => entry.startsWith('  CREDENTIAL_ENCRYPTION_KEY\n');
 
-    for (const environment of [production]) {
-      const missing = audit({ infrastructure, rows: [], supplied: supplyRows(environment, held([])), unreadFields: [] });
-      expect(missing.findings.some((entry) =>
-        entry.includes(`${environment.key}/CREDENTIAL_ENCRYPTION_KEY`))).toBe(true);
+    const missing = audit({ infrastructure, rows: [], supplied: supplyRows(worker, held([])), unreadFields: [] });
+    expect(missing.findings.some(named)).toBe(true);
 
-      // The negative control for the same environment: set it, and the finding
-      // is gone rather than merely reworded.
-      const set = audit({
-        infrastructure, rows: [], supplied: supplyRows(environment, held(['CREDENTIAL_ENCRYPTION_KEY'])), unreadFields: [],
-      });
+    // The negative control: set it, and the finding is gone rather than merely
+    // reworded.
+    const set = audit({
+      infrastructure, rows: [], supplied: supplyRows(worker, held(['CREDENTIAL_ENCRYPTION_KEY'])), unreadFields: [],
+    });
 
-      expect(set.findings.some((entry) =>
-        entry.includes(`${environment.key}/CREDENTIAL_ENCRYPTION_KEY`))).toBe(false);
-    }
+    expect(set.findings.some(named)).toBe(false);
   });
 
-  test('the green path prints the set it measured, per environment', () => {
+  test('the green path prints the set it measured', () => {
     // A gate that says "ok" without naming what it looked at is a gate nobody
     // can tell from a gate that looked at nothing.
     const fields = envFields();
+    const summary = supplySummary(worker, fields);
+    expect(summary).toStartWith('kinu supplies ');
+    expect(summary).toContain(`of ${String(fields.length)} \`Env\` fields`);
 
-    for (const environment of [production]) {
-      const summary = supplySummary(environment, fields);
-      expect(summary).toStartWith(`${environment.key} supplies `);
-      expect(summary).toContain(`of ${String(fields.length)} \`Env\` fields`);
-
-      for (const field of supplyCensus(environment, fields)) {
-        expect(summary).toContain(field.name);
-      }
+    for (const field of supplyCensus(worker, fields)) {
+      expect(summary).toContain(field.name);
     }
 
     // EMAIL_DOMAIN is a var here, so it is supplied, not governed.
-    expect(supplySummary(production, fields)).not.toContain('EMAIL_DOMAIN');
+    expect(summary).not.toContain('EMAIL_DOMAIN');
   });
 
   test('a paired secret is required exactly where its var is set', () => {
     // The Cloudflare provider is configured, so its secret is owed; Google's
     // client id is unset, so its secret is not. The eval identity's secret is
     // owed because DEV_USER_EMAIL is set.
-    expect(requiredIn('CLOUDFLARE_OAUTH_CLIENT_SECRET', production)).toBe(true);
-    expect(requiredIn('GOOGLE_OAUTH_CLIENT_SECRET', production)).toBe(false);
-    expect(requiredIn('DEV_IDENTITY_SECRET', production)).toBe(true);
+    expect(requiredIn('CLOUDFLARE_OAUTH_CLIENT_SECRET', worker)).toBe(true);
+    expect(requiredIn('GOOGLE_OAUTH_CLIENT_SECRET', worker)).toBe(false);
+    expect(requiredIn('DEV_IDENTITY_SECRET', worker)).toBe(true);
     // A paired var set to the empty string supplies nothing, so its secret is not owed.
-    const unset: InfraEnvironment = { ...production, vars: new Map([...production.vars, ['DEV_USER_EMAIL', '']]) };
+    const unset: InfraWorker = { ...worker, vars: new Map([...worker.vars, ['DEV_USER_EMAIL', '']]) };
     expect(requiredIn('DEV_IDENTITY_SECRET', unset)).toBe(false);
     // The root secret is unconditional: it seals the credential store.
-    expect(requiredIn('CREDENTIAL_ENCRYPTION_KEY', production)).toBe(true);
+    expect(requiredIn('CREDENTIAL_ENCRYPTION_KEY', worker)).toBe(true);
   });
 
   test('every classified value is read by some product source', () => {
@@ -229,7 +206,6 @@ describe('the supply census is pinned to `Env`, one environment at a time', () =
 });
 
 describe('the control plane\'s outer Access gate is declared and proved, not assumed', () => {
-  const production = environmentNamed('production');
   const ids = infrastructure.resources.map((resource) => resource.id);
 
   /** The Access application this deployment is supposed to have, as the API
@@ -255,7 +231,6 @@ describe('the control plane\'s outer Access gate is declared and proved, not ass
     for (const id of ['access-organization', 'access-application', 'access-policy', 'access-scope']) {
       const resource = infrastructure.resources.find((entry) => entry.id === `${id}.kinu.run`);
       expect(resource?.required).toBe(true);
-      expect(resource?.environments).toEqual(['production']);
       // Nothing here can be created by a program, so every row has to say what a
       // human does — an absent row whose detail is "does not exist" is unusable.
       expect((resource?.manual ?? '').length).toBeGreaterThan(60);
@@ -266,7 +241,7 @@ describe('the control plane\'s outer Access gate is declared and proved, not ass
 
 
   test('the hostnames the deployment claims are read from its routes', () => {
-    expect(claimedHosts(production)).toEqual({ app: 'kinu.run', wildcards: ['kinu.run'] });
+    expect(claimedHosts(worker)).toEqual({ app: 'kinu.run', wildcards: ['kinu.run'] });
   });
 
 
@@ -275,9 +250,9 @@ describe('the control plane\'s outer Access gate is declared and proved, not ass
     // `CONTROL_PLANE_ADMINS: ""` is the line that means NOBODY, and keying on
     // whether the KEY was typed made a feature explicitly turned off drag in
     // every value its enabled form needs.
-    const emptied: InfraEnvironment = { ...production, vars: new Map([['DEV_USER_EMAIL', '  ']]) };
+    const emptied: InfraWorker = { ...worker, vars: new Map([['DEV_USER_EMAIL', '  ']]) };
     expect(requiredIn('DEV_IDENTITY_SECRET', emptied)).toBe(false);
-    const filled: InfraEnvironment = { ...production, vars: new Map([['DEV_USER_EMAIL', 'eval-service@kinu.run']]) };
+    const filled: InfraWorker = { ...worker, vars: new Map([['DEV_USER_EMAIL', 'eval-service@kinu.run']]) };
     expect(requiredIn('DEV_IDENTITY_SECRET', filled)).toBe(true);
   });
 
@@ -454,7 +429,7 @@ describe('the verdict keeps absent, unknown and unobservable apart', () => {
   // equality in both directions: a fixture that omitted one would be red for
   // the stale-declaration reason and every count below would be off by one.
   const clean: readonly Row[] = [
-    row(authStore('production').id, 'present', true),
+    row(authStore().id, 'present', true),
     ...[...UNOBSERVABLE.keys()].map((id) => row(id, 'unobservable', true)),
   ];
 
@@ -515,10 +490,9 @@ describe('the verdict keeps absent, unknown and unobservable apart', () => {
     expect(undeclared.findings[0]).toContain('nothing declares that');
 
     // UNOBSERVABLE names rows that did not come back unobservable. Scoped to
-    // the rows THIS run declared: an entry owned by another environment's
-    // resource must NOT fail a run that never declares that row (staging runs
-    // failed on production's cron entry), while an entry whose row IS declared
-    // and observable is stale and fails.
+    // the rows THIS run declared: an entry whose row IS declared and observable
+    // is stale and fails, while one whose row this run never declared is left
+    // to the self-test that audits UNOBSERVABLE against the manifest.
     const gatewayId = [...UNOBSERVABLE.keys()].find((id) => id.startsWith('ai-gateway.'));
 
     if (gatewayId === undefined) throw new Error('fixture expects the ai-gateway blind entry');
@@ -528,7 +502,7 @@ describe('the verdict keeps absent, unknown and unobservable apart', () => {
 
     // Out of scope, out of verdict: the same entry with its row undeclared.
     const scoped = audit({
-      infrastructure, rows: [row(authStore('production').id, 'present', true)], supplied: [], unreadFields: [],
+      infrastructure, rows: [row(authStore().id, 'present', true)], supplied: [], unreadFields: [],
     });
 
     expect(scoped.findings).toEqual([]);
@@ -541,7 +515,7 @@ describe('the verdict keeps absent, unknown and unobservable apart', () => {
 
   test('a missing required secret fails and a missing optional one is reported only', () => {
     const secret = (required: boolean) => [{
-      environment: 'production', name: 'CREDENTIAL_ENCRYPTION_KEY',
+      name: 'CREDENTIAL_ENCRYPTION_KEY',
       verdict: 'absent' as const, required, detail: 'absent',
     }];
 
@@ -554,7 +528,7 @@ describe('the verdict keeps absent, unknown and unobservable apart', () => {
       infrastructure,
       rows: clean,
       supplied: [{
-        environment: 'production', name: '(all secrets)', verdict: 'unknown', required: true,
+        name: '(all secrets)', verdict: 'unknown', required: true,
         detail: 'token expired',
       }],
       unreadFields: [],
@@ -570,7 +544,7 @@ describe('the verdict keeps absent, unknown and unobservable apart', () => {
  * what it declares and a deploy that refuses itself.
  *
  * The red case is real and is this repository's: with `ControlPlaneDO` in
- * `migrations` and staging's 55 source gates green, the pre-deploy
+ * `migrations` and the 55 source gates green, the pre-deploy
  * infrastructure gate refuses the only command that could create the
  * namespace — no wrangler verb creates one, and provisioning is forbidden from
  * trying. The tolerance that answers it has to be narrow in three directions at
@@ -580,7 +554,7 @@ describe('the verdict keeps absent, unknown and unobservable apart', () => {
  */
 describe('the phases differ in exactly one tolerance, and only one direction', () => {
   const clean: readonly Row[] = [
-    row(authStore('production').id, 'present', true),
+    row(authStore().id, 'present', true),
     ...[...UNOBSERVABLE.keys()].map((id) => row(id, 'unobservable', true)),
   ];
 
@@ -600,10 +574,10 @@ describe('the phases differ in exactly one tolerance, and only one direction', (
     expect([...PHASES]).toEqual(['full', 'bootstrap', 'post-deploy']);
     // An explicit argv wins over the variable the deploy script exports, which is
     // what lets step 5 spell `--phase=post-deploy` inside a bootstrap deploy.
-    expect(phaseFrom(['production', '--phase=post-deploy'], { KINU_INFRA_PHASE: 'bootstrap' }))
+    expect(phaseFrom(['--phase=post-deploy'], { KINU_INFRA_PHASE: 'bootstrap' }))
       .toBe('post-deploy');
     expect(phaseFrom([], { KINU_INFRA_PHASE: 'bootstrap' })).toBe('bootstrap');
-    expect(phaseFrom(['production'], {})).toBe('full');
+    expect(phaseFrom([], {})).toBe('full');
     // Refused, never defaulted: a mistyped phase that fell back to `full` would
     // turn step 5 into a weaker check nobody asked for and would fail a bootstrap
     // deploy for a reason no output explains.
@@ -659,7 +633,7 @@ describe('the phases differ in exactly one tolerance, and only one direction', (
     // the fixture below is exactly the shape `supplyRows` produces for one.
     const external: readonly Row[] = [
       // Provisioned by hand; a deploy has never created a KV namespace.
-      row(authStore('production').id, 'absent', true, 'manual'),
+      row(authStore().id, 'absent', true, 'manual'),
       // `wrangler r2 bucket create` creates it; `bun run deploy` does not.
       row('r2.kinu-backups', 'absent', true, 'wrangler-cli'),
       // Nothing here can create it at all.
@@ -667,7 +641,7 @@ describe('the phases differ in exactly one tolerance, and only one direction', (
     ];
 
     const secrets = ['WEBHOOK_ROUTE_SECRET', 'DEV_IDENTITY_SECRET'].map((name) => ({
-      environment: 'production', name, verdict: 'absent' as const, required: true,
+      name, verdict: 'absent' as const, required: true,
       detail: 'prompt — absent ⇒ the feature it names is off',
     }));
 
@@ -748,7 +722,7 @@ describe('provisioning is idempotent, and refuses what it cannot see', () => {
   if (bucket === undefined) throw new Error('fixture lost r2.kinu-backups');
 
   test('a resource that exists is a no-op that says so', () => {
-    const second = plan(bucket, { state: 'present', detail: 'kinu-backups' }, undefined);
+    const second = plan(bucket, { state: 'present', detail: 'kinu-backups' });
     expect(second.action).toBe('skip');
     // The whole of idempotence: a second run issues no argv at all, so it cannot
     // create a duplicate and cannot fail on "already exists".
@@ -756,12 +730,12 @@ describe('provisioning is idempotent, and refuses what it cannot see', () => {
   });
 
   test('a resource that does not exist is created, once, with the manifest argv', () => {
-    const first = plan(bucket, { state: 'absent' }, undefined);
+    const first = plan(bucket, { state: 'absent' });
     expect(first).toEqual({ action: 'create', argv: ['r2', 'bucket', 'create', 'kinu-backups'] });
   });
 
   test('a lookup that FAILED creates nothing — the defect the third state exists for', () => {
-    const refused = plan(bucket, { state: 'unknown', reason: 'token expired' }, undefined);
+    const refused = plan(bucket, { state: 'unknown', reason: 'token expired' });
     expect(refused.action).toBe('refuse');
     expect('argv' in refused).toBe(false);
     expect(refused.action === 'refuse' && refused.detail).toContain('token expired');
@@ -772,27 +746,26 @@ describe('provisioning is idempotent, and refuses what it cannot see', () => {
     const gateway = infrastructure.resources.find((resource) => resource.id === 'ai-gateway.kinu-ai-gateway');
 
     if (gateway === undefined) throw new Error('fixture lost the AI Gateway');
-    const refused = plan(gateway, { state: 'absent' }, undefined);
+    const refused = plan(gateway, { state: 'absent' });
     expect(refused.action).toBe('refuse');
     expect(refused.action === 'refuse' && refused.detail).toContain('no wrangler command creates it');
   });
 });
 
-describe('teardown refuses by default and never takes a shared resource', () => {
-  test('the confirmation names the worker and the environment', () => {
+describe('teardown refuses by default', () => {
+  test('the confirmation names the worker', () => {
     // A `-y` can be produced by a shell that answers yes to everything, and a
     // generic "yes, delete" can be pasted from a runbook for another deployment.
-    expect(confirmationPhrase('kinu', 'production')).toBe('destroy kinu production');
-    expect(confirmationPhrase('kinu', 'production')).not.toBe('destroy kinu');
+    expect(confirmationPhrase('kinu')).toContain('kinu');
+    expect(confirmationPhrase('kinu')).not.toBe(confirmationPhrase('kinu-fork'));
   });
 
   test('the order is worker first, session store last, and only deletable resources', () => {
-    const deleted = partition(exclusiveTo(infrastructure, 'production')).deleted;
+    const deleted = partition(infrastructure.resources).deleted;
     const kinds = deleted.map((resource) => resource.kind);
     expect(kinds[0]).toBe('worker');
     expect(kinds.at(-1)).toBe('kv');
-    // Production's own bucket and index go with it; the shared one does not
-    // reach here at all.
+    // The buckets and the index go with it.
     expect(deleted.map((resource) => resource.id)).toContain('r2.kinu-backups');
     // A Durable Object namespace has no delete command; it goes away with its
     // Worker. Anything with no `destroy` must not appear here at all, or the run
@@ -806,7 +779,7 @@ describe('teardown refuses by default and never takes a shared resource', () => 
     // namespaces — every UserDO profile, every agent's state — under a heading
     // that says they OUTLIVE the teardown is the exact opposite of what
     // `wrangler delete` does to them, so they belong in the swept group.
-    const mine = exclusiveTo(infrastructure, 'production');
+    const mine = infrastructure.resources;
     const fate = partition(mine);
     const covered = [...fate.deleted, ...fate.swept, ...fate.outlives].map((resource) => resource.id);
     expect(covered.length).toBe(mine.length);

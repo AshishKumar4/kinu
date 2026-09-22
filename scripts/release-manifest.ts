@@ -56,7 +56,6 @@ export const VAR_POLICY = {
   CLOUDFLARE_OAUTH_TOKEN_AUTH_METHOD: 'carried',
   CLOUDFLARE_AI_GATEWAY_ID: 'carried',
   CLOUDFLARE_ACCOUNT_ID: 'derived',
-  ANALYTICS_DATASET_SUFFIX: 'carried',
   CONTROL_PLANE_ADMINS: 'derived',
   DEV_USER_EMAIL: 'ours',
   OPS_ALERT_EMAIL: 'ours',

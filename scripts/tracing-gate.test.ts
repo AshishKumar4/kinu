@@ -1,9 +1,9 @@
 import { describe, expect, test } from 'bun:test';
-import { auditTracing, environmentsOf, tracerCallSites } from './tracing-gate';
-import type { EnvironmentConfig, SpanObservations } from './tracing-gate';
+import { auditTracing, tracerCallSites, tracingConfigOf } from './tracing-gate';
+import type { SpanObservations, TracingConfig } from './tracing-gate';
 import { isProductSource, readMatching } from './sources';
 
-const TRACED: EnvironmentConfig = {
+const TRACED: TracingConfig = {
   label: 'wrangler.jsonc', workerName: 'kinu', tracesEnabled: true, tailConsumers: ['kinu-sink'],
 };
 
@@ -26,10 +26,7 @@ describe('tracing — the census is derived from the product corpus', () => {
   });
 
   test('the live config enables traces where the call site ships', () => {
-    const environments = environmentsOf('packages/cf-backend/wrangler.jsonc');
-
-    expect(environments.length).toBeGreaterThan(0);
-    expect(environments.every((env) => env.tracesEnabled)).toBe(true);
+    expect(tracingConfigOf('packages/cf-backend/wrangler.jsonc').tracesEnabled).toBe(true);
   });
 });
 

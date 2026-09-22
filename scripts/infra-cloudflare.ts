@@ -260,7 +260,7 @@ export function container(name: string, image: string): Observation {
   return present(row.image === image
     ? `${row.id} running ${row.image}`
     : `${row.id} running ${row.image} — MANIFEST DECLARES ${image}; the SDK logs a version `
-      + 'mismatch on every container start until that environment is redeployed');
+      + 'mismatch on every container start until the Worker is redeployed');
 }
 
 /**
@@ -323,9 +323,8 @@ export type Deployment =
  * typed as a `string`. The active deployment names a version and the version
  * carries the complete binding set, both through wrangler's own commands.
  */
-export function deployment(environment: string | undefined): Deployment {
-  const flag = environment === undefined ? [] : ['--env', environment];
-  const status = wrangler(['deployments', 'status', '--json', ...flag]);
+export function deployment(): Deployment {
+  const status = wrangler(['deployments', 'status', '--json']);
 
   if (!status.ok) {
     const complaint = why(status);
@@ -356,7 +355,7 @@ export function deployment(environment: string | undefined): Deployment {
 
   if (versionId.length === 0) return { state: 'absent' };
 
-  const view = wrangler(['versions', 'view', versionId, '--json', ...flag]);
+  const view = wrangler(['versions', 'view', versionId, '--json']);
 
   if (!view.ok) {
     return { state: 'unknown', reason: `\`wrangler versions view\` failed: ${why(view)}` };
@@ -396,9 +395,8 @@ export function deployment(environment: string | undefined): Deployment {
  * Cloudflare does not return them, which is also why provisioning displays a
  * generated root secret exactly once.
  */
-export function secretNames(environment: string | undefined): Observation & { readonly names?: readonly string[] } {
-  const flag = environment === undefined ? [] : ['--env', environment];
-  const run = wrangler(['secret', 'list', '--format', 'json', ...flag]);
+export function secretNames(): Observation & { readonly names?: readonly string[] } {
+  const run = wrangler(['secret', 'list', '--format', 'json']);
 
   if (!run.ok) {
     const complaint = why(run);
@@ -877,7 +875,7 @@ export async function accessApplication(
   paths: readonly string[],
 ): Promise<Observation> {
   if (aud.length === 0) {
-    return { state: 'absent', detail: 'CONTROL_PLANE_ACCESS_AUD is empty in this environment, so '
+    return { state: 'absent', detail: 'CONTROL_PLANE_ACCESS_AUD is empty in the Worker vars, so '
       + 'no Access application is named and the Worker can verify nothing' };
   }
 
@@ -949,7 +947,7 @@ export async function accessPolicies(host: string, aud: string): Promise<Observa
  * Whether Access is confined to the control-plane paths — the NEGATIVE assertion.
  *
  * `present` means the property HOLDS: no application on the account covers this
- * environment's app host beyond `paths`, and none covers any of its wildcard
+ * Worker's app host beyond `paths`, and none covers any of its wildcard
  * hostnames at all. `absent` means one does, and NAMES it, because which
  * application is over-broad is the entire actionable content of the finding — a
  * static manual step written before the run cannot say it. The rule is

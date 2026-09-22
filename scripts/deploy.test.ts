@@ -383,7 +383,7 @@ describe("deploy gate", () => {
   test("the published version is annotated with the build sha", () => {
     const source = readFileSync(join(REPO_ROOT, "scripts", "deploy.sh"), "utf8");
     expect(source).toContain(
-      'KINU_WRANGLER_ARGS+=(--tag "$KINU_SHA" --message "kinu $KINU_ENV $KINU_SHA")',
+      'KINU_WRANGLER_ARGS+=(--tag "$KINU_SHA" --message "kinu production $KINU_SHA")',
     );
     expect(source).toContain('npx wrangler deploy "${KINU_WRANGLER_ARGS[@]}"');
   });
@@ -810,7 +810,7 @@ describe("deploy gate", () => {
     // At column zero, and after the upload: nested inside any `if`, this would be
     // a phase some deploys skip, which is the whole thing `--bootstrap` must not
     // become.
-    const invocation = 'if bun scripts/infra-verify.ts "$KINU_ENV" --phase=post-deploy; then';
+    const invocation = 'if bun scripts/infra-verify.ts --phase=post-deploy; then';
     const upload = 'if npx wrangler deploy "${KINU_WRANGLER_ARGS[@]}" 2>&1 | tee "$KINU_DEPLOY_LOG"; then';
     expect(lines).toContain(invocation);
     expect(lines).toContain(upload);
@@ -843,14 +843,13 @@ describe("deploy gate", () => {
   // indistinguishable from an allowlist typo. So the proof has to be a gate, and
   // the gate has to be one no deploy can proceed past.
   test("no deploy can proceed without the gate that proves Access covers the admin plane", () => {
-    // The declaration, from the manifest rather than from prose: production
+    // The declaration, from the manifest rather than from prose: the Worker
     // declares the organization, the application, its Allow policy and the
     // NEGATIVE scope assertion, and every one of them is required — so an absent
     // or unreadable row is a finding and `gate:infra` exits non-zero.
     const infrastructure = deriveInfrastructure();
 
-    const access = infrastructure.resources.filter((resource) =>
-      resource.id.startsWith('access-') && resource.environments.includes('production'));
+    const access = infrastructure.resources.filter((resource) => resource.id.startsWith('access-'));
 
     expect(access.map((resource) => resource.id).sort()).toEqual([
       'access-application.kinu.run',
