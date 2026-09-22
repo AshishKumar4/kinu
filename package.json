@@ -61,6 +61,8 @@
     "gate:typecheck-coverage": "bun scripts/typecheck-coverage.ts",
     "gate:python-suites": "bun scripts/python-suites.ts",
     "sweep:mutation": "bun scripts/mutation-sweep.ts",
+    "census:bloat": "bun scripts/bloat-census.ts",
+    "proof:comment-only": "bun scripts/comment-only.ts",
     "gate:hammer": "bun scripts/hammer.ts",
     "gate:mutation-fences": "bun scripts/mutation-fences.ts",
     "test:eval": "bun scripts/ladder.ts --run bash scripts/eval-tier.sh",
