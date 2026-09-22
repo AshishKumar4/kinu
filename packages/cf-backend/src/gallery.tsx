@@ -3347,7 +3347,7 @@ function GalleryChatTabs({ clearable = true }: { clearable?: boolean }) {
 const MCTS_NOTICE: readonly ComposerNotice[] = [{
   id: "mcts",
   tone: "danger",
-  text: "Couldn't refresh MCTS.",
+  text: "Could not refresh MCTS.",
   action: { label: "Retry", onClick: () => {} },
 }];
 
@@ -4454,7 +4454,7 @@ function GalleryModal() {
         </>}
       >
         <p className="text-xs p-text-2 leading-relaxed">
-          Remove <span className="font-medium p-text">Checkout coupon bug</span> and clear its server-side state? This cannot be undone.
+          Remove <span className="font-medium p-text">Checkout coupon bug</span> and delete everything in it? This cannot be undone.
         </p>
       </Modal>
     </div>

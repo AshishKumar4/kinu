@@ -582,7 +582,7 @@ export function FrontierPanel({ frontier, onOpen }: {
             className="w-full flex flex-wrap items-baseline gap-x-3 gap-y-0.5 rounded-md px-1.5 py-0.5 text-left p-annotation p-card-hover transition-colors cursor-pointer">
             <span className="p-text-2 truncate max-w-[10rem]" title={candidate.nodeId}>{candidate.nodeId}</span>
             {frontier.axes.map((axis) => (
-              <span key={axis.id} className="whitespace-nowrap p-text-3" title={`${axis.id} — ${axis.direction}`}>
+              <span key={axis.id} className="whitespace-nowrap p-text-3" title={`${axis.id}: ${axis.direction}`}>
                 {axis.id} <span className="p-text-2">{formatEvidenceValue(candidate.evidence[axis.id])}</span>
               </span>
             ))}
@@ -1017,7 +1017,7 @@ function SwarmResolutionBody(
       {resolution.kind === "preset" && (
         <dl className="mt-1.5 grid gap-x-3 gap-y-1.5 [grid-template-columns:repeat(auto-fit,minmax(5.25rem,1fr))]">
           {swarmAxisRows(resolution.config).map((row) => (
-            <div key={row.axis} className="min-w-0" title={`${row.axis} — ${AXIS_MEANING[row.axis]}`}>
+            <div key={row.axis} className="min-w-0" title={`${row.axis}: ${AXIS_MEANING[row.axis]}`}>
               <dt className="p-eyebrow">{row.axis}</dt>
               <dd className="p-annotation p-text break-words">{row.value}</dd>
             </div>

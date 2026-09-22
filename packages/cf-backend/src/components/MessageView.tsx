@@ -611,12 +611,12 @@ export function DeviceOfflineRow({ devices }: { devices: ReadonlyArray<Unavailab
   if (devices === null) return null;
   const [only] = devices;
 
-  let offline: ReactNode = <span>No computer connected <Link to="/devices" className="p-accent hover:underline">Connect</Link></span>;
+  let offline: ReactNode = <span>No machine connected <Link to="/devices" className="p-accent hover:underline">Connect</Link></span>;
 
   if (only !== undefined && devices.length === 1) {
     offline = <span>{only.label} is offline</span>;
   } else if (devices.length > 1) {
-    offline = <span>Your computers are offline</span>;
+    offline = <span>Your machines are offline</span>;
   }
 
   return (

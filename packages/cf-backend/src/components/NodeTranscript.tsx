@@ -243,7 +243,7 @@ function EmptyTrace({ view }: { view: NodeTranscriptView }) {
   return (
     <EmptyState icon={<BrainIcon size={24} />} title="This branch recorded no steps"
       hint={view.errorMessage
-        ? "It stopped before finishing a step; the reason is above."
+        ? "It stopped before finishing a step. The reason is above."
         : "It stopped before finishing its first step, and reported no error."} />
   );
 }
@@ -643,7 +643,7 @@ export function NodeTranscript({ selection, trees, rpc, headActivity, headDeltas
     return (
       <div className="min-h-0 flex-1 flex items-center justify-center rounded-lg border p-border p-surface">
         <EmptyState icon={<TreeStructureIcon size={28} />} title="Pick a branch"
-          hint="Select a node to read its input, every step, and its answer." />
+          hint="Select one in the tree to read its input, every step, and its answer." />
       </div>
     );
   }
