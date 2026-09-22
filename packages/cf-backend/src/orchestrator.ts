@@ -563,7 +563,7 @@ export class OrchestratorAgent extends ActorAgent {
       return { error: 'This workspace has no owner yet, so there is no experience library to reach.' };
     }
 
-    return runExperienceAction(deps, input);
+    return runExperienceAction(deps, { value: input });
   }
 
   /**
