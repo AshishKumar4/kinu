@@ -311,13 +311,18 @@ export const ActivitySpendSchema = v.object({ spend: WorkspaceSpendSchema });
  * method allowlist and the per-method auth policy; this is the ONE
  * method-shaped path between the CLI and a cloud agent.
  */
+export interface AgentRpcCall<Input, T> {
+  readonly origin: string;
+  readonly token: string;
+  /** The cloud workspace the method runs against. */
+  readonly name: string;
+  readonly method: string;
+  readonly schema: v.GenericSchema<Input, T>;
+  readonly args?: JsonValue[];
+}
+
 export async function callAgentRpc<Input, T = Input>(
-  origin: string,
-  token: string,
-  name: string,
-  method: string,
-  schema: v.GenericSchema<Input, T>,
-  args: JsonValue[] = [],
+  { origin, token, name, method, schema, args = [] }: AgentRpcCall<Input, T>,
 ): Promise<T> {
   const body = await cloudJson(v.object({ result: JsonValueSchema }), origin, `/api/cli/workspaces/${encodeURIComponent(name)}/rpc`, {
     method: 'POST',

@@ -11,7 +11,7 @@ export function useComposerPaste(options: {
   input: RefObject<TextareaRenderable | null>;
   enabled: RefObject<boolean>;
   limitBytes: number;
-  note(message: string): void;
+  note: (message: string) => void;
 }) {
   const pastes = useMemo(() => new Map<string, string>(), []);
   const sequence = useMemo(() => ({ text: 0, image: 0 }), []);

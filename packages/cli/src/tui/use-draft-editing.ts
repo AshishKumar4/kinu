@@ -64,7 +64,8 @@ export function useDraftEditing(input: RefObject<TextareaRenderable | null>, ren
   }, [input]);
 
   const external = useCallback(async (text: string): Promise<string> => {
-    const command = process.env.VISUAL?.trim() || process.env.EDITOR?.trim();
+    const visual = process.env.VISUAL?.trim();
+  const command = visual === undefined || visual === '' ? process.env.EDITOR?.trim() : visual;
 
     if (!command) throw new Error('Set VISUAL or EDITOR to open an external editor.');
     const directory = await mkdtemp(join(tmpdir(), 'kinu-draft-'));

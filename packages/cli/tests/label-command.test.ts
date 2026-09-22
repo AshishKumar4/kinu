@@ -76,7 +76,7 @@ function seedWorkspace(name: string, size = 600): World {
     truthByTurn.set(`turn-${i}`, reallyNegative ? 'corrected' : 'accepted');
     recordTurnOutcome(sql, actor, {
       turnId: `turn-${i}`,
-      outcome: flagged ? (random() < 0.25 ? 'frustrated' : 'corrected') : 'accepted',
+      outcome: turnOutcome(flagged, random()),
       confidence: 0.8,
       source: 'classifier',
       userMessage: `refactor the token store (#${i})`,
@@ -117,6 +117,14 @@ function fillFile(path: string, truth: World['truth'], answer = (t: string): str
   });
 
   writeFileSync(path, filled.join('\n'));
+}
+
+/** How a seeded turn reads to the labeller: a flagged turn is frustrated a
+ *  quarter of the time, corrected otherwise. */
+function turnOutcome(flagged: boolean, roll: number): 'frustrated' | 'corrected' | 'accepted' {
+  if (!flagged) return 'accepted';
+
+  return roll < 0.25 ? 'frustrated' : 'corrected';
 }
 
 describe('kinu label', () => {

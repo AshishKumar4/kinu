@@ -64,8 +64,8 @@ function makeSurface(initial: PendingDeviceConsent[] = []) {
     polled: awaiting(pollWaiters, () => polls),
     /** Resolves once `count` decisions reached the surface. */
     settled: awaiting(resolveWaiters, () => resolved.length),
-    setPending(next: PendingDeviceConsent[]) { pending = next; },
-    setResolveOk(ok: boolean) { resolveOk = ok; },
+    setPending: (next: PendingDeviceConsent[]) => { pending = next; },
+    setResolveOk: (ok: boolean) => { resolveOk = ok; },
   };
 }
 
@@ -84,7 +84,7 @@ function collectNotes() {
         else waiters.push(waiter);
       }
     },
-    noted(count: number): Promise<void> {
+    noted: (count: number): Promise<void> => {
       if (notes.length >= count) return Promise.resolve();
       const { promise, resolve } = Promise.withResolvers<void>();
       waiters.push({ count, resolve });

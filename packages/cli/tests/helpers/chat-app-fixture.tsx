@@ -184,11 +184,21 @@ export function fakeClient(options: FakeClientOptions) {
   };
 }
 
+/** One row of the workspace drawer, as a test declares it. */
+export interface FixtureWorkspace {
+  name: string;
+  label: string;
+  mode: 'local' | 'cloud';
+  cloudName?: string;
+  cwd?: string;
+  workspaceId?: string;
+}
+
 export async function mountChat(
   client: AgentClient,
   options: {
     tui?: ChatAppOpts['tui'];
-    listWorkspaces?: () => Array<{ name: string; label: string; mode: 'local' | 'cloud'; cloudName?: string; cwd?: string; workspaceId?: string }>;
+    listWorkspaces?: () => FixtureWorkspace[];
     onWorkspaceSelect?: (name: string) => Promise<AgentClient>;
     hubData?: TuiHubData;
     /** How a mounted surface re-reads its hub after a switch. Left alone, it

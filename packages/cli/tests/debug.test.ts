@@ -403,7 +403,7 @@ describe('kinu debug — cloud backend', () => {
         const method = v.parse(v.string(), body.method);
         const args = v.parse(JsonArraySchema, body.args);
         calls.push(method);
-        const respond = (result: JsonValue) => Response.json({ result });
+        const respond = (value: JsonValue) => Response.json({ result: value });
 
         switch (method) {
           case 'getWorkspaceSnapshot': return respond({ status: { displayName: 'skywriter', purpose: 'p', scaffoldVersion: 1, model: 'x' } });
@@ -436,7 +436,7 @@ describe('kinu debug — cloud backend', () => {
           case 'getFacts': return respond([]);
           case 'getMemoryContent': return respond('');
           case 'getActivitySnapshot': return respond({ latest: null, log: [] });
-          default: return Response.json({ error: `unhandled ${body.method}` }, { status: 404 });
+          default: return Response.json({ error: `unhandled ${method}` }, { status: 404 });
         }
       },
     });

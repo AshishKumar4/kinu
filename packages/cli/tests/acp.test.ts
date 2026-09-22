@@ -20,10 +20,12 @@ import {
   type SessionNotification,
 } from '@agentclientprotocol/sdk';
 import type { ShellApprovalHandler } from '@kinu.run/cli-backend';
+import type { ShellApprovalOutcome, ShellApprovalRequest } from '@kinu.run/core';
 import { createAcpAgent } from '../src/acp/agent';
 import { createCliSession } from '../src/session';
 import type { AgentClient, AgentClientEvent, AgentPrompt, AgentSendResult } from '../src/agent-client';
 import * as v from 'valibot';
+import { present } from '@kinu.run/test-utils';
 
 const TURN: AgentSendResult = { landed: 'turn', text: '', toolCalls: [], steps: 1, durationMs: 1, hadError: false };
 
@@ -186,6 +188,16 @@ async function newSession(ctx: ClientContext, cwd = '/work'): Promise<string> {
   return session.sessionId;
 }
 
+/** Prompt a fresh session and report every update the agent sent back. */
+async function promptUpdates(fake: Fake): Promise<SessionNotification['update'][]> {
+  return withConnection(fake, async (ctx, collected) => {
+    const sessionId = await newSession(ctx);
+    await ctx.request(AGENT_METHODS.session_prompt, { sessionId, prompt: [{ type: 'text', text: 'go' }] });
+
+    return collected.map((u) => u.update);
+  });
+}
+
 describe('kinu acp — initialization', () => {
   test('reports the protocol version and the capabilities it actually implements', async () => {
     const fake = fakeClient();
@@ -244,12 +256,7 @@ describe('kinu acp — prompt turn', () => {
       ],
     });
 
-    const updates = await withConnection(fake, async (ctx, collected) => {
-      const sessionId = await newSession(ctx);
-      await ctx.request(AGENT_METHODS.session_prompt, { sessionId, prompt: [{ type: 'text', text: 'go' }] });
-
-      return collected.map((u) => u.update);
-    });
+    const updates = await promptUpdates(fake);
 
     expect(updates).toContainEqual(expect.objectContaining({
       sessionUpdate: 'tool_call',
@@ -274,12 +281,7 @@ describe('kinu acp — prompt turn', () => {
       ],
     });
 
-    const updates = await withConnection(fake, async (ctx, collected) => {
-      const sessionId = await newSession(ctx);
-      await ctx.request(AGENT_METHODS.session_prompt, { sessionId, prompt: [{ type: 'text', text: 'go' }] });
-
-      return collected.map((u) => u.update);
-    });
+    const updates = await promptUpdates(fake);
 
     expect(updates).toContainEqual(expect.objectContaining({
       sessionUpdate: 'tool_call_update', toolCallId: 'tc-9', status: 'failed',
@@ -296,12 +298,7 @@ describe('kinu acp — prompt turn', () => {
       ],
     });
 
-    const updates = await withConnection(fake, async (ctx, collected) => {
-      const sessionId = await newSession(ctx);
-      await ctx.request(AGENT_METHODS.session_prompt, { sessionId, prompt: [{ type: 'text', text: 'go' }] });
-
-      return collected.map((u) => u.update);
-    });
+    const updates = await promptUpdates(fake);
 
     const settled = updates.filter((u) => u.sessionUpdate === 'tool_call_update');
     expect(settled).toEqual([
@@ -315,12 +312,7 @@ describe('kinu acp — prompt turn', () => {
       events: [{ type: 'evolution', event: 'scaffold', message: 'promoted v2' }],
     });
 
-    const updates = await withConnection(fake, async (ctx, collected) => {
-      const sessionId = await newSession(ctx);
-      await ctx.request(AGENT_METHODS.session_prompt, { sessionId, prompt: [{ type: 'text', text: 'go' }] });
-
-      return collected.map((u) => u.update);
-    });
+    const updates = await promptUpdates(fake);
 
     expect(updates).toContainEqual(expect.objectContaining({ sessionUpdate: 'agent_thought_chunk' }));
     expect(updates.some((u) => u.sessionUpdate === 'agent_message_chunk')).toBe(false);
@@ -346,7 +338,7 @@ describe('kinu acp — prompt content', () => {
     const sent = v.parse(v.object({
       text: v.string(),
       files: v.array(v.object({ url: v.string(), mediaType: v.string() })),
-    }), fake.sent[0]!.prompt);
+    }), fake.sent[0].prompt);
 
     expect(sent.text).toContain('explain this');
     expect(sent.text).toContain('const a = 1;');
@@ -386,65 +378,63 @@ describe('kinu acp — cancellation', () => {
   });
 });
 
+interface PermissionCase {
+  /** What this case proves, as the test is named. */
+  name: string;
+  command: string;
+  hits: ShellApprovalRequest['review']['hits'];
+  /** The answer the editor gives to the permission request. */
+  answer: RequestPermissionResponse;
+  outcome: ShellApprovalOutcome;
+}
+
+const PERMISSION_CASES: PermissionCase[] = [
+  {
+    name: 'a gated command is put to the client and an allow answer comes back',
+    command: 'sudo systemctl restart nginx',
+    hits: [{ decision: 'gate', rule: 'sudo', explanation: 'root' }],
+    answer: { outcome: { outcome: 'selected', optionId: 'allow_always' } },
+    outcome: 'allow_always',
+  },
+  {
+    name: 'a rejected command comes back as deny',
+    command: 'rm -rf build',
+    hits: [],
+    answer: { outcome: { outcome: 'selected', optionId: 'deny' } },
+    outcome: 'deny',
+  },
+  {
+    name: 'a cancelled permission request denies the command',
+    command: 'sudo reboot',
+    hits: [],
+    answer: { outcome: { outcome: 'cancelled' } },
+    outcome: 'deny',
+  },
+];
+
 describe('kinu acp — permission', () => {
-  test('a gated command is put to the client and an allow answer comes back', async () => {
-    const fake = fakeClient();
+  for (const permission of PERMISSION_CASES) {
+    test(permission.name, async () => {
+      const fake = fakeClient();
 
-    const outcome = await withConnection(
-      fake,
-      async (ctx) => {
-        await newSession(ctx);
+      const outcome = await withConnection(
+        fake,
+        async (ctx) => {
+          await newSession(ctx);
 
-        // The adapter installed the channel; drive it as the shell tool would.
-        return fake.approval!({
-          command: 'sudo systemctl restart nginx',
-          executor: 'device',
-          review: { decision: 'gate', hits: [{ decision: 'gate', rule: 'sudo', explanation: 'root' }] },
-        });
-      },
-      () => ({ outcome: { outcome: 'selected', optionId: 'allow_always' } }),
-    );
+          // The adapter installed the channel; drive it as the shell tool would.
+          return present(fake.approval, 'the fake client approval hook')({
+            command: permission.command,
+            executor: 'device',
+            review: { decision: 'gate', hits: permission.hits },
+          });
+        },
+        () => permission.answer,
+      );
 
-    expect(outcome).toBe('allow_always');
-  });
-
-  test('a rejected command comes back as deny', async () => {
-    const fake = fakeClient();
-
-    const outcome = await withConnection(
-      fake,
-      async (ctx) => {
-        await newSession(ctx);
-
-        return fake.approval!({
-          command: 'rm -rf build',
-          executor: 'device',
-          review: { decision: 'gate', hits: [] },
-        });
-      },
-      () => ({ outcome: { outcome: 'selected', optionId: 'deny' } }),
-    );
-
-    expect(outcome).toBe('deny');
-  });
-
-  test('a cancelled permission request denies the command', async () => {
-    const fake = fakeClient();
-
-    const outcome = await withConnection(
-      fake,
-      async (ctx) => {
-        await newSession(ctx);
-
-        return fake.approval!({
-          command: 'sudo reboot', executor: 'device', review: { decision: 'gate', hits: [] },
-        });
-      },
-      () => ({ outcome: { outcome: 'cancelled' } }),
-    );
-
-    expect(outcome).toBe('deny');
-  });
+      expect(outcome).toBe(permission.outcome);
+    });
+  }
 });
 
 describe('kinu acp — session lifecycle', () => {

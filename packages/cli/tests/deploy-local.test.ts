@@ -206,9 +206,9 @@ async function freePort(): Promise<number> {
 }
 
 function listening(server: Server): Promise<void> {
-  const { promise, resolve } = Promise.withResolvers<void>();
+  const { promise, resolve: listened } = Promise.withResolvers<void>();
 
-  server.listen(0, '127.0.0.1', () => resolve());
+  server.listen(0, '127.0.0.1', () => listened());
 
   return promise;
 }

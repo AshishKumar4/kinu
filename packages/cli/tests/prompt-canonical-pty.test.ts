@@ -10,6 +10,7 @@
  * stdin on a pipe, so prompts must reach the terminal through /dev/tty.
  */
 import { scratchDir } from '../../test-utils/src/scratch';
+import { present } from '@kinu.run/test-utils';
 import { writeFileSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 
@@ -146,13 +147,13 @@ function runInPty(
   const driverPath = join(fixtures, `driver-${Bun.hash(driverSource).toString(16)}.ts`);
   writeFileSync(driverPath, driverSource);
 
-  const run = spawnSync(python!, [harnessPath, mode, JSON.stringify(expectPending), process.execPath, driverPath], {
+  const run = spawnSync(present(python, 'a python3 on PATH'), [harnessPath, mode, JSON.stringify(expectPending), process.execPath, driverPath], {
     encoding: "utf8",
   });
 
   expect(run.status).toBe(0);
 
-  return v.parse(HarnessResultSchema, JSON.parse(run.stdout.trim().split("\n").at(-1)!));
+  return v.parse(HarnessResultSchema, JSON.parse(present(run.stdout.trim().split("\n").at(-1), 'the last line of stdout')));
 }
 
 const CONFIRM_DRIVER = `
@@ -164,6 +165,7 @@ process.exit(0);
 
 const SECRET_DRIVER = `
 import { askSecret } from ${JSON.stringify(promptModule)};
+import { present } from '@kinu.run/test-utils';
 const v = await askSecret('API key');
 console.log('SECRET=' + JSON.stringify(v));
 process.exit(0);

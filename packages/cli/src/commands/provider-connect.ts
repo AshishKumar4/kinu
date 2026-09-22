@@ -190,7 +190,10 @@ export async function readProviderConnections(): Promise<ProviderConnections> {
         }
 
         return { descriptor, connected: false, detail: opencode.binary ? LOGIN_HINT_OPENCODE : hint };
-      default: {
+      case 'openai':
+      case 'openrouter':
+      case 'anthropic':
+      case 'openai-compatible': {
         const localKey = localApiKey(providers, descriptor.id);
         const credKey = ACCOUNT_CREDENTIAL_KEYS[descriptor.id];
         const model = currentModel(config.model, descriptor.id === 'openai-compatible' ? 'openai-compat' : descriptor.id);
@@ -242,7 +245,11 @@ function localApiKey(providers: NonNullable<KinuConfig['providers']>, id: Provid
     case 'openrouter': return providers.openrouter?.apiKey !== undefined;
     case 'anthropic': return providers.anthropic?.apiKey !== undefined;
     case 'openai-compatible': return providers.openaiCompat?.default !== undefined;
-    default: return false;
+    case 'cloudflare':
+    case 'claude':
+    case 'codex':
+    case 'opencode':
+      return false;
   }
 }
 
@@ -416,7 +423,7 @@ interface ApiKeyProvider {
   readonly model: string | undefined;
   readonly local: boolean;
   store(key: string, spec: string): void;
-  clear(): void;
+  clear: () => void;
 }
 
 async function connectApiKeyProvider(port: ProviderConnectPort, provider: ApiKeyProvider): Promise<ProviderConnectOutcome> {

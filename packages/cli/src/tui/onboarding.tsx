@@ -54,7 +54,7 @@ export interface TuiOnboardingOperations {
   /** Runs the provider's own credential flow against the step's port: the
    *  step reports its progress and answers its questions. */
   connectProvider(id: ProviderConnectId, port: ProviderConnectPort): Promise<ProviderConnectOutcome>;
-  configureTiers(): void | Promise<void>;
+  configureTiers: () => void | Promise<void>;
   selectTheme(selection: ThemeSelection): void | Promise<void>;
   selectKeymap(presetId: KeymapPresetId): void | Promise<void>;
   createWorkspace(input: OnboardingWorkspaceInput): void | Promise<void>;
@@ -84,7 +84,7 @@ interface DerivedOnboardingState {
 
 function deriveOnboardingState(readiness: OnboardingReadiness): DerivedOnboardingState {
   for (let index = 0; index < ONBOARDING_STEP_IDS.length; index += 1) {
-    const step = ONBOARDING_STEP_IDS[index]!;
+    const step = ONBOARDING_STEP_IDS[index];
 
     if (readiness.skippedSteps.includes(step) || onboardingStepReady(step, readiness)) continue;
 
@@ -254,17 +254,20 @@ export function GuidedOnboarding(props: {
       })))
   ), [registry]);
 
-  const choices = activeStep === 'location'
-    ? (['cloud', 'local', 'both'] as const)
-    : activeStep === 'connection'
-      ? providers.map((state) => state.descriptor.id)
-      : activeStep === 'theme'
-        ? themeChoices.map((choice) => choice.label)
-        : activeStep === 'keymap'
-          ? KEYMAP_PRESET_IDS
-          : activeStep === 'workspace'
-            ? props.roles.map((role) => role.id)
-            : [];
+  /** The rows the active step offers, in the order they are shown. */
+  function stepChoices(): readonly string[] {
+    switch (activeStep) {
+      case 'location': return ['cloud', 'local', 'both'];
+      case 'connection': return providers.map((state) => state.descriptor.id);
+      case 'theme': return themeChoices.map((choice) => choice.label);
+      case 'keymap': return KEYMAP_PRESET_IDS;
+      case 'workspace': return props.roles.map((role) => role.id);
+      case 'tiers':
+      case null: return [];
+    }
+  }
+
+  const choices = stepChoices();
 
   const activate = useCallback(() => {
     if (readiness === null || activeStep === null) return;
@@ -363,44 +366,51 @@ export function GuidedOnboarding(props: {
       return;
     }
 
-    switch (result.actionId) {
-      case 'home.exit':
-        event.preventDefault();
-        props.onExit();
+    const action = result.actionId;
 
-        return;
-      case 'onboarding.skip':
-        if (activeStep === null) return;
-        event.preventDefault();
-        run(() => props.operations.skip(activeStep));
+    if (action === 'home.exit') {
+      event.preventDefault();
+      props.onExit();
 
-        return;
-      case 'home.previous':
-        if (activeStep === 'workspace') return;
-        event.preventDefault();
-        setSelectedIndex((current) => (current - 1 + Math.max(1, choices.length)) % Math.max(1, choices.length));
+      return;
+    }
 
-        return;
-      case 'home.next':
-        if (activeStep === 'workspace') return;
-        event.preventDefault();
-        setSelectedIndex((current) => (current + 1) % Math.max(1, choices.length));
+    if (action === 'onboarding.skip') {
+      if (activeStep === null) return;
+      event.preventDefault();
+      run(() => props.operations.skip(activeStep));
 
-        return;
-      case 'home.focus-next':
-        if (activeStep !== 'workspace' || props.roles.length === 0) return;
-        event.preventDefault();
-        setRoleIndex((current) => (current + 1) % props.roles.length);
+      return;
+    }
 
-        return;
-      case 'home.activate':
-        if (activeStep === 'workspace') return;
-        event.preventDefault();
-        activate();
+    if (action === 'home.previous') {
+      if (activeStep === 'workspace') return;
+      event.preventDefault();
+      setSelectedIndex((current) => (current - 1 + Math.max(1, choices.length)) % Math.max(1, choices.length));
 
-        return;
-      default:
-        return;
+      return;
+    }
+
+    if (action === 'home.next') {
+      if (activeStep === 'workspace') return;
+      event.preventDefault();
+      setSelectedIndex((current) => (current + 1) % Math.max(1, choices.length));
+
+      return;
+    }
+
+    if (action === 'home.focus-next') {
+      if (activeStep !== 'workspace' || props.roles.length === 0) return;
+      event.preventDefault();
+      setRoleIndex((current) => (current + 1) % props.roles.length);
+
+      return;
+    }
+
+    if (action === 'home.activate') {
+      if (activeStep === 'workspace') return;
+      event.preventDefault();
+      activate();
     }
   });
 

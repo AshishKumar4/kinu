@@ -40,9 +40,9 @@ function controls(input: {
     decideDeferredApprovals: async () => ({ decided: [] }),
     listModelProviders: async () => [],
     listInstructionApprovals: async (request) => {
-      if (request?.cursor?.after === LATER_ANCHOR) return input.pages[1]!;
+      if (request?.cursor?.after === LATER_ANCHOR) return input.pages[1];
 
-      return input.pages[0]!;
+      return input.pages[0];
     },
     readInstructionApproval: async (path) => {
       input.reads.push(path);

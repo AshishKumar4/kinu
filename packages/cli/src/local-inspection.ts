@@ -219,21 +219,19 @@ export function getLocalAgentInfo(name: string): LocalAgentInfoSnapshot {
       craftedToolCount: status.craftedToolCount,
       searchNodeCount: status.searchNodeCount,
       taskCount: actor && tableExists(db, 'task_history')
-        ? get<{ c: number }>(
-          db, `SELECT COUNT(*) AS c FROM task_history WHERE actor_id = ?`, actor.actorId,
-        )?.c ?? 0
+        ? countOf(db, `SELECT COUNT(*) AS c FROM task_history WHERE actor_id = ?`, actor.actorId)
         : 0,
       // Not reported: it is a walk of the workspace filesystem, and this path
       // may not open one (see getLocalStatus).
       memorySize: 0,
       createdAt: status.createdAt ?? 0,
       conversationCount: actor && tableExists(db, 'conversation_entries')
-        ? get<{ c: number }>(
+        ? countOf(
           db,
           `SELECT COUNT(DISTINCT session_id) AS c FROM conversation_entries
            WHERE actor_id = ? AND session_id != 'mcts'`,
           actor.actorId,
-        )?.c ?? 0
+        )
         : 0,
       model: status.model,
       reasoningEffort: status.reasoningEffort,
@@ -929,8 +927,21 @@ function all<T>(db: SqliteDb, sql: string, ...params: SQLQueryBindings[]): T[] {
   return db.prepare<T, SQLQueryBindings[]>(sql).all(...params);
 }
 
-function get<T>(db: SqliteDb, sql: string, ...params: SQLQueryBindings[]): T | null {
-  return db.prepare<T, SQLQueryBindings[]>(sql).get(...params);
+/** A `SELECT COUNT(*) AS c` — zero when the query matched no row at all. */
+function countOf(db: SqliteDb, sql: string, ...params: SQLQueryBindings[]): number {
+  return all<{ c: number }>(db, sql, ...params).at(0)?.c ?? 0;
+}
+
+/** The LIVE scaffold version of one actor — 0 when none is current. */
+function currentScaffoldVersion(db: SqliteDb, actorId: string): number {
+  const current = all<{ version: number }>(
+    db,
+    `SELECT version FROM scaffold_versions
+     WHERE actor_id = ? AND status = 'current' ORDER BY version DESC LIMIT 1`,
+    actorId,
+  ).at(0);
+
+  return current?.version ?? 0;
 }
 
 function tableExists(db: SqliteDb, name: string): boolean {
@@ -1002,10 +1013,10 @@ export interface LocalActorRow {
 function actorDirectory(db: SqliteDb): WorkspaceActorDirectory | null {
   if (!tableExists(db, 'workspace_actors') || !tableExists(db, 'workspace_identity')) return null;
 
-  const identity = get<{ id: string; owner_user_id: string | null }>(
-    db, `SELECT id, owner_user_id FROM workspace_identity LIMIT 1`);
+  const identity = all<{ id: string; owner_user_id: string | null }>(
+    db, `SELECT id, owner_user_id FROM workspace_identity LIMIT 1`).at(0);
 
-  if (!identity) return null;
+  if (identity === undefined) return null;
 
   return new WorkspaceActorDirectory(makeSql(db), {
     workspaceId: identity.id, ownerUserId: identity.owner_user_id ?? '',
@@ -1075,10 +1086,7 @@ export function getLocalActorInfo(name: string, actorId: string): LocalAgentInfo
       purpose: '',
       soul: '',
       scaffoldVersion: tableExists(db, 'scaffold_versions')
-        ? get<{ v: number }>(db,
-          `SELECT version AS v FROM scaffold_versions
-           WHERE actor_id = ? AND status = 'current' ORDER BY version DESC LIMIT 1`,
-          actorId)?.v ?? 0
+        ? currentScaffoldVersion(db, actorId)
         : 0,
       // Both were hardcoded `0` with no reason given, under a doc claiming
       // "`actor_id` supplies every count" — measured against a workspace with a
@@ -1090,13 +1098,13 @@ export function getLocalActorInfo(name: string, actorId: string): LocalAgentInfo
       // so a node belongs to the actor that opened it and reading it unscoped
       // would report a sibling's search as this actor's.
       craftedToolCount: tableExists(db, 'crafted_tools')
-        ? get<{ c: number }>(db, `SELECT COUNT(*) AS c FROM crafted_tools`)?.c ?? 0
+        ? countOf(db, `SELECT COUNT(*) AS c FROM crafted_tools`)
         : 0,
       searchNodeCount: tableExists(db, 'search_nodes')
-        ? get<{ c: number }>(db, `SELECT COUNT(*) AS c FROM search_nodes WHERE actor_id = ?`, actorId)?.c ?? 0
+        ? countOf(db, `SELECT COUNT(*) AS c FROM search_nodes WHERE actor_id = ?`, actorId)
         : 0,
       taskCount: tableExists(db, 'task_history')
-        ? get<{ c: number }>(db, `SELECT COUNT(*) AS c FROM task_history WHERE actor_id = ?`, actorId)?.c ?? 0
+        ? countOf(db, `SELECT COUNT(*) AS c FROM task_history WHERE actor_id = ?`, actorId)
         : 0,
       // Not reported here for the same reason the workspace snapshot withholds
       // it: measuring it walks the workspace filesystem, and this path opens
@@ -1104,9 +1112,9 @@ export function getLocalActorInfo(name: string, actorId: string): LocalAgentInfo
       memorySize: 0,
       createdAt: row.createdAt,
       conversationCount: tableExists(db, 'conversation_entries')
-        ? get<{ c: number }>(db,
+        ? countOf(db,
           `SELECT COUNT(DISTINCT session_id) AS c FROM conversation_entries
-           WHERE actor_id = ? AND session_id != 'mcts'`, actorId)?.c ?? 0
+           WHERE actor_id = ? AND session_id != 'mcts'`, actorId)
         : 0,
       model: config?.getModel() ?? null,
       reasoningEffort: config?.getReasoningEffort() ?? null,
@@ -1119,8 +1127,8 @@ function getLocalStatus(db: SqliteDb): LocalStatus {
   const actor = mainActor(db);
 
   const identity = hasIdentity
-    ? get<{ name: string; created_at: number }>(
-      db, `SELECT name, created_at FROM workspace_identity LIMIT 1`)
+    ? all<{ name: string; created_at: number }>(
+      db, `SELECT name, created_at FROM workspace_identity LIMIT 1`).at(0)
     : null;
 
   // The MISSION, off the identity row — not SOUL.md itself.
@@ -1131,7 +1139,7 @@ function getLocalStatus(db: SqliteDb): LocalStatus {
   // listing that mutated every workspace it walked past would be wrong twice
   // over, so `writeSoul` keeps this one line current instead (identity/soul.ts).
   const mission = hasIdentity
-    ? get<{ mission: string | null }>(db, `SELECT mission FROM workspace_identity LIMIT 1`)?.mission?.trim() || null
+    ? all<{ mission: string | null }>(db, `SELECT mission FROM workspace_identity LIMIT 1`).at(0)?.mission?.trim() ?? null
     : null;
 
   return {
@@ -1142,20 +1150,16 @@ function getLocalStatus(db: SqliteDb): LocalStatus {
     // The LIVE version — the one that actually drives a turn. MAX(version)
     // reported an unresolved pending proposal as though it were already running.
     scaffoldVersion: actor && tableExists(db, 'scaffold_versions')
-      ? get<{ v: number }>(db,
-        `SELECT version AS v FROM scaffold_versions
-         WHERE actor_id = ? AND status = 'current' ORDER BY version DESC LIMIT 1`,
-        actor.actorId)?.v ?? 0
+      ? currentScaffoldVersion(db, actor.actorId)
       : 0,
     searchNodeCount: actor && tableExists(db, 'search_nodes')
-      ? get<{ c: number }>(db,
-        `SELECT COUNT(*) AS c FROM search_nodes WHERE actor_id = ?`, actor.actorId)?.c ?? 0
+      ? countOf(db, `SELECT COUNT(*) AS c FROM search_nodes WHERE actor_id = ?`, actor.actorId)
       : 0,
     craftedToolCount: tableExists(db, 'crafted_tools')
-      ? get<{ c: number }>(db, `SELECT COUNT(*) AS c FROM crafted_tools`)?.c ?? 0
+      ? countOf(db, `SELECT COUNT(*) AS c FROM crafted_tools`)
       : 0,
     messageCount: actor && tableExists(db, 'conversation_entries')
-      ? get<{ c: number }>(db, `SELECT COUNT(*) AS c FROM conversation_entries WHERE actor_id = ?`, actor.actorId)?.c ?? 0
+      ? countOf(db, `SELECT COUNT(*) AS c FROM conversation_entries WHERE actor_id = ?`, actor.actorId)
       : 0,
     model: tableExists(db, 'actor_config')
       ? openWorkspaceMainActor(makeSql(db)).config.getModel()

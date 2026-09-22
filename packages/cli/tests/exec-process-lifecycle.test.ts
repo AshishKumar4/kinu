@@ -29,7 +29,7 @@ import { join, resolve } from "node:path";
 import { afterEach, describe, expect, test } from "bun:test";
 import { JsonObjectSchema, decodeJsonValue, parseJsonObject, type JsonObject, type JsonValue } from '@kinu.run/core';
 import { tolerate } from '@kinu.run/core/obs';
-import { scratchDir } from '@kinu.run/test-utils';
+import { present, scratchDir } from '@kinu.run/test-utils';
 import * as v from 'valibot';
 
 const repoRoot = resolve(import.meta.dir, "../../..");
@@ -131,7 +131,7 @@ function modelThatRuns(command: string) {
     },
   });
 
-  return { port: server.port!, stop: () => server.stop(true) };
+  return { port: present(server.port, 'the mock server port'), stop: () => server.stop(true) };
 }
 
 function newHome(): string {

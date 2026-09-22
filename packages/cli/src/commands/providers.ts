@@ -1,5 +1,5 @@
 import { deleteCloudCredential, listCloudCredentials } from '../cloud-api';
-import { bumpProviderRevision, resolveCloudSession, updateConfigFile, type KinuConfig } from '../config';
+import { bumpProviderRevision, loadConfigFile, resolveCloudSession, updateConfigFile, type KinuConfig } from '../config';
 import { ACCENT, DIM, OK, WARN } from '../display';
 import { readProviderConnections } from './provider-connect';
 import { canonicalProviderName, connectOptions, connectProviderOnConsole } from './setup';
@@ -119,9 +119,9 @@ const LOCAL_CREDENTIALS = new Map<ProviderName, LocalCredential>([
   }],
 ]);
 
-function deleteKey<K extends keyof NonNullable<KinuConfig['providers']>>(
+function deleteKey(
   providers: NonNullable<KinuConfig['providers']>,
-  key: K,
+  key: keyof NonNullable<KinuConfig['providers']>,
 ): boolean {
   if (providers[key] === undefined) return false;
   delete providers[key];
@@ -251,16 +251,11 @@ function clearDefaultModelFor(provider: ProviderName): void {
 }
 
 function clearDefaultModelPrefixes(prefixes: readonly string[]): void {
-  let cleared: string | null = null;
-  updateConfigFile((config) => {
-    const model = config.model;
+  const current = loadConfigFile().model;
 
-    if (!model || !prefixes.some((prefix) => model.startsWith(prefix))) return;
-    cleared = model;
-    delete config.model;
-  });
-
-  if (cleared) console.log(DIM(`  Cleared the default model (${cleared}).`));
+  if (current === undefined || !prefixes.some((prefix) => current.startsWith(prefix))) return;
+  updateConfigFile((config) => { delete config.model; });
+  console.log(DIM(`  Cleared the default model (${current}).`));
 }
 
 /** `normalizeProvider`, but undefined instead of throwing. */

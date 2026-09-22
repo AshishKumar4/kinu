@@ -5,7 +5,7 @@ import { TextAttributes } from '@opentui/core';
 import { createTestRenderer } from '@opentui/core/testing';
 import { createRoot, flushSync } from '@opentui/react';
 import { describe, expect, test } from 'bun:test';
-import { scratchDir } from '@kinu.run/test-utils';
+import { present, scratchDir } from '@kinu.run/test-utils';
 
 import { MessageList } from '../src/tui/messages';
 import { PhaseLine, ThemePickerOverlay } from '../src/tui/overlays';
@@ -41,6 +41,13 @@ function contrast(foreground: string, background: string): number {
   const [light, dark] = [luminance(foreground), luminance(background)].sort((a, b) => b - a);
 
   return (light + 0.05) / (dark + 0.05);
+}
+
+/** A rendered colour as the theme writes it. */
+function hexOf(color: { toInts(): [number, number, number, number] }): string {
+  const [red, green, blue] = color.toInts();
+
+  return `#${[red, green, blue].map((channel) => channel.toString(16).padStart(2, '0')).join('')}`.toUpperCase();
 }
 
 describe('TUI theme', () => {
@@ -150,7 +157,7 @@ describe('TUI theme', () => {
   });
 
   test('under Kinu light the user turn carries the accent gutter on the canvas and the assistant turn avoids the user fill', async () => {
-    const light = BUILTIN_TUI_THEMES.find((theme) => theme.id === 'kinu-light')!;
+    const light = present(BUILTIN_TUI_THEMES.find((theme) => theme.id === 'kinu-light'), 'the kinu-light theme');
     const { renderer, renderOnce, captureSpans } = await createTestRenderer({ width: 80, height: 16, useThread: false, maxFps: Number.POSITIVE_INFINITY });
     const root = createRoot(renderer);
 
@@ -180,24 +187,18 @@ describe('TUI theme', () => {
         await Bun.sleep(20);
       }
 
-      const hex = (color: { toInts(): [number, number, number, number] }) => {
-        const [red, green, blue] = color.toInts();
-
-        return `#${[red, green, blue].map((channel) => channel.toString(16).padStart(2, '0')).join('')}`.toUpperCase();
-      };
-
-      const gutter = spans.find((span) => span.text.includes('YOU'))!;
-      const user = spans.find((span) => span.text.includes('USERTURN'))!;
-      const assistant = spans.find((span) => span.text.includes('ASSISTANTTURN'))!;
-      const tool = spans.find((span) => span.text.includes('exec'))!;
-      expect(hex(gutter.fg)).toBe(light.colors.intent.accent);
-      expect(hex(user.fg)).toBe(light.colors.text.strong);
-      expect(hex(user.bg)).not.toBe(light.colors.background.user);
-      expect(hex(assistant.bg)).not.toBe(light.colors.background.user);
-      expect(hex(assistant.fg)).toBe(light.colors.text.strong);
+      const gutter = present(spans.find((span) => span.text.includes('YOU')), 'the gutter span');
+      const user = present(spans.find((span) => span.text.includes('USERTURN')), 'the user span');
+      const assistant = present(spans.find((span) => span.text.includes('ASSISTANTTURN')), 'the assistant span');
+      const tool = present(spans.find((span) => span.text.includes('exec')), 'the tool span');
+      expect(hexOf(gutter.fg)).toBe(light.colors.intent.accent);
+      expect(hexOf(user.fg)).toBe(light.colors.text.strong);
+      expect(hexOf(user.bg)).not.toBe(light.colors.background.user);
+      expect(hexOf(assistant.bg)).not.toBe(light.colors.background.user);
+      expect(hexOf(assistant.fg)).toBe(light.colors.text.strong);
       // The tool card is the dark well, even under the light theme.
-      expect(hex(tool.bg)).toBe(light.colors.well.fill);
-      expect(hex(tool.fg)).toBe(light.colors.well.ink);
+      expect(hexOf(tool.bg)).toBe(light.colors.well.fill);
+      expect(hexOf(tool.fg)).toBe(light.colors.well.ink);
     } finally {
       flushSync(() => { root.unmount(); });
       renderer.destroy();
@@ -205,7 +206,7 @@ describe('TUI theme', () => {
   });
 
   test('each transcript role resolves its own ink: prose in ink, thinking muted and italic, notes muted', async () => {
-    const dark = BUILTIN_TUI_THEMES.find((theme) => theme.id === 'kinu-dark-solid')!;
+    const dark = present(BUILTIN_TUI_THEMES.find((theme) => theme.id === 'kinu-dark-solid'), 'the kinu-dark-solid theme');
     const { renderer, renderOnce, captureSpans } = await createTestRenderer({ width: 80, height: 20, useThread: false, maxFps: Number.POSITIVE_INFINITY });
     const root = createRoot(renderer);
 
@@ -235,21 +236,15 @@ describe('TUI theme', () => {
         await Bun.sleep(20);
       }
 
-      const hex = (color: { toInts(): [number, number, number, number] }) => {
-        const [red, green, blue] = color.toInts();
-
-        return `#${[red, green, blue].map((channel) => channel.toString(16).padStart(2, '0')).join('')}`.toUpperCase();
-      };
-
-      const span = (text: string) => spans.find((candidate) => candidate.text.includes(text))!;
+      const span = (text: string) => present(spans.find((candidate) => candidate.text.includes(text)), `the ${text} span`);
       const { text } = dark.colors;
-      expect(hex(span('USERTURN').fg)).toBe(text.strong);
+      expect(hexOf(span('USERTURN').fg)).toBe(text.strong);
       // The agent's body is ink, so it reads as prose and not as one more
       // grey register beside the thinking line and the annotations.
-      expect(hex(span('PROSETURN').fg)).toBe(text.strong);
-      expect(hex(span('SYSTEMNOTE').fg)).toBe(text.muted);
+      expect(hexOf(span('PROSETURN').fg)).toBe(text.strong);
+      expect(hexOf(span('SYSTEMNOTE').fg)).toBe(text.muted);
       const thinking = span('THINKINGLABEL');
-      expect(hex(thinking.fg)).toBe(text.muted);
+      expect(hexOf(thinking.fg)).toBe(text.muted);
       expect(thinking.attributes & TextAttributes.ITALIC).not.toBe(0);
       expect(text.strong).not.toBe(text.muted);
     } finally {

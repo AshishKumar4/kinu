@@ -47,7 +47,7 @@ function UserMessage({ content, attachments, steered, branched }: { content: str
         {attachments?.map((label, index) => (
           <text key={label || index}><span fg={colors.text.muted}>+ {label}</span></text>
         ))}
-        {(steered || branched) && (
+        {(steered === true || branched === true) && (
           <text><span fg={colors.text.muted}>{steered ? '↪ steered mid-turn' : '⎇ branched'}</span></text>
         )}
       </box>
@@ -137,6 +137,15 @@ const ListTokenSchema = v.object({
 
 type ListToken = v.InferOutput<typeof ListTokenSchema>;
 
+/** The bullet a list row draws: its number, its checkbox, or a dot. */
+function listMarker(ordered: boolean, position: number, item: ListToken['items'][number]): string {
+  if (ordered) return `${String(position)}. `;
+
+  if (!item.task) return '• ';
+
+  return item.checked ? '☑ ' : '☐ ';
+}
+
 function renderList(
   token: ListToken,
   context: Parameters<RenderNode>[1],
@@ -152,9 +161,9 @@ function renderList(
   const list = new BoxRenderable(ctx, { width: '100%', flexDirection: 'column' });
   const first = token.start === '' ? 1 : token.start;
 
-  token.items.forEach((item, index) => {
+  for (const [index, item] of token.items.entries()) {
     const row = new BoxRenderable(ctx, { width: '100%', flexDirection: 'row' });
-    const marker = token.ordered ? `${String(first + index)}. ` : item.task ? (item.checked ? '☑ ' : '☐ ') : '• ';
+    const marker = listMarker(token.ordered, first + index, item);
     row.add(new TextRenderable(ctx, { content: marker, fg: colors.intent.accent }));
     row.add(new MarkdownRenderable(ctx, {
       content: item.text,
@@ -168,9 +177,14 @@ function renderList(
       flexShrink: 1,
     }));
     list.add(row);
-  });
+  }
 
   return list;
+}
+
+/** The first line of a tool result is marked by how the call ended. */
+function resultMark(success: boolean | undefined): string {
+  return success === false ? `${TUI_MARKS.failure} ` : `${TUI_MARKS.toolResult} `;
 }
 
 /** Prose on the canvas, in the ink register: the agent's body must read as
@@ -282,7 +296,7 @@ function ToolResultRow({ message, call, previewWidth, expanded }: {
     <box flexDirection="column" style={{ paddingLeft: 2 }}>
       {lines.map((line, index) => (
         <text key={`${String(index)}-${line}`}>
-          <span fg={well.muted}>{index === 0 ? (success === false ? `${TUI_MARKS.failure} ` : `${TUI_MARKS.toolResult} `) : '  '}</span>
+          <span fg={well.muted}>{index === 0 ? resultMark(success) : '  '}</span>
           <span fg={success === false ? well.danger : well.success}>{line}</span>
         </text>
       ))}

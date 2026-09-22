@@ -30,6 +30,7 @@ import {
 import { createCliAgent } from '../src/agent-create';
 import { resolveLLMConfig, agentDbPath, AGENT_HOME, listLocalRefsAllProjects, updateConfigFile } from '../src/config';
 import { TestLanguageModelV2 } from '../../cli-backend/tests/test-language-model';
+import { present } from '@kinu.run/test-utils';
 
 // Dummy provider config so resolveLLMConfig succeeds offline — the capturing
 // model below intercepts before any network call could happen. Passed as
@@ -107,7 +108,11 @@ function capturingModel(sink: (tools: CapturedTool[]) => void): LanguageModel {
 
 function staticResolver(model: LanguageModel): LocalModelResolver {
   return {
-    normalizeSpecSync: (spec: string | null | undefined) => spec?.trim() || 'conformance/conformance-model',
+    normalizeSpecSync: (spec: string | null | undefined) => {
+        const trimmed = spec?.trim();
+
+        return trimmed === undefined || trimmed === '' ? 'conformance/conformance-model' : trimmed;
+      },
     resolveModel: () => model,
     listProviders: async () => [],
     listModels: async () => ({ models: [], failures: [] }),
@@ -201,14 +206,14 @@ describe('cli backend conformance', () => {
     // model were never called or the tool array went empty, the comparison
     // above would judge an empty world.
     expect(captured.length).toBeGreaterThanOrEqual(5);
-    expect(observed.planes.table!.size).toBeGreaterThanOrEqual(25);
-    expect(observed.planes.tool!.has('eval')).toBe(true);
+    expect(present(observed.planes.table, 'the table plane').size).toBeGreaterThanOrEqual(25);
+    expect(present(observed.planes.tool, 'the tool plane').has('eval')).toBe(true);
     // The peer transport reached the model. `reply` used to witness it as its
     // own action; the addressing verbs are one `msg` now, so the witness is the
     // TARGET only peers can offer — `event_id`, which is in the advertised
     // schema exactly when the host wired them. This is the local virtual
     // workspace's mail showing up in what a real model is handed.
-    expect(observed.planes['agents-action']!.has('msg')).toBe(true);
+    expect(present(observed.planes['agents-action'], 'the agents-action plane').has('msg')).toBe(true);
     expect(JSON.stringify(captured.find((tool) => tool.name === 'agents') ?? {}))
       .toContain('event_id');
   });

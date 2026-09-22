@@ -3,7 +3,7 @@
 // network LLM). Verifies the unified seam: event stream, turn results, JSONL
 // recording, history hydration, walk-back fork, and stop() reaching the abort.
 import { scratchDir } from '../../test-utils/src/scratch';
-import { readTranscriptRows } from '@kinu.run/test-utils';
+import { present, readTranscriptRows } from '@kinu.run/test-utils';
 import { existsSync } from 'node:fs';
 
 import { join } from 'node:path';
@@ -74,7 +74,11 @@ function stallingModel(): LanguageModel {
 
 function fakeResolver(model: LanguageModel): LocalModelResolver {
   return {
-    normalizeSpecSync: (spec: string | null | undefined) => spec?.trim() || 'fake/fake-model',
+    normalizeSpecSync: (spec: string | null | undefined) => {
+        const trimmed = spec?.trim();
+
+        return trimmed === undefined || trimmed === '' ? 'fake/fake-model' : trimmed;
+      },
     resolveModel: () => model,
     listProviders: async () => [{ id: 'fake', label: 'Fake', available: true }],
     listModels: async () => ({ models: [{ id: 'fake-model', label: 'Fake Model', provider: 'fake' }], failures: [] }),
@@ -187,8 +191,8 @@ describe('LocalAgentClient', () => {
     // Recording is owned by the client: user + assistant entries land in JSONL.
     const history = await client.history();
     expect(history.map((message) => message.role)).toEqual(['user', 'assistant']);
-    expect(history[0]!.content).toBe('hi');
-    expect(history[1]!.content).toBe('hello there');
+    expect(history[0].content).toBe('hi');
+    expect(history[1].content).toBe('hello there');
     await client.close();
   });
 
@@ -463,7 +467,7 @@ describe('LocalAgentClient', () => {
 
     // The forked conversation keeps turn one but not the walked-back message.
     await client.send('third question');
-    const forkedPrompt = seenPrompts.at(-1)!;
+    const forkedPrompt = present(seenPrompts.at(-1), 'the last prompt seen');
     expect(forkedPrompt).toContain('first question');
     expect(forkedPrompt).toContain('third question');
     expect(forkedPrompt).not.toContain('second question');
@@ -505,7 +509,7 @@ describe('LocalAgentClient', () => {
       try {
         await reopened.connect();
         await reopened.send('third question');
-        const prompt = seenPrompts.at(-1)!;
+        const prompt = present(seenPrompts.at(-1), 'the last prompt seen');
         expect(prompt).toContain('third question');
         expect(prompt).not.toContain('second question');
 
@@ -547,8 +551,8 @@ describe('/changelog — the Evolution Changelog over a real local client', () =
 
     if (listed.kind !== 'changelog') throw new Error(`expected changelog outcome, got ${listed.kind}`);
     expect(listed.view.unseenCount).toBe(2);
-    const tool = listed.view.entries.find((entry) => entry.kind === 'tool')!;
-    const facts = listed.view.entries.find((entry) => entry.kind === 'fact')!;
+    const tool = present(listed.view.entries.find((entry) => entry.kind === 'tool'), 'a tool entry');
+    const facts = present(listed.view.entries.find((entry) => entry.kind === 'fact'), 'a fact entry');
     expect(tool.summary).toBe('Created a tool: csv summarizer');
     expect(facts.summary).toBe('Learned 2 things about your environment');
     expect(facts.items?.map((entry) => entry.summary)).toEqual([

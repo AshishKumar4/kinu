@@ -142,7 +142,7 @@ export async function setupCommand(opts: {
     // Without a terminal there is nothing to ask — fall through to the
     // honest instruction paths below instead of letting readline hang on
     // a pipe (the `curl | bash` installer freeze).
-    const shouldLogin = opts.yes || (canPrompt() && await confirm('Sign in and attach Cloudflare Workers AI permissions now?', true));
+    const shouldLogin = opts.yes === true || (canPrompt() && await confirm('Sign in and attach Cloudflare Workers AI permissions now?', true));
 
     if (shouldLogin) {
       await authCommand({ origin: opts.origin });
@@ -183,7 +183,7 @@ export async function setupCommand(opts: {
     // Storing nothing is deliberate: the platform default is one constant in
     // @kinu.run/core, and an unset model reads it at resolve time instead of
     // pinning a copy that would go stale.
-    updateConfigFile((config) => { delete config.model; });
+    updateConfigFile((stored) => { delete stored.model; });
     console.log(`${OK('✓')} Using Cloudflare Workers AI`);
     console.log(DIM(`Default model: ${DEFAULT_WORKERS_AI_MODEL_SPEC}`));
     console.log(DIM('No API key on this machine. Requests go through your Kinu account.'));

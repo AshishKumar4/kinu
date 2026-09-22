@@ -23,10 +23,35 @@ export async function statusCommand(name: string): Promise<void> {
     const auth = requireAuthConfig();
 
     const [status, tools, triggers, jobs] = await Promise.all([
-      callAgentRpc(auth.origin, auth.token, target.cloudName, 'getAgentStatus', CloudAgentStatusSchema),
-      callAgentRpc(auth.origin, auth.token, target.cloudName, 'getToolDescriptions', CloudToolDescriptionsSchema),
-      callAgentRpc(auth.origin, auth.token, target.cloudName, 'listTriggers', CloudTriggerListSchema),
-      callAgentRpc(auth.origin, auth.token, target.cloudName, 'listBackgroundJobs', v.array(CloudBackgroundJobSchema), [10]),
+      callAgentRpc({
+        origin: auth.origin,
+        token: auth.token,
+        name: target.cloudName,
+        method: 'getAgentStatus',
+        schema: CloudAgentStatusSchema,
+      }),
+      callAgentRpc({
+        origin: auth.origin,
+        token: auth.token,
+        name: target.cloudName,
+        method: 'getToolDescriptions',
+        schema: CloudToolDescriptionsSchema,
+      }),
+      callAgentRpc({
+        origin: auth.origin,
+        token: auth.token,
+        name: target.cloudName,
+        method: 'listTriggers',
+        schema: CloudTriggerListSchema,
+      }),
+      callAgentRpc({
+        origin: auth.origin,
+        token: auth.token,
+        name: target.cloudName,
+        method: 'listBackgroundJobs',
+        schema: v.array(CloudBackgroundJobSchema),
+        args: [10],
+      }),
     ]);
 
     printCloudStatus(target.name, status, {

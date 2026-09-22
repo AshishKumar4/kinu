@@ -52,7 +52,7 @@ describe('prompt token shapes through resolution', () => {
 
     const result = await resolvePromptAttachments(`compare @"${img}" please`, { limitBytes: CAP, cwd: dir });
     expect(result.files).toHaveLength(1);
-    expect(result.files[0]!.filename).toBe('two words.png');
+    expect(result.files[0].filename).toBe('two words.png');
     expect(result.text).toBe(`compare ${img} please`);
   });
 
@@ -92,7 +92,7 @@ describe('resolvePromptAttachments', () => {
 
     const result = await resolvePromptAttachments(`summarize "${pdf}"`, { limitBytes: CAP, cwd: dir });
     expect(result.files).toHaveLength(1);
-    expect(result.files[0]!.mediaType).toBe('application/pdf');
+    expect(result.files[0].mediaType).toBe('application/pdf');
     expect(result.text).toBe(`summarize "${pdf}"`); // only @mentions are rewritten
   });
 
@@ -103,7 +103,7 @@ describe('resolvePromptAttachments', () => {
 
     const result = await resolvePromptAttachments('use @assets/logo.png here', { limitBytes: CAP, cwd: dir });
     expect(result.files).toHaveLength(1);
-    expect(result.attached[0]!.path).toBe(join(dir, 'assets', 'logo.png'));
+    expect(result.attached[0].path).toBe(join(dir, 'assets', 'logo.png'));
     expect(result.text).toBe('use assets/logo.png here');
   });
 
@@ -114,7 +114,7 @@ describe('resolvePromptAttachments', () => {
 
     const result = await resolvePromptAttachments(`what is in @${img}?`, { limitBytes: CAP, cwd: dir });
     expect(result.files).toHaveLength(1);
-    expect(result.files[0]!.filename).toBe('shot.png');
+    expect(result.files[0].filename).toBe('shot.png');
   });
 
   test('non-multimodal files become path references with a chip, not parts', async () => {
@@ -128,7 +128,7 @@ describe('resolvePromptAttachments', () => {
       { path: notes, filename: 'notes.txt', mediaType: null, size: 17 },
     ]);
     expect(result.text).toBe(`read ${notes}`);
-    expect(describePromptAttachment(result.attached[0]!)).toBe('notes.txt (17 B, referenced)');
+    expect(describePromptAttachment(result.attached[0])).toBe('notes.txt (17 B, referenced)');
   });
 
   test('an over-cap image is left as a reference with a visible error', async () => {
@@ -140,7 +140,7 @@ describe('resolvePromptAttachments', () => {
     expect(result.files).toEqual([]);
     expect(result.errors).toHaveLength(1);
     expect(result.errors[0]).toContain('huge.png is too large to attach');
-    expect(result.attached[0]!.mediaType).toBeNull();
+    expect(result.attached[0].mediaType).toBeNull();
   });
 
   test('the inline cap is a per-message aggregate: a second image that no longer fits falls back to a path reference', async () => {
@@ -152,7 +152,7 @@ describe('resolvePromptAttachments', () => {
 
     const result = await resolvePromptAttachments(`compare @${first} with @${second}`, { limitBytes: CAP, cwd: dir });
     expect(result.files).toHaveLength(1);
-    expect(result.files[0]!.filename).toBe('first.png');
+    expect(result.files[0].filename).toBe('first.png');
     expect(result.errors).toHaveLength(1);
     expect(result.errors[0]).toContain('second.png is too large to attach');
     expect(result.errors[0]).toContain('per-message budget');

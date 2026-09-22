@@ -386,23 +386,18 @@ export function ModelPickerOverlay({ models, failures, currentSpec, terminal, lo
         onInput={setFilter}
         selectRef={selectRef}
       />
-      {loading ? (
-        <PaletteLine text="Loading models…" width={innerWidth} color={colors.intent.accent} />
-      ) : error ? (
+      {loading && <PaletteLine text="Loading models…" width={innerWidth} color={colors.intent.accent} />}
+      {!loading && error !== null && error !== undefined && (
         <PaletteLine text={error} width={innerWidth} color={colors.intent.danger} />
-      ) : options.length === 0 ? (
+      )}
+      {!loading && (error === null || error === undefined) && options.length === 0 && (
         <PaletteLine
-          text={models.length > 0
-            ? `No models match "${filter.trim()}".`
-            : failureLines.length > 0
-              ? compact
-                ? `${String(failureLines.length)} provider${failureLines.length === 1 ? '' : 's'} unavailable. Resize for details.`
-                : 'Every connected provider failed to list. See below.'
-              : 'No connected model providers. Run kinu provider connect.'}
+          text={emptyModelListText(models.length, failureLines.length, compact, filter.trim())}
           width={innerWidth}
           color={colors.text.muted}
         />
-      ) : (
+      )}
+      {!loading && (error === null || error === undefined) && options.length > 0 && (
         <select
           ref={selectRef}
           focused={false}
@@ -667,7 +662,7 @@ interface DeviceConsentOverlayProps {
 export function PromptHistoryOverlay({ entries, terminal, onSelect }: {
   entries: readonly string[];
   terminal: OverlayGeometry;
-  onSelect(text: string): void;
+  onSelect: (text: string) => void;
 }) {
   const { colors } = useTuiTheme();
   const [filter, setFilter] = useState('');
@@ -724,7 +719,7 @@ function deviceConsentLayout(
   const commandText = `Command: ${consent.command || '(command)'}`;
 
   const commandRows = commandText.split('\n')
-    .reduce((rows, line) => rows + Math.max(1, Math.ceil([...line].length / commandColumns)), 0);
+    .reduce((rows, line) => rows + Math.max(1, Math.ceil(line.length / commandColumns)), 0);
 
   const preferredHeight = commandRows + 7;
   const maxHeight = Math.max(3, terminal.height - 2);
@@ -868,7 +863,7 @@ export function DeviceConnectOverlay({ prompt, terminal }: DeviceConnectOverlayP
       left={position.left}
       top={position.top}
     >
-      {prompt.phase === 'ask' ? (
+      {prompt.phase === 'ask' && (
         <>
           <WrappedPaletteLine text={prompt.statusLine} width={innerWidth} color={colors.text.primary} />
           <WrappedPaletteLine text={linking} width={innerWidth} color={colors.text.muted} />
@@ -877,7 +872,8 @@ export function DeviceConnectOverlay({ prompt, terminal }: DeviceConnectOverlayP
           <PaletteLine text={`${keybindings.hint('device.ssh')} use this session only`} width={innerWidth} color={colors.intent.accentStrong} />
           <PaletteLine text={`${keybindings.hint('device.dismiss')} don't ask again · ${keybindings.hint('device.not-now')} not now`} width={innerWidth} color={colors.text.muted} />
         </>
-      ) : prompt.phase === 'connecting' ? (
+      )}
+      {prompt.phase === 'connecting' && (
         <>
           <PaletteLine
             text={prompt.session ? 'Connecting this PC for this session…' : 'Connecting this PC…'}
@@ -891,7 +887,8 @@ export function DeviceConnectOverlay({ prompt, terminal }: DeviceConnectOverlayP
           />
           <PaletteLine text={`${keybindings.hint('device.not-now')} stop waiting`} width={innerWidth} color={colors.text.muted} />
         </>
-      ) : (
+      )}
+      {prompt.phase !== 'ask' && prompt.phase !== 'connecting' && (
         <>
           <PaletteLine
             text={`${prompt.ok ? '✓' : '✗'} ${prompt.message}`}
@@ -903,6 +900,17 @@ export function DeviceConnectOverlay({ prompt, terminal }: DeviceConnectOverlayP
       )}
     </PaletteFrame>
   );
+}
+
+/** Why the model list is empty: the filter, a failed provider, or none connected. */
+function emptyModelListText(modelCount: number, failureCount: number, compact: boolean, filter: string): string {
+  if (modelCount > 0) return `No models match "${filter}".`;
+
+  if (failureCount === 0) return 'No connected model providers. Run kinu provider connect.';
+
+  if (compact) return `${String(failureCount)} provider${failureCount === 1 ? '' : 's'} unavailable. Resize for details.`;
+
+  return 'Every connected provider failed to list. See below.';
 }
 
 interface ThemePickerProps {
@@ -948,7 +956,7 @@ export function ThemePickerOverlay({ terminal, selection, onSelect }: ThemePicke
 
   const currentIndex = choices.findIndex((choice) => choice.selection.themeId === selection.themeId);
   const [highlighted, setHighlighted] = useState(Math.max(0, currentIndex));
-  const choice = choices[Math.min(highlighted, choices.length - 1)]!;
+  const choice = choices[Math.min(highlighted, choices.length - 1)];
 
   useKeyboard((event) => {
     const result = dispatcher.feed(event, ['modal']);
@@ -959,24 +967,25 @@ export function ThemePickerOverlay({ terminal, selection, onSelect }: ThemePicke
       return;
     }
 
-    switch (result.actionId) {
-      case 'modal.previous':
-        event.preventDefault();
-        setHighlighted((index) => (index - 1 + choices.length) % choices.length);
+    const action = result.actionId;
 
-        return;
-      case 'modal.next':
-        event.preventDefault();
-        setHighlighted((index) => (index + 1) % choices.length);
+    if (action === 'modal.previous') {
+      event.preventDefault();
+      setHighlighted((index) => (index - 1 + choices.length) % choices.length);
 
-        return;
-      case 'modal.activate':
-        event.preventDefault();
-        onSelect(choice.selection);
+      return;
+    }
 
-        return;
-      default:
-        return;
+    if (action === 'modal.next') {
+      event.preventDefault();
+      setHighlighted((index) => (index + 1) % choices.length);
+
+      return;
+    }
+
+    if (action === 'modal.activate') {
+      event.preventDefault();
+      onSelect(choice.selection);
     }
   });
 
@@ -1060,7 +1069,7 @@ function ThemeChoiceRow({ choice, width, highlighted, current }: {
  */
 function ThemePreview({ theme, width }: { readonly theme: TuiThemeDefinition; readonly width: number }) {
   const { colors } = theme;
-  const ground = colors.background.canvas ?? REFERENCE_TERMINAL_GROUNDS[theme.appearance][0]!;
+  const ground = colors.background.canvas ?? REFERENCE_TERMINAL_GROUNDS[theme.appearance][0];
   const inner = Math.max(1, width - 2);
   const rule = '┄'.repeat(Math.max(1, inner - 4));
 

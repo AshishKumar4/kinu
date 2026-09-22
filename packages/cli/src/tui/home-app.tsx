@@ -33,13 +33,13 @@ import {
   resolveProfileAuthority,
   updateDefaultTier,
 } from '../profiles';
-import { createKeyDispatcher, openTuiKeyBindings } from './actions';
+import { createKeyDispatcher, openTuiKeyBindings, type KeyScope, type TuiActionId } from './actions';
 import { GuidedOnboarding, type OnboardingRoleChoice, type TuiOnboardingOperations } from './onboarding';
-import { createFileTuiPreferenceStore } from './preferences';
+import { createFileTuiPreferenceStore, type WorkspaceLocationChoice } from './preferences';
 import { DeviceConnectOverlay, ModelPickerOverlay } from './overlays';
 import { clipText } from '@kinu.run/core';
 import { useDeviceConnectPrompt } from './use-device-connect';
-import { useTuiTheme } from './theme';
+import { useTuiTheme, type TuiThemeColors } from './theme';
 import {
   TuiProductProvider,
   TuiShell,
@@ -345,7 +345,7 @@ function HomeScene({ opts }: { opts: HomeTuiOptions }) {
     if (deviceConnect.handleKey(key) || busy) return;
 
     if (overlayNavigation) return;
-    const result = dispatcher.feed(key, modelPicker ? ['modal'] : focusArea === 'mission' ? ['editor', 'home', 'global'] : ['home', 'global']);
+    const result = dispatcher.feed(key, keyScopes(modelPicker !== null, focusArea));
 
     if (result.pending) {
       key.preventDefault();
@@ -400,7 +400,7 @@ function HomeScene({ opts }: { opts: HomeTuiOptions }) {
     }
 
     if (focusArea === 'mission' || focusArea === 'agents') return;
-    const direction = actionId === 'home.previous' ? -1 : actionId === 'home.next' ? 1 : 0;
+    const direction = stepDirection(actionId);
 
     if (direction !== 0) {
       key.preventDefault();
@@ -492,11 +492,7 @@ function HomeScene({ opts }: { opts: HomeTuiOptions }) {
         <text>
           <strong fg={colors.text.strong}>{agents.length === 0 ? 'What is this workspace for?' : 'Open a workspace, or start a new one'}</strong>{'\n'}
           <span fg={colors.text.muted}>
-            {setupRequired
-              ? 'Connect Kinu once, then this screen can create and open workspaces directly.'
-              : agents.length === 0
-              ? "Describe what the workspace is for. It seeds SOUL.md and names the workspace. Nothing runs until you send the first message."
-              : 'Select a workspace, or write a mission to create a new one.'}
+            {subtitle(setupRequired, agents.length)}
           </span>
         </text>
 
@@ -516,7 +512,7 @@ function HomeScene({ opts }: { opts: HomeTuiOptions }) {
               height: promptHeight,
               border: true,
               borderStyle: 'rounded',
-              borderColor: busy ? colors.border.strong : focusArea === 'mission' ? colors.border.focus : colors.border.user,
+              borderColor: composerBorder(colors, busy, focusArea === 'mission'),
               backgroundColor: colors.background.user,
               paddingLeft: 1,
               paddingRight: 1,
@@ -553,7 +549,7 @@ function HomeScene({ opts }: { opts: HomeTuiOptions }) {
         <box flexDirection="column" style={{ marginTop: 1 }}>
           <text>
             <span fg={colors.intent.accentStrong}>Mode: </span>
-            <span fg={mode === 'cloud' ? (cloudReady ? colors.text.primary : colors.intent.warning) : (localReady ? colors.text.primary : colors.intent.warning)}>
+            <span fg={(mode === 'cloud' ? cloudReady : localReady) ? colors.text.primary : colors.intent.warning}>
               {modeLabel}
             </span>
             <span fg={colors.text.muted}>  {focusArea === 'mode' ? `${keybindings.hint('home.next')} switches` : `${keybindings.hint('home.focus-next')} to focus`}</span>
@@ -686,13 +682,10 @@ function ModeSegment(props: {
 }) {
   const { colors } = useTuiTheme();
 
-  const borderColor = props.selected
-    ? props.focused ? colors.intent.accent : colors.border.focus
-    : colors.border.default;
-
-  const textColor = props.ready
-    ? props.selected ? colors.text.strong : colors.text.primary
-    : colors.intent.warning;
+  const selectedBorder = props.focused ? colors.intent.accent : colors.border.focus;
+  const borderColor = props.selected ? selectedBorder : colors.border.default;
+  const readyText = props.selected ? colors.text.strong : colors.text.primary;
+  const textColor = props.ready ? readyText : colors.intent.warning;
 
   return (
     <box
@@ -740,11 +733,7 @@ function createDefaultOnboarding(
       const localConnected = isLocalModelConfigured();
       const location = current.onboardingLocation;
 
-      const providerConnected = location === 'cloud'
-        ? accountConnected
-        : location === 'local'
-          ? localConnected
-          : accountConnected || localConnected;
+      const providerConnected = connectedFor(location, accountConnected, localConnected);
 
       const profile = providerConnected ? await loadActiveProfile() : null;
 
@@ -782,11 +771,7 @@ function createDefaultOnboarding(
       const current = preferences.read();
       const location = current.onboardingLocation;
 
-      const mode: AgentMode = location === 'cloud'
-        ? 'cloud'
-        : location === 'local'
-          ? 'local'
-          : defaultCreateMode();
+      const mode: AgentMode = location === 'cloud' || location === 'local' ? location : defaultCreateMode();
 
       const identity = mode === 'local'
         ? await suggestAgentIdentityFromMission(input.mission, opts)
@@ -851,6 +836,48 @@ export async function runHomeTui(opts: HomeTuiOptions = {}): Promise<HomeTuiActi
   });
 }
 
+/** Which keybinding scopes a key press is read against: the picker owns every
+ *  key while it is open, and the composer takes editor keys. */
+function keyScopes(modelPickerOpen: boolean, focusArea: HomeFocus): readonly KeyScope[] {
+  if (modelPickerOpen) return ['modal'];
+
+  return focusArea === 'mission' ? ['editor', 'home', 'global'] : ['home', 'global'];
+}
+
+/** Which way a list action moves the selection; 0 for an action that does not. */
+function stepDirection(actionId: TuiActionId | null): number {
+  if (actionId === 'home.previous') return -1;
+
+  return actionId === 'home.next' ? 1 : 0;
+}
+
+/** The line under the heading: what to do next, given what is set up. */
+function subtitle(setupRequired: boolean, agentCount: number): string {
+  if (setupRequired) return 'Connect Kinu once, then this screen can create and open workspaces directly.';
+
+  if (agentCount === 0) {
+    return 'Describe what the workspace is for. It seeds SOUL.md and names the workspace. Nothing runs until you send the first message.';
+  }
+
+  return 'Select a workspace, or write a mission to create a new one.';
+}
+
+/** The composer's frame: dimmed while a turn runs, lit while it has focus. */
+function composerBorder(colors: TuiThemeColors, busy: boolean, focused: boolean): string {
+  if (busy) return colors.border.strong;
+
+  return focused ? colors.border.focus : colors.border.user;
+}
+
+/** Whether the chosen location has a provider behind it. `both` needs either. */
+function connectedFor(location: WorkspaceLocationChoice | undefined, account: boolean, local: boolean): boolean {
+  if (location === 'cloud') return account;
+
+  if (location === 'local') return local;
+
+  return account || local;
+}
+
 function nextFocus(current: HomeFocus, sidebarFocusable: boolean): HomeFocus {
   const order: HomeFocus[] = sidebarFocusable
     ? ['mission', 'agents', 'mode', 'model', 'effort']
@@ -858,7 +885,7 @@ function nextFocus(current: HomeFocus, sidebarFocusable: boolean): HomeFocus {
 
   const index = order.indexOf(current);
 
-  return order[(index + 1) % order.length] ?? order[0]!;
+  return order[(index + 1) % order.length] ?? order[0];
 }
 
 /**

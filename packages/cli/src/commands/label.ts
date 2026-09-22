@@ -172,6 +172,7 @@ export async function labelCommand(
     case 'ensemble': return ensembleLabels(target, opts);
     case 'report': return reportLabels(target, opts);
     case 'score': return scoreCorpus(target, opts);
+    case undefined:
     default:
       throw new Error(
         `Unknown action "${action ?? ''}". Use export, ingest, ensemble, report, mine, or score.`,
@@ -483,5 +484,5 @@ function cloudRpc<T>(
 ): Promise<T> {
   const auth = requireAuthConfig();
 
-  return callAgentRpc(auth.origin, auth.token, target.cloudName, method, schema, args);
+  return callAgentRpc({ origin: auth.origin, token: auth.token, name: target.cloudName, method, schema, args });
 }

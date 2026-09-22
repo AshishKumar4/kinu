@@ -128,9 +128,9 @@ export function watchDeviceConsents(
 }
 
 function decisionFeedback(decision: DeviceConsentDecision): string {
-  return decision === 'deny' ? 'Denied.'
-    : decision === 'always' ? 'Approved (always).'
-    : 'Approved once.';
+  if (decision === 'deny') return 'Denied.';
+
+  return decision === 'always' ? 'Approved (always).' : 'Approved once.';
 }
 
 /** Read one line from the surface's stdin. Resolve null on EOF or abort. */

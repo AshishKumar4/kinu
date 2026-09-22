@@ -114,7 +114,8 @@ async function confirmConnect(label?: string): Promise<string | null> {
     );
   }
 
-  const name = label?.trim() || await ask('Device name', defaultDeviceName());
+  const given = label?.trim();
+  const name = given === undefined || given === '' ? await ask('Device name', defaultDeviceName()) : given;
   const proceed = await confirm('Link and start the daemon?', true);
 
   return proceed ? name : null;

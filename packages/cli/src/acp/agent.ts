@@ -217,7 +217,12 @@ export function createAcpAgent(deps: AcpAgentDeps): AgentApp {
         };
       case 'error':
         return { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: `\n\n${event.message}` } };
-      default:
+      case 'turn-start':
+      case 'turn-end':
+      case 'step-finish':
+      case 'broadcast':
+      case 'run-event':
+      case 'background':
         return null;
     }
   };

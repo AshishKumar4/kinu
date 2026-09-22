@@ -198,9 +198,7 @@ export function fileEditDiffView(
     hunks: null,
     counts: null,
     truncated: false,
-    label: body.body.action === 'created'
-      ? 'new file'
-      : body.body.bytes === undefined ? 'replaced' : `replaced · ${String(body.body.bytes)} B`,
+    label: writeLabel(body.body.action === 'created', body.body.bytes),
   };
 }
 
@@ -218,6 +216,22 @@ function toLf(text: string): string {
  * the shared result-line budget with a "+K more lines" trailer, so creating a
  * large file cannot flood the transcript.
  */
+/** What a whole-file write did, for the card's one-line label. */
+function writeLabel(created: boolean, bytes: number | undefined): string {
+  if (created) return 'new file';
+
+  return bytes === undefined ? 'replaced' : `replaced · ${String(bytes)} B`;
+}
+
+/** The line under a clipped diff: what was left out, or where it stops. */
+function diffTrailer(omitted: number, truncated: boolean): string | null {
+  if (omitted > 0) {
+    return `+${String(omitted)} more line${omitted === 1 ? '' : 's'}${truncated ? ' · truncated' : ''}`;
+  }
+
+  return truncated ? `… diff ends at ${String(MAX_LINES_PER_FILE)} lines. The totals cover the full file.` : null;
+}
+
 export function FileDiffCard({ view, expanded, previewWidth, lineCap = EXPANDED_RESULT_LINES }: {
   readonly view: FileEditDiffView;
   readonly expanded: boolean;
@@ -249,11 +263,7 @@ export function FileDiffCard({ view, expanded, previewWidth, lineCap = EXPANDED_
 
   const omitted = totalLines - drawn;
 
-  const trailer = omitted > 0
-    ? `+${String(omitted)} more line${omitted === 1 ? '' : 's'}${view.truncated ? ' · truncated' : ''}`
-    : view.truncated
-      ? `… diff ends at ${String(MAX_LINES_PER_FILE)} lines. The totals cover the full file.`
-      : null;
+  const trailer = diffTrailer(omitted, view.truncated);
 
   return (
     <box flexDirection="column" style={{ paddingLeft: 2 }}>
@@ -264,11 +274,10 @@ export function FileDiffCard({ view, expanded, previewWidth, lineCap = EXPANDED_
         {view.counts === null || view.counts.removed === 0 ? null : <span fg={well.danger}>{` −${String(view.counts.removed)}`}</span>}
         {view.label === undefined ? null : <span fg={well.muted}>{` · ${view.label}`}</span>}
       </text>
-      {view.hunks === null ? (
-        <text><span fg={well.muted}>  diff unavailable</span></text>
-      ) : totalLines === 0 ? (
+      {view.hunks === null && <text><span fg={well.muted}>  diff unavailable</span></text>}
+      {view.hunks !== null && totalLines === 0 && (
         <text><span fg={well.muted}>{view.status === 'added' ? '  empty file' : '  no visible changes'}</span></text>
-      ) : null}
+      )}
       {rows.map((row, index) => row === 'gap' ? (
         <text key={`gap-${String(index)}`}><span fg={well.muted}>{'  ⋮'}</span></text>
       ) : (

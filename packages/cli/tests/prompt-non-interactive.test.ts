@@ -12,6 +12,7 @@ import { spawn } from "node:child_process";
 import { join, resolve } from "node:path";
 import { describe, expect, test } from "bun:test";
 import { tolerate } from "@kinu.run/core/obs";
+import { present } from '@kinu.run/test-utils';
 
 const repoRoot = resolve(__dirname, "../../..");
 
@@ -47,7 +48,7 @@ function runDetachedCli(args: string[], home: string, timeoutMs = 20_000): Promi
     child.stdin.end();
 
     const timer = setTimeout(() => {
-      tolerate(() => process.kill(-child.pid!, "SIGKILL"), "esrch");
+      tolerate(() => process.kill(-present(child.pid, "the child process id"), "SIGKILL"), "esrch");
       resolvePromise({ exitCode: null, stdout, stderr, timedOut: true });
     }, timeoutMs);
 

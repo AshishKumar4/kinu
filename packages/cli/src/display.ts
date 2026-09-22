@@ -180,7 +180,7 @@ export function createTurnStatus(opts: { hold?: () => boolean; tty?: boolean } =
     resume() {
       if (label === null || !tty) return;
 
-      if (!timer) timer = setInterval(draw, 80);
+      timer ??= setInterval(draw, 80);
       draw();
     },
   };
@@ -315,16 +315,21 @@ export interface SearchTreeNode {
   visits: number;
 }
 
+/** The glyph for each engine status; open reads as pending. */
+const SEARCH_STATUS_ICON: Record<SearchTreeNode['status'], string> = {
+  terminal: OK('●'),
+  pruned: ERR('○'),
+  failed: ERR('✗'),
+  open: WARN('◌'),
+};
+
 /** One terminal line per node. The glyphs name all four engine statuses:
  *  terminal, failed and pruned each read apart, open reads as pending. */
 export function renderSearchTreeLines(nodes: readonly SearchTreeNode[]): string[] {
   return nodes.map((node) => {
     const indent = '  '.repeat(node.depth + 1);
 
-    const icon = node.status === 'terminal' ? OK('●')
-      : node.status === 'pruned' ? ERR('○')
-      : node.status === 'failed' ? ERR('✗')
-      : WARN('◌');
+    const icon = SEARCH_STATUS_ICON[node.status];
 
     const value = WARN(node.value.toFixed(3));
     const visits = DIM(`n=${node.visits}`);
@@ -528,18 +533,18 @@ function renderHelp(program: Command): string {
     lines.push('', chalk.bold(heading));
 
     for (const entry of entries.filter((e) => e.heading === heading)) {
-      lines.push(...helpRow(ACCENT(entry.term), entry.term.length, entry.description, termColumn, width));
+      lines.push(...helpRow({ term: ACCENT(entry.term), termLength: entry.term.length, description: entry.description, termColumn, width }));
     }
   }
 
   lines.push('', chalk.bold('Options:'));
-  lines.push(...helpRow(DIM('-v, --version'), 13, 'Print the installed version', termColumn, width));
-  lines.push(...helpRow(DIM('-h, --help'), 10, `Show this help; \`${program.name()} <command> --help\` for one command`, termColumn, width));
+  lines.push(...helpRow({ term: DIM('-v, --version'), termLength: 13, description: 'Print the installed version', termColumn, width }));
+  lines.push(...helpRow({ term: DIM('-h, --help'), termLength: 10, description: `Show this help; \`${program.name()} <command> --help\` for one command`, termColumn, width }));
 
   lines.push('', chalk.bold('Environment:'));
 
   for (const [name, description] of GLOBAL_ENVIRONMENT) {
-    lines.push(...helpRow(DIM(name), name.length, description, termColumn, width));
+    lines.push(...helpRow({ term: DIM(name), termLength: name.length, description, termColumn, width }));
   }
 
   lines.push('', chalk.bold('Examples:'));
@@ -552,7 +557,16 @@ function renderHelp(program: Command): string {
 
 /** One `term    description` row, wrapping the description under a hanging
  *  indent. An over-long term takes its own line so the column never shears. */
-function helpRow(term: string, termLength: number, description: string, termColumn: number, width: number): string[] {
+interface HelpRow {
+  /** Styled for the terminal; `termLength` is its visible width. */
+  readonly term: string;
+  readonly termLength: number;
+  readonly description: string;
+  readonly termColumn: number;
+  readonly width: number;
+}
+
+function helpRow({ term, termLength, description, termColumn, width }: HelpRow): string[] {
   const gutter = '  ';
   const descriptionWidth = Math.max(24, width - gutter.length - termColumn);
   const wrapped = description ? wrapText(description, descriptionWidth) : [];

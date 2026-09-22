@@ -51,9 +51,12 @@ export function buildAgentHubEntries(input: {
   const currentRow = items.find((item) => item.name === current.name && item.mode === current.mode);
   const groupKey = currentRow ? agentWorkspaceKey(currentRow, projectRoot) : null;
 
-  const members = current.mode === 'local' && currentRow && groupKey !== null && groupKey !== 'unplaced'
+  const sameProject = current.mode === 'local' && currentRow !== undefined && groupKey !== null && groupKey !== 'unplaced';
+  const alone = currentRow === undefined ? [] : [currentRow];
+
+  const members = sameProject
     ? items.filter((item) => item.mode === 'local' && agentWorkspaceKey(item, projectRoot) === groupKey)
-    : currentRow ? [currentRow] : [];
+    : alone;
 
   if (members.length === 0) return [currentEntry];
 
@@ -108,6 +111,21 @@ export interface TuiHubData {
   readonly profile: TuiProfileHubData;
 }
 
+const HUB_TITLES = { agents: 'Agent Hub', roles: 'Role Hub', tiers: 'Tier Hub' } as const;
+
+/** A role row reads as live, offered, or out of reach. */
+function roleStateColor(colors: TuiThemeColors, active: boolean, available: boolean): string {
+  if (active) return colors.intent.accent;
+
+  return available ? colors.intent.success : colors.text.muted;
+}
+
+function roleStateMark(active: boolean, available: boolean): string {
+  if (active) return '● ';
+
+  return available ? '○ ' : '× ';
+}
+
 export function HubOverlay(props: {
   readonly view: TuiHubView;
   readonly data: TuiHubData;
@@ -120,7 +138,7 @@ export function HubOverlay(props: {
   const { colors } = useTuiTheme();
   const panelWidth = Math.min(Math.max(34, Math.floor(props.width * 0.72)), 88, Math.max(1, props.width - 2));
   const panelHeight = Math.min(Math.max(12, Math.floor(props.height * 0.72)), 28, Math.max(3, props.height - 2));
-  const title = props.view === 'agents' ? 'Agent Hub' : props.view === 'roles' ? 'Role Hub' : 'Tier Hub';
+  const title = HUB_TITLES[props.view];
 
   return (
     <box
@@ -227,7 +245,7 @@ function RoleHubRows({ data }: { readonly data: TuiProfileHubData }) {
         return (
           <box key={roleId} flexDirection="column" style={{ height: 2, marginBottom: 1, backgroundColor: active ? colors.background.selection : colors.background.recessed, paddingLeft: 1, paddingRight: 1 }}>
             <text>
-              <span fg={active ? colors.intent.accent : available ? colors.intent.success : colors.text.muted}>{active ? '● ' : available ? '○ ' : '× '}</span>
+              <span fg={roleStateColor(colors, active, available)}>{roleStateMark(active, available)}</span>
               <strong fg={active ? colors.text.strong : colors.text.primary}>{role.label ?? deriveRoleLabel(roleId)}</strong>
               <span fg={colors.text.muted}> · {role.tier} · {role.preset}</span>
             </text>

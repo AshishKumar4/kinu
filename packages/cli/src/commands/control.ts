@@ -108,8 +108,21 @@ export async function effortCommand(name: string, level: string | undefined): Pr
   if (target.mode === 'cloud') {
     const auth = requireAuthConfig();
     result = level
-      ? await callAgentRpc(auth.origin, auth.token, target.cloudName, 'setReasoningEffort', EffortSetResultSchema, [level])
-      : await callAgentRpc(auth.origin, auth.token, target.cloudName, 'getReasoningEffort', StoredEffortSchema);
+      ? await callAgentRpc({
+        origin: auth.origin,
+        token: auth.token,
+        name: target.cloudName,
+        method: 'setReasoningEffort',
+        schema: EffortSetResultSchema,
+        args: [level],
+      })
+      : await callAgentRpc({
+        origin: auth.origin,
+        token: auth.token,
+        name: target.cloudName,
+        method: 'getReasoningEffort',
+        schema: StoredEffortSchema,
+      });
   } else {
     const envelope = level
       ? await updateDefaultTier({ reasoningEffort: level })
@@ -199,7 +212,7 @@ function catalogSpec(catalog: ModelCatalog, spec: string): string {
   if (!('models' in catalog) || normalized.includes('/')) return normalized;
   const suffixMatches = catalog.models.filter((model) => model.spec.endsWith(`/${normalized}`));
 
-  return suffixMatches.length === 1 ? suffixMatches[0]!.spec : normalized;
+  return suffixMatches.length === 1 ? suffixMatches[0].spec : normalized;
 }
 
 export async function toolsCommand(name: string, _opts: ControlOpts): Promise<void> {
@@ -207,7 +220,15 @@ export async function toolsCommand(name: string, _opts: ControlOpts): Promise<vo
 
   if (target.mode === 'cloud') {
     const auth = requireAuthConfig();
-    const tools = await callAgentRpc(auth.origin, auth.token, target.cloudName, 'getToolDescriptions', CloudToolDescriptionsSchema);
+
+    const tools = await callAgentRpc({
+      origin: auth.origin,
+      token: auth.token,
+      name: target.cloudName,
+      method: 'getToolDescriptions',
+      schema: CloudToolDescriptionsSchema,
+    });
+
     printTools([
       ...tools.builtIn.map((tool) => ({ ...tool, group: 'built-in' })),
       ...tools.crafted.map((tool) => ({ ...tool, group: 'crafted' })),
@@ -237,7 +258,14 @@ export async function triggersCommand(
     const auth = requireAuthConfig();
 
     if (normalized === 'list') {
-      const { triggers } = await callAgentRpc(auth.origin, auth.token, target.cloudName, 'listTriggers', CloudTriggerListSchema);
+      const { triggers } = await callAgentRpc({
+        origin: auth.origin,
+        token: auth.token,
+        name: target.cloudName,
+        method: 'listTriggers',
+        schema: CloudTriggerListSchema,
+      });
+
       present(triggers, opts, (rows) => printTriggers(rows, auth.origin));
 
       return;
@@ -248,7 +276,16 @@ export async function triggersCommand(
       // `'owner'`: a CLI token is the account holder's own credential, so this
       // surface may close an owner-created ingress. The model's
       // `agent.cancelSchedule` reaches the same RPC as `'self'` and may not.
-      const cancelled = await callAgentRpc(auth.origin, auth.token, target.cloudName, 'cancelTrigger', CancelTriggerSchema, [value, 'owner']);
+
+      const cancelled = await callAgentRpc({
+        origin: auth.origin,
+        token: auth.token,
+        name: target.cloudName,
+        method: 'cancelTrigger',
+        schema: CancelTriggerSchema,
+        args: [value, 'owner'],
+      });
+
       present({ id: value, ...cancelled }, opts, () =>
         console.log(`${OK('cancelled')} ${cancelled.changed ? value : `${value} (already inactive)`}`));
 
@@ -307,9 +344,14 @@ async function createCloudTimerTrigger(cloudName: string, action: string, value:
 
   // trust:'owner' — an interactive session token IS the owner (the old
   // per-route matcher stamped the same value server-side).
-  return callAgentRpc(
-    auth.origin, auth.token, cloudName, 'createTimerTrigger', TimerTriggerSchema, [{ ...input, trust: 'owner' }],
-  );
+  return callAgentRpc({
+    origin: auth.origin,
+    token: auth.token,
+    name: cloudName,
+    method: 'createTimerTrigger',
+    schema: TimerTriggerSchema,
+    args: [{ ...input, trust: 'owner' }],
+  });
 }
 
 /** One `scheduled` line for both backends: creation answers the same shape. */
@@ -326,14 +368,31 @@ export async function jobsCommand(name: string, action: string | undefined, id: 
 
     if (normalized === 'cancel') {
       if (!id) throw new Error('job id required');
-      const cancelled = await callAgentRpc(auth.origin, auth.token, target.cloudName, 'cancelBackgroundJob', CancelJobSchema, [id]);
+
+      const cancelled = await callAgentRpc({
+        origin: auth.origin,
+        token: auth.token,
+        name: target.cloudName,
+        method: 'cancelBackgroundJob',
+        schema: CancelJobSchema,
+        args: [id],
+      });
+
       present({ id, ...cancelled }, opts, () =>
         console.log(`${OK('cancelled')} ${cancelled.ok ? id : `${id} (not running)`}`));
 
       return;
     }
 
-    const jobs = await callAgentRpc(auth.origin, auth.token, target.cloudName, 'listBackgroundJobs', v.array(CloudBackgroundJobSchema), [20]);
+    const jobs = await callAgentRpc({
+      origin: auth.origin,
+      token: auth.token,
+      name: target.cloudName,
+      method: 'listBackgroundJobs',
+      schema: v.array(CloudBackgroundJobSchema),
+      args: [20],
+    });
+
     present(jobs, opts, printJobs);
 
     return;

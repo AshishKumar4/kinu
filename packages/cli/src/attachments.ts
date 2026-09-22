@@ -56,8 +56,8 @@ function extractPathTokens(text: string): PathToken[] {
   const tokens: PathToken[] = [];
 
   for (const m of text.matchAll(TOKEN_RE)) {
-    const raw = m[2]!;
-    const index = m.index! + m[1]!.length;
+    const raw = m[2];
+    const index = m.index + m[1].length;
     const mention = raw.startsWith('@');
     const path = stripQuotes(mention ? raw.slice(1) : raw);
 

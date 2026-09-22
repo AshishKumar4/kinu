@@ -91,7 +91,15 @@ async function signedRelease(origin: string, served: string, fetchImpl: FetchLik
 /** Download one published artifact and prove it whole against the SIGNED
  *  checksum — the manifest's, never the origin's own `.sha256` file, which
  *  the origin chooses. */
-async function fetchVerified(origin: string, pathname: string, into: string, release: SignedRelease, fetchImpl: FetchLike): Promise<void> {
+interface VerifiedDownload {
+  readonly origin: string;
+  readonly pathname: string;
+  readonly into: string;
+  readonly release: SignedRelease;
+  readonly fetchImpl: FetchLike;
+}
+
+async function fetchVerified({ origin, pathname, into, release, fetchImpl }: VerifiedDownload): Promise<void> {
   const expected = release.checksums[pathname];
 
   if (expected === undefined) throw new KinuError('denied', `the signed release names no ${pathname}; nothing is downloaded`);
@@ -145,8 +153,8 @@ async function stageServedBuild(origin: string, served: string, seams: RefreshSe
     // The signed manifest first, before any download: a refused signature
     // costs one small read and lands nothing.
     const release = await signedRelease(origin, served, fetchImpl);
-    await fetchVerified(origin, platformArtifactPath(), join(work, 'cli.tar.gz'), release, fetchImpl);
-    await fetchVerified(origin, CLI_RUNTIME_PATH, join(work, 'runtime.tar.gz'), release, fetchImpl);
+    await fetchVerified({ origin, pathname: platformArtifactPath(), into: join(work, 'cli.tar.gz'), release, fetchImpl });
+    await fetchVerified({ origin, pathname: CLI_RUNTIME_PATH, into: join(work, 'runtime.tar.gz'), release, fetchImpl });
     mkdirSync(join(work, 'extract'));
     await extractTarball(join(work, 'cli.tar.gz'), join(work, 'extract'));
     await extractTarball(join(work, 'runtime.tar.gz'), join(work, 'extract'));

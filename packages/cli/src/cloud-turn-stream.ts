@@ -161,7 +161,7 @@ export class CloudTurnStream {
         const toolCallId = jsonString(chunk.toolCallId, '');
         const call = this.toolById.get(toolCallId);
 
-        const result = type.output === 'tool-output-error'
+        const toolResult = type.output === 'tool-output-error'
           ? jsonErrorMessage(chunk.errorText, 'tool error')
           : stringifyToolOutput(chunk.output ?? null);
 
@@ -169,10 +169,10 @@ export class CloudTurnStream {
           ? { success: false, reason: null } satisfies ToolOutcome
           : { success: true } satisfies ToolOutcome;
 
-        if (call) { call.result = result; call.outcome = outcome; }
+        if (call) { call.result = toolResult; call.outcome = outcome; }
 
         this.emit({
-          type: 'tool-result', toolName: call?.name ?? 'tool', toolCallId, result,
+          type: 'tool-result', toolName: call?.name ?? 'tool', toolCallId, result: toolResult,
           ...outcome,
         });
 
@@ -202,7 +202,9 @@ export function jsonErrorMessage(value: JsonValue | undefined, fallback: string)
   if (value === undefined) return fallback;
   const text = v.safeParse(v.string(), value);
 
-  return text.success && text.output ? text.output : String(value);
+  if (text.success && text.output !== '') return text.output;
+
+  return JSON.stringify(value);
 }
 
 function jsonString(value: JsonValue | undefined, fallback: string): string {

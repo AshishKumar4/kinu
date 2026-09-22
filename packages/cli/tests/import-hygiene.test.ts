@@ -9,6 +9,7 @@
 import { spawnSync } from "node:child_process";
 import { join, resolve } from "node:path";
 import { expect, test } from "bun:test";
+import { present } from '@kinu.run/test-utils';
 
 const srcDir = resolve(__dirname, "../src");
 
@@ -35,7 +36,7 @@ test("importing the setup/chat command graph leaves stdin untouched and opentui 
   });
 
   expect(run.status).toBe(0);
-  const result = JSON.parse(run.stdout.trim().split("\n").at(-1)!);
+  const result = JSON.parse(present(run.stdout.trim().split("\n").at(-1), 'the last line of stdout'));
   expect(result.afterCommands.stdin).toEqual({ data: 0, readable: 0, keypress: 0, isRaw: false });
   expect(result.afterCommands.opentuiLoaded).toBe(false);
   expect(result.controlLoaded).toBe(true);

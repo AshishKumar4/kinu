@@ -341,7 +341,7 @@ export class CloudAgentClient implements AgentClient {
   private readonly subordinateName: string | null;
   private readonly oneShot: boolean;
   private readonly transcriptOptions: CliSessionOptions;
-  private activeCliSession: CliSession;
+  private readonly activeCliSession: CliSession;
   private readonly listeners = new Set<(event: AgentClientEvent) => void>();
   private readonly recorder = new SessionRecorder('cloud');
   private ws: WebSocket | null = null;
@@ -540,7 +540,7 @@ export class CloudAgentClient implements AgentClient {
   }
 
   private callParentHttp<Input, T = Input>(method: string, schema: v.GenericSchema<Input, T>, args: JsonValue[] = []): Promise<T> {
-    return callAgentRpc(this.origin, this.token, this.cloudName, method, schema, args);
+    return callAgentRpc({ origin: this.origin, token: this.token, name: this.cloudName, method, schema, args });
   }
 
   /** Invoke a @callable agent method over the websocket ({type:'rpc'}). */
@@ -981,9 +981,9 @@ export class CloudAgentClient implements AgentClient {
     // the TUI's branch segment + settle hint. Narrowed field-by-field like
     // every other frame in this handler — no wholesale re-typing.
     if (payload.type === 'branch_status') {
-      const event = parseBranchStatusEvent(payload);
+      const branchStatus = parseBranchStatusEvent(payload);
 
-      if (event) this.emit({ type: 'broadcast', event });
+      if (branchStatus) this.emit({ type: 'broadcast', event: branchStatus });
 
       return;
     }
@@ -1028,7 +1028,8 @@ export class CloudAgentClient implements AgentClient {
     if (payload.error) {
       if (this.stoppingTurnIds.has(payload.id)) return;
       this.activeTurns.delete(payload.id);
-      const message = payload.body || 'Cloud agent stream failed.';
+      const body = payload.body ?? '';
+      const message = body === '' ? 'Cloud agent stream failed.' : body;
       this.emit({ type: 'error', message });
       active.settle(true);
 
@@ -1170,19 +1171,28 @@ function parseBranchStatusEvent(payload: SocketFrame): BranchStatusEvent | null 
   return { ...event, message: event.message ?? 'branch failed' };
 }
 
+/** A websocket frame's text, whichever transport shape it arrived in. */
+function frameText(
+  text: v.SafeParseResult<v.StringSchema<undefined>>,
+  buffer: v.SafeParseResult<v.InstanceSchema<typeof ArrayBuffer, undefined>>,
+  bytes: v.SafeParseResult<v.InstanceSchema<typeof Uint8Array, undefined>>,
+): string {
+  if (text.success) return text.output;
+
+  if (buffer.success) return new TextDecoder().decode(buffer.output);
+
+  if (bytes.success) return new TextDecoder().decode(bytes.output);
+
+  return '';
+}
+
 function parseSocketJson(event: MessageEvent): SocketFrame | null {
   const data: unknown = event.data;
   const textResult = v.safeParse(v.string(), data);
   const bufferResult = v.safeParse(v.instance(ArrayBuffer), data);
   const bytesResult = v.safeParse(v.instance(Uint8Array), data);
 
-  const text = textResult.success
-    ? textResult.output
-    : bufferResult.success
-      ? new TextDecoder().decode(bufferResult.output)
-      : bytesResult.success
-        ? new TextDecoder().decode(bytesResult.output)
-        : String(data);
+  const text = frameText(textResult, bufferResult, bytesResult);
 
   // A frame off the wire is untrusted input: unparseable text is a frame we drop, and only that.
   const parsed = tolerate(() => parseJsonValue(text), 'malformed-input');

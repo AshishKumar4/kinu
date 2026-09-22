@@ -68,7 +68,10 @@ export async function runChatLoop(opts: ChatLoopOpts): Promise<void> {
   const onClientEvent = (event: AgentClientEvent) => {
     if (event.type === 'turn-start') activeTurns += 1;
     else if (event.type === 'turn-end') activeTurns = Math.max(0, activeTurns - 1);
-    renderClientEvent(event, client.agentName, turnStatus, () => headerPrinted, (v) => { headerPrinted = v; });
+    renderClientEvent({
+      event, agentName: client.agentName, status: turnStatus,
+      getHeader: () => headerPrinted, setHeader: (printed) => { headerPrinted = printed; },
+    });
   };
 
   let unsubscribe = client.subscribe(onClientEvent);
@@ -131,7 +134,7 @@ export async function runChatLoop(opts: ChatLoopOpts): Promise<void> {
   // Mid-turn input: a plain line steers the running turn; /queue holds it for
   // after; /stop interrupts. Lines answering a consent question are excluded.
   const onMidTurnLine = async (input: string) => {
-    const command = input.split(/\s+/, 1)[0]!.toLowerCase();
+    const command = input.split(/\s+/, 1)[0].toLowerCase();
 
     if (command === '/stop') {
       client.stop();
@@ -283,9 +286,11 @@ export async function runChatLoop(opts: ChatLoopOpts): Promise<void> {
 
     if (!ref) {
       console.log(`\n${DIM('Walk back to (1 = most recent):')}`);
-      candidates.forEach((candidate, i) => {
+
+      for (const [i, candidate] of candidates.entries()) {
         console.log(`  ${ACCENT(String(i + 1))} ${clipText(candidate.text.replace(/\s+/g, ' '), 100)}`);
-      });
+      }
+
       console.log(DIM('Fork with /fork <number>. The conversation restarts just before that message.\n'));
 
       return;
@@ -321,7 +326,10 @@ export async function runChatLoop(opts: ChatLoopOpts): Promise<void> {
   while (!exiting) {
     // Drain messages queued during the previous turn, in order.
     while (!exiting && queuedInputs.length > 0) {
-      await runTurn(queuedInputs.shift()!);
+      const queued = queuedInputs.shift();
+
+      if (queued === undefined) break;
+      await runTurn(queued);
     }
 
     const prefill = pendingPrefill;
@@ -338,15 +346,13 @@ export async function runChatLoop(opts: ChatLoopOpts): Promise<void> {
         const outcome = await executeSlashCommand(client, input);
 
         if (outcome.kind === 'queue') {
-          if (outcome.text) queuedInputs.push(outcome.text);
-          else console.log(DIM('  Usage: /queue <text>. It sends after the running turn, or at once when idle.'));
+          queueOrExplain(outcome.text, queuedInputs);
           continue;
         }
 
         if (outcome.kind === 'branch') {
           // Idle — there is no live turn to branch from; run it normally.
-          if (outcome.text) await runTurn(outcome.text);
-          else console.log(DIM('  Usage: /branch <text>. It runs a redirect as a parallel branch during a turn.'));
+          await branchOrExplain(outcome.text, runTurn);
           continue;
         }
 
@@ -356,16 +362,7 @@ export async function runChatLoop(opts: ChatLoopOpts): Promise<void> {
         }
 
         if (outcome.kind === 'undo') {
-          const undone = await performUndo(client, outcome.ref);
-          console.log(`\n${MUTED(undone.text)}\n`);
-
-          if (undone.restored) {
-            // opencode parity: files came back — offer the conversation
-            // walk-back through the existing fork mechanics.
-            console.log(DIM('Files restored. To also walk the conversation back:'));
-            await handleFork(undefined);
-          }
-
+          await runUndo(client, outcome.ref, handleFork);
           continue;
         }
 
@@ -606,6 +603,43 @@ async function applySlashOutcome(client: AgentClient, rl: readline.Interface, ou
   }
 }
 
+/** Run the redirect as its own turn, or say how to use /branch. */
+async function branchOrExplain(text: string | undefined, runTurn: (text: string) => Promise<void>): Promise<void> {
+  if (text === undefined || text === '') {
+    console.log(DIM('  Usage: /branch <text>. It runs a redirect as a parallel branch during a turn.'));
+
+    return;
+  }
+
+  await runTurn(text);
+}
+
+/** Undo the last turn's writes; when files came back, offer the matching
+ *  conversation walk-back too (opencode parity). */
+async function runUndo(
+  client: Pick<AgentClient, 'checkpoints'>,
+  ref: string | undefined,
+  handleFork: (ref: string | undefined) => Promise<void>,
+): Promise<void> {
+  const undone = await performUndo(client, ref);
+  console.log(`\n${MUTED(undone.text)}\n`);
+
+  if (!undone.restored) return;
+  console.log(DIM('Files restored. To also walk the conversation back:'));
+  await handleFork(undefined);
+}
+
+/** Queue the text for after the running turn, or say how to use /queue. */
+function queueOrExplain(text: string | undefined, queued: string[]): void {
+  if (text === undefined || text === '') {
+    console.log(DIM('  Usage: /queue <text>. It sends after the running turn, or at once when idle.'));
+
+    return;
+  }
+
+  queued.push(text);
+}
+
 /**
  * Render one AgentClientEvent to the terminal. The status line is part of the
  * same event flow: every label it shows is a state the turn actually entered —
@@ -613,10 +647,15 @@ async function applySlashOutcome(client: AgentClient, rl: readline.Interface, ou
  * line never spins a claim the client did not make. The vocabulary matches the
  * TUI's phase line word for word.
  */
-function renderClientEvent(
-  event: AgentClientEvent, agentName: string, status: TurnStatus,
-  getHeader: () => boolean, setHeader: (v: boolean) => void,
-): void {
+interface ClientEventRender {
+  readonly event: AgentClientEvent;
+  readonly agentName: string;
+  readonly status: TurnStatus;
+  readonly getHeader: () => boolean;
+  readonly setHeader: (printed: boolean) => void;
+}
+
+function renderClientEvent({ event, agentName, status, getHeader, setHeader }: ClientEventRender): void {
   const header = () => {
     if (getHeader()) return;
     status.clear();

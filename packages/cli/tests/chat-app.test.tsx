@@ -6,12 +6,42 @@ import type { AgentModelMenu } from '@kinu.run/core';
 import type { TuiHubData } from '../src/tui/hubs';
 import { asFetchFunction, codenameFor } from '@kinu.run/core';
 
-import { TURN, cleanupChats, fakeClient, mountChat } from './helpers/chat-app-fixture';
+import { TURN, cleanupChats, fakeClient, mountChat, type FixtureWorkspace } from './helpers/chat-app-fixture';
 import { createMemoryTuiPreferenceStore } from './helpers/tui-preferences';
 import { SelectRenderable, TextareaRenderable } from '@opentui/core';
 import { flushSync } from '@opentui/react';
 
 afterEach(cleanupChats);
+
+const ALPHA_LOCAL: FixtureWorkspace = { name: 'alpha', label: 'Alpha', mode: 'local' };
+
+const BETA_LOCAL: FixtureWorkspace = { name: 'beta', label: 'Beta', mode: 'local' };
+
+const BETA_CLOUD: FixtureWorkspace = { name: 'beta', label: 'Beta', mode: 'cloud', cloudName: 'beta' };
+
+const MISSING_CLOUD: FixtureWorkspace = {
+  name: 'missing', label: 'Missing', mode: 'cloud', cloudName: 'missing',
+};
+
+interface HubWorkspaces {
+  /** The workspace the surface opened on. */
+  open: string;
+  label: string;
+  /** The peer the hub creates, listed only once it exists. */
+  peer: string;
+  created: boolean;
+}
+
+/** The drawer an agent-hub test sees: the open workspace, and the peer created
+ *  beside it in the same project. */
+function hubWorkspaces({ open, label, peer, created }: HubWorkspaces): FixtureWorkspace[] {
+  const cwd = process.cwd();
+  const rows: FixtureWorkspace[] = [{ name: open, label, mode: 'local', cwd, workspaceId: 'shop' }];
+
+  if (created) rows.push({ name: peer, label: '', mode: 'local', cwd, workspaceId: 'shop' });
+
+  return rows;
+}
 
 test('draft undo restores the previous deletion burst and is isolated after send', async () => {
   const screen = await mountChat(fakeClient({ name: 'undo-draft' }).client, { kittyKeyboard: true });
@@ -298,10 +328,7 @@ describe('ChatApp terminal interaction', () => {
     });
 
     const screen = await mountChat(controlled.client, {
-      listWorkspaces: () => [
-        { name: 'alpha', label: 'Alpha', mode: 'local' },
-        { name: 'missing', label: 'Missing', mode: 'cloud', cloudName: 'missing' },
-      ],
+      listWorkspaces: () => [ALPHA_LOCAL, MISSING_CLOUD],
       onWorkspaceSelect: async () => candidate.client,
       width: 80,
     });
@@ -331,10 +358,7 @@ describe('ChatApp terminal interaction', () => {
     let selections = 0;
 
     const screen = await mountChat(alpha.client, {
-      listWorkspaces: () => [
-        { name: 'alpha', label: 'Alpha', mode: 'local' },
-        { name: 'beta', label: 'Beta', mode: 'cloud', cloudName: 'beta' },
-      ],
+      listWorkspaces: () => [ALPHA_LOCAL, BETA_CLOUD],
       onWorkspaceSelect: () => {
         selections += 1;
 
@@ -376,7 +400,7 @@ describe('ChatApp terminal interaction', () => {
     });
 
     const screen = await mountChat(controlled.client, {
-      listWorkspaces: () => [{ name: 'alpha', label: 'Alpha', mode: 'local' }],
+      listWorkspaces: () => [ALPHA_LOCAL],
       width: 80,
     });
 
@@ -423,10 +447,7 @@ describe('ChatApp terminal interaction', () => {
     };
 
     const screen = await mountChat(alpha.client, {
-      listWorkspaces: () => [
-        { name: 'alpha', label: 'Alpha', mode: 'local' },
-        { name: 'beta', label: 'Beta', mode: 'cloud', cloudName: 'beta' },
-      ],
+      listWorkspaces: () => [ALPHA_LOCAL, BETA_CLOUD],
       onWorkspaceSelect: async () => beta.client,
       width: 80,
     });
@@ -499,15 +520,11 @@ test('a turn waiting on a rate limit names the provider, not thinking', async ()
       name: 'agent-1', purpose: '', model: 'openai/gpt-5.5', reasoningEffort: 'medium',
     }) });
 
-    const cwd = process.cwd();
     let created = 0;
 
     const screen = await mountChat(main.client, {
       hubData: HUB_FIXTURE,
-      listWorkspaces: () => [
-        { name: 'checkout', label: 'Checkout', mode: 'local', cwd, workspaceId: 'shop' },
-        ...(created > 0 ? [{ name: 'agent-1', label: '', mode: 'local' as const, cwd, workspaceId: 'shop' }] : []),
-      ],
+      listWorkspaces: () => hubWorkspaces({ open: 'checkout', label: 'Checkout', peer: 'agent-1', created: created > 0 }),
       onWorkspaceSelect: async (name) => {
         if (name !== 'agent-1') throw new Error(`unexpected switch to ${name}`);
 
@@ -601,10 +618,7 @@ test('a turn waiting on a rate limit names the provider, not thinking', async ()
     const beta = fakeClient({ name: 'beta' });
 
     const screen = await mountChat(alpha.client, {
-      listWorkspaces: () => [
-        { name: 'alpha', label: 'Alpha', mode: 'local' },
-        { name: 'beta', label: 'Beta', mode: 'local' },
-      ],
+      listWorkspaces: () => [ALPHA_LOCAL, BETA_LOCAL],
       onWorkspaceSelect: async (name) => {
         if (name === 'alpha') return alpha.client;
 
@@ -650,7 +664,6 @@ test('a turn waiting on a rate limit names the provider, not thinking', async ()
 
     const second = fakeClient({ name: 'second' });
     const peer = fakeClient({ name: 'agent-9' });
-    const cwd = process.cwd();
     let created = 0;
     const reported: unknown[] = [];
     const consoleError = spyOn(console, 'error').mockImplementation((...args: unknown[]) => { reported.push(args[0]); });
@@ -658,10 +671,7 @@ test('a turn waiting on a rate limit names the provider, not thinking', async ()
     try {
       const screen = await mountChat(second.client, {
         hubData: HUB_FIXTURE,
-        listWorkspaces: () => [
-          { name: 'second', label: 'Second', mode: 'local', cwd, workspaceId: 'shop' },
-          ...(created > 0 ? [{ name: 'agent-9', label: '', mode: 'local' as const, cwd, workspaceId: 'shop' }] : []),
-        ],
+        listWorkspaces: () => hubWorkspaces({ open: 'second', label: 'Second', peer: 'agent-9', created: created > 0 }),
         onWorkspaceSelect: async () => peer.client,
         onNewAgent: async () => {
           created += 1;
@@ -732,10 +742,7 @@ test('a turn waiting on a rate limit names the provider, not thinking', async ()
     try {
       const screen = await mountChat(alpha.client, {
         hubData: HUB_FIXTURE,
-        listWorkspaces: () => [
-          { name: 'alpha', label: 'Alpha', mode: 'local' },
-          { name: 'beta', label: 'Beta', mode: 'local' },
-        ],
+        listWorkspaces: () => [ALPHA_LOCAL, BETA_LOCAL],
         onWorkspaceSelect: async () => beta.client,
       });
 

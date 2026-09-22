@@ -74,7 +74,7 @@ export function useStreamingBuffer(
 ) {
   const controllerRef = useRef<StreamingBufferController | null>(null);
 
-  if (!controllerRef.current) controllerRef.current = createStreamingBufferController(setStreamingText, intervalMs);
+  controllerRef.current ??= createStreamingBufferController(setStreamingText, intervalMs);
 
   const start = useCallback(() => {
     controllerRef.current?.start();
