@@ -166,7 +166,9 @@ function makeTree(seed: Record<string, string>, opts: { native?: boolean; unlink
       return [...names];
     },
     stat: async (path) => {
-      if (files.has(path)) return { size: files.get(path)!.length, mtimeMs: 1_724_500_000_000, isDir: false };
+      const stored = files.get(path);
+
+      if (stored !== undefined) return { size: stored.length, mtimeMs: 1_724_500_000_000, isDir: false };
 
       return dirs.has(path) ? { size: 0, mtimeMs: 0, isDir: true } : null;
     },

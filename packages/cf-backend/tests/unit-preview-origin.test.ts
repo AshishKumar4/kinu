@@ -36,6 +36,7 @@ import { sandboxPreviewExposures } from '@kinu.run/core';
 import type { KvStore } from '@kinu.run/agent-utils';
 import { installSandboxSdkMock, setSandboxSdk } from './helpers/sandbox-sdk';
 import type { SandboxOptions } from '@cloudflare/sandbox';
+import { present } from '@kinu.run/test-utils';
 
 // The SDK's entry point pulls in `cloudflare:workers`, which only exists inside
 // workerd. proxyToSandbox is the seam the Worker delegates preview routing to,
@@ -1081,7 +1082,7 @@ describe('worker wiring', () => {
 
     // Production is the first of each — the staging environment follows.
     const first = (key: string): string =>
-      wrangler.match(new RegExp(`"${key}"\\s*:\\s*"([^"]*)"`))![1];
+      present(wrangler.match(new RegExp(`"${key}"\\s*:\\s*"([^"]*)"`)), `the "${key}" entry in wrangler.jsonc`)[1];
 
     const vars = {
       PREVIEW_HOST_SUFFIX: first('PREVIEW_HOST_SUFFIX'),

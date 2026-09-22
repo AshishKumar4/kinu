@@ -15,7 +15,7 @@ import {
   type PeerAgentPayload, type ReplyDispatcher, type ReplyChannelKind,
   type PeerMessage, type KinuEvent, type ReceiveResult, type SqlExec,
 } from '@kinu.run/core';
-import { createMemoryVfs, createTestActorsOver, type MemoryVfs } from '@kinu.run/test-utils';
+import { createMemoryVfs, createTestActorsOver, type MemoryVfs, present } from '@kinu.run/test-utils';
 import { sqlExec } from './helpers/user-do';
 
 function makeExec(db: Database): SqlExec {
@@ -183,7 +183,7 @@ describe('fire-and-forget (send)', () => {
     expect(events[0].priority).toBe('normal');
 
     // The drained turn renders the message without a reply instruction.
-    const batch = buildDrainBatch(pendingPeerEvents(bob))!;
+    const batch = present(buildDrainBatch(pendingPeerEvents(bob)), 'the drain batch');
     expect(batch.text).toContain('peer agent (alice)');
     expect(batch.text).not.toContain("action:'msg'");
 
@@ -208,7 +208,7 @@ describe('send-and-await (ask) round-trip', () => {
     const events = pendingPeerEvents(bob);
     expect(events).toHaveLength(1);
     expect(peerPayload(events[0]).reply_expected).toBe(true);
-    const batch = buildDrainBatch(events)!;
+    const batch = present(buildDrainBatch(events), 'the drain batch');
     expect(batch.text).toContain(`agents({action:'msg', event_id:'${events[0].id}'`);
 
     // Bob answers through the peer-back reply channel.

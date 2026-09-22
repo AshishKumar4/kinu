@@ -17,7 +17,7 @@ import {
 import {
   routeInboundEmail, type EmailDeliveryTarget,
 } from '../src/email/route';
-import { createMemoryVfs, createTestActorsOver } from '@kinu.run/test-utils';
+import { createMemoryVfs, createTestActorsOver, present } from '@kinu.run/test-utils';
 import { sqlExec } from './helpers/user-do';
 
 function makeExec(db: Database): SqlExec {
@@ -195,7 +195,7 @@ describe('acceptInboundEmail — the trust gate', () => {
     expect(event.priority).toBe('normal');
 
     // The thread reply channel is bound to the event and carries threading.
-    const channel = replies.findOpenByEvent(result.event_id)!;
+    const channel = present(replies.findOpenByEvent(result.event_id), 'the open reply channel for the event');
     expect(channel.kind).toBe('email_thread');
     expect(v.parse(v.object({
       to: v.string(), from: v.string(), subject: v.string(), message_id: v.nullable(v.string()),
@@ -207,9 +207,9 @@ describe('acceptInboundEmail — the trust gate', () => {
     });
 
     // The event wakes a turn: it appears in the drain batch.
-    const batch = buildDrainBatch(log.pending());
-    expect(batch!.ids).toContain(result.event_id);
-    expect(batch!.text).toContain('email (owner@example.com)');
+    const batch = present(buildDrainBatch(log.pending()), 'the drain batch');
+    expect(batch.ids).toContain(result.event_id);
+    expect(batch.text).toContain('email (owner@example.com)');
   });
 
   test('owner match ignores case and display-name wrappers', async () => {
@@ -232,7 +232,7 @@ describe('acceptInboundEmail — the trust gate', () => {
     expect(result).toMatchObject({ admitted: true, sender_class: 'allowlisted' });
 
     if (!result.admitted) throw new Error('unreachable');
-    const event = log.get(result.event_id)!;
+    const event = present(log.get(result.event_id), 'the logged inbound event');
     expect(event.trust).toBe('external');
     expect(event.priority).toBe('background');
   });
@@ -318,7 +318,7 @@ describe('threading identity is bounded at admission', () => {
 
   test('a chain past the line budget keeps the first id and the most recent', () => {
     const chain = Array.from({ length: 200 }, (_, i) => `<r${String(i).padStart(3, '0')}@x>`);
-    const bounded = boundedReferences(chain.join(' '), '<answered@x>')!;
+    const bounded = present(boundedReferences(chain.join(' '), '<answered@x>'), 'the bounded References header');
 
     expect(bounded.length).toBeLessThanOrEqual(REFERENCES_BUDGET);
     const kept = bounded.split(' ');
@@ -346,10 +346,10 @@ describe('threading identity is bounded at admission', () => {
     if (!result.admitted) throw new Error('unreachable');
 
     const payload = requireEmailEvent(log, result.event_id).payload;
-    expect(payload.references!.length).toBeLessThanOrEqual(REFERENCES_BUDGET);
+    expect(present(payload.references, 'the event payload References').length).toBeLessThanOrEqual(REFERENCES_BUDGET);
     // One authority: the payload the model reads and the address the reply is
     // sent from cannot disagree about which thread this is.
-    const channel = replies.findOpenByEvent(result.event_id)!;
+    const channel = present(replies.findOpenByEvent(result.event_id), 'the open reply channel for the event');
 
     const addr = v.parse(
       v.object({ references: v.nullable(v.string()), message_id: v.nullable(v.string()) }),

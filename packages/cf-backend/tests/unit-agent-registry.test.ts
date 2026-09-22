@@ -9,7 +9,7 @@ import {
   parseModelSpec,
   KINU_USER_AGENT,
 } from '@kinu.run/core';
-import { createMockFetch, createTestRuntime, OPENCODE_GO_CATALOG, OPENAI_RESPONSES_BODY } from '@kinu.run/test-utils';
+import { createMockFetch, createTestRuntime, OPENCODE_GO_CATALOG, OPENAI_RESPONSES_BODY, present } from '@kinu.run/test-utils';
 import { createAgentProviderRegistry, type AgentProviderRegistry } from '../src/providers/agent-registry';
 import type { ModelMenuEntry } from '../src/user/available-models';
 import type { CredentialSummary } from '../src/user/user-do';
@@ -159,7 +159,7 @@ describe('AgentProviderRegistry composition', () => {
     };
 
     const reg = createAgentProviderRegistry({ env, userDO: fakeUserDOStub() });
-    expect(await reg.registry.get('workers-ai')!.isAvailable(reg.deps)).toBe(true);
+    expect(await present(reg.registry.get('workers-ai'), 'the workers-ai provider').isAvailable(reg.deps)).toBe(true);
     const model = reg.resolveModel('workers-ai/@cf/moonshotai/kimi-k2.6');
     const generated = await generateText({ model, prompt: 'reply' });
     expect(generated.text).toBe('direct binding');

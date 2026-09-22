@@ -19,6 +19,7 @@
 import { describe, expect, test } from 'bun:test';
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
+import { present } from '@kinu.run/test-utils';
 
 const INDEX_CSS = resolve(import.meta.dir, '../src/index.css');
 
@@ -103,7 +104,7 @@ function palette(blocks: readonly string[]) {
   for (const [k, v] of Object.entries(merged)) {
     const ref = v.match(/^var\((--c-[a-z0-9-]+)\)$/);
 
-    if (ref) merged[k] = merged[ref[1]]!;
+    if (ref) merged[k] = present(merged[ref[1]], `the palette variable ${ref[1]}`);
   }
 
   return merged;

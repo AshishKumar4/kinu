@@ -23,6 +23,7 @@ import {
   type ActorHarness,
   type HarnessOrchestratorAgent,
 } from './helpers/actor-harness';
+import { present } from '@kinu.run/test-utils';
 
 const BroadcastSchema = v.object({
   type: v.literal('mcts-progress'),
@@ -136,7 +137,7 @@ describe('broadcastMctsProgress', () => {
       mergeStrategy: 'synthesize',
     });
 
-    const latest = sent.at(-1)!;
+    const latest = present(sent.at(-1), 'the latest broadcast');
     expect(latest.pushSeq).toBe(2);
     expect(latest.nodes).toEqual([{
       id: 'root',
@@ -198,26 +199,26 @@ describe('broadcastMctsProgress', () => {
 
     seedNode(harness, { id: 'a', root: 'a', at: 1_000 });
     harness.agent.broadcastMctsProgress('a', 'explore', 1, 5);
-    expect(sent.at(-1)!.nodes.map((n) => n.id)).toEqual(['a']);
+    expect(present(sent.at(-1), 'the latest broadcast').nodes.map((n) => n.id)).toEqual(['a']);
 
     // B starts and expands. B is now the most recently written root.
     seedNode(harness, { id: 'b', root: 'b', at: 2_000 });
     seedNode(harness, { id: 'b1', root: 'b', parent: 'b', depth: 1, at: 2_100 });
     harness.agent.broadcastMctsProgress('b', 'explore', 1, 9);
-    expect(sent.at(-1)!.nodes.map((n) => n.id)).toEqual(['b', 'b1']);
+    expect(present(sent.at(-1), 'the latest broadcast').nodes.map((n) => n.id)).toEqual(['b', 'b1']);
 
     // A backpropagates. No insert, so A is still not the "latest" root — but
     // this event is A's and must carry A's tree, not B's.
     harness.db.prepare(`UPDATE search_nodes SET visits = 7 WHERE id = 'a'`).run();
     harness.agent.broadcastMctsProgress('a', 'iteration-complete', 1, 4);
-    expect(sent.at(-1)!.rootId).toBe('a');
-    expect(sent.at(-1)!.nodes.map((n) => n.id)).toEqual(['a']);
+    expect(present(sent.at(-1), 'the latest broadcast').rootId).toBe('a');
+    expect(present(sent.at(-1), 'the latest broadcast').nodes.map((n) => n.id)).toEqual(['a']);
 
     // And B's next phase is still B's, unaffected by A having spoken between.
     seedNode(harness, { id: 'b2', root: 'b', parent: 'b', depth: 1, at: 2_200 });
     harness.agent.broadcastMctsProgress('b', 'evaluate', 2, 8);
-    expect(sent.at(-1)!.rootId).toBe('b');
-    expect(sent.at(-1)!.nodes.map((n) => n.id)).toEqual(['b', 'b1', 'b2']);
+    expect(present(sent.at(-1), 'the latest broadcast').rootId).toBe('b');
+    expect(present(sent.at(-1), 'the latest broadcast').nodes.map((n) => n.id)).toEqual(['b', 'b1', 'b2']);
 
     expect(sent.map(({ rootId, pushSeq }) => [rootId, pushSeq])).toEqual([
       ['a', 1],

@@ -22,6 +22,7 @@ import {
   fetchCloudflareAIGateways,
 } from '@kinu.run/core';
 import { requestBodyText, requestUrl } from './helpers/fetch-input';
+import { present } from '@kinu.run/test-utils';
 
 const ACCOUNT_ROOT = 'https://api.cloudflare.com/client/v4/accounts/abc123abc123abc1';
 
@@ -131,10 +132,10 @@ describe('my-gateway request shape', () => {
 describe('my-gateway availability gating', () => {
   test('unavailable until a gateway is selected; available once it is', async () => {
     const noGateway = createAgentProviderRegistry({ env: {}, userDO: gatewayStub({ gatewayId: null }) });
-    expect(await noGateway.registry.get('my-gateway')!.isAvailable(noGateway.deps)).toBe(false);
+    expect(await present(noGateway.registry.get('my-gateway'), 'the my-gateway provider').isAvailable(noGateway.deps)).toBe(false);
 
     const selected = createAgentProviderRegistry({ env: {}, userDO: gatewayStub() });
-    expect(await selected.registry.get('my-gateway')!.isAvailable(selected.deps)).toBe(true);
+    expect(await present(selected.registry.get('my-gateway'), 'the my-gateway provider').isAvailable(selected.deps)).toBe(true);
   });
 
   test('without a usable Cloudflare credential the provider drops out', async () => {
@@ -145,8 +146,10 @@ describe('my-gateway availability gating', () => {
     });
 
     const reg = createAgentProviderRegistry({ env: {}, userDO: dead });
-    expect(await reg.registry.get('my-gateway')!.isAvailable(reg.deps)).toBe(false);
-    expect(await reg.registry.get('my-gateway')!.unavailableReason!(reg.deps)).toMatch(/select an AI Gateway/i);
+    const provider = present(reg.registry.get('my-gateway'), 'the my-gateway provider');
+
+    expect(await provider.isAvailable(reg.deps)).toBe(false);
+    expect(present(await provider.unavailableReason?.(reg.deps), "the my-gateway provider's unavailable reason")).toMatch(/select an AI Gateway/i);
   });
 });
 
@@ -217,7 +220,7 @@ describe('my-gateway model discovery', () => {
       fetch: discoveryFetch({ slugs: ['openai', 'google-ai-studio', 'workers-ai'], onRequest: (u) => urls.push(u) }),
     });
 
-    const models = await reg.registry.get('my-gateway')!.listModels(reg.deps);
+    const models = await present(reg.registry.get('my-gateway'), 'the my-gateway provider').listModels(reg.deps);
     const ids = models.map((m) => m.id).sort();
     // google-ai-studio (gateway slug) → google (wire author + models.dev id);
     // the workers-ai slug is the bespoke workers-ai provider's territory.
@@ -233,7 +236,7 @@ describe('my-gateway model discovery', () => {
       fetch: discoveryFetch({ slugs: [], balance: 12.5 }),
     });
 
-    const models = await reg.registry.get('my-gateway')!.listModels(reg.deps);
+    const models = await present(reg.registry.get('my-gateway'), 'the my-gateway provider').listModels(reg.deps);
     const ids = models.map((m) => m.id);
     // Curated unified-billing set ∩ what models.dev knows in this fixture.
     expect(ids).toContain('openai/gpt-4.1');
@@ -258,7 +261,7 @@ describe('my-gateway model discovery', () => {
       }),
     });
 
-    expect(await reg.registry.get('my-gateway')!.listModels(reg.deps)).toEqual([]);
+    expect(await present(reg.registry.get('my-gateway'), 'the my-gateway provider').listModels(reg.deps)).toEqual([]);
   });
 
   test('a 5xx keeps the last catalog the account was shown, and caches nothing', async () => {
@@ -293,7 +296,7 @@ describe('my-gateway model discovery', () => {
       }),
     });
 
-    const provider = reg.registry.get('my-gateway')!;
+    const provider = present(reg.registry.get('my-gateway'), 'the my-gateway provider');
 
     expect((await provider.listModels(reg.deps)).map((m) => m.id)).toEqual(['openai/gpt-4.1']);
 
@@ -328,7 +331,7 @@ describe('my-gateway model discovery', () => {
       }),
     });
 
-    await expect(reg.registry.get('my-gateway')!.listModels(reg.deps)).rejects.toThrow(/429/);
+    await expect(present(reg.registry.get('my-gateway'), 'the my-gateway provider').listModels(reg.deps)).rejects.toThrow(/429/);
   });
 });
 

@@ -23,6 +23,7 @@ import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { MemoryRouter } from 'react-router-dom';
 import { SettingsRail, settingsSection, type SettingsSection } from '../src/components/SettingsRail';
+import { present } from '@kinu.run/test-utils';
 
 /** The rail as a reader sees it, under a router, since every entry is a link
  *  that keeps the pathname and changes only the hash. */
@@ -46,10 +47,9 @@ const SECTION_IDS = RAW_IDS.map(settingsSection);
 
 /** The one entry for `id`, as markup. */
 function entry(html: string, id: string): string {
-  const match = new RegExp(`<a[^>]*data-settings-section="${id}"[^>]*>`).exec(html);
-  expect(match).not.toBeNull();
+  const match = present(new RegExp(`<a[^>]*data-settings-section="${id}"[^>]*>`).exec(html), `the ${id} settings link`);
 
-  return match![0];
+  return match[0];
 }
 
 describe('the URL hash decides the section', () => {

@@ -22,6 +22,7 @@ import type { ModelMessage } from 'ai';
 import type { SessionMessage } from 'agents/experimental/memory/session';
 import * as v from 'valibot';
 import { orchestratorHarness, reactivateOrchestratorHarness, chatSessionTurns, type HarnessOrchestratorAgent } from './helpers/actor-harness';
+import { present } from '@kinu.run/test-utils';
 
 const SteerFrameSchema = v.object({
   type: v.literal('steer_status'),
@@ -125,7 +126,7 @@ describe('a message typed while the agent is working', () => {
     expect(admitted[0]?.parts).toEqual([{ type: 'text', text: 'nothing is running' }]);
     expect(turnAuthor(admitted[0])).toBe('operator');
     expect(h.db.query('SELECT work_mode FROM actor_turn_claims WHERE turn_id = ?').get(admitted[0].id)).toEqual({ work_mode: 'build' });
-    expect(h.db.query<{ c: number }, []>('SELECT count(*) AS c FROM pending_steers').get()!.c).toBe(0);
+    expect(present(h.db.query<{ c: number }, []>('SELECT count(*) AS c FROM pending_steers').get(), 'the pending_steers count row').c).toBe(0);
 
     // Nothing was buffered for a step boundary: the next turn's steps carry no
     // splice — the step hands the model exactly the conversation the turn was
@@ -152,7 +153,7 @@ describe('a message typed while the agent is working', () => {
     // closes — and the reservation is retired with it.
     h.agent.harnessRefuseDriving({ reason: 'unavailable', error: 'another session is driving this workspace' });
     await expect(h.agent.harnessChatLoop.send('nothing is running')).rejects.toThrow(/another session is driving/);
-    expect(h.db.query<{ c: number }, []>('SELECT count(*) AS c FROM pending_steers').get()!.c).toBe(0);
+    expect(present(h.db.query<{ c: number }, []>('SELECT count(*) AS c FROM pending_steers').get(), 'the pending_steers count row').c).toBe(0);
   });
 
   test('is taken mid-turn, announced as queued, and reaches the model at the next step', async () => {
@@ -303,7 +304,7 @@ describe('a message typed while the agent is working', () => {
       ],
     });
     await chatSessionTurns(restarted.agent).settle({ messageId: 'a-rerun-file', text: 'attached' });
-    expect(restarted.db.query<{ c: number }, []>('SELECT count(*) AS c FROM pending_steers').get()!.c).toBe(0);
+    expect(present(restarted.db.query<{ c: number }, []>('SELECT count(*) AS c FROM pending_steers').get(), 'the pending_steers count row').c).toBe(0);
   });
 });
 
@@ -489,13 +490,14 @@ describe('an eviction with acknowledged steers', () => {
 
     // The dead turn's rows rerun as ONE user-origin turn, the words in typed
     // order, mode-stamped by their narrower grant: plan.
-    const rerun = (await restarted.agent.harnessTranscript.history()).filter((message) => message.role === 'user').at(-1);
-    expect(rerun?.parts).toEqual([{ type: 'text', text: 'orphaned by an eviction\n\nalso orphaned' }]);
-    expect(turnAuthor(rerun!)).toBe('operator');
-    expect(restarted.db.query('SELECT work_mode FROM actor_turn_claims WHERE turn_id = ?').get(rerun!.id)).toEqual({ work_mode: 'plan' });
+    const rerun = present((await restarted.agent.harnessTranscript.history()).filter((message) => message.role === 'user').at(-1), 'the rerun user turn');
+
+    expect(rerun.parts).toEqual([{ type: 'text', text: 'orphaned by an eviction\n\nalso orphaned' }]);
+    expect(turnAuthor(rerun)).toBe('operator');
+    expect(restarted.db.query('SELECT work_mode FROM actor_turn_claims WHERE turn_id = ?').get(rerun.id)).toEqual({ work_mode: 'plan' });
 
     // Admission deleted them, and the live row's step drain deleted it too:
     // nothing is left to sweep twice.
-    expect(restarted.db.query<{ c: number }, []>('SELECT count(*) AS c FROM pending_steers').get()!.c).toBe(0);
+    expect(present(restarted.db.query<{ c: number }, []>('SELECT count(*) AS c FROM pending_steers').get(), 'the pending_steers count row').c).toBe(0);
   });
 });

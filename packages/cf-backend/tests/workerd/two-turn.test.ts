@@ -214,8 +214,9 @@ describe('two real turns over the HTTP model seam', () => {
     const spliced = calls.find((call) =>
       call.fileParts.some((parts) => parts.some((part) => part.type === 'image_url' && part.url === 'data:image/png;base64,iVBORw0KGgo=')));
 
-    expect(spliced).toBeDefined();
-    expect(spliced!.conversation.some((m) => m.role === 'user' && m.content.includes('QUEUE-B'))).toBe(true);
+    if (spliced === undefined) throw new Error('no probe-queue call carried the spliced attachment');
+
+    expect(spliced.conversation.some((m) => m.role === 'user' && m.content.includes('QUEUE-B'))).toBe(true);
   });
 
   it('re-delivers a mid-turn attachment with real file data through a cold reset and replay', async () => {
@@ -250,8 +251,9 @@ describe('two real turns over the HTTP model seam', () => {
     const carried = calls.find((call) =>
       call.fileParts.some((parts) => parts.some((part) => part.type === 'image_url' && part.url === 'data:image/png;base64,iVBORw0KGgo=')));
 
-    expect(carried).toBeDefined();
-    expect(carried!.conversation.some((m) => m.role === 'user' && m.content.includes('QUEUE-B'))).toBe(true);
+    if (carried === undefined) throw new Error('no replayed probe-queue call carried the attachment');
+
+    expect(carried.conversation.some((m) => m.role === 'user' && m.content.includes('QUEUE-B'))).toBe(true);
   });
 
   it('re-delivers a buffered event after eviction when its drain lease is stale', async () => {

@@ -17,6 +17,7 @@ import { asFetchFunction, createChatModel, reasoningEffortOptions, type JsonObje
 import * as v from 'valibot';
 import { createDirectWorkersAIFetch } from '@kinu.run/core';
 import { requestBodyText, requestUrl } from './helpers/fetch-input';
+import { present } from '@kinu.run/test-utils';
 
 
 /** What a rejected `generateText` hands back: the AI SDK's error, whose
@@ -243,7 +244,7 @@ describe('Workers AI credential refresh', () => {
     });
 
     const reg = createAgentProviderRegistry({ env: {}, userDO: dead });
-    expect(await reg.registry.get('workers-ai')!.isAvailable(reg.deps)).toBe(false);
+    expect(await present(reg.registry.get('workers-ai'), 'the workers-ai provider').isAvailable(reg.deps)).toBe(false);
 
     // …while a credential UserDO can still serve (fresh or silently
     // refreshed) keeps Workers AI advertised — no CTA.
@@ -255,7 +256,7 @@ describe('Workers AI credential refresh', () => {
     });
 
     const reg2 = createAgentProviderRegistry({ env: {}, userDO: alive });
-    expect(await reg2.registry.get('workers-ai')!.isAvailable(reg2.deps)).toBe(true);
+    expect(await present(reg2.registry.get('workers-ai'), 'the workers-ai provider').isAvailable(reg2.deps)).toBe(true);
   });
 
   test('UserDO refreshes expiring Cloudflare credentials and persists the rotation', () => {

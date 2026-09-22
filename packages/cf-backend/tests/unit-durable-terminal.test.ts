@@ -30,6 +30,7 @@ import type { TurnHarness } from './helpers/turn-harness';
 import type { AgentSignal, CompletedTurn } from '@kinu.run/core';
 
 import { openTurnRun, TERMINAL_EFFECT_RETRY_CEILING_MS } from '@kinu.run/core';
+import { present } from '@kinu.run/test-utils';
 
 /** One settled assistant response, as Think reports it. */
 /** The one way this suite runs a turn: the turn seam over the harness root. */
@@ -908,16 +909,14 @@ describe('an interrupted terminal sequence replays its suffix and repeats nothin
     harness.agent.harnessArmTerminalFault('turn_record', 'before');
     await expect(turns(harness).settle({ messageId: 'a-live-wake' })).rejects.toThrow('terminal effect turn_record:a-live-wake interrupted before its side effect');
 
-    const owedAt = harness.agent.harnessNextRetryAt(new Set());
-    expect(owedAt).not.toBeNull();
+    const owedAt = present(harness.agent.harnessNextRetryAt(new Set()), 'the owed retry instant');
 
     // The same roster, read while this activation owns the sequence.
     const live = new Set([harness.agent.harnessSequenceId('u-live-wake', 'a-live-wake')]);
-    const deferredAt = harness.agent.harnessNextRetryAt(live);
-    expect(deferredAt).not.toBeNull();
+    const deferredAt = present(harness.agent.harnessNextRetryAt(live), 'the deferred retry instant');
     // Not dropped, and not the overdue instant that would re-arm on every tick.
-    expect(deferredAt!).toBeGreaterThan(owedAt!);
-    expect(deferredAt!).toBeGreaterThanOrEqual(Date.now() + TERMINAL_EFFECT_RETRY_CEILING_MS - 1_000);
+    expect(deferredAt).toBeGreaterThan(owedAt);
+    expect(deferredAt).toBeGreaterThanOrEqual(Date.now() + TERMINAL_EFFECT_RETRY_CEILING_MS - 1_000);
   });
 
   /**

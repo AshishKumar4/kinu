@@ -21,6 +21,7 @@ import {
   type UserCaller,
   type WorkspaceCapability,
 } from '@kinu.run/core';
+import { present } from '@kinu.run/test-utils';
 
 const WORKSPACE = 'workspace-a';
 
@@ -562,7 +563,7 @@ describe('capability provisioning', () => {
       harness.userDO.ensureWorkspaceCapability(WORKSPACE, null),
     ]);
 
-    const installedToken = harness.installed.get(WORKSPACE)!;
+    const installedToken = present(harness.installed.get(WORKSPACE), 'the installed workspace capability token');
     expect((await harness.userDO.listWorkspaces({ workspaceToken: installedToken })).entries).toHaveLength(1);
     harness.close();
   });
@@ -575,7 +576,7 @@ describe('capability provisioning', () => {
 
     await harness.userDO.ensureWorkspaceCapability(WORKSPACE, await sha256Hex(harness.token));
 
-    const repaired = harness.installed.get(WORKSPACE)!;
+    const repaired = present(harness.installed.get(WORKSPACE), 'the repaired workspace capability token');
     expect(repaired).not.toBe(harness.token);
     expect((await harness.userDO.listWorkspaces({ workspaceToken: repaired })).entries).toHaveLength(2);
     harness.close();
@@ -593,7 +594,7 @@ describe('capability provisioning', () => {
     const harness = await setupWorkspaces();
     await harness.userDO.setCredential(await testOwner(), 'openai.bearer', { kind: 'bearer', token: 'sk-model' });
     await harness.userDO.ensureWorkspaceCapability(WORKSPACE, null);
-    const reminted = harness.installed.get(WORKSPACE)!;
+    const reminted = present(harness.installed.get(WORKSPACE), 'the re-minted workspace capability token');
 
     await expect(harness.userDO.listWorkspaces({ workspaceToken: harness.token }))
       .rejects.toThrow('Unrecognized workspace capability token');

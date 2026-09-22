@@ -19,6 +19,7 @@ import {
   rpcAccessScope,
 } from '../src/cli/rpc-gate';
 import { extractTicketOrchestratorAgentName } from '@kinu.run/core';
+import { present } from '@kinu.run/test-utils';
 
 const root = join(import.meta.dir, '..');
 
@@ -130,9 +131,8 @@ describe('rpc gate on scoped connections', () => {
   });
 
   test('read RPCs are scope-checked: exec-only tokens get a typed rejection', () => {
-    const rejection = rejectOutOfScopeRpc(EXEC_ONLY, rpcFrame('getMemoryContent', 'rpc-7'));
-    expect(rejection).not.toBeNull();
-    const frame = JSON.parse(rejection!);
+    const rejection = present(rejectOutOfScopeRpc(EXEC_ONLY, rpcFrame('getMemoryContent', 'rpc-7')), 'the out-of-scope rejection');
+    const frame = JSON.parse(rejection);
     expect(frame).toMatchObject({ type: 'rpc', id: 'rpc-7', success: false });
     expect(frame.error).toContain('workspace.read');
   });
@@ -160,9 +160,8 @@ describe('rpc gate on scoped connections', () => {
       'renameSubordinateAgent', 'dismissSubordinate',
       'savePlanReviewAnnotations', 'decidePlanReview',
     ]) {
-      const rejection = rejectOutOfScopeRpc(READ_EXEC, rpcFrame(method, 'rpc-9'));
-      expect(rejection).not.toBeNull();
-      const frame = JSON.parse(rejection!);
+      const rejection = present(rejectOutOfScopeRpc(READ_EXEC, rpcFrame(method, 'rpc-9')), `the out-of-scope rejection of ${method}`);
+      const frame = JSON.parse(rejection);
       expect(frame).toMatchObject({ type: 'rpc', id: 'rpc-9', success: false });
       expect(frame.error).toContain('kinu auth');
     }

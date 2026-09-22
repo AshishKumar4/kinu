@@ -16,6 +16,7 @@ import {
 } from '@kinu.run/core';
 import { hostedSubordinateHarness, orchestratorHarness } from './helpers/actor-harness';
 import type { ActorHarness, HarnessOrchestratorAgent } from './helpers/actor-harness';
+import { present } from '@kinu.run/test-utils';
 
 interface RawToolsAgent {
   observeRawTools(): ToolSet;
@@ -93,15 +94,15 @@ describe('cf backend conformance', () => {
   // covered without a second place to remember.
   test('cf-orchestrator: the observation sees a real surface at all', async () => {
     const observed = await observe(orchestratorHarness());
-    expect(observed.planes.tool!.size).toBeGreaterThanOrEqual(6);
-    expect(observed.planes.table!.size).toBeGreaterThanOrEqual(30);
-    expect(observed.planes.tool!.has('eval')).toBe(true);
+    expect(present(observed.planes.tool, 'the observed tool plane').size).toBeGreaterThanOrEqual(6);
+    expect(present(observed.planes.table, 'the observed table plane').size).toBeGreaterThanOrEqual(30);
+    expect(present(observed.planes.tool, 'the observed tool plane').has('eval')).toBe(true);
   });
 
   test('cf-subordinate: the observation sees a real surface at all', async () => {
     const observed = await observeSubordinate(orchestratorHarness());
-    expect(observed.planes.tool!.size).toBeGreaterThanOrEqual(6);
-    expect(observed.planes.table!.size).toBeGreaterThanOrEqual(30);
-    expect(observed.planes.tool!.has('eval')).toBe(true);
+    expect(present(observed.planes.tool, 'the observed tool plane').size).toBeGreaterThanOrEqual(6);
+    expect(present(observed.planes.table, 'the observed table plane').size).toBeGreaterThanOrEqual(30);
+    expect(present(observed.planes.tool, 'the observed tool plane').has('eval')).toBe(true);
   });
 });

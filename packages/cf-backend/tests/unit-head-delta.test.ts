@@ -21,6 +21,7 @@ import {
   appendHeadDelta, deltaAsMessage, retireHeadDelta, stepAsMessage,
   type HeadDelta,
 } from '@kinu.run/core';
+import { present } from '@kinu.run/test-utils';
 
 const NOTHING: ReadonlyMap<string, HeadDelta> = new Map();
 
@@ -122,10 +123,11 @@ describe('the arriving step, as the chat draws it', () => {
   });
 
   test('the arriving message keeps one id per head, so React reuses the row', () => {
-    const first = deltaAsMessage({ text: 'a', reasoning: '' }, 'h1');
-    const second = deltaAsMessage({ text: 'ab', reasoning: '' }, 'h1');
-    expect(first?.id).toBe(second!.id);
-    expect(deltaAsMessage({ text: 'a', reasoning: '' }, 'h2')?.id).not.toBe(first?.id);
+    const first = present(deltaAsMessage({ text: 'a', reasoning: '' }, 'h1'), 'the first head delta message');
+    const second = present(deltaAsMessage({ text: 'ab', reasoning: '' }, 'h1'), 'the second head delta message');
+
+    expect(first.id).toBe(second.id);
+    expect(deltaAsMessage({ text: 'a', reasoning: '' }, 'h2')?.id).not.toBe(first.id);
   });
 });
 

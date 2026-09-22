@@ -24,6 +24,7 @@ import {
   FEEDBACK_MAX_USER_AGENT_CHARS,
   type FeedbackRecord,
 } from '@kinu.run/core';
+import { present } from '@kinu.run/test-utils';
 
 const ME: AuthIdentity = { userId: 'user-7', email: 'me@example.com', sub: 'sub-7' };
 
@@ -334,7 +335,7 @@ describe('what the endpoint refuses', () => {
     const huge = pngPart(new Uint8Array(FEEDBACK_MAX_SCREENSHOT_BYTES + 1024));
     const response = await routeFeedback(submit({ note: 'see image', screenshot: huge }), ME, rec.deps);
     expect(response?.status).toBe(413);
-    expect((await replyOf(response!)).error).toContain('note');
+    expect((await replyOf(present(response, 'the feedback response'))).error).toContain('note');
     expect(rec.objects.size).toBe(0);
     expect(rec.rows).toEqual([]);
     expect(rec.marks[0]).toMatchObject({ rejectReason: 'too_large', screenshotBytes: FEEDBACK_MAX_SCREENSHOT_BYTES + 1024 });
@@ -415,7 +416,7 @@ describe('what the endpoint refuses', () => {
       submit({ note: 'x', screenshot: pngPart(realPng()) }), ME, rec.deps);
 
     expect(response?.status).toBe(503);
-    expect((await replyOf(response!)).error).toContain('note');
+    expect((await replyOf(present(response, 'the feedback response'))).error).toContain('note');
     expect(rec.marks[0]?.rejectReason).toBe('storage_unavailable');
   });
 });
@@ -541,7 +542,7 @@ describe('what the endpoint stores', () => {
     }), ME, rec.deps);
 
     expect(response?.status).toBe(201);
-    expect(await replyOf(response!)).toEqual({ id: 'id-1' });
+    expect(await replyOf(present(response, 'the feedback response'))).toEqual({ id: 'id-1' });
     expect(rec.objects.size).toBe(0);
     expect(rec.rows).toEqual([{
       id: 'id-1',
@@ -585,10 +586,10 @@ describe('what the endpoint stores', () => {
     expect(Buffer.from(withExif).includes(Buffer.from(secret))).toBe(true);
 
     await routeFeedback(submit({ note: 'x', screenshot: pngPart(withExif) }), ME, rec.deps);
-    const stored = rec.objects.get('feedback/user-7/id-1.png');
-    expect(stored).toBeDefined();
-    expect(Buffer.from(stored!).includes(Buffer.from(secret))).toBe(false);
-    expect(stored!.length).toBeLessThan(withExif.length);
+    const stored = present(rec.objects.get('feedback/user-7/id-1.png'), 'the stored screenshot object');
+
+    expect(Buffer.from(stored).includes(Buffer.from(secret))).toBe(false);
+    expect(stored.length).toBeLessThan(withExif.length);
   });
 
   test('over-long text is clamped at the edge, not rejected', async () => {
@@ -660,7 +661,7 @@ describe('when the object store refuses the write', () => {
     // NOT a throw. Uncaught, this was a platform 500 with no marker and no row —
     // a lost report invisible to the rate that exists to count lost reports.
     expect(response?.status).toBe(503);
-    expect((await replyOf(response!)).error).toContain('note');
+    expect((await replyOf(present(response, 'the feedback response'))).error).toContain('note');
     expect(rec.rows).toEqual([]);
     expect(rec.objects.size).toBe(0);
     // Nothing to orphan: the object was never written, so nothing is deleted.
@@ -690,7 +691,7 @@ describe('the analytics marker', () => {
       screenshot: pngPart(realPng()),
     }), ME, rec.deps);
 
-    const mark = rec.marks.at(-1)!;
+    const mark = present(rec.marks.at(-1), 'the last analytics mark');
     expect(mark).toMatchObject({
       outcome: 'accepted',
       rejectReason: '',
@@ -715,7 +716,7 @@ describe('the analytics marker', () => {
     for (const route of ['/', `/workspace/${slug}`, `/mcts/${slug}`, `/settings/${slug}`, '/user/settings', `/triggers/${slug}`]) {
       const rec = recorder();
       await routeFeedback(submit({ note: 'x', route }), ME, rec.deps);
-      seen.push(rec.marks.at(-1)!.routeFamily);
+      seen.push(present(rec.marks.at(-1), 'the last analytics mark').routeFamily);
     }
 
     // Families, never slugs: `/settings/:agent` and `/user/settings` are both
@@ -826,7 +827,7 @@ describe('the workspace a report claims to be about', () => {
     }), ME, rec.deps);
 
     expect(response?.status).toBe(403);
-    expect((await replyOf(response!)).error).toMatch(/not one of yours/u);
+    expect((await replyOf(present(response, 'the feedback response'))).error).toMatch(/not one of yours/u);
     expect(rec.rows).toEqual([]);
     // The gate runs BEFORE the bytes are stored, so a refused report never pays
     // for an object that would then have to be cleaned up.
@@ -867,7 +868,7 @@ describe('the workspace a report claims to be about', () => {
     // 503 and not 403: the reporter did nothing wrong, and the report is worth
     // sending again in a moment.
     expect(response?.status).toBe(503);
-    expect((await replyOf(response!)).error).toMatch(/could not be confirmed/u);
+    expect((await replyOf(present(response, 'the feedback response'))).error).toMatch(/could not be confirmed/u);
     expect(rec.rows).toEqual([]);
     expect(rec.objects.size).toBe(0);
     expect(rec.marks[0]).toMatchObject({ outcome: 'rejected', rejectReason: 'workspace_unverified' });

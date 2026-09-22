@@ -16,6 +16,7 @@ import {
 } from './helpers/user-do';
 import { createCredentialCipher } from '@kinu.run/core';
 import { ownerCaller } from '@kinu.run/core';
+import { present } from '@kinu.run/test-utils';
 
 /** The owner capability of a deployment whose key has been rotated. */
 const rotatedOwner = () => ownerCaller({ CREDENTIAL_ENCRYPTION_KEY: NEXT_KEY });
@@ -66,7 +67,7 @@ describe('the credential store is sealed at rest', () => {
   test('a sealed value replayed under another credential key does not open', async () => {
     const harness = createTestUserDO();
     await harness.userDO.setCredential(await testOwner(), 'openai.bearer', { kind: 'bearer', token: 'sk-openai' });
-    const sealed = storedValue(harness, 'openai.bearer')!;
+    const sealed = present(storedValue(harness, 'openai.bearer'), 'the sealed openai.bearer row');
     sqlExec(harness.db).exec(
       `INSERT INTO user_credentials (key, kind, value, created_at, updated_at) VALUES (?, ?, ?, ?, ?)`,
       'openrouter.bearer', 'bearer', sealed, Date.now(), Date.now(),
@@ -99,7 +100,7 @@ describe('migration and rotation', () => {
   test('a rotation re-seals the store and the retired key stays readable', async () => {
     const first = createTestUserDO();
     await first.userDO.setCredential(await testOwner(), 'openai.bearer', { kind: 'bearer', token: 'sk-rotate' });
-    const sealedUnderOldKey = storedValue(first, 'openai.bearer')!;
+    const sealedUnderOldKey = present(storedValue(first, 'openai.bearer'), 'the sealed openai.bearer row');
     first.close();
 
     const rotated = createTestUserDO({
@@ -118,7 +119,7 @@ describe('migration and rotation', () => {
 
     expect(await rotated.userDO.getAuthHeaders(await rotatedOwner(), 'openai.bearer'))
       .toEqual({ Authorization: 'Bearer sk-rotate' });
-    const resealed = storedValue(rotated, 'openai.bearer')!;
+    const resealed = present(storedValue(rotated, 'openai.bearer'), 'the re-sealed openai.bearer row');
     expect(resealed).not.toBe(sealedUnderOldKey);
     const nextKeyId = (await createCredentialCipher({ CREDENTIAL_ENCRYPTION_KEY: NEXT_KEY })).keyId;
     expect(resealed.startsWith(`pce1.${nextKeyId}.`)).toBe(true);
@@ -207,7 +208,7 @@ describe('MCP server headers are sealed too', () => {
     });
 
     const cipher = await createCredentialCipher({ CREDENTIAL_ENCRYPTION_KEY: TEST_CREDENTIAL_ENCRYPTION_KEY });
-    const stored = storedHeaders(harness, 'srv1')!;
+    const stored = present(storedHeaders(harness, 'srv1'), "the sealed headers of MCP server 'srv1'");
     expect(JSON.parse(await cipher.open('test-user-do:mcp:srv1', stored)))
       .toEqual({ Authorization: 'Bearer mcp-secret' });
     await expect(cipher.open('test-user-do:mcp:srv2', stored)).rejects.toThrow('failed to decrypt');
@@ -228,7 +229,7 @@ describe('a sealed value is bound to the store it was written in', () => {
   test("one user's credential does not open inside another user's Durable Object", async () => {
     const mine = createTestUserDO({ durableObjectId: 'user-a' });
     await mine.userDO.setCredential(await testOwner(), 'openai.bearer', { kind: 'bearer', token: 'sk-mine' });
-    const sealed = storedValue(mine, 'openai.bearer')!;
+    const sealed = present(storedValue(mine, 'openai.bearer'), 'the sealed openai.bearer row');
     mine.close();
 
     // Same deployment, same encryption key, different UserDO.

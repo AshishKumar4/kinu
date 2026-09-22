@@ -10,6 +10,7 @@ import {
   NODE_R_MAX, nodeRadius, principalVariation, subtreeCount, terminalForkNode, treeStats,
   viewNoteFor,
 } from '@kinu.run/core';
+import { present } from '@kinu.run/test-utils';
 
 let seq = 0;
 
@@ -103,11 +104,11 @@ describe('stored tree fields', () => {
       }],
     };
 
-    const tree = explorationForkTree({ tree: [root], head });
+    const tree = present(explorationForkTree({ tree: [root], head }), 'the folded fork tree');
 
     expect(tree).toMatchObject({ id: 'root', depth: 0 });
-    expect(tree!.children[0]).toMatchObject({ id: 'deep', depth: 3, status: 'running' });
-    expect(treeStats(tree!)).toEqual({ nodes: 2, depth: 3 });
+    expect(tree.children[0]).toMatchObject({ id: 'deep', depth: 3, status: 'running' });
+    expect(treeStats(tree)).toEqual({ nodes: 2, depth: 3 });
   });
 });
 

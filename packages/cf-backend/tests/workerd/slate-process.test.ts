@@ -140,8 +140,9 @@ it('a slate declaring a browser surface serves the shell, the client bundle, and
     // against — exact JSON, and every path it names must answer.
     const importMap = shell.body.match(/<script type="importmap">\s*(\{[^<]*?)\s*<\/script>/)?.[1];
 
-    expect(importMap).toBeDefined();
-    expect(JSON.parse(importMap!)).toEqual({
+    if (importMap === undefined) throw new Error('the shell carries no import map');
+
+    expect(JSON.parse(importMap)).toEqual({
       imports: {
         'react': '/__kinu/react.js',
         'react-dom/client': '/__kinu/react.js',
@@ -151,7 +152,7 @@ it('a slate declaring a browser surface serves the shell, the client bundle, and
       },
     });
 
-    const mapped = Object.values(v.parse(v.object({ imports: v.record(v.string(), v.string()) }), JSON.parse(importMap!)).imports)
+    const mapped = Object.values(v.parse(v.object({ imports: v.record(v.string(), v.string()) }), JSON.parse(importMap)).imports)
       .concat('/__kinu/client.js');
 
     for (const path of mapped) {

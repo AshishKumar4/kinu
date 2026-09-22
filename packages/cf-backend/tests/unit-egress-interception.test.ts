@@ -29,6 +29,7 @@ import {
   createRecordingLogger, setDiagnosticsSink, type RecordedLog,
 } from '@kinu.run/core/obs';
 import { KINU_USER_AGENT, kinuUserAgent, reoriginateRequest } from '@kinu.run/core';
+import { present } from '@kinu.run/test-utils';
 
 // The gate's own resolver of the shipped SDK copy, loaded rather than repeated:
 // `bun run gate:egress-interception` and this test must read one copy, and two
@@ -605,7 +606,7 @@ describe('a throw at the boundary becomes a classified answer', () => {
     });
 
     expect(response?.status).toBe(503);
-    const body = await response!.text();
+    const body = await present(response, 'the egress response').text();
     expect(body).toContain('unavailable');
     expect(body).toContain('api.stripe.com');
 
@@ -641,7 +642,7 @@ describe('a throw at the boundary becomes a classified answer', () => {
       });
 
       expect(response?.status).toBe(502);
-      expect(await response!.text()).toContain('example.com');
+      expect(await present(response, 'the egress response').text()).toContain('example.com');
       expect(emitted).toHaveLength(1);
       expect(emitted[0].event).toBe('egress.upstream_failed');
       expect(emitted[0].cause).toContain('connection refused');
@@ -668,7 +669,7 @@ describe('a throw at the boundary becomes a classified answer', () => {
       });
 
       expect(response?.status).toBe(502);
-      expect(await response!.text()).not.toContain(SECRET);
+      expect(await present(response, 'the egress response').text()).not.toContain(SECRET);
       expect(emitted[0].cause).not.toContain(SECRET);
       // Scrubbed, not deleted: the placeholder the container already holds is
       // what an operator correlates the failure with.
@@ -691,7 +692,7 @@ describe('a throw at the boundary becomes a classified answer', () => {
 
     expect(response?.status).toBe(503);
     // The container has to know the event is NOT recorded, or it drops it.
-    expect(await response!.text()).toContain('send it again');
+    expect(await present(response, 'the egress response').text()).toContain('send it again');
     expect(emitted[0].event).toBe('egress.event_channel_unreachable');
     expect(emitted[0].cause).toContain('object evicted mid-write');
   });

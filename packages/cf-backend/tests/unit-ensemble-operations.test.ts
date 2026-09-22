@@ -22,7 +22,7 @@ import {
   WORKSPACE_RUN_ID,
   type RunEvent,
 } from '@kinu.run/core';
-import { sqlOver } from '@kinu.run/test-utils';
+import { sqlOver, present } from '@kinu.run/test-utils';
 import { openWorkspaceMainActor } from '@kinu.run/core';
 import { declareShadowCandidate, orchestratorHarness } from './helpers/actor-harness';
 import type { AgentProviderRegistry } from '../src/providers/agent-registry';
@@ -202,7 +202,7 @@ describe('runOutcomeEnsemble — the judges write their operation lifecycle', ()
 
     for (const [operationId, rows] of byId) {
       expect(rows.map((r) => r.phase).sort()).toEqual(['end', 'start']);
-      const end = rows.find((r) => r.phase === 'end')!;
+      const end = present(rows.find((r) => r.phase === 'end'), `the end row of operation ${operationId}`);
       expect(end.operationId).toBe(operationId);
       expect(end.outcome).toBe('ok');
       expect(end.usage).toEqual({ input: 41, output: 7 });
