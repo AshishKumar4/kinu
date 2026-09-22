@@ -669,7 +669,7 @@ export class ChatSession {
 
       const front = this.queue.findIndex((queued) => queued.rerun !== true);
       this.queue.splice(front === -1 ? this.queue.length : front, 0, item);
-      void this.pump();
+      this.pump();
 
       return Promise.resolve({ status: 'queued' });
     }
@@ -710,9 +710,15 @@ export class ChatSession {
       // drain gets its rows back when another process holds the driver lease.
       // 'yielded' is neither: the offer was consumed at its slot, so nothing
       // comes back and nothing is retried.
-      settle: (refusal, yielded) => resolve({
-        status: yielded === true ? 'yielded' : refusal ? 'skipped' : 'queued',
-      }),
+      settle: (refusal, yielded) => {
+        if (yielded === true) {
+          resolve({ status: 'yielded' });
+
+          return;
+        }
+
+        resolve({ status: refusal ? 'skipped' : 'queued' });
+      },
     };
 
     if (input.idempotencyKey !== undefined) item.idempotencyKey = input.idempotencyKey;
@@ -724,12 +730,12 @@ export class ChatSession {
       // Accepted, not started. `item.settle` still runs when the pump reaches
       // it; resolving twice is harmless, and the caller gets an answer it can
       // act on instead of a promise only it could complete.
-      void this.pump();
+      this.pump();
 
       return Promise.resolve({ status: 'queued' });
     }
 
-    void this.pump();
+    this.pump();
 
     return promise;
   }
@@ -1394,7 +1400,7 @@ export class ChatSession {
     };
   }
 
-  private async runTurn(item: QueueItem, event: string | undefined, startedAt: number, lease: ActorTurnLease): Promise<void> {
+  private async runTurn(item: QueueItem, eventName: string | undefined, startedAt: number, lease: ActorTurnLease): Promise<void> {
     const input: ChatTurnInput = item;
 
     // The one rule for where the turn's conversation comes from, on both
@@ -1462,7 +1468,7 @@ export class ChatSession {
     // The turn's whole durable record, in ONE commit — see {@link commitTurn}.
     const commit = this.commitTurn({
       item,
-      event,
+      event: eventName,
       startedAt,
       assistantText: fullText,
       // A turn cut before its first token has no answer row: the operator's
@@ -1784,7 +1790,7 @@ export class ChatSession {
     if (turnId === null || runId === null) throw new KinuError('denied', 'steer publication requires an active turn');
     const opening = this.openingRow;
     const parentId = this.actorSession.landedSteers.at(-1)?.id ?? turnId;
-    const prepared = await this.transcript.prepareSteers(rows, reference, turnId, runId, parentId);
+    const prepared = await this.transcript.prepareSteers({ rows, reference, turnId, runId, parentId });
 
     return context => {
       if (opening !== null && this.actorSession.landedSteers.length === 0) this.transcript.appendUser(opening);

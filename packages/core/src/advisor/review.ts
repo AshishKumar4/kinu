@@ -735,7 +735,7 @@ export function markAdvisorLaneStarted(
 ): void {
   const key = advisorLaneKey(turn);
 
-  if (key !== null) recordEffectDone(sql, actor, ADVISOR_LANE_SCOPE, key);
+  if (key !== null) recordEffectDone(sql, actor, { scope: ADVISOR_LANE_SCOPE, key: key });
 }
 
 /**

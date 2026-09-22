@@ -19,6 +19,7 @@ import { TurnContextMeter } from '../context-meter';
 import { FAILURE_WITHOUT_ERROR, type RunEventInput } from '../events/types';
 import { TurnFileLedger } from '../tools/file-ledger';
 import { TurnEscalationLedger } from '../execution/escalation';
+import { renderToolResult } from '../prompts/evidence-window';
 import { priceCall, type MissionGovernor } from '../mission-budget';
 import { USAGE_FIELDS, addUsage, usageReported, usageTotal, type Usage } from '../usage';
 import * as v from 'valibot';
@@ -92,7 +93,7 @@ function describeToolFailure(input: { error: unknown }): string {
 
   if (error === null || error === undefined) return FAILURE_WITHOUT_ERROR;
 
-  return String(error) || FAILURE_WITHOUT_ERROR;
+  return renderToolResult(error) || FAILURE_WITHOUT_ERROR;
 }
 
 export class TurnAccumulator {

@@ -70,9 +70,14 @@ export const TUI_ADVERTISED_PRESET_BINDINGS = {
   'tier.quick': 'alt+p',
 } as const;
 
+/** How a modifier token is spelled in a hint. A Map and not a Record because
+ *  the token is an arbitrary slice of the binding string: anything that is not
+ *  a modifier is a key name, shown upper-case. */
+const TUI_HINT_MODIFIERS = new Map<string, string>([['ctrl', 'Ctrl'], ['alt', 'Alt']]);
+
 const tuiHintKey = (binding: string): string => binding
   .split('+')
-  .map((part) => part === 'ctrl' ? 'Ctrl' : part === 'alt' ? 'Alt' : part.toUpperCase())
+  .map((part) => TUI_HINT_MODIFIERS.get(part) ?? part.toUpperCase())
   .join('+');
 
 /** The bindings the product advertises on chrome and marketing surfaces, as

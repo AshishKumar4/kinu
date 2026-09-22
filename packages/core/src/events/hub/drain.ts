@@ -96,7 +96,7 @@ export function buildDrainBatch(events: KinuEvent[]): DrainBatch | null {
   // A delegated Plan event can never share a turn with Build or neutral work.
   // Select the oldest event's homogeneous mode group; the post-turn drain
   // immediately picks up the remaining groups in arrival order.
-  const mode = delegatedEventMode(pending[0]!);
+  const mode = delegatedEventMode(pending[0]);
   const drainable = pending.filter((event) => delegatedEventMode(event) === mode);
 
   const lines = drainable.map((e) => {

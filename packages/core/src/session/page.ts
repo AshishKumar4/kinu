@@ -111,7 +111,7 @@ export function seekPage<Item>(
   if (fetched.length <= limit) return { status: 'end', items: fetched };
   const items = fetched.slice(0, limit);
 
-  return { status: 'more', items, next: { after: anchorOf(items[items.length - 1]!) } };
+  return { status: 'more', items, next: { after: anchorOf(items[items.length - 1]) } };
 }
 
 /**

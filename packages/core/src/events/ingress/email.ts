@@ -128,7 +128,7 @@ export function boundedReferences(references: string | null, appended: string | 
   let octets = chain.reduce((sum, id) => sum + id.length + 1, -1);
 
   while (octets > budget && chain.length > 1) {
-    octets -= chain[1]!.length + 1;
+    octets -= chain[1].length + 1;
     chain.splice(1, 1);
   }
 
@@ -261,7 +261,7 @@ export async function acceptInboundEmail(
     in_reply_to: boundedMessageId(msg.in_reply_to, 'In-Reply-To'),
     references: thread.references,
     attachments: msg.attachments,
-    body_path: bodyPath || undefined,
+    body_path: bodyPath ?? undefined,
   };
 
   const reply_channel_id = deps.replies.open({

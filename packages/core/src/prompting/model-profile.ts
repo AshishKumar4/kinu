@@ -87,7 +87,7 @@ function resolveFamily(model?: PromptModelContext): PromptModelFamily {
 function inferredCapabilities(model: PromptModelContext | undefined, family: PromptModelFamily): PromptModelCapability[] {
   // Catalog-reported capabilities (ModelInfo.capabilities) are authoritative.
   if (model?.capabilities?.length) {
-    const out = model.capabilities.map(normalizeCapability).filter((c): c is PromptModelCapability => !!c);
+    const out = model.capabilities.map(normalizeCapability).filter((c): c is PromptModelCapability => c !== null);
 
     if (model.reasoning && !out.includes('reasoning')) out.push('reasoning');
 

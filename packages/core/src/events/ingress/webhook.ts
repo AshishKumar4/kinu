@@ -128,6 +128,14 @@ function freshWebhookSecret(): string {
   return [...bytes].map((byte) => byte.toString(16).padStart(2, '0')).join('');
 }
 
+/** The operator's own secret when they gave one, a minted one when the field was
+ *  absent or blank — a whitespace-only secret is no secret. */
+function webhookSecretOrMinted(provided: string | undefined): string {
+  const trimmed = provided?.trim() ?? '';
+
+  return trimmed === '' ? freshWebhookSecret() : trimmed;
+}
+
 /**
  * Register a durable webhook trigger, WITH the credential its auth mode needs.
  *
@@ -151,7 +159,7 @@ export async function registerDurableWebhook(
 ): Promise<RegisteredWebhook> {
   const rate_limit_per_min = normalizeWebhookRateLimitPerMin(opts.rate_limit_per_min);
   const secret_id = `webhook_secret_${Math.random().toString(36).slice(2, 12)}`;
-  const secret = opts.auth_mode === 'mtls' ? null : (opts.secret?.trim() || freshWebhookSecret());
+  const secret = opts.auth_mode === 'mtls' ? null : webhookSecretOrMinted(opts.secret);
 
   const trigger_id = await registry.register({
     kind: 'webhook_durable',
@@ -360,7 +368,7 @@ export async function acceptWebhookDelivery(
         http_headers: opts.headers,
         body: parsedBody,
         delivery_id,
-        body_path: bodyPath || undefined,
+        body_path: bodyPath ?? undefined,
       },
       auth_outcome: 'verified',
       webhook_id: opts.trigger_id,

@@ -18,6 +18,7 @@ import {
   type StepResult,
   type StopCondition,
   type TextStreamPart,
+  type TypedToolCall,
   type UIMessageChunk,
   type LanguageModelUsage,
 } from 'ai';
@@ -356,7 +357,7 @@ function settleModelOperation(
  *  missing one as an untyped catch variable) — and so the arm reads as the
  *  event it writes, not the promise mechanics around it. */
 const operationRejected = (operation: ModelOperation) =>
-  <Failure>(cause: Failure): void => { operation.failed({ cause }); };
+  (...rejection: [unknown]): void => { operation.failed({ cause: rejection[0] }); };
 
 /** What {@link answerFromSteps} reads off one step, and nothing more: a
  *  provider's `StepResult` satisfies it structurally, which is what keeps this
@@ -586,7 +587,7 @@ class ProviderCall {
 
         return {
           type: 'tool-result', toolName: chunk.toolName, toolCallId: chunk.toolCallId, result: renderToolResult(raw),
-          ...toolOutput(raw), ...this.toolDuration(chunk.toolCallId), ...successfulToolOutcome(chunk.toolName, raw),
+          ...toolOutput(raw), ...this.toolDuration(chunk.toolCallId), ...successfulToolOutcome(chunk.toolName, { output: raw }),
         };
       }
 
@@ -620,6 +621,29 @@ class ProviderCall {
 
         return null;
 
+      // Lifecycle frames, the input-streaming parts the caller reads off the
+      // finished call instead, and the provider passthrough: none of them is
+      // an event in this vocabulary.
+      case 'abort':
+      case 'file':
+      case 'finish':
+      case 'raw':
+      case 'reasoning-end':
+      case 'reasoning-start':
+      case 'source':
+      case 'start':
+      case 'start-step':
+      case 'text-end':
+      case 'text-start':
+      case 'tool-approval-request':
+      case 'tool-input-delta':
+      case 'tool-input-end':
+      case 'tool-input-start':
+      case 'tool-output-denied':
+        return null;
+
+      // A part the compiled union does not name: a provider stream ahead of
+      // this SDK version, which is still not an event the caller has a row for.
       default:
         return null;
     }
@@ -863,12 +887,12 @@ export async function* runChat(opts: ChatOptions): AsyncGenerator<ChatEvent> {
    *  the rest stay wired for execution but are not offered. One decision per
    *  turn; every provider call of the turn offers the same set.
    *
-   *  SAFETY: the names come from the caller that built `tools`; the SDK
-   *  ignores a name the set does not carry, which is the narrowing a caller
-   *  asked for and not a fault. */
-  const offeredTools = opts.activeTools === undefined
+   *  The names come from the caller that built `tools`; the SDK ignores a name
+   *  the set does not carry, which is the narrowing a caller asked for and not
+   *  a fault. */
+  const offeredTools: { activeTools?: Array<keyof ToolSet> } = opts.activeTools === undefined
     ? {}
-    : { activeTools: [...opts.activeTools] as Array<keyof ToolSet> };
+    : { activeTools: [...opts.activeTools] };
 
   /** What a mapped event owes the seams before it is yielded: the extension
    *  host hears every call and every result, and the host UI bridge sees the
@@ -1117,7 +1141,7 @@ export async function* runChat(opts: ChatOptions): AsyncGenerator<ChatEvent> {
   if (interrupted) throw new Error(INTERRUPTED_TURN);
 }
 
-function parseToolArgs<T>(raw: T): JsonObject {
+function parseToolArgs(raw: TypedToolCall<ToolSet>['input']): JsonObject {
   const parsed = v.safeParse(JsonObjectSchema, raw);
 
   return parsed.success ? parsed.output : {};

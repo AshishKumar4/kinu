@@ -6,7 +6,7 @@ import {
   type BuiltinToolName,
 } from '../tools/registry';
 import { isMcpToolKey } from '../tools/mcp-naming';
-import type { ExecutorInfo, ExecutorLifecycleStatus } from '../execution/types';
+import type { ExecutorInfo } from '../execution/types';
 import {
   resolvePromptModelProfile,
   type PromptModelContext,
@@ -14,6 +14,7 @@ import {
 } from './model-profile';
 import * as v from 'valibot';
 import type { TurnProvenance, WorkMode } from '../types/turn';
+import type { JsonObject } from '../utils/json';
 
 export type PromptBackend = 'cf' | 'cli-local' | 'cli-cloud';
 
@@ -43,7 +44,7 @@ const ExternalToolSchema = v.object({
  * background job's result rather than start the work again has to reach the
  * model identically in a Durable Object and in a local process.
  */
-export function turnProvenanceForMetadata<Metadata>(metadata: Metadata): TurnProvenance {
+export function turnProvenanceForMetadata(metadata: JsonObject | null | undefined): TurnProvenance {
   const parsed = v.safeParse(TurnMetadataSchema, metadata);
 
   if (!parsed.success) return 'chat';
@@ -55,7 +56,7 @@ export function turnProvenanceForMetadata<Metadata>(metadata: Metadata): TurnPro
  *  the Plan bar; everything else is ordinary unconstrained work. Delegated
  *  children inherit this same value, so a Plan parent propagates its bar and
  *  an autonomous wake never weakens one. */
-export function workModeForTurnMetadata<Metadata>(metadata: Metadata): WorkMode {
+export function workModeForTurnMetadata(metadata: JsonObject | null | undefined): WorkMode {
   const parsed = v.safeParse(TurnMetadataSchema, metadata);
 
   if (!parsed.success) return 'build';
@@ -76,7 +77,7 @@ export function workModeForTurnMetadata<Metadata>(metadata: Metadata): WorkMode 
 export type PromptExecutorInfo =
   & Partial<Pick<ExecutorInfo, 'kind' | 'capabilities' | 'available' | 'configured' | 'active'>>
   & Omit<ExecutorInfo, 'kind' | 'capabilities' | 'available' | 'configured' | 'active' | 'status'>
-  & { status?: ExecutorLifecycleStatus | string };
+  & { status?: string };
 
 export interface PromptExternalToolInfo {
   name: string;
@@ -274,6 +275,8 @@ function uniqueAgentsActions(
 export function compilePromptSurface(opts: PromptSurfaceOptions): PromptSurface {
   const executors = uniquePromptExecutors(opts);
   const builtinTools = uniqueBuiltinTools(opts.availableTools);
+  const workspaceTitle = opts.identity?.workspace?.trim() ?? '';
+  const agentTitle = opts.identity?.agent?.trim() ?? '';
 
   return {
     builtinTools,
@@ -285,11 +288,12 @@ export function compilePromptSurface(opts: PromptSurfaceOptions): PromptSurface 
     model: resolvePromptModelProfile(opts.model),
     roleSection: opts.roleSection ?? null,
     backend: opts.backend,
-    // `|| null`, not `??`: the empty string is what a fresh workspace's title
-    // is until its first prompt names it, and whitespace is not a name either.
+    // Compared against the empty string, not `??`: the empty string is what a
+    // fresh workspace's title is until its first prompt names it, and
+    // whitespace is not a name either.
     identity: {
-      workspace: opts.identity?.workspace?.trim() || null,
-      agent: opts.identity?.agent?.trim() || null,
+      workspace: workspaceTitle === '' ? null : workspaceTitle,
+      agent: agentTitle === '' ? null : agentTitle,
     },
   };
 }

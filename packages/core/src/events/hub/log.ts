@@ -888,13 +888,15 @@ export class EventLog {
    *  e.g. the email dispatcher's reply_attempt audit rows). Direct callers
    *  must NOT use this to insert `kind='event'` rows — only `publish()` is
    *  allowed. */
-  appendNonEventRow<Payload>(opts: {
+  appendNonEventRow(opts: {
     kind: 'phase' | 'step' | 'tool_call' | 'tool_result' | 'reactor_decision' | 'reply_attempt';
     turn_id: TurnId | null;
     step_idx: number | null;
     parent_id: string | null;
     trace_id: TraceId;
-    payload: Payload;
+    /** Serialized as the row's body and read back as a {@link JsonValue}; the
+     *  caller's own audit shape, whatever it holds. */
+    payload: unknown;
     now: number;
   }): string {
     this.actor.assertCurrent();

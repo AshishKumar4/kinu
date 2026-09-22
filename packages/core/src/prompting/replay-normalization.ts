@@ -19,6 +19,27 @@ import type { AssistantContent, AssistantModelMessage, ModelMessage, ToolModelMe
 import { toolCallIdFor } from '../providers/tool-call-id';
 import * as v from 'valibot';
 
+/** A reasoning part carries provider-signed state, so it can only be replayed
+ *  as reasoning to the provider that signed it. Crossing to any other
+ *  destination, its prose goes as plain text and a block with no prose is
+ *  dropped — an unsigned reasoning block is rejected by the receiving API. */
+type ReasoningCrossing = 'unchanged' | 'as-text' | 'dropped';
+
+function reasoningCrossing(
+  part: Extract<Exclude<AssistantContent, string>[number], { type: 'reasoning' }>,
+  destinationIsAnthropic: boolean,
+): ReasoningCrossing {
+  const anthropic = v.safeParse(AnthropicReasoningOptionsSchema, part.providerOptions?.anthropic);
+
+  const sourceIsAnthropic = anthropic.success
+    && (anthropic.output.signature !== undefined
+      || anthropic.output.redactedData !== undefined);
+
+  if (sourceIsAnthropic === destinationIsAnthropic) return 'unchanged';
+
+  return part.text ? 'as-text' : 'dropped';
+}
+
 const AnthropicReasoningOptionsSchema = v.object({
   signature: v.optional(v.string()),
   redactedData: v.optional(v.string()),
@@ -53,19 +74,12 @@ export function normalizeReplayForDestination(
 
       for (const part of message.content) {
         if (part.type === 'reasoning') {
-          const anthropic = v.safeParse(
-            AnthropicReasoningOptionsSchema,
-            part.providerOptions?.anthropic,
-          );
+          const crossing = reasoningCrossing(part, destinationIsAnthropic);
 
-          const sourceIsAnthropic = anthropic.success
-            && (anthropic.output.signature !== undefined
-              || anthropic.output.redactedData !== undefined);
+          if (crossing === 'as-text') content.push({ type: 'text', text: part.text });
 
-          if (sourceIsAnthropic !== destinationIsAnthropic) {
+          if (crossing !== 'unchanged') {
             contentChanged = true;
-
-            if (part.text) content.push({ type: 'text', text: part.text });
             continue;
           }
         }

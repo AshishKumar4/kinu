@@ -539,9 +539,8 @@ export function isLegalDecision(d: ReactorDecision, ctx: {
 
   // `abort_one`, `abort_all`, `add` require `eventOp: handle` (you can't
   // defer/drop while also acting on heads in response to the event).
-  if (d.head_op.kind === 'abort_one' || d.head_op.kind === 'abort_all' || d.head_op.kind === 'add') {
-    if (d.event_op.kind !== 'handle') return false;
-  }
+  if ((d.head_op.kind === 'abort_one' || d.head_op.kind === 'abort_all' || d.head_op.kind === 'add')
+    && d.event_op.kind !== 'handle') return false;
 
   // `merge_now` permits handle or defer but not drop.
   if (d.head_op.kind === 'merge_now' && d.event_op.kind === 'drop') return false;

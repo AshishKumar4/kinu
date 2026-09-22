@@ -34,7 +34,7 @@ import {
   type TriggerId, type TriggerKind, type TriggerRow, type TrustLevel,
 } from './types';
 import { ulid } from './ulid';
-import type { SqlExec, SqlValue } from '../../types/primitives';
+import type { SqlExec, SqlExecRow, SqlValue } from '../../types/primitives';
 import type { ActorHandle } from '../../identity/actor-handle';
 import { parseJsonObject, type JsonObject } from '../../utils/json';
 // The DEFAULT is shared with the gate that enforces it; the RANGE is not. This
@@ -331,7 +331,7 @@ export class TriggerRegistry {
   }
 }
 
-function rowToTrigger<T>(row: T): TriggerRow {
+function rowToTrigger(row: SqlExecRow): TriggerRow {
   const r = v.parse(TriggerRowSchema, row);
 
   return {

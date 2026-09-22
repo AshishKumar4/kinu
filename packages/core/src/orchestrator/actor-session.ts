@@ -19,6 +19,7 @@ import {
 } from './actor-claims';
 import type { ContextEventRecorder } from '../types/context-plane';
 import type { ContextSelection } from '../session/context';
+import type { JsonObject } from '../utils/json';
 import type { ScaffoldBridgeOpts } from './scaffold-host';
 import type { ModelCallSpend } from '../events/model-call';
 import type { AgentSignal, SendOutcome } from '../types/signals';
@@ -211,7 +212,10 @@ export class ActorSession {
     }
 
     const publish = await prepareDrain?.(rows, atStep, reference);
-    this.canonical.landInput(prepared, reference, claim.turnId, () => this.canonical.assertEpoch(claim.turnId, claim.epoch), publish);
+    this.canonical.landInput({
+      prepared, reference, turnId: claim.turnId,
+      assertOwner: () => { this.canonical.assertEpoch(claim.turnId, claim.epoch); }, publish,
+    });
     const message = await this.canonical.messages.materialize(reference);
     this.landed.push(...rows);
 
@@ -268,7 +272,7 @@ export class ActorSession {
       snapshot,
       actor: this.runtime.actor,
       llm,
-      govern: (llm, labels) => budget?.govern(llm, labels) ?? llm,
+      govern: (model, labels) => budget?.govern(model, labels) ?? model,
       gateOpen,
       guidance: await advisorWorkspaceGuidance({
         vfs: workspace,
@@ -331,6 +335,17 @@ export class ActorSession {
     return pending;
   }
 
+  /** The ownership fence an input write runs under: this process still holds
+   *  the actor, and the lease's turn is still in its preparing phase. The
+   *  refusal text names which write was refused. */
+  private preparingTurnFence(lease: ActorTurnLease, refusal: string): () => void {
+    return () => {
+      this.runtime.actor.assertCurrent();
+
+      if (this.requireTurn(lease).phase !== 'preparing') throw new KinuError('denied', refusal);
+    };
+  }
+
   /** Open a durable assignment against this actor's working revision. The
    * lease's turn id is the delivery identity, not the actor's name: a re-drive
    * keeps the admitted task once, even when two assignments have equal text.
@@ -341,11 +356,7 @@ export class ActorSession {
   }): Promise<void> {
     await this.restoration;
 
-    const assertOwner = () => {
-      this.runtime.actor.assertCurrent();
-
-      if (this.requireTurn(lease).phase !== 'preparing') throw new KinuError('denied', 'delegated input requires a preparing turn');
-    };
+    const assertOwner = this.preparingTurnFence(lease, 'delegated input requires a preparing turn');
 
     const current = await this.canonical.materialize();
 
@@ -383,11 +394,7 @@ export class ActorSession {
   }): Promise<void> {
     await this.restoration;
 
-    const assertOwner = () => {
-      this.runtime.actor.assertCurrent();
-
-      if (this.requireTurn(lease).phase !== 'preparing') throw new KinuError('denied', 'input must belong to a preparing turn');
-    };
+    const assertOwner = this.preparingTurnFence(lease, 'input must belong to a preparing turn');
 
     const restored = await this.canonical.materialize();
     const drainTurn = v.safeParse(v.string(), input.item.metadata?.drainTurnId);
@@ -412,11 +419,11 @@ export class ActorSession {
    * effects are attributed to the activation's run, and a recovered activation
    * that re-admits the same turn writes its own run id under a new epoch.
    */
-  beginTurn<Metadata>(
+  beginTurn(
     ids: { readonly runId: string; readonly turnId: string },
     mode: WorkMode,
     startedAt: number,
-    metadata?: Metadata,
+    metadata?: JsonObject,
   ): ActorTurnLease {
     if (this.active !== null) throw new KinuError('denied', 'this actor already has an admitted turn');
     const abort = new AbortController();
@@ -600,6 +607,10 @@ export class ActorSession {
           case 'text-delta': this.orchestrator.acc.onFirstChunk(); text += event.delta; break;
           case 'tool-call': pending.push(event); break;
           case 'tool-result': this.recordToolResult(pending, event); break;
+
+          // Reasoning is written to the durable output by `observe` above and
+          // is never the turn's answer, so the accounting here ignores it.
+          case 'reasoning-delta': break;
 
           case 'step-finish':
             steps += 1;

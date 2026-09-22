@@ -291,9 +291,9 @@ function serializeOutput(part: ToolResultPart): string | null {
       return output.value;
     case 'json':
     case 'error-json':
-      return safeStringify(output.value);
+      return safeStringify({ value: output.value });
     case 'content':
-      return safeStringify(output.value);
+      return safeStringify({ value: output.value });
     case 'execution-denied':
       return null;
   }
@@ -321,7 +321,7 @@ function estimateMessageTokens(message: ModelMessage): number {
           chars += part.text.length;
           break;
         case 'tool-call':
-          chars += part.toolName.length + jsonLength(part.input);
+          chars += part.toolName.length + jsonLength({ value: part.input });
           break;
         case 'tool-result':
           chars += serializedOutputLength(part);
@@ -330,8 +330,13 @@ function estimateMessageTokens(message: ModelMessage): number {
         case 'file':
           chars += ESTIMATED_MEDIA_CHARS;
           break;
+
+        // Approval traffic carries no prose of its own, so it is priced by what
+        // it serializes — the same as any part this estimator does not name.
+        case 'tool-approval-request':
+        case 'tool-approval-response':
         default:
-          chars += jsonLength(part);
+          chars += jsonLength({ value: part });
       }
     }
   }
@@ -339,16 +344,16 @@ function estimateMessageTokens(message: ModelMessage): number {
   return Math.max(0, Math.round(chars / 4));
 }
 
-function safeStringify<Value>(value: Value): string {
+function safeStringify(input: { value: unknown }): string {
   try {
-    return JSON.stringify(value, binaryReplacer) ?? '';
+    return JSON.stringify(input.value, binaryReplacer) ?? '';
   } catch (error) {
     return `unserializable step part: ${renderThrownChain({ cause: error })}`;
   }
 }
 
-function jsonLength<Value>(value: Value): number {
-  return safeStringify(value).length;
+function jsonLength(input: { value: unknown }): number {
+  return safeStringify(input).length;
 }
 
 /** Binary payloads flatten to a size placeholder — never serialize megabytes

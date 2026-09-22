@@ -176,9 +176,16 @@ function finishPrepareStep(
   // revision a step ran on is durable by the time the step can have an effect.
   const consumed = pipeline.context?.consume({ stepNumber: ctx.stepNumber, messages });
 
-  const result = !plan
-    ? pipeline.context !== undefined || steered || pruned || woven || replayed ? { messages } : undefined
-    : plan.system !== undefined ? { system: plan.system, messages } : { messages };
+  const rewritten = pipeline.context !== undefined || steered !== undefined
+    || pruned !== undefined || woven !== undefined || replayed !== undefined;
+
+  let result: StepPrepareResult;
+
+  if (plan) {
+    result = plan.system === undefined ? { messages } : { system: plan.system, messages };
+  } else {
+    result = rewritten ? { messages } : undefined;
+  }
 
   return consumed instanceof Promise ? consumed.then(() => result) : result;
 }

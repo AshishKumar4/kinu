@@ -148,6 +148,10 @@ export function resolvePromptCacheStrategy(
     case 'my-gateway':
     case 'ai-gateway':
       return { kind: 'openai-compat', bodyNamespace: providerId, markers: false };
+
+    // A turn that named no provider routes no cache key, the same as one whose
+    // provider this table does not know.
+    case undefined:
     default:
       if (providerId === 'openai-compat' || providerId?.startsWith('openai-compat:')) {
         return { kind: 'openai-compat', bodyNamespace: providerId, markers: false };

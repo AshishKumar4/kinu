@@ -1016,5 +1016,7 @@ export function observeSystemPromptHash(
 ): SystemPromptObservation {
   const hash = fnv1a64(system);
 
-  return { hash, status: previous === null ? 'first' : previous === hash ? 'stable' : 'changed' };
+  if (previous === null) return { hash, status: 'first' };
+
+  return { hash, status: previous === hash ? 'stable' : 'changed' };
 }

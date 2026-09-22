@@ -150,7 +150,7 @@ export async function receiveSubordinateEvent(
       sequenceId: input.sequenceId,
       mode: input.mode,
       task: subordinate.currentTask ?? undefined,
-      contentPath: contentPath || undefined,
+      contentPath: contentPath ?? undefined,
       handoff: input.handoff,
       now,
     });

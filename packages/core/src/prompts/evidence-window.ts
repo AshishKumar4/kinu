@@ -34,6 +34,7 @@
  * rule is byte-unchanged until it has been.
  */
 
+import type { ToolSet, TypedToolResult } from 'ai';
 import * as v from 'valibot';
 import { renderThrownChain } from '../obs/index';
 import { EVIDENCE_BUDGETS } from '../types/evidence';
@@ -67,7 +68,7 @@ export function evidenceWindow(text: string, maxChars: number): string {
  *  object through the message history; this rendering is for the trajectory,
  *  the trace and the fallback summary, so a structured result must show its
  *  content and never `String({...})`'s "[object Object]". */
-export function renderToolResult<T>(raw: T): string {
+export function renderToolResult(raw: TypedToolResult<ToolSet>['output']): string {
   const text = v.safeParse(v.string(), raw);
 
   if (text.success) return text.output;
@@ -85,8 +86,13 @@ export function renderToolResult<T>(raw: T): string {
  * chat path and the generateText collector both call it, so a tool-only turn
  * reads the same either way.
  */
-export function synthesizeToolFallback<T>(
-  steps: ReadonlyArray<{ readonly toolResults: ReadonlyArray<{ readonly toolName: string; readonly output: T }> }>,
+export function synthesizeToolFallback(
+  steps: ReadonlyArray<{
+    readonly toolResults: ReadonlyArray<{
+      readonly toolName: string;
+      readonly output: TypedToolResult<ToolSet>['output'];
+    }>;
+  }>,
 ): string {
   const lines: string[] = [];
 

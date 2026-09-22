@@ -293,9 +293,9 @@ export class SessionMessages extends SessionMessageReader<ActorHandle, SessionPa
         // index (`message_part_open`, `message_part_end`). The `IN` form
         // walked every update of the part per delta — the square of a
         // streamed answer's length, measured 2026-09-21 (D23).
-        if (!this.partOpened(messageId, update.part)) throw new KinuError('denied', 'part update precedes open');
+        if (!this.partHasOperation(messageId, update.part, 'open')) throw new KinuError('denied', 'part update precedes open');
 
-        if (update.operation === 'append' && this.partEnded(messageId, update.part)) throw new KinuError('denied', 'stream content already ended');
+        if (update.operation === 'append' && this.partHasOperation(messageId, update.part, 'content-end')) throw new KinuError('denied', 'stream content already ended');
       }
 
       if (!(update instanceof PreparedMessageUpdate)) throw new KinuError('bad_input', 'message update was not prepared');
@@ -309,13 +309,15 @@ export class SessionMessages extends SessionMessageReader<ActorHandle, SessionPa
   }
 
   /** The operation is a literal in each query, not a bound value: SQLite
-   *  proves a partial index applies only from the statement's own text. */
-  private partOpened(messageId: string, part: number): boolean {
-    return (this.sql<{ n: number }>`SELECT count(*) AS n FROM message_updates WHERE actor_id=${this.actor.actorId} AND message_id=${messageId} AND part_no=${part} AND operation='open'`[0]?.n ?? 0) > 0;
-  }
+   *  proves a partial index applies only from the statement's own text. So the
+   *  two statements stay written out, and the arm that picks between them is
+   *  what keeps them one rule. */
+  private partHasOperation(messageId: string, part: number, operation: 'open' | 'content-end'): boolean {
+    const counted = operation === 'open'
+      ? this.sql<{ n: number }>`SELECT count(*) AS n FROM message_updates WHERE actor_id=${this.actor.actorId} AND message_id=${messageId} AND part_no=${part} AND operation='open'`
+      : this.sql<{ n: number }>`SELECT count(*) AS n FROM message_updates WHERE actor_id=${this.actor.actorId} AND message_id=${messageId} AND part_no=${part} AND operation='content-end'`;
 
-  private partEnded(messageId: string, part: number): boolean {
-    return (this.sql<{ n: number }>`SELECT count(*) AS n FROM message_updates WHERE actor_id=${this.actor.actorId} AND message_id=${messageId} AND part_no=${part} AND operation='content-end'`[0]?.n ?? 0) > 0;
+    return (counted[0]?.n ?? 0) > 0;
   }
 
   seal(reference: MessageReference): void {

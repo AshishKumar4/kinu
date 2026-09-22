@@ -47,7 +47,7 @@ import type { LLM, RawSqlExec, SqlExecutor } from './types/primitives';
 import type { ActorHandle } from './identity/actor-handle';
 import { estimateTokens, estimateUsdCost } from './llm';
 import type { ModelPricing } from './providers/types';
-import type { JsonValue } from './utils/json';
+import type { JsonObject, JsonValue } from './utils/json';
 import { usageReported, usageTotal, type Usage } from './usage';
 import { KinuError } from './obs/error';
 
@@ -256,7 +256,13 @@ export class MissionBudgetLedger {
         (actor_id, label, parent_label, limit_usd, limit_tokens, spent_tokens, spent_usd, blended_tokens, calls, spawns, created_at, exhausted_at)
       VALUES (${this.actorId}, ${label}, ${effectiveParent}, ${limits.usd ?? null}, ${limits.tokens ?? null}, 0, 0, 0, 0, 0, ${now}, NULL)`;
 
-    return this.get(label)!;
+    const declared = this.get(label);
+
+    if (declared === null) {
+      throw new KinuError('io', `mission budget "${label}" was inserted but could not be read back`);
+    }
+
+    return declared;
   }
 
   get(label: string): MissionRow | null {
@@ -380,9 +386,9 @@ function isOverBudget(row: MissionRow): boolean {
 }
 
 function provenanceOf(row: MissionRow): MissionSpendProvenance {
-  const source = row.blendedTokens === 0
-    ? 'catalog'
-    : row.blendedTokens >= row.tokens ? 'blended' : 'mixed';
+  if (row.blendedTokens === 0) return { blendedTokens: row.blendedTokens, source: 'catalog' };
+
+  const source = row.blendedTokens >= row.tokens ? 'blended' : 'mixed';
 
   return { blendedTokens: row.blendedTokens, source };
 }
@@ -438,7 +444,9 @@ export interface MissionGovernorDeps {
    *  Absent — or null before the catalog lookup lands — means every debit uses
    *  the blended fallback, and says so. */
   pricing?(): ModelPricing | null;
-  now?(): number;
+  /** A property, not a method: the governor holds it unbound for the life of
+   *  the actor, so its `this` must not be the deps bag. */
+  now?: () => number;
 }
 
 /**
@@ -453,7 +461,7 @@ export class MissionGovernor {
   private readonly now: () => number;
 
   constructor(private readonly deps: MissionGovernorDeps) {
-    this.now = deps.now ?? Date.now;
+    this.now = deps.now ?? (() => Date.now());
     this.ledger = new MissionBudgetLedger(deps.storage.sql, deps.actor, deps.storage.execRaw);
   }
 
@@ -735,7 +743,7 @@ const MissionLabelsMetadataSchema = v.object({
 
 /** Mission labels off a turn's metadata bag. Anything malformed reads as
  *  unscoped: a turn must never inherit a budget it cannot name properly. */
-export function readMissionLabels<Metadata>(metadata: Metadata): string[] {
+export function readMissionLabels(metadata: JsonObject | undefined): string[] {
   const parsed = v.safeParse(MissionLabelsMetadataSchema, metadata);
 
   return parsed.success ? parsed.output[MISSION_LABELS_METADATA_KEY] ?? [] : [];

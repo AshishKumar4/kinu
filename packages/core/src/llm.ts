@@ -398,7 +398,7 @@ function createAnthropicModel(
     name: config.name,
     baseURL: config.baseURL,
     apiKey: apiKey || undefined,
-    authToken: authToken || undefined,
+    authToken,
     headers,
     fetch: withRateLimitRetry(config.fetch ?? fetch, {
       provider: config.name,
@@ -411,7 +411,8 @@ function createAnthropicModel(
 }
 
 function bearerToken(value: string | undefined): string | undefined {
-  const match = /^Bearer\s+(.+)$/i.exec(value ?? '');
+  const match = /^Bearer\s+(.+)$/iu.exec(value ?? '');
+  const token = match?.[1]?.trim();
 
-  return match?.[1]?.trim() || undefined;
+  return token === '' ? undefined : token;
 }

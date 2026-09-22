@@ -52,6 +52,22 @@ export interface PrepareStepContext {
   readonly abortSignal?: AbortSignal;
 }
 
+/** Where the synchronous prepareStep walk stopped and what it had already
+ *  produced, handed to the awaited path so the chain resumes rather than
+ *  restarts. */
+interface PrepareStepResumption {
+  /** The extension index to continue from — the one AFTER the hook that
+   *  returned `first`. */
+  readonly start: number;
+  readonly ctx: PrepareStepContext;
+  /** What the synchronous prefix had rewritten the messages to. */
+  readonly messages: ModelMessage[];
+  /** The synchronous prefix already rewrote the messages. */
+  readonly changed: boolean;
+  /** The hook that promoted the walk to the awaited path. */
+  readonly first: Promise<ModelMessage[] | undefined>;
+}
+
 export interface TransformContext {
   /** Stable conversation identity — the agent/DO name on cf, the session key on cli. */
   readonly sessionKey: string;
@@ -202,7 +218,7 @@ export class ExtensionHost {
       });
 
       if (next instanceof Promise) {
-        return this.continuePrepareStep(index + 1, ctx, messages, changed, next);
+        return this.continuePrepareStep({ start: index + 1, ctx, messages, changed, first: next });
       }
 
       if (next) {
@@ -214,18 +230,13 @@ export class ExtensionHost {
     return changed ? messages : undefined;
   }
 
-  private async continuePrepareStep(
-    start: number,
-    ctx: PrepareStepContext,
-    messages: ModelMessage[],
-    changed: boolean,
-    first: Promise<ModelMessage[] | undefined>,
-  ): Promise<ModelMessage[] | undefined> {
-    const firstResult = await untilAborted(first, ctx.abortSignal);
+  private async continuePrepareStep(resume: PrepareStepResumption): Promise<ModelMessage[] | undefined> {
+    const { ctx, messages } = resume;
+    const firstResult = await untilAborted(resume.first, ctx.abortSignal);
     let current = firstResult ?? messages;
-    let rewritten = changed || firstResult !== undefined;
+    let rewritten = resume.changed || firstResult !== undefined;
 
-    for (let index = start; index < this.extensions.length; index += 1) {
+    for (let index = resume.start; index < this.extensions.length; index += 1) {
       const next = await untilAborted(Promise.resolve(this.extensions[index]?.prepareStep?.({
         stepNumber: ctx.stepNumber,
         messages: current,

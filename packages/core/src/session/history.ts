@@ -26,6 +26,27 @@ export interface TurnOutput {
   readonly parts: readonly MessagePartReference[];
 }
 
+/** One `context_edit` run event waiting to be written: which proposal moved the
+ *  context where, and the recorder it belongs on. A null `turnId` or `events`
+ *  means there is no run to file it against, so nothing is written. */
+interface ContextEditAudit {
+  readonly proposalId: string;
+  readonly selection: ContextSelection;
+  readonly status: 'staged' | 'activated';
+  readonly turnId: string | null;
+  readonly events: ContextEventRecorder | null;
+}
+
+/** An input message being landed against the cutoff its preparation reserved. */
+interface LandedInput {
+  /** Null when the input was already admitted by an earlier attempt. */
+  readonly prepared: PreparedMessage | null;
+  readonly reference: MessageReference;
+  readonly turnId: string;
+  readonly assertOwner: () => void;
+  readonly publish?: (selection: ContextSelection) => void;
+}
+
 export class SessionHistory {
   readonly messages: SessionMessages;
   readonly context: SessionContext;
@@ -116,7 +137,7 @@ export class SessionHistory {
       for (const message of messages) this.messages.insert(message, proposal.cause === 'context_transform' ? 'context_transform' : 'edit');
       this.proposals.stage({ ...proposal, base });
 
-      return this.editEvent(proposal.id, base, 'staged', proposal.turnId, events);
+      return this.editEvent({ proposalId: proposal.id, selection: base, status: 'staged', turnId: proposal.turnId, events });
     });
 
     publication?.publish();
@@ -149,7 +170,8 @@ export class SessionHistory {
         this.proposals.stage({ id: proposalId, base: selected, author: options.author, via: options.via, cause: 'edit', turnId: options.turnId, expectedPending: pending,
           changes: [...base.filter(entry => !turnEntries.has(entry.entryId)).map(entry => ({ entryId: entry.entryId, expected: entry, replacement: null })), ...entries.map(entry => ({ entryId: entry.entryId, expected: null, replacement: entry }))] });
 
-        return { result: { selection: selected, proposalId }, publication: this.editEvent(proposalId, selected, 'staged', options.turnId, options.events ?? null) };
+        return { result: { selection: selected, proposalId },
+          publication: this.editEvent({ proposalId, selection: selected, status: 'staged', turnId: options.turnId, events: options.events ?? null }) };
       }
 
       for (const proposal of this.proposals.pending(selected.contextId)) this.proposals.close(proposal.proposal_id, 'history_rewritten');
@@ -200,7 +222,8 @@ export class SessionHistory {
         return refusal;
       }, turnId);
 
-      return { applied, publication: applied === null ? null : this.editEvent(pending.proposal_id, applied, 'activated', turnId, events) };
+      return { applied,
+        publication: applied === null ? null : this.editEvent({ proposalId: pending.proposal_id, selection: applied, status: 'activated', turnId, events }) };
     });
 
     committed.publication?.publish();
@@ -208,7 +231,9 @@ export class SessionHistory {
     return { messages: committed.applied === null ? (await this.materialize()).messages : messages, changed: committed.applied !== null };
   }
 
-  private editEvent(proposalId: string, selection: ContextSelection, status: 'staged' | 'activated', turnId: string | null, events: ContextEventRecorder | null): { publish(): void } | null {
+  private editEvent(edit: ContextEditAudit): { publish(): void } | null {
+    const { proposalId, selection, status, turnId, events } = edit;
+
     if (events === null || turnId === null) return null;
     const claim = this.dependencies.sql<{ run_id: string; status: string }>`SELECT run_id,status FROM actor_turn_claims WHERE actor_id=${this.dependencies.actor.actorId} AND turn_id=${turnId}`[0];
 
@@ -273,7 +298,8 @@ export class SessionHistory {
     });
   }
 
-  landInput(prepared: PreparedMessage | null, reference: MessageReference, turnId: string, assertOwner: () => void, publish?: (selection: ContextSelection) => void): void {
+  landInput(input: LandedInput): void {
+    const { prepared, reference, assertOwner } = input;
     this.dependencies.transactionSync(() => {
       assertOwner();
       const existing = this.admittedInput(reference.messageId);
@@ -284,11 +310,11 @@ export class SessionHistory {
 
         if (inserted.sequence !== reference.sequence) throw new KinuError('io', 'landed input cutoff differs from preparation');
       } else if (existing.sequence !== reference.sequence) throw new KinuError('denied', 'landed input changed during preparation');
-      this.activateInput(reference, turnId, assertOwner);
+      this.activateInput(reference, input.turnId, assertOwner);
       const selected = this.context.selected();
 
       if (selected === null) throw new KinuError('missing', 'landed input has no context');
-      publish?.(selected);
+      input.publish?.(selected);
     });
   }
   activateInput(reference: MessageReference, turnId: string, assertOwner: () => void): void {
