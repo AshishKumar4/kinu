@@ -113,10 +113,10 @@ function hubObject(): HubTarget {
   };
 
   return {
-    listTriggersWire: refuse('listTriggersWire'),
+    listTriggers: refuse('listTriggers'),
     createDurableWebhook: refuse('createDurableWebhook'),
     cancelTrigger: refuse('cancelTrigger'),
-    listRecentEventsWire: refuse('listRecentEventsWire'),
+    listRecentEvents: refuse('listRecentEvents'),
     getEmailIngress: refuse('getEmailIngress'),
     setEmailAllowlist: refuse('setEmailAllowlist'),
     setEmailNotifications: refuse('setEmailNotifications'),

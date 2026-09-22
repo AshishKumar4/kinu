@@ -59,8 +59,10 @@ import type {
   ReleaseBoard,
   ReleaseChange,
   ReleaseStatus,
+  RunEvent,
   RunEventQuery,
   RunListEntry,
+  ScaffoldRunReport,
   ShadowStatus,
   ToolListEntry,
 } from "@kinu.run/core";
@@ -72,7 +74,6 @@ import { claimOwnedWorkspace, type WorkspaceOwnerClaim, type WorkspaceRegistry }
 import type { SessionAuthority } from "./auth/store";
 import type { ObjectNamespace } from '@kinu.run/core';
 import type { KvStore } from '@kinu.run/agent-utils';
-import { decodeRunEventWire, decodeScaffoldRunWire } from '@kinu.run/core';
 import { renderThrownChain } from '@kinu.run/core/obs';
 
 const corsHeaders = {
@@ -110,13 +111,10 @@ export interface McpAgentClient {
   searchMemoryHybrid(query: string, limit: number): Promise<HybridHit[]>;
   saveNoteFromMcp(content: string): Promise<{ ok: true }>;
   getToolList(): Promise<{ builtIn: string[]; crafted: ToolListEntry[] }>;
-  runScaffoldOnceWire(
-    task: string,
-    opts?: { useShadowOverride?: boolean },
-  ): Promise<string>;
+  runScaffoldOnce(task: string, opts?: { useShadowOverride?: boolean }): Promise<ScaffoldRunReport>;
   getShadowStatus(): Promise<ShadowStatus>;
   listRuns(request: PageRequest): Promise<Page<RunListEntry>>;
-  getRunEventsWire(runId: string, opts?: RunEventQuery): Promise<string>;
+  getRunEvents(runId: string, opts?: RunEventQuery): Promise<RunEvent[]>;
   runTaskFromMcp(text: string): Promise<EnqueueTurnResult>;
   sendPeerFromMcp(input: PeerMessageInput): Promise<PeerSendOutcome>;
   listPeersFromMcp(): Promise<Array<{ name: string; displayName?: string }>>;
@@ -144,10 +142,10 @@ async function mcpClient(resolveAgent: McpResolver, agentName: string): Promise<
     searchMemoryHybrid: (query, limit) => stub.searchMemoryHybrid(query, limit),
     saveNoteFromMcp: (content) => stub.saveNoteFromMcp(content),
     getToolList: () => stub.getToolList(),
-    runScaffoldOnceWire: (task, opts) => stub.runScaffoldOnceWire(task, opts),
+    runScaffoldOnce: (task, opts) => stub.runScaffoldOnce(task, opts),
     getShadowStatus: () => stub.getShadowStatus(),
     listRuns: (request) => stub.listRuns(request),
-    getRunEventsWire: (runId, opts) => stub.getRunEventsWire(runId, opts),
+    getRunEvents: (runId, opts) => stub.getRunEvents(runId, opts),
     runTaskFromMcp: (text) => stub.runTaskFromMcp(text),
     sendPeerFromMcp: (input) => stub.sendPeerFromMcp(input),
     listPeersFromMcp: () => stub.listPeersFromMcp(),
@@ -256,20 +254,14 @@ function buildServer(resolveAgent: McpResolver, agentName: string): McpServer {
       try {
         const agent = await mcpClient(resolveAgent, agentName);
 
-        // The agents-SDK stub doesn't resolve the @callable's return type, so
-        // annotate from the source-of-truth ScaffoldRunResult shape.
-        const result = decodeScaffoldRunWire(
-          await agent.runScaffoldOnceWire(
-            task,
-            useShadowOverride ? { useShadowOverride: true } : undefined,
-          ),
-        );
+        const result = await agent.runScaffoldOnce(task, useShadowOverride ? { useShadowOverride: true } : undefined);
 
         const summary = [
           `ok=${result.ok}, doneEmitted=${result.doneEmitted}, emits=${result.emitCount}, ms=${result.durationMs}`,
           result.error ? `error: ${result.error}` : '',
           `events:`,
           ...result.events.slice(0, 10).map((e) => `  - ${e.type}: ${JSON.stringify(e).slice(0, 120)}`),
+          result.nativeEvents > 0 ? `  (+${String(result.nativeEvents)} native model chunks not carried)` : '',
         ].filter(Boolean).join("\n");
 
         return { content: [{ type: "text", text: summary }] };
@@ -341,9 +333,7 @@ function buildServer(resolveAgent: McpResolver, agentName: string): McpServer {
       try {
         const agent = await mcpClient(resolveAgent, agentName);
 
-        const events = decodeRunEventWire(
-          await agent.getRunEventsWire(runId, { since, limit: limit ?? 100 }),
-        );
+        const events = await agent.getRunEvents(runId, { since, limit: limit ?? 100 });
 
         const text = events.length === 0
           ? "(no events)"

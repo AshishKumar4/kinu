@@ -18,7 +18,7 @@ import {
   claimOwnedWorkspace,
   type WorkspaceOwnerClaim, type WorkspaceOwnershipEnv, type WorkspaceRegistry,
 } from './workspace-ownership';
-import { workspaceOwner, type WorkspaceOwnerWire } from '../workspace-owner-rpc';
+import { workspaceOwner, type WorkspaceOwnerRpc } from '../workspace-owner-rpc';
 import type { ObjectNamespace } from '@kinu.run/core';
 import type { UserDO } from './user-do';
 import { ROOT_SLATE_CALLER } from '../slates/bindings';
@@ -45,10 +45,10 @@ export type ShareRosterAuthority =
   WorkspaceRegistry & Pick<UserDO, 'listActiveWorkspaces' | 'sharesReceived_forget'>;
 
 /** What a share enumeration reads: the ownership gate's bindings, widened by
- *  the roster read on the asking account and the owner object's wire surface
- *  every listed workspace answers on. */
+ *  the roster read on the asking account and the owner object's seam every
+ *  listed workspace answers on. */
 export interface SharesGivenEnv<Id>
-  extends WorkspaceOwnershipEnv<Id, WorkspaceOwnerClaim & WorkspaceOwnerWire> {
+  extends WorkspaceOwnershipEnv<Id, WorkspaceOwnerClaim & WorkspaceOwnerRpc> {
   UserDO: ObjectNamespace<Id, ShareRosterAuthority>;
 }
 

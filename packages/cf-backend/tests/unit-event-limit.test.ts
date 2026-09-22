@@ -133,14 +133,11 @@ describe('a direct RPC cannot ask for more than the route may', () => {
     expect(await countOf({ since: Number.NaN, limit: 3 })).toBe(3);
   });
 
-  test('the wire form carries the same ceiling', async () => {
+  test('the RPC carries the same ceiling', async () => {
     const { harness } = seededWorkspace();
 
-    const countOf = async (opts: { limit?: number }): Promise<number> => {
-      const parsed: unknown = JSON.parse(await harness.agent.listRecentEventsWire(opts));
-
-      return Array.isArray(parsed) ? parsed.length : -1;
-    };
+    const countOf = async (opts: { limit?: number }): Promise<number> =>
+      (await harness.agent.listRecentEvents(opts)).length;
 
     expect(await countOf({ limit: -1 })).toBe(1);
     expect(await countOf({ limit: 1e9 })).toBe(UNTRUSTED_CEILING);

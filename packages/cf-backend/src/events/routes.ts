@@ -35,7 +35,6 @@ import {
 import { err, json, readBounded, safeJson } from '@kinu.run/core';
 import { ingressAdmitted, ingressDenied, peerIp } from '@kinu.run/core';
 import { isFreshAuthTime } from '../auth/session';
-import { decodeJsonWire } from '@kinu.run/core';
 import {
   matchWebhookDeliveryPath, verifyWebhookRoute, webhookRouteSecret,
   WEBHOOK_ROUTE_UNAVAILABLE, type SignedWebhookRoute,
@@ -113,7 +112,7 @@ function requireStepUp(request: Request): Response | null {
 
 /** Every call the hub routes make on the workspace object they address. */
 export type HubTarget = Pick<OrchestratorAgent,
-  'listTriggersWire' | 'createDurableWebhook' | 'cancelTrigger' | 'listRecentEventsWire'
+  'listTriggers' | 'createDurableWebhook' | 'cancelTrigger' | 'listRecentEvents'
   | 'getEmailIngress' | 'setEmailAllowlist' | 'setEmailNotifications'
 >;
 
@@ -358,7 +357,7 @@ async function handleTriggersRoute(
 
   if (rest === '' || rest === '/') {
     if (method === 'GET') {
-      return json({ body: decodeJsonWire(await agent.listTriggersWire()) });
+      return json({ body: await agent.listTriggers() });
     }
 
     if (method === 'POST') {
@@ -444,9 +443,7 @@ async function handleEventsList(
   const agent = await resolveAgent();
 
   return json({
-    body: decodeJsonWire(await agent.listRecentEventsWire({
-      variant, since: bounds.since, limit: bounds.limit,
-    })),
+    body: await agent.listRecentEvents({ variant, since: bounds.since, limit: bounds.limit }),
   });
 }
 

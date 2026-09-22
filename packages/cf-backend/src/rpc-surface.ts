@@ -60,7 +60,6 @@ import { AGENT_RPC_ACCESS } from './cli/rpc-gate';
 import type { ActorAgent } from './actor-agent';
 import type { OrchestratorAgent } from './orchestrator';
 import type { UserDO } from './user/user-do';
-import type { WorkspaceOwnerWire } from './workspace-owner-rpc';
 
 /**
  * The names the Workers runtime and the two SDKs dispatch on a stub, which
@@ -251,7 +250,7 @@ const USER_DO_METHODS = [
   'getCredentialBaseURL',
   'getDeviceFileView',
   'getWorkspaceTitle',
-  'getExperienceEntryWire',
+  'getExperienceEntry',
   'getReleaseBoard',
   'getReleaseDetail',
   'getProfile',
@@ -277,7 +276,7 @@ const USER_DO_METHODS = [
   'mintCliToken',
   'openDeviceTerminal',
   'pollCodexDeviceFlow',
-  'publishExperienceWire',
+  'publishExperience',
   'publishWorkspaceReservation',
   'putEgressSecret',
   'putProfileCatalog',
@@ -303,7 +302,7 @@ const USER_DO_METHODS = [
   'cancelDeviceRequestsForTurn',
   'revokeDeviceConsent',
   'revokeEgressSecret',
-  'searchExperienceWire',
+  'searchExperience',
   'selectAIGateway',
   'selectCloudflareAccount',
   'setConfig',
@@ -466,13 +465,10 @@ const ORCHESTRATOR_METHODS = [
   'getActorSnapshot',
   'getEmailIngress',
   'getRunEvents',
-  'getRunEventsWire',
   'getShadowStatus',
   'getToolList',
   'getWorkspaceCapabilityHash',
   'listPeersFromMcp',
-  'listRecentEventsWire',
-  'listTriggersWire',
   'listRuns',
   'openDeviceTerminal',
   'prepareTerminal',
@@ -480,7 +476,7 @@ const ORCHESTRATOR_METHODS = [
   'readExecutorFileChunk',
   'receivePeerMessage',
   'recordHeadStep',
-  'runScaffoldOnceWire',
+  'runScaffoldOnce',
   'runTaskFromMcp',
   'saveNoteFromMcp',
   'sendPeerFromMcp',
@@ -507,25 +503,13 @@ const ORCHESTRATOR_METHODS = [
   // actor it acts as. A browser cannot mint a caller.
   'slateAs',
   'slateBindingCallAs',
-  // The wire half of the cross-workspace owner seam: every answer above that
-  // carries `JsonValue` crosses as a JSON string, because a stub's RPC mapping
-  // over that recursion exceeds TypeScript's instantiation depth. Decoded at
-  // the one adapter in workspace-owner-rpc.ts, never `@callable`.
-  'slateAsWire',
-  'slateBindingCallAsWire',
-  'readBlueprintWire',
-  'blueprintBundleWire',
-  'shareBlueprintWithWire',
-  'admitBlueprintWire',
-  'readLiveShareWire',
-  'shareLiveWithWire',
-  'liveShareBundleWire',
   // Live shares: the share route's verified call, and the owner surfaces the
   // app host reads. Reachable by a DO stub in this Worker, never a browser —
   // `slateAs`'s own comment above is why none is `@callable`.
   'routeSlateShare',
   'readLiveShare',
   'shareLiveWith',
+  'liveShareBundle',
   'liveShareUrl',
   'viewerEntryUrl',
   // The one method the supervisor entrypoint calls on the object that owns a
@@ -548,15 +532,6 @@ export const ORCHESTRATOR_RPC_SURFACE: readonly string[] = [
   ...Object.keys(AGENT_RPC_ACCESS),
   ...ORCHESTRATOR_METHODS,
 ];
-
-/** Compile-time proof that the owner wire view `workspaceOwner` calls through
- *  is this class's own shape. It is written by hand there because that module
- *  is in the workerd probe project's graph and may not name the orchestrator;
- *  the check belongs where the surface does, and a signature that drifts breaks
- *  the build here rather than at a decode in production. */
-const ownerWireMatchesClass: WorkspaceOwnerWire extends Pick<OrchestratorAgent, keyof WorkspaceOwnerWire> ? true : false = true;
-
-void ownerWireMatchesClass;
 
 /**
  * Hosted actors are acquired and run through root-owned objects, not remote

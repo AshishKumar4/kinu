@@ -1135,7 +1135,7 @@ export {
   runScaffold,
   scaffoldEventText,
   type ScaffoldRunOptions,
-  type ScaffoldRunResult,
+  type ScaffoldRunResult, type ScaffoldRunReport, type ScaffoldJsonEvent, scaffoldRunReport,
   type ScaffoldDefaultInferenceChunk,
   type ScaffoldEvent, type ScaffoldModelEvent, type ScaffoldToolOutput,
   type ScaffoldEmitFn,
@@ -2338,10 +2338,7 @@ export {
   type TabPresence, type ToolInfo,
 } from './protocol';
 
-export {
-  decodeJsonWire, decodeRunEventWire, decodeScaffoldRunWire, resumeIndexFromLastEventId,
-  type RunEventWire, type ScaffoldRunWire,
-} from './protocol/orchestrator-wire';
+export { resumeIndexFromLastEventId } from './protocol/run-events-cursor';
 
 export { buildTree, explorationForkTree, type MctsRow } from './read-models/fork-tree-rows';
 

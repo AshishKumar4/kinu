@@ -26,6 +26,7 @@
  */
 
 import { modelMessageSchema, type ModelMessage } from 'ai';
+import { JsonValueSchema, type JsonValue } from '../utils/json';
 import * as v from 'valibot';
 import { base64ToBytes, bytesToBase64 } from '../utils/base64';
 import { KinuError } from '../obs/error';
@@ -39,11 +40,9 @@ export type NativeValue =
   | { readonly [key: string]: NativeValue };
 
 /** Anything the stored form holds: JSON only, which is what a SQLite TEXT
- *  column can carry back unchanged. */
-export type StoredValue =
-  | string | number | boolean | null
-  | readonly StoredValue[]
-  | { readonly [key: string]: StoredValue };
+ *  column can carry back unchanged, and core's one JSON type rather than a
+ *  second declaration of it. */
+export type StoredValue = JsonValue;
 
 /** The native side as a schema, so the walk below branches on a PARSED domain
  *  value rather than sniffing representations as it goes. */
@@ -57,11 +56,7 @@ const NativeValueSchema: v.GenericSchema<NativeValue> = v.lazy(() => v.union([
 const NativeRecordSchema: v.GenericSchema<{ readonly [key: string]: NativeValue }> =
   v.record(v.string(), NativeValueSchema);
 
-const StoredValueSchema: v.GenericSchema<StoredValue> = v.lazy(() => v.union([
-  v.string(), v.number(), v.boolean(), v.null(),
-  v.array(StoredValueSchema),
-  v.record(v.string(), StoredValueSchema),
-]));
+const StoredValueSchema: v.GenericSchema<StoredValue> = JsonValueSchema;
 
 /** Base64 of a byte payload. `bytes` is the length the decoder asserts, so a
  *  truncated row is named rather than decoded into a shorter buffer.
@@ -183,19 +178,31 @@ function nativeMessage(message: NativeValue, position: number): NativeValue {
   return v.parse(NativeValueSchema, validated(message, position));
 }
 
-/** The durable form of a step's message array. */
-export function encodeModelMessages(messages: readonly ModelMessage[]): string {
-  return JSON.stringify(messages.map((message, index) =>
-    encodeValue(nativeMessage(v.parse(NativeValueSchema, message), index))));
+/** The durable form of a step's message array, as JSON values: what a run
+ *  event records beside its own fields, and what a session revision holds
+ *  as text through {@link encodeModelMessages}. */
+export function encodeModelMessageValues(messages: readonly ModelMessage[]): JsonValue[] {
+  return messages.map((message, index) =>
+    encodeValue(nativeMessage(v.parse(NativeValueSchema, message), index)));
 }
 
-/** The array a stored revision holds, as native SDK messages — byte-identical
+/** The stored values back as native SDK messages — byte-identical
  *  attachments included. */
+export function decodeModelMessageValues(values: readonly JsonValue[]): ModelMessage[] {
+  return values.map((message, index) => validated(decodeValue(message), index));
+}
+
+/** The durable form of a step's message array, as one text column. */
+export function encodeModelMessages(messages: readonly ModelMessage[]): string {
+  return JSON.stringify(encodeModelMessageValues(messages));
+}
+
+/** The array a stored revision holds, as native SDK messages. */
 export function decodeModelMessages(payload: string): ModelMessage[] {
   const parsed = v.safeParse(v.array(StoredValueSchema), JSON.parse(payload));
 
   if (!parsed.success) throw new KinuError('io', 'a stored message payload is not a JSON message array');
 
-  return parsed.output.map((message, index) => validated(decodeValue(message), index));
+  return decodeModelMessageValues(parsed.output);
 }
 

@@ -4007,7 +4007,7 @@ export class UserDO extends Agent<Env> {
    * only ever publish under its own name, and an owner session (which is not
    * any workspace) cannot publish at all.
    */
-  private async publishExperience(caller: UserCaller, candidate: PublishableCandidate): Promise<ExperienceEntry> {
+  async publishExperience(caller: UserCaller, candidate: PublishableCandidate): Promise<ExperienceEntry> {
     const resolved = await this.requireTier(caller, 'experience.write');
 
     if (resolved.kind !== 'workspace') {
@@ -4019,7 +4019,7 @@ export class UserDO extends Agent<Env> {
 
   /** Search the owner's library. The calling workspace's own entries are
    *  excluded — re-importing what you already have is noise, not transfer. */
-  private async searchExperience(
+  async searchExperience(
     caller: UserCaller,
     options: { query?: string; kind?: ExperienceKind; limit?: number } = {},
   ): Promise<ExperienceEntry[]> {
@@ -4031,29 +4031,10 @@ export class UserDO extends Agent<Env> {
     return this.experienceLibrary().search(searchOptions);
   }
 
-  private async getExperienceEntry(caller: UserCaller, id: string): Promise<ExperienceEntry | null> {
+  async getExperienceEntry(caller: UserCaller, id: string): Promise<ExperienceEntry | null> {
     await this.requireTier(caller, 'experience.read');
 
     return this.experienceLibrary().get(id);
-  }
-
-  /** Cross-DO wire forms. `ExperiencePayload` carries a `JsonValue`, and a
-   *  stub's RPC mapping over that recursion exceeds TypeScript's instantiation
-   *  depth, so every holder of a `UserDO` stub reaches the library through
-   *  these and reads them with `decodeJsonWire`. */
-  async publishExperienceWire(caller: UserCaller, candidate: PublishableCandidate): Promise<string> {
-    return JSON.stringify(await this.publishExperience(caller, candidate));
-  }
-
-  async searchExperienceWire(
-    caller: UserCaller,
-    options: { query?: string; kind?: ExperienceKind; limit?: number } = {},
-  ): Promise<string> {
-    return JSON.stringify(await this.searchExperience(caller, options));
-  }
-
-  async getExperienceEntryWire(caller: UserCaller, id: string): Promise<string> {
-    return JSON.stringify(await this.getExperienceEntry(caller, id));
   }
 
   // ── Credentials ────────────────────────────────────────────────────

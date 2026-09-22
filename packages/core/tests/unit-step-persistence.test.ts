@@ -33,6 +33,7 @@ import { z } from 'zod';
 import { runChat, INTERRUPTED_TURN, type ChatEvent } from '../src/chat';
 import { createChatModel } from '../src/llm';
 import { initRunEventTables, RunEventRecorder } from '../src/events/recorder';
+import { decodeModelMessageValues } from '../src/session/message-codec';
 import { TurnAccumulator, type StepLike } from '../src/orchestrator/turn-accumulator';
 import { makeSql, makeExecRaw } from './helpers';
 
@@ -186,9 +187,11 @@ function pairing(messages: readonly ModelMessage[]): Array<{ id: string; name: s
   return calls;
 }
 
+/** The recorded steps, their messages read back through the one codec the
+ *  recorder wrote them with. */
 function stepRows(recorder: RunEventRecorder, runId: string) {
   return recorder.read(runId, { limit: 100 })
-    .flatMap((e) => e.type === 'step_finish' ? [e] : []);
+    .flatMap((e) => e.type === 'step_finish' ? [{ ...e, messages: decodeModelMessageValues(e.messages ?? []) }] : []);
 }
 
 describe('a completed step is durable at the moment it completes', () => {

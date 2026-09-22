@@ -12,7 +12,8 @@
  */
 
 import * as v from 'valibot';
-import { modelMessageSchema, type ModelMessage } from 'ai';
+import type { ModelMessage } from 'ai';
+import { decodeModelMessageValues, encodeModelMessageValues } from '../session/message-codec';
 import type { RawSqlExec, SqlExecutor } from '../types/primitives';
 import type { ActorHandle } from '../identity/actor-handle';
 import {
@@ -40,9 +41,6 @@ const OpenTurnIdentitySchema: v.GenericSchema<OpenTurnIdentity> = v.object({
   metadata: v.optional(JsonObjectSchema), pendingSendId: v.optional(v.string()),
   steerIds: v.optional(v.array(v.string())),
 });
-
-const StoredModelMessageSchema: v.GenericSchema<ModelMessage> =
-  v.custom<ModelMessage>((value) => modelMessageSchema.safeParse(value).success);
 
 const BaseFields = {
   eventIndex: v.number(),
@@ -94,7 +92,7 @@ export const RunEventSchema = v.variant('type', [
     result: v.optional(JsonValueSchema), error: v.optional(v.string()),
     durationMs: v.optional(v.number()), outcome: v.optional(ToolOutcomeSchema) }),
   v.object({ ...BaseFields, type: v.literal('step_finish'), stepIndex: v.number(),
-    reason: v.optional(v.string()), messages: v.optional(v.array(StoredModelMessageSchema)),
+    reason: v.optional(v.string()), messages: v.optional(v.array(JsonValueSchema)),
     usage: v.optional(UsageSchema), usd: v.optional(v.number()),
     usdFloorTokens: v.optional(v.number()),
     modelId: v.optional(v.string()), context: v.optional(ContextCompositionSchema) }),
@@ -184,8 +182,18 @@ export const RunEventSchema = v.variant('type', [
   v.object({ ...BaseFields, type: v.literal('run_end'), reason: v.optional(v.string()), error: v.optional(v.string()) }),
 ]);
 
-function stampRunEvent<Input extends RunEventInput>(input: Input, eventIndex: number, runId: string) {
-  return { ...input, eventIndex, runId, timestamp: new Date().toISOString() };
+/** The input as the row holds it: the base fields filled in, and a step's
+ *  messages in the session codec's durable form (one codec for a model
+ *  message everywhere it is stored). */
+function stampRunEvent(input: RunEventInput, eventIndex: number, runId: string): RunEvent {
+  const base = { eventIndex, runId, timestamp: new Date().toISOString() };
+
+  if (input.type !== 'step_finish') return { ...input, ...base };
+  const { messages, ...rest } = input;
+
+  return messages === undefined
+    ? { ...rest, ...base }
+    : { ...rest, ...base, messages: encodeModelMessageValues(messages) };
 }
 
 /** Validate one stored `run_events.payload` against the canonical union. The
@@ -749,7 +757,7 @@ export class RunEventRecorder {
     return rows.flatMap((r) => {
       const event = parseStoredRunEvent(r.payload);
 
-      return event.type === 'step_finish' ? event.messages ?? [] : [];
+      return event.type === 'step_finish' ? decodeModelMessageValues(event.messages ?? []) : [];
     });
   }
 

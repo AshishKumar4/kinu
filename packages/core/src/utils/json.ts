@@ -7,7 +7,17 @@ export interface JsonObject {
   [key: string]: JsonValue;
 }
 
-export type JsonValue = JsonPrimitive | JsonValue[] | JsonObject;
+/**
+ * An interface, not `JsonValue[]`: the two composite arms are declared as
+ * interfaces so the recursion is deferred. A value of this type crosses Workers
+ * RPC on a typed Durable Object stub, and workers-types' `Serializable<T>`
+ * expands an alias-recursive return type until TypeScript gives up (TS2589);
+ * an interface it resolves lazily. Measured 2026-09-22 on
+ * `DurableObjectStub<OrchestratorAgent>.slateAs`: alias red, interface green.
+ */
+export interface JsonArray extends Array<JsonValue> {}
+
+export type JsonValue = JsonPrimitive | JsonArray | JsonObject;
 
 export function isJsonObject(value: JsonValue): value is JsonObject {
   return !Array.isArray(value) && v.is(JsonObjectSchema, value);

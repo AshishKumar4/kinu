@@ -5,7 +5,7 @@
 //
 // The route is checked against a REAL recorder over real SQLite, not a counting
 // stub, because the defect was in what SQL did with the forwarded value. The
-// stub's `getRunEventsWire` is the production body of `OrchestratorAgent`'s —
+// stub's `getRunEvents` is the production body of `OrchestratorAgent`'s —
 // `getRunEvents(recorder, runId, opts)` and nothing else — so the direct-RPC
 // cases below exercise the real boundary, which is the bypass a route-only fix
 // leaves open.
@@ -29,7 +29,7 @@ const { handleRunEventsRequest } = await import('../src/run-events-routes');
 
 const SEEDED_EVENTS = 700;
 
-/** A workspace whose `getRunEventsWire` is the production one: the boundary
+/** A workspace whose `getRunEvents` is the production one: the boundary
  *  read-model over a real recorder, with no validation added by the test. */
 function runEventsWorkspace() {
   const db = new Database(':memory:');
@@ -43,8 +43,8 @@ function runEventsWorkspace() {
 
   const stub: RunEventsTarget = {
     listRuns: () => { throw new Error('OrchestratorAgent.listRuns: not reachable in this test'); },
-    async getRunEventsWire(runId: string, opts?: RunEventQuery) {
-      return JSON.stringify(getRunEvents(recorder, runId, opts));
+    async getRunEvents(runId: string, opts?: RunEventQuery) {
+      return getRunEvents(recorder, runId, opts);
     },
   };
 
@@ -98,11 +98,7 @@ describe('a direct RPC cannot ask for more than the route may', () => {
   test('the RPC applies the same bounds with no route in the path', async () => {
     const { stub } = runEventsWorkspace();
 
-    const countOf = async (opts: RunEventQuery): Promise<number> => {
-      const parsed: unknown = JSON.parse(await stub.getRunEventsWire('run-1', opts));
-
-      return Array.isArray(parsed) ? parsed.length : -1;
-    };
+    const countOf = async (opts: RunEventQuery): Promise<number> => (await stub.getRunEvents('run-1', opts)).length;
 
     // No route in this path — the same query strings a caller would smuggle
     // past it, handed straight to the RPC.

@@ -161,6 +161,50 @@ export interface ScaffoldRunResult {
   finalResult?: JsonValue;
 }
 
+/** The scaffold events that are JSON by their own declaration: every kind but
+ *  the native host chunks, which never round-trip through authored JSON. */
+export type ScaffoldJsonEvent = Exclude<ScaffoldEvent, { type: 'chat_chunk' | 'model_chunk' | 'model_output' }>;
+
+/** A run's result as it crosses a process boundary: the same figures, the
+ *  JSON-native events in order, and a count of the native chunks left behind. */
+export interface ScaffoldRunReport extends Omit<ScaffoldRunResult, 'events'> {
+  events: ScaffoldJsonEvent[];
+  nativeEvents: number;
+}
+
+/** The event as the report carries it, or null for a native chunk. */
+function jsonScaffoldEvent(event: ScaffoldEvent): ScaffoldJsonEvent | null {
+  switch (event.type) {
+    case 'chat_chunk':
+    case 'model_chunk':
+    case 'model_output':
+      return null;
+    case 'text_delta':
+    case 'tool_call':
+    case 'tool_result':
+    case 'step_finish':
+    case 'done':
+    case 'error':
+    case 'ui_chunk':
+      return event;
+  }
+}
+
+export function scaffoldRunReport(result: ScaffoldRunResult): ScaffoldRunReport {
+  const { events, ...figures } = result;
+  const carried: ScaffoldJsonEvent[] = [];
+  let nativeEvents = 0;
+
+  for (const event of events) {
+    const json = jsonScaffoldEvent(event);
+
+    if (json === null) nativeEvents += 1;
+    else carried.push(json);
+  }
+
+  return { ...figures, events: carried, nativeEvents };
+}
+
 
 /** Native chat events stay typed; Think UI chunks remain wire-safe JSON. */
 export type ScaffoldDefaultInferenceChunk = { value: JsonValue } | { event: ChatEvent };

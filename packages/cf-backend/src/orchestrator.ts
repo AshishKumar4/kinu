@@ -119,7 +119,7 @@ import {
   type EvolutionDebt, type RefinementDecisionInput, type RefinementDecisionResult,
   type StagedSkillResult,
   type RefinementRequestView, type RefinementScope, type RequestRefinementInput,
-  runScaffoldOnce,
+  runScaffoldOnce, scaffoldRunReport, type ScaffoldRunReport,
   type GepaOptimizationResult, type ScaffoldDecisionResult,
   type ScaffoldVersionView, type ShadowStatus,
   getPendingScaffold,
@@ -242,7 +242,8 @@ import {
   type AgentSignal,
 } from "@kinu.run/core";
 import * as v from 'valibot';
-import { experienceLibraryOver } from './user/experience-wire';
+import { experienceLibraryOver } from './user/experience-library';
+import type { WorkspaceOwnerRpc } from './workspace-owner-rpc';
 import {
   ActorAgent,
   TERMINAL_RETRY_CALLBACK,
@@ -462,7 +463,7 @@ function clampLimit(requested: number | undefined, max: number): number {
   return Math.min(Math.max(Math.floor(requested), 1), max);
 }
 
-export class OrchestratorAgent extends ActorAgent {
+export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
 
   constructor(ctx: AgentContext, env: Env) {
     super(ctx, env);
@@ -4515,11 +4516,8 @@ export class OrchestratorAgent extends ActorAgent {
    * no remote transport dispatches the plain name, so the structured result
    * crosses as its JSON twin and is decoded at the call site.
    */
-  async runScaffoldOnceWire(
-    task: string,
-    opts?: { useShadowOverride?: boolean },
-  ): Promise<string> {
-    return JSON.stringify(await runScaffoldOnce(this.scaffoldControl, task, opts));
+  async runScaffoldOnce(task: string, opts?: { useShadowOverride?: boolean }): Promise<ScaffoldRunReport> {
+    return scaffoldRunReport(await runScaffoldOnce(this.scaffoldControl, task, opts));
   }
 
   /**
@@ -5261,11 +5259,6 @@ export class OrchestratorAgent extends ActorAgent {
     return getRunEvents(this.eventRecorder, runId, opts);
   }
 
-  /** Cross-DO wire form for Worker HTTP and MCP adapters. */
-  async getRunEventsWire(runId: string, opts?: RunEventQuery): Promise<string> {
-    return JSON.stringify(await this.getRunEvents(runId, opts));
-  }
-
   /**
    * A page of the agent's recent runs with each one's latest timestamp and event
    * count, newest first.
@@ -5738,49 +5731,6 @@ export class OrchestratorAgent extends ActorAgent {
   /** Admit a blueprint into THIS workspace as a new slate with every binding unmapped. */
   async admitBlueprint(bundle: BlueprintBundle): Promise<SlateAnswer<BlueprintFork>> {
     return this.slates.admitBlueprint(bundle);
-  }
-
-  /**
-   * The cross-workspace owner seam as JSON strings — the same rule
-   * `publishExperienceWire` states on UserDO. Every answer above is a
-   * `SlateAnswer`, and a stub's RPC mapping over one carrying `JsonValue`
-   * exceeds TypeScript's instantiation depth, so a holder of this object's
-   * stub reads them through these and decodes at `workspaceOwner`.
-   */
-  async slateAsWire(caller: SlateCaller, operation: SlateOperation): Promise<string> {
-    return JSON.stringify(await this.slateAs(caller, operation));
-  }
-
-  async slateBindingCallAsWire(caller: SlateCaller, id: string, name: string, request: SlateBindingRequest): Promise<string> {
-    return JSON.stringify(await this.slateBindingCallAs(caller, id, name, request));
-  }
-
-  async readBlueprintWire(share: string): Promise<string> {
-    return JSON.stringify(await this.readBlueprint(share));
-  }
-
-  async blueprintBundleWire(share: string): Promise<string> {
-    return JSON.stringify(await this.blueprintBundle(share));
-  }
-
-  async shareBlueprintWithWire(share: string, users: readonly ShareUser[]): Promise<string> {
-    return JSON.stringify(await this.shareBlueprintWith(share, users));
-  }
-
-  async admitBlueprintWire(bundle: BlueprintBundle): Promise<string> {
-    return JSON.stringify(await this.admitBlueprint(bundle));
-  }
-
-  async readLiveShareWire(share: string): Promise<string> {
-    return JSON.stringify(await this.readLiveShare(share));
-  }
-
-  async shareLiveWithWire(share: string, users: readonly ShareUser[]): Promise<string> {
-    return JSON.stringify(await this.shareLiveWith(share, users));
-  }
-
-  async liveShareBundleWire(share: string, userId: string): Promise<string> {
-    return JSON.stringify(await this.liveShareBundle(share, userId));
   }
 
   @callable() async previewSlate(id: string): Promise<SlateCallResult> {
@@ -6833,11 +6783,6 @@ export class OrchestratorAgent extends ActorAgent {
     };
   }
 
-  /** Cross-DO wire form for the Worker HTTP adapter. */
-  async listTriggersWire(): Promise<string> {
-    return JSON.stringify(await this.listTriggers());
-  }
-
   /** Create a durable webhook trigger. Returns the signed public URL.
    *
    *  Deliberately NOT @callable: webhook creation is step-up gated, and the
@@ -7413,15 +7358,6 @@ export class OrchestratorAgent extends ActorAgent {
       payload: e.payload,
       received_at: e.received_at,
     }));
-  }
-
-  /** Cross-DO wire form for the Worker HTTP adapter. */
-  async listRecentEventsWire(opts?: {
-    variant?: string;
-    since?: number;
-    limit?: number;
-  }): Promise<string> {
-    return JSON.stringify(await this.listRecentEvents(opts));
   }
 
   // ── Internal: timing-safe string compare for webhook auth ──────

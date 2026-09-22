@@ -20,7 +20,7 @@ import { boundRunEventQuery, RUN_EVENT_LIMIT_DEFAULT, RUN_EVENT_LIMIT_MAX,
   type RunEventType, type WorkspaceOverview } from "@kinu.run/core";
 import * as v from 'valibot';
 import {
-  decodeRunEventWire, resumeIndexFromLastEventId, type RunEventWire,
+  resumeIndexFromLastEventId, type RunEvent,
 } from '@kinu.run/core';
 import { err, json, waitOn, type Clock } from "@kinu.run/core";
 import { diagnostics, renderThrownChain, toKinuError } from '@kinu.run/core/obs';
@@ -63,7 +63,7 @@ const ALLOWED_TYPES = [
 ] as const satisfies readonly RunEventType[];
 
 /** Every call a run-event route makes on the workspace object it addresses. */
-export type RunEventsTarget = Pick<OrchestratorAgent, 'listRuns' | 'getRunEventsWire'>;
+export type RunEventsTarget = Pick<OrchestratorAgent, 'listRuns' | 'getRunEvents'>;
 
 /**
  * How a run-event route reaches that object.
@@ -149,7 +149,7 @@ export async function handleRunEventsRequest(
 
     try {
       const stub = await resolveAgent(agentName);
-      const events = decodeRunEventWire(await stub.getRunEventsWire(runId, opts));
+      const events = await stub.getRunEvents(runId, opts);
 
       return Response.json(events);
     } catch (cause) {
@@ -228,7 +228,7 @@ function streamRunEvents(options: RunEventStreamOptions): Response {
         });
       };
 
-      const send = (ev: RunEventWire) => {
+      const send = (ev: RunEvent) => {
         const lines = [
           `id: ${ev.eventIndex}`,
           `event: ${ev.type}`,
@@ -244,9 +244,7 @@ function streamRunEvents(options: RunEventStreamOptions): Response {
 
       try {
         // Initial replay — drain everything strictly after sinceIndex.
-        let backlog = decodeRunEventWire(
-          await stub.getRunEventsWire(runId, { since: cursor + 1, limit: RUN_EVENT_LIMIT_MAX }),
-        );
+        let backlog = await stub.getRunEvents(runId, { since: cursor + 1, limit: RUN_EVENT_LIMIT_MAX });
 
         for (const ev of backlog) send(ev);
         // Reported even when the replay is EMPTY: a run with nothing new to say
@@ -271,9 +269,7 @@ function streamRunEvents(options: RunEventStreamOptions): Response {
           await waitOn(clock, SSE_POLL_MS);
 
           if (closed) break;
-          backlog = decodeRunEventWire(
-            await stub.getRunEventsWire(runId, { since: cursor + 1, limit: RUN_EVENT_LIMIT_DEFAULT }),
-          );
+          backlog = await stub.getRunEvents(runId, { since: cursor + 1, limit: RUN_EVENT_LIMIT_DEFAULT });
 
           for (const ev of backlog) send(ev);
           const hasRunEnd = backlog.some((e) => e.type === 'run_end');

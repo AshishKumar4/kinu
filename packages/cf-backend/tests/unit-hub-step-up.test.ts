@@ -19,9 +19,9 @@ function hubWorkspace() {
   const calls: string[] = [];
 
   const agent: HubTarget = {
-    listTriggersWire: unreached('listTriggersWire'),
+    listTriggers: unreached('listTriggers'),
     cancelTrigger: unreached('cancelTrigger'),
-    listRecentEventsWire: unreached('listRecentEventsWire'),
+    listRecentEvents: unreached('listRecentEvents'),
     getEmailIngress: unreached('getEmailIngress'),
     setEmailAllowlist: unreached('setEmailAllowlist'),
     setEmailNotifications: unreached('setEmailNotifications'),

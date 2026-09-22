@@ -184,7 +184,14 @@ export type RunEvent =
       type: 'step_finish';
       stepIndex: number;
       reason?: string;
-      messages?: ModelMessage[];
+      /** The step's response messages in the session codec's durable form
+       *  (`session/message-codec.ts`): attachments as byte envelopes, a URL as
+       *  its href under `$url`. Recorded that way so a resume decodes exactly
+       *  what the model produced, and so a recorded event is JSON as declared —
+       *  the SDK's `ModelMessage` may hold a live `URL` in memory and never in
+       *  a row. The input (`RunEventInput`) carries the SDK's messages; the
+       *  recorder encodes at the write. */
+      messages?: JsonValue[];
       usage?: Usage;
       usd?: number;
       usdFloorTokens?: number;
@@ -508,8 +515,9 @@ export type ApprovalConsumedRecord =
 
 /** A new event payload sans the base fields the recorder fills in. */
 export type RunEventInput = {
-  [K in RunEvent['type']]: Omit<Extract<RunEvent, { type: K }>, keyof RunEventBase> & { type: K }
+  [K in RunEvent['type']]: Omit<Extract<RunEvent, { type: K }>, keyof RunEventBase | (K extends 'step_finish' ? 'messages' : never)> & { type: K }
     & (K extends 'tool_call_end' ? { outcome: ToolOutcome } : object)
+    & (K extends 'step_finish' ? { messages?: ModelMessage[] } : object)
 }[RunEvent['type']];
 
 /**

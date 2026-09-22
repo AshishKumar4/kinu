@@ -38,10 +38,10 @@ function setup(deleteOutcome: 'ok' | 'destroyed' | 'io') {
     hasWorkspace: refuse('hasWorkspace'),
     ensureWorkspaceCapability: refuse('ensureWorkspaceCapability'),
     sharesReceived_forget: refuse('sharesReceived_forget'),
-    async searchExperienceWire(_caller: UserCaller, options: { kind?: string; limit?: number } = {}) {
+    async searchExperience(_caller: UserCaller, options: { kind?: string; limit?: number } = {}) {
       calls.push(`experience:${options.kind ?? '-'}:${String(options.limit)}`);
 
-      return JSON.stringify([]);
+      return [];
     },
     async listActiveWorkspaces(_caller: UserCaller) {
       calls.push('workspaces:list');

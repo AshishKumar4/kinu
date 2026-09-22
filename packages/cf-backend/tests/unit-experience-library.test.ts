@@ -7,7 +7,7 @@
 // own entries — and that an owner session, which is not any workspace, cannot
 // publish at all.
 import { createTestUserDO, provisionTestWorkspace, testOwner, type TestUserDO } from './helpers/user-do';
-import { experienceLibraryOver } from '../src/user/experience-wire';
+import { experienceLibraryOver } from '../src/user/experience-library';
 import { describe, expect, test } from 'bun:test';
 import type { ExperienceLibraryClient, UserCaller } from '@kinu.run/core';
 import type { PublishableCandidate } from '@kinu.run/core';

@@ -2,6 +2,7 @@
 // as soon as the client goes away (request abort or stream cancellation)
 // instead of polling every 500ms for up to 5 minutes.
 import type { RunEventsTarget } from '../src/run-events-routes';
+import type { RunEvent } from '@kinu.run/core';
 import { describe, test, expect } from 'bun:test';
 import { mockAgentsSdk } from './helpers/agents-sdk';
 import { AwaitedList, handClock } from '@kinu.run/test-utils';
@@ -10,16 +11,16 @@ mockAgentsSdk();
 
 const { handleRunEventsRequest } = await import('../src/run-events-routes');
 
-function sseStream(wire: (read: number) => string = () => '[]') {
+function sseStream(answer: (read: number) => RunEvent[] = () => []) {
   // Every DO read the stream makes, as an event the test can await.
   const polled = new AwaitedList<number>();
 
   const stub: RunEventsTarget = {
     listRuns: () => { throw new Error('OrchestratorAgent.listRuns: not reachable in this test'); },
-    async getRunEventsWire() {
+    async getRunEvents() {
       polled.push(polled.items.length + 1);
 
-      return wire(polled.items.length);
+      return answer(polled.items.length);
     },
   };
 
@@ -35,9 +36,9 @@ describe('run-events SSE client disconnect', () => {
     // The fourth DO read — the one only a loop that missed the abort makes —
     // answers run_end, so a missed abort ENDS the stream with one extra read
     // and a run_end in the body instead of hanging: both are red below.
-    const { resolveAgent, pollCount, polled } = sseStream((read) => read < 4 ? '[]' : JSON.stringify([{
+    const { resolveAgent, pollCount, polled } = sseStream((read) => read < 4 ? [] : [{
       eventIndex: 3, runId: 'run-1', type: 'run_end', timestamp: new Date(0).toISOString(),
-    }]));
+    }]);
 
     const aborter = new AbortController();
     const clock = handClock();
@@ -117,9 +118,9 @@ describe('run-events SSE client disconnect', () => {
     // The poll loop tests only batches it fetched itself, so a run_end in the
     // initial replay misses that test: without the close below, a finished run
     // holds the stream open and polls the DO every 500 ms until the timeout.
-    const { resolveAgent, pollCount } = sseStream(() => JSON.stringify([{
+    const { resolveAgent, pollCount } = sseStream(() => [{
       eventIndex: 3, runId: 'run-1', type: 'run_end', timestamp: new Date(0).toISOString(),
-    }]));
+    }]);
 
     // A stream that polled instead of closing would never reach `done`, and
     // the hand pacing never releases a wait here: that hang is the failure,

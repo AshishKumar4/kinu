@@ -27,7 +27,7 @@ import { forgetSharesGiven, type ShareRosterAuthority, type SharesGivenEnv } fro
 import type { ObjectNamespace } from '@kinu.run/core';
 import {
   confirmsAccountDelete,
-  decodeJsonWire,
+  
   displayNameProblem,
   EXPERIENCE_KINDS,
   err, json, safeJson, ownerCaller, OwnerCapabilityUnavailableError,
@@ -46,7 +46,7 @@ const ExperienceQuery = v.object({
 /** The four account-authority calls these routes make on the account's own
  *  object, beside the share sweep's own reach. */
 export type AccountAuthority = Pick<
-  UserDO, 'completeOnboarding' | 'searchExperienceWire' | 'deleteAccount' | 'setDisplayName'
+  UserDO, 'completeOnboarding' | 'searchExperience' | 'deleteAccount' | 'setDisplayName'
 >;
 
 /** Every binding the account routes read: the share sweep's, widened by the
@@ -93,7 +93,7 @@ export async function handleAccountRequest<Id>(
 
     if (!query.success) return err(400, `kind must be one of ${EXPERIENCE_KINDS.join(', ')} and limit an integer from 1 to 100.`);
 
-    return json({ body: decodeJsonWire(await stub.searchExperienceWire(owner, query.output)) });
+    return json({ body: await stub.searchExperience(owner, query.output) });
   }
 
   // DELETE /api/user/account — the one that cannot be undone. The typed

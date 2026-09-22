@@ -58,7 +58,7 @@ export interface SlateBindingProps {
 }
 
 interface SlateBindingEnv {
-  OrchestratorAgent: WorkspaceOwnerNamespace;
+  OrchestratorAgent: WorkspaceOwnerNamespace<DurableObjectId>;
 }
 
 /** All four capability planes return through the owner's one route decision, as the caller. */

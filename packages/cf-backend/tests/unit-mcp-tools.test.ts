@@ -81,10 +81,10 @@ function mcpWorkspace() {
     searchMemoryHybrid: unreached('searchMemoryHybrid'),
     saveNoteFromMcp: unreached('saveNoteFromMcp'),
     getToolList: unreached('getToolList'),
-    runScaffoldOnceWire: unreached('runScaffoldOnceWire'),
+    runScaffoldOnce: unreached('runScaffoldOnce'),
     getShadowStatus: unreached('getShadowStatus'),
     listRuns: unreached('listRuns'),
-    getRunEventsWire: unreached('getRunEventsWire'),
+    getRunEvents: unreached('getRunEvents'),
     getMemoryContent: unreached('getMemoryContent'),
     async runTaskFromMcp(text) {
       record('runTaskFromMcp', text);

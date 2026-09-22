@@ -9,7 +9,9 @@ import {
   type RunEvent, type RunEventInput, type Usage,
 } from '@kinu.run/core';
 
-function ev(event: RunEventInput): RunEvent {
+/** A recorded event over an input that carries no step messages: every row
+ *  here reads spans, and the recorder's codec has nothing to encode. */
+function ev(event: Exclude<RunEventInput, { type: 'step_finish' }> | (Extract<RunEventInput, { type: 'step_finish' }> & { messages?: undefined })): RunEvent {
   return { eventIndex: 0, runId: 'r1', timestamp: '2026-06-01T00:00:00.000Z', ...event };
 }
 

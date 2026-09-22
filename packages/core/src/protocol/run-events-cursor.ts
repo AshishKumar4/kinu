@@ -1,43 +1,8 @@
-import { JsonValueSchema, parseJsonValue, type JsonValue } from '../utils/json';
-import * as v from 'valibot';
-
-const RpcEventSchema = v.objectWithRest({
-  type: v.string(),
-}, JsonValueSchema);
-
-const RunEventWireSchema = v.array(v.objectWithRest({
-  eventIndex: v.number(),
-  runId: v.string(),
-  type: v.string(),
-  timestamp: v.string(),
-}, JsonValueSchema));
-
-const ScaffoldRunWireSchema = v.object({
-  ok: v.boolean(),
-  doneEmitted: v.boolean(),
-  emitCount: v.number(),
-  events: v.array(RpcEventSchema),
-  durationMs: v.number(),
-  error: v.optional(v.string()),
-  finalResult: v.optional(JsonValueSchema),
-});
-
-export type RunEventWire = v.InferOutput<typeof RunEventWireSchema>[number];
-
-export type ScaffoldRunWire = v.InferOutput<typeof ScaffoldRunWireSchema>;
-
-export function decodeJsonWire(wire: string): JsonValue {
-  return parseJsonValue(wire);
-}
-
-export function decodeRunEventWire(wire: string): RunEventWire[] {
-  return v.parse(RunEventWireSchema, parseJsonValue(wire));
-}
-
-export function decodeScaffoldRunWire(wire: string): ScaffoldRunWire {
-  return v.parse(ScaffoldRunWireSchema, parseJsonValue(wire));
-}
-
+/**
+ * The run-event stream's cursor: the one rule the SSE route and its tests
+ * share, kept out of the route because the route reaches `agents` and
+ * therefore `cloudflare:*`.
+ */
 /**
  * The event index an SSE reconnect resumes AFTER, from its `Last-Event-ID`.
  *

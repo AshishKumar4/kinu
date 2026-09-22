@@ -366,12 +366,11 @@ describe('every Durable Object that holds something worth stealing is sealed', (
 describe('the agent surfaces cannot drift from their classes', () => {
   const actorMembers = declaredClassMembers(source('actor-agent.ts'));
 
-  const internalOrchestratorWire = [
-    'getRunEventsWire',
-    'runScaffoldOnceWire',
-    'listTriggersWire',
-    'listRecentEventsWire',
-  ] as const;
+  /** Reached by a stub inside this Worker and never dispatched for a client:
+   *  the MCP adapter's scaffold run. The run-event and trigger reads the same
+   *  adapter uses are client RPC by design (`AGENT_RPC_ACCESS` rows
+   *  `workspace.read` / `interactive`), so they are not listed here. */
+  const internalOrchestratorRpc = ['runScaffoldOnce'] as const;
 
   test('the orchestrator keeps every method the CLI transport dispatches onto it', () => {
     // cli/routes.ts calls `stub[method](...)` for each key of this table, so a
@@ -405,10 +404,10 @@ describe('the agent surfaces cannot drift from their classes', () => {
     expect(called.filter((name) => !ORCHESTRATOR_RPC_SURFACE.includes(name))).toEqual([]);
   });
 
-  test('internal cross-DO wire methods stay sealed from client RPC', () => {
-    expect(internalOrchestratorWire.filter((name) => !ORCHESTRATOR_RPC_SURFACE.includes(name)))
+  test('internal cross-DO methods stay sealed from client RPC', () => {
+    expect(internalOrchestratorRpc.filter((name) => !ORCHESTRATOR_RPC_SURFACE.includes(name)))
       .toEqual([]);
-    expect(internalOrchestratorWire.filter((name) => Object.hasOwn(AGENT_RPC_ACCESS, name)))
+    expect(internalOrchestratorRpc.filter((name) => Object.hasOwn(AGENT_RPC_ACCESS, name)))
       .toEqual([]);
   });
 
