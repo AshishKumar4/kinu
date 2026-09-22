@@ -33,9 +33,9 @@ function transcript() {
 
   const output = async (id: string, parts: JsonObject[]): Promise<MessagePartReference[]> => {
     const prepared = await history.messages.prepareParts('assistant', parts, {}, id);
-    const reference = db.transaction(() => history.messages.insert(prepared, 'output'))();
+    db.transaction(() => history.messages.insert(prepared, 'output'))();
 
-    return prepared.parts.map((part) => ({ messageId: id, partNo: part.number, throughSequence: reference.sequence }));
+    return prepared.content.parts.map((part) => ({ messageId: id, partNo: part.partNo }));
   };
 
   return { history, store, user, output };
@@ -104,6 +104,6 @@ describe('the CF public transcript over canonical references', () => {
     if (selected !== null) expect(t.history.context.entries(selected).some((entry) => entry.messageId === 'display-answer')).toBe(false);
     t.store.clear();
     expect(t.store.count()).toBe(0);
-    expect(await t.history.messages.materialize({ messageId: finalText.messageId, sequence: finalText.throughSequence })).toMatchObject({ role: 'assistant' });
+    expect(await t.history.messages.materialize({ messageId: finalText.messageId })).toMatchObject({ role: 'assistant' });
   });
 });

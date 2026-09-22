@@ -223,8 +223,8 @@ describe('durable delegated turn opening', () => {
       for (const [ask, answer, text] of [['ask-1', 'answer-1', 'one'], ['ask-2', 'answer-2', 'two']] as const) {
         const input = await stores.history.append({ id: ask, message: { role: 'user', content: text }, origin: 'input', turnId: ask, assertOwner });
         chat.record({ ...await chat.prepareUser({ id: ask, turnId: ask, message: input }), parentId: undefined });
-        const output = await stores.history.append({ id: answer, message: { role: 'assistant', content: `${text} answered` }, origin: 'output', turnId: ask, assertOwner });
-        chat.appendAssistant(await chat.prepareAssistant({ id: answer, parentId: ask, turnId: ask, runId: ask, parts: [{ messageId: answer, partNo: 0, throughSequence: output.sequence }], finalText: null }));
+        await stores.history.append({ id: answer, message: { role: 'assistant', content: `${text} answered` }, origin: 'output', turnId: ask, assertOwner });
+        chat.appendAssistant(await chat.prepareAssistant({ id: answer, parentId: ask, turnId: ask, runId: ask, parts: [{ messageId: answer, partNo: 0 }], finalText: null }));
       }
 
       await session.restoreWorkingHistory();
