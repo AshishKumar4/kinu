@@ -88,11 +88,6 @@ const KNOWN_TWINS: readonly string[] = [
   // the process lifetime on the CLI. Core decides WHEN the transition may close;
   // this decides what is still running when it does.
   'holdTerminalClose',
-  // Both build core's default key-less provider, but from different platform
-  // material: cf's owned model services (env + the owner's auth) vs node fetch
-  // + the local auth store. Only the memoisation is common, and memoisation is
-  // not a module.
-  'getWebSearchProvider',
   // The platform fan-out itself: cf's is the Durable Object's socket
   // broadcast minus its terminal sockets, the CLI's is one frontend listener.
   // Neither carries logic the other could share.

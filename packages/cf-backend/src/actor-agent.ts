@@ -4506,7 +4506,7 @@ export abstract class ActorAgent extends Agent<Env> {
         throw new KinuError('denied', `a hosted actor has no ${route.kind} surface; that route belongs to the workspace actor`);
       }
 
-      const surface = hostedActorSurface(actor, this.getWebSearchProvider());
+      const surface = hostedActorSurface(actor, this.ownedModelServices.getWebSearchProvider());
       const providers = providersInWorkMode(mode, surface.providers);
       // NARROWED BY THE CHILD'S OWN ROLE, which is what the header above has
       // always promised and what this path did not do: it went straight from the
@@ -4693,7 +4693,7 @@ export abstract class ActorAgent extends Agent<Env> {
 
     const factory = createCodemodeToolFactory({
       loader: this.env.LOADER, egress: codemodeEgress(), rt,
-      sql: rt.storage.sql, workspace: this.workspaceName(), webSearch: this.getWebSearchProvider(), reach,
+      sql: rt.storage.sql, workspace: this.workspaceName(), webSearch: this.ownedModelServices.getWebSearchProvider(), reach,
       extraProviders: () => providers.filter((provider) => !executorNames.has(provider.name) && provider.name !== 'web'),
     });
 
@@ -4820,7 +4820,7 @@ export abstract class ActorAgent extends Agent<Env> {
   protected slateNamespaces(): CodemodeProvider[] {
     return [
       ...(this.rt.executionRouter?.getProviders() ?? []),
-      createWebCodemodeProvider(this.getWebSearchProvider()),
+      createWebCodemodeProvider(this.ownedModelServices.getWebSearchProvider()),
       createAgentsCodemodeProvider(() => this.getAgentsToolDeps('build')),
       ...this.turnCodemodeProviders('build'),
     ];
@@ -4846,7 +4846,7 @@ export abstract class ActorAgent extends Agent<Env> {
         reach: narrowing,
         sql: this.boundSql,
         workspace: this.workspaceName(),
-        webSearch: this.getWebSearchProvider(),
+        webSearch: this.ownedModelServices.getWebSearchProvider(),
         // `agents.*` in the sandbox — the same deps the top-level tool holds,
         // so a script delegates through the one path with the one action gate.
         agents: () => this.getAgentsToolDeps(mode),
@@ -5018,14 +5018,6 @@ export abstract class ActorAgent extends Agent<Env> {
 
       return shell.exec(command);
     });
-  }
-
-  /** The web search + fetch provider — built once per DO lifetime. Key-less by
-   *  default (DuckDuckGo + Markdown-for-Agents); a stored `tavily` credential,
-   *  resolved through the registry's getAuth seam, upgrades search. HTML→markdown
-   *  routes through env.AI.toMarkdown when the AI binding is present. */
-  private getWebSearchProvider(): WebSearchProvider {
-    return this.ownedModelServices.getWebSearchProvider();
   }
 
   /** Stored model spec, or null when unset (registry will pick the default). */
@@ -5552,7 +5544,7 @@ export abstract class ActorAgent extends Agent<Env> {
         // The release lane is codemode-only now (release.* — see
         // getCodemodeToolFactory below), not a BuiltinToolDeps field.
         // Web research — key-less default, codemode web.* wired below.
-        webSearch: this.getWebSearchProvider(),
+        webSearch: this.ownedModelServices.getWebSearchProvider(),
       };
 
       if (actorDeps.report) builtinDeps.report = actorDeps.report;
