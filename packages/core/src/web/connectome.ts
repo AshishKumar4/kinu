@@ -383,8 +383,8 @@ export class Connectome {
       const b = this.nodes[edge.b];
 
       if (a === undefined || b === undefined) continue;
-      const flashedEnd = [a, b].find((end) => end.corner === flashCorner);
-      const cornerness = flashedEnd?.cornerness ?? 0;
+      const flashedEnd = a.corner === flashCorner ? a : b;
+      const cornerness = flashedEnd.corner === flashCorner ? flashedEnd.cornerness : 0;
       const flashed = lift * cornerness;
       const focused = a.corner === focusCorner ? focus * a.cornerness * 0.3 : 0;
       const held = Math.max(a.hold, b.hold);
