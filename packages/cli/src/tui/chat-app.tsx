@@ -43,6 +43,7 @@ import {
   executeSlashCommand,
   filterCommands,
   isBranchStatusEvent,
+  renderPlanReview,
   performUndo,
   resolveCommandDraft,
   setModelPreference,
@@ -80,7 +81,7 @@ import {
 } from './overlays';
 import { useDeviceConnectPrompt, type DeviceConnectPromptState } from './use-device-connect';
 import { useShellApproval } from './use-shell-approval';
-import type { ShellApprovalRequest } from '@kinu.run/core';
+import type { ShellApprovalRequest, WorkMode } from '@kinu.run/core';
 import { useComposerPaste } from './use-composer-paste';
 import { useDraftEditing } from './use-draft-editing';
 import { composerHelp } from './help-view';
@@ -516,7 +517,7 @@ function ChatScene({
   /** Send one user prompt, wherever the agent is. @path mentions (plus quoted/~ path
    *  tokens) become attachments: images and PDFs inline as file parts, other
    *  files stay path references. */
-  const sendPrompt = useCallback(async (input: string) => {
+  const sendPrompt = useCallback(async (input: string, mode?: WorkMode) => {
     rememberPrompt(input);
     const generation = clientGenerationRef.current;
     clientActionCountRef.current += 1;
@@ -538,7 +539,7 @@ function ChatScene({
 
       addMessage(message);
       const payload = prompt.files.length > 0 ? { text: prompt.text, files: prompt.files } : prompt.text;
-      const sendOptions: AgentClientSendOptions = { cwd: process.cwd() };
+      const sendOptions: AgentClientSendOptions = { cwd: process.cwd(), ...(mode !== undefined && { mode }) };
 
       if (nextTier) sendOptions.tier = nextTier;
 
@@ -998,6 +999,7 @@ function ChatScene({
         return;
       case 'queue':
       case 'branch':
+      case 'plan':
       case 'fork':
       case 'undo':
         // Surface-owned outcomes — handleSubmit intercepts them before this.
@@ -1126,6 +1128,13 @@ function ChatScene({
         if (outcome.kind === 'branch') {
           if (outcome.text) await performBranch(outcome.text);
           else addMessage({ role: 'system', content: `Usage: /branch <text> (or ${keybindings.hint('conversation.branch')} on a draft). It runs the redirect as a parallel branch of the running turn.` });
+
+          return;
+        }
+
+        if (outcome.kind === 'plan') {
+          if (outcome.text) await sendPrompt(outcome.text, 'plan');
+          else addMessage({ role: 'system', content: 'Usage: /plan <what to plan>. It drafts a plan for you to approve (/plan approve) or send back (/plan changes <feedback>).' });
 
           return;
         }
@@ -1298,6 +1307,14 @@ function ChatScene({
       }
 
       case 'broadcast': {
+        // The plan as it now stands — the owner reads it and decides with
+        // /plan approve | /plan changes.
+        if (event.event.type === 'plan_updated' && event.event.plan) {
+          addMessage({ role: 'system', content: renderPlanReview(event.event.plan) });
+
+          return;
+        }
+
         if (!isBranchStatusEvent(event.event)) return;
         const branchStatus = event.event;
         setBranchTasks((prev) => {

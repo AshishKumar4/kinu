@@ -3,6 +3,7 @@ import {
   ADVISOR_SEVERITIES,
   CLOUD_MAX_INLINE_ATTACHMENT_BYTES,
   JsonValueSchema,
+  PlanReviewSchema,
   ChatHistoryEntrySchema, type ChatHistoryEntry,
   ORCHESTRATOR_AGENT_SLUG,
   hostedActorSocketPath,
@@ -19,6 +20,7 @@ import { renderThrownChain, tolerate } from '@kinu.run/core/obs';
 import type {
   CheckpointAvailability, FileCheckpointEntry, FileCheckpointListing,
   FileRestorePlan, FileRestoreResult,
+  PlanReviewResult,
 } from '@kinu.run/core';
 import {
   callAgentRpc,
@@ -60,6 +62,7 @@ import {
   type FileCheckpointSurface,
   type ForkPoint,
   type PendingDeviceConsent,
+  type PlanReviewSurface,
 } from './agent-client';
 import * as v from 'valibot';
 
@@ -120,6 +123,16 @@ const FileCheckpointListingSchema: v.GenericSchema<FileCheckpointListing> = v.ob
   availability: CheckpointAvailabilitySchema,
   entries: v.array(FileCheckpointEntrySchema),
 });
+
+/** The plan-review wire shapes. `PlanReviewSchema` is core's own — the same
+ *  admission the store applies — so a forged annotation cannot arrive here by
+ *  a route the workspace UI does not have. */
+const CloudPlanReviewSchema = v.nullable(PlanReviewSchema);
+
+const CloudPlanReviewResultSchema: v.GenericSchema<unknown, PlanReviewResult> = v.variant('ok', [
+  v.object({ ok: v.literal(true), plan: PlanReviewSchema }),
+  v.object({ ok: v.literal(false), error: v.string(), plan: CloudPlanReviewSchema }),
+]);
 
 const CloudChatPageSchema = pageSchema(ChatHistoryEntrySchema);
 
@@ -332,6 +345,7 @@ export class CloudAgentClient implements AgentClient {
   readonly consents: DeviceConsentSurface;
   readonly localControls = null;
   readonly checkpoints: FileCheckpointSurface;
+  readonly plans: PlanReviewSurface;
   readonly inlineAttachmentLimitBytes = CLOUD_MAX_INLINE_ATTACHMENT_BYTES;
   readonly rename?: (displayName: string) => Promise<{ name: string; displayName: string }>;
 
@@ -391,6 +405,19 @@ export class CloudAgentClient implements AgentClient {
       plan: async (dir, id) => v.parse(FileRestorePlanSchema, await this.callRpc('planFileRestore', [dir, id])),
       restore: async (dir, id) => v.parse(
         FileRestoreResultSchema, await this.callRpc('restoreFileCheckpoint', [dir, id]),
+      ),
+    };
+    // The three sealed plan RPCs (`rpc-gate.ts`): one read and two owner
+    // decisions, over the same review stream the workspace UI shows.
+    this.plans = {
+      active: async () => v.parse(CloudPlanReviewSchema, await this.callRpc('getActivePlanReview', [])),
+      saveAnnotations: async (id, revision, annotations) => v.parse(
+        CloudPlanReviewResultSchema,
+        await this.callRpc('savePlanReviewAnnotations', [id, revision, v.parse(JsonValueSchema, annotations)]),
+      ),
+      decide: async (id, revision, decision, feedback) => v.parse(
+        CloudPlanReviewResultSchema,
+        await this.callRpc('decidePlanReview', [id, revision, decision, feedback ?? null]),
       ),
     };
   }
@@ -485,7 +512,7 @@ export class CloudAgentClient implements AgentClient {
 
       try {
         const body: JsonObject = {
-          messages: [decodeJsonValue({ value: createUserUiMessage(text, files) })],
+          messages: [decodeJsonValue({ value: createUserUiMessage(text, files, opts.mode) })],
           trigger: 'submit-message',
         };
 

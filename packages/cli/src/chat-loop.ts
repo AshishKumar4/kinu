@@ -16,7 +16,7 @@ import * as readline from 'node:readline';
 import { renderChangelogText } from '@kinu.run/core';
 import { EMPTY_MODEL_MENU } from '@kinu.run/core';
 import { forkCandidates, type AgentClient, type AgentClientEvent } from './agent-client';
-import { describeBranchStatus, executeSlashCommand, isBranchStatusEvent, performUndo, renderStatusLines, renderTakesText, type SlashOutcome } from './slash-commands';
+import { describeBranchStatus, executeSlashCommand, isBranchStatusEvent, performUndo, renderPlanReview, renderStatusLines, renderTakesText, type SlashOutcome } from './slash-commands';
 import { describePromptAttachment, resolvePromptAttachments } from './attachments';
 import { watchTerminalConsents } from './consent-watch';
 import {
@@ -34,7 +34,7 @@ import {
   ACCENT, DIM, MUTED, ERR, OK, WARN, type TurnStatus,
 } from './display';
 import { renderThrownChain } from '@kinu.run/core/obs';
-import { clipText } from '@kinu.run/core';
+import { clipText, type WorkMode } from '@kinu.run/core';
 
 export interface ChatLoopOpts {
   client: AgentClient;
@@ -236,7 +236,7 @@ export async function runChatLoop(opts: ChatLoopOpts): Promise<void> {
     }
   };
 
-  const runTurn = async (input: string) => {
+  const runTurn = async (input: string, mode?: WorkMode) => {
     // @path mentions (plus quoted/~ path tokens) become attachments: images
     // and PDFs inline as file parts, other files stay path references.
     const resolved = await resolvePromptAttachments(input, { limitBytes: client.inlineAttachmentLimitBytes });
@@ -259,7 +259,7 @@ export async function runChatLoop(opts: ChatLoopOpts): Promise<void> {
     try {
       await client.send(
         resolved.files.length > 0 ? { text: resolved.text, files: resolved.files } : resolved.text,
-        { cwd: process.cwd() },
+        { cwd: process.cwd(), ...(mode !== undefined && { mode }) },
       );
       await waitForTurnsToSettle();
     } catch (err) {
@@ -353,6 +353,11 @@ export async function runChatLoop(opts: ChatLoopOpts): Promise<void> {
         if (outcome.kind === 'branch') {
           // Idle — there is no live turn to branch from; run it normally.
           await branchOrExplain(outcome.text, runTurn);
+          continue;
+        }
+
+        if (outcome.kind === 'plan') {
+          await planOrExplain(outcome.text, runTurn);
           continue;
         }
 
@@ -592,6 +597,7 @@ async function applySlashOutcome(client: AgentClient, rl: readline.Interface, ou
       return 'ok';
     case 'queue':
     case 'branch':
+    case 'plan':
     case 'fork':
     case 'undo':
       // Surface-owned outcomes — runChatLoop intercepts them before this.
@@ -601,6 +607,20 @@ async function applySlashOutcome(client: AgentClient, rl: readline.Interface, ou
 
       return 'ok';
   }
+}
+
+/** Run the draft as a Plan turn, or say how to use /plan. */
+async function planOrExplain(
+  text: string | undefined,
+  runTurn: (text: string, mode?: WorkMode) => Promise<void>,
+): Promise<void> {
+  if (text === undefined || text === '') {
+    console.log(DIM('  Usage: /plan <what to plan>. It drafts a plan you approve with /plan approve.'));
+
+    return;
+  }
+
+  await runTurn(text, 'plan');
 }
 
 /** Run the redirect as its own turn, or say how to use /branch. */
@@ -707,6 +727,12 @@ function renderClientEvent({ event, agentName, status, getHeader, setHeader }: C
       if (isBranchStatusEvent(event.event)) {
         status.clear();
         console.log(`\n${DIM(describeBranchStatus(event.event))}`);
+      }
+
+      // The plan as it now stands, which is what the owner decides on.
+      if (event.event.type === 'plan_updated' && event.event.plan) {
+        status.clear();
+        console.log(`\n${renderPlanReview(event.event.plan)}\n`);
       }
 
       break;

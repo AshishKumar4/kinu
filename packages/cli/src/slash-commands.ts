@@ -5,7 +5,7 @@
  * stdout, picker overlay vs printed list).
  */
 
-import { ADVISOR_SEVERITIES, DEFAULT_ROLE_ID, REASONING_EFFORTS, REFINEMENT_DECISIONS, offeredReasoningEfforts, type StagedSkillView, type RefinementRequestView, type RefinementRoute, isAdvisorSeverity, isReasoningEffort, summarizeRestorePlan, takeEvidence, type AlternateTakeSet, type BranchStatusEvent, type EvolutionConfigView, type FileCheckpointEntry, type ReasoningEffort, type TakePickOutcome } from '@kinu.run/core';
+import { ADVISOR_SEVERITIES, DEFAULT_ROLE_ID, REASONING_EFFORTS, REFINEMENT_DECISIONS, offeredReasoningEfforts, formatPlanWithLineNumbers, planTitle, type PlanReview, type StagedSkillView, type RefinementRequestView, type RefinementRoute, isAdvisorSeverity, isReasoningEffort, summarizeRestorePlan, takeEvidence, type AlternateTakeSet, type BranchStatusEvent, type EvolutionConfigView, type FileCheckpointEntry, type ReasoningEffort, type TakePickOutcome } from '@kinu.run/core';
 import type { AgentChangelogView, AgentClient, AgentClientStatus, AgentRefinementView } from './agent-client';
 import type { InstructionSourceRow } from '@kinu.run/core';
 import { renderThrownChain } from '@kinu.run/core/obs';
@@ -17,7 +17,7 @@ export interface SlashCommandInfo {
   description: string;
   usage?: string;
   /** Only offered when the client exposes this capability surface. */
-  requires?: 'localControls' | 'consents' | 'checkpoints' | 'rename';
+  requires?: 'localControls' | 'consents' | 'checkpoints' | 'rename' | 'plans';
 }
 
 const SLASH_COMMANDS: readonly SlashCommandInfo[] = [
@@ -41,6 +41,7 @@ const SLASH_COMMANDS: readonly SlashCommandInfo[] = [
   { name: '/stop', description: 'Stop the active turn' },
   { name: '/queue', description: 'Queue a message to send after the current turn', usage: '/queue <text>' },
   { name: '/branch', description: 'Run a redirect as a parallel branch of the running turn', usage: '/branch <text>' },
+  { name: '/plan', description: 'Work in Plan mode: draft a plan for review, then approve it or send it back', usage: '/plan [<text>|show|approve [notes]|changes <feedback>]', requires: 'plans' },
   { name: '/fork', description: 'Fork the conversation before an earlier message to walk back', usage: '/fork [number]' },
   { name: '/undo', description: 'Restore files to before a turn (n = turns back), then offer walk-back', usage: '/undo [n]', requires: 'checkpoints' },
   { name: '/approval', description: 'Show or set shell approval mode', usage: '/approval strict|allow_all|deny_all', requires: 'localControls' },
@@ -51,7 +52,7 @@ const SLASH_COMMANDS: readonly SlashCommandInfo[] = [
 ];
 
 export function commandsForClient(
-  client: Pick<AgentClient, 'localControls' | 'consents' | 'checkpoints' | 'rename'>,
+  client: Pick<AgentClient, 'localControls' | 'consents' | 'checkpoints' | 'rename' | 'plans'>,
 ): SlashCommandInfo[] {
   return SLASH_COMMANDS.filter((command) => {
     if (!command.requires) return true;
@@ -62,7 +63,7 @@ export function commandsForClient(
 }
 
 function commandHelp(
-  client: Pick<AgentClient, 'localControls' | 'consents' | 'checkpoints' | 'rename'>,
+  client: Pick<AgentClient, 'localControls' | 'consents' | 'checkpoints' | 'rename' | 'plans'>,
 ): string {
   const lines = ['Commands'];
 
@@ -166,6 +167,9 @@ export type SlashOutcome =
   /** Steer-as-Branch: run the text as a parallel branch of the running turn
    *  (surface-owned — falls back to a normal send when idle). */
   | { kind: 'branch'; text?: string }
+  /** `/plan <text>` — run the message as a Plan turn (surface-owned send, the
+   *  same shape as `branch`). Plan mode ends in a review this command decides. */
+  | { kind: 'plan'; text?: string }
   /** Walk-back fork; ref is the picker number when given. Surfaces own the
    *  candidate list (their rendered user messages) and the fork() call. */
   | { kind: 'fork'; ref?: string }
@@ -616,6 +620,44 @@ export async function executeSlashCommand(client: AgentClient, input: string): P
       return { kind: 'queue', text: arg || undefined };
     case '/branch':
       return { kind: 'branch', text: arg || undefined };
+    case '/plan': {
+      const plans = client.plans;
+
+
+      if (!plans) return { kind: 'unknown', command: cmd };
+      const [sub, ...args] = rest.filter((token) => token);
+
+      if (sub === undefined || sub === 'show') return { kind: 'text', text: renderPlanReview(await plans.active()) };
+
+      if (sub === 'approve' || sub === 'changes') {
+        const active = await plans.active();
+
+        if (!active) return { kind: 'text', text: 'No plan is waiting for you. Draft one with /plan <what to plan>.' };
+        const feedback = args.join(' ').trim();
+
+        if (sub === 'changes' && !feedback) {
+          return { kind: 'text', text: 'Usage: /plan changes <feedback>. Say what has to change; the agent revises against it.' };
+        }
+
+        const decided = await plans.decide(
+          active.id, active.revision,
+          sub === 'approve' ? 'approve' : 'request_changes',
+          feedback || undefined,
+        );
+
+        if (!decided.ok) return { kind: 'text', text: `The plan was not decided: ${decided.error}` };
+
+        return {
+          kind: 'text',
+          text: sub === 'approve'
+            ? `Approved plan ${decided.plan.id} revision ${String(decided.plan.revision)}. The agent is implementing it now.`
+            : `Sent plan ${decided.plan.id} revision ${String(decided.plan.revision)} back for changes. The agent is revising it now.`,
+        };
+      }
+
+      return { kind: 'plan', text: arg || undefined };
+    }
+
     case '/fork':
       return { kind: 'fork', ref: arg || undefined };
     case '/undo':
@@ -955,6 +997,26 @@ function renderRefinementsText(view: AgentRefinementView): string {
 /** Narrow a BroadcastEvent to the Steer-as-Branch progress event. */
 export function isBranchStatusEvent(event: { type: string }): event is BranchStatusEvent {
   return event.type === 'branch_status';
+}
+
+/** The plan as the terminal shows it — the numbered body the agent edits
+ *  against, plus what the owner can do about it. Shared by both surfaces, so
+ *  a `plan_updated` broadcast and `/plan show` read identically. */
+export function renderPlanReview(plan: PlanReview | null): string {
+  if (!plan) return 'No plan yet. /plan <what to plan> drafts one for review.';
+
+  const states: Record<PlanReview['status'], string> = {
+    pending: 'waiting for you — /plan approve [notes] or /plan changes <feedback>',
+    changes_requested: 'sent back for changes; the agent is revising it',
+    approved: 'approved',
+    superseded: 'superseded by a newer revision',
+  };
+
+  return [
+    `${planTitle(plan.content)} — ${plan.id} revision ${String(plan.revision)} (${states[plan.status]})`,
+    '',
+    formatPlanWithLineNumbers(plan.content),
+  ].join('\n');
 }
 
 /** One presentation-neutral line per branch_status broadcast — shared by the

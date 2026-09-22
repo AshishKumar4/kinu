@@ -26,7 +26,7 @@ function inertCheckpointSurface(): FileCheckpointSurface {
 function slashClient(checkpoints: FileCheckpointSurface | null): AgentClient {
   const client: AgentClient = {
     mode: 'local', agentName: 'test', cliSession: createCliSession('test', { noTranscript: true }),
-    consents: null, localControls: null, checkpoints, inlineAttachmentLimitBytes: 1024,
+    consents: null, localControls: null, checkpoints, plans: null, inlineAttachmentLimitBytes: 1024,
     connect: async () => {}, subscribe: () => () => {},
     send: async () => ({ landed: 'turn' as const, text: '', toolCalls: [], steps: 0, durationMs: 0, hadError: false }),
     branch: () => false,
@@ -273,9 +273,10 @@ describe('/undo command surface', () => {
       localControls: null,
       consents: null,
       checkpoints: inertCheckpointSurface(),
+      plans: null,
     };
 
-    const without = { localControls: null, consents: null, checkpoints: null };
+    const without = { localControls: null, consents: null, checkpoints: null, plans: null };
     expect(commandsForClient(withSurface).some((c) => c.name === '/undo')).toBe(true);
     expect(commandsForClient(without).some((c) => c.name === '/undo')).toBe(false);
 
@@ -288,6 +289,7 @@ describe('/undo command surface', () => {
       localControls: null,
       consents: null,
       checkpoints: null,
+      plans: null,
     };
 
     const commands = commandsForClient(capabilities).map((command) => command.name);
@@ -362,6 +364,7 @@ describe('/advisor command surface', () => {
     for (const checkpoints of [inertCheckpointSurface(), null]) {
       const commands = commandsForClient({
         localControls: null,
+        plans: null,
         consents: null,
         checkpoints,
       });

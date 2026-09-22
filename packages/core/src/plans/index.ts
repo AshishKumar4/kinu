@@ -8,6 +8,8 @@ export {
   formatPlanWithLineNumbers,
   initPlanReviewTable,
   listPendingPlanReviews,
+  planHandoffKey,
+  planHandoffTurn,
   planReviewAwaitingDecision,
   planTitle,
   validatePlanEdits,

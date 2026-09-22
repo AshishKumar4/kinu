@@ -68,6 +68,7 @@ import type {
   FileCheckpointSurface,
   ForkPoint,
   LocalSessionControls,
+  PlanReviewSurface,
 } from './agent-client';
 
 export interface LocalAgentClientOptions {
@@ -250,6 +251,7 @@ export class LocalAgentClient implements AgentClient {
   readonly consents = null;
   readonly localControls: LocalSessionControls;
   readonly checkpoints: FileCheckpointSurface;
+  readonly plans: PlanReviewSurface;
   private readonly deps: LocalAgentClientDeps;
   readonly inlineAttachmentLimitBytes = LOCAL_MAX_INLINE_ATTACHMENT_BYTES;
   readonly rename = async (displayName: string) => renameLocalAgent(this.agentName, displayName);
@@ -337,6 +339,12 @@ export class LocalAgentClient implements AgentClient {
       list: (limit, turnId) => this.session.listFileCheckpoints(limit, turnId),
       plan: (dir, id) => this.session.planFileRestore(dir, id),
       restore: (dir, id) => this.session.restoreFileCheckpoint(dir, id),
+    };
+    // Same closure rule, and the same three actions the cloud RPCs expose.
+    this.plans = {
+      active: () => this.session.getActivePlanReview(),
+      saveAnnotations: (id, revision, annotations) => this.session.savePlanReviewAnnotations(id, revision, annotations),
+      decide: (id, revision, decision, feedback) => this.session.decidePlanReview(id, revision, decision, feedback),
     };
   }
 
@@ -441,7 +449,7 @@ export class LocalAgentClient implements AgentClient {
     this.awaiting.set(id, pending);
 
     try {
-      const landed = await this.session.send(payload, { tier: opts.tier, id });
+      const landed = await this.session.send(payload, { tier: opts.tier, id, mode: opts.mode });
 
       if (landed === 'mid-turn') {
         this.activeCliSession.append('user', { ...sessionEntry, steered: true });

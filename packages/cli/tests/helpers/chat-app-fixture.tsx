@@ -9,6 +9,7 @@ import type {
   AgentClientStatus,
   DeviceConsentSurface,
   LocalSessionControls,
+  PlanReviewSurface,
 } from '../../src/agent-client';
 import type { AgentModelMenu } from '@kinu.run/core';
 import { createCliSession } from '../../src/session';
@@ -68,6 +69,7 @@ interface FakeClientOptions {
   /** Lets command tests supply an honest local boundary without mutating the
    * readonly AgentClient surface after construction. */
   localControls?: LocalSessionControls;
+  plans?: PlanReviewSurface | null;
   listModels?: () => Promise<AgentModelMenu>;
   send?: AgentClient['send'];
   setModel?: AgentClient['setModel'];
@@ -88,6 +90,7 @@ export function fakeClient(options: FakeClientOptions) {
     agentName: options.name,
     cliSession: createCliSession(options.name, { noTranscript: true }),
     consents: options.consents ?? null,
+    plans: options.plans ?? null,
     localControls: mode === 'local' ? (options.localControls ?? {
       getAlwaysActiveSkills: () => [],
       setAlwaysActiveSkills: () => {},

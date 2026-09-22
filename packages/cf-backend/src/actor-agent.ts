@@ -164,7 +164,7 @@ import {
   // Heads support (inherited-context digest)
   inheritedContextFromTranscript,
   type ReleaseToolDeps,
-  PlanReviewStore, admitPlanReviewAnnotations, formatPlanWithLineNumbers,
+  PlanReviewStore, admitPlanReviewAnnotations, planHandoffKey, planHandoffTurn,
   type PlanEdit, type PlanReview, type PlanReviewAnnotation,
   type PlanReviewDecision, type PlanReviewResult, type SubmitPlanToolDeps,
   isVfsError,
@@ -950,46 +950,12 @@ export abstract class ActorAgent extends Agent<Env> {
     this.broadcastPlanUpdate(result.plan);
 
     const plan = result.plan;
-
-    const text = decision === 'request_changes'
-      ? [
-          `The owner requested changes to plan ${plan.id} revision ${plan.revision}.`,
-          '',
-          '## Review feedback',
-          plan.feedback ?? '',
-          '',
-          `## Current plan (${plan.content.split('\n').length} lines)`,
-          'Use these exact pre-edit line numbers in the next submit_plan call:',
-          '',
-          '```',
-          formatPlanWithLineNumbers(plan.content),
-          '```',
-          '',
-          'Revise the plan with targeted submit_plan edits. Do not implement or create previews.',
-        ].join('\n')
-      : [
-          `The owner approved plan ${plan.id} revision ${plan.revision}.`,
-          ...(plan.feedback ? ['', 'Approval notes:', plan.feedback] : []),
-          '',
-          'Implement the exact approved plan below. Verify the result and report any necessary deviation explicitly.',
-          '',
-          '<approved-plan>',
-          plan.content,
-          '</approved-plan>',
-        ].join('\n');
-
-    const metadata = {
-      kinuEvent: decision === 'approve' ? 'plan_approved' : 'plan_feedback',
-      kinuMode: decision === 'approve' ? 'build' : 'plan',
-      planId: plan.id,
-      revision: plan.revision,
-      decision,
-    };
+    const { text, metadata } = planHandoffTurn(plan, decision);
 
     const enqueue = (attempt: number) => this.host.enqueueTurn({
       text,
       metadata,
-      idempotencyKey: `plan:${plan.id}:${plan.revision}:${decision}:${attempt}`,
+      idempotencyKey: planHandoffKey(plan, decision, attempt),
     });
 
     try {
