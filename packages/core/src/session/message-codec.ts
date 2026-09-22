@@ -1,29 +1,6 @@
-/**
- * The durable representation of a native model-message array.
- *
- * The typed boundary is the AI SDK's OWN `modelMessageSchema` — the same
- * predicate `events/recorder.ts` validates a stored message with and the
- * compaction codec narrows a native handle with. Nothing here re-declares a
- * part union, and nothing flattens a message into display prose: what goes in
- * is what comes out, including tool calls, tool results, reasoning and typed
- * attachments.
- *
- * WHY A CODEC AND NOT `JSON.stringify`. A `FilePart.data` / `ImagePart.image`
- * may hold a `Uint8Array`, an `ArrayBuffer` or a `URL`, and `JSON.stringify`
- * renders all three as something that parses back as a DIFFERENT value: a byte
- * array becomes `{"0":137,"1":80,…}` (an object the SDK schema rejects), and a
- * `URL` becomes its href with its type lost. A context revision is the exact
- * input a model step consumed and a recovery must reproduce, so a lossy round
- * trip is not a representation of it. The compaction codec's `binaryReplacer`
- * is deliberately NOT reused: it renders `[binary N bytes]` for a transcript a
- * human or a model reads, which is the right answer for a preview and the wrong
- * one for bytes that must come back.
- *
- * Both directions walk NAMED types — {@link NativeValue} on the way in,
- * {@link StoredValue} on the way out — and the stored side is PARSED before it
- * is walked, so a corrupt row is named at the boundary instead of narrowing
- * field by field on the way through.
- */
+// Lossless codec for native model messages, validated by the SDK's `modelMessageSchema`.
+// Not `JSON.stringify`: it turns `Uint8Array`/`ArrayBuffer`/`URL` into different values, and a
+// context revision must round-trip exactly. The compaction `binaryReplacer` is preview-only.
 
 import { modelMessageSchema, type ModelMessage } from 'ai';
 import { JsonValueSchema, isParsedJsonObject, type JsonObject, type JsonValue } from '../utils/json';
@@ -31,24 +8,16 @@ import * as v from 'valibot';
 import { base64ToBytes, bytesToBase64 } from '../utils/base64';
 import { KinuError } from '../obs/error';
 
-/** Anything a native model message holds: JSON, plus the three carriers an SDK
- *  attachment may use for its payload. */
 export type NativeValue =
   | string | number | boolean | null | undefined
   | Uint8Array | ArrayBuffer | URL
   | readonly NativeValue[]
   | { readonly [key: string]: NativeValue };
 
-/** Anything the stored form holds: JSON only, which is what a SQLite TEXT
- *  column can carry back unchanged, and core's one JSON type rather than a
- *  second declaration of it. */
 export type StoredValue = JsonValue;
 
-/** The native side as a schema, so the walk below branches on a PARSED domain
- *  value rather than sniffing representations as it goes. */
 const NativeValueSchema: v.GenericSchema<NativeValue> = v.lazy(() => NativeValueOptions);
 
-/** Built once, as `JsonValueSchema`'s options are. */
 const NativeValueOptions: v.GenericSchema<NativeValue> = v.union([
   v.string(), v.number(), v.boolean(), v.null(), v.undefined(),
   v.instance(Uint8Array), v.instance(ArrayBuffer), v.instance(URL),
@@ -56,16 +25,11 @@ const NativeValueOptions: v.GenericSchema<NativeValue> = v.union([
   v.record(v.string(), NativeValueSchema),
 ]);
 
-/** The scalar arms of a native value; what is left after them, the carriers
- *  and the arrays is a record. One step per node, never a walk of its subtree. */
 const NativeScalarSchema = v.union([v.string(), v.number(), v.boolean(), v.null()]);
 
 const StoredValueSchema: v.GenericSchema<StoredValue> = JsonValueSchema;
 
-/** Base64 of a byte payload. `bytes` is the length the decoder asserts, so a
- *  truncated row is named rather than decoded into a shorter buffer.
- *  `buffer` marks an `ArrayBuffer` source, so the decode restores that type
- *  rather than substituting a view of it. */
+/** `bytes` lets the decoder detect truncation; `buffer` restores an `ArrayBuffer` source type. */
 const BinaryEnvelopeSchema = v.object({
   $binary: v.string(),
   bytes: v.number(),
@@ -74,12 +38,9 @@ const BinaryEnvelopeSchema = v.object({
 
 const UrlEnvelopeSchema = v.object({ $url: v.string() });
 
-/** The escape hatch: a SOURCE object that itself carries a reserved key travels
- *  inside `{ $plain: … }`, so an encode/decode pair is total rather than
- *  total-unless-the-data-looks-like-the-encoding. */
+// Source objects carrying a reserved key are wrapped in `{ $plain: … }` so the codec is total.
 const RESERVED = ['$binary', '$url', '$plain'] as const;
 
-/** `Array.isArray` leaves a readonly array in the other branch of a union. */
 function isNativeArray(value: NativeValue): value is readonly NativeValue[] {
   return Array.isArray(value);
 }
@@ -99,8 +60,7 @@ function encodeValue(value: NativeValue): StoredValue {
 
   if (isNativeArray(value)) return value.map(encodeValue);
 
-  // A scalar the stored form carries unchanged once it is a JSON one: a
-  // non-finite number is refused here, as the stored schema refuses it.
+  // Non-finite numbers are refused, as the stored schema refuses them.
   if (v.is(NativeScalarSchema, value)) return v.parse(StoredValueSchema, value);
   const mapped: Record<string, StoredValue> = {};
 
@@ -113,8 +73,6 @@ function encodeValue(value: NativeValue): StoredValue {
   return RESERVED.some((key) => Object.hasOwn(value, key)) ? { $plain: mapped } : mapped;
 }
 
-/** The stored side is JSON already, parsed at its boundary: the walk narrows
- *  each node in one step, and an envelope is recognized by its key. */
 function decodeValue(value: StoredValue): NativeValue {
   if (Array.isArray(value)) return value.map(decodeValue);
 
@@ -130,9 +88,6 @@ function decodeValue(value: StoredValue): NativeValue {
     }
 
     if (binary.output.buffer !== true) return bytes;
-    // A fresh buffer rather than `bytes.buffer`: the view's backing store is
-    // typed `ArrayBufferLike`, and a copy states the exact type the source had
-    // without an assertion about which kind of buffer it is.
     const restored = new ArrayBuffer(bytes.byteLength);
     new Uint8Array(restored).set(bytes);
 
@@ -155,10 +110,7 @@ function decodeValue(value: StoredValue): NativeValue {
   return mapped;
 }
 
-/** Validate one message through the SDK's own schema. The single narrowing in
- *  this module, and it runs on BOTH directions: a message that does not parse
- *  is refused at the WRITE, so a stored revision is always a request a provider
- *  could be handed, and refused at the READ, so a corrupt row is named. */
+/** Runs on write and read: stored revisions are always valid requests; corrupt rows are named. */
 function validated(message: NativeValue | ModelMessage, position: number): ModelMessage {
   const parsed = modelMessageSchema.safeParse(message);
 
@@ -169,21 +121,14 @@ function validated(message: NativeValue | ModelMessage, position: number): Model
   return parsed.data;
 }
 
-/** One message as the native walk sees it: the SDK's own parse, then this
- *  module's value domain. Two schemas rather than one assertion — the SDK owns
- *  what a message IS, and `NativeValueSchema` owns what this codec can carry. */
 function nativeMessage(message: ModelMessage, position: number): NativeValue {
   return v.parse(NativeValueSchema, validated(message, position));
 }
 
-/** The durable form of a step's message array, as JSON values: what a run
- *  event records beside its own fields. */
 export function encodeModelMessageValues(messages: readonly ModelMessage[]): JsonValue[] {
   return messages.map((message, index) => encodeValue(nativeMessage(message, index)));
 }
 
-/** One message's durable form: the object a stored row splits into its role,
- *  its content and the envelope around them. */
 export function encodeModelMessage(message: ModelMessage): JsonObject {
   const encoded = encodeValue(nativeMessage(message, 0));
 
@@ -192,8 +137,6 @@ export function encodeModelMessage(message: ModelMessage): JsonObject {
   return encoded;
 }
 
-/** The stored values back as native SDK messages — byte-identical
- *  attachments included. */
 export function decodeModelMessageValues(values: readonly JsonValue[]): ModelMessage[] {
   return values.map((message, index) => validated(decodeValue(message), index));
 }

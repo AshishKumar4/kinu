@@ -166,7 +166,6 @@ async function readText(vfs: VFS, path: string): Promise<string> {
   return text.success ? text.output : new TextDecoder().decode(v.parse(v.instance(Uint8Array), raw));
 }
 
-/** Typed by the plane's published header type, so the projection cannot drift. */
 type ServedHeader = Pick<ContextFileHeader, 'actor' | 'revision' | 'effectiveAt' | 'status' | 'proposalId'>;
 
 const ServedLine = v.object({
@@ -498,10 +497,7 @@ test('the owner UI path gets a real conditional write, and a conflicting revisio
   ws.close();
 });
 
-/**
- * An edit replacing the head must leave the recorded tail intact even when the
- * rendered array is longer than the raw one; otherwise a tool result loses its call.
- */
+/** Head replacement keeps the recorded tail even when the rendered array is longer than the raw one. */
 test('a landed edit preserves the recorded tail exactly, with a woven block and a pruned tool output in play', async () => {
   const ws = workspace();
   const actor = ws.bind('actor-coordinates');

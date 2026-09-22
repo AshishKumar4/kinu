@@ -164,8 +164,7 @@ test('VFS-backed image payloads fail explicitly after file corruption', async ()
 });
 
 test('a sealed row that is JSON but not a message is refused on read', async () => {
-  // The stored text is the trust boundary: parsing it as JSON is not enough
-  // for a reader to serve it as a message a provider will be handed.
+  // Valid JSON is not enough; the stored text must parse as a message.
   const corruptions = [
     { content: '{"parts":[]}', layer: 'the part list' },
     { content: '[{"partNo":0,"kind":"text","streamOrder":0,"replyTo":null,"value":{"type":"text","text":7}}]', layer: 'the SDK message schema' },
@@ -185,8 +184,7 @@ test('a sealed row that is JSON but not a message is refused on read', async () 
 });
 
 test('a sealed message read back cannot be edited in place, and a later read is the stored one', async () => {
-  // Every step shares the object a sealed row reads back as; a consumer that
-  // edited it would change what the next step sends without a new revision.
+  // Steps share the sealed object, so in-place edits must fail.
   const s = setup();
 
   try {
