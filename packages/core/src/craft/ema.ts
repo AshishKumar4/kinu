@@ -1,11 +1,5 @@
 /**
- * EMA scoring + time decay for crafted tools.
- *
- * Quality lives ON the crafted_tools row (score, uses, last_used_at) — one
- * row per tool, written by the same statements that create and retire it, so
- * a tool can never exist without its quality state or outlive it.
- *
- * Architecture reference: docs/EVOLUTION.md — "CraftStore Lifecycle"
+ * Quality lives on the crafted_tools row, so a tool never exists without its score.
  * Formal spec: Evolution/FullCraftLifecycle.lean — ema_bounded, ema_nonneg
  * (over a scaled-integer model of the EMA update)
  */
@@ -16,7 +10,6 @@ import { nowMs } from '../utils/date';
 
 const MS_PER_DAY = 86_400_000;
 
-/** Exponential moving average update */
 export function emaUpdate(
   oldScore: number,
   newObs: number,
@@ -25,14 +18,7 @@ export function emaUpdate(
   return (1 - alpha) * oldScore + alpha * newObs;
 }
 
-/**
- * Time-decayed effective score. Unused tools decay toward 0.
- * After halfLifeDays: score * 0.5. After 2*halfLifeDays: score * 0.25.
- *
- * A tool never used carries last_used_at = 0 (the column default). There is
- * no usage clock to decay against, so it passes at its stored score — the
- * same chance a brand-new tool had when it simply had no row yet.
- */
+/** Half-life decay; a never-used tool (last_used_at = 0) keeps its stored score. */
 export function effectiveScore(
   score: number,
   lastUsedAtMs: number,
@@ -45,15 +31,7 @@ export function effectiveScore(
   return score * Math.pow(0.5, daysSince / halfLifeDays);
 }
 
-/**
- * The ONE injection policy for crafted tools: drop tools whose time-decayed
- * effective score fell below the threshold. Every tool is born scored at the
- * neutral prior (the crafted_tools column defaults), so there is no "unscored"
- * state and nothing passes by accident of a missing row.
- *
- * Used by both injection paths — core's buildCraftedToolSetFromExecute and
- * the CF eval sandbox — so the filter cannot drift between them.
- */
+/** The single injection policy, shared by core and the CF eval sandbox so they cannot drift. */
 export function filterByEffectiveScore<T extends { name: string }>(
   sql: SqlExecutor,
   tools: readonly T[],
@@ -72,9 +50,7 @@ export function filterByEffectiveScore<T extends { name: string }>(
   });
 }
 
-/** Record one execution-grounded observation against each named tool — ONE
- *  UPDATE per tool on the row the tool already occupies, so an observation can
- *  never strand a score beside a retired tool or resurrect a deleted one. */
+/** Updates only existing rows, so an observation never resurrects a deleted tool. */
 export function updateCraftScores(
   sql: SqlExecutor,
   usedToolNames: readonly string[],

@@ -1,12 +1,5 @@
-/**
- * A cloud workspace's checkpoint store: the owner's device, reached over the
- * account object's device RPC. Every answer is parsed against core's own
- * schema, and the three ways a device can be out of reach come back as
- * availability rather than as a throw — with the unattached case first, since
- * its remedy is not the owner's: a workspace with no owner account reached no
- * hub, and advising `kinu connect` there sends a person to re-link a machine
- * that was never the problem.
- */
+// Device-backed checkpoint store. Out-of-reach devices answer as availability, not a throw; the
+// unattached case is checked first because `kinu connect` cannot fix a workspace with no owner.
 import * as v from 'valibot';
 import { isDeviceAmbiguityError, isDeviceNotConnectedError, isWorkspaceUnattachedError, WORKSPACE_HAS_NO_OWNER } from '../execution/device-tunnel';
 import { renderThrownChain } from '../obs/index';
@@ -17,24 +10,18 @@ import {
   type CheckpointAvailability, type FileCheckpointReads,
 } from './types';
 
-/** The device call the account object forwards, as the actor reaches it. */
 export interface DeviceRpcHub {
   deviceRpc(caller: UserCaller, method: string, params: JsonValue[]): Promise<string | undefined>;
 }
 
 export interface DeviceCheckpointsInput {
-  /** The account object and the caller the actor acts as; resolved per call
-   *  because the owner may be claimed after the actor is built. */
+  /** Resolved per call: the owner may be claimed after the actor is built. */
   readonly hub: () => Promise<{ stub: DeviceRpcHub; caller: UserCaller }>;
-  /** Whether an owner account is attached at all; without one there is no hub
-   *  to ask and the answer is the unattached reason, not a throw. */
   readonly hasOwner: () => boolean;
-  /** The workspace the device's store files checkpoints under. */
   readonly workspace: string;
 }
 
-/** The device RPC's own bound on one listing: the store filters by turn before
- *  it truncates, so the bound is about one answer's size only. */
+/** Bounds one answer's size only; the store filters by turn before it truncates. */
 const DEVICE_LIST_LIMIT_MAX = 500;
 
 const DEVICE_LIST_LIMIT_DEFAULT = 50;
@@ -60,9 +47,7 @@ export function deviceFileCheckpoints(input: DeviceCheckpointsInput): FileCheckp
           return { available: false, reason: 'no device connected — connect one with `kinu connect`' };
         }
 
-        // Several machines are live and the checkpoint plane does not yet name
-        // one: an availability answer in the hub's own words (it names the
-        // machines), never a silent pick of whichever came first.
+        // Several live machines: report the hub's message (it names them), never silently pick one.
         if (isDeviceAmbiguityError({ cause })) return { available: false, reason: renderThrownChain({ cause }) };
 
         throw cause;

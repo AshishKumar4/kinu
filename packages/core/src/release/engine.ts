@@ -1,36 +1,5 @@
-/**
- * ReleaseEngine — the execution engine beneath the release
- * governance ledger.
- *
- * The ledger (sql-store.ts) records what happened; the engine MAKES it
- * happen, grounded in real command execution inside the agent's sandbox
- * container:
- *
- *   apply     → the change's stored unified diff is applied for real in a
- *               per-change git working copy (`/workspace/releases/<id>`),
- *               committed, and the commit sha recorded. For `github` sources
- *               the repo is cloned and a `kinu/<changeId>` branch created.
- *   runChecks → declared build/test/lint commands run via sandbox exec; each
- *               check row's pass/fail comes from the ACTUAL exit code. All
- *               green advances validating → preview_ready; any failure blocks.
- *   preview   → optionally starts a server in the workdir, then exposes the
- *               port through the existing preview-proxy path and binds the
- *               real URL to the change.
- *   deploy    → gated on an APPROVED approval of the matching type. Runs the
- *               deploy command (workerVersionId parsed from real output,
- *               e.g. wrangler's "Current Version ID:") or promotes the
- *               verified preview (workerVersionId = the real HEAD sha).
- *   rollback  → gated on an approved 'rollback' approval. A git-sha target is
- *               restored with `git reset --hard`, VERIFIED via
- *               `git rev-parse HEAD`, and redeployed when a deploy command
- *               exists; a platform-version-id target (e.g. a wrangler UUID)
- *               is rolled back by the explicit rollback command instead —
- *               only then does the ledger state flip.
- *
- * The engine owns the transitions into validating / preview_ready /
- * applying / deployed / rolled_back (see isEngineOwnedTransitionTarget) —
- * those states are earned by execution, never asserted.
- */
+// Release execution engine beneath the governance ledger (sql-store.ts): apply, checks, preview, deploy,
+// rollback run for real in the sandbox; engine-owned states are earned by execution, never asserted.
 
 import type {
   ReleaseApproval,
@@ -50,38 +19,20 @@ import {
   suppliedCommand,
 } from './approval-digest';
 
-// ── Seams ────────────────────────────────────────────────────────────────
-
-/** Raw execution surface — adapted from the sandbox executor's raw handle
- *  (cf-backend) so pass/fail is grounded in real exit codes, not the lossy
- *  LLM-facing tool strings. */
+/** Raw sandbox exec so pass/fail comes from real exit codes, not LLM-facing tool strings. */
 export interface ReleaseExec {
-  /**
-   * No wall clock, and a signal instead. A release command ends when its
-   * process ends, when the transport fails, or when the engine's owner cancels
-   * it — {@link ReleaseEngineOptions.signal} reaches the container through
-   * `SandboxHandle.exec`, which kills the process it started and waits for it
-   * to be gone.
-   *
-   * A per-step deadline here would kill a running command and record `failed`
-   * with no exit code, which a reader cannot tell apart from a check that ran
-   * and found a real defect. And nothing measures what such a figure should be
-   * for apply, clone, check or deploy, so there is no bound to pick.
-   */
+  /** No per-step deadline: a timeout kill would record `failed` indistinguishable from a real defect;
+   *  cancellation arrives via {@link ReleaseEngineOptions.signal}. */
   exec(command: string, opts?: { cwd?: string; signal?: AbortSignal }): Promise<{
     stdout: string;
     stderr: string;
     exitCode: number;
   }>;
   writeFile(path: string, content: string): Promise<void>;
-  /** Existing preview-proxy/exposePort path. The implementation verifies a
-   *  listener before returning a URL. */
+  /** Verifies a listener before returning a URL. */
   exposePort(port: number, name?: string): Promise<{ url: string } | { error: string }>;
 }
 
-/** Ledger surface — the existing governance store, unchanged. The engine
- *  writes through it so every execution result lands on the same board the
- *  UI and approvals already read. */
 export interface ReleaseLedger {
   detail(changeId: string): Promise<ReleaseDetail>;
   update(
@@ -105,28 +56,16 @@ export interface ReleaseLedger {
 }
 
 export interface ReleaseEngineOptions {
-  /** null → no execution substrate (sandbox not configured). Every action
-   *  then returns an honest actionable error instead of fake progress. */
+  /** null when no sandbox is configured; every action then returns an actionable error. */
   exec: ReleaseExec | null;
   ledger: ReleaseLedger;
-  /** Git auth for `github` sources: the value for an
-   *  `AUTHORIZATION: Basic …` http.extraheader, or null when the user has
-   *  no GitHub credential stored. */
+  /** Value for an `AUTHORIZATION: Basic …` http.extraheader, or null without a GitHub credential. */
   gitHubAuth?: () => Promise<string | null>;
-  /** Root for per-change working copies. Lives under /workspace so the
-   *  existing R2 workspace backup covers it. */
+  /** Lives under /workspace so the R2 workspace backup covers it. */
   workRoot?: string;
-  /**
-   * The cancellation the engine's owner holds, read PER COMMAND rather than
-   * captured, because an engine is built once and a turn is not. Every command
-   * this engine runs carries whatever this answers at the moment it starts, so
-   * cancelling the turn kills the container process instead of leaving a hung
-   * check pinning the change.
-   */
+  /** Read per command, not captured: an engine is built once, a turn is not. */
   signal?: () => AbortSignal | undefined;
 }
-
-// ── Results (discriminated so the agent tool can relay them verbatim) ──────
 
 export type ApplyResult =
   | { ok: true; workdir: string; commit: string; status: ReleaseStatus }
@@ -162,8 +101,6 @@ export type RollbackResult =
   | { ok: true; restored: string; verified: boolean; status: ReleaseStatus }
   | { ok: false; error: string };
 
-// ── Internals ──────────────────────────────────────────────────────────────
-
 const NOT_CONFIGURED =
   'No execution substrate: this deployment has no sandbox container, so release changes cannot be applied, ' +
   'checked, previewed, or deployed for real. Add the @cloudflare/sandbox binding and Container to ' +
@@ -185,8 +122,7 @@ function isSafeChangeId(id: string): boolean {
   return /^pc-[A-Za-z0-9_-]{6,64}$/.test(id);
 }
 
-/** wrangler ≥3 prints "Current Version ID: <uuid>"; older prints
- *  "Current Deployment ID: <uuid>". Both are REAL deploy identities. */
+/** wrangler ≥3 prints "Current Version ID: <uuid>"; older prints "Current Deployment ID: <uuid>". */
 export function parseDeployOutput(output: string) {
   const version = /Current Version ID:\s*([0-9a-z][0-9a-z-]{7,})/i.exec(output)
     ?? /\bVersion ID:\s*([0-9a-z][0-9a-z-]{7,})/i.exec(output);
@@ -205,8 +141,6 @@ function combinedOutput(res: { stdout: string; stderr: string; exitCode: number 
   return [res.stdout, res.stderr].filter(Boolean).join('\n').trim();
 }
 
-// ── Engine ─────────────────────────────────────────────────────────────────
-
 export class ReleaseEngine {
   private readonly exec: ReleaseExec | null;
   private readonly ledger: ReleaseLedger;
@@ -216,9 +150,7 @@ export class ReleaseEngine {
   constructor(opts: ReleaseEngineOptions) {
     const source = opts.exec;
     const signal = opts.signal;
-    // Wrapped once so the cancellation cannot be forgotten at one of the twenty
-    // call sites below, and read per command so a cached engine still sees the
-    // turn that is running now.
+    // Wrapped once so no call site can forget the signal; read per command for the current turn.
     this.exec = source === null || signal === undefined ? source : {
       ...source,
       exec: (command, execOpts) => source.exec(command, { ...execOpts, signal: signal() }),
@@ -259,8 +191,6 @@ export class ReleaseEngine {
     return /^[0-9a-f]{7,40}$/.test(sha) ? sha : null;
   }
 
-  /** Clone (or fetch-refresh) the github working copy and check out the
-   *  change branch on a pristine base. Returns an error string on failure. */
   private async ensureGithubWorkdir(
     exec: ReleaseExec,
     changeId: string,
@@ -270,9 +200,8 @@ export class ReleaseEngine {
     if (!binding.repoUrl) return 'github source binding has no repoUrl';
     const auth = (await this.gitHubAuth?.()) ?? null;
     const branch = binding.defaultBranch ?? 'main';
-    // The credential never enters argv (visible to every sandbox process via
-    // /proc/*/cmdline): it lands in a 0600 config file that network git
-    // commands pick up through GIT_CONFIG_GLOBAL, removed when done.
+    // The credential never enters argv (visible via /proc/*/cmdline): a 0600 file read through
+    // GIT_CONFIG_GLOBAL, removed when done.
     const authFile = `/tmp/${changeId}.gitauth`;
     const netGit = auth ? `GIT_CONFIG_GLOBAL=${shellQuote(authFile)} ${GIT}` : GIT;
 
@@ -306,10 +235,8 @@ export class ReleaseEngine {
           return `git clone failed (exit ${clone.exitCode}):\n${cap(out)}`;
         }
       } else {
-        // The pristine base below is origin/<branch> — fetch its CURRENT tip
-        // so a re-apply never builds on a stale clone. The explicit refspec
-        // keeps a hostile branch value from parsing as a fetch flag:
-        // `refs/heads/<branch>` never starts with a dash.
+        // Fetch the current tip so a re-apply never builds on a stale clone; the refs/heads/ refspec
+        // keeps a hostile branch value from parsing as a flag.
         const fetched = await exec.exec(
           `${netGit} fetch origin ${shellQuote(`refs/heads/${branch}`)}`,
           { cwd: workdir },
@@ -318,8 +245,6 @@ export class ReleaseEngine {
         if (fetched.exitCode !== 0) return `git fetch failed (exit ${fetched.exitCode}):\n${cap(combinedOutput(fetched))}`;
       }
 
-      // Pristine base for every (re-)apply: drop local drift, rebuild the
-      // change branch from the fetched default branch tip.
       const checkout = await exec.exec(
         `${GIT} reset --hard && ${GIT} clean -fd && ${GIT} checkout -B ${shellQuote(`kinu/${changeId}`)} ${shellQuote(`origin/${branch}`)}`,
         { cwd: workdir },
@@ -333,10 +258,8 @@ export class ReleaseEngine {
     }
   }
 
-  /** Init (or reset) the local working copy. First apply snapshots whatever
-   *  base files the agent staged into the workdir as the rollback anchor;
-   *  re-applies reset back to that base so the stored patch stays the single
-   *  source of truth. */
+  /** First apply snapshots the staged base files as the rollback anchor; re-applies reset to it so the
+   *  stored patch stays the single source of truth. */
   private async ensureLocalWorkdir(exec: ReleaseExec, workdir: string): Promise<string | null> {
     const hasRepo = await this.pathExists(exec, `${workdir}/.git`);
 
@@ -361,7 +284,6 @@ export class ReleaseEngine {
     return null;
   }
 
-  /** Walk the change to `patching` through allowed lifecycle edges. */
   private async normalizeToPatching(change: ReleaseChange): Promise<string | null> {
     const steps = new Map<ReleaseStatus, readonly ReleaseStatus[]>([
       ['draft', ['planning', 'patching']],
@@ -381,8 +303,6 @@ export class ReleaseEngine {
 
     return null;
   }
-
-  // ── 1. Apply — the diff is applied for real ─────────────────────────────
 
   async apply(changeId: string): Promise<ApplyResult> {
     const pre = await this.requireDetail(changeId);
@@ -483,8 +403,6 @@ export class ReleaseEngine {
     return { ok: true, workdir, commit: sha, status: updated.status };
   }
 
-  // ── 2. Checks — pass/fail from real exit codes ──────────────────────────
-
   async runChecks(changeId: string, checks: Array<{ name: string; command: string }>): Promise<RunChecksResult> {
     const pre = await this.requireDetail(changeId);
 
@@ -535,8 +453,6 @@ export class ReleaseEngine {
     return { ok: true, allPassed, results, status: updated.status };
   }
 
-  // ── 3. Preview — a real URL through the preview proxy ───────────────────
-
   async preview(changeId: string, opts: { port: number; startCommand?: string }): Promise<PreviewResult> {
     const pre = await this.requireDetail(changeId);
 
@@ -581,8 +497,6 @@ export class ReleaseEngine {
     return { ok: true, url: exposed.url };
   }
 
-  // ── 4. Deploy — approval-gated, real version ids ────────────────────────
-
   async deploy(
     changeId: string,
     opts: { environment: ReleaseDeployment['environment']; command?: string },
@@ -616,9 +530,7 @@ export class ReleaseEngine {
     const workdir = this.workdirFor(changeId);
     const command = suppliedCommand(opts.command) ?? deployTargetAsCommand(binding?.deployTarget ?? null);
 
-    // Preview promotion is local-only: staging/production deploys run a real
-    // deploy command, so without one there is nothing to record — fail before
-    // the digest check and before any status transition.
+    // Preview promotion is local-only; fail before the digest check and any transition.
     if (!command && environment !== 'local') {
       return {
         ok: false,
@@ -628,10 +540,7 @@ export class ReleaseEngine {
       };
     }
 
-    // Digest-bound approval (SPEC §7.3): the owner approved deploying THIS
-    // patch via THIS declared command. Recompute the digest of what is about
-    // to run and require an approved approval bound to it — a patch mutated or
-    // a deploy command injected after approval fails closed here.
+    // Digest-bound approval (SPEC §7.3): a patch mutated or a command injected after approval fails closed.
     const expectedDigest = deployApprovalDigest({
       approvalType: requiredApproval,
       patch: change.patch,
@@ -695,8 +604,7 @@ export class ReleaseEngine {
       workerVersionId = parsed.versionId ?? (await this.headSha(exec, workdir));
       deploymentId = parsed.deploymentId;
     } else {
-      // Promote the verified preview: the deployed artifact IS the working
-      // copy the preview URL serves; its identity is the real HEAD sha.
+      // Promote the verified preview; its identity is the working copy's HEAD sha.
       const sha = await this.headSha(exec, workdir);
 
       if (!sha) {
@@ -719,8 +627,6 @@ export class ReleaseEngine {
 
     return { ok: true, environment, workerVersionId, deploymentId, rollbackTarget, status: updated.status };
   }
-
-  // ── 5. Rollback — restore, VERIFY, then flip the ledger ─────────────────
 
   async rollback(changeId: string, opts?: { command?: string }): Promise<RollbackResult> {
     const pre = await this.requireDetail(changeId);
@@ -760,13 +666,8 @@ export class ReleaseEngine {
       };
     }
 
-    // Digest-bound approval, the same rule `deploy()` already enforces. Without
-    // it `hasApproved` would be the whole gate: any approved rollback could be
-    // spent on whatever `opts.command` the caller passed, and the model's
-    // release tool is one of the callers. `platformCommand` is null for a commit
-    // target, which is the same "no command — restore this target with git" the
-    // approval recorded, so a git rollback needs no new ceremony and a platform
-    // rollback must have had ITS command approved.
+    // Digest-bound like deploy(). A commit target binds command null (git restore); a platform
+    // rollback must have had its command approved.
     const expectedDigest = deployApprovalDigest({
       approvalType: 'rollback',
       patch: change.patch,
@@ -806,8 +707,7 @@ export class ReleaseEngine {
 
     const started = Date.now();
 
-    // Platform-version-id target: the explicit command IS the rollback —
-    // there is nothing for git to restore, so no git reset runs at all.
+    // Platform-version-id target: the explicit command is the rollback; no git reset runs.
     if (platformCommand) {
       const res = await exec.exec(platformCommand, { cwd: workdir });
       await this.ledger.recordCheck(changeId, {
@@ -856,8 +756,7 @@ export class ReleaseEngine {
       return { ok: false, error: `rollback NOT verified: expected HEAD ${target}, got ${restoredSha ?? 'unknown'}` };
     }
 
-    // Re-deploy the restored state when a deploy command exists; a promoted
-    // preview serves the workdir directly, so the reset already took effect.
+    // A promoted preview serves the workdir directly, so the reset already took effect.
     const command = explicitCommand ?? deployTargetAsCommand(binding?.deployTarget ?? null);
     let redeployNote = 'preview workdir restored in place';
 

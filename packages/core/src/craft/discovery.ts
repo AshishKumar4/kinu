@@ -1,8 +1,4 @@
-/**
- * CraftStore tool discovery — extract reusable patterns from winning branches.
- *
- * Architecture reference: docs/EVOLUTION.md — "CraftStore Lifecycle"
- */
+// See docs/EVOLUTION.md "CraftStore Lifecycle".
 
 import * as v from 'valibot';
 import type { AgentRuntime } from '../types/agent-runtime';
@@ -11,8 +7,7 @@ import { extractJsonObject, jsonObjectOnlyInstruction } from '../prompts/structu
 import { EVIDENCE_BUDGETS } from '../types/evidence';
 import { tolerate } from '../obs/index';
 
-/** Head-only cut with a named omission — code must stay contiguous for a
- *  rewriter (same rationale as gepaParentSource). */
+/** Head-only cut: code must stay contiguous for a rewriter (as in gepaParentSource). */
 function truncateSource(code: string): string {
   return code.length <= EVIDENCE_BUDGETS.assertionCode
     ? code
@@ -32,24 +27,14 @@ export function isCraftable(language: string | null): boolean {
   return language !== null && CRAFTABLE_LANGUAGES.has(language);
 }
 
-/**
- * When a branch scores high (>0.8) and used codemode, try to generalize
- * the code into a reusable crafted tool.
- */
 export async function maybeStoreCraftedTool(
   rt: AgentRuntime,
   codemodeCode: string,
   score: number,
 ): Promise<void> {
-  // Too small to encode a pattern (trivial one-liners). There is no upper
-  // gate: whether a winning branch's code generalizes is a semantic question
-  // the generalization call below answers — a 1500-char size ceiling was a
-  // proxy that silently excluded every substantial win from the craft loop.
-  // The prompt budget is the same contiguous-code window the GEPA rewriter
-  // uses (a rewrite of code with a hole comes back with a hole).
+  // No upper size gate: the generalization call decides whether large code generalizes.
   if (codemodeCode.length < 50) return;
 
-  // Ask LLM to generalize the pattern
   const generalized = await rt.llm.complete(
     `This JavaScript code was effective (score ${score.toFixed(2)}):\n\`\`\`js\n${truncateSource(codemodeCode)}\n\`\`\`\n\n` +
     `Rewrite as a parameterized reusable function.\n` +
@@ -57,11 +42,7 @@ export async function maybeStoreCraftedTool(
     jsonObjectOnlyInstruction(),
   );
 
-  // Only the model's own output is allowed to be unusable here. `tolerate`
-  // covers the parse and NOTHING else: a store write inside the same catch
-  // would report a tool that failed to persist as "the LLM returned invalid
-  // JSON", and the craft loop would look like it had simply declined to
-  // generalize.
+  // `tolerate` covers only the parse, so store failures are not misreported as bad JSON.
   const extracted = tolerate(() => extractJsonObject(generalized), 'malformed-input');
 
   if (extracted === undefined) return;

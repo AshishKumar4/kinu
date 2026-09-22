@@ -1,19 +1,5 @@
-/**
- * Fault injection — the validation of the gate itself.
- *
- * A per-layer score is only worth something if a regression inside one layer
- * actually craters THAT layer and leaves the others flat. So each layer gets a
- * synthetic single-layer regression, and the matrix reports what every slice
- * did. The bar: the faulted layer drops at least LOCALIZATION_OWN_MIN_PP, and
- * no other layer moves by LOCALIZATION_OTHER_MAX_PP or more. A layer that
- * fails it has a wrong decomposition, not a bad fault.
- *
- * A fault may patch several subjects — a real regression is a module changing,
- * not one function — but only subjects its own layer owns. Anything else would
- * be a multi-layer fault, and the isolation question would be meaningless.
- * The reference is the CLEAN run, not the locked baseline, so the matrix
- * measures the fault and nothing else.
- */
+// Validates the gate: each fault patches only subjects its own layer owns, and must crater that layer
+// while leaving the others flat, measured against the clean run rather than the locked baseline.
 
 import type { ModelMessage } from 'ai';
 import type { PrepareStepContext } from '../extension';
@@ -27,16 +13,14 @@ import { renderThrownChain } from '../obs/index';
 
 export interface Fault<S = PipelineSubjects> {
   readonly id: string;
-  /** The layer whose code this regression lives in. */
   readonly layer: string;
-  /** Subjects it patches — all owned by `layer` (asserted in tests). */
+  /** All owned by `layer` (asserted in tests). */
   readonly patches: readonly (keyof S & string)[];
-  /** The real-world regression class it models. */
   readonly models: string;
   readonly inject: (subjects: S) => S;
 }
 
-/** The faulted layer must lose at least this many percentage points. */
+/** Minimum drop, in percentage points, of the faulted layer. */
 export const LOCALIZATION_OWN_MIN_PP = 25;
 
 /** Every other layer must move less than this. */
@@ -45,17 +29,14 @@ export const LOCALIZATION_OTHER_MAX_PP = 5;
 export interface FaultImpact {
   readonly fault: string;
   readonly layer: string;
-  /** Conformance drop vs the clean run, in percentage points, per layer.
-   *  `null` for layers with no slice — they cannot move because nothing
-   *  measures them, which is not the same as being unaffected. */
+  /** Drop vs the clean run, in pp. `null` for unmeasured layers, which is not the same as unaffected. */
   readonly dropPp: Readonly<Record<string, number | null>>;
   readonly ownDropPp: number;
   readonly maxOtherDropPp: number;
   readonly localized: boolean;
 }
 
-/** The ledger stops recognising an unchanged state and appends every step —
- *  the prefix-cache regression the append gate exists to prevent. */
+/** Appends every step instead of deduplicating: the prefix-cache regression. */
 class UndedupedLedger extends DynamicContextLedger {
   private appended = 0;
   override get size(): number {
@@ -71,8 +52,7 @@ class UndedupedLedger extends DynamicContextLedger {
   }
 }
 
-/** Injections drift to the tail of whatever step drains them instead of
- *  holding their entry index — the mid-turn cache-busting regression. */
+/** Injections drift to the step tail instead of holding their entry index. */
 class DriftingStepInjections<E extends { readonly message: ModelMessage; readonly durable: boolean }> extends StepInjections<E> {
   private own: Array<RecordedInjection<E>> = [];
   override get recorded(): ReadonlyArray<RecordedInjection<E>> {
@@ -153,8 +133,6 @@ export const FAULTS: readonly Fault[] = Object.freeze([
         if (text.length <= DEFAULT_TOOL_RESULT_MAX_CHARS) return text;
         const headLen = Math.floor(DEFAULT_TOOL_RESULT_MAX_CHARS * 0.5);
 
-        // The regression: the marker is charged on top of a full cap, and the
-        // head/tail split moves.
         return `${text.slice(0, headLen)}\n\n[output truncated]\n\n${text.slice(-(DEFAULT_TOOL_RESULT_MAX_CHARS - headLen))}`;
       },
     }),

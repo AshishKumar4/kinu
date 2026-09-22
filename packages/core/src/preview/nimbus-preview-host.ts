@@ -1,22 +1,5 @@
-/**
- * The workspace-preview hostname, encoded and decoded.
- *
- * One DNS label, four fields, fixed widths for the first three so the fourth can
- * be a workspace name that contains hyphens:
- *
- *   `<port base36>-<capability handle>-<token>-<workspace>`
- *
- * Parsing is positional rather than a backtracking regex: with a variable-length
- * tail there is exactly one correct split, and arithmetic finds it without a
- * regex engine being free to find a different one.
- *
- * THE BUDGET. A DNS label holds 63 characters. Port ≤ 4, handle 10, token 15,
- * three separators: 32, leaving `WORKSPACE_ADDRESS_MAX` (31) for the name. The
- * grammar is core's (`identity/naming.ts` `workspaceAddressRefusal`), the same one
- * creation and forking admit a name against, so every address a workspace can
- * be given fits here and none is truncated: a truncated one would address a
- * different workspace.
- */
+// One DNS label `<port base36>-<handle>-<token>-<workspace>`, parsed positionally; fixed-width fields
+// leave `WORKSPACE_ADDRESS_MAX` for the name so no workspace address is ever truncated.
 
 import { workspaceAddressRefusal } from '../identity/naming';
 
@@ -37,12 +20,7 @@ export interface WorkspacePreviewHost {
   token: string;
 }
 
-/**
- * The URL an exposed port is reachable at, or why this deployment cannot mint
- * one for this workspace. The reason is written for the Ports surface: without
- * one, a port that is listening and has no URL vanishes from that surface, and
- * a single fixed message blames a missing preview host whatever the cause.
- */
+/** `unavailable` is shown on the Ports surface, so a listening port without a URL stays visible. */
 export type WorkspacePreviewUrl =
   | { readonly url: string; readonly unavailable?: undefined }
   | { readonly url?: undefined; readonly unavailable: string };
@@ -74,15 +52,7 @@ export function parseWorkspacePreviewLabel(label: string): WorkspacePreviewHost 
   return { port, workspace, handle, token };
 }
 
-/**
- * The hostname for one exposed port, or null when the pieces cannot make a
- * legal one.
- *
- * Null rather than a throw for the name: a workspace whose name is too long for
- * a DNS label is a workspace whose ports cannot be previewed, which the port
- * surface reports as "no URL" — the same answer an unconfigured preview host
- * gets. The other three are derived here and a malformed one is a fault.
- */
+/** Null when the workspace name does not fit (reported as "no URL"); malformed derived parts throw. */
 export function buildWorkspacePreviewHost(parts: {
   port: number;
   workspace: string;

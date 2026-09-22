@@ -14,11 +14,8 @@ const ALLOWED = new Map<ReleaseStatus, ReadonlySet<ReleaseStatus>>([
   ['failed', new Set(['planning', 'patching'])],
 ]);
 
-/** States EARNED by the execution engine (apply/run_checks/deploy/rollback),
- *  never asserted: entering them requires real command results. The agent
- *  tool and the MCP release surface refuse manual transitions into
- *  these targets when an engine is wired; owner/UI RPCs keep full
- *  transition power. */
+/** Earned by the execution engine, never asserted: agent/MCP surfaces refuse manual transitions into
+ *  these when an engine is wired; owner/UI RPCs keep full transition power. */
 const ENGINE_OWNED_TARGETS = new Set<ReleaseStatus>([
   'validating', 'preview_ready', 'applying', 'deployed', 'rolled_back',
 ]);

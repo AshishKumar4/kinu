@@ -1,12 +1,4 @@
-/**
- * ReleaseExec over the sandbox executor's RAW handle.
- *
- * The engine needs real exit codes, so this adapter rides `SandboxHandle.exec`
- * directly (the LLM-facing `sandbox.exec` tool flattens results into lossy
- * strings). Port exposure goes through the ExecutorProvider's generic
- * `exposePort` — the existing preview-proxy path with its listener probe —
- * so a preview URL is only ever returned for a verified listener.
- */
+// Rides the raw SandboxHandle.exec for real exit codes; the LLM-facing sandbox.exec tool flattens them.
 
 import type { ExecutorProvider } from '../execution/types';
 import { withSandboxRetry, type SandboxHandle } from '../execution/sandbox';
@@ -18,16 +10,13 @@ export function createSandboxReleaseExec(
 ): ReleaseExec {
   return {
     async exec(command, opts) {
-      // No `timeout`: an absent one is how `SandboxHandle.exec` spells "this
-      // call carries no work deadline". `signal` is what ends it early, and the
-      // adapter contract says it kills the container process and waits for it
-      // to be gone, so a cancelled release command is a stopped one.
+      // No `timeout`: `signal` ends it early, and SandboxHandle.exec kills the process and waits for it.
       const res = await withSandboxRetry(() => handle.exec(command, { cwd: opts?.cwd, signal: opts?.signal }));
 
       return {
         stdout: res.stdout ?? res.output ?? '',
         stderr: res.stderr ?? '',
-        // Absent exit code is failure, not success: the SDK resolves { stdout, exitCode } or { output, exitCode }, never a bare result.
+        // Absent exit code is failure: the SDK always resolves an exitCode.
         exitCode: res.exitCode ?? 1,
       };
     },

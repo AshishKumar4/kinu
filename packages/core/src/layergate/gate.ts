@@ -1,17 +1,5 @@
-/**
- * Scoring the layer slices against a locked baseline.
- *
- * The point of a per-layer score is resolution. One aggregate number over a
- * whole pipeline moves by a point or two when a stage breaks, and no amount of
- * single-user traffic resolves that; the same regression moves its own layer's
- * slice by tens of points. So the report is per layer, always — and a layer
- * with no slice reports `null`, never 1. Silent perfection for untested code
- * is worse than no gate at all.
- *
- * The digest primitives are imported directly (never through PipelineSubjects)
- * so injecting a fault into `stableStringify` cannot corrupt the scoring that
- * measures it.
- */
+// Digest primitives are imported directly, never via PipelineSubjects, so a fault injected into
+// `stableStringify` cannot corrupt the scoring that measures it.
 
 import { fnv1a64 } from '../utils/fnv1a';
 import { stableStringify } from '../safety/argument-digest';
@@ -20,25 +8,22 @@ import { LAYERS, type Layer, type LayerObservation } from './layers';
 import type { PipelineSubjects } from './subjects';
 import { renderThrownChain } from '../obs/index';
 
-/** Probe id → observation digest. */
 export type Baseline = Readonly<Record<string, string>>;
 
 export interface LayerScore {
   readonly layer: string;
-  /** Share of the layer's probes matching the baseline, in [0,1] — or `null`
-   *  when the layer has no assertion slice. An unmeasured layer is NEVER 1. */
+  /** `null` when the layer has no probes: an unmeasured layer is never 1. */
   readonly conformance: number | null;
   readonly probes: number;
   readonly matched: number;
-  /** Probes whose observation moved away from the baseline. */
   readonly drifted: readonly string[];
-  /** Probes with no baseline entry — the lock is stale, not the code. */
+  /** No baseline entry: the lock is stale, not the code. */
   readonly unlocked: readonly string[];
 }
 
 export interface LayerGateReport {
   readonly layers: readonly LayerScore[];
-  /** Mean conformance over MEASURED layers, or `null` when none is measured. */
+  /** Over measured layers only; `null` when none is measured. */
   readonly aggregate: number | null;
   readonly measured: readonly string[];
   readonly unmeasured: readonly string[];
@@ -55,9 +40,7 @@ function digest(value: LayerObservation): string {
   return fnv1a64(stableStringify(parseJsonValue(serialized)));
 }
 
-/** Run every probe once. A probe that throws is recorded as an observation,
- *  not a crashed run — otherwise one broken subject would take the whole
- *  matrix down instead of scoring the layer that owns it. */
+/** A throwing probe is recorded as an observation so one broken subject scores only its own layer. */
 async function observeLayers<S>(
   subjects: S,
   layers: readonly Layer<S>[],
@@ -163,7 +146,6 @@ export async function runLayerGate<S>(
   );
 }
 
-/** Re-lock: the observation digests as they stand now. */
 export function lockBaseline(subjects: PipelineSubjects): Promise<Baseline>;
 export function lockBaseline<S>(subjects: S, layers: readonly Layer<S>[]): Promise<Baseline>;
 export async function lockBaseline<S>(

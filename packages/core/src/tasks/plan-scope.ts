@@ -13,8 +13,7 @@ export interface TaskPlanContext {
   readonly plan: TaskPlan | null;
 }
 
-// Work-mode context contains no actor store or approval identity. The trusted
-// turn owner captures this scope; the store, not ALS, owns atomic writes.
+// The trusted turn owner captures this scope; the store, not ALS, owns atomic writes.
 const scope = new AsyncLocalStorage<TaskPlanContext | undefined>();
 
 export function taskPlanScope(sql: SqlExecutor): TaskPlanContext | undefined {

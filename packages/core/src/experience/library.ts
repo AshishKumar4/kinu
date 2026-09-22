@@ -1,18 +1,4 @@
-/**
- * The owner's experience library — one shared knowledge base per user, living
- * beside the owner's other user-level state.
- *
- * Portable by construction (the `ReleaseSqlStore` pattern): core owns the
- * schema and the queries, the backend supplies an exec seam and the capability
- * gate around it. The library is deliberately OWNER-SCOPED — there is no
- * cross-owner path here and no grant concept to get wrong; reach into it is
- * attenuated at the same boundary every other user-level surface is.
- *
- * Entries outlive their source workspace on purpose. Publishing is an explicit
- * act that moves knowledge from a workspace into the OWNER's library; deleting
- * the workspace afterwards does not un-publish it, the same way deleting a
- * repository does not un-publish a release.
- */
+// Owner-scoped experience library (no cross-owner path); entries deliberately outlive their source workspace.
 
 import { nanoid } from '../utils/nanoid';
 import { nowMs } from '../utils/date';
@@ -47,9 +33,7 @@ export function initExperienceLibraryTables(sql: SqlExec): void {
   sql.exec(`CREATE INDEX IF NOT EXISTS idx_experience_library_published
               ON experience_library (published_at DESC)`);
 
-  // External-content FTS5 over the row's own columns, kept in sync by
-  // triggers — the same shape CraftStore uses, so there is one FTS idiom in
-  // the codebase rather than two.
+  // Same trigger-synced external-content FTS5 idiom as CraftStore.
   sql.exec(`
     CREATE VIRTUAL TABLE IF NOT EXISTS experience_library_fts USING fts5(
       title, key, evidence, search_text,
@@ -79,17 +63,15 @@ export function initExperienceLibraryTables(sql: SqlExec): void {
 }
 
 export interface ExperienceSearchOptions {
-  /** Free-text query. Omitted (or blank) lists the newest entries instead. */
+  /** Omitted or blank lists the newest entries. */
   query?: string;
   kind?: ExperienceKind;
-  /** The calling workspace's own entries — excluded, because importing what
-   *  you already have is noise, not transfer. */
   excludeWorkspace?: string;
   limit?: number;
 }
 
 export interface ExperienceLibraryStore {
-  /** Publish (or replace, by (workspace, kind, key)) one entry. */
+  /** Replaces by (workspace, kind, key). */
   publish(candidate: PublishableCandidate, sourceWorkspace: string): ExperienceEntry;
   search(options?: ExperienceSearchOptions): ExperienceEntry[];
   get(id: string): ExperienceEntry | null;
@@ -128,9 +110,7 @@ function toEntry(row: LibraryRow): ExperienceEntry | null {
   };
 }
 
-/** FTS5 MATCH input from free text: quote every term so punctuation in a user
- *  query can never be read as query syntax, and OR them so a multi-word query
- *  ranks rather than requires. */
+/** Quote each term so punctuation is never FTS5 syntax; OR them so multi-word queries rank. */
 function ftsQuery(query: string): string | null {
   const terms = query.split(/[^\p{L}\p{N}_]+/u).filter((t) => t.length > 0);
 
@@ -147,9 +127,7 @@ export function createExperienceLibrary(sql: SqlExec): ExperienceLibraryStore {
     publish(candidate, sourceWorkspace) {
       const id = `exp-${nanoid()}`;
       const publishedAt = nowMs();
-      // ON CONFLICT keeps the ORIGINAL id when a workspace re-publishes the
-      // same key, so an importer's provenance reference stays valid across
-      // refreshes of the same knowledge.
+      // ON CONFLICT keeps the original id so importers' provenance references stay valid.
       sql.exec(
         `INSERT INTO experience_library
            (id, kind, source_workspace, key, title, payload_json, evidence, search_text, published_at)
@@ -179,13 +157,9 @@ export function createExperienceLibrary(sql: SqlExec): ExperienceLibraryStore {
     },
 
     search(options: ExperienceSearchOptions = {}) {
-      // The caller's limit is honoured — a reader that asks for 50 rows gets
-      // 50 rows, not a silent 25.
       const limit = Math.max(1, options.limit ?? DEFAULT_SEARCH_LIMIT);
       const match = options.query ? ftsQuery(options.query) : null;
-      // '' matches nothing for kind (the CHECK constraint forbids it) and
-      // nothing for a workspace name, so one statement per shape serves both
-      // the filtered and unfiltered cases without string-built SQL.
+      // '' matches no kind or workspace, so one statement serves filtered and unfiltered cases.
       const kind = options.kind ?? '';
       const exclude = options.excludeWorkspace ?? '';
 

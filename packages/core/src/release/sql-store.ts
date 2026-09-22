@@ -16,9 +16,7 @@ import { deployApprovalDigest, deployTargetAsCommand } from './approval-digest';
 import { assertGithubRepoUrl, redactReleaseDiff } from './path-safety';
 import type { SqlExec, SqlValue } from '../types/primitives';
 
-/** The largest diff this ledger stores. A refusal rather than a truncation:
- *  the stored bytes are the ones `git apply` runs, and half a hunk is not a
- *  smaller change, it is a broken one. */
+/** Oversized diffs are refused, not truncated: the stored bytes are what `git apply` runs. */
 const MAX_PATCH_CHARS = 250_000;
 
 export interface ReleaseSqlStore {
@@ -131,8 +129,7 @@ export function initReleaseTables(sql: SqlExec): void {
     )
   `);
   sql.exec(`CREATE INDEX IF NOT EXISTS idx_release_approvals_change ON release_approvals (change_id, created_at DESC)`);
-  // An empty digest never matches a recomputed one, so a stale approval fails
-  // closed and is re-requested (SPEC §7.3).
+  // An empty digest never matches a recomputed one, so a stale approval fails closed (SPEC §7.3).
 
   sql.exec(`
     CREATE TABLE IF NOT EXISTS release_deployments (
@@ -349,9 +346,7 @@ export class ReleaseStore {
     const repoUrl = cleanOptional(input.repoUrl);
     const defaultBranch = cleanOptional(input.defaultBranch) ?? 'main';
 
-    // A branch value that starts with a dash parses as a git flag wherever it
-    // reaches a positional argument (notably `fetch origin <branch>`), so the
-    // ref is validated here, the last point before the value is durable.
+    // A leading dash parses as a git flag at positional args (`fetch origin <branch>`).
     if (defaultBranch.startsWith('-') || /\s/.test(defaultBranch) || defaultBranch.includes('..')) {
       throw new Error(`invalid defaultBranch ${JSON.stringify(defaultBranch)}: must not start with '-', contain whitespace, or contain '..'`);
     }
@@ -362,12 +357,7 @@ export class ReleaseStore {
 
     if (kind === 'github' && !repoUrl) throw new Error('github source binding requires repoUrl');
 
-    // The credential this binding's kind names is a GITHUB credential, and
-    // `apply` installs it as an HTTP authorization header before cloning
-    // whatever this URL says. So the URL decides where a GitHub token is sent,
-    // and a nonempty-string check decided nothing: `kind: 'github'` with a
-    // repoUrl pointing anywhere meant the token went there. Refused at the
-    // ledger, which is the last point before the value is durable.
+    // `apply` installs a GitHub token as an auth header before cloning this URL, so the URL decides where it goes.
     if (kind === 'github' && repoUrl) assertGithubRepoUrl(repoUrl);
 
     if (kind === 'local' && !localRoot) throw new Error('local source binding requires localRoot');
@@ -440,10 +430,7 @@ export class ReleaseStore {
           n,
         );
 
-    // Redacted HERE, on the DISPLAY read. `getChange` (and so `detail`, and so
-    // everything the engine applies) returns the stored bytes untouched: a diff
-    // that is redacted in storage is a diff `git apply` writes the redaction
-    // marker into. See `updateChange`.
+    // Redacted only on display reads; stored bytes must stay verbatim for `git apply`.
     return rows.map(mapReleaseChange).map((change) => (
       change.patch === null ? change : { ...change, patch: redactReleaseDiff(change.patch) }
     ));
@@ -470,13 +457,8 @@ export class ReleaseStore {
     const nextPlan = patch.plan === undefined ? existing.plan : cleanOptional(patch.plan, 12000);
     const nextSummary = patch.summary === undefined ? existing.summary : cleanOptional(patch.summary, 4000);
 
-    // VERBATIM. This column is the one the engine writes to a file and hands to
-    // `git apply`, so anything done to it here is done to the bytes that land in
-    // the repository: a redacted ADDED line applies the literal marker into the
-    // target file, a redacted REMOVED line no longer matches the working tree
-    // and breaks its hunk, and a truncation cuts a valid patch mid-hunk.
-    // Redaction belongs to the display read (`listChanges`), and an oversized
-    // patch is refused rather than silently shortened into a broken one.
+    // Verbatim: the engine hands this column to `git apply`, so redaction or truncation would corrupt the
+    // applied diff. Redaction belongs to `listChanges`; oversized patches are refused.
     if (patch.patch != null && patch.patch.length > MAX_PATCH_CHARS) {
       throw new Error(
         `patch is ${String(patch.patch.length)} characters, over the ${String(MAX_PATCH_CHARS)} `
@@ -550,9 +532,7 @@ export class ReleaseStore {
       .map(mapReleaseCheck)[0];
   }
 
-  /** The binding's declared deploy command for a change (null when the binding
-   *  carries a bare environment label or no target) — the reviewable command a
-   *  deploy approval binds (SPEC §7.3). */
+  /** Null when the binding carries a bare environment label or no target (SPEC §7.3). */
   private deployCommandForChange(change: ReleaseChange): string | null {
     const row = this.sql.all(
       DeployTargetRowSchema,
@@ -581,18 +561,8 @@ export class ReleaseStore {
     const id = this.makeId('pca', 10);
     const now = this.now();
 
-    // Bind the reviewable identity (patch + the command that will run). deploy
-    // and rollback both recompute this and reject a mismatch, so an approval
-    // can't be redirected to a mutated patch or an injected command.
-    //
-    // A rollback approval binds the ROLLBACK command, not
-    // `deployCommandForChange` — that is the command a DEPLOY runs — and
-    // `rollback()` recomputes that digest before execution. Hashing the deploy
-    // command describes the wrong operation; accepting an approval without
-    // comparing its digest permits the caller to substitute another command.
-    // The model's release tool is a caller. `null` here means "the git restore
-    // this target implies", which is what a commit-target rollback runs and
-    // what `rollback()` recomputes for one.
+    // Bind patch + the command that will run; deploy/rollback recompute and reject a mismatch (SPEC §7.3).
+    // A rollback binds its own command; null means the git restore a commit target implies.
     const impliedCommand = approvalType === 'rollback' ? null : this.deployCommandForChange(existing);
 
     const digest = deployApprovalDigest({
@@ -668,7 +638,6 @@ export class ReleaseStore {
     ).map(mapReleaseDeployment)[0];
   }
 
-  /** Full ledger view of ONE change — the engine's read surface. */
   detail(changeId: string): ReleaseDetail {
     const change = this.getChange(changeId);
 
