@@ -1,12 +1,4 @@
-/**
- * `memory.*` — the durable-state tool, projected into the codemode sandbox.
- *
- * A PROJECTION, not a second implementation: every member calls the SAME
- * `createMemoryDispatcher` output the native `memory` tool is built from
- * (tools/memory-tool.ts), so a script and a direct tool call read and write
- * the identical store. remember/recall/forget appear only when a FactsStore
- * is wired — the same structural gate the native tool's action enum reads.
- */
+/** `memory.*` in codemode: projects the native `memory` dispatcher, so both read and write one store. */
 import { codemodeText, type CodemodeProvider } from './sandbox-contract';
 import * as v from 'valibot';
 import { decodeJsonValue, type JsonValue } from '../utils/json';
@@ -33,9 +25,7 @@ const TYPES_BASE = `  /** Save a prose note or lesson too long to be a keyed val
   save(content: string): Promise<string>;
 `;
 
-/** The search member's doc line changes with the facts gate: a runtime without
- *  a FactsStore searches notes only, and the declaration must not promise
- *  remembered facts it cannot find. */
+/** Without a FactsStore the declaration must not promise fact search. */
 const typesSearch = (hasFacts: boolean) => hasFacts
   ? `  /** Search memory notes and remembered facts (matched on key or value) —
    *  hybrid FTS5 + Vectorize (RRF) over the notes when a vector store is wired
@@ -60,12 +50,7 @@ const TYPES_FACTS = `
   /** Forget a keyed fact by name. */
   forget(key: string): Promise<{ ok: boolean; key: string; existed: boolean }>;`;
 
-/**
- * Build the codemode provider exposing `memory.*`. `deps` is a thunk, read
- * per call, so a re-bound facts/vector store lands without rebuilding the
- * tool. Whether remember/recall/forget exist is read once at construction —
- * a FactsStore is wired for a runtime's whole lifetime, never mid-session.
- */
+/** `deps` is read per call so rebound stores apply; the facts gate is read once (a FactsStore never changes mid-session). */
 export function createMemoryCodemodeProvider(deps: () => MemoryToolDeps): CodemodeProvider {
   const hasFacts = deps().facts !== undefined;
 

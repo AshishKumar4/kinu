@@ -1,29 +1,4 @@
-/**
- * The codemode sandbox contract: what a program the model writes can reach.
- *
- * `eval` runs a JavaScript program in a fresh isolate. The program
- * sees:
- *
- *   tools.<name>(input)   EVERY tool the agent has on this turn — the native
- *                         builtins (`file`, `shell`, `memory`, `tasks`, `web`,
- *                         `agents`, `report`, …) with the same input object
- *                         the native call takes, and every crafted tool the
- *                         agent saved with `workspace.createTool`, called with
- *                         whatever arguments its own source declares.
- *   <executor>.*          one namespace per live execution environment
- *                         (`workspace`, `sandbox`, `device`, `parent`).
- *   state.*               a key/value store that survives between programs.
- *   <projection>.*        the codemode projections (`memory`, `tasks`, `web`,
- *                         `agents`, `agent`, `release`, `report`).
- *   require(), fetch      a Node-style `require` for `fs`, `path`,
- *                         `child_process` and the other builtins, and a real
- *                         `fetch` — both provided by the backend's prelude.
- *
- * This module owns the cross-backend parts of that: the namespace names, the
- * declaration text the model reads for `tools.*`, and the labelling of a
- * crafted tool. There is no second callable form and no refusing alias: a name
- * the declarations list is a name the program can call.
- */
+/** Codemode sandbox contract: namespace names, the `tools.*` declaration text, and crafted-tool labelling. */
 
 import * as v from 'valibot';
 import type { Schema, ToolSet } from 'ai';
@@ -41,20 +16,13 @@ export {
   CRAFTED_TOOL_NAMESPACE, type CodemodeProvider, type CodemodeResult,
 } from '../types/codemode';
 
-/** The sandbox's own entry. A program cannot call `eval` from inside
- *  itself, so the declaration and the bindings below both skip it: callers
- *  hand in the whole finished surface. */
+/** A program cannot call `eval` from inside itself, so declarations and bindings skip it. */
 const SANDBOX_TOOL = 'eval';
 
-/** What a crafted tool with no stored description is labelled. One spelling,
- *  so the advertised set reads the same however it was assembled. */
 export function craftedToolDescription(name: string, description?: string): string {
   return description === undefined || description === '' ? `Crafted tool: ${name}` : description;
 }
 
-/** The first sentence of a tool description — what a declaration's JSDoc
- *  carries. The native tools' full doctrine is on the native schema already;
- *  the sandbox declaration only has to name the tool and its input shape. */
 export function firstSentence(text: string): string {
   const line = text.trim().split('\n')[0] ?? '';
   const match = /^(.+?[.!?])(\s|$)/.exec(line);
@@ -73,13 +41,7 @@ const SchemaObjectSchema = v.looseObject({
   oneOf: v.optional(v.array(JsonValueSchema)),
 });
 
-/**
- * Render a JSON Schema (already parsed as JSON) as a TypeScript type, compactly.
- *
- * Deliberately shallow on the exotic corners — a schema this cannot read renders
- * as `unknown`, never as a throw: a declaration block that fails to render is a
- * tool the model cannot see, which is worse than a loosely typed one.
- */
+/** Unreadable schemas render as `unknown`, never throw: a failed declaration hides the tool from the model. */
 export function jsonSchemaToTs(schema: JsonValue | undefined, depth = 0): string {
   if (depth > 6) return 'unknown';
   const parsed = v.safeParse(SchemaObjectSchema, schema);
@@ -126,8 +88,6 @@ export function jsonSchemaToTs(schema: JsonValue | undefined, depth = 0): string
   return rendered.length === 0 ? 'unknown' : [...new Set(rendered)].join(' | ');
 }
 
-/** One native tool's JSON input schema, read off an AI SDK tool. `jsonSchema()`
- *  tools carry it as `.jsonSchema`; anything else renders as `unknown`. */
 const NativeToolSchemaCarrier = v.looseObject({ jsonSchema: v.optional(JsonValueSchema) });
 
 export function nativeToolInputSchema(tool: ToolSet[string]): JsonValue | undefined {
@@ -136,11 +96,7 @@ export function nativeToolInputSchema(tool: ToolSet[string]): JsonValue | undefi
   return parsed.success ? parsed.output.jsonSchema : undefined;
 }
 
-/** The `eval` input schema, shared by both backends so the tool's one
- *  `code` field is described one way — by CODEMODE_CODE_DESCRIPTION in
- *  registry.ts, NOT by codemode's own "async arrow function" label. CF wraps
- *  `createCodeTool` and reassigns this schema over the built tool's own; the
- *  CLI builds the `tool()` with it directly. */
+/** Shared by both backends; CF reassigns it over `createCodeTool`'s own schema. */
 export function codemodeInputSchema(): Schema<{ code: string }> {
   return jsonSchema<{ code: string }>({
     type: 'object',
@@ -154,7 +110,6 @@ export interface CraftedDeclaration {
   readonly description: string;
 }
 
-/** The resolver travels with its tool through the same wrappers as planAllowed. */
 export function withCraftedToolDeclarations<Tool extends ToolSet[string]>(
   entry: Tool,
   read: () => readonly CraftedDeclaration[],
@@ -162,7 +117,6 @@ export function withCraftedToolDeclarations<Tool extends ToolSet[string]>(
   return Object.assign(entry, { craftedDeclarations: read });
 }
 
-/** Describe only the installed sandbox and its existing invocation reach. */
 export function craftedToolDeclarations(
   tools: ToolSet,
   profile: { readonly workMode: WorkMode; readonly allowedTools: readonly string[] },
@@ -177,12 +131,7 @@ export function craftedToolDeclarations(
   return v.parse(v.array(v.object({ name: v.string(), description: v.string() })), read());
 }
 
-/**
- * The `tools` declaration block the model reads: every native tool of the
- * finished surface with its input type, then every crafted tool. Native names
- * come first because they are stable across turns; the crafted set changes as
- * the agent saves tools.
- */
+/** Native tools first: they are stable across turns, crafted ones are not. */
 export function renderToolsDeclaration(
   native: ToolSet,
   crafted: readonly CraftedDeclaration[],
@@ -205,7 +154,6 @@ export function renderToolsDeclaration(
   return `export declare const ${CRAFTED_TOOL_NAMESPACE}: {\n${lines.join('\n')}\n};\n`;
 }
 
-/** What a codemode program passed, by kind: its arguments arrive as JSON. */
 function receivedKind(argument: { readonly value: unknown }): string {
   if (v.is(v.number(), argument.value)) return 'a number';
 
@@ -214,12 +162,7 @@ function receivedKind(argument: { readonly value: unknown }): string {
   return Array.isArray(argument.value) ? 'an array' : 'an object';
 }
 
-/**
- * One text parameter of a codemode member, read the one way every member reads
- * one. An omitted argument is empty text, which the member refuses in its own
- * words; anything else that is not a string is refused here, by parameter and
- * by what arrived, so `web.search(42)` is not reported as a search for nothing.
- */
+/** Omitted reads as empty text; any other non-string is refused here. */
 export function codemodeText(argument: { readonly value: unknown; readonly parameter: string }): string {
   if (argument.value === undefined || argument.value === null) return '';
   const text = v.safeParse(v.string(), argument.value);
@@ -229,14 +172,6 @@ export function codemodeText(argument: { readonly value: unknown; readonly param
   return text.output;
 }
 
-/**
- * The `tools` namespace's host functions: every native tool of a finished
- * surface, called with the one input object the native call takes. Anything
- * else answers a refusal that names the call. The tool's answer crosses the
- * sandbox boundary as JSON, which `decodeJsonValue` establishes. Both sandboxes
- * bind this; a program's `tools.shell(input)` reaches the same `shell` the model
- * calls natively.
- */
 export function nativeToolFunctions(tools: ToolSet): CodemodeProvider['tools'] {
   const out: Record<string, CodemodeProvider['tools'][string]> = {};
 
@@ -266,11 +201,9 @@ export function nativeToolFunctions(tools: ToolSet): CodemodeProvider['tools'] {
   return out;
 }
 
-/** The `file` tool's codemode members, which are accounted to `file` rather than
- *  to the namespace that exposed them. */
+/** Failures of these members are accounted to `file`, not the exposing namespace. */
 const FILE_MEMBERS = ['readFile', 'writeFile', 'editFile', 'readdir', 'exists', 'stat', 'mkdir', 'remove'];
 
-/** Which native tool a codemode member's failures are filed under. */
 function accountedTool(namespace: string, member: string, owner: string | undefined): string {
   if (namespace === CRAFTED_TOOL_NAMESPACE) return member;
 
@@ -281,7 +214,6 @@ function accountedTool(namespace: string, member: string, owner: string | undefi
   return FILE_MEMBERS.includes(member) ? 'file' : `${namespace}.${member}`;
 }
 
-/** The host dispatcher shared by both sandboxes and by caller-scoped slate bindings. */
 export function codemodeFunction<Result>(namespace: string, member: string, invoke: (...args: unknown[]) => Promise<Result>) {
   const owner = Object.entries(TOOL_REACH).find(([name, reach]) => name === namespace && reach.codemode === namespace);
   const tool = accountedTool(namespace, member, owner?.[0]);
@@ -299,7 +231,6 @@ export function codemodeFunction<Result>(namespace: string, member: string, invo
   };
 }
 
-/** A local crafted definition reports a rejection through its own captured host member. */
 export function craftedFailureFunctions(crafted: readonly CraftedDeclaration[]): CodemodeProvider['tools'] {
   const functions: CodemodeProvider['tools'] = {};
 
@@ -316,7 +247,7 @@ export function craftedFailureFunctions(crafted: readonly CraftedDeclaration[]):
   return functions;
 }
 
-/** Slates inherit caller reach, but an app may neither delegate nor steer the actor. */
+/** Slates inherit caller reach but may neither delegate nor steer the actor. */
 export function slateToolReach(caller: ToolSurfaceNarrowing): ToolSurfaceNarrowing {
   const allowsNamespace = (name: string) => name !== 'agent' && name !== 'agents' && caller.allowsNamespace(name);
 
@@ -327,7 +258,7 @@ export function slateToolReach(caller: ToolSurfaceNarrowing): ToolSurfaceNarrowi
   };
 }
 
-/** Names and implementations are resolved together; a held slate binding is not a grant. */
+/** A held slate binding is not a grant: reach is re-resolved per call. */
 export async function callCodemodeMember(providers: readonly CodemodeProvider[], namespace: string, member: string, args: readonly JsonValue[]): Promise<JsonValue | undefined> {
   const call = codemodeFunction(namespace, member, async () => {
     const provider = providers.find((candidate) => candidate.name === namespace);

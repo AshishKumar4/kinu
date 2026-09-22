@@ -1,25 +1,4 @@
-/**
- * The web-search/fetch provider seam — one interface, two thin backend
- * adapters (cf-backend Worker fetch, cli-backend node fetch).
- *
- * Design (reconciling both research reports):
- *   - ONE model-facing tool, `web`, with a search action and a fetch action:
- *     discovery and retrieval are distinct operations but a single capability,
- *     always used as a pair. The tool lives in tools/builtins.ts; this module
- *     owns the network behaviour behind it.
- *   - KEY-LESS out of the box: search degrades to a DuckDuckGo HTML scrape and
- *     fetch uses plain `fetch` (Markdown-for-Agents `Accept: text/markdown`,
- *     falling back to local HTML→markdown). No credential is required for the
- *     agent to research the web on either backend.
- *   - KEYED upgrade: when a `tavily` credential is stored, search routes
- *     through Tavily for ranked, relevance-filtered, agent-tuned results. The
- *     credential is resolved through the same auth seam every model provider
- *     uses (`getAuth`), so no new credential plumbing is invented.
- *
- * Backends supply only what differs: the `fetch` implementation, the auth
- * resolver, and (cf-only) an `htmlToMarkdown` override that calls
- * `env.AI.toMarkdown`. Everything else is shared here.
- */
+/** Web search/fetch provider shared by both backends; key-less by default (DuckDuckGo), Tavily when a `tavily` credential is stored. */
 
 import * as v from 'valibot';
 import { assertSafeUrl, isSafeUrl, UnsafeUrlError } from './url-safety';
@@ -31,26 +10,23 @@ import { codemodeText } from '../tools/sandbox-contract';
 import { diagnostics, toKinuError, tolerate } from '../obs/index';
 import { REAL_CLOCK, type Clock } from '../types/clock';
 
-/** Credential key for the optional Tavily search upgrade. */
 export const TAVILY_CRED_KEY = 'tavily';
 
 export interface WebSearchResult {
   title: string;
   url: string;
   snippet: string;
-  /** Freshness signal when the backend reports one (ISO date or relative). */
+  /** ISO or relative date, when the backend reports one. */
   date?: string;
-  /** 1-based rank in the result list. */
+  /** 1-based. */
   position: number;
 }
 
 export interface WebSearchResponse {
   query: string;
-  /** Optional synthesized answer (Tavily only). */
+  /** Tavily only. */
   answer?: string;
   results: WebSearchResult[];
-  /** Which backend served the results — surfaced to the model so it knows
-   *  whether it got ranked (tavily) or degraded (duckduckgo) results. */
   source: 'tavily' | 'duckduckgo';
 }
 
@@ -58,39 +34,24 @@ export interface WebFetchResult {
   url: string;
   title?: string;
   retrievedAt: string;
-  /** Clean markdown (already base64-stripped). */
+  /** Base64 images already stripped. */
   markdown: string;
 }
 
 export interface WebSearchProvider {
-  /** `signal` is the caller's cancellation, and with no `timeoutMs` it is the
-   *  only thing that ends a request early. */
+  /** Without `timeoutMs`, `signal` is the only thing that ends a request early. */
   search(query: string, opts?: { limit?: number; signal?: AbortSignal }): Promise<WebSearchResponse>;
   fetch(url: string, opts?: { signal?: AbortSignal }): Promise<WebFetchResult>;
 }
 
 export interface DefaultWebSearchProviderDeps {
-  /** Outbound fetch. cf-backend passes the Worker global; cli-backend node fetch. */
   fetch: typeof fetch;
-  /** Resolves credential headers. Optional — without it search is always
-   *  key-less (DuckDuckGo). With it, a stored `tavily` key upgrades search. */
+  /** Absent: search is always DuckDuckGo. */
   getAuth?: AuthResolver;
-  /** Platform HTML→markdown override (cf-backend: env.AI.toMarkdown). Falls
-   *  back to the dependency-free local converter when absent or it throws. */
+  /** Falls back to the local converter when absent or throwing. */
   htmlToMarkdown?: (html: string, opts?: { url?: string }) => Promise<string>;
-  /**
-   * Per-request network budget in ms, CALLER-REQUESTED ONLY.
-   *
-   * Absent means the request ends on its response, on a network failure, or on
-   * the platform below it — never on a clock chosen here. A 15_000 ms default
-   * would cite no requirement, and it would fail a slow origin with `request
-   * timed out`, which a reader cannot tell apart from an origin that really
-   * refused.
-   */
+  /** Per-request budget in ms; absent means no local timeout. */
   timeoutMs?: number;
-  /** The budget's clock: real unless a test hands in one it advances, so a
-   *  body trickling past the budget is a step the test takes rather than a
-   *  real timer racing a real stream. */
   clock?: Clock;
 }
 
@@ -110,14 +71,9 @@ const TavilyResponseSchema = v.object({
 
 const WebSearchOptionsSchema = v.object({ limit: v.optional(v.number()) });
 
-/** Body cap before conversion — protects against multi-MB pages. */
 const MAX_FETCH_BYTES = 2_000_000;
 
-/** Manual-follow bound: the WHATWG Fetch standard stops automatic following
- *  after 20 redirects ("If request's redirect count is 20, then return a
- *  network error", https://fetch.spec.whatwg.org/#http-redirect-fetch). The
- *  provider follows one validated hop at a time instead of handing Location
- *  to the platform, so it carries the same bound rather than an invented one. */
+/** WHATWG Fetch's redirect bound (https://fetch.spec.whatwg.org/#http-redirect-fetch). */
 const MAX_REDIRECTS = 20;
 
 class WebFetchError extends Error {
@@ -127,20 +83,12 @@ class WebFetchError extends Error {
   }
 }
 
-/** The single shared provider implementation. Both backends construct it with
- *  their own `fetch` + auth seam; no per-backend search/fetch logic exists. */
 export function createDefaultWebSearchProvider(deps: DefaultWebSearchProviderDeps): WebSearchProvider {
   const budgetMs = deps.timeoutMs;
   const clock = deps.clock ?? REAL_CLOCK;
-  // workerd's fetch enforces its `this` binding: invoking the dependency as
-  // a member of `deps` sets `this = deps` and throws "Illegal invocation".
-  // Detach once so every call goes out with `this = undefined`, exactly like
-  // a bare `fetch()` call (undici on the CLI is `this`-insensitive either way).
+  // Detached: workerd's fetch throws "Illegal invocation" when called as `deps.fetch`.
   const fetchImpl = deps.fetch;
 
-  // The caller's signal is what ends a request early. A `timeoutMs` the caller
-  // ALSO asked for adds a timer on top of it; with neither, the request ends on
-  // the origin's answer or a network failure and nothing local can cut it.
   const withRequestBudget = async <T>(
     caller: AbortSignal | undefined,
     run: (signal?: AbortSignal) => Promise<T>,
@@ -229,8 +177,6 @@ export function createDefaultWebSearchProvider(deps: DefaultWebSearchProviderDep
         const results: WebSearchResult[] = safe
           .slice(0, limit)
           .map((r, i) => {
-            // A blank title is one the index did not supply; the url names the
-            // result instead of an empty line.
             const title = r.title?.trim();
 
             return {
@@ -299,11 +245,7 @@ export function createDefaultWebSearchProvider(deps: DefaultWebSearchProviderDep
         throw error;
       }
 
-      // Manual redirect chain: the initial URL is validated above, and every
-      // Location below passes the same guard before its hop leaves. With
-      // `redirect: 'follow'` the platform chased Location unchecked, so a
-      // benign public page could bounce the agent's fetch onto a metadata or
-      // private address the initial check had refused.
+      // Redirects followed manually so every Location passes the SSRF guard.
       let finalUrl = parsed.toString();
 
       const fetched = await withRequestBudget(opts?.signal, async (signal) => {
@@ -312,9 +254,7 @@ export function createDefaultWebSearchProvider(deps: DefaultWebSearchProviderDep
         for (let redirects = 0; ; redirects++) {
           const hop = await fetchImpl(target, {
             headers: {
-              // Markdown-for-Agents: Cloudflare-proxied zones return clean
-              // markdown directly. Non-CF origins ignore it and serve HTML,
-              // which we convert below.
+              // Markdown-for-Agents: Cloudflare-proxied zones answer with markdown.
               accept: 'text/markdown, text/html;q=0.9, text/plain;q=0.8',
               'user-agent': 'Mozilla/5.0 (compatible; KinuAgent/1.0; +https://kinu.dev)',
             },
@@ -346,7 +286,6 @@ export function createDefaultWebSearchProvider(deps: DefaultWebSearchProviderDep
           let next: URL;
 
           try {
-            // Relative Location resolves against the hop that sent it.
             next = new URL(location, target);
           } catch (error) {
             throw new WebFetchError(`redirect from ${target} names an unparseable location`, false, { cause: error });
@@ -370,8 +309,6 @@ export function createDefaultWebSearchProvider(deps: DefaultWebSearchProviderDep
         ? await convert(raw, finalUrl)
         : stripBase64Images(raw);
 
-      // The byte guard is a memory ceiling; when it binds, the reader must be
-      // able to tell a complete page from a cut one.
       const note = clipped
         ? `\n\n[fetch truncated: kept the first ${MAX_FETCH_BYTES} of more than ${MAX_FETCH_BYTES} bytes]`
         : '';
@@ -386,12 +323,7 @@ export function createDefaultWebSearchProvider(deps: DefaultWebSearchProviderDep
   };
 }
 
-/** Read at most `cap` body bytes, cancelling the stream once the cap binds —
- *  so the cap is a real memory ceiling instead of a post-hoc slice of a fully
- *  buffered body. `clipped` is set only after a byte past the cap is seen, so
- *  a body of exactly `cap` bytes still reads as complete. The total past the
- *  cap is deliberately not measured (that would download the whole body to
- *  count it), so callers must not report an exact full length. */
+/** Streams at most `cap` bytes; the total past the cap is never measured. */
 async function readCappedBody(res: Response, cap: number): Promise<{ bytes: Uint8Array; clipped: boolean }> {
   if (!res.body) {
     const buf = await res.arrayBuffer();
@@ -419,7 +351,6 @@ async function readCappedBody(res: Response, cap: number): Promise<{ bytes: Uint
       }
 
       clipped = true;
-      // Cancelling stops the transport; the rest of the body is never read.
       await reader.cancel();
       break;
     }
@@ -439,16 +370,7 @@ async function readCappedBody(res: Response, cap: number): Promise<{ bytes: Uint
   return { bytes, clipped };
 }
 
-/** The `web.*` declaration the sandbox shows the model.
- *
- *  Explicit, like every sibling provider's, because the members take POSITIONAL
- *  arguments. Without it @cloudflare/codemode generates a declaration from the
- *  tools' (absent) input schemas and produces `search: (input: SearchInput) =>
- *  Promise<SearchOutput>` with `type SearchInput = unknown` — an object-argument
- *  signature sitting beside a member description that states the positional
- *  shape. A model following the generated signature writes
- *  `web.search({ query })`, which arrives as args[0] and is stringified into a
- *  search for the literal "[object Object]". */
+/** Explicit because members take positional args; a generated declaration would suggest `web.search({ query })`. */
 const TYPES = `export declare const web: {
   /** Search the live web. Returns up to \`limit\` ranked results (default 5,
    *  max 20), each with title, url, snippet and position — plus a freshness
@@ -465,10 +387,6 @@ const TYPES = `export declare const web: {
 };
 `;
 
-/** Codemode provider exposing the same web capability inside eval as
- *  `web.search(query, { limit })` / `web.fetch(url)`, so agents can loop
- *  searches and fetch in parallel from one JS block. Shape is the shared
- *  `{ name, tools }` codemode contract both backends already inject. */
 export function createWebCodemodeProvider(provider: WebSearchProvider) {
   return {
     name: TOOL_REACH.web.codemode,
@@ -482,8 +400,6 @@ export function createWebCodemodeProvider(provider: WebSearchProvider) {
           const parsedOpts = v.safeParse(WebSearchOptionsSchema, args[1]);
           const opts = parsedOpts.success ? parsedOpts.output : undefined;
 
-          // The trailing context is the executor cancellation convention; a
-          // codemode call that carries one ends its request with the turn.
           return provider.search(query, { ...opts, signal: readExecSignal({ context: args[2] }) });
         },
       },
@@ -502,10 +418,7 @@ function clampLimit(limit: number | undefined): number {
   return Math.max(1, Math.min(MAX_SEARCH_LIMIT, Math.floor(limit)));
 }
 
-/** Parse DuckDuckGo's HTML SERP into ranked results. The lite HTML endpoint
- *  wraps each hit in `<a class="result__a" href="...">title</a>` plus a
- *  `<a class="result__snippet">snippet</a>`. DDG proxies the real URL behind
- *  a `/l/?uddg=` redirect — we unwrap it. */
+/** Parses `result__a` / `result__snippet` anchors from DuckDuckGo's HTML endpoint. */
 export function parseDuckDuckGoHtml(html: string, limit: number): WebSearchResult[] {
   const results: WebSearchResult[] = [];
   const linkRe = /<a[^>]+class="[^"]*result__a[^"]*"[^>]+href="([^"]+)"[^>]*>([\s\S]*?)<\/a>/gi;
@@ -543,8 +456,6 @@ export function parseDuckDuckGoHtml(html: string, limit: number): WebSearchResul
 /** DuckDuckGo wraps targets in `//duckduckgo.com/l/?uddg=<encoded>&...`. */
 function unwrapDuckUrl(href: string): string {
   const abs = href.startsWith('//') ? `https:${href}` : href;
-  // A result row can carry anything the page put in `href`; an unparseable one
-  // is a value here. Every other URL failure is this module's own bug.
   const parsed = tolerate(() => new URL(abs, 'https://duckduckgo.com'), 'malformed-input');
 
   if (!parsed) return '';
@@ -561,8 +472,7 @@ function extractTitle(html: string): string {
   return m ? decodeEntities(stripTags(m[1])).trim().slice(0, 300) : '';
 }
 
-/** Title for already-markdown content (Markdown-for-Agents): YAML frontmatter
- *  `title:` then the first `# heading`. */
+/** Frontmatter `title:`, else the first `# heading`. */
 function extractMarkdownTitle(md: string): string {
   const fm = /^---\s*[\s\S]*?\btitle:\s*["']?([^"'\n]+)["']?\s*[\s\S]*?\n---/m.exec(md);
 

@@ -1,12 +1,4 @@
-/**
- * `tasks.*` — the agent's own task list, projected into the codemode
- * sandbox.
- *
- * A PROJECTION: every member calls the SAME `createTasksDispatcher` output
- * the native `tasks` tool is built from (tools/tasks-tool.ts), over the
- * SAME TaskListStore instance — a script and a direct tool call see and
- * mutate the identical list, never a shadow copy.
- */
+/** `tasks.*` in codemode: projects the native `tasks` dispatcher over the same TaskListStore. */
 import { codemodeText, type CodemodeProvider } from './sandbox-contract';
 import * as v from 'valibot';
 import { TASK_STATUSES, type TaskListStore } from '../tasks/store';
@@ -42,10 +34,7 @@ const TYPES = `export declare const tasks: {
 };
 `;
 
-/** Build the codemode provider exposing `tasks.*` over one TaskListStore and
- *  one AgentConfigStore — constructed once by the caller (the same instances
- *  the native tool uses), not per call: unlike memory/release deps, neither
- *  store rebinds. */
+/** Stores are the native tool's instances, bound once: neither rebinds. */
 export function createTasksCodemodeProvider(
   taskList: TaskListStore,
   config: AgentConfigStore,
