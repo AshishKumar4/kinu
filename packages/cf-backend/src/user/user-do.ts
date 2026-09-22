@@ -4053,7 +4053,7 @@ export class UserDO extends Agent<Env> {
       throw new Error(`${CLOUDFLARE_AI_GATEWAY_CRED_KEY} is derived from your Cloudflare login and cannot be stored directly.`);
     }
 
-    const cred = validateCredential(credentialJson);
+    const cred = validateCredential({ value: credentialJson });
 
     if (key === CODEX_CRED_KEY && cred.kind === 'oauth' && !cred.refreshToken) {
       throw new Error('codex.oauth requires an OAuth refresh token.');
@@ -4958,7 +4958,7 @@ export class UserDO extends Agent<Env> {
     }
 
     try {
-      return validateProfileCatalog(json);
+      return validateProfileCatalog({ value: json });
     } catch (error) {
       throw new Error(
         'The stored account profile catalog violates the profile catalog contract.',
@@ -5030,7 +5030,7 @@ export class UserDO extends Agent<Env> {
     let parsed: ProfileCatalog;
 
     try {
-      parsed = validateProfileCatalog(catalog);
+      parsed = validateProfileCatalog({ value: catalog });
     } catch (cause) {
       // The whole chain, not the outermost frame. This reason is the only thing
       // an owner is shown about a catalog the account refused, and the frame

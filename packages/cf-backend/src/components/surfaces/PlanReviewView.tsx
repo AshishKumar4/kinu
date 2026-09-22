@@ -37,7 +37,7 @@ function annotationType(value: PlanReviewAnnotation["type"]): AnnotationType {
 }
 
 function parsePlanAnnotations(values: readonly PlanReviewAnnotation[]): Annotation[] {
-  const admission = admitPlanReviewAnnotations(values);
+  const admission = admitPlanReviewAnnotations({ value: values });
 
   if (!admission.ok) return [];
 

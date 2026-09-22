@@ -26,6 +26,7 @@
 
 import type { HeadRuntime } from '../heads/controller';
 import type { JsonObject } from '../utils/json';
+import type { PlanReview } from './plans';
 
 /** A typed event fanned out to connected clients (mcts-progress, device_consent,
  *  workspace_renamed, background-event cards…). Fire-and-forget. */
@@ -50,6 +51,8 @@ export interface BroadcastEvent {
   readonly jobId?: string;
   /** `head_activity` / `head_stream`: which exploration head is speaking. */
   readonly headId?: string;
+  /** `plan_updated`: the review as it now stands. */
+  readonly plan?: PlanReview;
 }
 
 /** A programmatic turn injected into the SAME serialized loop the user drives —

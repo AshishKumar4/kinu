@@ -1473,7 +1473,7 @@ export function useKinu(target?: string | KinuActorAddress) {
 
         return value;
       } catch (cause) {
-        sessionRecovery.rpcFailed(cause, agent.readyState === WebSocket.OPEN);
+        sessionRecovery.rpcFailed({ cause }, agent.readyState === WebSocket.OPEN);
         throw cause;
       }
     };

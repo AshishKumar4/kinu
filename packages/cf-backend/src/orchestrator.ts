@@ -4334,7 +4334,7 @@ export class OrchestratorAgent extends ActorAgent {
   @callable() async listRecordCells(
     request: RecordObjectiveHandle & PageRequest,
   ): Promise<Page<RecordCellSummary>> {
-    return listRecordCells(this.boundSql, this.actorHandle(), request, request.cursor ?? null, request.limit);
+    return listRecordCells(this.boundSql, this.actorHandle(), request, { cursor: request.cursor ?? null, limit: request.limit });
   }
 
   /**
@@ -4347,7 +4347,7 @@ export class OrchestratorAgent extends ActorAgent {
   @callable() async readRecordCell(
     request: RecordCellHandle & PageRequest,
   ): Promise<Page<ExplorationRecord>> {
-    return readRecordCell(this.boundSql, this.actorHandle(), request, request.cursor ?? null, request.limit);
+    return readRecordCell(this.boundSql, this.actorHandle(), request, { cursor: request.cursor ?? null, limit: request.limit });
   }
 
   /**

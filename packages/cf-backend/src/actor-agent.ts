@@ -910,13 +910,13 @@ export abstract class ActorAgent extends Agent<Env> {
     revision: number,
     annotations: PlanReviewAnnotation[],
   ): Promise<PlanReviewResult> {
-    const admitted = admitPlanReviewAnnotations(annotations);
+    const admitted = admitPlanReviewAnnotations({ value: annotations });
 
     if (!admitted.ok) {
       return { ok: false, error: admitted.error, plan: this.planReviews.get(id, revision) };
     }
 
-    const result = this.planReviews.saveAnnotations(id, revision, admitted.annotations);
+    const result = this.planReviews.saveAnnotations(id, revision, { value: admitted.annotations });
 
     if (result.ok) this.broadcastPlanUpdate(result.plan);
 
@@ -6560,7 +6560,7 @@ export abstract class ActorAgent extends Agent<Env> {
         ...entry,
         execute: async (input, options) => {
           const outer = this._activeDeviceRequests;
-          this._activeDeviceRequests = readDeviceRequestChannel(options) ?? null;
+          this._activeDeviceRequests = readDeviceRequestChannel({ toolOptions: options }) ?? null;
 
           try {
             return await exec(input, options);
