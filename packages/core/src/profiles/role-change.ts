@@ -1,16 +1,4 @@
-// Durable role change — how an agent's active role moves at a turn boundary.
-//
-// The active role is durable per-agent state (actor_config), so a change made
-// now applies to the NEXT resolved turn; the running step keeps the profile it
-// already resolved. Policy is the owner's, per agent:
-//
-//   allow     any switch lands immediately
-//   approval  a capability-INCREASING agent self-switch is refused and names
-//             the owner approval it needs; a pure narrowing lands immediately
-//   locked    the agent cannot switch at all — only the owner can
-//
-// Every applied move records provenance (actor, previous id, catalog version),
-// which is exactly what the typed run event and the changelog row carry.
+// Role changes land at the next turn boundary; policy per agent: allow, approval (agent widening refused), locked.
 import {
   DEFAULT_ROLE_ID, effectiveRoleCatalog, isValidRoleId, validateProfileCatalogEnvelope,
   type ProfileCatalogEnvelope, type RoleDefinition, type RoleId,
@@ -23,31 +11,13 @@ export type RoleChangeActor = 'user' | 'agent';
 
 export type RoleChangePolicy = 'allow' | 'approval' | 'locked';
 
-/** Why a change could not be made. Named because two places speak it: the
- *  outcome union below and the message table over it. */
 export type RoleChangeRefusal = 'locked' | 'unknown-role' | 'invalid-role-id' | 'approval-required';
 
 export type RoleChangeOutcome =
   | { readonly kind: 'applied'; readonly from: RoleId; readonly to: RoleId; readonly catalogVersion: number }
   | { readonly kind: 'refused'; readonly reason: RoleChangeRefusal };
 
-/**
- * What to tell the caller about a role change, for every outcome the union has.
- *
- * TOTAL over {@link RoleChangeOutcome}, and owned here rather than at the
- * callsites because the two callers sit in packages with no dependency between
- * them: written twice, a new member earns a wrong sentence in two places
- * instead of a compile error in one.
- *
- * An approval-policy widening is a REFUSAL, not a queue ticket: no owner
- * surface reads a staged request, so calling one "staged" promises an
- * approval that never arrives. "Refused" covers `locked`, the roles the
- * catalog cannot carry, and the widenings the owner must make instead.
- * Every message says which role is live afterwards, because that is the thing
- * the caller has to act on. `currentRole` is consulted ONLY by `refused`, the
- * one member carrying no `from` of its own, so the sentence can never disagree
- * with the outcome about which role that is.
- */
+/** Total over {@link RoleChangeOutcome}; owned here so both callers (no shared dependency) get a compile error on a new member. */
 export function roleChangeOutcomeText(
   requested: string,
   outcome: RoleChangeOutcome,
@@ -79,17 +49,12 @@ export function roleChangeOutcomeText(
   }
 }
 
-/** The slice of AgentConfigStore a role change reads and writes. Generic
- *  get/set keeps callers free of the store type; the keys and the policy
- *  reading live in config/store beside the accessors that own them. */
 export interface RoleStateStore {
   get(key: string): string | null;
   set(key: string, value: string): void;
 }
 
-/** Whether `to` can reach any tool `from` could not. An absent allowedTools
- *  list IS the full surface: restricted to full widens, full to anything does
- *  not, and two restricted lists compare by membership. */
+/** An absent allowedTools list is the full surface. */
 function roleWidensCapabilities(from: RoleDefinition, to: RoleDefinition): boolean {
   if (to.allowedTools === undefined) return from.allowedTools !== undefined;
 
@@ -105,8 +70,6 @@ function roleOf(envelope: ProfileCatalogEnvelope, id: RoleId): RoleDefinition | 
   return roles[id] ?? null;
 }
 
-/** One applied role change: who is moving, from where to where, and the
- *  envelope version that ruling was made against. */
 interface AppliedRoleChange {
   readonly config: RoleStateStore;
   readonly envelope: ProfileCatalogEnvelope;
@@ -123,9 +86,7 @@ function applyRole(change: AppliedRoleChange): void {
   change.config.set('role_changed_catalog_version', String(change.envelope.version));
 }
 
-/** Apply one role change under the owner's policy. Validates the target
- *  against THIS envelope, so an unknown role is refused rather than stored to
- *  fail later at resolution. */
+/** Validates the target against this envelope, so an unknown role is refused rather than stored. */
 export function changeActiveRole(input: {
   envelope: ProfileCatalogEnvelope;
   config: RoleStateStore;
@@ -155,8 +116,7 @@ export function changeActiveRole(input: {
     && fromDef !== null
     && roleWidensCapabilities(fromDef, target)
   ) {
-    // No staging row: no owner surface reads one, so a stored request would
-    // wait forever. Refuse and name the approval the switch needs.
+    // No staging row: no owner surface reads one, so a stored request would wait forever.
     return { kind: 'refused', reason: 'approval-required' };
   }
 
@@ -165,11 +125,7 @@ export function changeActiveRole(input: {
   return { kind: 'applied', from, to: input.to, catalogVersion: envelope.version };
 }
 
-/**
- * The owner's own role change, the one body both backends' `setRole` run:
- * applied from the next turn, or refused in words that name the role staying
- * active (`active`, as the backend reports it).
- */
+/** The owner's role change, shared by both backends' `setRole`. */
 export function changeRoleAsOwner(input: {
   envelope: ProfileCatalogEnvelope;
   config: RoleStateStore;

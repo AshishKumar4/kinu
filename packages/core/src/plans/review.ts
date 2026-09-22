@@ -22,9 +22,7 @@ export type {
   PlanReviewStatus, SubmitPlanToolDeps,
 } from '../types/plans';
 
-// One plan_reviews row holds content plus annotations_json. The platform
-// caps that row at do.sqlite.row_bytes. Both caps below fit inside it
-// together, so a stored row stays under the platform ceiling.
+// Content plus annotations_json share one row capped at do.sqlite.row_bytes; both caps fit inside it together.
 export const MAX_PLAN_CONTENT_BYTES = 1536 * 1024;
 
 export const MAX_PLAN_ANNOTATIONS_BYTES = 256 * 1024;
@@ -61,13 +59,7 @@ export function planReviewAwaitingDecision(
     || (review?.status === 'approved' && !review.handoffAccepted);
 }
 
-/**
- * The work mode a turn runs in once the review is consulted: a build turn is
- * held in Plan while a submitted plan awaits the owner's decision, because the
- * agent asked for a verdict and must not start implementing before it has
- * one. The handoff turn an approval queues says `plan_approved` on its own
- * metadata and passes, which is what lets the approved work begin.
- */
+/** A build turn is held in Plan while a submitted plan awaits decision; the `plan_approved` handoff turn passes. */
 export function workModeUnderReview(
   requested: WorkMode,
   metadata: { readonly kinuEvent?: unknown } | undefined,
@@ -78,16 +70,12 @@ export function workModeUnderReview(
   return planReviewAwaitingDecision(active) ? 'plan' : requested;
 }
 
-/** The plan's own name for itself: the first non-empty line of the content,
- *  headings stripped, which is what every list row prints for it. */
+/** First non-empty line of the content, headings stripped. */
 export function planTitle(content: string): string {
   return content.split('\n').find((line) => line.trim())?.replace(/^#+\s*/, '').trim() ?? 'Plan';
 }
 
-/** A `plan_reviews` row awaiting an owner decision, read workspace-wide and
- *  carrying its owner's name — the `plan_review` pending-action's input. The
- *  roster stays retired-inclusive: a dismissed actor's undecided plan is
- *  still undecided, and its row belongs to the owner, not the actor. */
+/** Pending plan reviews workspace-wide with owner name. Retired actors stay included: their undecided plan is still undecided. */
 export function listPendingPlanReviews(
   sql: SqlExecutor,
   workspaceId: string,
@@ -305,8 +293,7 @@ export function initPlanReviewTable(execRaw: RawSqlExec): void {
     ON plan_reviews(actor_id, session_id, created_at DESC)`);
 }
 
-/** Validate edits against the revision the model saw. Line coordinates are
- * one-indexed, inclusive, and refer to the pre-edit document for the batch. */
+/** Line coordinates are one-indexed, inclusive, and refer to the pre-edit document for the batch. */
 export function validatePlanEdits(existingLines: readonly string[], edits: readonly PlanEdit[]): string | null {
   if (edits.length === 0) return 'at least one edit is required';
   const lineCount = existingLines.length;
@@ -383,15 +370,6 @@ export function formatPlanWithLineNumbers(content: string): string {
   return lines.map((line, index) => `${String(index + 1).padStart(width)}| ${line}`).join('\n');
 }
 
-/**
- * The turn a decided plan hands off to.
- *
- * A verdict means the same thing on every backend: an approval hands the
- * model the exact plan to implement, a change request hands back the numbered
- * revision to edit. So the words, the `kinuEvent`/`kinuMode` the loop reads
- * off them, and the key a retry collapses onto are declared once here rather
- * than per adapter.
- */
 interface PlanHandoffTurn {
   readonly text: string;
   readonly metadata: JsonObject;
@@ -437,8 +415,7 @@ function planHandoffTurn(plan: PlanReview, decision: PlanReviewDecision): PlanHa
   };
 }
 
-/** The name one handoff attempt announces itself under: the decision's own
- *  identity, so a re-delivery collapses onto the row the first attempt wrote. */
+/** Keyed on the decision's identity so a re-delivery collapses onto the first attempt's row. */
 function planHandoffKey(plan: PlanReview, decision: PlanReviewDecision, attempt: number): string {
   return `plan:${plan.id}:${plan.revision}:${decision}:${attempt}`;
 }
@@ -448,17 +425,13 @@ export interface PlanReviewStoreOptions {
   readonly now?: () => number;
 }
 
-/** One durable review stream per session. Every revision is immutable except
- * for its reviewer-owned annotations and terminal decision fields. */
+/** Every revision is immutable except its reviewer-owned annotations and terminal decision fields. */
 export class PlanReviewStore {
   private readonly newId: () => string;
   private readonly now: () => number;
   private readonly actorId: string;
 
-  /** Bind the review stream to ONE actor. A plan is written by an actor working
-   *  in plan mode and approved for THAT actor to execute: a subordinate planning
-   *  its own delegated task shares a session id with nobody, and an approval is
-   *  not transferable between actors. */
+  /** Bound to one actor: an approval is not transferable between actors. */
   constructor(
     private readonly sql: SqlExecutor,
     private readonly actor: ActorHandle,
@@ -493,9 +466,6 @@ export class PlanReviewStore {
     return rows[0] ? toPlanReview(rows[0]) : null;
   }
 
-  /** The revision a write in this store just produced. Absent means the write
-   *  did not land, which is a failure of this call and not a stale revision —
-   *  the caller renders it the same way it renders every other refusal. */
   private written(id: string, revision: number): PlanReviewResult {
     const plan = this.get(id, revision);
 
@@ -504,8 +474,7 @@ export class PlanReviewStore {
     return { ok: true, plan };
   }
 
-  /** The latest non-superseded revision, including an approved revision so a
-   * reload can keep rendering the plan the owner accepted. */
+  /** Includes an approved revision so a reload keeps rendering the accepted plan. */
   getActive(sessionId: string): PlanReview | null {
     this.actor.assertCurrent();
 
@@ -687,11 +656,7 @@ export class PlanReviewStore {
 }
 
 
-/**
- * The owner-facing review actions over one store, with every change the store
- * makes announced to whoever watches the actor. Both backends expose these
- * verbatim; the one thing each supplies is how it broadcasts.
- */
+/** Owner-facing review actions; each backend supplies only how it broadcasts. */
 export class PlanReviewActions {
   constructor(
     private readonly store: PlanReviewStore,
@@ -724,14 +689,7 @@ export class PlanReviewActions {
     return this.announced(this.store.markHandoffAccepted(id, revision));
   }
 
-  /**
-   * The owner's verdict and the turn it hands the actor.
-   *
-   * The handoff is recorded ACCEPTED only once the loop has admitted that turn.
-   * A submission the loop skipped or could not take leaves the review decided
-   * with its handoff still owed, so the next decision submits under the same
-   * key, and the loop, which recognises a turn it already ran, admits no second.
-   */
+  /** The handoff is marked accepted only once the loop admits the turn; otherwise the next decision resubmits under the same key. */
   async decideAndHandOff(
     verdict: { readonly id: string; readonly revision: number; readonly decision: PlanReviewDecision; readonly feedback?: string },
     enqueue: (turn: ProgrammaticTurn) => Promise<EnqueueTurnResult>,
@@ -757,9 +715,7 @@ export class PlanReviewActions {
 
       if (accepted.ok) return { ok: true, plan: accepted.plan, queued: true };
 
-      // The loop runs a handed-off turn before this answer, and a change
-      // request's turn ends by submitting the next revision: superseded here
-      // means the handoff was delivered, not refused.
+      // A change request's turn may already have submitted the next revision: superseded means delivered.
       if (accepted.plan?.status === 'superseded') return { ok: true, plan: accepted.plan, queued: true };
 
       return accepted;
