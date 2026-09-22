@@ -96,16 +96,16 @@ async function postCreate(
   globalThis.fetch = asFetchFunction(async () => new Response('{}', { status: 503 }));
 
   try {
-    const response = await handleCreateWorkspaceRequest(
-      new Request('https://kinu.run/api/user/workspaces', {
+    const response = await handleCreateWorkspaceRequest({
+      request: new Request('https://kinu.run/api/user/workspaces', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify(body),
       }),
-      typed,
-      USER_ID,
-      typed.UserDO.get(typed.UserDO.idFromName(USER_ID)),
-    );
+      env: typed,
+      userId: USER_ID,
+      userDO: typed.UserDO.get(typed.UserDO.idFromName(USER_ID)),
+    });
 
     const error = response.ok ? null : v.parse(v.object({ error: v.string() }), await response.json()).error;
 
