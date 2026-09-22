@@ -24,7 +24,7 @@
  * ending with its BOM restored.
  */
 import { KinuError } from '../obs/error';
-import { headEnd } from '../utils/text';
+import { headEnd, lineCount } from '../utils/text';
 import {
   FILE_REFUSAL_REASONS, type FileEditFailure,
 } from '../types/file-edits';
@@ -132,12 +132,6 @@ function lineOf(content: string, index: number): number {
 
 /** Lines a span of text covers. A trailing newline ENDS the last line rather
  *  than starting a phantom one, so `'a\nb\n'` covers two. */
-function lineSpan(text: string): number {
-  if (text.length === 0) return 0;
-
-  return text.split('\n').length - (text.endsWith('\n') ? 1 : 0);
-}
-
 /** Where an edit index is named in a message: silent for a single edit, indexed
  *  when the call carried several, so the model knows WHICH one to fix. */
 function at(index: number, total: number): string {
@@ -237,8 +231,8 @@ export function applyFileEdits(original: string, edits: readonly FileEdit[], pat
 
   const applied = matches.map((m) => ({
     line: lineOf(base, m.start),
-    removedLines: lineSpan(base.slice(m.start, m.start + m.length)),
-    addedLines: lineSpan(m.newText),
+    removedLines: lineCount(base.slice(m.start, m.start + m.length)),
+    addedLines: lineCount(m.newText),
   }));
 
   return { ok: true, content: (hasBom ? BOM : '') + content, applied };

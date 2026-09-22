@@ -1,4 +1,4 @@
-import { startTransition, useState, useRef, useEffect, useLayoutEffect, useCallback, useMemo, type DragEvent as ReactDragEvent } from "react";
+import { startTransition, useState, useRef, useEffect, useCallback, useMemo, type DragEvent as ReactDragEvent } from "react";
 import { useParams, useLocation, Link, useNavigate } from "react-router-dom";
 import { Button, Loader } from "@cloudflare/kumo";
 import { FilledButton } from "@/components/ui/FilledButton";
@@ -14,6 +14,7 @@ import {
 import type { AlternateTakeSet, FileRestoreChange, TakePickOutcome } from "@kinu.run/core";
 import { useKinu, type WorkspaceNotice } from "@/hooks/use-kinu";
 import { useGrowingScroll } from "@/hooks/use-growing-scroll";
+import { useAutogrow } from "@/hooks/use-autogrow";
 import { useChatThread } from "@/hooks/use-chat-thread";
 import { useConversationUiState, usePlanGatedMode } from "@/hooks/use-conversation-ui-state";
 import { useSteerActions } from "@/hooks/use-steer-actions";
@@ -427,13 +428,7 @@ function SubordinateChatColumn({
 
   const inputRef = useRef<HTMLTextAreaElement>(null);
 
-  useLayoutEffect(() => {
-    const el = inputRef.current;
-
-    if (!el) return;
-    el.style.height = "auto";
-    el.style.height = `${el.scrollHeight}px`;
-  }, [input]);
+  useAutogrow(inputRef, input);
 
   // One submit, whatever the agent is doing: `sendChat` owns admission (one
   // synchronous latch inside `useKinu`) and decides between starting a turn
@@ -736,16 +731,7 @@ export default function WorkspacePage() {
     attachments.add(files);
   }, [attachments]);
 
-  // Auto-grow the chat input with its content (kumo InputArea has no resize
-  // logic). The max-h-40 class clamps growth; beyond it the textarea scrolls
-  // internally. Clearing chatInput after send collapses it back to one row.
-  useLayoutEffect(() => {
-    const el = chatInputRef.current;
-
-    if (!el) return;
-    el.style.height = "auto";
-    el.style.height = `${el.scrollHeight}px`;
-  }, [chatInput]);
+  useAutogrow(chatInputRef, chatInput);
 
   useEffect(() => {
     if (!agentId) return;

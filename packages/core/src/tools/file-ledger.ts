@@ -33,6 +33,7 @@
  */
 
 import { fnv1a64 } from '../utils/fnv1a';
+import { lineCount } from '../utils/text';
 import type { VfsRevision } from '../types/primitives';
 import type { FileEditOutcomeReason, FileEditSnapshot } from '../types/file-edits';
 import { countSharedWrite, newWriteAuthor } from './msg-counters';
@@ -249,12 +250,4 @@ export class TurnFileLedger {
   get progress() {
     return { filesTouched: this.seenPaths.size, editsApplied: this.applied };
   }
-}
-
-/** Lines in a file, counting a trailing newline as ending the last line rather
- *  than starting a phantom one. */
-function lineCount(content: string): number {
-  if (content.length === 0) return 0;
-
-  return content.split('\n').length - (content.endsWith('\n') ? 1 : 0);
 }

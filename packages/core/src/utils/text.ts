@@ -31,3 +31,11 @@ export function tailStart(text: string, len: number): number {
 
   return splitsPair ? start + 1 : start;
 }
+
+/** How many lines a text spans: a trailing newline ends the last line rather
+ *  than opening an empty one, and empty text spans none. */
+export function lineCount(text: string): number {
+  if (text.length === 0) return 0;
+
+  return text.split('\n').length - (text.endsWith('\n') ? 1 : 0);
+}

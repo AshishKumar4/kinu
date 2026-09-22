@@ -333,22 +333,23 @@ export function validateMcpServerName(name: JsonValue): string {
   return trimmed;
 }
 
-/** Decode an `allowed_tools` SQL column. Returns null when unset or
- *  unparseable, which the rest of the pipeline treats as "allow all". */
-export function parseAllowedTools(raw: string | null | undefined): string[] | null {
+/** A JSON column read against its schema: null when the column is unset or
+ *  holds anything the schema refuses. */
+function jsonColumn<Schema extends v.GenericSchema>(raw: string | null | undefined, schema: Schema): v.InferOutput<Schema> | null {
   if (!raw) return null;
-  const parsed = v.safeParse(StringArraySchema, tolerate(() => JSON.parse(raw), 'malformed-input'));
+  const parsed = v.safeParse(schema, tolerate(() => JSON.parse(raw), 'malformed-input'));
 
   return parsed.success ? parsed.output : null;
 }
 
-/** Decode the `headers` SQL column into a header map. Returns null when unset
- *  or malformed, which the pipeline treats as "no custom headers". */
-export function parseMcpHeaders(raw: string | null | undefined): Record<string, string> | null {
-  if (!raw) return null;
-  const parsed = v.safeParse(HeaderRecordSchema, tolerate(() => JSON.parse(raw), 'malformed-input'));
+/** The `allowed_tools` column; null is what the pipeline reads as "allow all". */
+export function parseAllowedTools(raw: string | null | undefined): string[] | null {
+  return jsonColumn(raw, StringArraySchema);
+}
 
-  return parsed.success ? parsed.output : null;
+/** The `headers` column; null is what the pipeline reads as "no custom headers". */
+export function parseMcpHeaders(raw: string | null | undefined): Record<string, string> | null {
+  return jsonColumn(raw, HeaderRecordSchema);
 }
 
 /**

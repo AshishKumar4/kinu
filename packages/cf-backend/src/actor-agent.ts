@@ -4956,62 +4956,50 @@ export abstract class ActorAgent extends Agent<Env> {
 
   /** A fork reaches these through its `parent` executor. They deliberately
    * carry no `@callable`: only a worker-held parent stub can reach them. */
-  private workspaceFileFailure<T>(path: string, thrown: { cause: unknown }): ParentRpcResult<T> {
-    return {
-      ok: false,
-      error: {
-        code: isVfsError(thrown.cause) ? thrown.cause.code : 'EIO',
-        message: renderThrownChain(thrown),
-        path,
-      },
-    };
+  /** One file operation on this workspace's plane as the fork's parent answers
+   *  it: the value, or the VFS's own error code and the path it names. */
+  private async workspaceFileAnswer<T>(path: string, operate: () => Promise<T>): Promise<ParentRpcResult<T>> {
+    try {
+      return { ok: true, value: await operate() };
+    } catch (cause) {
+      return {
+        ok: false,
+        error: { code: isVfsError(cause) ? cause.code : 'EIO', message: renderThrownChain({ cause }), path },
+      };
+    }
   }
 
   async readWorkspaceFile(path: string): Promise<ParentRpcResult<Uint8Array>> {
-    try {
+    return this.workspaceFileAnswer(path, async () => {
       const content = await this.rt.localVfs.readFile(path);
 
-      return { ok: true, value: v.is(v.string(), content) ? new TextEncoder().encode(content) : content };
-    } catch (error) {
-      return this.workspaceFileFailure(path, { cause: error });
-    }
+      return v.is(v.string(), content) ? new TextEncoder().encode(content) : content;
+    });
   }
 
   async writeWorkspaceFile(input: ParentRpcWrite): Promise<ParentRpcResult<null>> {
-    try {
+    return this.workspaceFileAnswer(input.path, async () => {
       if (input.kind === 'file') await this.rt.localVfs.writeFile(input.path, input.data);
       else await this.rt.localVfs.mkdir(input.path, { recursive: input.recursive });
 
-      return { ok: true, value: null };
-    } catch (error) {
-      return this.workspaceFileFailure(input.path, { cause: error });
-    }
+      return null;
+    });
   }
 
   async listWorkspaceFiles(path: string): Promise<ParentRpcResult<string[]>> {
-    try {
-      return { ok: true, value: await this.rt.localVfs.readdir(path) };
-    } catch (error) {
-      return this.workspaceFileFailure(path, { cause: error });
-    }
+    return this.workspaceFileAnswer(path, () => this.rt.localVfs.readdir(path));
   }
 
   async statWorkspaceFile(path: string): Promise<ParentRpcResult<{ size: number; mtimeMs: number; isDir: boolean } | null>> {
-    try {
-      return { ok: true, value: await this.rt.localVfs.stat(path) };
-    } catch (error) {
-      return this.workspaceFileFailure(path, { cause: error });
-    }
+    return this.workspaceFileAnswer(path, () => this.rt.localVfs.stat(path));
   }
 
   async deleteWorkspaceFile(path: string): Promise<ParentRpcResult<null>> {
-    try {
+    return this.workspaceFileAnswer(path, async () => {
       await this.rt.localVfs.unlink(path);
 
-      return { ok: true, value: null };
-    } catch (error) {
-      return this.workspaceFileFailure(path, { cause: error });
-    }
+      return null;
+    });
   }
 
   /**
@@ -5023,15 +5011,13 @@ export abstract class ActorAgent extends Agent<Env> {
    * coreutils set behind it.
    */
   async execWorkspaceCommand(command: string): Promise<ParentRpcResult<ParentExecResult>> {
-    const shell = this.rt.shell;
+    return this.workspaceFileAnswer('', async () => {
+      const shell = this.rt.shell;
 
-    if (!shell) return this.workspaceFileFailure('', { cause: new Error('this workspace has no shell') });
+      if (!shell) throw new Error('this workspace has no shell');
 
-    try {
-      return { ok: true, value: await shell.exec(command) };
-    } catch (error) {
-      return this.workspaceFileFailure('', { cause: error });
-    }
+      return shell.exec(command);
+    });
   }
 
   /** The web search + fetch provider — built once per DO lifetime. Key-less by

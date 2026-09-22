@@ -1,6 +1,1 @@
-[
-  "cross-file packages/core/src/tools/file-edit.ts#lineSpan | packages/core/src/tools/file-ledger.ts#lineCount",
-  "same-file packages/cf-backend/src/actor-agent.ts#listWorkspaceFiles | packages/cf-backend/src/actor-agent.ts#statWorkspaceFile",
-  "same-file packages/cf-backend/src/pages/WorkspacePage.tsx#SubordinateChatColumn > useLayoutEffect | packages/cf-backend/src/pages/WorkspacePage.tsx#WorkspacePage > useLayoutEffect",
-  "same-file packages/cf-backend/src/user/mcp.ts#parseAllowedTools | packages/cf-backend/src/user/mcp.ts#parseMcpHeaders"
-]
+[]
