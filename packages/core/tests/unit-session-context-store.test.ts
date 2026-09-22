@@ -1,6 +1,6 @@
 import { expect, test } from 'bun:test';
 import * as v from 'valibot';
-import { createTestRuntime } from '@kinu.run/test-utils';
+import { createTestRuntime, present } from '@kinu.run/test-utils';
 import { initSessionContextTables } from '../src/session/schema';
 import { SessionMessages } from '../src/session/messages';
 import { PLATFORM_CATALOG } from '../src/platform-catalog';
@@ -36,7 +36,7 @@ test('message publication rolls back with its membership and can be retried', as
     } })).toThrow('crash before membership');
     expect(s.context.entries(selected)).toEqual([]);
     const committed = s.context.commit(selected, { cause: 'input', turnId: 'turn', mutate: () => [{ ...s.messages.insert(prepared, 'input'), entryId: 'input', position: 0 }], assertEpoch: () => s.rt.actor.assertCurrent() });
-    expect(await s.messages.materialize(s.context.entries(committed)[0]!)).toEqual({ role: 'user', content: 'hello' });
+    expect(await s.messages.materialize(present(s.context.entries(committed)[0], 'the committed context entry'))).toEqual({ role: 'user', content: 'hello' });
   } finally { s.testSql.close(); }
 });
 
@@ -157,7 +157,7 @@ test('VFS-backed image payloads fail explicitly after file corruption', async ()
   try {
     const image = await s.messages.prepare({ role: 'user', content: [{ type: 'image', image: new Uint8Array([0, 1, 255]) }] }, 'image');
     const selected = s.context.commit(s.context.initialize(), { cause: 'input', turnId: 'turn', mutate: () => [{ ...s.messages.insert(image, 'input'), entryId: 'image', position: 0 }], assertEpoch: () => s.rt.actor.assertCurrent() });
-    const reference = s.context.entries(selected)[0]!;
+    const reference = present(s.context.entries(selected)[0], 'the image entry');
     expect(await s.messages.materialize(reference)).toEqual({ role: 'user', content: [{ type: 'image', image: new Uint8Array([0, 1, 255]) }] });
     const stored = await s.messages.materializeParts(reference);
     const external = v.parse(v.object({ image: v.object({ $sessionAttachment: v.object({ path: v.string() }) }) }), stored[0]?.value);
@@ -186,7 +186,7 @@ test('staged removal preserves an appended tail and rejects a changed target', a
     const proposals = new SessionProposals(s.rt.storage.sql, s.rt.actor, s.context, write => s.rt.storage.transactionSync(write));
     const prepared = await s.messages.prepare({ role: 'user', content: 'old' }, 'old');
     const base = s.context.commit(s.context.initialize(), { cause: 'input', turnId: 'turn', mutate: () => [{ ...s.messages.insert(prepared, 'input'), entryId: 'old', position: 0 }], assertEpoch: assertOwner });
-    const old = s.context.entries(base)[0]!;
+    const old = present(s.context.entries(base)[0], 'the staged entry');
     proposals.stage({ id: 'remove', base, author: s.rt.actor.actorId, via: 'session', cause: 'context_transform', turnId: 'turn', changes: [{ entryId: old.entryId, expected: old, replacement: null }] });
     const tail = await s.messages.prepare({ role: 'assistant', content: 'new work' }, 'tail');
     s.context.commit(base, { cause: 'output', turnId: 'turn', mutate: entries => [...entries, { ...s.messages.insert(tail, 'output'), entryId: 'tail', position: 1 }], assertEpoch: assertOwner });

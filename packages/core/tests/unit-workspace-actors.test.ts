@@ -165,11 +165,10 @@ describe('one workspace actor directory', () => {
     expect(directory.list().map((actor) => actor.kind)).toContain('head');
     expect(actorScaffoldPath(read)).toBe(`.kinu/agents/${encodeURIComponent(actorId)}/scaffold/agent.js`);
     expect(actorScaffoldPath(read)).not.toBe('scaffold/agent.js');
-    // And the write path is closed: nothing registers 'node' anymore.
-    // SAFETY: the schema parse below is the checked invariant — the cast carries
-    // only the retired 'node' spelling, and the bad_input refusal proves the
-    // schema rejects what the type already excludes.
-    expect(() => directory.apply(main, [], { action: 'register', creationId: 'c-new', name: 'exp:node-new', kind: 'node', lifetime: 'task' } as never))
+    // And the write path is closed: nothing registers 'node' anymore. A change
+    // reaches the directory as JSON, so the retired spelling arrives the same
+    // way, and the bad_input refusal proves the schema rejects it.
+    expect(() => directory.apply(main, [], JSON.parse(JSON.stringify({ action: 'register', creationId: 'c-new', name: 'exp:node-new', kind: 'node', lifetime: 'task' }))))
       .toThrow(expect.objectContaining({ code: 'bad_input' }));
   });
 });
