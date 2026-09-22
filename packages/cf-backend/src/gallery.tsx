@@ -1670,7 +1670,7 @@ function maybeRefuseCreate(): void {
    the stub socket stays inert (the interactive `agentchats` rig covers send
    and the first-message titler). */
 const GALLERY_SUBS: {
-  name: string; displayName: string; role: string; createdBy: string;
+  name: string; actorId: string; displayName: string; role: string; createdBy: string;
   status: string; currentTask: string | null; createdAt: number; dismissedAt: number | null;
 }[] = [];
 
@@ -1937,7 +1937,7 @@ function galleryRosterRpc(method: string, args?: unknown[]): GalleryAnswer {
     const name = `agent-${++gallerySubSeq}`;
 
     const entry = {
-      name, displayName: codenameFor(name), role: "agent", createdBy: "user",
+      name, actorId: galleryActorId(name), displayName: codenameFor(name), role: "agent", createdBy: "user",
       status: "idle", currentTask: null, createdAt: NOW, dismissedAt: null,
     };
 
@@ -4137,12 +4137,12 @@ function All() {
 /* ── Agent tab strip ────────────────────────────────────────────── */
 
 const SUBORDINATES: Parameters<typeof SubordinateTabs>[0]["subordinates"] = [
-  { name: "coupon-tester", displayName: "Coupon tester", role: "QA", createdBy: "orchestrator", status: "working", currentTask: "Running the checkout regression suite", createdAt: NOW - 36e5, dismissedAt: null },
-  { name: "migration-review", displayName: "Migration review", role: "Reviewer", createdBy: "orchestrator", status: "awaiting_input", currentTask: "Needs a call on the backfill order", createdAt: NOW - 72e5, dismissedAt: null },
-  { name: "docs", displayName: "Release notes", role: "Writer", createdBy: "user", status: "idle", currentTask: null, createdAt: NOW - 108e5, dismissedAt: null },
+  { name: "coupon-tester", actorId: galleryActorId("coupon-tester"), displayName: "Coupon tester", role: "QA", createdBy: "orchestrator", status: "working", currentTask: "Running the checkout regression suite", createdAt: NOW - 36e5, dismissedAt: null },
+  { name: "migration-review", actorId: galleryActorId("migration-review"), displayName: "Migration review", role: "Reviewer", createdBy: "orchestrator", status: "awaiting_input", currentTask: "Needs a call on the backfill order", createdAt: NOW - 72e5, dismissedAt: null },
+  { name: "docs", actorId: galleryActorId("docs"), displayName: "Release notes", role: "Writer", createdBy: "user", status: "idle", currentTask: null, createdAt: NOW - 108e5, dismissedAt: null },
   // A one-click agent the titler has not reached: blank name, shown as
   // "New agent" in the provisional register.
-  { name: "agent-4f2c", displayName: "", role: "agent", createdBy: "user", status: "idle", currentTask: null, createdAt: NOW - 6e5, dismissedAt: null },
+  { name: "agent-4f2c", actorId: galleryActorId("agent-4f2c"), displayName: "", role: "agent", createdBy: "user", status: "idle", currentTask: null, createdAt: NOW - 6e5, dismissedAt: null },
 ];
 
 /* One strip of the frame: the tab it has open, the column width it draws at,
@@ -4200,10 +4200,10 @@ type GalleryRosterEntry = Parameters<typeof SubordinateTabs>[0]["subordinates"][
 const AGENTCHATS_SEED: readonly GalleryRosterEntry[] = [
   // The role string is deliberately distinctive: the gate asserts it never
   // renders — an agent's being subordinate shows as hierarchy, not as a badge.
-  { name: "scout", displayName: "Checkout scout", role: "Fixture-role QA lead", createdBy: "user", status: "idle", currentTask: null, createdAt: NOW - 36e5, dismissedAt: null },
+  { name: "scout", actorId: galleryActorId("scout"), displayName: "Checkout scout", role: "Fixture-role QA lead", createdBy: "user", status: "idle", currentTask: null, createdAt: NOW - 36e5, dismissedAt: null },
   // An agent-created subordinate: keeps the confirmation path, beside the
   // user-created seed above that deletes on click.
-  { name: "auto-scout", displayName: "Auto scout", role: "Fixture-role QA lead", createdBy: "orchestrator", status: "idle", currentTask: null, createdAt: NOW - 18e5, dismissedAt: null },
+  { name: "auto-scout", actorId: galleryActorId("auto-scout"), displayName: "Auto scout", role: "Fixture-role QA lead", createdBy: "orchestrator", status: "idle", currentTask: null, createdAt: NOW - 18e5, dismissedAt: null },
 ];
 
 const AGENTCHATS_ROWS = 40;
@@ -4280,7 +4280,7 @@ function AgentChatsScene() {
     const name = `agent-${++counter.current}`;
     missions.current[name] = AGENTCHATS_MISSION;
     setRoster((current) => [...current, {
-      name, displayName: "", role: "agent", createdBy: "user",
+      name, actorId: galleryActorId(name), displayName: "", role: "agent", createdBy: "user",
       status: "idle", currentTask: null, createdAt: NOW, dismissedAt: null,
     }]);
     await navigate(`/workspace/checkout-fixes/agents/${name}`);

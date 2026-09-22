@@ -63,7 +63,7 @@ export interface WorkspaceWork {
  *  the fence at bind AND before every store access, so a row that disappears
  *  mid-read still stops authorising; it just no longer throws on the states a
  *  retained dismissal legitimately sits in. */
-function readHandle(sql: SqlExecutor, row: WorkspaceActor): ActorHandle {
+export function actorReadHandle(sql: SqlExecutor, row: WorkspaceActor): ActorHandle {
   const identity: ActorIdentity = {
     actorId: row.actorId,
     workspaceId: row.workspaceId,
@@ -97,7 +97,7 @@ export function readWorkspaceWork(
   const tasks: OwnedTask[] = [];
 
   for (const row of actors) {
-    const actor = readHandle(sql, row);
+    const actor = actorReadHandle(sql, row);
     const owner: WorkspaceWorkOwner = { actorId: row.actorId, name: row.name, retired: row.retiringAt !== null || row.deletedAt !== null };
 
     if (tableExists(sql, 'plan_reviews')) {

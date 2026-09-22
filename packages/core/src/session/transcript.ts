@@ -40,6 +40,9 @@ export interface ConversationProjection {
   readonly recordedAt: number;
   readonly toolCalls: readonly string[];
   metadata?: JsonObject;
+  /** Set by a reader with no file plane when the entry's content sits in a
+   *  spilled payload: the row keeps its place and says it cannot be read here. */
+  unavailable?: true;
 }
 
 interface StoredUiMessage {
@@ -49,7 +52,7 @@ interface StoredUiMessage {
   metadata?: JsonValue;
 }
 
-export function readSessionTranscript(sql: SqlExecutor, authority: ActorReadAuthority, sessionId: string, files: () => Promise<Pick<VFS, 'readFile'>>): SessionTranscriptReader {
+export function readSessionTranscript(sql: SqlExecutor, authority: ActorReadAuthority, sessionId: string, files: (() => Promise<Pick<VFS, 'readFile'>>) | null): SessionTranscriptReader {
   const payloads = new SessionPayloadReader(files);
 
   return new SessionTranscriptReader({
@@ -88,6 +91,12 @@ export class SessionTranscriptReader<A extends ActorReadAuthority = ActorReadAut
     const entry = this.read(id);
 
     if (entry === null) return null;
+
+    if (!this.payloads.readsFiles && ((entry.metadata !== null && entry.metadata.path !== null)
+      || [...new Set(entry.parts.map((part) => part.messageId))].some((messageId) => this.messages.spilled(messageId)))) {
+      return { id: entry.id, parentId: entry.parentId, role: entry.role, content: '', recordedAt: entry.recordedAt, toolCalls: [], unavailable: true };
+    }
+
     const parts = await this.parts(entry.parts);
     const text: string[] = [];
     const toolCalls: string[] = [];

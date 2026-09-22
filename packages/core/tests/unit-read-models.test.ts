@@ -24,9 +24,11 @@ import { getRunTimeline } from '../src/read-models/timeline';
 import { getRunEvents, getRunSummaries, listRuns } from '../src/read-models/runs';
 import { getAgentStatus, getChatHistoryPage, getToolList } from '../src/read-models/status';
 import { SessionHistory } from '../src/session/history';
-import type { SessionTranscriptReader } from '../src/session/transcript';
+import { readSessionTranscript, type SessionTranscriptReader } from '../src/session/transcript';
+import { PLATFORM_CATALOG } from '../src/platform-catalog';
+import type { ChatHistoryEntry } from '../src/types/chat';
 import { CHAT_SESSION_ID } from '../src/session/transcript-schema';
-import { StaleCursorError, type SeekCursor } from '../src/session/page';
+import { StaleCursorError, type Page, type SeekCursor } from '../src/session/page';
 import {
   getWorkspaceDiff, initWorkspaceBaselineTable, resetWorkspaceBaseline,
 } from '../src/read-models/workspace-diff';
@@ -468,6 +470,39 @@ describe('agent status', () => {
       .rejects.toThrow(StaleCursorError);
     await expect(getChatHistoryPage(transcript, { cursor: { after: 'never-existed' } }))
       .rejects.toThrow(/no longer in it/);
+    w.db.close();
+  });
+
+  /**
+   * What a dismissed actor's pane pages through: a reader with no file plane,
+   * because nothing binds a retired actor's private home. An entry whose
+   * content spilled there keeps its place and says it is unavailable; the page
+   * around it reads whole, and neither the entry nor the page goes missing.
+   */
+  test('a reader with no file plane pages a spilled entry as unavailable, in its place', async () => {
+    const w = workspace();
+    const { history, transcript } = chatStore(w);
+    const spilled = 'x'.repeat(PLATFORM_CATALOG['do.sqlite.row_bytes'].limit.value);
+
+    await seedTranscript(history, [
+      { id: 'm1', role: 'user', content: 'before' },
+      { id: 'm2', role: 'assistant', content: spilled },
+      { id: 'm3', role: 'user', content: 'after' },
+    ]);
+
+    const shown = (page: Page<ChatHistoryEntry>) =>
+      page.items.map(({ id, content, unavailable }) => ({ id, content: content.length, unavailable }));
+
+    expect(shown(await getChatHistoryPage(transcript))).toEqual([
+      { id: 'm1', content: 6, unavailable: undefined },
+      { id: 'm2', content: spilled.length, unavailable: undefined },
+      { id: 'm3', content: 5, unavailable: undefined },
+    ]);
+    expect(shown(await getChatHistoryPage(readSessionTranscript(w.sql, w.actor, CHAT_SESSION_ID, null)))).toEqual([
+      { id: 'm1', content: 6, unavailable: undefined },
+      { id: 'm2', content: 0, unavailable: true },
+      { id: 'm3', content: 5, unavailable: undefined },
+    ]);
     w.db.close();
   });
 
