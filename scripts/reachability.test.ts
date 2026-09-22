@@ -102,7 +102,7 @@ export class OrchestratorAgent {
     );
 
     expect(found.unreachable.map(keyOf)).toEqual([KEY]);
-    expect(found.unreachable[0]!.testCallers).toEqual(['agent.test.ts']);
+    expect(found.unreachable[0].testCallers).toEqual(['agent.test.ts']);
   });
 
   // ── The parser's own health ──────────────────────────────────────────

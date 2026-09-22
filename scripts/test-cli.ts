@@ -50,7 +50,7 @@ function main(): void {
   const subprocessHeavy = SUBPROCESS_HEAVY.map((name) => `${CLI_TEST_ROOT}/${name}`);
 
   const parallel = files
-    .filter((name) => !ISOLATED.some((isolated) => isolated === name))
+    .filter((name) => !ISOLATED.some((isolatedName) => isolatedName === name))
     .filter((name) => !SUBPROCESS_HEAVY.some((heavy) => heavy === name))
     .map((name) => `${CLI_TEST_ROOT}/${name}`);
 

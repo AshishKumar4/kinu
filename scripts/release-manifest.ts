@@ -65,12 +65,14 @@ export const VAR_POLICY = {
   CONTROL_PLANE_ACCESS_AUD: 'ours',
 } satisfies Record<string, VarPolicy>;
 
+function isClassifiedVar(name: string): name is keyof typeof VAR_POLICY {
+  return Object.hasOwn(VAR_POLICY, name);
+}
+
 /** A closed table has no index signature, so the lookup is a function rather
  *  than a subscript — and the absent case is exactly the one that must refuse. */
 function policyFor(name: string): VarPolicy | undefined {
-  // SAFETY: `Object.hasOwn` checked own-key membership in VAR_POLICY — the exact
-  // invariant `keyof typeof VAR_POLICY` states.
-  return Object.hasOwn(VAR_POLICY, name) ? VAR_POLICY[name as keyof typeof VAR_POLICY] : undefined;
+  return isClassifiedVar(name) ? VAR_POLICY[name] : undefined;
 }
 
 const BindingBlocksSchema = v.object({
@@ -175,10 +177,11 @@ export function releaseSecrets(
   for (const [name, entry] of supply) {
     if (entry.handling === 'config-var') continue;
     const required = entry.pairedWith === undefined ? entry.required : sent.has(entry.pairedWith);
+    const whenPrompted = required ? 'prompted' : 'optional';
 
     rows.push({
       name,
-      handling: entry.handling === 'prompt' ? (required ? 'prompted' : 'optional') : 'out-of-band',
+      handling: entry.handling === 'prompt' ? whenPrompted : 'out-of-band',
       required,
       prompt: entry.source ?? entry.absent,
     });

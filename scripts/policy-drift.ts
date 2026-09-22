@@ -245,11 +245,7 @@ function roleOf(node: SyntaxNode): string | undefined {
   if (parent === undefined) return undefined;
   const { raw } = parent;
 
-  if (raw.type === 'Property' && raw.value === node.raw) {
-    const key = declaredName(parent);
-
-    return key === undefined ? undefined : key;
-  }
+  if (raw.type === 'Property' && raw.value === node.raw) return declaredName(parent);
 
   if (raw.type === 'PropertyDefinition' && raw.value === node.raw) return declaredName(parent);
 

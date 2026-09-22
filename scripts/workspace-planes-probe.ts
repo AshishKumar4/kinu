@@ -11,6 +11,14 @@ const config = {
   hostRoot: null,
 };
 
+/** The per-plane file generation 1 writes so generation 2 can prove each plane
+ *  still reads its own `/tmp`, not another plane's. */
+async function writePrivateMarker(shell: NonNullable<AgentRuntime['shell']>, plane: string): Promise<void> {
+  const written = await shell.exec(`echo ${plane} > /tmp/private.txt`);
+
+  if (written.exitCode !== 0) throw new Error(written.stderr);
+}
+
 try {
   for (const generation of [1, 2]) {
     const runtime = createCLIRuntime(database, config);
@@ -46,12 +54,7 @@ try {
 
       if (!shell) throw new Error(`${plane.name} has no shell`);
 
-      if (generation === 1) {
-        const written = await shell.exec(`echo ${plane.name} > /tmp/private.txt`);
-
-        if (written.exitCode !== 0) throw new Error(written.stderr);
-      }
-
+      if (generation === 1) await writePrivateMarker(shell, plane.name);
       const result = await shell.exec('echo HOME=$HOME TMPDIR=$TMPDIR; cat /tmp/private.txt; cat /home/user/shared.txt');
 
       if (result.exitCode !== 0) throw new Error(result.stderr);

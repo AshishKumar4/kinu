@@ -365,9 +365,8 @@ function rejectionHandlerOf(call: SyntaxNode): SyntaxNode | undefined {
   const method = memberCalleeName(call);
   const args = call.children.slice(1);
 
-  const handler = method === 'catch'
-    ? args[0]
-    : method === 'then' && args.length >= 2 ? args[1] : undefined;
+  if (method !== 'catch' && method !== 'then') return undefined;
+  const handler = method === 'catch' ? args[0] : args[1];
 
   if (handler === undefined) return undefined;
 
@@ -569,11 +568,11 @@ export function auditFile(file: string, text: string): readonly Drop[] {
   const auditAdapter = (fn: SyntaxNode): void => {
     const block = blockBodyOf(fn);
 
-    const returned = block === undefined
-      ? fn.children.at(-1)
-      : block.children.length === 1 && block.children[0]?.type === 'ReturnStatement'
-        ? block.children[0]
-        : undefined;
+    const soleReturn = block?.children.length === 1 && block.children[0]?.type === 'ReturnStatement'
+      ? block.children[0]
+      : undefined;
+
+    const returned = block === undefined ? fn.children.at(-1) : soleReturn;
 
     if (returned === undefined || returned.type === 'BlockStatement') return;
 

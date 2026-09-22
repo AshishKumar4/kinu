@@ -13,14 +13,27 @@ const corpus = (files: Record<string, string>): Map<string, string> =>
 const ColumnSchema = v.object({ name: v.string() });
 
 describe('vendor-schema', () => {
-  test('a read naming only columns the vendor DDL has is not a finding', () => {
-    const { findings, statements } = findViolations(vendor(), corpus({
-      'a.ts': 'const rows = sql`SELECT id, body FROM v_rows WHERE created_at > 0`;',
-    }));
+  const clean = [
+    {
+      name: 'a read naming only columns the vendor DDL has is not a finding',
+      source: 'const rows = sql`SELECT id, body FROM v_rows WHERE created_at > 0`;',
+      statements: 1,
+    },
+    {
+      name: 'a backtick-fenced statement inside a comment is prose, not a read',
+      source: '/** The SDK runs `DELETE FROM v_rows WHERE gone = 1` after the callback. */\nexport const x = 1;',
+      statements: 0,
+    },
+  ];
 
-    expect(findings).toEqual([]);
-    expect(statements).toBe(1);
-  });
+  for (const read of clean) {
+    test(read.name, () => {
+      const { findings, statements } = findViolations(vendor(), corpus({ 'a.ts': read.source }));
+
+      expect(findings).toEqual([]);
+      expect(statements).toBe(read.statements);
+    });
+  }
 
   test('a read naming a column the vendor lacks is one finding that says so', () => {
     const { findings } = findViolations(vendor(), corpus({
@@ -73,15 +86,6 @@ describe('vendor-schema', () => {
     expect(statements).toBe(2);
     expect(findings.map((f) => f.file)).toEqual(['packages/core/src/b.ts']);
     expect(findings[0]?.detail).toContain('no such column: e.missing');
-  });
-
-  test('a backtick-fenced statement inside a comment is prose, not a read', () => {
-    const { findings, statements } = findViolations(vendor(), corpus({
-      'a.ts': '/** The SDK runs `DELETE FROM v_rows WHERE gone = 1` after the callback. */\nexport const x = 1;',
-    }));
-
-    expect(findings).toEqual([]);
-    expect(statements).toBe(0);
   });
 
   test('the installed vendors declare the pane store and the fiber runs, and the pane carries no actor column', () => {

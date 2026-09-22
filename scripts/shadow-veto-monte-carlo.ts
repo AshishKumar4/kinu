@@ -153,25 +153,27 @@ function simulateOnce(
 
 interface Rates { promote: number; rollback: number; unresolved: number }
 
-function rollout(
-  protocol: Protocol,
-  world: JudgeWorld,
-  config: ShadowConfig,
-  sims: number,
-  seed: number,
-): Rates {
-  const rng = mulberry32(seed);
+interface Rollout {
+  protocol: Protocol;
+  world: JudgeWorld;
+  config: ShadowConfig;
+  sims: number;
+  seed: number;
+}
+
+function rollout(run: Rollout): Rates {
+  const rng = mulberry32(run.seed);
   let promote = 0, rollback = 0, unresolved = 0;
 
-  for (let i = 0; i < sims; i++) {
-    const outcome = simulateOnce(protocol, world, config, rng);
+  for (let i = 0; i < run.sims; i++) {
+    const outcome = simulateOnce(run.protocol, run.world, run.config, rng);
 
     if (outcome === 'promote') promote++;
     else if (outcome === 'rollback') rollback++;
     else unresolved++;
   }
 
-  return { promote: promote / sims, rollback: rollback / sims, unresolved: unresolved / sims };
+  return { promote: promote / run.sims, rollback: rollback / run.sims, unresolved: unresolved / run.sims };
 }
 
 /** The trial-level distribution a protocol induces — the input the promotion
@@ -262,26 +264,35 @@ interface Agg {
   worstUnresolved: number;
 }
 
+/** One config across the whole win-rate × tie-rate grid: each cell's promote
+ *  rate for the better variant and for its mirror, plus the clearly-worse
+ *  subset and the worst unresolved rate either side reached. */
+function gridOutcomes(protocol: Protocol, config: ShadowConfig, bias: number, agreement: number) {
+  const better: number[] = [], worseAll: number[] = [], worseClear: number[] = [];
+  let worstUnresolved = 0;
+
+  for (const winRate of WIN_RATES) {
+    for (const tieRate of TIE_RATES) {
+      const good = rollout({ protocol, world: world(winRate, tieRate, bias, agreement), config, sims: SIMS, seed: seed++ });
+      const bad = rollout({ protocol, world: world(1 - winRate, tieRate, bias, agreement), config, sims: SIMS, seed: seed++ });
+      better.push(good.promote);
+      worseAll.push(bad.promote);
+
+      if (winRate >= 0.7 && tieRate <= 0.5) worseClear.push(bad.promote);
+      worstUnresolved = Math.max(worstUnresolved, good.unresolved, bad.unresolved);
+    }
+  }
+
+  return { better, worseAll, worseClear, worstUnresolved };
+}
+
 function sweep(protocol: Protocol, bias: number, agreement: number, maxTrials = 12): Agg[] {
   const aggs: Agg[] = [];
 
   for (const maxRegressions of MAX_REGRESSIONS) {
     for (const minDecisiveTrials of MIN_DECISIVE) {
       const config: ShadowConfig = { ...DEFAULT_SHADOW_CONFIG, maxRegressions, minDecisiveTrials, maxTrials };
-      const better: number[] = [], worseAll: number[] = [], worseClear: number[] = [];
-      let worstUnresolved = 0;
-
-      for (const winRate of WIN_RATES) {
-        for (const tieRate of TIE_RATES) {
-          const good = rollout(protocol, world(winRate, tieRate, bias, agreement), config, SIMS, seed++);
-          const bad = rollout(protocol, world(1 - winRate, tieRate, bias, agreement), config, SIMS, seed++);
-          better.push(good.promote);
-          worseAll.push(bad.promote);
-
-          if (winRate >= 0.7 && tieRate <= 0.5) worseClear.push(bad.promote);
-          worstUnresolved = Math.max(worstUnresolved, good.unresolved, bad.unresolved);
-        }
-      }
+      const { better, worseAll, worseClear, worstUnresolved } = gridOutcomes(protocol, config, bias, agreement);
 
       aggs.push({
         protocol, maxRegressions, minDecisiveTrials,
@@ -351,10 +362,10 @@ console.log('─'.repeat(88));
 
 for (const bias of [0, 0.05, 0.10, 0.15, 0.25]) {
   for (const agreement of [1.0, 0.5, 0.0]) {
-    const good = (p: Protocol) => rollout(p, world(0.7, 0.5, bias, agreement), DEFAULT_SHADOW_CONFIG, SIMS, seed++);
-    const bad = (p: Protocol) => rollout(p, world(0.3, 0.5, bias, agreement), DEFAULT_SHADOW_CONFIG, SIMS, seed++);
-    const s = { good: good('single'), bad: bad('single') };
-    const d = { good: good('doubleWin'), bad: bad('doubleWin') };
+    const rates = (p: Protocol, winRate: number) => rollout({ protocol: p, world: world(winRate, 0.5, bias, agreement), config: DEFAULT_SHADOW_CONFIG, sims: SIMS, seed: seed++ });
+    const s = { good: rates('single', 0.7), bad: rates('single', 0.3) };
+    const d = { good: rates('doubleWin', 0.7), bad: rates('doubleWin', 0.3) };
+
     console.log(
       `${bias.toFixed(2)}  ${agreement.toFixed(2)} │      ${pct(s.good.promote)}%  ${pct(s.bad.promote)}% │` +
       `         ${pct(d.good.promote)}%  ${pct(d.bad.promote)}%     ${pct(d.good.unresolved)}%`,
@@ -384,8 +395,8 @@ for (const maxTrials of [12, 16, 20, 24, 30, 40]) {
   for (const winRate of WIN_RATES) {
     for (const tieRate of TIE_RATES) {
       const w = (x: number) => world(x, tieRate, HEADLINE_BIAS, HEADLINE_AGREEMENT);
-      const good = rollout('doubleWin', w(winRate), config, SIMS, seed++);
-      const bad = rollout('doubleWin', w(1 - winRate), config, SIMS, seed++);
+      const good = rollout({ protocol: 'doubleWin', world: w(winRate), config, sims: SIMS, seed: seed++ });
+      const bad = rollout({ protocol: 'doubleWin', world: w(1 - winRate), config, sims: SIMS, seed: seed++ });
       better.push(good.promote);
       worseAll.push(bad.promote);
 
@@ -458,8 +469,8 @@ for (const [promoteThreshold, rollbackThreshold] of PROMOTE_BANDS) {
   for (const winRate of WIN_RATES) {
     for (const tieRate of TIE_RATES) {
       const w = (x: number) => world(x, tieRate, HEADLINE_BIAS, HEADLINE_AGREEMENT);
-      const good = rollout('doubleWin', w(winRate), config, SIMS, seed++);
-      const bad = rollout('doubleWin', w(1 - winRate), config, SIMS, seed++);
+      const good = rollout({ protocol: 'doubleWin', world: w(winRate), config, sims: SIMS, seed: seed++ });
+      const bad = rollout({ protocol: 'doubleWin', world: w(1 - winRate), config, sims: SIMS, seed: seed++ });
       better.push(good.promote);
       worseAll.push(bad.promote);
 

@@ -201,10 +201,9 @@ function chainText(node: Node | null | undefined): string {
   if (node.type === 'ThisExpression') return 'this';
 
   if (node.type === 'MemberExpression') {
-    const property = node.computed ? '[…]'
-      : node.property.type === 'Identifier' ? `.${node.property.name}` : '.?';
+    const named = node.property.type === 'Identifier' ? `.${node.property.name}` : '.?';
 
-    return `${chainText(node.object)}${property}`;
+    return `${chainText(node.object)}${node.computed ? '[…]' : named}`;
   }
 
   if (node.type === 'CallExpression') return `${chainText(node.callee)}()`;
@@ -329,6 +328,16 @@ function testSpans(parsed: ParsedFile): TestSpan[] {
   });
 
   return spans;
+}
+
+/** Records a finding at a node of one parsed file, under the test its line
+ *  falls inside. */
+function finderIn(parsed: ParsedFile, spans: readonly TestSpan[]) {
+  return (node: SyntaxNode, what: string, detail: string): Finding => {
+    const line = parsed.lineAt(node.start);
+
+    return { file: parsed.file, line, test: titleAt(spans, line), what, detail };
+  };
 }
 
 /** The innermost test a line belongs to. `(file scope)` for module-level code:
@@ -628,12 +637,7 @@ function sourceText(
   tracked: ReadonlySet<string>,
 ): Finding[] {
   const found: Finding[] = [];
-
-  const at = (node: SyntaxNode, what: string, detail: string): Finding => {
-    const line = parsed.lineAt(node.start);
-
-    return { file: parsed.file, line, test: titleAt(spans, line), what, detail };
-  };
+  const at = finderIn(parsed, spans);
 
   walk(parsed.tree, (node) => {
     const r = node.raw;
@@ -1064,12 +1068,7 @@ function privateReaches(
   nonPublic: ReadonlyMap<string, string>,
 ): Finding[] {
   const found: Finding[] = [];
-
-  const at = (node: SyntaxNode, what: string, detail: string): Finding => {
-    const line = parsed.lineAt(node.start);
-
-    return { file: parsed.file, line, test: titleAt(spans, line), what, detail };
-  };
+  const at = finderIn(parsed, spans);
 
   walk(parsed.tree, (node) => {
     const r = node.raw;
