@@ -27,6 +27,8 @@ import type { BackupOptions, DirectoryBackup } from '@cloudflare/sandbox';
 import * as v from 'valibot';
 
 import {
+  CHAIN_SERVED_WORDS,
+  type ChainServedWord,
   DELTA_BLOCK_BYTES,
   DELTA_MANIFEST_NAME,
   DELTA_OPS_PER_COMMAND,
@@ -1118,12 +1120,12 @@ interface ComposedMounts {
 }
 
 /** What the attach log says the upper was restored from. */
-function restoredFrom(haveDelta: boolean, held: boolean, chunked: boolean): string {
-  if (!haveDelta) return 'base';
+function restoredFrom(haveDelta: boolean, held: boolean, chunked: boolean): ChainServedWord {
+  if (!haveDelta) return CHAIN_SERVED_WORDS.base;
 
-  if (held) return 'base+delta already in this upper';
+  if (held) return CHAIN_SERVED_WORDS.held;
 
-  return chunked ? 'base+delta block-composed' : 'base+delta layered';
+  return chunked ? CHAIN_SERVED_WORDS.chunked : CHAIN_SERVED_WORDS.layered;
 }
 
 /** What a commit is, for its log line. */

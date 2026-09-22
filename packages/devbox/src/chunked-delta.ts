@@ -24,6 +24,17 @@ import { buildDeltaIndex, DELTA_BLOCK_BYTES, DELTA_INDEX_PAGE_BYTES, DeltaIndexR
 
 /** Bytes per delta block. Matches the 16 KiB nominal chunk the conformance
  *  cells budget against. */
+/** What the attach log says an upper was restored from. The bench reads a
+ *  served fact against this same vocabulary, so there is no second copy. */
+export const CHAIN_SERVED_WORDS = {
+  base: 'base',
+  held: 'base+delta already in this upper',
+  chunked: 'base+delta block-composed',
+  layered: 'base+delta layered',
+} as const;
+
+export type ChainServedWord = (typeof CHAIN_SERVED_WORDS)[keyof typeof CHAIN_SERVED_WORDS];
+
 export { DELTA_BLOCK_BYTES } from './delta-index';
 
 /** Files below this size travel whole: a block map would cost more than

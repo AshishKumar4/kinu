@@ -471,7 +471,7 @@
       },
       {
         "id": "input-PARITY-FOUR-TOOL",
-        "turnId": "null",
+        "turnId": null,
         "mode": "build",
         "text": "PARITY-FOUR-TOOL"
       }

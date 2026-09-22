@@ -60,7 +60,7 @@ import {
 
 export type { ExecReply, CheckpointReply, FileObservation, StateReply, StartupPoll, StartupCompletion, StartupObservation } from '../packages/devbox/bench/observation-schema';
 
-import { DELTA_MANIFEST_NAME, DeltaManifestSchema, type DeltaManifest } from '../packages/devbox/src/chunked-delta';
+import { CHAIN_SERVED_WORDS, DELTA_MANIFEST_NAME, DeltaManifestSchema, type DeltaManifest } from '../packages/devbox/src/chunked-delta';
 import { BlockAttachMetricsSchema, evaluateLiveC3, type BlockAttachMetrics, type C3Identity, type LiveC3Observation } from '../packages/devbox/bench/c3-result';
 import { PublicationWindowSchema, publicationTotals } from '../packages/devbox/bench/publication-meter';
 import { C3_BYTES_BOUND, C3_WORKLOAD } from '../packages/devbox/bench/witness-files';
@@ -7268,7 +7268,6 @@ export interface CutJudgment {
  */
 const CHAIN_SERVED_PATTERN = /^chain \S+ \d+B (.+)$/;
 
-const CHAIN_SERVED_WORDS = ['base', 'base+delta already in this upper', 'base+delta block-composed', 'base+delta layered'] as const;
 
 /** The served word of a chain attach detail, or null when the detail speaks
  *  an shape the judges do not cover — a fallback path, or a rewording. */
@@ -7340,7 +7339,7 @@ export function judgeChainCut(facts: ChainCutFacts): CutJudgment {
 
   const movedWithoutRevision = changed && facts.preRev === facts.postRev;
 
-  const servedKnown = facts.servedWord !== null && CHAIN_SERVED_WORDS.some((word) => word === facts.servedWord);
+  const servedKnown = facts.servedWord !== null && Object.values(CHAIN_SERVED_WORDS).some((word) => word === facts.servedWord);
   let verdict: CutVerdict;
   let note: string;
 

@@ -1505,17 +1505,6 @@ describe('the instruments restate nothing unchecked', () => {
   const driver = readFileSync(join(import.meta.dir, 'bench-devbox-strategies.ts'), 'utf8');
   const repo = (...parts: string[]): string => readFileSync(join(import.meta.dir, '..', ...parts), 'utf8');
 
-
-
-  test('the chain served words are the product ternary’s', () => {
-    const chain = repo('packages', 'devbox', 'src', 'snapshot-chain.ts');
-    const product = /\? '([^']+)'\s*:\s*held \? '([^']+)' : chunked \? '([^']+)' : '([^']+)'/.exec(chain);
-    expect(product?.slice(1)).toEqual(['base', 'base+delta already in this upper', 'base+delta block-composed', 'base+delta layered']);
-    const restated = /CHAIN_SERVED_WORDS = \[([^\]]+)\]/.exec(driver)?.[1] ?? '';
-    const words = [...restated.matchAll(/'([^']+)'/g)].map((match) => match[1]).sort();
-    expect(words).toEqual([...(product?.slice(1) ?? [])].sort());
-  });
-
   test('legacy checkpoints have no third kind to hide a barrier in', () => {
     const storage = repo('packages', 'devbox', 'src', 'storage.ts');
     const kinds = /type CheckpointKind = ((?:'[^']+'(?: \| )?)+)/.exec(storage)?.[1] ?? '';
