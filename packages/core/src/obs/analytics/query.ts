@@ -1,40 +1,7 @@
 /**
- * Weighted SQL for the Analytics Engine read path.
- *
- * ## Why every aggregate here is weighted
- *
- * AE downsamples. Sampling happens on write and on read, keyed on `index1`, and
- * the surviving row carries `_sample_interval` — how many original rows it stands
- * for. A `COUNT()` over a sampled dataset is therefore not a count of anything: it
- * counts SURVIVORS. Cloudflare's own translation table is the contract these
- * builders implement:
- *
- *     COUNT()        →  SUM(_sample_interval)
- *     SUM(double1)   →  SUM(_sample_interval * double1)
- *     AVG(double1)   →  SUM(_sample_interval * double1) / SUM(_sample_interval)
- *     quantile       →  quantileExactWeighted(q)(double1, _sample_interval)
- *
- * The failure this prevents is not an error. An unweighted query returns a
- * plausible smaller number, and the moment one workspace gets busy enough to be
- * sampled, that number silently stops meaning what its column heading says. So
- * there is no unweighted aggregate in this module at all: the safe form is the
- * only form available.
- *
- * ## Why positions never appear
- *
- * Every column is resolved through the schema by NAME. A query that spelled
- * `blob7` would be a second declaration of a fact `schemas.ts` already owns, and
- * when the two disagree the query still returns strings — every one of them from
- * the wrong field. The name arguments are typed against the schema, so a slot
- * that moves is a compile error here and a slot that is renamed is a compile
- * error too.
- *
- * ## Purity
- *
- * Text in, text out. Nothing here reads an environment, touches a binding or
- * makes a request: the control plane owns the transport, the credential and the
- * not-configured arm, and it must be able to render "analytics not configured"
- * without this module existing at runtime.
+ * Weighted SQL for the AE read path. AE samples on write and read, so every aggregate weights by
+ * `_sample_interval`; no unweighted form exists. Columns resolve by slot name, never `blobN`.
+ * Pure text: no env, binding or request.
  */
 import { assertQuantileLevel } from './limits';
 import {
@@ -43,29 +10,18 @@ import {
   type AnalyticsSchema, type BlobName, type DoubleName,
 } from './schemas';
 
-/** `COUNT()`, weighted. The sample interval IS the count: one surviving row
- *  stands for `_sample_interval` originals. */
 function weightedCount(): string {
   return 'SUM(_sample_interval)';
 }
 
-/** `SUM(metric)`, weighted. */
 function weightedSum<S extends AnalyticsSchema>(schema: S, metric: DoubleName<S>): string {
   return `SUM(_sample_interval * ${doubleColumn(schema, metric)})`;
 }
 
-/** `AVG(metric)`, weighted — the weighted total over the weighted row count,
- *  which is what makes it an average of the ORIGINAL rows rather than of the
- *  survivors. */
 function weightedAvg<S extends AnalyticsSchema>(schema: S, metric: DoubleName<S>): string {
   return `SUM(_sample_interval * ${doubleColumn(schema, metric)}) / SUM(_sample_interval)`;
 }
 
-/**
- * A quantile of `metric`, weighted. `quantileExactWeighted` takes the weight as
- * its second argument and AE's documentation names `_sample_interval` as the
- * value to pass — the platform built the function for this.
- */
 function weightedQuantile<S extends AnalyticsSchema>(
   schema: S,
   metric: DoubleName<S>,
@@ -76,15 +32,7 @@ function weightedQuantile<S extends AnalyticsSchema>(
   return `quantileExactWeighted(${quantile})(${doubleColumn(schema, metric)}, _sample_interval)`;
 }
 
-/**
- * A ratio of two weighted sums — a mean of `metric` over the rows that actually
- * carried one, rather than over every row.
- *
- * The case it exists for: `usd` is 0 both when a call cost nothing and when it
- * could not be priced, so an average cost has to divide by the number of PRICED
- * calls. Dividing by the row count would report a fabricated discount that grows
- * with the number of unpriced calls.
- */
+/** Mean over rows that carried the metric, e.g. `usd` over priced calls, not over all rows. */
 function weightedRatio<S extends AnalyticsSchema>(
   schema: S,
   numerator: DoubleName<S>,
@@ -94,7 +42,6 @@ function weightedRatio<S extends AnalyticsSchema>(
     + ` / SUM(_sample_interval * ${doubleColumn(schema, denominator)})`;
 }
 
-/** One selected metric: the expression, and the name it is reported under. */
 interface QueryMetric {
   readonly as: string;
   readonly expression: string;
@@ -102,33 +49,18 @@ interface QueryMetric {
 
 interface WeightedQuery<S extends AnalyticsSchema> {
   readonly schema: S;
-  /** Blob slots to group by, in order. Reported under their own slot names. */
   readonly groupBy: readonly BlobName<S>[];
   readonly metrics: readonly QueryMetric[];
-  /** The lookback, as an AE interval expression — `'24' HOUR`, `'7' DAY`. */
+  /** AE interval expression, e.g. `'24' HOUR`. */
   readonly since: string;
-  /** Extra predicates, ANDed. Build them with the column resolvers, never by
-   *  spelling `blobN`. */
+  /** ANDed; build with the column resolvers, never `blobN`. */
   readonly where?: readonly string[];
-  /** A reported metric name to order by, descending. */
   readonly orderBy?: string;
-  /**
-   * Rows to return at most. REQUIRED of any panel whose `groupBy` has open
-   * cardinality, and meaningless on one whose group-by is a closed vocabulary —
-   * see `PANEL_ROW_LIMIT` for which panels are which and why.
-   */
+  /** Required when `groupBy` has open cardinality (see `PANEL_ROW_LIMIT`). */
   readonly limit?: number;
 }
 
-/**
- * The full SELECT.
- *
- * THE TIME PREDICATE IS MANDATORY, which is why `since` is a required field and
- * not an option. AE's query timeout is 30 seconds and an unbounded scan over a
- * three-month dataset reaches it; a builder that let a caller omit the window
- * would make "the metrics page times out" a thing a caller could cause by
- * forgetting one argument.
- */
+/** `since` is required: an unbounded scan over the three-month dataset hits AE's query timeout. */
 function buildWeightedQuery<S extends AnalyticsSchema>(query: WeightedQuery<S>): string {
   const { schema } = query;
   const grouped = query.groupBy.map((name) => `${blobColumn(schema, name)} AS ${String(name)}`);
@@ -160,9 +92,6 @@ function buildWeightedQuery<S extends AnalyticsSchema>(query: WeightedQuery<S>):
   return lines.join('\n');
 }
 
-/** One SQL string per panel the admin metrics view renders. A closed contract
- *  rather than an open dictionary, so a panel the reader expects and the builder
- *  stopped producing is a type error rather than an empty card. */
 export interface ControlPlaneMetricQueries {
   readonly turns: string;
   readonly latency: string;
@@ -173,46 +102,14 @@ export interface ControlPlaneMetricQueries {
 }
 
 /**
- * Rows one panel may return.
- *
- * WHICH PANELS NEED IT. Four of the six below group by a blob whose cardinality
- * nothing bounds: `latency` and `firstToken` and `tokens` group by `model` (a
- * 128-byte slot holding whatever model id a provider or a user's own config
- * names), and `toolFailures` groups by `tool`, which is the name of the tool the
- * model called — including the crafted tools a workspace authors at runtime. One
- * row per distinct value, times the outcome and code columns beside it, is a row
- * count no deployment fact caps. The other two are closed vocabularies and take
- * no bound: `turns` groups by `outcome` and `code`, which are a four-member union
- * and core's own error codes, and `adminOps` groups by the tail of a
- * `control_plane.*` event name and its outcome.
- *
- * WHY THIS NUMBER. The surface is `MetricTable` in `pages/ControlPage.tsx`: a
- * plain table in a half-width card, six of them in one grid, rendering every row
- * it is handed with no cursor, no pagination and no "show more". So a panel is a
- * top-N table and always was — each of the four already orders by its own volume
- * metric descending — and this is the N it never declared. 50 is the control
- * plane's own answer to how many rows one uncursored read hands an operator
- * (`control-plane/store.ts` `CONTROL_PAGE_DEFAULT`), restated rather than
- * imported because that module reads this one and the dependency may not invert.
- *
- * The bound is also what keeps the read inside AE's 30-second query timeout,
- * which is the same reason `since` is mandatory.
+ * Bound for panels grouped by open-cardinality blobs (`model`, `tool`); the UI table has no
+ * pagination. Mirrors `CONTROL_PAGE_DEFAULT`, restated because that module imports this one.
  */
 const PANEL_ROW_LIMIT = 50;
 
 /**
- * The queries the control plane's metrics surface reads.
- *
- * Assembled here rather than there so slot positions never leave this module: the
- * control plane owns what to ASK and how to show it, and this owns how the
- * question is spelled. A rename on either side of that line is a type error
- * rather than a column of zeros.
- *
- * `workspaceDigest` is compared against `index1`, so a caller filters by
- * digesting a workspace id it already holds — the raw name is deliberately
- * unrecoverable from the dataset. `adminOps` ignores it: a different dataset with
- * a different index, where the same string would match nothing and a silently
- * empty panel is worse than an unfiltered one.
+ * `workspaceDigest` filters `index1`; `adminOps` ignores it, since that dataset is indexed by
+ * actor and the filter would silently empty the panel.
  */
 export function controlPlaneMetricsQueries(
   opts: { sinceHours: number; workspaceDigest?: string },
@@ -268,8 +165,6 @@ export function controlPlaneMetricsQueries(
         { as: 'outputTokens', expression: weightedSum(agent, 'output') },
         { as: 'cachedInputTokens', expression: weightedSum(agent, 'cacheRead') },
         { as: 'usd', expression: weightedSum(agent, 'usd') },
-        // Not `usd / calls`: `usd` is 0 for an unpriced call as well as a free
-        // one, so the denominator has to be the calls that carried a rate.
         { as: 'usdPerPricedCall', expression: weightedRatio(agent, 'usd', 'priced') },
       ],
       since,
@@ -298,11 +193,7 @@ export function controlPlaneMetricsQueries(
         { as: 'p95TtftMs', expression: weightedQuantile(agent, 'ttftMs', 0.95) },
       ],
       since,
-      // A DIFFERENT ROW KIND, which is why this is its own panel rather than two
-      // more metrics on `latency`: a first-token row exists only for a turn that
-      // streamed something, so folding it in would average first-token latency
-      // over turns that never produced a token — and those two populations are
-      // exactly the ones to keep apart when latency is the complaint.
+      // Separate row kind: exists only for turns that streamed.
       where: scoped('ttft'),
       orderBy: 'turns',
       limit: PANEL_ROW_LIMIT,

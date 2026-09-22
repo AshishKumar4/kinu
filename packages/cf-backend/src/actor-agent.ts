@@ -164,7 +164,7 @@ import {
   // Heads support (inherited-context digest)
   inheritedContextFromTranscript,
   type ReleaseToolDeps,
-  PlanReviewActions, planHandoffKey, planHandoffTurn,
+  PlanReviewActions, type PlanDecisionOutcome,
   type PlanEdit, type PlanReview, type PlanReviewAnnotation,
   type PlanReviewDecision, type PlanReviewResult, type SubmitPlanToolDeps,
   isVfsError,
@@ -902,68 +902,14 @@ export abstract class ActorAgent extends Agent<Env> {
     return this.planActions.saveAnnotations(id, revision, { value: annotations });
   }
 
-  /** Persist the verdict before starting the next turn. The queued handoff
-   * keeps implementation outside the Plan tool surface. */
   @callable()
   async decidePlanReview(
     id: string,
     revision: number,
     decision: PlanReviewDecision,
     feedback?: string,
-  ): Promise<PlanReviewResult | {
-    readonly ok: true;
-    readonly plan: PlanReview;
-    readonly queued: boolean;
-    readonly queueError?: string;
-  }> {
-    const result = this.planActions.decide(id, revision, decision, feedback);
-
-    if (!result.ok) return result;
-
-    if (result.plan.handoffAccepted) {
-      return { ok: true, plan: result.plan, queued: true };
-    }
-
-    const plan = result.plan;
-    const { text, metadata } = planHandoffTurn(plan, decision);
-
-    const enqueue = (attempt: number) => this.host.enqueueTurn({
-      text,
-      metadata,
-      idempotencyKey: planHandoffKey(plan, decision, attempt),
-    });
-
-    try {
-      let attempt = this.stores.planReviews.handoffAttempt(plan.id, plan.revision);
-      let queued = await enqueue(attempt);
-
-      if (queued.status === 'skipped'
-        && queued.durable
-        && !queued.durable.accepted
-        && (queued.durable.status === 'aborted'
-          || queued.durable.status === 'skipped'
-          || queued.durable.status === 'error')) {
-        attempt = this.stores.planReviews.advanceHandoffAttempt(plan.id, plan.revision, attempt);
-        queued = await enqueue(attempt);
-      }
-
-      if (queued.status !== 'queued') {
-        return { ok: true, plan, queued: false, queueError: 'the durable turn submission was skipped' };
-      }
-
-      const accepted = this.planActions.markHandoffAccepted(plan.id, plan.revision);
-
-      if (!accepted.ok) return accepted;
-
-      return { ok: true, plan: accepted.plan, queued: true };
-    } catch (error) {
-      return {
-        ok: true,
-        plan,
-        queued: false,
-        queueError: renderThrownChain({ cause: error }),
-      };
-    }
+  ): Promise<PlanDecisionOutcome> {
+    return this.planActions.decideAndHandOff({ id, revision, decision, feedback }, (turn) => this.host.enqueueTurn(turn));
   }
 
   // ── The subordinate tree ────────────────────────────────────────────
@@ -1613,21 +1559,15 @@ export abstract class ActorAgent extends Agent<Env> {
             : { status: 'completed', detail: refusal };
         },
       }),
-      overflow_retry: overflowRetryTerminalEffect(this.orch.inbox),
-      // The other follow-up a settled turn can owe, and the shape is identical
-      // because the obligation is: one signal, keyed on this response, still
-      // owed until it is delivered. What differs is which turn earns it — the
-      // retry answers a context-length FAILURE, this one an answer the provider
-      // cut at its output limit while the model had more to say.
-      output_continuation: outputLimitContinuationTerminalEffect(this.orch.inbox),
+      // The follow-up turns a settled turn can owe — a context-length retry, the
+      // continuation of an answer cut at its output limit, a reminder of open
+      // tasks — each owed until its own turn is on disk.
+      overflow_retry: overflowRetryTerminalEffect(() => this.chatLoop),
+      output_continuation: outputLimitContinuationTerminalEffect(() => this.chatLoop),
+      task_reminder: taskReminderTerminalEffect(() => this.chatLoop),
 
       turn_record: turnRecordTerminalEffect(this.orch),
       event_drain: eventDrainTerminalEffect(this.orch),
-
-      // The third signal a settled turn can owe: it ended while its task list
-      // still held open items. One queued turn, keyed on this response — the
-      // ledger, not RAM, says the once.
-      task_reminder: taskReminderTerminalEffect(this.orch.inbox),
 
       improvement_lanes: terminalEffect({
         input: v.object({

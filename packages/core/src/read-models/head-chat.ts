@@ -1,57 +1,27 @@
 /**
- * A head's work as chat messages: the steps its journal holds, and the step
- * still arriving.
- *
- * Both projections live here because they have to agree. A journalled step and
- * the step being written are the SAME shape — optional reasoning, optional
- * prose, the calls it made — and the chat already has one renderer for that
- * (`MessageView`). A bespoke rendering for the live half is what made an
- * in-flight step read as a plain dashed box with its reasoning thrown away,
- * while the identical text one frame later read as a chat message.
- *
- * The accumulator is here too, next to the projection that consumes it, and it
- * is the whole of the live state: two strings per head, no history, nothing
- * persisted. A `head_stream` frame carries the provider's own delta verbatim,
- * so applying one is a concatenation and nothing else.
+ * A head's journalled steps and its in-flight step as chat messages. Kept together because both
+ * must render through `MessageView` identically; the live state is two strings per head.
  */
 import type { UIMessage } from "ai";
 import type { HeadStep } from '../heads/types';
 
-/** What a running head has produced but not yet journalled, in the two streams
- *  the provider separates. Both halves, because the chat draws both. */
 export interface HeadDelta {
   readonly text: string;
   readonly reasoning: string;
 }
 
-/** Which of a head's two streams a `head_stream` frame carried. */
 export type HeadDeltaKind = "text" | "reasoning";
 
 const NOTHING: HeadDelta = { text: "", reasoning: "" };
 
-/**
- * The live deltas as a READER sees them: what a head is writing, and the one
- * thing the reader may say back about it.
- *
- * `retire` is that one thing, and it is why this is an interface rather than
- * the map itself. A delta is retired by the `head_activity` push in the normal
- * case — but a socket frame can be missed, which is the whole reason an open
- * transcript also re-reads on a clock. A reader that learns of a landed step
- * from its OWN read has to retire the delta as well, or the same text paints
- * twice: once as the durable step, once as the live tail under it.
- *
- * The accumulator stays in `useKinu`, where the socket is. This is its surface.
- */
+/** `retire` exists because a socket frame can be missed: a reader that sees a landed step via its
+ * own read must retire the delta, or the text paints twice. */
 export interface HeadDeltas {
-  /** What this head is writing, or undefined when nothing is. */
   get(headId: string): HeadDelta | undefined;
-  /** This head's journal has caught up with what the accumulator holds, so the
-   *  accumulator must stop claiming it. Idempotent. */
+  /** The journal caught up; stop claiming this head's text. Idempotent. */
   retire(headId: string): void;
 }
 
-/** No head is painting. A shared empty for every caller without a live socket:
- *  the gallery frames, a settled view. */
 export const NO_HEAD_DELTAS: HeadDeltas = { get: () => undefined, retire: () => {} };
 
 export function appendHeadDelta(
@@ -67,9 +37,7 @@ export function appendHeadDelta(
     : { text: held.text + delta, reasoning: held.reasoning });
 }
 
-/** Drop one head's accumulator, keeping the map's identity when there is
- *  nothing to drop — a retire that changed nothing must not re-render every
- *  reader. */
+/** Keeps the map's identity when nothing drops, so a no-op retire re-renders nothing. */
 export function retireHeadDelta(
   previous: ReadonlyMap<string, HeadDelta>,
   headId: string,
@@ -82,20 +50,8 @@ export function retireHeadDelta(
 }
 
 /**
- * One recorded step as one assistant message.
- *
- * A step is exactly what the chat already draws: optional reasoning, optional
- * prose, and the calls it made. The only translation needed is the tool shape —
- * the journal stores `{ name, input, output }` and the chat reads AI-SDK tool
- * parts — so that is all this does.
- *
- * `dynamic-tool` rather than a typed `tool-<name>` part because the head's tool
- * set is not statically known to the browser, and `groupMessageParts` /
- * `ToolCallPart` treat both variants identically by design (tool-call-grouping.ts).
- *
- * A call with no recorded output is `input-available`, which the chat draws as
- * still running — true of the step a live branch is in the middle of, and the
- * honest reading of a call whose result never came back.
+ * `dynamic-tool` parts: the head's tool set is not statically known to the browser. A call with no
+ * recorded output stays `input-available`, drawn as still running.
  */
 export function stepAsMessage(step: HeadStep, index: number, headId: string): UIMessage {
   const parts: UIMessage["parts"] = [];
@@ -115,17 +71,8 @@ export function stepAsMessage(step: HeadStep, index: number, headId: string): UI
 }
 
 /**
- * The step still arriving, as the chat's own live message.
- *
- * Left OPEN — `state: "streaming"` on the part tokens are landing in — so
- * `MessageView`'s live tail shimmers the reasoning block and puts the caret
- * inside the prose, which is what the main chat's streaming turn looks like.
- * Reasoning closes the moment prose starts, because a provider that has begun
- * answering has stopped thinking.
- *
- * Null when the head has produced nothing: there is no message to draw, and
- * that is also what a head emitting no deltas at all looks like — one rendering
- * for both.
+ * Left `state: "streaming"` so `MessageView` draws the live tail; reasoning closes once prose starts.
+ * Null when the head has produced nothing.
  */
 export function deltaAsMessage(delta: HeadDelta | undefined, headId: string): UIMessage | null {
   if (delta === undefined || (delta.text === "" && delta.reasoning === "")) return null;

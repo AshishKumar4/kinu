@@ -1,10 +1,4 @@
-/**
- * Seven abstract primitive interfaces — the portability layer.
- * Everything in the agent core is written against these.
- * Backends (CF Workers / Linux CLI) satisfy them.
- *
- * Architecture reference: docs/ARCHITECTURE.md — "Backends and the AgentRuntime contract"
- */
+/** The portability layer: the agent core is written against these; backends satisfy them. */
 
 import type { SqlExecutor, SqlValue } from '@kinu.run/agent-utils';
 import * as v from 'valibot';
@@ -12,45 +6,22 @@ import type { MemorySearchResult } from '@kinu.run/agent-utils/memory';
 import type { ToolSet as AiToolSet } from 'ai';
 import type { JsonObject, JsonValue } from '../utils/json';
 
-/**
- * The tagged-template SQL primitive. Both DO sql and better-sqlite3 satisfy it.
- * For DDL (CREATE TABLE etc), use execRaw below, which accepts a plain string.
- *
- * Defined in `@kinu.run/agent-utils` rather than here: core already depends on
- * that package and it sits at the bottom of the DAG, so it is the only place
- * one definition can serve both. Re-exported here because this file is the
- * portability layer a backend author reads.
- */
+/** Tagged-template SQL; defined in agent-utils (bottom of the DAG). DDL goes through execRaw. */
 export type { SqlValue, SqlExecutor } from '@kinu.run/agent-utils';
 
 import type { Refusal } from '../obs/error';
 
-/**
- * Raw SQL execution for DDL statements that don't use parameter binding.
- * On CF: ctx.storage.sql.exec(ddl)
- * On Linux: db.exec(ddl)
- */
 export interface RawSqlExec {
   (ddl: string): void;
 }
 
-/**
- * Positional-binding SQL. Durable Object `ctx.storage.sql` implements it
- * natively; bun:sqlite is one `db.query(q).all(...)` wrapper away.
- *
- * The second SQL primitive, and a deliberate one: a tagged template cannot
- * express a query whose shape is built at runtime, so the stores holding DDL
- * and dynamic statements — the events hub, the experience library, the
- * release board, the subordinate roster — speak this instead. Prefer
- * {@link SqlExecutor} wherever the statement is a literal.
- */
+/** Positional-binding SQL for runtime-shaped queries; prefer {@link SqlExecutor} for literals. */
 export interface SqlExec {
   readonly exec: (query: string, ...bindings: SqlValue[]) => {
     toArray(): SqlExecRow[];
   };
 }
 
-/** One dynamically queried SQLite row in the portable value vocabulary. */
 export type SqlExecRow = Record<string, SqlValue>;
 
 /** Native generations remain numbers; relational projections expose their persisted identity tuple. */
@@ -58,32 +29,17 @@ export const VfsRevisionSchema = v.union([v.number(), v.string()]);
 
 export type VfsRevision = v.InferOutput<typeof VfsRevisionSchema>;
 
-/** What {@link VFS.stat} answers for a path that exists. Named because a
- *  consumer holding one needs the type, and `ReturnType<typeof vfs.stat>`
- *  couples it to the method rather than to the contract. */
 export interface VfsEntryStat {
   size: number;
   mtimeMs: number;
   isDir: boolean;
-  /** Authoritative backend path revision when the plane has one. Never derived
-   * from size/mtime: a same-size/same-mtime peer write is still a new value. */
+  /** Never derived from size/mtime: a same-size/same-mtime peer write is still a new value. */
   revision?: VfsRevision;
 }
 
-/**
- * VFS interface — the workspace filesystem implements it, and so does each
- * executor's own file view. `stat` names its time field `mtimeMs` (the Node
- * fs.Stats convention).
- *
- * In production `Storage.vfs` is the workspace filesystem
- * (vfs/nimbus-workspace.ts). Relative paths resolve at its root — the same
- * directory the workspace shell starts in, so both address one set of bytes by
- * one set of names.
- */
+/** Relative paths resolve at the workspace root, the same directory the workspace shell starts in. */
 export interface VFS {
-  /** Native authoritative compare-and-write. Undefined means this plane cannot
-   * safely offer in-place editor saves; callers must not emulate it with a
-   * read/compare/write sequence. */
+  /** Native compare-and-write. When undefined, callers must not emulate it with read/compare/write. */
   writeFileIfRevision?(
     path: string,
     data: Uint8Array,
@@ -100,37 +56,24 @@ export interface VFS {
   exists(path: string): Promise<boolean>;
 }
 
-/** 1. STORAGE — filesystem + raw SQL */
 export interface Storage {
   vfs: VFS;
   sql: SqlExecutor;
-  /** Raw DDL execution (CREATE TABLE, CREATE INDEX) */
   execRaw: RawSqlExec;
-  /** Atomic synchronous writes on the SAME connection as sql; rolls back on throw. */
+  /** Atomic synchronous writes on the same connection as sql; rolls back on throw. */
   readonly transactionSync: <T>(write: () => T) => T;
 }
 
-/**
- * Re-exported from `@kinu.run/agent-utils/memory`: one definition serves the
- * store and the portability layer alike.
- */
 export type { MemorySearchResult } from '@kinu.run/agent-utils/memory';
 
-/** 2. MEMORY — FTS5-indexed markdown files in VFS */
+/** FTS5-indexed markdown files in VFS. */
 export interface Memory {
   write(path: string, content: string): Promise<void>;
   append(path: string, content: string): Promise<void>;
   index(path: string): Promise<void>;
   search(query: string, limit?: number): Promise<MemorySearchResult[]>;
   read(path: string): Promise<string | null>;
-  /**
-   * The newest `bytes` of one file as text; null when the file is absent.
-   *
-   * Bounded on the STORE side: an implementation reads at most `bytes` of the
-   * file, never the file to slice it. A window that opens inside a multi-byte
-   * sequence drops that sequence's remainder, so the text is whole code points
-   * and the same bytes `read` would have decoded there.
-   */
+  /** Newest `bytes` as text; reads at most `bytes` from the store and drops a split code point. */
   tail(path: string, bytes: number): Promise<string | null>;
 }
 
@@ -145,21 +88,14 @@ export interface ExecuteResult {
   logs?: string[];
 }
 
-/**
- * 3. EXECUTOR — sandboxed multi-tool orchestration.
- * The LLM writes an async arrow function. Tool namespaces are Proxy globals.
- * Network blocked by default (globalOutbound: null on CF). No persistent state.
- */
+/** Sandboxed; network blocked by default (globalOutbound: null on CF); no persistent state. */
 export interface Executor {
   /** Languages this executor can actually run, in preference order. */
   readonly languages: readonly [string, ...string[]];
   execute(
     code: string,
     providers: ResolvedProvider[] | Record<string, (...args: JsonValue[]) => Promise<JsonValue | undefined>>,
-    /** Caller-declared wall-clock budget. Tool-call-scale code omits it and
-     *  gets the executor's own default; agentic-loop callers (runScaffold)
-     *  declare none at all and run to settlement. Executors that cannot
-     *  honour a declared budget may ignore it. */
+    /** Omitted `timeoutMs` gets the executor default; executors that cannot honour it may ignore it. */
     opts?: {
       timeoutMs?: number;
       /** Omitted means the executor's first declared language. */
@@ -180,7 +116,6 @@ export interface StepResult {
 
 export type ToolSet = AiToolSet;
 
-/** 4. LLM — inference */
 export interface LLM {
   stream(opts: {
     system: string;
@@ -198,23 +133,18 @@ export interface FiberCtx {
   snapshot: JsonValue | null;
 }
 
-/**
- * 5. SCHEDULE — deferred + durable execution.
- * CONSTRAINT: fiber() ONLY callable from orchestrator. Throws in sub-agents.
- */
+/** fiber() is callable only from the orchestrator; it throws in sub-agents. */
 export interface Schedule {
   after(delayMs: number, fn: () => Promise<void>): Promise<void>;
   cron(expr: string, name: string, fn: () => Promise<void>): Promise<void>;
   fiber<T>(name: string, fn: (ctx: FiberCtx) => Promise<T>): Promise<T>;
 }
 
-/** 6. IDENTITY — stable id + mutable scaffold */
 export interface Identity {
   id: string;
   name: string;
   scaffold: {
-    /** Canonical live scaffold path for this actor. Version archives append
-     * `.vN` to this path. */
+    /** Version archives append `.vN` to this path. */
     path: string;
     exists(): Promise<boolean>;
     read(): Promise<string>;
@@ -223,24 +153,16 @@ export interface Identity {
   };
 }
 
-/**
- * 7. SHELL — POSIX command execution over a VFS.
- * Both the workspace shell (structural match) and any other
- * host-native shell bridge satisfy this. Optional on AgentRuntime; tools that
- * need shell access (e.g. `shell`) read it and fall back to the executionRouter.
- */
 export interface ShellExecOptions {
   stdin?: string;
   signal?: AbortSignal;
 }
 
-/** What a command leaves behind. Named because gating and checkpointing
- *  wrappers have to construct one without running anything. */
 export interface ShellExecResult {
   stdout: string;
   stderr: string;
   exitCode: number;
-  /** The command never ran; this producer-owned classification is not process stdout/stderr. */
+  /** The command never ran. */
   refusal?: Refusal;
 }
 

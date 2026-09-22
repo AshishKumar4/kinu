@@ -1,20 +1,7 @@
-/**
- * Limit bounds on the two run-log read models that a caller can reach without
- * passing through the run-events HTTP route: the run LIST page (`listRuns`,
- * `getRunSummaries`) and the merged TIMELINE (`getRunTimeline`, a `@callable`).
- *
- * The shared defect: a caller-supplied `limit` reached `LIMIT` binds unclosed.
- * SQLite reads `LIMIT -1` as no limit and rejects a fraction or `NaN` as a
- * datatype mismatch, so the same value could either read a whole table or 500
- * the request. The run list had a third failure mode of its own — `limit + 1`
- * reaching SQL as `LIMIT 0`, and an empty page is how this read model says the
- * history behind the cursor is EXHAUSTED.
- */
+/** A caller-supplied `limit` must never reach SQL unclamped: SQLite reads `LIMIT -1` as no limit,
+ *  rejects NaN, and an empty page (`LIMIT 0`) means the history is exhausted. */
 
 import { describe, test, expect } from 'bun:test';
-// Imported per module rather than through `../src/index`: this suite is about
-// four specific read models, and the barrel drags in every unrelated module
-// being edited beside them.
 import { BackgroundJobStore, initBackgroundJobsTable } from '../src/jobs/store';
 import { boundedInt } from '../src/utils/bounds';
 import { initRunEventTables, RunEventRecorder } from '../src/events/recorder';
@@ -23,16 +10,12 @@ import { getRunTimeline } from '../src/read-models/timeline';
 import { initAllTables } from '../src/identity/schema';
 import { createTestActors, createTestSql } from '@kinu.run/test-utils';
 
-/** `count` distinct runs in the log, one event each, so a page bound is
- *  observable as a row count. */
 function seededRuns(count: number) {
   const { sql, execRaw } = createTestSql();
   initAllTables(execRaw, sql);
   initRunEventTables(execRaw);
   initBackgroundJobsTable(execRaw);
-  // The job store is actor-private, so the timeline's jobs spine needs a real
-  // owner — and the run-event log is scoped by the same actor, so the recorder
-  // writes under the one the spine reads.
+  // Job store and run-event log are actor-scoped; the recorder writes under the actor the spine reads.
   const actor = createTestActors(sql, execRaw).main;
   const recorder = new RunEventRecorder(sql, actor);
 
@@ -47,16 +30,13 @@ describe('the run list page is closed against every caller value', () => {
   test('a negative limit yields a page, never the empty page that means exhausted', () => {
     const { recorder } = seededRuns(5);
     const page = listRuns(recorder, null, -1);
-    // The defect: `-1 + 1` bound as `LIMIT 0`, so this read answered "no runs"
-    // for a workspace holding five.
+    // `-1 + 1` must not bind as `LIMIT 0` and answer "no runs".
     expect(page.items.length).toBe(1);
     expect(page.items.length).toBeGreaterThan(0);
   });
 
   test('an unparseable limit means unstated and takes the default', () => {
     const { recorder } = seededRuns(5);
-    // `Number('abc')` is NaN. `Math.max(1, NaN)` is NaN, and binding that is a
-    // datatype mismatch rather than a page.
     expect(listRuns(recorder, null, Number.NaN).items.length).toBe(5);
     expect(listRuns(recorder, null, Number.POSITIVE_INFINITY).items.length).toBe(5);
   });
@@ -74,10 +54,7 @@ describe('the run list page is closed against every caller value', () => {
   });
 
   test('a bounded page still reports the rest of the history as reachable', () => {
-    // Why a ceiling here is a page and not the truncation a prior decision
-    // rejected: the remainder stays reachable. `Page` is a variant on `status`
-    // precisely so `next` cannot be read without observing which state this is,
-    // which is what stops a caller mistaking a full page for the end of the log.
+    // A ceiling yields a page with `next`, not truncation: the remainder stays reachable.
     const { recorder } = seededRuns(205);
     const page = listRuns(recorder, null, 1e9);
 
@@ -102,8 +79,6 @@ describe('the run list page is closed against every caller value', () => {
 });
 
 describe('the merged timeline is closed against every caller value', () => {
-  /** The four spines the timeline merges, each seeded so a bound is visible in
-   *  the span count rather than only in the SQL. */
   function timelineDeps(runs: number) {
     const { recorder, sql, actor } = seededRuns(1);
 
@@ -123,9 +98,7 @@ describe('the merged timeline is closed against every caller value', () => {
 
   test('a negative limit does not read whole tables, nor invert the tail slice', () => {
     const { deps } = timelineDeps(12);
-    // Two failures at once: `LIMIT -1` on evolution_events and search_nodes read
-    // everything, and `spans.slice(-limit)` with limit -1 becomes `slice(1)`,
-    // dropping spans off the FRONT of the merged spine.
+    // `spans.slice(-limit)` with -1 becomes `slice(1)`, dropping spans off the front.
     const spans = getRunTimeline(deps, { limit: -1 });
     expect(spans.length).toBe(1);
   });
@@ -144,8 +117,7 @@ describe('the merged timeline is closed against every caller value', () => {
       seeded: 450, limit: 1e9, spans: 400,
     },
     {
-      // The chat seed's removed `getRunTimeline({ limit: 250 })` is the widest ask
-      // the product ever made of this surface; the ceiling must not cut it.
+      // 250 is the widest ask the product has made of this surface; the ceiling must not cut it.
       name: 'the recorded widest legitimate ask is still honoured exactly',
       seeded: 300, limit: 250, spans: 250,
     },

@@ -1,27 +1,6 @@
 /**
- * The reserved-log-field ban, red-proven.
- *
- * A type-level ban that nobody points a compiler at is decoration: it is asserted
- * by the absence of a diagnostic in code nobody wrote. So this suite runs the SAME
- * `tsc` the gate runs (`bun run check`) over a project of two fixtures, and reads
- * the diagnostics:
- *
- *   fixtures/log-ban/violations.ts   nine evasion routes, each of which MUST fail
- *                                    to compile, with a diagnostic that names the
- *                                    uninhabited marker type rather than any old
- *                                    error
- *   fixtures/log-ban/allowed.ts      the ordinary calls, which MUST compile — the
- *                                    half a ban usually skips, and the half that
- *                                    caught two earlier designs of
- *                                    `LoggableFields` rejecting a fields object
- *                                    held in an annotated variable
- *
- * `@ts-expect-error` is deliberately not used for this. It proves an error exists
- * somewhere on the next line and never says WHICH, so a fixture built from it
- * keeps passing if the ban breaks and a typo takes its place.
- *
- * That directory is excluded from `packages/core/tsconfig.json` — it is meant to
- * be uncompilable, and the gate would otherwise fail on it.
+ * Runs the gate's `tsc` over fixtures/log-ban: violations.ts must fail naming the marker type,
+ * allowed.ts must compile. No `@ts-expect-error`: it never says which error fired.
  */
 
 import { describe, test, expect } from 'bun:test';
@@ -47,19 +26,12 @@ interface Diagnostic {
   readonly text: string;
 }
 
-/** What one `tsc` run over the fixture project reported. */
 interface CompileReport {
   readonly status: number;
   readonly diagnostics: readonly Diagnostic[];
 }
 
-/**
- * `tsc --noEmit` over the fixture project, parsed into diagnostics.
- *
- * The compiler is invoked through the repo's own `node_modules/.bin/tsc`, the same
- * binary eight `bun run check` projects use, so this cannot pass against a
- * compiler the gate does not run.
- */
+/** Uses the repo's `node_modules/.bin/tsc`, the binary `bun run check` runs. */
 function compileFixtures(): CompileReport {
   const tsc = join(repoRoot, 'node_modules', '.bin', 'tsc');
 
@@ -85,8 +57,7 @@ function compileFixtures(): CompileReport {
   return { status: run.status ?? -1, diagnostics };
 }
 
-/** Line numbers are read from the fixture's own `[N]` markers, so renumbering the
- *  file cannot silently detach an assertion from the line it is about. */
+/** Lines come from the fixture's `[N]` markers, so renumbering cannot detach an assertion. */
 function markedLines(file: string): ReadonlyMap<number, number> {
   const source = readFileSync(join(fixtureProject, file), 'utf8').split('\n');
   const byCase = new Map<number, number>();
@@ -94,10 +65,7 @@ function markedLines(file: string): ReadonlyMap<number, number> {
   for (const [index, text] of source.entries()) {
     const marker = /^\/\/ \[(\d+)\]/u.exec(text);
 
-    // The call is the first line after the marker's comment block, which the
-    // fixture keeps to a fixed shape: `// [n] …` then optional `//` continuation
-    // lines, then the statement. Resolved by scanning forward to the first line
-    // that is not a comment.
+    // The call is the first non-comment line after the `// [n]` marker block.
     if (!marker?.[1]) continue;
     let cursor = index + 1;
 
@@ -112,18 +80,12 @@ const compiled = compileFixtures();
 
 describe('a log call carrying a secret does not compile', () => {
   test('the fixture project fails to compile at all', () => {
-    // The precondition for everything below. A zero exit here would mean the ban
-    // is gone and every per-case assertion below is vacuously reading an empty
-    // diagnostic list.
+    // A zero exit would make every per-case assertion vacuous.
     expect(compiled.status).not.toBe(0);
     expect(compiled.diagnostics.length).toBeGreaterThan(0);
   });
 
-  /**
-   * Every evasion route, with the marker type the diagnostic must name. A test
-   * that only asserted "line N errors" would pass on a typo; naming the marker
-   * asserts it is THIS ban that fired.
-   */
+  /** Naming the marker type asserts this ban fired, not a typo. */
   const cases: readonly (readonly [number, string, string])[] = [
     [1, 'a reserved field in a literal', 'ReservedFieldIsNotLoggable<"soul">'],
     [2, 'a reserved field through an annotated variable', 'ReservedFieldIsNotLoggable<"apiKey">'],
@@ -150,10 +112,7 @@ describe('a log call carrying a secret does not compile', () => {
   }
 
   test('every marked case is covered, and nothing else in the fixture errors', () => {
-    // Two directions. A violation the fixture documents and this suite forgot to
-    // assert would be a silent gap; a diagnostic on an UNMARKED line means the
-    // fixture has an ordinary mistake in it and one of the assertions above may be
-    // passing for the wrong reason.
+    // Both directions: every documented violation asserted, and no diagnostic on an unmarked line.
     expect([...lines.keys()].sort((a, b) => a - b)).toEqual(cases.map(([id]) => id));
     const expected = new Set(lines.values());
     const stray = violations.filter((d) => !expected.has(d.line));
@@ -161,10 +120,8 @@ describe('a log call carrying a secret does not compile', () => {
   });
 
   test('the ordinary calls compile', () => {
-    // The false-positive guard, and not a formality: constraining the fields type
-    // to `Record<string, LogFieldValue>` rejected every fields object held in an
-    // annotated variable, because an interface without an index signature is not
-    // assignable to a Record. Nothing but this fixture would have caught it.
+    // False-positive guard: fields held in an annotated interface variable must be accepted
+    // (no index signature, so not assignable to a Record).
     const allowed = compiled.diagnostics.filter((d) => d.file.endsWith('allowed.ts'));
     expect(allowed.map((d) => `${String(d.line)}: ${d.text}`)).toEqual([]);
   });
@@ -179,8 +136,7 @@ describe('the logger records what a code path claimed', () => {
     ]);
   });
   test('a recorded line keeps its own copy of the fields', () => {
-    // The fields object belongs to the caller: mutating it after the call
-    // must not rewrite the history the logger already captured.
+    // Mutating the caller's fields after the call must not rewrite captured history.
     const log = createRecordingLogger();
     const eventFields = { rows: 3 };
     log.event('capability.read', eventFields);
@@ -197,8 +153,6 @@ describe('the logger records what a code path claimed', () => {
   });
 
   test('a failure carries the class and the whole cause chain', () => {
-    // What makes the log line answer the question the string returns could not:
-    // WHICH kind of failure, and what actually failed underneath.
     const log = createRecordingLogger();
 
     const failure = toKinuError({
@@ -217,8 +171,7 @@ describe('the logger records what a code path claimed', () => {
   });
 
   test('a failure log cannot omit the class', () => {
-    // Enforced by the signature, so this asserts the runtime half: whatever
-    // classification the error carries is what the line reports, with no default.
+    // Runtime half: the line reports the error's classification, with no default.
     const log = createRecordingLogger();
     log.failure('shell.escalation_refused', new KinuError('unavailable', 'not provisioned'));
     expect(log.emitted[0]?.code).toBe('unavailable');

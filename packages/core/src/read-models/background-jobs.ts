@@ -1,19 +1,6 @@
 /**
- * The background-job control plane — what an operator can do to work that has
- * detached from the turn that started it.
- *
- * The lifecycle (detach → settle → wake → recover) is the BackgroundJobRunner's;
- * this is the layer above it: list, inspect, cancel, retry, dismiss, and the
- * foreground abort. Retry is the only one with real policy in it — it
- * reconstructs a tool invocation from the stored input and re-detaches it,
- * which is agent behaviour, not transport.
- *
- * Cancelling detached work always takes a job id. The foreground abort
- * (`cancelCurrentWork`) cannot reach a detached job at all — see its own note.
- *
- * `background_jobs` is a table `initWorkspaceSchema` creates, so a read that
- * fails is a broken workspace rather than an empty task list, and it says so
- * instead of showing the nothing an agent with no detached work shows.
+ * Background-job control plane above BackgroundJobRunner: list, inspect, cancel, retry, dismiss,
+ * and the foreground abort. Cancelling detached work always takes a job id.
  */
 
 import type { ToolSet } from 'ai';
@@ -25,10 +12,8 @@ import { decodeJsonValue, parseJsonValue, type JsonValue } from '../utils/json';
 import { resumableAgentsInput } from '../delegation/agents-tool';
 import { renderThrownChain } from '../obs/index';
 
-/** The three things the control plane asks of a running job registry —
- *  BackgroundJobRunner's public surface, named at the width this plane uses.
- *  `cancelRunning` is deliberately absent: nothing here stops a job whose id it
- *  was not given. */
+/** BackgroundJobRunner's surface as this plane uses it. `cancelRunning` is deliberately absent:
+ *  nothing here stops a job whose id it was not given. */
 export interface BackgroundJobControl {
   cancel(jobId: string): Promise<boolean>;
   createRetry(request: BackgroundRetryRequest): string | null;
@@ -38,34 +23,27 @@ export interface BackgroundJobControl {
 export interface BackgroundJobPlaneDeps {
   readonly jobs: BackgroundJobStore;
   readonly jobRunner: BackgroundJobControl;
-  /** The RAW tool surface a retry re-invokes through — raw, so a re-drive
-   *  cannot detach a second job on top of the one it is replaying. */
+  /** Raw tools, so a retry cannot detach a second job on top of the one it replays. */
   readonly rawTools: (mode: WorkMode) => ToolSet;
   readonly logActivity: (event: string, detail?: string) => void;
 }
 
 export type RetryOutcome = { ok: boolean; jobId?: string; error?: string };
 
-/** One job's record, or null when it is unknown. */
 export function jobResult(jobs: BackgroundJobStore, jobId: string): BackgroundJob | null {
   return jobs.get(jobId);
 }
 
-/** Recent jobs, newest first. */
 export function listBackgroundJobs(jobs: BackgroundJobStore, limit = 20): BackgroundJob[] {
   return jobs.list(limit);
 }
 
-/** Hard-cancel a running job: abort the underlying work (its merged
- *  AbortSignal), mark it cancelled, and wake the agent so it stops waiting on
- *  a result that will never arrive. Awaited, because the wake is part of the
- *  cancel: an operator who is told "cancelled" while the agent still believes
- *  the job is in flight is exactly the split this closed. */
+/** Abort a running job, mark it cancelled, and wake the agent. Awaited: the wake is part of the
+ *  cancel, so the operator and the agent never disagree about whether the job is in flight. */
 export async function cancelBackgroundJob(jobRunner: BackgroundJobControl, jobId: string) {
   return { ok: await jobRunner.cancel(jobId) };
 }
 
-/** Remove a settled job from the registry (an operator dismiss). */
 export function dismissBackgroundJob(jobs: BackgroundJobStore, jobId: string) {
   try {
     jobs.dismiss(jobId);
@@ -76,7 +54,6 @@ export function dismissBackgroundJob(jobs: BackgroundJobStore, jobId: string) {
   }
 }
 
-/** Clear all settled jobs, keeping running ones. */
 export function clearBackgroundJobs(jobs: BackgroundJobStore) {
   try {
     jobs.clearSettled();
@@ -88,20 +65,8 @@ export function clearBackgroundJobs(jobs: BackgroundJobStore) {
 }
 
 /**
- * Re-run a settled job's tool with its original input as a fresh background
- * job. Detaches immediately — the work already proved slow.
- *
- * The stored row goes through the SAME narrowing the evict-resume path uses
- * (`resumableAgentsInput`), and that is the point rather than tidiness: a row is
- * recorded verbatim from whatever the model sent, so a stored row can carry
- * fields the strict parse refuses, and one carrying `action:'fork'` or a
- * `settle` names a rung this surface does not have. Replaying it raw would meet
- * the parse instead of the translation — a translate-on-replay convention that
- * holds on the resume path and not on this one would be worse than none, because
- * the two paths differ only in who pressed the button.
- *
- * A kind the narrowing declines (`shell`, `eval`, a converse `agents` action)
- * is replayed exactly as stored.
+ * Re-run a settled job's tool with its stored input as a fresh background job. Input goes through
+ * the same `resumableAgentsInput` narrowing as the evict-resume path; declined kinds replay as stored.
  */
 export function retryBackgroundJob(deps: BackgroundJobPlaneDeps, jobId: string): RetryOutcome {
   const job = deps.jobs.get(jobId);
@@ -145,14 +110,9 @@ export function retryBackgroundJob(deps: BackgroundJobPlaneDeps, jobId: string):
   return { ok: true, jobId: newId };
 }
 
-/** One device command Stop asked its durable owner to cancel. `unknown` is an
- *  honest daemon result, not a success: the request may still be running. */
+/** `unknown` is an honest daemon result, not success: the request may still be running. */
 export interface DeviceStopOutcome {
-  /** WHICH command this outcome is about — the identity the daemon registered
-   *  its process group under. Every per-request answer carries it, so a `failed`
-   *  one can be named to the owner and retried; it is absent only when the
-   *  durable sweep itself could not run and the report is about no single
-   *  command. */
+  /** The daemon's process-group id; absent only when the sweep itself could not run. */
   readonly requestId?: string;
   readonly outcome: 'terminated' | 'unknown' | 'failed';
   readonly detail?: string;
@@ -165,40 +125,20 @@ export interface CancelWorkOutcome {
 }
 
 export interface CancelWorkDeps {
-  /** Abort the in-flight LLM request itself, before the Kinu-level abort below.
-   *  The framework holds the stream behind its own registry, so tool controllers
-   *  alone cannot stop a model that is still writing. Absent on surfaces with
-   *  no framework turn to abort. */
+  /** Abort the in-flight LLM request first: tool controllers alone cannot stop a streaming model. */
   readonly cancelChats?: () => void | Promise<void>;
-  /** The foreground tool calls currently holding an abort handle. */
   readonly activeToolControllers: Set<AbortController>;
   readonly broadcast: (payload: string) => void;
-  /** Cancel the device commands owned by this durable turn. Absent on hosts
-   *  with no device authority; the caller receives the daemon's actual outcome
-   *  for every command it did ask to stop. */
+  /** Absent on hosts with no device authority. */
   readonly stopDeviceCommands?: () => Promise<readonly DeviceStopOutcome[]>;
-  /** Where a backend settles its own turn state once the abort is issued —
-   *  clearing an in-flight flag, writing an activity line. Runs before the
-   *  broadcast so a client that reacts to it reads settled state. */
+  /** Settles backend turn state; runs before the broadcast so clients read settled state. */
   readonly onCancelled?: (outcome: Omit<CancelWorkOutcome, 'ok'>) => void;
 }
 
 /**
- * Stop the DISPLAYED turn: abort the in-flight LLM request, then the foreground
- * tool calls it is holding. Queued steers stay queued — the turn settle path
- * re-queues what the model never saw as the next user-origin turn, so nothing
- * returns to the composer. Detached background jobs are deliberately untouched.
- *
- * It deliberately does NOT open with `jobRunner.cancelRunning()`: that kills
- * every job that had detached from any earlier turn — a two-hour search, a
- * running release, a device command another turn started — because one
- * conversation pressed Stop. Detaching is what a job does when it outlives its
- * turn, so "the turn you can see is over" says nothing about it: the two
- * lifetimes share nothing but the button.
- *
- * Stopping detached work needs the job's own identity —
- * {@link cancelBackgroundJob}, which the task roster's per-job control calls.
- * That is the whole property: a caller who names no job stops no job.
+ * Stop the displayed turn: abort the LLM request, then its foreground tool calls. Queued steers
+ * stay queued. Never calls `jobRunner.cancelRunning()`: detached jobs outlive their turn and
+ * stop only through {@link cancelBackgroundJob} by id.
  */
 export async function cancelCurrentWork(deps: CancelWorkDeps): Promise<CancelWorkOutcome> {
   await deps.cancelChats?.();
@@ -213,10 +153,7 @@ export async function cancelCurrentWork(deps: CancelWorkDeps): Promise<CancelWor
     deps.activeToolControllers.delete(controller);
   }
 
-  // ONE awaited sweep before ONE frame. A foreground Stop that said "done"
-  // while its turn-owned device commands were still running was a split-brain
-  // result; device unavailability is an honest empty/failed outcome, never a
-  // reason to throw Stop or to sweep commands outside this turn.
+  // One awaited sweep before one frame; device unavailability is a failed outcome, never a throw.
   const deviceCommands = await deps.stopDeviceCommands?.() ?? [];
   deps.onCancelled?.({ abortedTools, deviceCommands });
   deps.broadcast(JSON.stringify({

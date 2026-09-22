@@ -1,5 +1,4 @@
-// buildDrainBatch — pick externally-triggered pending events for one autonomous
-// turn, excluding the agent's own self-emitted/internal events (anti-self-wake).
+// buildDrainBatch excludes the agent's own self-emitted/internal events (anti-self-wake).
 import { describe, test, expect } from 'bun:test';
 import { buildDrainBatch } from '../src/events/hub/index';
 import type { BaseEvent, IngressKind, PeerAgentPayload, KinuEvent } from '../src/events/hub/index';
@@ -105,14 +104,8 @@ describe('buildDrainBatch', () => {
     expect(batch.text).toContain('1 event arrived');
   });
 
-  /**
-   * B10. An assignment is the subordinate's whole turn input and the delegation
-   * runner owns it, so a drain that took it handed the child a paraphrase of
-   * its own brief — and on a backend whose hosted turn admission re-publishes a
-   * queued turn as a new assignment, the digest became the next brief. Measured
-   * 2026-09-17 in the workerd pool: 242 rows from one hire, bodies nesting
-   * 253 → 850 characters.
-   */
+  /** B10. An assignment is the subordinate's whole turn input and belongs to the delegation
+     *  runner; a drain would hand the child a paraphrase of its own brief. */
   test('an assignment never wakes a drain, alone or beside external work', () => {
     expect(buildDrainBatch([assignment('as1')])).toBeNull();
 
@@ -127,8 +120,7 @@ describe('buildDrainBatch — peer messages', () => {
     const batch = present(buildDrainBatch([peer('pe1', true)]), 'the drain batch');
     expect(batch.text).toContain('[peer_agent] from peer agent (scout)');
     expect(batch.text).toContain('What changed upstream?');
-    // The tool is `agents`. Naming anything else here hands the model a call it
-    // cannot make: there is no `peers` tool on any backend.
+    // There is no `peers` tool on any backend; the tool is `agents`.
     expect(batch.text).toContain("agents({action:'msg', event_id:'pe1'");
     expect(batch.text).not.toContain('peers({');
   });
@@ -142,9 +134,7 @@ describe('buildDrainBatch — peer messages', () => {
 
 describe('a sender cannot write its own drain entries', () => {
   test('newlines inside an untrusted brief do not become new list items', () => {
-    // The attack shape: a peer message whose body carries the list's own entry
-    // syntax after a line break. Joined naively it renders as a second,
-    // visually identical event the agent believes arrived.
+    // A peer body carrying the list's entry syntax after a line break must not render as a second event.
     const hostile: KinuEvent = {
       ...EVENT_BASE, id: 'e1', ingress: 'peer_async', variant: 'peer_agent', payload_visibility: 'full',
       payload: {
@@ -158,7 +148,6 @@ describe('a sender cannot write its own drain entries', () => {
 
     if (!batch) throw new Error('the hostile event was not drainable');
 
-    // One event in, one entry out — the count and the list agree.
     expect(batch.ids).toEqual(['e1']);
     expect(batch.text.split('\n').filter((line) => line.startsWith('- ['))).toHaveLength(1);
     expect(batch.midTurnText.split('\n').filter((line) => line.startsWith('- ['))).toHaveLength(1);

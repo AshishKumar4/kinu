@@ -1,106 +1,63 @@
-/**
- * Kinu EventsHub — shared types.
- *
- * The whole hub traffics in `KinuEvent`. New entry points add new variants
- * to the discriminated union; older code keeps working because every variant
- * shares the same `BaseEvent` skeleton.
- *
- * Trust is a four-valued meet-semilattice. Two distinct uses:
- *  - **event trust** stamped at ingress, immutable post-insert
- *  - **head trust** recomputed per LLM step as `min(trust of causal_set)`
- *
- * Tool surface composes from `(headTrust, phase, role)` as a pure function —
- * never via prompt instructions. The runtime is the gate.
- *
- * See docs/ARCHITECTURE.md — "Events and ingress" for the authoritative spec.
- */
+/** Hub types. Spec: docs/ARCHITECTURE.md "Events and ingress". */
 
 import type { WorkMode } from '../../types/turn';
 import type { SubordinateInheritedContext } from '../../types/subordinates';
 import type { JsonObject, JsonValue } from '../../utils/json';
 
-// ── Trust ────────────────────────────────────────────────────────
-
-/** Meet-semilattice: `external < authenticated < owner < self`. Merge never
- *  grants, only restricts. */
+/** Meet-semilattice `external < authenticated < owner < self`; merge only restricts. */
 export type TrustLevel = 'external' | 'authenticated' | 'owner' | 'self';
 
 export const TRUST_ORDER = {
   external: 0, authenticated: 1, owner: 2, self: 3,
 } satisfies Record<TrustLevel, number>;
 
-// ── Priority ─────────────────────────────────────────────────────
-
-/** Three levels, assigned by the Hub from `(trust, variant)` — never
- *  read from payload. `urgent` preempts the current step; `normal` injects
- *  at the next step boundary; `background` can roll to the next turn. */
+/** Derived from `(trust, variant)`. `urgent` preempts the step; `normal` injects at the next step
+ *  boundary; `background` may roll to the next turn. */
 export type Priority = 'urgent' | 'normal' | 'background';
 
-// ── Phase ────────────────────────────────────────────────────────
-
-/** Turn phase. Transitions persisted in `agent_log` rows of `kind='phase'`. */
 export type Phase = 'idle' | 'linear' | 'heads' | 'reactor' | 'merging';
 
-// ── Visibility ───────────────────────────────────────────────────
-
-/** Payload visibility / storage policy. Orthogonal to trust:
- *  trust gates *execution*; visibility gates *display* + *audit storage*. */
 export type PayloadPolicy =
-  | 'full'           // store + render as-is
-  | 'redact'         // store-as-is, render with secret-shaped fields masked
-  | 'hash'           // store sha256 + size + content-type only
-  | 'hmac'           // store hmac (proves identity without revealing content)
-  | 'opaque_handle'; // store an opaque pointer to a separate secret store
+  | 'full'
+  | 'redact'
+  | 'hash'
+  | 'hmac'
+  | 'opaque_handle';
 
-// ── Ingress ──────────────────────────────────────────────────────
-
-/** The codepath that converted an external signal into an event row.
- *  The *only* place trust is derived (see `trust.ts`). */
 export type IngressKind =
-  | 'chat_ws'         // operator UI over the authenticated app session
-  | 'webhook_hmac'    // HMAC-SHA256(timestamp || '.' || body)
+  | 'chat_ws'
+  | 'webhook_hmac'
   | 'webhook_bearer'  // bearer secret in header or path
-  | 'webhook_mtls'    // client certificate
-  | 'timer_alarm'     // DO alarm fired
+  | 'webhook_mtls'
+  | 'timer_alarm'
   | 'sandbox_cb'      // callback from sandbox.exec(..., {notify_when})
-  | 'process_watch'   // process lifecycle (start/exit) — kept distinct from sandbox_cb
-  | 'file_watch'      // sandbox filesystem change
-  | 'peer_async'      // receiver-side write from a peer agent
-  | 'mcp_streamable'  // MCP tool call from external client
+  | 'process_watch'
+  | 'file_watch'
+  | 'peer_async'
+  | 'mcp_streamable'
   | 'email_inbound'   // inbound mail via Cloudflare Email Routing → Worker email()
   | 'subordinate'     // same-workspace facet spine: parent↔subordinate task/report
-  | 'self_emit'       // emitted by a tool during the agent's own turn
-  | 'reply_request';  // operator confirmation reply
+  | 'self_emit'
+  | 'reply_request';
 
-// ── Event variants ───────────────────────────────────────────────
-
-/**
- * Every event variant, as an ARRAY — because a route validator needs the
- * picklist and a reader needs the type, and hand-keeping the two in step failed:
- * one backend mirrored these thirteen literals into its own valibot schema, so a
- * fourteenth variant added here compiled in core and was silently rejected at
- * that route. Derive both from this and a new variant reaches every surface or
- * none.
- */
+/** Single source for both the route picklist and the type, so a new variant reaches every surface. */
 export const EVENT_VARIANTS = [
-  'chat',              // operator message via chat_ws
-  'webhook',           // external HTTP push
-  'process_done',      // sandbox process completion
-  'timer',             // alarm fired
-  'peer_agent',        // cross-agent message
+  'chat',
+  'webhook',
+  'process_done',
+  'timer',
+  'peer_agent',
   'subordinate_task',    // parent → subordinate assignment / conversational injection
-  'subordinate_report',  // subordinate → parent progress/completion report
-  'file_changed',      // sandbox FS event
-  'email',             // inbound email (Mission Inbox)
-  'internal',          // tool-emitted within the agent's own turn
-  'reply_request',     // pending owner-confirmation question
-  'mcp_chat',          // owner-authenticated MCP call
-  'mcp_third_party',   // third-party MCP call
+  'subordinate_report',
+  'file_changed',
+  'email',
+  'internal',
+  'reply_request',
+  'mcp_chat',
+  'mcp_third_party',
 ] as const;
 
 export type EventVariant = (typeof EVENT_VARIANTS)[number];
-
-// ── Causality / identity ─────────────────────────────────────────
 
 export type EventId = string;     // ULID, monotonic per DO
 
@@ -114,16 +71,13 @@ export type TriggerId = string;
 
 export type ReplyChannelId = string;
 
-// ── ReplyChannel ─────────────────────────────────────────────────
-
-/** Reply-channel kinds. The single `reply()` LLM tool dispatches on this. */
 export type ReplyChannelKind =
-  | 'ws_session'    // open WebSocket — streams tokens
-  | 'http_pending'  // held-open HTTP request — 30s TTL
-  | 'peer_back'     // async reply to a peer agent — 24h TTL
-  | 'mcp_pending'   // open MCP HTTP request — 60s TTL
-  | 'email_thread'  // reply lands back on the inbound email's thread — 24h TTL
-  | 'none';         // event has no reply channel (timer, file_watch, etc.)
+  | 'ws_session'
+  | 'http_pending'
+  | 'peer_back'
+  | 'mcp_pending'
+  | 'email_thread'
+  | 'none';
 
 export interface ReplyChannelRef {
   id: ReplyChannelId;
@@ -146,8 +100,6 @@ export interface ReplyChannelRow {
   updated_at: number;
 }
 
-// ── Event payloads (per variant) ─────────────────────────────────
-
 export interface ChatPayload {
   text: string;
 }
@@ -158,13 +110,9 @@ export interface WebhookPayload {
   http_headers: Record<string, string>;
   body: unknown;
   delivery_id: string;
-  /** Workspace path holding the fully serialized `body`, set at ingress when
-   *  it outgrows the brief budget. The brief's window plus this path is the
-   *  reference-plus-digest pair the woken turn reads back — without it the
-   *  agent is woken BY a delivery it can only see a fragment of. */
+  /** Set when the body outgrew the brief budget. */
   body_path?: string;
-  /** Set instead of `body_path` when the spill failed: why the rest of the
-   *  body cannot be read back. The delivery still lands. */
+  /** Set instead of `body_path` when the spill failed. */
   body_unsaved?: string;
 }
 
@@ -177,8 +125,6 @@ export interface ProcessDonePayload {
   duration_ms: number;
   full_stdout_handle?: string;
   full_stderr_handle?: string;
-  /** Set instead of the matching handle when that output's spill failed: why
-   *  the rest of it cannot be read back. */
   stdout_unsaved?: string;
   stderr_unsaved?: string;
 }
@@ -188,9 +134,7 @@ export interface TimerPayload {
   scheduled_fire_at: number;
   label?: string;
   user_payload?: unknown;
-  /** The mission budget this schedule spends against, when it declared one.
-   *  Carried on the event so the woken turn — and everything it forks or
-   *  hires — debits the same durable ledger (mission-budget.ts). */
+  /** The woken turn and everything it spawns debit this label (mission-budget.ts). */
   mission_label?: string;
 }
 
@@ -199,18 +143,10 @@ export interface PeerAgentPayload {
   from_user_id: string;
   topic: string;
   body: JsonValue;
-  /** Sender-side outbox row id — the receiver-side dedupe key, so redelivery
-   *  after a crash is a no-op and repeated topics are NOT collapsed. */
+  /** Receiver-side dedupe key: crash redelivery is a no-op; repeated topics are not collapsed. */
   sender_event_id: string;
-  /** True when the sender opened an ask (send-and-await) and holds a
-   *  reply waiter — the receiver should answer via its peer-back channel. */
   reply_expected?: boolean;
-  /** Workspace path holding the fully serialized `body`, set at ingress when
-   *  the body outgrows the brief budget. The brief's slice plus this path is
-   *  the reference-plus-digest pair the receiving turn reads back. */
   body_path?: string;
-  /** Set instead of `body_path` when the spill failed: why the rest of the
-   *  body cannot be read back. The message is still delivered. */
   body_unsaved?: string;
   kinu_mode: WorkMode;
 }
@@ -221,8 +157,7 @@ export interface FileChangedPayload {
   size?: number;
 }
 
-/** Parent workspace → subordinate facet. `task` starts/replaces an
- *  assignment; `message` is a conversational injection into its next turn. */
+/** `task` starts or replaces an assignment; `message` is injected into the next turn. */
 export interface SubordinateTaskPayload {
   from_workspace: string;
   kind: 'task' | 'message';
@@ -231,88 +166,39 @@ export interface SubordinateTaskPayload {
   inherited_context?: SubordinateInheritedContext;
   kinu_mode: WorkMode;
   creation_id?: string;
-  /** The pane's own id for a `message`, so the turn answers under it. */
   message_id?: string;
 }
 
-/** The three things a subordinate can report. One declaration: the event
- *  schema, the native `report` tool's enum, the codemode projection's
- *  signature and the dispatcher's refusal all read it, so what the model is
- *  offered and what is accepted cannot drift. */
+/** One declaration read by the event schema, `report` tool, codemode and dispatcher. */
 export const SUBORDINATE_REPORT_STATUSES = ['progress', 'completed', 'blocked'] as const;
 
 export type SubordinateReportStatus = (typeof SUBORDINATE_REPORT_STATUSES)[number];
 
-/**
- * The structured handoff a report may carry BESIDE its prose body.
- *
- * One declaration, for the same reason {@link SUBORDINATE_REPORT_STATUSES} is
- * one: the native `report` tool's JSON schema, the codemode projection, the
- * dispatcher's parse, the stored payload's schema and the parent's brief all
- * read this tuple, so a field the model is offered is a field the parent is
- * shown.
- *
- * WHY THESE FOUR AND NOT MORE. A prose blob makes the parent re-derive what
- * the child already knew — which of its sentences is a decision it must weigh,
- * and which is narration. These four are the parts a parent ACTS on: what the
- * child is unsure of, where it left the brief, what it settled that outlives
- * the assignment, and what is still owed. "Thoughts" and "feedback" are
- * deliberately absent: a schema cannot validate reflection, and a field the
- * model fills only out of politeness costs every caller a slot in the surface
- * for nothing.
- *
- * Every field is optional and the whole handoff may be absent — a report that
- * says `{status, content}` and nothing else is the contract it always was.
- */
+/** Fields a parent acts on; single tuple so what the model is offered is what the parent sees. All
+ *  optional. */
 export const SUBORDINATE_REPORT_HANDOFF_FIELDS = [
   'concerns', 'deviations', 'findings', 'open_work',
 ] as const;
 
 export type SubordinateReportHandoffField = (typeof SUBORDINATE_REPORT_HANDOFF_FIELDS)[number];
 
-/** One short entry per item, never a second prose body: the entries are what
- *  the parent reads in full. */
 export type SubordinateReportHandoff = {
   readonly [Field in SubordinateReportHandoffField]?: readonly string[];
 };
 
-/**
- * The whole handoff's character budget, summed over every retained entry of
- * every field.
- *
- * It exists so the parent's brief can render the handoff WHOLE. `content` is
- * unbounded prose, so the brief windows it and `content_path` addresses the
- * tail; the handoff has no spill path, and truncating the concerns while
- * keeping six hundred characters of narration would drop exactly the part the
- * parent was given these fields to weigh. So the bound is enforced where a
- * refusal is still actionable — at the tool call, which can name it and be
- * called again — and never at render, which cannot.
- *
- * The same figure as the prose brief's window ({@link EVENT_BRIEF_MAX_CHARS}):
- * one report adds at most one further window to the turn that drains it.
- */
+/** Enforced at the tool call (actionable), never at render: the brief renders the handoff whole.
+ *  Matches {@link EVENT_BRIEF_MAX_CHARS}. */
 export const SUBORDINATE_REPORT_HANDOFF_MAX_CHARS = 600;
 
-/** Subordinate facet → parent workspace. Reports drain into the
- *  orchestrator's next turn on the standard reactor rail. */
 export interface SubordinateReportPayload extends SubordinateReportHandoff {
   from_subordinate: string;
   status: SubordinateReportStatus;
   content: string;
-  /** The sending child's terminal sequence — this report's durable identity on
-   *  BOTH sides. The child's ledger replays the report until the parent holds
-   *  it, and the parent keys ingress on it, so a replay is recognised instead
-   *  of published a second time. Stated by the sender, never minted at
-   *  ingress: a receiving-side key would be new on every replay. */
+  /** Durable identity on both sides; stated by the sender, since a receiver-minted key would be new
+   *  on every replay. */
   sequence_id: string;
-  /** The assignment this report answers, when one is active. */
   task?: string;
-  /** Workspace path holding the full `content`, set at admission when the
-   *  report outgrows the brief budget — without it the parent's turn would
-   *  see only the brief's slice and the rest would be unreachable. */
   content_path?: string;
-  /** Set instead of `content_path` when the spill failed: why the rest of the
-   *  report cannot be read back. The report is still delivered. */
   content_unsaved?: string;
   kinu_mode: WorkMode;
 }
@@ -324,26 +210,16 @@ export interface EmailAttachmentMeta {
 }
 
 export interface EmailPayload {
-  /** Envelope sender (SMTP MAIL FROM) — the address the trust gate verified. */
   from: string;
-  /** The agent address the mail arrived at (envelope RCPT TO). */
   to: string;
   subject: string;
-  /** Top-of-thread text with quoted history stripped. */
   body_text: string;
-  /** RFC 5322 Message-ID of the inbound mail — threading + dedupe anchor. */
   message_id: string | null;
   in_reply_to: string | null;
-  /** Raw References header (space-separated message ids). */
   references: string | null;
-  /** Attachment metadata only — bytes never enter the event log. */
+  /** Bytes never enter the event log. */
   attachments: EmailAttachmentMeta[];
-  /** Workspace path holding the full `body_text`, set at ingress when the mail
-   *  outgrows the brief budget — without it the agent is woken BY a message it
-   *  can only read the opening of, with no way to ask for the rest. */
   body_path?: string;
-  /** Set instead of `body_path` when the spill failed: why the rest of the
-   *  mail cannot be read back. The mail is still delivered. */
   body_unsaved?: string;
 }
 
@@ -354,7 +230,7 @@ export interface InternalPayload {
 
 export interface ReplyRequestPayload {
   question: string;
-  schema?: unknown;       // Valibot schema if structured
+  schema?: unknown;
   awaiting_event_id: EventId;
 }
 
@@ -373,10 +249,6 @@ export interface McpThirdPartyPayload {
   request_id: string;
 }
 
-// ── Discriminated union over events ──────────────────────────────
-
-/** A persisted event row's typed view. The runtime layer reads `kind='event'`
- *  rows from `agent_log` and projects to this shape. */
 export interface BaseEvent {
   id: EventId;
   trace_id: TraceId;
@@ -409,9 +281,7 @@ export type ReadableKinuEvent =
   | (ReadableEventBase & { variant: 'mcp_chat'; payload: McpChatPayload })
   | (ReadableEventBase & { variant: 'mcp_third_party'; payload: McpThirdPartyPayload });
 
-/** Hash/HMAC/opaque policies intentionally replace the domain payload. Keeping
- * that fact in the type prevents routing code from treating an envelope or a
- * digest as the original event body. */
+/** Replaced payloads are typed apart so routing code cannot treat a digest as the event body. */
 export type ProtectedKinuEvent = BaseEvent & {
   payload_visibility: 'hash' | 'hmac' | 'opaque_handle';
   payload: JsonValue;
@@ -419,11 +289,7 @@ export type ProtectedKinuEvent = BaseEvent & {
 
 export type KinuEvent = ReadableKinuEvent | ProtectedKinuEvent;
 
-// ── Ingress descriptor (the only way to construct events) ────────
-
-/** What an ingress hands to `EventLog.publish`. The Log derives trust,
- *  priority, visibility from this — those fields are never accepted as
- *  parameters. */
+/** Trust, priority and visibility are derived from this, never accepted as parameters. */
 export type IngressDescriptor =
   | {
       ingress: 'chat_ws';
@@ -436,14 +302,14 @@ export type IngressDescriptor =
       ingress: 'webhook_hmac' | 'webhook_bearer' | 'webhook_mtls';
       variant: 'webhook';
       payload: WebhookPayload;
-      auth_outcome: 'verified';   // ingress only calls publish AFTER auth
+      auth_outcome: 'verified';
       webhook_id: string;
     }
   | {
       ingress: 'timer_alarm';
       variant: 'timer';
       payload: TimerPayload;
-      trigger_creator_trust: TrustLevel; // recorded on trigger row at creation
+      trigger_creator_trust: TrustLevel;
     }
   | {
       ingress: 'sandbox_cb';
@@ -474,12 +340,10 @@ export type IngressDescriptor =
       variant: 'peer_agent';
       payload: PeerAgentPayload;
       same_owner: boolean;
-      receiver_grant_present: boolean;   // for cross-owner peers
+      receiver_grant_present: boolean;
     }
   | {
-      // Same-workspace facet spine — the parent DO and its subordinate facets
-      // are one trust domain (one owner, one storage shard), so no grant
-      // machinery: possession of the worker-side stub IS the authorization.
+      // One trust domain: possession of the worker-side stub is the authorization.
       ingress: 'subordinate';
       variant: 'subordinate_task';
       payload: SubordinateTaskPayload;
@@ -503,9 +367,6 @@ export type IngressDescriptor =
       ingress: 'email_inbound';
       variant: 'email';
       payload: EmailPayload;
-      /** How the sender passed the gate — the ingress only calls publish AFTER
-       *  verifying the envelope sender against the owner's verified email or
-       *  the agent's email_route allowlist. Unknown senders never publish. */
       sender_class: 'owner' | 'allowlisted';
     }
   | {
@@ -519,8 +380,6 @@ export type IngressDescriptor =
       variant: 'reply_request';
       payload: ReplyRequestPayload;
     };
-
-// ── Reactor decision (orthogonal axes + legality) ────────────────
 
 export type HeadOp =
   | { kind: 'keep' }
@@ -540,34 +399,26 @@ export interface ReactorDecision {
   reasoning: string;       // 3-5 sentence CoT; recorded for offline eval
 }
 
-/** Mechanically-enforceable predicate on (head_op, event_op). See §5.2. */
 export function isLegalDecision(d: ReactorDecision, ctx: {
   reactor_head_trust: TrustLevel;
-  events_trust_class: TrustLevel; // trust of the event(s) being reacted to
+  events_trust_class: TrustLevel;
   current_phase: Phase;
 }): boolean {
-  // `drop` requires reactor head trust >= authenticated AND event trust = external.
   if (d.event_op.kind === 'drop') {
     if (TRUST_ORDER[ctx.reactor_head_trust] < TRUST_ORDER.authenticated) return false;
 
     if (ctx.events_trust_class !== 'external') return false;
   }
 
-  // `abort_one`, `abort_all`, `add` require `eventOp: handle` (you can't
-  // defer/drop while also acting on heads in response to the event).
   if ((d.head_op.kind === 'abort_one' || d.head_op.kind === 'abort_all' || d.head_op.kind === 'add')
     && d.event_op.kind !== 'handle') return false;
 
-  // `merge_now` permits handle or defer but not drop.
   if (d.head_op.kind === 'merge_now' && d.event_op.kind === 'drop') return false;
 
-  // `add` after merge has begun is rejected.
   if (d.head_op.kind === 'add' && ctx.current_phase === 'merging') return false;
 
   return true;
 }
-
-// ── Spawn / revisit specs ────────────────────────────────────────
 
 export interface SpawnHeadSpec {
   task: string;
@@ -576,25 +427,21 @@ export interface SpawnHeadSpec {
   budget?: { max_steps?: number; max_tokens?: number };
 }
 
-/** Enumerated revisit conditions. No free-form predicates — the Hub must
- *  be able to index and evaluate these without an LLM. */
+/** No free-form predicates: the Hub evaluates these without an LLM. */
 export type RevisitCondition =
   | { kind: 'at'; ts: number }
   | { kind: 'after_phase'; phase: 'idle' | 'merging' }
   | { kind: 'after_event'; variant: EventVariant; source?: string }
   | { kind: 'after_seconds'; n: number };       // n capped at 3600
 
-// ── agent_log row (storage shape) ────────────────────────────────
-
-/** The kinds of rows in `agent_log`. Discriminated by `kind`. */
 export type AgentLogKind =
-  | 'event'             // a KinuEvent
-  | 'phase'             // phase transition
-  | 'step'              // one LLM step
-  | 'tool_call'         // a tool invocation
-  | 'tool_result'       // its result
-  | 'reactor_decision'  // a reactor's output
-  | 'reply_attempt';    // an attempt to deliver a reply
+  | 'event'
+  | 'phase'
+  | 'step'
+  | 'tool_call'
+  | 'tool_result'
+  | 'reactor_decision'
+  | 'reply_attempt';
 
 export interface AgentLogRow {
   id: string;
@@ -614,8 +461,6 @@ export interface AgentLogRow {
   dedupe_key: string | null;
 }
 
-// ── Trigger registry ─────────────────────────────────────────────
-
 export type TriggerKind =
   | 'webhook_durable'
   | 'webhook_ephemeral'
@@ -630,27 +475,20 @@ export type TriggerKind =
 export interface TriggerRow {
   id: TriggerId;
   kind: TriggerKind;
-  /** Defining configuration; shape depends on kind. */
   spec: JsonObject;
-  /** Trust at creation time. Inherited by timer/scheduled events. */
+  /** Inherited by timer events. */
   creator_trust: TrustLevel;
-  /** Fork policy override; null → use default per kind. */
+  /** Null uses the per-kind default. */
   fork_policy: 'copy' | 'sever' | 'share' | null;
   state: 'active' | 'paused' | 'revoked';
   created_at: number;
   paused_at: number | null;
   revoked_at: number | null;
-  /** Per-trigger rate limits (events/minute). */
   rate_limit_per_min: number;
-  /** Next scheduled fire time for timer-like triggers, epoch ms. */
   next_fire_at: number | null;
-  /** Last time this trigger fired, epoch ms. */
   last_fire_at: number | null;
-  /** Number of times this trigger has fired. */
   fire_count: number;
 }
-
-// ── Tool surface composition ─────────────────────────────────────
 
 export type Role = 'worker' | 'reactor';
 
@@ -659,8 +497,6 @@ export interface ToolSurfaceContext {
   phase: Phase;
   role: Role;
 }
-
-// ── Phase transitions / errors ───────────────────────────────────
 
 export class TrustViolationError extends Error {
   constructor(public readonly attempted: TrustLevel, public readonly required: TrustLevel) {

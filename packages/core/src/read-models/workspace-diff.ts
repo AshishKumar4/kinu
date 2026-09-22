@@ -1,15 +1,6 @@
 /**
- * The change-set read model — what the agent has actually changed, per
- * executor.
- *
- * Two planes, one answer shape. A workspace with a git repository uses a
- * read-only git diff; a non-git workspace uses a snapshot baseline stored in
- * `vfs_baseline`. Other shell executors use the same read-only git path from
- * their own working directory.
- *
- * The baseline is captured at workspace birth and is re-markable, which is
- * what makes "mark reviewed" work without a second store. Reads never mutate
- * it: work completed before the owner first opens Output must still be shown.
+ * Change-set read model per executor: read-only git diff where a repo exists, else a snapshot
+ * baseline in `vfs_baseline`. Reads never mutate the baseline; "mark reviewed" re-baselines.
  */
 
 import type { AgentRuntime } from '../types/agent-runtime';
@@ -22,29 +13,16 @@ import { CommandResultSchema } from '../execution/exec-result';
 import { KinuError, renderThrownChain } from '../obs/index';
 
 /**
- * Files bigger than this are excluded from the snapshot — a change-set is a
- * review surface, not a backup.
- *
- * Both numbers bound the RESPONSE, not peak resident bytes: their product is
- * 104,857,600 bytes — 100.0 MiB, or 104.9 MB. Both units, because the 128 MB
- * ceiling below is decimal and dividing a KiB count by 1000 mis-states the
- * product as 102.4 MiB. That leaves 23 MB under `worker.isolate.memory`'s
- * published 128 MB, not a margin worth relying on, and
- * `do.isolate.reset_silent` — a retained working set past roughly 200 MiB
- * resetting the object with nothing thrown or logged — would present as an
- * unexplained disappearance rather than as a truncated diff. What bounds residency
- * is `walkWorkspaceTextFiles`, which holds one body at a time; these two only
- * bound what a caller is answered with.
+ * These two bound the response, not residency: their product is 100 MiB, near
+ * `worker.isolate.memory` (128 MB) and `do.isolate.reset_silent`. `walkWorkspaceTextFiles` bounds
+ * residency by holding one body at a time.
  */
 const MAX_SNAPSHOT_FILE_BYTES = 256 * 1024;
 
 const MAX_SNAPSHOT_FILES = 400;
 
-/** Total body characters one change-set may carry. A quarter of the facet RPC
- *  ceiling, because the reply crosses that boundary and the isolate holds it as
- *  UTF-16 — twice its serialized size — with a row object and JSON quoting per
- *  line on top. A file admitted past it is still listed, with true +/- counts
- *  and no body, rather than dropped. */
+/** Quarter of the facet RPC ceiling: the reply is UTF-16 in the isolate plus per-line overhead.
+ *  Files past it are listed with +/- counts and no body. */
 const MAX_CHANGESET_BODY_CHARS = PLATFORM_CATALOG['do.facet.rpc_bytes'].limit.value / 4;
 
 const SNAPSHOT_IGNORED_DIRECTORIES = new Set([
@@ -63,9 +41,7 @@ export function initWorkspaceBaselineTable(execRaw: RawSqlExec): void {
     active     INTEGER NOT NULL CHECK (active IN (0, 1)),
     PRIMARY KEY (actor_id, generation, path)
   )`);
-  // "Which generation is active" is asked per owner: a subordinate working in
-  // its own tree re-baselines on its own schedule, and a table-wide flip would
-  // reset the root's change-set with it.
+  // Active generation is per owner: a subordinate re-baselines its own tree independently.
   execRaw(`CREATE INDEX IF NOT EXISTS idx_vfs_baseline_active
     ON vfs_baseline(actor_id, active)`);
 }
@@ -84,30 +60,18 @@ export interface ExecutorDiffResult {
 }
 
 /**
- * Visit every workspace text file the change-set considers, one body at a time.
- *
- * The visitor shape is the whole point. A 400-file workspace of 256 KiB files
- * is 100 MiB, and materializing that map holds it, the materialized baseline
- * and the diff output live at once — three copies, in an isolate whose
- * silent-reset wall is `PLATFORM_CATALOG['do.isolate.reset_silent']` and whose
- * breach throws and logs nothing. Exactly one body is live here.
- *
- * Skips directories, binary files (NUL byte) and anything oversized; caps the
- * admitted file count. Binary and oversized files are skipped BEFORE the cap is
- * counted, so a tree of blobs cannot exhaust the text budget.
+ * Visit workspace text files one body at a time, bounding residency under
+ * `PLATFORM_CATALOG['do.isolate.reset_silent']`. Binary and oversized files are skipped before the
+ * file cap is counted.
  */
 export async function walkWorkspaceTextFiles(
   rt: AgentRuntime,
   visit: (path: string, content: string) => void | Promise<void>,
 ): Promise<void> {
   let admitted = 0;
-  // Breadth-first, with direct files before child directories. A large nested
-  // tree can never hide the authored files beside it at the workspace root.
+  // Breadth-first, direct files before child directories, so root files are never starved.
   const directories = [''];
 
-  // A cursor rather than a shift: the queue grows as directories are found, and
-  // reading it in index order is the same breadth-first walk with no read that
-  // can come back empty.
   for (let next = 0; next < directories.length; next++) {
     const dir = directories[next];
     const children: string[] = [];
@@ -162,8 +126,7 @@ export async function walkWorkspaceTextFiles(
   }
 }
 
-/** The generation the change-set reads. Pinned once so the per-path content
- *  reads below cannot straddle a concurrent re-baseline. */
+/** Pinned once so per-path reads cannot straddle a concurrent re-baseline. */
 function activeBaselineGeneration(rt: AgentRuntime): string | null {
   rt.actor.assertCurrent();
 
@@ -172,8 +135,7 @@ function activeBaselineGeneration(rt: AgentRuntime): string | null {
     WHERE actor_id = ${rt.actor.actorId} AND active = 1 LIMIT 1`[0]?.generation ?? null;
 }
 
-/** One baseline body, by primary key. Reading these one at a time is what
- *  keeps the whole baseline out of the isolate. */
+/** One baseline body by primary key, keeping the whole baseline out of the isolate. */
 function baselineContent(rt: AgentRuntime, generation: string, path: string): string {
   rt.actor.assertCurrent();
 
@@ -182,9 +144,7 @@ function baselineContent(rt: AgentRuntime, generation: string, path: string): st
     WHERE actor_id = ${rt.actor.actorId} AND generation = ${generation}
       AND path = ${path} LIMIT 1`[0];
 
-  // The generation was pinned from the active row, so a missing body means a
-  // re-baseline landed mid-read. Saying so lets the caller read again; assuming
-  // an empty baseline would report the whole file as newly added.
+  // A missing body means a re-baseline landed mid-read; assuming empty would report the file as added.
   if (!row) {
     throw new Error(
       `Workspace baseline changed while reading the change-set (generation ${generation}, path ${JSON.stringify(path)})`,
@@ -194,13 +154,7 @@ function baselineContent(rt: AgentRuntime, generation: string, path: string): st
   return row.content;
 }
 
-/**
- * The cumulative workspace change-set since the baseline.
- *
- * Streams: one current body and one baseline body are live at a time, and only
- * the bounded diff accumulates. Nothing here scales with the workspace's total
- * size.
- */
+/** Cumulative change-set since the baseline; streams one current and one baseline body at a time. */
 export async function getWorkspaceDiff(rt: AgentRuntime): Promise<WorkspaceDiffResult> {
   const generation = activeBaselineGeneration(rt);
 
@@ -252,15 +206,8 @@ export async function getWorkspaceDiff(rt: AgentRuntime): Promise<WorkspaceDiffR
 }
 
 /**
- * Mark the current workspace as the new baseline — the diff resets to empty and
- * accrues from here.
- *
- * Rows are written under an inactive generation as the walk produces them, then
- * one SQLite statement flips the whole table to that generation, so no read ever
- * sees a partial replacement. A failed insert leaves the previous generation
- * active and the error reaches the caller unchanged. The walk awaits between
- * inserts, which other work can interleave with; that is safe for exactly the
- * reason the inactive generation exists — nothing reads it until the flip.
+ * Mark the current workspace as the baseline. Rows go under an inactive generation, then one
+ * statement flips it active, so no read sees a partial replacement.
  */
 export async function resetWorkspaceBaseline(rt: AgentRuntime): Promise<{ ok: true; files: number }> {
   rt.actor.assertCurrent();
@@ -281,21 +228,15 @@ export async function resetWorkspaceBaseline(rt: AgentRuntime): Promise<{ ok: tr
       SET active = CASE WHEN generation = ${generation} THEN 1 ELSE 0 END
       WHERE actor_id = ${actorId}`;
   } finally {
-    // One sweep for both outcomes, and the reason there is no catch here: after
-    // a successful flip the only inactive rows are the generations this one
-    // replaced, and after a failure they are this one's own partial write, which
-    // no read can see and nothing will ever finish. Deleting them cannot change
-    // what the caller is told, so the original error propagates untouched.
+    // Inactive rows are either replaced generations or this failed partial write; the error propagates.
     void rt.storage.sql`DELETE FROM vfs_baseline WHERE actor_id = ${actorId} AND active = 0`;
   }
 
   return { ok: true, files };
 }
 
-/** Read tracked, staged and untracked changes without writing the repository's
- * index. `git diff --no-index` renders untracked files directly from the work
- * tree; unlike `git add -N`, repeated Output polling cannot contend on
- * `.git/index.lock` or alter a later commit. */
+/** Tracked, staged and untracked changes without writing the index: `git diff --no-index` avoids
+ * `.git/index.lock` contention that `git add -N` would cause. */
 async function getGitDiff(rt: AgentRuntime, executorId: string): Promise<ExecutorDiffResult> {
   const provider = rt.executionRouter?.getProvider(executorId);
 
@@ -313,9 +254,7 @@ async function getGitDiff(rt: AgentRuntime, executorId: string): Promise<Executo
   };
 
   try {
-    // Keep the two git streams separate: the first is a unified diff; the
-    // second is a NUL-delimited path list that must be rendered one file at a
-    // time. A single shell pipeline would mix binary NULs into the diff.
+    // Keep the two git streams separate: a single pipeline would mix NUL-delimited paths into the diff.
     const root = (await execute(`git rev-parse --show-toplevel 2>/dev/null || printf '${NOT_GIT_REPO}'`)).trim();
 
     if (root === NOT_GIT_REPO) return { files: [], mode: 'git', notGitRepo: true };

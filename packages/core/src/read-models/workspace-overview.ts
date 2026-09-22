@@ -1,16 +1,6 @@
 /**
- * The home card's summary of one workspace.
- *
- * The wire shape is `WorkspaceOverviewSchema`; `buildWorkspaceOverview` folds
- * the caller's own queue reads into it and `workspaceOverviewStatus` names the
- * one slot a card may speak from. Only what can actually wait on the owner —
- * a parked command, a device consent, a plan review, a scaffold trial the
- * deployment does not auto-promote — is a decision; unseen changes and
- * auto-promoted trials are updates, and a curriculum proposal is neither.
- *
- * `primarySlate` is the one slate a tile can draw: the first the caller's
- * store already holds an address for. A slate whose URL exists only after
- * something starts is not one — a card read looks, it never launches.
+ * The home card's summary of one workspace. Only what waits on the owner is a decision; unseen changes
+ * and auto-promoted trials are updates. A card read looks; it never launches a slate.
  */
 import * as v from 'valibot';
 import type { PendingAction, PendingActionKind } from './pending-actions';
@@ -24,8 +14,7 @@ const WorkspaceOverviewRunSchema = v.object({
   task: v.nullable(v.string()),
 });
 
-/** The slate a tile draws: its durable preview URL, which outlives the
- *  process behind it, so the picture is the live app and not a capture. */
+/** Durable preview URL: outlives the process, so the picture is the live app. */
 const WorkspaceOverviewSlateSchema = v.object({
   id: v.string(),
   title: v.string(),
@@ -43,10 +32,7 @@ export const WorkspaceOverviewSchema = v.object({
 
 export type WorkspaceOverview = v.InferOutput<typeof WorkspaceOverviewSchema>;
 
-/** One slate as the store answers it for a card read: `url` is the address
- *  its durable reservation already holds, and `null` where there is none to
- *  read — a reservation is minted by the act that starts the app, never by
- *  looking at it. */
+/** `url` is null without a durable reservation; reservations are minted only by starting the app. */
 export interface WorkspaceOverviewSlate {
   readonly id: string;
   readonly title: string;
@@ -55,20 +41,15 @@ export interface WorkspaceOverviewSlate {
 
 export interface WorkspaceOverviewInputs {
   readonly observedAt: number;
-  /** A live turn on this actor or a hosted child. */
   readonly working: boolean;
-  /** Durable unfinished work — owed turns, recovery, parked effects. */
   readonly unfinished: boolean;
   readonly pendingActions: readonly PendingAction[];
   readonly pendingConsents: readonly PendingDeviceConsent[];
   readonly activePlan: { readonly status: PlanReviewStatus } | null;
-  /** auto_promote_scaffold: a pending trial the engine applies itself is an
-   *  update to read; one it cannot apply waits on the owner. */
+  /** A trial the engine applies itself is an update; one it cannot apply waits on the owner. */
   readonly scaffoldAutoApply: boolean;
   readonly latestRun: { readonly status: string | null; readonly task: string | null } | null;
-  /** The workspace's slates in the order the store lists them, each with the
-   *  URL its held reservation already answers — `null` where showing it would
-   *  mean starting a process, which a card read never does. */
+  /** Store order; `url` is null where showing it would mean starting a process. */
   readonly slates: readonly WorkspaceOverviewSlate[];
 }
 
@@ -98,7 +79,6 @@ function reservedSlate(slates: readonly WorkspaceOverviewSlate[]): WorkspaceOver
   return null;
 }
 
-/** Live work outranks work left open, which outranks nothing happening. */
 function activityOf(working: boolean, unfinished: boolean): WorkspaceOverview['activity'] {
   if (working) return 'working';
 
@@ -131,17 +111,12 @@ export function buildWorkspaceOverview(inputs: WorkspaceOverviewInputs): Workspa
       ? null
       : { status: inputs.latestRun.status, task: task === null ? null : task.slice(0, TASK_PREVIEW_MAX) },
 
-    // The tile's picture is the FIRST slate the store can already address:
-    // the order is the store's, and a slate whose URL would have to be minted
-    // is skipped rather than waited for, so no card read boots a process.
+    // First addressable slate; unaddressed ones are skipped so no card read boots a process.
     primarySlate: reservedSlate(inputs.slates),
   };
 }
 
-/** What the one chip on a workspace's card says: the label, and the status
- *  the surface resolves to its tone classes — `needs` waits on the owner,
- *  `working` is moving, `failed` and `unfinished` are ends and durable
- *  leftovers, `updated` and `idle` are everything quiet. */
+/** `needs` waits on the owner; `failed`/`unfinished` are ends and durable leftovers; `updated`/`idle` are quiet. */
 export type WorkspaceStatus = 'needs' | 'working' | 'failed' | 'unfinished' | 'updated' | 'idle';
 
 export interface WorkspaceHeadline {
@@ -149,10 +124,8 @@ export interface WorkspaceHeadline {
   readonly status: WorkspaceStatus;
 }
 
-/** The single state a workspace's card states, first match wins: text and
- *  status together, one rule, so no surface orders them differently. A run only reads as failed when it
- *  can speak at all — working and durable leftovers outrank its end, because
- *  a stale verdict beside live work would say two things at once. */
+/** First match wins. Working and durable leftovers outrank a failed run: a stale verdict beside live
+ * work would say two things. */
 export function overviewHeadline(o: WorkspaceOverview): WorkspaceHeadline {
   if (o.decisionsWaiting > 0) return { label: `Needs you · ${o.decisionsWaiting}`, status: 'needs' };
 
@@ -167,10 +140,6 @@ export function overviewHeadline(o: WorkspaceOverview): WorkspaceHeadline {
   return { label: 'Idle', status: 'idle' };
 }
 
-/** What the workspaces a shell watches add up to: whether any turn is live,
- *  and how many decisions wait on the owner across them. The shell's living
- *  background reads this and nothing else — a workspace's own card still
- *  speaks for itself. */
 export interface RosterActivity {
   readonly working: boolean;
   readonly decisions: number;

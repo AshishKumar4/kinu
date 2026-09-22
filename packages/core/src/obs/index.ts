@@ -1,20 +1,4 @@
-/**
- * Observability primitives. Platform-agnostic by construction: nothing here imports a backend.
- *
- * `expected-failure` is the error-handling half — the pinned signatures of the failures a caller may
- * declare as tolerable, and `tolerate`, which absorbs exactly the declared one and propagates
- * everything else. It is what makes the anti-slop no-swallow rules satisfiable without exempting
- * anything: `tolerate`'s own catch classifies and rethrows, so it passes all four rules unaided.
- *
- * `tracer` is the tracing half — the span seam, and the recording fake that makes instrumentation
- * assertable without a runtime. Neither half depends on the other: `ScopedSpan.fail` takes a native
- * `Error`, so no error taxonomy has to exist before a span can record a failure.
- *
- * `error` is the CLASSIFICATION — `ErrorCode`, `KinuError` and the refusal payload a tool puts on
- * its own result — and `log` is the typed logger, whose reserved-field ban is a type rather than a
- * convention. Those two are one pair: `Logger.failure` requires a classified error, so a log line
- * that reports a failure cannot omit which kind it was.
- */
+/** Observability primitives; nothing here imports a backend. */
 export {
   classify,
   tolerate,

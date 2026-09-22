@@ -1,6 +1,4 @@
-/** The plan-review contract, declared at the platform layer: the builtins tool
- *  surface submits edits and reads decisions without importing the review
- *  store. */
+/** Plan-review contract shared by the builtins tool surface without importing the review store. */
 
 export interface PlanEdit {
   readonly start: number;
@@ -56,6 +54,11 @@ export interface PlanReview {
 export type PlanReviewResult =
   | { readonly ok: true; readonly plan: PlanReview }
   | { readonly ok: false; readonly error: string; readonly plan: PlanReview | null };
+
+/** `queued: false` leaves the handoff owed to the next decision. */
+export type PlanDecisionOutcome =
+  | { readonly ok: false; readonly error: string; readonly plan: PlanReview | null }
+  | { readonly ok: true; readonly plan: PlanReview; readonly queued: boolean; readonly queueError?: string };
 
 export interface SubmitPlanToolDeps {
   readonly submit: (edits: readonly PlanEdit[]) => PlanReviewResult | Promise<PlanReviewResult>;

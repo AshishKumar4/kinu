@@ -1,74 +1,36 @@
 /**
- * Where a message typed mid-turn belongs in the transcript.
- *
- * A turn is ONE assistant message. Think accumulates every step of it and
- * persists it once, after the stream drains, so a row appended beside it can
- * only sort before or after the whole turn — there is no position "inside the
- * agent's work" for a sibling row to take. That is why a steer the model read
- * at step twenty was drawn under the entire turn while it ran, and above the
- * entire turn once it was saved.
- *
- * The step index closes that. The drain records which step it spliced the
- * steer into (`STEER_STEP_METADATA_KEY` on the durable row, `atStep` on the
- * live broadcast), and a step boundary is already a durable part of the
- * assistant message: the AI SDK pushes a `step-start` part for every step it
- * begins. So the same index places the bubble whether it arrives over the
- * socket during the turn or is read back out of storage a week later, and the
- * two cannot disagree.
- *
- * Pure, and separate from the view, because that agreement is the whole
- * property worth testing and a component cannot be asked about it.
+ * Placement of mid-turn steers inside the one assistant message of a turn. The step index
+ * (`STEER_STEP_METADATA_KEY` durable, `atStep` live) maps onto the AI SDK's `step-start` parts, so
+ * live and stored placement agree.
  */
 import type { UIMessage } from 'ai';
 import * as v from 'valibot';
 import { STEER_METADATA_KEY, STEER_STEP_METADATA_KEY } from '../orchestrator/inbox';
 
-/** One part of a message, as a renderer receives it. */
 export type TranscriptPart = UIMessage['parts'][number];
 
-/** One steer as the thread draws it: the operator's words, whether the model
- *  has them yet, and where in the turn it read them. */
 export interface InlineSteer {
   readonly id: string;
   readonly text: string;
-  /** `queued` is a steer the server has taken but the model has not reached. */
   readonly state: 'queued' | 'landed';
-  /**
-   * The step of the turn the model read it in.
-   *
-   * Null while it is queued — there is no position until a step takes it — and
-   * on a landed steer whose position was never recorded, which is every row in
-   * the workspaces that predate the index. A steer with no position is drawn
-   * where the thread can honestly put it: at the end, saying it landed and not
-   * saying where.
-   */
+  /** Null while queued, or on a landed steer with no recorded step; those draw at the end. */
   readonly atStep: number | null;
 }
 
-/** A steer whose position inside a turn is known, which is the only kind that
- *  can be placed. */
 export type PlacedSteer = InlineSteer & { readonly state: 'landed'; readonly atStep: number };
 
-/** One message of the thread, with the steers that landed inside it. */
 export interface TranscriptEntry {
   readonly message: UIMessage;
-  /** Empty for every message nobody interrupted, which is nearly all of them. */
   readonly steers: readonly PlacedSteer[];
 }
 
-/** The thread as the chat draws it. */
 export interface Transcript {
   readonly entries: readonly TranscriptEntry[];
-  /**
-   * Steers that have no place inside a turn yet: one still queued, and one the
-   * model took but whose position was never recorded. They draw under the
-   * thread, which is the only thing that can be said about them.
-   */
+  /** Steers with no place inside a turn: still queued, or landed with no recorded step. */
   readonly trailing: readonly InlineSteer[];
 }
 
-/** A run of one assistant message's parts, and the steer that arrived
- *  immediately before them. `null` on the first segment of a turn. */
+/** A run of assistant parts and the steer immediately before them; null on a turn's first segment. */
 export interface TurnSegment {
   readonly steer: PlacedSteer | null;
   readonly parts: readonly TranscriptPart[];
@@ -79,14 +41,7 @@ const SteerRowSchema = v.looseObject({
   [STEER_STEP_METADATA_KEY]: v.optional(v.number()),
 });
 
-/**
- * The step a durable row says it was steered into, or null when the row is not
- * a landed steer.
- *
- * A row stamped as a steer but carrying no step is a row written before the
- * index existed. It stays a top-level bubble rather than being guessed into a
- * position — a wrong position is a worse claim than an honest one at the end.
- */
+/** Step of a landed steer row, or null. A steer row without a step is not guessed into place. */
 function steerRowStep(row: { metadata: unknown }): number | null {
   const parsed = v.safeParse(SteerRowSchema, row.metadata ?? {});
 
@@ -96,24 +51,11 @@ function steerRowStep(row: { metadata: unknown }): number | null {
   return step === undefined || !Number.isInteger(step) || step < 0 ? null : step;
 }
 
-/**
- * The thread so far, resumable. A streaming pane re-derives its thread on
- * every token, and the settled half of the conversation never changes inside
- * one of those ticks — so the walk is exposed as a fold: extend it with the
- * frozen half once, then per tick extend that with the live window only. The
- * result of a fold is immutable; extending one never reworks what it holds.
- */
+/** Resumable thread walk: fold the frozen half once, then extend per tick with the live window. */
 export interface TranscriptFold {
-  /** Entries for every message folded so far. */
   readonly entries: readonly TranscriptEntry[];
-  /** Steer rows still waiting for their turn's assistant message. */
   readonly pending: readonly PlacedSteer[];
-  /**
-   * Ids of every durable steer row folded — the live-steer dedup set. A live
-   * steer's id can only ever collide with its own durable row (the row keeps
-   * the steer's id), so this set, not one of every message id, is what "the
-   * durable copy has arrived" is decided against.
-   */
+  /** Durable steer row ids; a live steer's id can only collide with its own durable row. */
   readonly steerRowIds: ReadonlySet<string>;
 }
 
@@ -147,8 +89,7 @@ export function extendTranscript(
       continue;
     }
 
-    // A steer with no turn after it — the turn failed before its assistant
-    // message was persisted. Show it where it is rather than losing it.
+    // A steer whose turn failed before its assistant message persisted.
     for (const orphan of pending) entries.push({ message: steerMessage(orphan), steers: NO_STEERS });
     pending = [];
     entries.push({ message, steers: NO_STEERS });
@@ -157,11 +98,7 @@ export function extendTranscript(
   return { entries, pending, steerRowIds };
 }
 
-/**
- * Close a fold into the thread the chat draws: still-pending steer rows become
- * trailing bubbles (their turn never persisted an answer), and `live` steers
- * whose durable row has not been folded attach to the message being streamed.
- */
+/** Close a fold: pending steer rows trail; unseen `live` steers attach to the streamed message. */
 export function sealTranscript(
   fold: TranscriptFold, live: readonly InlineSteer[] = [],
 ): Transcript {
@@ -177,20 +114,8 @@ export function sealTranscript(
 }
 
 /**
- * The thread, with every steer moved inside the turn it landed in.
- *
- * A durable steer row is followed in the message list by the assistant message
- * of the turn it interrupted — `addMessages` parents it off the turn's user
- * message while the assistant message is still uncommitted, and the assistant
- * message then parents off it. So the steer's turn is the next assistant
- * message, and attaching it there is a fact about the write order rather than a
- * guess.
- *
- * `live` are the steers this session has been told about over the socket but
- * has no durable row for yet — the turn is still running, and `addMessages`
- * deliberately does not broadcast from inside the inference loop. They attach
- * to the message being streamed. A live steer whose row HAS arrived is dropped
- * here rather than drawn twice.
+ * The thread with every steer inside the turn it landed in. Write order guarantees the steer's
+ * turn is the next assistant message; a live steer whose durable row has arrived is dropped.
  */
 export function buildTranscript(
   messages: readonly UIMessage[], live: readonly InlineSteer[] = [],
@@ -198,8 +123,7 @@ export function buildTranscript(
   return sealTranscript(extendTranscript(EMPTY_TRANSCRIPT_FOLD, messages), live);
 }
 
-/** Live steers onto the turn being streamed — the last message, when there is
- *  one to stream. A steer that arrives with no turn to sit in trails instead. */
+/** Live steers attach to the last message only when it is an assistant message. */
 function attachLive(
   entries: readonly TranscriptEntry[], live: readonly PlacedSteer[],
 ): readonly TranscriptEntry[] {
@@ -213,21 +137,13 @@ function attachLive(
     : entry);
 }
 
-/** Whether the model has this steer AND the thread knows where. */
 function isPlaced(steer: InlineSteer): steer is PlacedSteer {
   return steer.state === 'landed' && steer.atStep !== null;
 }
 
 /**
- * One assistant message's parts, cut at the steers that landed in it.
- *
- * The cut is on the parts and not on the render blocks, so a run of tool calls
- * the operator interrupted renders as two runs. Folding across the steer would
- * put a '7 calls' headline over work done on either side of an instruction that
- * changed what the agent was doing.
- *
- * A step index past the last `step-start` places the steer at the end: the turn
- * stopped before that step wrote anything, and the end is where it was read.
+ * One assistant message's parts, cut at its steers. Cut on parts, not render blocks, so a tool
+ * run is never folded across a steer. A step past the last `step-start` places the steer at the end.
  */
 export function segmentBySteers(
   parts: readonly TranscriptPart[], steers: readonly PlacedSteer[],
@@ -261,7 +177,6 @@ function messageText(message: UIMessage): string {
     .join('');
 }
 
-/** A live or orphaned steer as the plain user message the thread draws. */
 function steerMessage(steer: InlineSteer): UIMessage {
   return {
     id: steer.id, role: 'user', parts: [{ type: 'text', text: steer.text }],

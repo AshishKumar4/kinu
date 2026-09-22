@@ -1,13 +1,4 @@
-/**
- * Run events — Flue-style discriminated union for everything that happens
- * during an agent run.
- *
- * Persisted in run_events table; queried via /api/runs/<runId>/events;
- * streamed via /api/runs/<runId>/stream (SSE w/ Last-Event-ID resume).
- *
- * Each event carries `runId` + `eventIndex` (monotonic per run) + `timestamp`.
- * Consumers may filter by `type` and slice by index.
- */
+/** Run events: persisted in run_events, served by /api/runs/<runId>/events and /stream (SSE). */
 
 import type { ModelMessage } from 'ai';
 import type { ContextBudgetSnapshot } from '../context-budget';
@@ -25,23 +16,12 @@ import type {
   SpendSource, ModelOperationKind, ModelOperationOutcome, ModelOperationPhase,
 } from './model-call';
 
-/**
- * What one finished step cost — the provider's own report, plus what we priced
- * it at. Derived from the durable schema rather than declared, so the payload a
- * reader gets and the row that was stored cannot drift.
- *
- * `usage` is what the provider said, absent field by absent field (see
- * `../usage.ts`). `usd` is present only when the model carried a models.dev
- * catalog rate at the time of the call — an absent `usd` means unpriced, never
- * free — and it is deliberately NOT inside `usage`, because a price is something
- * we computed and the rest is something a provider measured.
- */
+/** `usd` is present only when the model had a catalog rate; absent means unpriced, never free. */
 export type StepCost = Pick<
   Extract<RunEvent, { type: 'step_finish' }>, 'usage' | 'usd' | 'modelId'
 >;
 
-/** Kept as an explicit list because `RunEventBase` carries `type`, so deriving
- *  it from the union below is circular. */
+/** Explicit list: `RunEventBase` carries `type`, so deriving it from the union is circular. */
 export type RunEventType =
   | 'run_start'
   | 'turn_start'
@@ -74,44 +54,27 @@ export type RunEventType =
   | 'turn_end'
   | 'run_end';
 
-/**
- * The three closed vocabularies of a `context_edit`, as constants rather than
- * bare literal unions: the durable schema in `events/recorder.ts` builds its
- * picklists from these, so the parser and the type cannot disagree about which
- * words are admissible.
- */
-/** Which surface authored the edit. `owner` is a human editing through the UI,
- *  which is a different authority from the agent editing its own history. */
+/** `owner` is a human editing through the UI, a different authority from the agent. */
 export const CONTEXT_EDIT_VIA = ['file', 'session', 'owner'] as const;
 
 export type ContextEditVia = (typeof CONTEXT_EDIT_VIA)[number];
 
-/** Accepted and numbered, or actually consumed by a boundary. */
 export const CONTEXT_EDIT_STATUSES = ['staged', 'activated'] as const;
 
 export type ContextEditStatus = (typeof CONTEXT_EDIT_STATUSES)[number];
 
-/** Which boundary takes it: the next step of the live turn, or the next turn. */
 export const CONTEXT_EDIT_BOUNDARIES = ['step', 'turn'] as const;
 
 export type ContextEditBoundary = (typeof CONTEXT_EDIT_BOUNDARIES)[number];
 
 export interface RunEventBase {
-  /** Unique within a single run; monotonically increasing. */
   readonly eventIndex: number;
-  /** Unique run identifier (typically the chat turn id or a fresh nanoid). */
   readonly runId: string;
   readonly type: RunEventType;
-  /** ISO timestamp at emission time. */
   readonly timestamp: string;
 }
 
-/**
- * The turn a run was opened for, as the loop needs it to re-open the same turn
- * after the process that ran it died: the opening row's id, the answer's id,
- * the words, and the pending-send rows the words came from (their files are
- * read back from those rows). Present only on runs the turn loop opens.
- */
+/** What the loop needs to re-open a turn after its process died. Only on turn-loop runs. */
 export interface OpenTurnIdentity {
   readonly turnId: string;
   readonly messageId: string;
@@ -122,8 +85,6 @@ export interface OpenTurnIdentity {
   readonly steerIds?: readonly string[];
 }
 
-/** One tool call the in-flight step had issued when its partial was written,
- *  with its result when the tool had answered before the write. */
 export interface PartialToolCall {
   readonly toolCallId: string;
   readonly toolName: string;
@@ -134,63 +95,22 @@ export interface PartialToolCall {
 
 export type RunEvent =
   | (RunEventBase & { type: 'run_start'; agentId: string; userMessage?: string;
-      /** What kicked off this run: 'chat' | 'webhook' | 'timer' | 'peer' | … */
       caused_by?: string;
-      /** Ingress descriptor kind for event-triggered runs (webhook_hmac, …). */
       ingress_kind?: string;
-      /** The trigger that fired this run, when event-driven. */
       trigger_id?: string;
       turn?: OpenTurnIdentity })
   | (RunEventBase & { type: 'turn_start'; turnIndex: number })
-  /** One completed tool call, and — in `args` — WHAT it was asked to do.
-   *
-   *  There is no matching `tool_call_start`. One existed, declared in this
-   *  union and read by three readers, and no producer ever wrote it: the
-   *  backends' sinks emit this row and `step_finish`, so a `tool_call_start`
-   *  reader reported zero forever and was believed. The completed row carries
-   *  the execution identity directly, together with the input and outcome.
-   *
-   *  `args` is therefore on the row that carries the failure. It is a digest
-   *  (`digestJsonValue`), so a `write` of a large body is described rather than
-   *  duplicated: the durable cost of the ledger tracks what the turn DID, not
-   *  how much content it moved. Absent when the call took no arguments.
-   *
-   *  New records carry the SDK invocation outcome separately from arbitrary
-   *  result content. Historical rows lacking it are unmeasured. */
+  /** There is no `tool_call_start`; this row carries identity, input and outcome. `args` is a
+   *  digest (`digestJsonValue`). Rows lacking `outcome` are unmeasured. */
   | (RunEventBase & { type: 'tool_call_end'; name: string; toolCallId: string;
       args?: JsonValue; result?: JsonValue; error?: string; durationMs?: number; outcome?: ToolOutcome })
-  /** One model request completed — and, in `messages`, WHAT it produced: the
-   *  assistant parts and paired tool results of that step alone, appended the
-   *  moment the step finished. This is the durable record of the model's own
-   *  output. Nothing else writes it: a backend's message store is written once
-   *  per turn, so before this row existed a turn killed at step 12 left twelve
-   *  steps of work nowhere on disk.
-   *
-   *  Pairing holds WITHIN a row by construction — the SDK reports a step's
-   *  assistant tool-call parts and their tool results together — so a run's
-   *  rows concatenate into a valid request without repair. Absent on a step the
-   *  provider ended with nothing to say; never fabricated.
-   *
-   *  `usage` is the provider's own report of that request — the authority on
-   *  what it cost, field by field, with anything the provider did not mention
-   *  absent rather than zero. `usd` is that report priced at the model's catalog
-   *  rate, absent when the model is unpriced. `usdFloorTokens` qualifies that
-   *  price: present only when `usd` is a FLOOR rather than the figure, and
-   *  equal to the tokens that made it one (see `priceCall`). `context` is what
-   *  the request was locally measured to be made of; usage and context do not
-   *  reconcile exactly and are carried side by side so a reader can see the
-   *  gap. All of them are absent when the step produced no such report. */
+  /** The durable record of one step's output; pairing holds within a row, so a run's rows
+   *  concatenate into a valid request. `usdFloorTokens` is present only when `usd` is a floor. */
   | (RunEventBase & {
       type: 'step_finish';
       stepIndex: number;
       reason?: string;
-      /** The step's response messages in the session codec's durable form
-       *  (`session/message-codec.ts`): attachments as byte envelopes, a URL as
-       *  its href under `$url`. Recorded that way so a resume decodes exactly
-       *  what the model produced, and so a recorded event is JSON as declared —
-       *  the SDK's `ModelMessage` may hold a live `URL` in memory and never in
-       *  a row. The input (`RunEventInput`) carries the SDK's messages; the
-       *  recorder encodes at the write. */
+      /** In the session codec's durable form (`session/message-codec.ts`); the recorder encodes. */
       messages?: JsonValue[];
       usage?: Usage;
       usd?: number;
@@ -198,33 +118,11 @@ export type RunEvent =
       modelId?: string;
       context?: ContextComposition;
     })
-  /** The in-flight step's output so far — the text and the tool calls it has
-   *  issued — written at the loop's partial cadence so a process that dies
-   *  mid-step leaves the step where it stopped. Superseded by the step's own
-   *  `step_finish`; the newest row of a run whose last step never finished is
-   *  where a continuation resumes. */
+  /** Superseded by the step's `step_finish`; the newest row of an unfinished step is where a
+   *  continuation resumes. */
   | (RunEventBase & { type: 'step_partial'; stepIndex: number; text: string; toolCalls: readonly PartialToolCall[] })
-  /** A model call that was NOT a turn step — a judge, the fast tier, the
-   *  evolution engine, a compaction fold, a scaffold's own loop, the memory
-   *  embedder. `source` is which of them
-   *  (`events/model-call.ts`), and it is the reason this is its own row type
-   *  rather than a `source` field on `step_finish`: the step rows feed the
-   *  turn loop's prefix-cache EMA, and a judge's cold prompt in that window
-   *  would read as a cache regression the agent never had.
-   *
-   *  `usage` is ALWAYS written, `{}` when the provider reported nothing,
-   *  because the honest reading of a silent call is unmeasured spend, not free
-   *  spend, and the workspace total's coverage fraction is built out of exactly
-   *  these. It stays OPTIONAL on the type only so rows written without it still
-   *  read back; every producer goes through `buildModelCallEvent`, which is what
-   *  makes the field present in practice. A producer that omitted it instead
-   *  would leave a reader unable to tell "unmeasured" from "not recorded" — the
-   *  one distinction this row exists to carry.
-   *
-   *  `usd` is that report at the CALL'S OWN model's catalog rate, absent
-   *  when unpriced; a judge deliberately runs on a different model from the
-   *  actor, so pricing it at the actor's rate would be a fabricated number.
-   *  `usdFloorTokens` qualifies it the same way it qualifies a step's. */
+  /** A model call that is not a turn step; separate from `step_finish` so it stays out of the
+   *  prefix-cache EMA. `usage` is always written (`{}` = unmeasured); `usd` uses the call's own model. */
   | (RunEventBase & {
       type: 'model_call';
       source: SpendSource;
@@ -234,163 +132,62 @@ export type RunEvent =
       spec?: string;
       modelId?: string;
     })
-  /** One direct model operation's start, or its end.
-   *
-   *  The `model_call` row above is written after a call returns, so a frame the
-   *  platform destroys mid-call leaves nothing: the durable trail could not say
-   *  which operation was in flight, and a killed evolution pass read exactly
-   *  like one that never started. This pair fixes that, in the shape
-   *  `run_start`/`run_end` already uses one level up — a start whose
-   *  `operationId` never reaches an end row is the visible signature of a dead
-   *  process (`RunEventRecorder.unterminatedModelOperations`), and no elapsed
-   *  reading is taken anywhere to decide it.
-   *
-   *  `usage` rides the END row alone, because usage does not exist until the
-   *  provider answers. It is deliberately the same normalized report
-   *  `model_call` carries rather than a second accounting: the two rows are
-   *  written from one value on one line, and the census reads `model_call`
-   *  alone so this pair can never double-count it. */
+  /** Start/end pair: a start without an end marks a dead process
+   *  (`RunEventRecorder.unterminatedModelOperations`). The census reads `model_call`, not this. */
   | (RunEventBase & {
       type: 'model_operation';
-      /** Stable across the pair; unique in the log. */
       operationId: string;
       source: SpendSource;
       op: ModelOperationKind;
       phase: ModelOperationPhase;
-      /** End rows only. */
       outcome?: ModelOperationOutcome;
-      /** End rows only, and `{}` where the provider reported nothing. */
       usage?: Usage;
       spec?: string;
       modelId?: string;
-      /** Failed end rows only: the cause chain, bounded by the producer. */
       error?: string;
     })
-  /** The turn is not thinking — it is WAITING. One row per declared sleep the
-   *  model's transport is about to take: a 429/529's Retry-After, this layer's
-   *  backoff when the refusal carried none, or the shared pacer's join onto a
-   *  cooldown a sibling request earned (`source` says which, `status` the
-   *  refusing status when there was a response at all).
-   *
-   *  Without these rows a rate-limited turn is indistinguishable from a slow
-   *  one: the stream is simply quiet, the recorder writes nothing, and a
-   *  reader watching for stalls would call it stuck. The row is what lets a
-   *  surface say "waiting on {provider}" — the wait is real, measured, and
-   *  attributed, never guessed from silence. */
+  /** One row per declared transport sleep (Retry-After, backoff, or pacer cooldown join). */
   | (RunEventBase & {
       type: 'provider_wait';
       provider: string;
       modelId?: string;
-      /** How long the request sleeps, in ms. */
       waitMs: number;
-      /** Which attempt was refused, 1-based — 0 when the wait is a pacer
-       *  cooldown join taken before this request's first attempt. */
+      /** 1-based; 0 for a pacer cooldown join before the first attempt. */
       attempt: number;
-      /** The upstream status that caused the wait, when one was seen. */
       status?: number;
-      /** `header`: the provider's own Retry-After. `backoff`: a refusal with
-       *  none. `cooldown`: a wait declared by a sibling, joined before this
-       *  request's first send. */
       source: 'header' | 'backoff' | 'cooldown';
     })
   | (RunEventBase & { type: 'head_split'; rootId: string; headIds: string[]; rationale: string })
-  /** A split settled. `headsWithFindings` vs `headCount` is how many forks came
-   *  back with something against how many returned empty, `totalTokens` is what
-   *  the whole split cost, and `fileChanges` is what it changed — so the
-   *  productivity of delegation is a query over the ledger instead of a
-   *  hand-read of trajectories.
-   *
-   *  `totalTokens` is ABSENT when no head in the split reported usage. A split
-   *  served by a silent provider did not cost zero tokens; it cost an unknown
-   *  number, and a delegation-productivity query that read those as free would
-   *  rank the unmeasured split as the cheapest. */
+  /** `totalTokens` is absent when no head reported usage: unknown, not zero. */
   | (RunEventBase & { type: 'head_merge'; rootId: string; headCount: number;
       headsWithFindings: number; totalTokens?: number; mergedNarrative: string;
-      /** Which files each head created, changed or deleted, with line counts —
-       *  so "what did that delegation actually do to the workspace" is a query
-       *  over the ledger rather than a re-read of the narrative. Heads that
-       *  changed nothing are absent. */
       fileChanges: HeadFileChangeSet[];
-      /** Ground the merge says NO head covered. Recorded because the field's
-       *  own value is unmeasured: whether it reports real negative space or
-       *  degenerates into filler is settled by reading these rows across real
-       *  splits, not by argument. Empty on the deterministic empty-split and
-       *  merge-fallback paths, which never reach a model. */
+      /** Empty on the deterministic empty-split and merge-fallback paths. */
       blindSpots: string[] })
-  /** A split that never settled — retired at the start of a later activation
-   *  because nothing was left to run it (heads/reconcile.ts).
-   *
-   *  The terminal counterpart to `head_split` on the path where `head_merge`
-   *  never arrives. Without it the ledger held a split with no outcome, which is
-   *  byte-for-byte what a fork still in flight looks like: the Timeline rendered
-   *  a "Heads split" span nothing closed, and a delegation-productivity query
-   *  counted the spend against no result it could see. `abandoned` against
-   *  `headCount` is how much of the split was still unreported when it died —
-   *  the rest had already returned, and their reports stand. */
+  /** Terminal counterpart to `head_split` when `head_merge` never arrives (heads/reconcile.ts). */
   | (RunEventBase & { type: 'head_abandoned'; rootId: string; headCount: number;
       abandoned: number; rationale: string; reason: string })
   | (RunEventBase & { type: 'scaffold_promotion'; fromVersion: number; toVersion: number })
   | (RunEventBase & { type: 'scaffold_rollback'; fromVersion: number; toVersion: number })
   | (RunEventBase & { type: 'memory_write'; path: string; bytes: number })
-  /** One committed `db` operation: which table, whose rows, and how many of
-   *  them changed.
-   *
-   *  Written INSIDE the mutation's own transaction (tools/db-codemode.ts), so a
-   *  batch that rolled back leaves none of these rows and a row that exists
-   *  proves the write it describes committed. `batch` is what tells one
-   *  transaction from several: every operation of one `db.batch` records the
-   *  same batch size, and a single operation records null. */
+  /** Written inside the mutation's transaction, so a row proves the write committed. */
   | (RunEventBase & { type: 'db_op' } & DbOpRecord)
-  /** A working-context edit: the revision it produced, the revision it was
-   *  authored against, and who authored it.
-   *
-   *  TWO of these per landed edit, and they are not redundant: `staged` when
-   *  the edit is accepted and numbered (`effectiveAt` says which boundary will
-   *  take it, `stepIndex` is null because none has), `activated` when a
-   *  boundary actually consumes it (`turnId`/`stepIndex` name that boundary).
-   *  A refused edit writes neither, so an activation row is never a claim about
-   *  an edit that never landed.
-   *
-   *  The committed revision and the pending proposal have distinct identities.
-   *  A staged event names its base revision; activation names the new revision. */
+  /** Two per landed edit: `staged` (accepted, `stepIndex` null) and `activated` (consumed by a
+   *  boundary). A refused edit writes neither. */
   | (RunEventBase & { type: 'context_edit'; contextId: string; proposalId: string; revision: number; baseRevision: number;
       messageCount: number; author: string;
       via: ContextEditVia; status: ContextEditStatus; effectiveAt: ContextEditBoundary;
       turnId: string | null; stepIndex: number | null })
-  /** The turn's bulk-ingestion ledger — how much tool output the root actually
-   *  admitted, what every producer spilled instead, and whether the agent read
-   *  any of it back. Written once per turn by the settle spine (M1 trip
-   *  counters); `turn_end` is the denominator. */
   | (RunEventBase & { type: 'context_budget' } & ContextBudgetSnapshot)
-  /** What this turn's `file` edits did: how many were attempted, how many
-   *  landed, which exact-match failures they hit, and whether the model came
-   *  back and got the file right. Written once per turn by the settle spine
-   *  like `context_budget`, only for turns that attempted an edit. Shell-based
-   *  edits could not produce this row at all — `sed -i` exits 0 whether or not
-   *  it matched anything — which is why the primitive is what makes edit
-   *  success a gradable signal. */
   | (RunEventBase & { type: 'file_edit' } & FileEditSnapshot)
-  /** The harness mechanically steered the turn, and whether the model then did
-   *  what the steer asked. At most one per turn — the one reactive steer —
-   *  written by the settle spine like `context_budget`;
-   *  `turn_end` is the denominator, `converted` the conversion numerator, and
-   *  `trigger` is what separates the loop arms from the stall arm.
-   *  Declared here rather than imported from the producer
-   *  (orchestrator/turn-steering.ts): this union is reachable from most of the
-   *  turn pipeline, and the producer holds mid-turn injection machinery no
-   *  other layer may reach. */
+  /** Declared here rather than imported from orchestrator/turn-steering.ts to keep the producer's
+   *  mid-turn machinery out of this widely reachable union. */
   | (RunEventBase & { type: 'turn_steering';
-      /** Which mechanical trigger fired. */
       trigger: 'repeated_call' | 'repeated_failure' | 'no_progress';
-      /** Step boundary the steer was spliced into. */
       step: number;
-      /** The tool that kept repeating or failing (not the stall trigger). */
+      /** Not set for the stall trigger. */
       tool?: string;
-      /** The model did what the steer asked: called something other than the
-       *  named call after a repeat or failure steer, or reached ground the
-       *  turn had not covered after a stall steer. */
       converted: boolean })
-  /** Profile authority and provider availability resolved before model work. */
   | (RunEventBase & { type: 'profile_resolution';
       durationMs: number;
       providerCache: 'hit' | 'joined' | 'miss';
@@ -398,141 +195,58 @@ export type RunEvent =
       unavailableProviders: number;
       catalogVersion: number;
       authority: 'local' | 'account' })
-  /** The one-shot completion gate fired: the harness refused to let the run end
-   *  on the model's own say-so and handed it freshly observed state first.
-   *  At most one per one-shot run, written by the settle spine when the
-   *  confirming turn closes — `converted` says the re-look found real work to
-   *  do rather than confirming a claim. */
   | (RunEventBase & { type: 'completion_gate';
-      /** The agent made tool calls after seeing the observed state. */
       converted: boolean })
-  /** The in-episode craft loop's turn record — did the agent build itself a
-   *  tool mid-episode, did it reach for that tool again, and did the reach
-   *  work. Written once per turn by the settle spine like `turn_steering`,
-   *  with `turn_end` as the denominator: the durable trail an analysis can read
-   *  without asking the model anything. Declared here rather than imported from
-   *  the producer (orchestrator/craft-cycle.ts) for the same reason the steering
-   *  record is: this union is reachable from most of the turn pipeline, the
-   *  producer is not. */
   | (RunEventBase & { type: 'craft_cycle';
-      /** Crafted tools that came into existence during this turn. */
       crafted: string[];
-      /** Crafted tools whose call sites appeared in a settled execute call. */
       invoked: string[];
-      /** Crafted THIS turn and then called by a LATER execute call — the
-       *  in-episode loop actually closing, and the numerator to report. */
+      /** Crafted this turn and called by a later execute call. */
       reused: string[];
-      /** Observations recorded: invocations that returned, and invocations
-       *  that raised and were attributed to the tool itself. */
       returned: number;
       raised: number;
-      /** Crafted tools this turn's execution evidence pushed below the
-       *  injection floor — retirement, in-episode. */
+      /** Pushed below the injection floor this turn. */
       dropped: string[] })
-  /** The step clock's knowledge channel fired: failure streaks the turn's own
-   *  ledger saw broken by a CHANGED call that ran clean, each recorded as a
-   *  durable finding and injected for the rest of the episode
-   *  (evolution/recovery.ts). Written once per turn by the settle spine like
-   *  `craft_cycle`, with `turn_end` as the denominator. Declared here rather
-   *  than imported from the producer for the same reason the other turn
-   *  records are. */
   | (RunEventBase & { type: 'execution_recovery';
       recoveries: Array<{
-        /** The tool whose streak broke. */
         tool: string;
-        /** Consecutive failures before the changed call. */
         failures: number;
-        /** Stable signature of the failing call — the SAME signature failing
-         *  again in a later turn is the direct falsifier that the finding
-         *  did not take. */
         failedSignature: string }> })
-  /** The turn escalated: it ran work in a provisioned environment rather than
-   *  its own shell, and this is why and how that turned out. Written once per
-   *  turn by the settle spine, with `turn_end` as the denominator, so "did
-   *  escalating help" is answerable from the log alone. The shape is the
-   *  ledger's own (execution/escalation.ts) rather than a second declaration —
-   *  same composition as `context_budget` and `file_edit`. */
   | (RunEventBase & { type: 'execution_escalation' } & EscalationSnapshot)
-  /** A mission budget ran out and a host seam declined the work. Written once
-   *  per label by the governor (mission-budget.ts), so the durable trail says
-   *  which cap stopped which run rather than leaving an unexplained short turn. */
   | (RunEventBase & { type: 'budget_exhausted' } & Omit<MissionBudgetRefusal, 'error'>)
   | (RunEventBase & { type: 'fiber_recovered'; fiberName: string; fiberId: string; snapshot?: unknown })
-  /** A deferred-approval grant was CONSUMED: the owner approved a parked
-   *  command, an agent re-issued it, and this row is what proves the grant was
-   *  spent — exactly once. It replaces the deleted `used` status row as the
-   *  only durable consumption record (safety/deferred-approval.ts spends by
-   *  deleting), so the audit outlives the state it audited. */
+  /** The only durable consumption record; safety/deferred-approval.ts spends by deleting. */
   | (RunEventBase & { type: 'approval_consumed'; approvalId: string;
       command: string; executor: string })
   | (RunEventBase & { type: 'error'; message: string; details?: unknown })
-  /** `usage` is what the turn's steps reported, accumulated field by field —
-   *  absent entirely when no step reported anything, and absent per field where
-   *  no step's provider mentioned it. */
   | (RunEventBase & { type: 'turn_end'; turnIndex: number;
-      /** The work mode the turn ran in, resolved at turn start. The
-       *  auto-GEPA cadence counts completed non-plan turns from these rows
-       *  instead of an activation-local counter. Absent on rows written
-       *  before the field existed — absence reads as "before the denominator
-       *  started", never as build. */
+      /** Absent on older rows; absence means before the denominator started, never build. */
       workMode?: WorkMode; usage?: Usage })
   | (RunEventBase & { type: 'run_end'; reason?: string;
-      /** The provider/stream error text (truncated) when the run ended in
-       *  status 'error' — the durable evidence a post-hoc investigation needs
-       *  (Think persists only the LAST terminal error, which a later failure
-       *  overwrites). */
       error?: string });
 
-/** One turn's mechanical steer — what the steering object reports and what the
- *  settle spine writes, derived from the durable schema so there is one
- *  declaration. */
 export type TurnSteeringRecord =
   Omit<Extract<RunEvent, { type: 'turn_steering' }>, keyof RunEventBase | 'type'>;
 
 export type TurnSteeringTrigger = TurnSteeringRecord['trigger'];
 
-/** One run's completion gate — derived from the durable schema for the same
- *  reason as the steering record: one declaration, no drift. */
 export type CompletionGateRecord =
   Omit<Extract<RunEvent, { type: 'completion_gate' }>, keyof RunEventBase | 'type'>;
 
-/** One turn's in-episode craft loop — what the cycle reports and what the
- *  settle spine writes, derived from the durable schema so there is one
- *  declaration. */
 export type CraftCycleRecord =
   Omit<Extract<RunEvent, { type: 'craft_cycle' }>, keyof RunEventBase | 'type'>;
 
-/** One turn's execution recoveries — derived from the durable schema for the
- *  same reason as the records above: one declaration, no drift. */
 export type ExecutionRecoveryRecord =
   Omit<Extract<RunEvent, { type: 'execution_recovery' }>, keyof RunEventBase | 'type'>;
 
-/** One consumed deferred-approval grant — what the queue hands its audit sink
- *  when a spend deletes the row, derived from the durable schema for the same
- *  reason as the records above: one declaration, no drift. */
 export type ApprovalConsumedRecord =
   Omit<Extract<RunEvent, { type: 'approval_consumed' }>, keyof RunEventBase | 'type'>;
 
-/** A new event payload sans the base fields the recorder fills in. */
 export type RunEventInput = {
   [K in RunEvent['type']]: Omit<Extract<RunEvent, { type: K }>, keyof RunEventBase | (K extends 'step_finish' ? 'messages' : never)> & { type: K }
     & (K extends 'tool_call_end' ? { outcome: ToolOutcome } : object)
     & (K extends 'step_finish' ? { messages?: ModelMessage[] } : object)
 }[RunEvent['type']];
 
-/**
- * What a call that failed WITHOUT saying why records as.
- *
- * An empty `error` is no error to every reader — the one predicate they share
- * is `error != null && error !== ''`. So a tool reporting `success: false` with
- * a nullish error must not be rendered as `String(c.error ?? '')`: that makes
- * the worst calls in a turn the ones that vanish from it, a tool failing on a
- * missing runtime method reporting failure with nothing to report while the
- * ledger scores it as a clean call. The accumulator KNOWS — it flips `hadError`
- * on the same branch — and would lose it at the event boundary.
- *
- * A sentinel and not prose because both the producer and the failure census
- * name it, and a reader that has to match prose is a reader that will drift
- * from the writer.
- */
+/** Sentinel so a failed call with a nullish error still reads as an error; producer and census
+ *  both match it. */
 export const FAILURE_WITHOUT_ERROR = 'the tool reported failure without an error';

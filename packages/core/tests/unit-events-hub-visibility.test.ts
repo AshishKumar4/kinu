@@ -1,4 +1,3 @@
-// Payload visibility — redaction + LLM rendering.
 import { describe, test, expect } from 'bun:test';
 import { Database } from 'bun:sqlite';
 import { createMemoryVfs, createTestActorsOver, present } from '@kinu.run/test-utils';
@@ -105,11 +104,8 @@ describe('applyVisibilityForStorage — redact', () => {
 });
 
 describe('redactSecrets — secret-shaped VALUES in free text', () => {
-  // KINU-011: `redactPayload` saw field names only, so a token inside a
-  // free-form string survived every preview that renders one — a tool result
-  // carrying a `cfut_` token, a run command with `--token=…`, an errorText.
-  // The assembled literals keep this file clean under the commit-tier scan
-  // that shares the same pattern list.
+  // KINU-011: tokens inside free-form strings must be redacted, not just by field name. Literals
+  // are assembled so this file stays clean under the commit-tier scan.
   const TOKEN = `cfut_${'a'.repeat(48)}`;
 
   test('a token inside a free-form string is masked, and only the token', () => {
@@ -177,8 +173,7 @@ describe('renderForLLM', () => {
     expect(r.brief).toContain('redacted');
   });
   test('an internal note names its kind and never leaks its payload bytes', () => {
-    // `data` is whatever the emitting layer put there; the brief is the model's
-    // view of an event, not a dump of it. The kind is the actionable fact.
+    // The brief is the model's view of an event, not a dump of `data`.
     const r = renderForLLM({
       ...EVENT_BASE, ingress: 'self_emit', variant: 'internal', payload_visibility: 'full',
       payload: {
@@ -192,10 +187,7 @@ describe('renderForLLM', () => {
   });
 
   test('opaque-handle brief states the withholding and invents no read-back API', () => {
-    // Regression: this brief once instructed the model to call
-    // `read_external_payload(event_id)` — a function that existed nowhere on
-    // any backend. Text injected into the prompt is an API contract; it may
-    // only cite what the runtime can actually serve.
+    // Prompt text is an API contract: it may only cite what the runtime serves.
     const r = renderForLLM({
       ...EVENT_BASE, ingress: 'webhook_hmac', variant: 'webhook', payload_visibility: 'opaque_handle',
       payload: { _visibility: 'opaque_handle', handle: 'opaque:abcd1234' },
@@ -214,9 +206,7 @@ describe('renderForLLM', () => {
     expect(r.is_self_caused).toBe(true);
   });
 
-  // Reference plus digest: a brief may truncate, but never without saying
-  // where the rest lives. Small payloads keep their exact pre-reference
-  // rendering — the prompt-cache prefix depends on those bytes.
+  // A truncated brief says where the rest lives; small payloads keep exact bytes for the prompt cache.
   describe('bulk payloads carry a resolvable reference', () => {
     const longReport = 'seam found in the auth module; '.repeat(40);
     const shortReport = 'Survey done — three seams found; note written.';
@@ -235,8 +225,7 @@ describe('renderForLLM', () => {
         },
       });
 
-      // Bounded, but it SAYS it is bounded and where the rest lives: head,
-      // an in-band omitted count, tail, then the resolvable path.
+      // Head, in-band omitted count, tail, then the resolvable path.
       expect(r.brief.startsWith(`completed: ${longReport.slice(0, 100)}`)).toBe(true);
       expect(r.brief).toContain(
         `[... ${longReport.length - EVENT_BRIEF_MAX_CHARS} chars omitted from the middle ...]`,
@@ -279,8 +268,6 @@ describe('renderForLLM', () => {
       expect(r.brief).toContain(
         `[... ${serialized.length - EVENT_BRIEF_MAX_CHARS} chars omitted from the middle ...]`,
       );
-      // The tail survives the window, so the serialization's closing brace is
-      // visible rather than cut mid-value.
       expect(r.brief).toContain(`"} — full message: ${body_path}`);
       expect(await vfs.readFile(body_path)).toBe(serialized);
     });
@@ -302,9 +289,6 @@ describe('renderForLLM', () => {
     });
 
     test('an oversize webhook body is windowed, counted, and addressable', async () => {
-      // The old brief handed the model 200 characters of stringified JSON —
-      // syntactically invalid, unmarked, and with nothing to read the rest
-      // from — as the whole content of the delivery that woke it.
       const { vfs } = createMemoryVfs();
       const body = { event: 'deploy.failed', log: 'y'.repeat(900), action: 'rollback' };
       const serialized = JSON.stringify(body);

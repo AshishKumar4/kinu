@@ -372,18 +372,12 @@ describe('Plan mode tool lifecycle', () => {
     expect(attempts[0]?.idempotencyKey).toBe(attempts[1]?.idempotencyKey);
   });
 
-  test('recovers when durable acceptance outlives the RPC and the accepted turn later errors', async () => {
+  test('recovers when acceptance outlives the RPC: the retried decision admits no second turn', async () => {
     const harness = orchestratorHarness();
     const agent = harness.agent;
-    // The loop's admissions, scripted as the durable statuses the retry policy
-    // is pinned on: accepted; then the SAME key found errored after the fact,
-    // which advances the attempt; then accepted under the new key.
-    agent.harnessScriptAdmissions([
-      async () => ({ status: 'queued', durable: { submissionId: 'submission-1', accepted: true, status: 'pending' } }),
-      async () => ({ status: 'skipped', durable: { submissionId: 'submission-1', accepted: false, status: 'error' } }),
-      async () => ({ status: 'queued', durable: { submissionId: 'submission-2', accepted: true, status: 'pending' } }),
-    ]);
-    const attempts = agent.harnessAdmissionsAsked;
+    // Every ask goes through the loop's real admission, which names a turn by
+    // its key and recognises one it already ran.
+    const attempts = recordAdmissions(agent);
     setMode(agent, 'plan');
     await codemodeTool(rawTools(agent), 'submit_plan', {
       edits: [{ start: 1, content: '# Plan' }],
@@ -414,11 +408,12 @@ describe('Plan mode tool lifecycle', () => {
       queued: true,
       plan: { status: 'approved', handoffAccepted: true },
     });
+    // Asked twice under one key; the loop ran the turn once.
     expect(attempts.map((attempt) => attempt.idempotencyKey)).toEqual([
       `plan:${plan.id}:1:approve:1`,
       `plan:${plan.id}:1:approve:1`,
-      `plan:${plan.id}:1:approve:2`,
     ]);
+    expect((await agent.listRuns()).items).toHaveLength(1);
   });
 });
 

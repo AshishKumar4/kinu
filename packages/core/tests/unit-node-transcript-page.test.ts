@@ -1,14 +1,5 @@
-// The node transcript's step trace, bounded.
-//
-// `readNodeTranscript` answers with a cursored page (newest page first, each
-// page oldest-first, cursor anchored on `head_steps.id`), with `stepCount`
-// carrying the honest total so the Steps metric does not start lying about the
-// page it was handed. EVERY step of the branch in one payload opens a 400-step
-// search's whole trace over the wire on one click.
-//
-// These tests walk a transcript longer than one page and hold the contract the
-// chat history paging already established: every row reachable exactly once,
-// in order, `end` only stated by a query that ran off the data.
+// `readNodeTranscript` pages newest-page-first, each page oldest-first, cursor on `head_steps.id`;
+// every row reachable exactly once, `end` only from a query that ran off the data.
 import type { SeekCursor } from '../src/session/page';
 import type { SqlExecutor } from '../src/types/primitives';
 import type { ActorHandle } from '../src/identity/actor-handle';
@@ -35,7 +26,6 @@ function spawn(id: string, rootId: string): HeadInput {
   };
 }
 
-/** A head whose trace is `n` steps, s0 oldest. */
 function seeded(n: number) {
   const sql = createTestSql();
   initHeadsTables(sql.execRaw);
@@ -52,7 +42,6 @@ function seeded(n: number) {
   return { sql: sql.sql, actor, journal };
 }
 
-/** Every page, oldest first — the walk a caller performs. */
 function walkSteps(sql: SqlExecutor, actor: ActorHandle, limit: number): string[] {
   const texts: string[] = [];
   let cursor: SeekCursor | undefined;
@@ -120,16 +109,9 @@ describe('node transcript paging', () => {
   });
 });
 
-/**
- * THE FIRST CRUMB IS THE RUN.
- *
- * `mcts/engine.ts` records a search's root with `action: ''` — a root is the
- * workspace as found and proposed nothing — so a breadcrumb built from the raw
- * column had nothing to print, and the panel printed the literal `root`. The
- * crumb carries the run's name, derived exactly as the run list derives it.
- */
+/** The first crumb is the run: a root records `action: ''`, so the crumb carries the run's
+ *  derived name. */
 describe('the search path names the run it belongs to', () => {
-  /** A two-level search: an unlabelled root, one branch under it. */
   function seedSearch(rootAction: string) {
     const ws = createTestWorkspace();
     const actor = createTestActors(ws.sql, ws.execRaw).main;

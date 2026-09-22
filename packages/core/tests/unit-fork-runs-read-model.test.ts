@@ -1,18 +1,5 @@
-/**
- * One root id, one run — carrying every half it wrote.
- *
- * A run's journalled nodes land in `head_journal` and its search tree lands in
- * `search_nodes`. The two stores never meet, so a surface reading one showed an
- * empty pane for runs that had written the other and the same user action
- * appeared to vanish. Then a swarm whose nodes are agents wrote BOTH, and the
- * list — which tagged each half with one of the removed `fork` verb's two
- * settlements — answered with TWO runs sharing one id, the tree-less half sorting
- * newer and winning every caller's dedup.
- *
- * These tests pin the fixed list: one row per root, both halves on it, one
- * chronological order, one status vocabulary, and the thing that must NOT
- * appear (Steer-as-Branch redirects).
- */
+/** One root id, one run: journal (`head_journal`) and tree (`search_nodes`) halves fold into one
+ *  row with one order and status vocabulary; Steer-as-Branch redirects never appear. */
 
 import { describe, test, expect } from 'bun:test';
 import { Database } from 'bun:sqlite';
@@ -35,22 +22,14 @@ function freshDb() {
   initSearchTables(execRaw);
   initMctsSearchTable(execRaw);
   initHeadsTables(execRaw);
-  // A REAL actor over this database: both stores these runs are folded from are
-  // actor-private, so a seeded row exists only for the owner that wrote it.
-  // The directory comes back too, so a case can issue a real SIBLING and prove
-  // the folding is per-actor rather than per-database.
+  // Both stores are actor-private; the directory is returned so a case can issue a real sibling.
   const actors = createTestActors(sql, execRaw);
 
   return { db, sql, actors, actor: actors.main, actorId: actors.main.actorId };
 }
 
-/**
- * A run with journalled nodes, seeded the way the writers write one:
- * `recordSplit` puts the rationale in head_runs, and every node gets a journal
- * row. A TOP-LEVEL split's root id is synthetic — there is deliberately no
- * journal row carrying it, which is why the read model groups by head_journal.
- * Pass `parentHead` for the recursive case, where a real head IS the root.
- */
+/** A top-level split's root id is synthetic (no journal row carries it), hence grouping by
+ *  head_journal. `parentHead` covers the recursive case, where a real head is the root. */
 function seedJournalledRun(
   db: Database,
   actorId: string,
@@ -85,13 +64,12 @@ function seedJournalledRun(
   }
 }
 
-/** A run with a search tree: a root node, N branches, and optionally the ledger row. */
 function seedSearchRun(
   db: Database,
   actorId: string,
   run: {
     rootId: string; task: string; at: number; branches: number;
-    /** What the engine wrote as the ROOT's own label — the run's name. */
+    /** The root's own label, which is the run's name. */
     name?: string;
     winner?: number;
     ledger?: 'running' | 'converged' | 'failed' | 'no_acceptable_candidate';
@@ -120,15 +98,7 @@ function seedSearchRun(
   }
 }
 
-/**
- * A run's NAME — the short handle every exploration surface leads with.
- *
- * The owner's report: the tree drew `(root)` and the index rows drew truncated
- * task text, so two searches of one repository were told apart by reading two
- * paragraphs. A run carries a name: what the caller gave the `agents` tool,
- * which the engine writes as the root node's own label, and a derivation from
- * the task where nothing was given.
- */
+/** A run's name: the caller's name (the root node's label), else derived from the task. */
 describe('a run carries a name', () => {
   test('the name the caller gave is what the run is called', () => {
     const { db, sql, actor, actorId } = freshDb();
@@ -223,8 +193,7 @@ describe('listForkRuns', () => {
   }
 
   test("a recursive sub-split is judged by its parent head, as the detail view judges it", () => {
-    // HeadJournal.assembleRun prefers the root head row's own status; the list
-    // must agree, or one run reads two ways depending on which pane you open.
+    // Must agree with HeadJournal.assembleRun's preference for the root head row's status.
     const { db, sql, actor, actorId } = freshDb();
     seedJournalledRun(db, actorId, {
       rootId: 'r1', task: 'nested', at: 1000, parentHead: { status: 'running' },
@@ -235,9 +204,7 @@ describe('listForkRuns', () => {
   });
 
   test('a search whose ledger row was pruned still lists, judged by its own tree', () => {
-    // mcts_search_runs prunes settled rows after a day; search_nodes keeps the
-    // tree forever. A ledger-driven list would make week-old runs disappear —
-    // the exact complaint this read model answers.
+    // mcts_search_runs prunes settled rows after a day; search_nodes keeps the tree forever.
     const { db, sql, actor, actorId } = freshDb();
     seedSearchRun(db, actorId, { rootId: 'r-won', task: 'old but decided', at: 1000, branches: 3, winner: 0.9 });
     seedSearchRun(db, actorId, { rootId: 'r-stopped', task: 'old and abandoned', at: 900, branches: 2 });
@@ -268,9 +235,7 @@ describe('listForkRuns', () => {
   });
 
   test('Steer-as-Branch redirects are not exploration runs', () => {
-    // They go through the same HeadRuntime seam and journal, but a mid-turn
-    // user redirect is not a search the agent chose — it renders as a chip on
-    // the message it forked, and listing it here would be the duplication.
+    // A mid-turn redirect renders as a chip on the message it forked, not as a run here.
     const { db, sql, actor, actorId } = freshDb();
     const branchId = newBranchId();
     seedJournalledRun(db, actorId, { rootId: branchId, task: 'user redirect', at: 2000, heads: [{ status: 'completed' }], merged: true });
@@ -335,24 +300,8 @@ describe('listForkRuns', () => {
   });
 });
 
-/**
- * TWO ACTORS, ONE DATABASE.
- *
- * Every workspace table is now keyed `(actor_id, …)` and one SQLite file holds
- * every actor of the workspace, so "which rows are mine" is a predicate this
- * read model has to write, not a property of the file it reads. The transcript
- * half always carried it; the tree half did not, and the difference was
- * invisible to every single-actor case above.
- *
- * The damage is worse than a longer list, because both tree aggregates are SUMs
- * over `root_id`: two actors that ran the SAME root id reported each other's
- * branches added together, and an open node read as expanded when a stranger's
- * node named it as a parent — which decides `running` vs `settled`.
- *
- * Each case asserts THIS actor's own read first and the stranger's absence
- * second. In that order the fixture cannot pass by seeding nothing: a run filed
- * under the wrong id fails the positive read before the negative is reached.
- */
+/** Two actors, one database: tree aggregates sum over `root_id`, so they must be actor-scoped.
+ *  Each case asserts the own read first, so seeding nothing cannot pass. */
 describe('the run list is folded per actor, not per database', () => {
   test('a sibling search tree is neither listed nor readable as a run', () => {
     const { db, sql, actors, actor, actorId } = freshDb();
@@ -366,14 +315,11 @@ describe('the run list is folded per actor, not per database', () => {
 
     const listed = listForkRuns(sql, actor, null, 50).items;
 
-    // POSITIVE FIRST: my own run is there, whole.
     expect(listed.map((run) => run.id)).toEqual(['mine']);
     expect(listed[0]).toMatchObject({ task: 'my search', branches: 2, hasSearchTree: true });
-    // The stranger's root is not a run of mine even by exact id — an id is only
-    // unguessable until a caller pastes one from another actor's surface.
+    // Not visible even by exact id.
     expect(readForkRun(sql, actor, 'theirs')).toBeNull();
-    // ...and the stranger can still see its own, so the scoping is a filter and
-    // not a tree that stopped being readable at all.
+    // The stranger still sees its own: a filter, not a broken read.
     expect(listForkRuns(sql, other, null, 50).items.map((run) => run.id)).toEqual(['theirs']);
   });
 
@@ -395,10 +341,7 @@ describe('the run list is folded per actor, not per database', () => {
   });
 
   test("a sibling's child node does not make my open root read as expanded", () => {
-    // The frontier is what decides `running` vs `settled`: an open node WITH a
-    // child is an expanded parent and not selectable. Scoped by root id alone,
-    // a sibling's node parented on my node id emptied my frontier and settled a
-    // search that was still running.
+    // A stranger's node parented on mine must not empty my frontier and settle a running search.
     const { db, sql, actors, actor, actorId } = freshDb();
     const other = actors.sibling('other');
     seedSearchRun(db, actorId, { rootId: 'mine', task: 'my search', at: 100, branches: 0 });
@@ -419,21 +362,10 @@ describe('the run list is folded per actor, not per database', () => {
   });
 });
 
-/**
- * A LEASE THAT OUTLIVED ITS TREE.
- *
- * `mcts_search_runs.status='running'` is a lease, not an observation. The engine
- * closes the tree BEFORE recording an outcome (`mcts/engine.ts`) precisely so a
- * crash between the two leaves a closed tree with a still-`running` row, which
- * that file calls inert: nothing is selectable. The TREE answers the question,
- * over the frontier `mcts/frontier.ts` selects from. Reading the column instead
- * reports those runs as running for as long as the row survives — the report
- * *"this run had 2 reported and rest stopped … still it says 'running'?"*.
- */
+/** `mcts_search_runs.status='running'` is a lease, not an observation: the engine closes the tree
+ *  before recording an outcome, so the tree's frontier decides running vs settled. */
 describe('a stale running lease', () => {
-  /** One tree with the statuses named, and the ledger row left as given. Raw
-   *  inserts rather than `seedSearchRun`, because the node STATUSES are the
-   *  evidence under test. */
+  /** Raw inserts: the node statuses are the evidence under test. */
   function seedTree(
     db: Database,
     actorId: string,
@@ -459,8 +391,7 @@ describe('a stale running lease', () => {
   }
 
   test('a closed tree under a running row stopped without an answer', () => {
-    // The reported run: two nodes reported, the rest stopped, nothing won, and a
-    // lease nobody settled. `abandonSearchTree` is what left the nodes `failed`.
+    // Nodes reported/stopped, nothing won, lease never settled (`abandonSearchTree` marks `failed`).
     const { db, sql, actor, actorId } = freshDb();
     seedTree(db, actorId, {
       rootId: 'r-stale', root: 'failed',
@@ -471,8 +402,7 @@ describe('a stale running lease', () => {
   });
 
   test('a tree that converged under a running row is settled, not running', () => {
-    // The other half of the same crash window: `converge` closed the tree and the
-    // `converged` write never landed. A terminal node is written by nothing else.
+    // `converge` closed the tree and the `converged` write never landed.
     const { db, sql, actor, actorId } = freshDb();
     seedTree(db, actorId, {
       rootId: 'r-won', root: 'pruned', branches: ['terminal', 'pruned'], ledger: 'running',
@@ -481,8 +411,7 @@ describe('a stale running lease', () => {
   });
 
   test('a search with a frontier left is still running', () => {
-    // The guard on all of it: an open childless node is selectable, so this run
-    // IS at work and must keep saying so.
+    // An open childless node is selectable, so this run is at work.
     const { db, sql, actor, actorId } = freshDb();
     seedTree(db, actorId, {
       rootId: 'r-live', root: 'open', branches: ['open', 'failed'], ledger: 'running',
@@ -497,26 +426,19 @@ describe('a stale running lease', () => {
   });
 
   test('an expanded parent left open is not a frontier', () => {
-    // `frontier.ts` selects `status='open' AND NOT EXISTS (children)`. Counting a
-    // bare open node instead would make every tree whose settle left its root
-    // open read as running forever.
+    // Matches `frontier.ts`: `status='open' AND NOT EXISTS (children)`.
     const { db, sql, actor, actorId } = freshDb();
     seedTree(db, actorId, { rootId: 'r-open-root', root: 'open', branches: ['pruned', 'pruned'] });
     expect(listForkRuns(sql, actor).items[0].status).toBe('partial');
   });
 });
 
-/**
- * A swarm whose `unit` is an agent writes BOTH stores under one root: the tree
- * through `mcts/record-node.ts`, a journalled transcript per node through
- * `heads/journal.ts`. Everything below is about that run being ONE run.
- */
+/** An agent-unit swarm writes both stores under one root; it must read as one run. */
 describe('a run that wrote both stores', () => {
   const TASK = 'cut p99 latency on the search path';
   const PRESET = 'optimise';
 
-  /** One root, both halves — the shape a swarm leaves behind. The journal starts
-   *  AFTER the tree, which is what makes the tree-less half sort newer. */
+  /** The journal starts after the tree, making the tree-less half sort newer. */
   function seedSwarmRun(db: Database, actorId: string, rootId = 'swarm-1'): void {
     seedSearchRun(db, actorId, { rootId, task: TASK, at: 1000, branches: 3, winner: 0.71, ledger: 'converged' });
     seedJournalledRun(db, actorId, {
@@ -529,15 +451,13 @@ describe('a run that wrote both stores', () => {
     const { db, sql, actor, actorId } = freshDb();
     seedSwarmRun(db, actorId);
     const runs = listForkRuns(sql, actor).items;
-    // The denominator: one seeded root must arrive as exactly one row. Two rows is
-    // the defect — the caller then dedups, and dedup picks a winner.
+    // Exactly one row per root.
     expect(runs).toHaveLength(1);
     expect(runs[0]).toMatchObject({
       id: 'swarm-1',
       hasSearchTree: true,
       hasNodeTranscripts: true,
-      // The TREE's branches: every branch writes a tree row, only a tool-using
-      // node writes a journal row, so the tree is the complete structure.
+      // Only tool-using nodes write journal rows; the tree is the complete structure.
       branches: 3,
       winnerScore: 0.71,
       status: 'completed',
@@ -554,17 +474,13 @@ describe('a run that wrote both stores', () => {
   test('reports the task it ran, never the preset name in the split rationale', () => {
     const { db, sql, actor, actorId } = freshDb();
     seedSwarmRun(db, actorId);
-    // `recordSplit` stamps `label ?? preset` into `head_runs.rationale`, and a
-    // swarm journals no row for its root — so reading that column as the run's
-    // task reports the preset name. The tree's root node holds the real task.
+    // `head_runs.rationale` holds `label ?? preset` for a swarm; the tree root holds the real task.
     expect(listForkRuns(sql, actor).items[0].task).toBe(TASK);
     expect(listForkRuns(sql, actor).items[0].task).not.toBe(PRESET);
   });
 
   test('a run with no tree still falls back to the split rationale for its task', () => {
-    // The other direction of the same precedence: a journal-only run has no tree
-    // root to name it, and its synthetic root has no journal row either, so the
-    // rationale is the only thing that says what the run was for.
+    // A journal-only run has only the rationale to say what it was for.
     const { db, sql, actor, actorId } = freshDb();
     seedJournalledRun(db, actorId, {
       rootId: 'j1', task: 'unused', at: 1000, rationale: 'compare two rewrites',
@@ -576,10 +492,7 @@ describe('a run that wrote both stores', () => {
   const BOTH_HALVES = [
     { name: 'is running while either half is still writing', winner: 0.5, second: 'running', status: 'running' },
     {
-      // The tree's own ledger is the run's statement about how it ended; a failed
-      // branch is normal in a search. The journal rule — nothing synthesised and
-      // something errored means `partial` — is about heads reaching a synthesis, and
-      // applying it here would report every swarm with a lost node as unfinished.
+      // The tree's ledger states how it ended; a failed branch does not make a swarm `partial`.
       name: 'a settled search with one failed node reads as settled, not partial',
       winner: 0.6, second: 'errored', status: 'completed',
     },
@@ -599,11 +512,7 @@ describe('a run that wrote both stores', () => {
   }
 
   test('arrives whole on whichever page it falls on, halves together', () => {
-    // The page boundary is the other place a run can lose a half. Bounding each
-    // STORE against a position in the merged order tears exactly here: this run's
-    // tree begins before `middle` and its journal after it, so a per-store bound
-    // admits the tree and rejects the journal, and the run arrives half-empty on
-    // the page after `middle`.
+    // Bounding each store separately would tear a run straddling the page boundary.
     const { db, sql, actor, actorId } = freshDb();
     seedSwarmRun(db, actorId);
     seedJournalledRun(db, actorId, { rootId: 'middle', task: 'in between', at: 1200, heads: [{ status: 'completed' }] });
@@ -634,22 +543,8 @@ describe('a run that wrote both stores', () => {
   });
 });
 
-/**
- * WHAT A CANVAS PAGE MAY NOT CARRY.
- *
- * `readExplorationCanvas` composes thirty runs and every head of each. When a
- * head view carried its own step trace, that made one production Exploration
- * page 824 KiB and — because the page also seeded the workspace's initial load
- * — put the same bytes in front of the chat pane on every workspace open. No
- * renderer read them: `headRunToTree`, the fan-in marks and the resolution
- * label are folds over the head's lifecycle fields, and the one surface that
- * shows prose opens ONE branch and reads it by id.
- *
- * So this is a size contract with a behavioural test: the page must not grow
- * with the length of the traces on it, and the per-branch read must still
- * deliver every step. Both directions, because dropping the trace from the
- * canvas is only correct while the branch reader still has it.
- */
+/** Canvas pages must not grow with trace length (no renderer reads traces there), while the
+ *  per-branch read still delivers every step. */
 describe('the canvas page does not carry step traces', () => {
   function seedWithTrace(fixture: ReturnType<typeof freshDb>, chars: number) {
     seedJournalledRun(fixture.db, fixture.actorId, {
@@ -674,8 +569,7 @@ describe('the canvas page does not carry step traces', () => {
 
     const shortBytes = JSON.stringify(readExplorationCanvas(short.sql, short.actor)).length;
     const longBytes = JSON.stringify(readExplorationCanvas(long.sql, long.actor)).length;
-    // Identical, not merely close: nothing derived from a step's length may
-    // reach this payload at all. 200 KiB of prose was written on the long side.
+    // Identical: nothing derived from step length may reach this payload.
     expect(longBytes).toBe(shortBytes);
   });
 
@@ -687,8 +581,7 @@ describe('the canvas page does not carry step traces', () => {
     const page = readExplorationCanvas(sql, actor);
     const head = page.items[0]?.head?.heads.find((candidate) => candidate.id === 'traced-h0');
     expect(head).toBeDefined();
-    // …and its lifecycle is intact, including the aggregate over the very rows
-    // the page declines to carry.
+    // …and its lifecycle is intact, including aggregates over rows the page omits.
     expect(head?.lastStepAt).toBeGreaterThan(0);
     // …and opening it reads the trace.
     const steps = journal.readSteps('traced-h0');
