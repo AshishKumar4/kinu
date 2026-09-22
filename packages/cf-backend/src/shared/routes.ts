@@ -86,7 +86,7 @@ export async function handleSharedPublicRequest(request: Request, env: Env): Pro
   if (!answer.ok) return err(404, NOT_FOUND);
   const view: BlueprintView = { id, ...answer.value.view };
 
-  return json(view, { headers: { 'cache-control': 'no-store' } });
+  return json({ body: view }, { headers: { 'cache-control': 'no-store' } });
 }
 
 const PublishBody = v.object({
@@ -121,7 +121,7 @@ export async function handleSharedRequest(request: Request, env: Env, identity: 
     throw cause;
   }
 
-  if (path === '' && request.method === 'GET') return json(await library(env, identity, owner));
+  if (path === '' && request.method === 'GET') return json({ body: await library(env, identity, owner) });
 
   if (path === '/publish' && request.method === 'POST') return publish(request, env, identity, owner);
 
@@ -343,7 +343,7 @@ async function publish(request: Request, env: Env, identity: AuthIdentity, owner
     });
   }
 
-  return json({ id, share: share.id, users, published: published.value }, { status: 201 });
+  return json({ body: { id, share: share.id, users, published: published.value } }, { status: 201 });
 }
 
 async function fork(request: Request, env: Env, identity: AuthIdentity): Promise<Response> {
@@ -366,7 +366,7 @@ async function fork(request: Request, env: Env, identity: AuthIdentity): Promise
   if (!admitted.ok) return err(admitted.reason === 'bad_input' ? 400 : 409, admitted.error);
   const result: BlueprintFork = admitted.value;
 
-  return json(result, { status: 201 });
+  return json({ body: result }, { status: 201 });
 }
 
 /** A blueprint's bundle, or the absent answer a bad address and a revoked row share. */
@@ -438,7 +438,7 @@ async function shareLive(request: Request, env: Env, identity: AuthIdentity, own
     });
   }
 
-  return json({ share, url }, { status: 201 });
+  return json({ body: { share, url } }, { status: 201 });
 }
 
 async function revokeLive(request: Request, env: Env, identity: AuthIdentity): Promise<Response> {
@@ -453,7 +453,7 @@ async function revokeLive(request: Request, env: Env, identity: AuthIdentity): P
   if (!revoked.ok) return err(revoked.reason === 'missing' ? 404 : 409, revoked.error);
   await forgetPublicShare(env, { ownerUserId: identity.userId, workspace: body.workspace, shareId: body.share });
 
-  return json(revoked.value);
+  return json({ body: revoked.value });
 }
 
 /** The URL the signed-in user opens a live share at: the share's own origin,
@@ -474,5 +474,5 @@ async function openLive(request: Request, env: Env, identity: AuthIdentity): Pro
 
   if (url === null) return err(503, 'This deployment cannot sign live-share links: CREDENTIAL_ENCRYPTION_KEY or the share suffix is not set.');
 
-  return json({ url });
+  return json({ body: { url } });
 }

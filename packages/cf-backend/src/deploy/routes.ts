@@ -111,13 +111,13 @@ export async function handleDeployRequest(request: Request, env: Env): Promise<R
     return stub.fetch(request);
   }
 
-  if (tail === '' && request.method === 'GET') return json(await stub.snapshot());
+  if (tail === '' && request.method === 'GET') return json({ body: await stub.snapshot() });
 
   // What the person picks between, read with their own token: the door has no
   // list of its own and stores neither answer.
-  if (tail === '/accounts' && request.method === 'GET') return json(await stub.accounts());
+  if (tail === '/accounts' && request.method === 'GET') return json({ body: await stub.accounts() });
 
-  if (tail === '/zones' && request.method === 'GET') return json(await stub.zones());
+  if (tail === '/zones' && request.method === 'GET') return json({ body: await stub.zones() });
 
   // The authorization leg starts here rather than at a navigated GET: the key
   // authorizes this POST in its header, and what the browser navigates to is
@@ -131,11 +131,11 @@ export async function handleDeployRequest(request: Request, env: Env): Promise<R
 
     if (!await stub.authorized()) return err(409, 'This run is not authorized with Cloudflare yet.');
 
-    return json(await stub.start(inputs));
+    return json({ body: await stub.start(inputs) });
   }
 
   if (tail.startsWith('/retry/') && request.method === 'POST') {
-    return json(await stub.retry(tail.slice('/retry/'.length)));
+    return json({ body: await stub.retry(tail.slice('/retry/'.length)) });
   }
 
   if (tail === '/keys' && request.method === 'POST') {
@@ -144,7 +144,7 @@ export async function handleDeployRequest(request: Request, env: Env): Promise<R
     if (parsed === null) return err(400, 'That is not a provider key this flow stores.');
     await stub.holdProviderKey(parsed.name, parsed.value);
 
-    return json({ held: parsed.name });
+    return json({ body: { held: parsed.name } });
   }
 
   // The CLI door authorizes on its own localhost redirect, the way wrangler
@@ -159,7 +159,7 @@ export async function handleDeployRequest(request: Request, env: Env): Promise<R
     if (clientId === '') return err(503, 'The Cloudflare door has no OAuth client configured.');
     await stub.landToken(clientId, parsed.accessToken, parsed.refreshToken, parsed.expiresInSeconds);
 
-    return json({ authorized: true });
+    return json({ body: { authorized: true } });
   }
 
   return err(404, 'No such deploy route.');
@@ -188,7 +188,7 @@ async function options(request: Request, env: Env): Promise<Response> {
       reason: 'This deployment publishes no release channel, so there is nothing to install.',
     };
 
-    return json(offline);
+    return json({ body: offline });
   }
 
   const manifest = parseReleaseManifest(await response.text());
@@ -203,7 +203,7 @@ async function options(request: Request, env: Env): Promise<Response> {
       : 'The Cloudflare door needs an OAuth client, and this deployment has none configured yet.',
   };
 
-  return json(offer);
+  return json({ body: offer });
 }
 
 async function create(env: Env): Promise<Response> {
@@ -214,7 +214,7 @@ async function create(env: Env): Promise<Response> {
   // The only time the key is ever sent. It is not stored here, not logged, and
   // not recoverable: a lost key is a lost run, which is the correct trade for a
   // capability that can write into somebody's Cloudflare account.
-  return json(ticket);
+  return json({ body: ticket });
 }
 
 /**
@@ -235,9 +235,11 @@ async function authorize(request: Request, env: Env, stub: DurableObjectStub<Dep
   const redirectUri = new URL(DEPLOY_CALLBACK_PATH, new URL(request.url).origin).href;
 
   const handoff = json({
-    location: authorizeUrl({
-      clientId, redirectUri, state, challenge: pkce.challenge, scopes: CLOUDFLARE_DEPLOY_SCOPES,
-    }),
+    body: {
+      location: authorizeUrl({
+        clientId, redirectUri, state, challenge: pkce.challenge, scopes: CLOUDFLARE_DEPLOY_SCOPES,
+      }),
+    },
   });
 
   handoff.headers.set('cache-control', 'no-store');

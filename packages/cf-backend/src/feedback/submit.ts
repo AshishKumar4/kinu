@@ -488,7 +488,7 @@ async function handleFeedbackSubmission(
   // `satisfies` rather than an annotation: the success shape is DECLARED beside
   // the wire limits both halves read, and checking the literal against it here
   // is what makes that declaration load-bearing instead of documentation.
-  return json({ id: written.id } satisfies FeedbackAccepted, { status: 201 });
+  return json({ body: { id: written.id } satisfies FeedbackAccepted }, { status: 201 });
 }
 
 /** Path and method routing only; the policy is `handleFeedbackSubmission`. */

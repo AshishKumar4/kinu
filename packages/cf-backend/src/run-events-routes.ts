@@ -320,7 +320,7 @@ export async function handleWorkspaceOverviewRequest(
   if (workspace === undefined) return null;
 
   try {
-    return json(await read());
+    return json({ body: await read() });
   } catch (cause) {
     diagnostics.failure("http.workspace_overview_failed", toKinuError({
       doing: `answering a workspace overview request`,

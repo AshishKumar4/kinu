@@ -58,7 +58,7 @@ function failed(failure: DriveFailure): Response {
 
 /** An answer as a response: the value as JSON, or the failure as its status. */
 function answered<Value>(answer: DriveAnswer<Value>): Response {
-  return answer.ok ? json(answer.value ?? { ok: true }) : failed(answer);
+  return answer.ok ? json({ body: answer.value ?? { ok: true } }) : failed(answer);
 }
 
 const PathBody = v.strictObject({ path: v.string() });

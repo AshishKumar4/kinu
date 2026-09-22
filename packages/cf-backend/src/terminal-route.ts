@@ -226,7 +226,7 @@ async function deviceTerminal(call: TerminalCall): Promise<Response> {
     // A container quiesces when nobody is typing, so it needs telling that
     // somebody is. A machine is simply on, and its own socket is the
     // liveness this would have reported.
-    return json({ ok: true });
+    return json({ body: { ok: true } });
   }
 
   const refused = notAnUpgrade(request);
@@ -303,7 +303,7 @@ async function workspaceTerminal(call: TerminalCall): Promise<Response> {
   if (call.verb !== "attach") {
     if (request.method !== "POST") return err(405, "use POST");
 
-    return json({ ok: true });
+    return json({ body: { ok: true } });
   }
 
   const refused = notAnUpgrade(request);
@@ -360,7 +360,7 @@ async function sandboxKeepalive(sandbox: KinuSandbox, call: TerminalCall): Promi
   try {
     await sandbox.noteTerminalActivity();
 
-    return json({ ok: true });
+    return json({ body: { ok: true } });
   } catch (cause) {
     // The whole chain, not the outermost message: a terminal that says only
     // "renewing the lease failed" leaves the user without the one fact that
@@ -400,7 +400,7 @@ async function sandboxReset(sandbox: KinuSandbox, call: TerminalCall): Promise<R
     // of being flattened into a failure or hidden behind a true.
     const deleted = await sandbox.deleteSession(TERMINAL_SESSION);
 
-    return json({ ok: true, existed: deleted.success });
+    return json({ body: { ok: true, existed: deleted.success } });
   } catch (cause) {
     const error = toKinuError({
       doing: "restarting the terminal's shell",
@@ -631,7 +631,7 @@ export async function handleTerminalRequest(
   // body carries the mode and nothing else: what an environment lacks is not a
   // sentence anyone is shown.
   if (lane.mode === "line") {
-    return json({ error: `${executor} has no terminal`, lane: "line" }, { status: 409 });
+    return json({ body: { error: `${executor} has no terminal`, lane: "line" } }, { status: 409 });
   }
 
   const call: TerminalCall = { request, url, env, agentName, executor, verb, scope };

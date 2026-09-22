@@ -122,7 +122,7 @@ async function handleClientErrorReport(
 
   // The route's verdict, and the only thing it has to say. Accepted rather than
   // created: nothing was stored.
-  return json({ releaseMatch: match }, { status: 202 });
+  return json({ body: { releaseMatch: match } }, { status: 202 });
 }
 
 /** Path and method routing only; the policy is `handleClientErrorReport`. */

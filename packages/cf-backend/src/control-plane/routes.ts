@@ -161,12 +161,12 @@ async function dispatch(request: Request, url: URL, control: ControlContext): Pr
 
   switch (head) {
     case 'overview':
-      return json(await stub.overview(caller));
+      return json({ body: await stub.overview(caller) });
 
     case 'users': {
       const userId = segments[1];
 
-      if (userId === undefined) return json(await stub.listUsers(caller, pageQuery(url)));
+      if (userId === undefined) return json({ body: await stub.listUsers(caller, pageQuery(url)) });
 
       return await handleUserDetail(control, userId, url);
     }
@@ -186,7 +186,7 @@ async function dispatch(request: Request, url: URL, control: ControlContext): Pr
 
         if (userId !== null) filter.userId = userId;
 
-        return json(await stub.listWorkspaces(caller, pageQuery(url), filter));
+        return json({ body: await stub.listWorkspaces(caller, pageQuery(url), filter) });
       }
 
       // A workspace name is not an address — `?userId=` is what makes it one.
@@ -203,15 +203,19 @@ async function dispatch(request: Request, url: URL, control: ControlContext): Pr
     }
 
     case 'incidents':
-      return json({ incidents: await env.MonitorDO
-        .get(env.MonitorDO.idFromName(MONITOR_SINGLETON))
-        .listIncidents(INCIDENT_MAX) });
+      return json({
+        body: {
+          incidents: await env.MonitorDO
+            .get(env.MonitorDO.idFromName(MONITOR_SINGLETON))
+            .listIncidents(INCIDENT_MAX),
+        },
+      });
 
     case 'feedback':
-      return json(await stub.listFeedback(caller, pageQuery(url)));
+      return json({ body: await stub.listFeedback(caller, pageQuery(url)) });
 
     case 'audit':
-      return json(await stub.listAudit(caller, pageQuery(url)));
+      return json({ body: await stub.listAudit(caller, pageQuery(url)) });
 
     case 'metrics': {
       const ask: MetricsRequest = { hours: numberParam(url, 'hours') ?? 24 };
@@ -221,7 +225,7 @@ async function dispatch(request: Request, url: URL, control: ControlContext): Pr
 
       if (url.searchParams.get('refresh') === '1') ask.forceRefresh = true;
 
-      return json(await controlPlaneMetrics(env, ask));
+      return json({ body: await controlPlaneMetrics(env, ask) });
     }
 
     default:
@@ -323,7 +327,7 @@ async function handleAction(
 
   const status = ACTION_STATUS[outcome.outcome];
 
-  return json({ outcome: outcome.outcome, detail: outcome.detail }, { status });
+  return json({ body: { outcome: outcome.outcome, detail: outcome.detail } }, { status });
 }
 
 /** A refusal by the owning object is a 409, not a 500: the request was
@@ -444,7 +448,7 @@ async function handleUserDetail(control: ControlContext, userId: string, url: UR
   const reconcile = await reconcileRoster(env, caller, userId, request.cursor === undefined);
   const workspaces = await stub.listWorkspaces(caller, request, { userId, includeRemoved: true });
 
-  return json({ user, workspaces, reconcile, viewer: admin.email });
+  return json({ body: { user, workspaces, reconcile, viewer: admin.email } });
 }
 
 /**
@@ -578,7 +582,7 @@ async function handleWorkspaceDetail(
     shellGrants: settled(grants),
   };
 
-  return json(detail);
+  return json({ body: detail });
 }
 
 /** A panel's value, or why it has none. Never a silent `null`: a missing panel

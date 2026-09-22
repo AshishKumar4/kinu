@@ -51,10 +51,12 @@ export async function handleUserAIProxyRequest(
     const menu = await listAvailableModels(env, cli.userId, await ownerCaller(env));
 
     return json({
-      object: 'list',
-      data: menu.models
-        .filter((m) => m.provider === 'workers-ai' || m.provider === MY_GATEWAY_PROVIDER_ID)
-        .map((m) => ({ id: m.spec.slice(m.provider.length + 1), object: 'model', owned_by: m.provider })),
+      body: {
+        object: 'list',
+        data: menu.models
+          .filter((m) => m.provider === 'workers-ai' || m.provider === MY_GATEWAY_PROVIDER_ID)
+          .map((m) => ({ id: m.spec.slice(m.provider.length + 1), object: 'model', owned_by: m.provider })),
+      },
     });
   }
 

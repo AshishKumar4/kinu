@@ -75,7 +75,7 @@ export async function handleUserProviderProxyRequest(
   const owner = await ownerCaller(env);
 
   if (path === '/credentials' && request.method === 'GET') {
-    return json({ credentials: await listProxyableCredentials(cli.userDO, owner) });
+    return json({ body: { credentials: await listProxyableCredentials(cli.userDO, owner) } });
   }
 
   if (path === '/forward') {

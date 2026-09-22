@@ -78,7 +78,7 @@ describe('a route that names its own policy keeps it', () => {
   });
 
   test('an explicit policy on any json() answer wins', () => {
-    const response = json({ ok: true }, { headers: { 'cache-control': 'public, max-age=60' } });
+    const response = json({ body: { ok: true } }, { headers: { 'cache-control': 'public, max-age=60' } });
     expect(response.headers.get('cache-control')).toBe('public, max-age=60');
   });
 });

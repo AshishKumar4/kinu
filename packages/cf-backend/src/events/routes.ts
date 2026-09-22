@@ -192,7 +192,7 @@ async function handleEmailConfigRoute(
   const agent = await getAgentByName<Env, OrchestratorAgent>(env.OrchestratorAgent, agentName);
 
   if (request.method === 'GET') {
-    return json(await agent.getEmailIngress());
+    return json({ body: await agent.getEmailIngress() });
   }
 
   if (request.method === 'PUT') {
@@ -218,7 +218,7 @@ async function handleEmailConfigRoute(
       await agent.setEmailNotifications(body.notifications === true);
     }
 
-    return json(await agent.getEmailIngress());
+    return json({ body: await agent.getEmailIngress() });
   }
 
   return err(405, 'GET or PUT');
@@ -293,9 +293,11 @@ async function handleWebhookDelivery(
   // through the event/reply-channel system; held-open HTTP webhook responses are
   // intentionally not exposed until that channel has a production-safe waiter.
   return json({
-    accepted: true,
-    event_id: result.event_id,
-    admitted: result.admitted,
+    body: {
+      accepted: true,
+      event_id: result.event_id,
+      admitted: result.admitted,
+    },
   }, { status: 202 });
 }
 
@@ -312,7 +314,7 @@ async function handleTriggersRoute(
 
   if (rest === '' || rest === '/') {
     if (method === 'GET') {
-      return json(decodeJsonWire(await agent.listTriggersWire()));
+      return json({ body: decodeJsonWire(await agent.listTriggersWire()) });
     }
 
     if (method === 'POST') {
@@ -341,13 +343,15 @@ async function handleTriggersRoute(
       }
 
       try {
-        return json(await agent.createDurableWebhook({
-          label: body.label,
-          auth_mode: body.auth_mode,
-          secret: body.secret,
-          accepted_content_type: body.accepted_content_type,
-          rate_limit_per_min: rateLimit,
-        }), { status: 201 });
+        return json({
+          body: await agent.createDurableWebhook({
+            label: body.label,
+            auth_mode: body.auth_mode,
+            secret: body.secret,
+            accepted_content_type: body.accepted_content_type,
+            rate_limit_per_min: rateLimit,
+          }),
+        }, { status: 201 });
       } catch (e) {
         return err(500, renderThrownChain({ cause: e }));
       }
@@ -366,7 +370,7 @@ async function handleTriggersRoute(
     // gates, so the caller has been shown to be the workspace's owner. The
     // model's own `agent.cancelSchedule` reaches the same method as `self` and
     // is refused an owner-created ingress.
-    return json(await agent.cancelTrigger(trigger_id, 'owner'));
+    return json({ body: await agent.cancelTrigger(trigger_id, 'owner') });
   }
 
   return err(404, 'not found');
@@ -392,9 +396,11 @@ async function handleEventsList(request: Request, env: Env, agentName: string): 
 
   const agent = await getAgentByName<Env, OrchestratorAgent>(env.OrchestratorAgent, agentName);
 
-  return json(decodeJsonWire(await agent.listRecentEventsWire({
-    variant, since: bounds.since, limit: bounds.limit,
-  })));
+  return json({
+    body: decodeJsonWire(await agent.listRecentEventsWire({
+      variant, since: bounds.since, limit: bounds.limit,
+    })),
+  });
 }
 
 // ── helpers ──────────────────────────────────────────────────────

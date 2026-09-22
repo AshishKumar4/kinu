@@ -172,14 +172,14 @@ async function upload(transfer: {
 
     if ('conflict' in result) {
       return json(
-        { error: 'This file changed after you opened it.', revision: result.revision },
+        { body: { error: 'This file changed after you opened it.', revision: result.revision } },
         { status: 412 },
       );
     }
 
-    if ('unsupported' in result) return json({ error: result.error }, { status: 409 });
+    if ('unsupported' in result) return json({ body: { error: result.error } }, { status: 409 });
 
-    return 'error' in result ? err(400, result.error) : json(result);
+    return 'error' in result ? err(400, result.error) : json({ body: result });
   } catch (cause) {
     await abandon();
     diagnostics.failure('files.upload_failed', toKinuError({

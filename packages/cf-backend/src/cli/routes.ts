@@ -122,10 +122,12 @@ export async function handleCliRequest(request: Request, env: Env, ctx?: Executi
     const body = await safeJson(request, v.object({ deviceName: v.optional(v.string()) }));
 
     try {
-      return json(await startCliAuth(env, {
-        origin: url.origin, approvalOrigin: approvalOrigin(env, url),
-        deviceName: body?.deviceName, clientKey: clientKey(request),
-      }));
+      return json({
+        body: await startCliAuth(env, {
+          origin: url.origin, approvalOrigin: approvalOrigin(env, url),
+          deviceName: body?.deviceName, clientKey: clientKey(request),
+        }),
+      });
     } catch (e) {
       return cliAuthError(toError({ cause: e }));
     }
@@ -137,7 +139,7 @@ export async function handleCliRequest(request: Request, env: Env, ctx?: Executi
     if (!body?.deviceToken) return err(400, 'deviceToken required');
 
     try {
-      return json(await pollCliAuth(env, body.deviceToken, clientKey(request)));
+      return json({ body: await pollCliAuth(env, body.deviceToken, clientKey(request)) });
     } catch (e) {
       return cliAuthError(toError({ cause: e }));
     }
@@ -171,16 +173,18 @@ export async function handleCliRequest(request: Request, env: Env, ctx?: Executi
 
   if (path === '/me' && method === 'GET') {
     return json({
-      user: { id: cli.userId, email: cli.email, displayName: cli.displayName },
-      tokenHash: cli.tokenHash,
-      token: { kind: cli.kind, scopes: cli.scopes === 'all' ? 'all' : cli.scopes },
+      body: {
+        user: { id: cli.userId, email: cli.email, displayName: cli.displayName },
+        tokenHash: cli.tokenHash,
+        token: { kind: cli.kind, scopes: cli.scopes === 'all' ? 'all' : cli.scopes },
+      },
     });
   }
 
   if (path === '/logout' && method === 'POST') {
     await cli.userDO.revokeCliTokenHash(await ownerCaller(env), cli.tokenHash);
 
-    return json({ ok: true });
+    return json({ body: { ok: true } });
   }
 
   // ── Session inventory — the recovery surface for an orphaned bearer ──
@@ -191,13 +195,13 @@ export async function handleCliRequest(request: Request, env: Env, ctx?: Executi
   // any of it — by the hash the inventory prints, or all of it at once.
   // Interactive sessions only, like every other account-management surface.
   if (path === '/sessions' && method === 'GET') {
-    return json({ sessions: await cli.userDO.listCliTokens(await ownerCaller(env)) });
+    return json({ body: { sessions: await cli.userDO.listCliTokens(await ownerCaller(env)) } });
   }
 
   if (path === '/sessions' && method === 'DELETE') {
     const result = await cli.userDO.revokeAllCliTokens(await ownerCaller(env));
 
-    return json({ ok: true, revoked: result.revoked });
+    return json({ body: { ok: true, revoked: result.revoked } });
   }
 
   const sessionRevokeMatch = path.match(/^\/sessions\/([a-f0-9]{64})$/);
@@ -205,13 +209,13 @@ export async function handleCliRequest(request: Request, env: Env, ctx?: Executi
   if (sessionRevokeMatch && method === 'DELETE') {
     await cli.userDO.revokeCliTokenHash(await ownerCaller(env), sessionRevokeMatch[1]);
 
-    return json({ ok: true });
+    return json({ body: { ok: true } });
   }
 
   // ── Profile catalog — interactive owner session only. The route gate
   // blocks scoped tokens; the UserDO separately blocks workspace callers. ──
   if (path === '/profile' && method === 'GET') {
-    return json(await cli.userDO.getProfileCatalog(await ownerCaller(env)));
+    return json({ body: await cli.userDO.getProfileCatalog(await ownerCaller(env)) });
   }
 
   if (path === '/profile' && method === 'PUT') {
@@ -226,13 +230,15 @@ export async function handleCliRequest(request: Request, env: Env, ctx?: Executi
       await ownerCaller(env), body.catalog, body.expectedVersion,
     );
 
-    if (result.ok) return json(result.envelope);
+    if (result.ok) return json({ body: result.envelope });
 
     if (result.kind === 'conflict') {
       return json({
-        error: `Version conflict: the stored catalog is at version ${result.currentVersion}.`,
-        currentVersion: result.currentVersion,
-        currentDigest: result.currentDigest,
+        body: {
+          error: `Version conflict: the stored catalog is at version ${result.currentVersion}.`,
+          currentVersion: result.currentVersion,
+          currentDigest: result.currentDigest,
+        },
       }, { status: 409 });
     }
 
@@ -241,7 +247,7 @@ export async function handleCliRequest(request: Request, env: Env, ctx?: Executi
 
   // ── CI access tokens — interactive-session-only management surface ──
   if (path === '/tokens' && method === 'GET') {
-    return json({ tokens: await cli.userDO.listAccessTokens(await ownerCaller(env)) });
+    return json({ body: { tokens: await cli.userDO.listAccessTokens(await ownerCaller(env)) } });
   }
 
   if (path === '/tokens' && method === 'POST') {
@@ -265,10 +271,12 @@ export async function handleCliRequest(request: Request, env: Env, ctx?: Executi
     if (!minted.ok) return err(400, minted.error);
 
     return json({
-      token: minted.token,
-      name: minted.record.name,
-      scopes: minted.record.scopes,
-      createdAt: minted.record.createdAt,
+      body: {
+        token: minted.token,
+        name: minted.record.name,
+        scopes: minted.record.scopes,
+        createdAt: minted.record.createdAt,
+      },
     }, { status: 201 });
   }
 
@@ -280,15 +288,15 @@ export async function handleCliRequest(request: Request, env: Env, ctx?: Executi
 
     if (!result.revoked) return err(404, `No active access token matched "${ref}".`);
 
-    return json({ ok: true });
+    return json({ body: { ok: true } });
   }
 
   if (path === '/workspaces' && method === 'GET') {
-    return json(await cli.userDO.listActiveWorkspaces(await ownerCaller(env)));
+    return json({ body: await cli.userDO.listActiveWorkspaces(await ownerCaller(env)) });
   }
 
   if (path === '/models' && method === 'GET') {
-    return json(await listAvailableModels(env, cli.userId, await ownerCaller(env)));
+    return json({ body: await listAvailableModels(env, cli.userId, await ownerCaller(env)) });
   }
 
   if (path === '/workspaces' && method === 'POST') {
@@ -304,7 +312,7 @@ export async function handleCliRequest(request: Request, env: Env, ctx?: Executi
       if (!(await cli.userDO.hasWorkspace(await ownerCaller(env), name))) return err(404, `Agent ${name} not found.`);
       await cli.userDO.removeWorkspace(await ownerCaller(env), name, cli.userId);
 
-      return json({ ok: true });
+      return json({ body: { ok: true } });
     } catch (e) {
       return err(400, renderThrownChain({ cause: e }));
     }
@@ -327,7 +335,7 @@ export async function handleCliRequest(request: Request, env: Env, ctx?: Executi
 
     if (!issued.ok || !issued.ticket || !issued.expiresAt) return err(403, issued.error ?? 'Could not issue connect ticket.');
 
-    return json({ ticket: issued.ticket, expiresAt: issued.expiresAt });
+    return json({ body: { ticket: issued.ticket, expiresAt: issued.expiresAt } });
   }
 
   const webhookTriggerMatch = path.match(/^\/workspaces\/([^/]+)\/triggers\/webhook$/);
@@ -352,27 +360,29 @@ export async function handleCliRequest(request: Request, env: Env, ctx?: Executi
     if (!body?.label || !body.auth_mode) return err(400, 'label and auth_mode required');
 
     try {
-      return json(await agent.createDurableWebhook({
-        label: body.label,
-        auth_mode: body.auth_mode,
-        secret: body.secret,
-        accepted_content_type: body.accepted_content_type,
-        rate_limit_per_min: body.rate_limit_per_min,
-      }), { status: 201 });
+      return json({
+        body: await agent.createDurableWebhook({
+          label: body.label,
+          auth_mode: body.auth_mode,
+          secret: body.secret,
+          accepted_content_type: body.accepted_content_type,
+          rate_limit_per_min: body.rate_limit_per_min,
+        }),
+      }, { status: 201 });
     } catch (e) {
       return err(400, renderThrownChain({ cause: e }));
     }
   }
 
   if (path === '/devices' && method === 'GET') {
-    return json(await cli.userDO.listDevices(await ownerCaller(env)));
+    return json({ body: await cli.userDO.listDevices(await ownerCaller(env)) });
   }
 
   if (path === '/devices' && method === 'POST') {
     const body = await safeJson(request, OptionalLabelSchema);
     const { deviceId, token } = await cli.userDO.registerDevice(await ownerCaller(env), body?.label);
 
-    return json({ deviceId, token, userId: cli.userId, origin: url.origin }, { status: 201 });
+    return json({ body: { deviceId, token, userId: cli.userId, origin: url.origin } }, { status: 201 });
   }
 
   // Provider credentials. Interactive sessions only (the default-deny gate
@@ -381,7 +391,7 @@ export async function handleCliRequest(request: Request, env: Env, ctx?: Executi
   // secret is not offered here for the same reason it is not offered in the
   // browser — once submitted, a secret is not viewable again.
   if (path === '/credentials' && method === 'GET') {
-    return json(await cli.userDO.listCredentials(await ownerCaller(env)));
+    return json({ body: await cli.userDO.listCredentials(await ownerCaller(env)) });
   }
 
   const cliCredMatch = path.match(/^\/credentials\/([^/]+)$/);
@@ -401,7 +411,7 @@ export async function handleCliRequest(request: Request, env: Env, ctx?: Executi
       // to every live workspace until some unrelated invalidation lands.
       notifyWorkspacesCredentialsChanged(env, cli.userDO, ctx);
 
-      return json({ ok: true }, { status: 201 });
+      return json({ body: { ok: true } }, { status: 201 });
     }
 
     if (method === 'DELETE') {
@@ -410,7 +420,7 @@ export async function handleCliRequest(request: Request, env: Env, ctx?: Executi
 
       notifyWorkspacesCredentialsChanged(env, cli.userDO, ctx);
 
-      return json({ ok: true });
+      return json({ body: { ok: true } });
     }
   }
 
@@ -474,7 +484,7 @@ async function handleAgentRpc(request: Request, env: Env, cli: CliTokenIdentity,
     const invoke = agent[rpcMethod] as (...values: JsonValue[]) => Promise<JsonValue | undefined>;
     const result = await invoke(...args);
 
-    return json({ result: result === undefined ? null : result });
+    return json({ body: { result: result === undefined ? null : result } });
   } catch (e) {
     // Same contract as a websocket rpc-error frame: the thrown message goes
     // back to the caller as a request-level failure.
