@@ -45,7 +45,8 @@ import { buildWorkspacePreviewHost, parseWorkspacePreviewLabel } from '@kinu.run
 import { sanitizePreviewRequestHeaders } from './lib/preview-request';
 import { labelSigner } from '@kinu.run/core';
 import { reoriginateRequest } from '@kinu.run/core';
-import type { WorkspacePreviewUrl } from '@kinu.run/core';
+import type { LabelSignerEnv, PreviewHostEnv, WorkspacePreviewUrl } from '@kinu.run/core';
+import type { ObjectNamespace } from './bindings';
 import { PREVIEW_CAPABILITY_HANDLE_LENGTH } from './workspace-host';
 
 /** The v4 preview signer: its own HKDF salt and info, so a preview token
@@ -54,14 +55,21 @@ const previewSigner = labelSigner('kinu.workspace-preview.salt', 'kinu.workspace
 
 /** The Durable Object method a preview request reaches. Declared here so the
  *  route holds the narrowest view of the orchestrator it needs. */
-interface WorkspacePreviewHost {
+export interface WorkspacePreviewHost {
   fetch(request: Request): Promise<Response>;
   routeWorkspacePreview(
     port: number, handle: string, request: Request, pathname: string,
   ): Promise<Response>;
 }
 
-export function nimbusPreviewConfigured(env: Env): boolean {
+/** Every binding a workspace preview reads: the suffix its hostname is built
+ *  and parsed against, the secrets its label is signed and verified under, and
+ *  the workspace object it is served from. */
+export interface NimbusPreviewEnv<Id> extends PreviewHostEnv, LabelSignerEnv {
+  OrchestratorAgent: ObjectNamespace<Id, WorkspacePreviewHost>;
+}
+
+export function nimbusPreviewConfigured(env: PreviewHostEnv & LabelSignerEnv): boolean {
   return previewHostSuffix(env) !== null && previewSigner.secrets(env).length > 0;
 }
 
@@ -93,7 +101,7 @@ function previewMessage(workspace: string, port: number, handle: string): string
  * report exactly that.
  */
 export async function nimbusPreviewUrl(
-  env: Env,
+  env: PreviewHostEnv & LabelSignerEnv,
   workspaceName: string,
   port: number,
   capability: string,
@@ -133,7 +141,10 @@ export async function nimbusPreviewUrl(
  * Runs BEFORE app authentication (see server.ts): a preview host is not the app
  * and must never be treated as one.
  */
-export async function handleNimbusPreviewHostRequest(request: Request, env: Env): Promise<Response | null> {
+export async function handleNimbusPreviewHostRequest<Id>(
+  request: Request,
+  env: NimbusPreviewEnv<Id>,
+): Promise<Response | null> {
   const suffix = previewHostSuffix(env);
 
   if (!suffix) return null;
@@ -161,9 +172,7 @@ export async function handleNimbusPreviewHostRequest(request: Request, env: Env)
   const headers = sanitizePreviewRequestHeaders(request.headers);
   headers.delete('x-nimbus-base');
 
-  const stub: WorkspacePreviewHost = env.OrchestratorAgent.get(
-    env.OrchestratorAgent.idFromName(workspace),
-  );
+  const stub = env.OrchestratorAgent.get(env.OrchestratorAgent.idFromName(workspace));
 
   // One construction policy, shared with container egress: `request.body` is
   // handed over unwrapped so a fixed-length upload stays fixed-length across the

@@ -2368,7 +2368,7 @@ export {
 export {
   PREVIEW_SANDBOX, containPreviewResponse, extractPreviewUrl, hostOf, isPreviewHostRequest,
   isPreviewUrl, previewHostSuffix, previewSuffixMetaName, sandboxPreviewLabelOf,
-  type SandboxPreviewLabel,
+  type PreviewHostEnv, type SandboxPreviewLabel,
 } from './preview/preview-origin';
 
 export {

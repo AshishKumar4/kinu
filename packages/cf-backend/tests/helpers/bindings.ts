@@ -13,6 +13,7 @@ import type { Connection } from 'agents';
 import type { UserProfile } from '../../src/user/user-do';
 import type { CliAgentTarget, CliRoutesAuthority, CliRoutesEnv } from '../../src/cli/routes';
 import type { UserRoutesAuthority } from '../../src/user/routes';
+import type { McpAuthority } from '../../src/mcp-server';
 import type { AssetFetcher } from '@kinu.run/core';
 import type { ObjectNamespace } from '../../src/bindings';
 
@@ -69,7 +70,7 @@ export function workerEnv(reached: Partial<Env> = {}): Env {
 
 /** A Durable Object namespace nothing may resolve through: every entry point
  *  into it refuses and says which binding was reached. */
-function unreachableObjects<T extends Rpc.DurableObjectBranded>(binding: string): DurableObjectNamespace<T> {
+export function unreachableObjects<T extends Rpc.DurableObjectBranded>(binding: string): DurableObjectNamespace<T> {
   const refuse = (verb: string, arg: string): never => {
     throw new Error(`${binding}.${verb}(${arg}): not reachable in this test`);
   };
@@ -249,6 +250,32 @@ export function cliAccount<Built extends Partial<CliRoutesAuthority>>(built: Bui
     issueCliAgentConnectTicket: refuse('issueCliAgentConnectTicket'),
     registerDevice: refuse('registerDevice'),
     listDevices: refuse('listDevices'),
+    ...built,
+  };
+}
+
+/**
+ * The account object as the MCP surface declares it: the bearer path's token
+ * checks, the cookie path's session checks, and the ownership gate's roster
+ * reads, with everything a case did not build refusing.
+ *
+ * One server answers external MCP clients (a CLI bearer) and the browser
+ * (a session cookie), so both authentications are on the same object even
+ * though one request takes one of them.
+ */
+export function mcpAccount<Built extends Partial<McpAuthority>>(built: Built): McpAuthority & Built {
+  const refuse = (member: string) => unreached('UserDO', member);
+
+  return {
+    ensureProfile: refuse('ensureProfile'),
+    mintCliToken: refuse('mintCliToken'),
+    verifyCliToken: refuse('verifyCliToken'),
+    verifyAccessToken: refuse('verifyAccessToken'),
+    registerBrowserSession: refuse('registerBrowserSession'),
+    verifyBrowserSession: refuse('verifyBrowserSession'),
+    revokeBrowserSession: refuse('revokeBrowserSession'),
+    hasWorkspace: refuse('hasWorkspace'),
+    ensureWorkspaceCapability: refuse('ensureWorkspaceCapability'),
     ...built,
   };
 }
