@@ -1,6 +1,7 @@
 /**
  * `withSseTerminal` — end an SSE stream at `data: [DONE]` with the upstream
- * reader cancelled, instead of at producer close. Every case drives the
+ * reader cancelled, instead of at producer close, and give up on a producer
+ * that holds the socket open while sending no content. Every case drives the
  * public fetch-level entry with a scripted upstream, so the assertions pin
  * the shipped path including the content-type gate: the producer-open case
  * (content, [DONE], then silence with the producer holding the connection)
@@ -8,8 +9,10 @@
  * the whole fix.
  */
 import { describe, test, expect } from 'bun:test';
-import { withSseTerminal } from '../src/providers/sse-terminal';
+import { handClock } from '@kinu.run/test-utils';
+import { withSseTerminal, SSE_CONTENT_IDLE_MS } from '../src/providers/sse-terminal';
 import { asFetchFunction } from '../src/providers/fetch-shim';
+import type { Clock } from '../src/types/clock';
 
 const encoder = new TextEncoder();
 
@@ -80,6 +83,29 @@ async function through(upstream: Scripted): Promise<Response> {
   const fetchImpl = asFetchFunction(async () => eventStream(upstream));
 
   return withSseTerminal(fetchImpl)('http://fake.invalid/v1/chat/completions');
+}
+
+/** The wrapper over a scripted upstream on a clock the test advances. */
+function throughClock(upstream: Scripted, clock: Clock): Promise<Response> {
+  const fetchImpl = asFetchFunction(async () => eventStream(upstream));
+
+  return withSseTerminal(fetchImpl, clock)('http://fake.invalid/v1/chat/completions');
+}
+
+/** One whole SSE message off the wrapper, which forwards a line at a time. */
+async function readMessage(reader: ReadableStreamDefaultReader<Uint8Array>): Promise<string> {
+  const decoder = new TextDecoder();
+  let text = '';
+
+  for (;;) {
+    const next = await reader.read();
+
+    if (next.done || text.endsWith('\n\n')) return text;
+
+    text += decoder.decode(next.value, { stream: true });
+
+    if (text.endsWith('\n\n')) return text;
+  }
 }
 
 describe('withSseTerminal', () => {
@@ -262,5 +288,74 @@ describe('withSseTerminal', () => {
     const json = await wrapped('http://fake.invalid/v1/models');
 
     expect(await json.json()).toEqual({ data: [{ id: 'probe' }] });
+  });
+});
+
+describe('a producer that holds the socket open without sending content', () => {
+  test('a keepalive comment does not reset the content deadline, and the stall is named', async () => {
+    const clock = handClock();
+    const upstream = scripted();
+    const response = await throughClock(upstream, clock);
+    const reader = (response.body ?? new ReadableStream<Uint8Array>()).getReader();
+    const content = readMessage(reader);
+
+    await clock.whenArmed(1);
+    upstream.enqueue(sseData('{"content":"hello"}'));
+    expect(await content).toBe(sseData('{"content":"hello"}'));
+
+    // One millisecond short of the window, with the producer sending SSE
+    // framing only. A comment line is the keepalive every OpenAI-dialect
+    // gateway sends; it reaches the consumer, and it buys the producer no
+    // time at all.
+    const keepalive = readMessage(reader);
+
+    await clock.whenArmed(2);
+    clock.advance(SSE_CONTENT_IDLE_MS - 1);
+    upstream.enqueue(': keepalive\n\n');
+    expect(await keepalive).toBe(': keepalive\n\n');
+
+    const stalled = readMessage(reader);
+
+    await clock.whenArmed(3);
+    clock.advance(1);
+
+    // The last CONTENT frame is what the window was measured from, so the
+    // error names that instant rather than the keepalive's.
+    await expect(stalled).rejects.toMatchObject({
+      code: 'timeout',
+      message: expect.stringContaining(new Date(0).toISOString()),
+    });
+    expect(upstream.calls).toEqual(['cancelled']);
+  });
+
+  test('content keeps the stream alive however long it runs', async () => {
+    const clock = handClock();
+    const upstream = scripted();
+    const response = await throughClock(upstream, clock);
+    const reader = (response.body ?? new ReadableStream<Uint8Array>()).getReader();
+    let armed = 0;
+
+    // Four windows of wall clock, one content frame just inside each: a slow
+    // reasoning model is not a stalled one, and nothing here bounds how long
+    // the work may take.
+    for (let frame = 0; frame < 4; frame += 1) {
+      const next = readMessage(reader);
+
+      armed += 1;
+      await clock.whenArmed(armed);
+      clock.advance(SSE_CONTENT_IDLE_MS - 1);
+      upstream.enqueue(sseData(`{"content":"${frame}"}`));
+      expect(await next).toBe(sseData(`{"content":"${frame}"}`));
+    }
+
+    expect(upstream.calls).toHaveLength(0);
+
+    const done = readMessage(reader);
+
+    await clock.whenArmed(armed + 1);
+    upstream.enqueue(sseData('[DONE]'));
+    expect(await done).toBe(sseData('[DONE]'));
+    expect((await reader.read()).done).toBe(true);
+    expect(upstream.calls).toEqual(['cancelled']);
   });
 });
