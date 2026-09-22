@@ -25,7 +25,7 @@ import {
 import type { AgentIdentity } from '../vfs/agent-home';
 import { SubordinateRosterStore } from './roster';
 import { requireSubordinateActorName } from '../identity/actor-key';
-import { codenameFor } from '../identity/naming';
+import { codenameFor, type NameOrigin } from '../identity/naming';
 import type { ActorReference } from '../identity/actor-handle';
 import { finishSubordinateBirth, type SubordinateBirth, type SubordinateSeed } from './birth';
 import type { WorkMode } from '../types/turn';
@@ -300,7 +300,7 @@ export class SubordinateIdentityStore {
  */
 export interface SubordinateDescriptor {
   displayName: string;
-  nameOrigin: 'user' | 'auto';
+  nameOrigin: NameOrigin;
   /** The catalog role id. */
   role: RoleId;
   /** The tier a parent pinned at hire; null derives from the role. */
@@ -548,7 +548,7 @@ export interface SubordinateRuntime {
   /** Write the child's own naming state. Called with `user` for an owner's
    *  rename, which is what makes the refusal in `planWorkspaceTitle` durable
    *  on the side that runs the title policy. */
-  rename(name: string, displayName: string, nameOrigin: 'user' | 'auto'): Promise<void>;
+  rename(name: string, displayName: string, nameOrigin: NameOrigin): Promise<void>;
   dismiss(name: string, keepHistory: boolean, reference: ActorReference): Promise<void>;
 }
 

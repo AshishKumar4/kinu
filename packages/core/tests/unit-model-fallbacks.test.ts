@@ -12,14 +12,15 @@ import {
 // trigger premature compaction and drops reasoning/caching from the prompt.
 describe('model fallbacks track new releases', () => {
   test('DeepSeek V4 Pro keeps its documented context window without a catalog', () => {
-    expect(contextWindowForModel('workers-ai/@cf/deepseek-ai/deepseek-v4-pro-0813')).toBe(1_048_576);
+    expect(contextWindowForModel('workers-ai/@cf/deepseek-ai/deepseek-v4-pro-0813'))
+      .toEqual({ measured: true, window: 1_048_576 });
   });
 
   test('Kimi context windows by generation', () => {
-    expect(contextWindowForModel('moonshotai/kimi-k3')).toBe(1_048_576);
-    expect(contextWindowForModel('openrouter/moonshotai/kimi-k3')).toBe(1_048_576);
-    expect(contextWindowForModel('workers-ai/@cf/moonshotai/kimi-k2.6')).toBe(262_144);
-    expect(contextWindowForModel('workers-ai/@cf/moonshotai/kimi-k2.7-code')).toBe(262_144);
+    expect(contextWindowForModel('moonshotai/kimi-k3').window).toBe(1_048_576);
+    expect(contextWindowForModel('openrouter/moonshotai/kimi-k3').window).toBe(1_048_576);
+    expect(contextWindowForModel('workers-ai/@cf/moonshotai/kimi-k2.6').window).toBe(262_144);
+    expect(contextWindowForModel('workers-ai/@cf/moonshotai/kimi-k2.7-code').window).toBe(262_144);
   });
 
   test('the whole Kimi family keeps reasoning + caching without a catalog', () => {
@@ -98,7 +99,9 @@ describe('ModelCatalogSession.modelOutputLimit', () => {
     const pending = session.contextFor('deep/selected');
     selected.resolve({ id: 'deep/selected', contextWindow: 200_000, modelOutputLimit: 32_000 });
 
-    expect(await pending).toEqual({ id: 'deep/selected', contextWindow: 200_000, modelOutputLimit: 32_000 });
+    expect(await pending).toEqual({
+      id: 'deep/selected', contextWindow: 200_000, modelOutputLimit: 32_000, windowMeasured: true,
+    });
     expect(lookedUp).toEqual(['deep/selected']);
   });
 
@@ -124,11 +127,12 @@ describe('ModelCatalogSession.modelOutputLimit', () => {
     expect(stepContextLimit(limits)).toBe(872_000);
   });
 
-  test('an unanswered catalog reads as the whole window, so the split decides', async () => {
-    // The alternative would be a picked number in the catalog's mouth. Saying
-    // "the answer may take all of it" is the only honest reading, and
-    // outputReserveTokens then reserves half — more conservative than the flat
-    // 0.7 share this replaced, never less.
+  test('an unanswered catalog reports NO allowance rather than the whole window', async () => {
+    // The reading this replaced — "the answer may take all of it" — sounds like
+    // the honest one and is not: `outputReserveTokens` then withholds half the
+    // window from every model nobody has published an allowance for, which is
+    // how #20's 1M-window model came to be refused against 64,000 tokens. An
+    // absent figure is absent; the provider bounds its own answer either way.
     const session = new ModelCatalogSession({
       effectiveSpec: () => 'workers-ai/@cf/moonshotai/kimi-k2.6',
       lookup: async () => null,
@@ -138,14 +142,13 @@ describe('ModelCatalogSession.modelOutputLimit', () => {
     await Promise.resolve();
 
     expect(session.contextWindow()).toBe(262_144);
-    expect(session.modelOutputLimit()).toBe(262_144);
-    expect(stepContextLimit({
-      contextWindow: session.contextWindow(),
-      modelOutputLimit: session.modelOutputLimit(),
-    })).toBe(131_072);
+    expect(session.modelOutputLimit()).toBeNull();
+    expect(outputReserveTokens({
+      contextWindow: session.contextWindow(), modelOutputLimit: session.modelOutputLimit(),
+    })).toBe(0);
   });
 
-  test('a catalog that reports a window but no allowance still reserves the split', async () => {
+  test('a catalog that reports a window but no allowance reserves nothing for the answer', async () => {
     const session = new ModelCatalogSession({
       effectiveSpec: () => 'workers-ai/@cf/moonshotai/kimi-k2.6',
       lookup: async () => ({ id: '@cf/moonshotai/kimi-k2.6', contextWindow: 262_144 }),
@@ -154,7 +157,41 @@ describe('ModelCatalogSession.modelOutputLimit', () => {
     session.info();
     await Promise.resolve();
 
-    expect(session.modelOutputLimit()).toBe(262_144);
+    expect(session.modelOutputLimit()).toBeNull();
+    expect(stepContextLimit({
+      contextWindow: session.contextWindow(), modelOutputLimit: session.modelOutputLimit(),
+    })).toBe(262_144);
+  });
+
+  test('`resolved` waits for the lookup the synchronous reads answered without', async () => {
+    // The first turn of a fresh isolate is the case: `contextWindow()` answers
+    // from the stand-in table while the lookup that knows better is still in
+    // flight, and a gate that refuses work has to wait for the second answer.
+    const landed = Promise.withResolvers<ModelInfo>();
+
+    const session = new ModelCatalogSession({
+      effectiveSpec: () => 'some/unlisted-model',
+      lookup: async () => landed.promise,
+    });
+
+    expect(session.contextWindow()).toBe(128_000);
+    expect(session.windowMeasured()).toBe(false);
+    landed.resolve({ id: 'some/unlisted-model', contextWindow: 1_048_576, modelOutputLimit: 131_072 });
+
+    expect(await session.resolved()).toEqual({
+      contextWindow: 1_048_576, modelOutputLimit: 131_072, windowMeasured: true,
+    });
+  });
+
+  test('a spec nothing has measured says so, and keeps saying so', async () => {
+    const session = new ModelCatalogSession({
+      effectiveSpec: () => 'some/unlisted-model',
+      lookup: async () => null,
+    });
+
+    expect(await session.resolved()).toEqual({
+      contextWindow: 128_000, modelOutputLimit: null, windowMeasured: false,
+    });
   });
 });
 

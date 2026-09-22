@@ -143,6 +143,7 @@ export {
   suggestWorkspaceTitle,
   workspaceSlug, workspaceAddressRefusal, isPlaceholderWorkspaceTitle, codenameFor,
   workspaceTitleFromMission,
+  type NameOrigin,
   type SuggestedWorkspaceIdentity,
   type WorkspaceTitlePlan,
   type WorkspaceTitleState,
@@ -498,6 +499,7 @@ export {
   stepContextLimit,
   outputReserveTokens,
   type ModelWindow,
+  type ResolvedModelWindow,
   type StepPruneBudget,
 } from './prompting/step-prune';
 
@@ -542,7 +544,7 @@ export {
 
 export type { Usage } from './usage';
 
-export { contextWindowForModel } from './context-window';
+export { contextWindowForModel, type ContextWindowEstimate } from './context-window';
 
 // The per-turn bulk ledger: the cumulative clamp budget + the M1 trip counters.
 export {

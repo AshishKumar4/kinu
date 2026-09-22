@@ -18,7 +18,7 @@ import { z } from 'zod';
 import { assembleTurnMessages } from '../src/orchestrator/turn-context';
 import { runChat } from '../src/chat';
 import { ExtensionHost } from '../src/extension';
-import { classifyTurnFailure } from '../src/turn-failure';
+import { classifyTurnFailure, planOverflowRecovery } from '../src/turn-failure';
 import { stepContextLimit } from '../src/prompting/step-prune';
 import {
   countRequestInputTokens, NO_COUNT_ENDPOINT,
@@ -50,8 +50,12 @@ const COMPACTED: ModelMessage[] = [{ role: 'user', content: 'summary of the long
 /** A window whose input allocation is a round number: a 200k window with a 40k
  *  answer reserve, so `stepContextLimit` is 160k. Read from that function rather
  *  than restated, so this suite budgets against the one allocation every
- *  producer divides instead of a second copy of the arithmetic. */
-const LIMITS = { contextWindow: 200_000, modelOutputLimit: 40_000 };
+ *  producer divides instead of a second copy of the arithmetic.
+ *
+ *  MEASURED, because that is what entitles this gate to refuse at all: a window
+ *  the static table stood in for is admitted over rather than refused against
+ *  (the last case in this suite). */
+const LIMITS = { contextWindow: 200_000, modelOutputLimit: 40_000, windowMeasured: true };
 
 const LIMIT = stepContextLimit(LIMITS);
 
@@ -230,13 +234,15 @@ describe('exact turn admission', () => {
     expect(counter.seen.length).toBe(2);
   });
 
-  test('the refusal does not read as a context-length provider failure', async () => {
+  test('the refusal carries its own failure class, not a transient one', async () => {
     // A local refusal must NOT arm the shared recovery: that policy answers a
     // REMOTE context-length failure by force-compacting and enqueuing one retry
     // turn, and this request was already compacted and re-counted. A retry would
     // be a second forced compaction of history that just proved it cannot shrink
-    // enough. The wording is pinned here so it cannot drift into the pattern
-    // list that would re-arm it.
+    // enough. Nor is it `transient`, which says "a blip, try again" about a turn
+    // that can only refuse again — that reading is what left #20's workspace
+    // wedged with nothing the client could do about it. The wording is pinned
+    // here so it cannot drift out of the one pattern that names it.
     const { extensions } = compactionProbe();
     const counter = scriptedCounter([LIMIT + 1, LIMIT + 1]);
 
@@ -249,7 +255,9 @@ describe('exact turn admission', () => {
     // cannot pass this by classifying the empty string.
     expect(failure).toBeInstanceOf(Error);
     const message = failure?.message ?? '';
-    expect(classifyTurnFailure(message)).toBe('transient');
+    expect(classifyTurnFailure(message)).toBe('admission_refused');
+    expect(planOverflowRecovery({ error: message, turnWasOverflowRetry: false }))
+      .toEqual({ failureClass: 'admission_refused', forceCompaction: false, enqueueRetry: false });
     // Negative control for the oracle above: the classifier DOES name a real
     // remote refusal, so the assertion is about this wording and not about a
     // classifier that never fires.
@@ -308,7 +316,7 @@ describe('exact turn admission', () => {
     // The assembled request serializes to 128 chars (est 32 tokens); the
     // compacted one to 90 (est 23). A 28-token input allocation sits between
     // them, so the estimate — not an absence — is what forces the compaction.
-    const tight = { contextWindow: 48, modelOutputLimit: 20 };
+    const tight = { contextWindow: 48, modelOutputLimit: 20, windowMeasured: true };
 
     const out = await assembleTurnMessages({
       ...base(),
@@ -325,7 +333,7 @@ describe('exact turn admission', () => {
   test('with no count endpoint, an estimate that still overflows after compaction is refused, not submitted', async () => {
     const { extensions } = compactionProbe();
     // Even the compacted summary (est 23) overflows a 4-token allocation.
-    const tight = { contextWindow: 8, modelOutputLimit: 4 };
+    const tight = { contextWindow: 8, modelOutputLimit: 4, windowMeasured: true };
 
     const failure = await refusalOf(assembleTurnMessages({
       ...base(),

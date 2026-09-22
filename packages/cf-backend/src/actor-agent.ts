@@ -183,7 +183,7 @@ import {
   delegationExhausted, deriveChildDelegationBudget, type DelegationBudget,
   readSoul, bootstrapScaffold,
   // Automatic titling — one policy for every root that can be talked to
-  applyWorkspaceTitle, suggestWorkspaceTitle,
+  applyWorkspaceTitle, suggestWorkspaceTitle, type NameOrigin,
   parseModelSpec, catalogModelInfo, countRequestInputTokens,
   // Model-capability attachment sanitization (the PDF-400 fix)
   type MediaModality,
@@ -199,7 +199,7 @@ import {
   listInstructionApprovals, gatherApprovableInstructions,
   openInstructionSource, admitInstructionDecision,
   type InstructionSourceRow, type InstructionSourceView,
-  stepContextLimit,
+  stepContextLimit, type ResolvedModelWindow,
   reasoningEffortOptions,
   // memory.* / tasks.* — codemode projections of the same-named native tools
   JsonObjectSchema, JsonValueSchema, changeActiveRole,
@@ -349,7 +349,9 @@ interface AssembledTurn {
   readonly rawMessages: readonly ModelMessage[];
   readonly turnLocal: ModelMessage[];
   readonly measured: ReturnType<typeof measureCompactionTrigger>;
-  readonly contextWindow: number;
+  /** The window this turn is admitted, compacted and pruned against, and
+   *  whether its figures are the catalog's or the static table's stand-in. */
+  readonly window: ResolvedModelWindow;
   readonly memoryTail: string | undefined;
   readonly countInputTokens: (request: CountableRequest) => Promise<InputTokenCount>;
   readonly cacheOptions: ReturnType<typeof promptCachePlan>['providerOptions'];
@@ -580,7 +582,7 @@ export interface ActorDynamicContextExtras {
 
 interface WorkspaceTitleInputs {
   readonly displayName: string | null;
-  readonly nameOrigin: 'user' | 'auto' | null;
+  readonly nameOrigin: NameOrigin | null;
 }
 
 
@@ -5382,9 +5384,10 @@ export abstract class ActorAgent extends Agent<Env> {
    * pruned rather than retried. The durable caller uses this and completes only
    * once the boundary has answered.
    *
-   * `persistAutoTitle` is the once-only boundary either way: it stamps
-   * `name_origin`, so a replay of an already-titled workspace changes nothing and
-   * a manual rename that claimed the title first still wins.
+   * `persistAutoTitle` is the boundary either way: a title the owner claimed
+   * first refuses the write, and a model's answer stamps `name_origin` 'auto',
+   * after which the plan no longer matches. A DERIVED stand-in stamps
+   * 'provisional' instead and stays owed its upgrade.
    */
   protected async applyAutoTitle(mission: string): Promise<string | null> {
     // Read stored naming state before a cold activation plans a title.
@@ -5395,16 +5398,14 @@ export abstract class ActorAgent extends Agent<Env> {
       ...this.titleInputs(),
       mission,
     }, {
-      persist: (name) => this.persistAutoTitle(name),
+      persist: (name, origin) => this.persistAutoTitle(name, origin),
       suggest: (text) => this.suggestTitle(text),
     });
 
     if (title) diagnostics.event('agent.auto_titled', { workspace: this.name, title });
-    // ALWAYS, not only when this pass produced a title: persisting stamps
-    // `name_origin`, which stops matching the naming policy above — so a
-    // replay after a failed publish plans nothing, and a roster that never heard
-    // about the stored title would keep the placeholder with nothing owed to fix
-    // it. Throws, so the owed row carries the retry.
+    // ALWAYS, not only when this pass produced a title: a roster that never
+    // heard about the stored title would keep the placeholder with nothing owed
+    // to fix it. Throws, so the owed row carries the retry.
     await this.publishAutoTitle();
 
     return title;
@@ -5427,9 +5428,12 @@ export abstract class ActorAgent extends Agent<Env> {
   }
 
   /** Commit one auto title wherever this root's naming state is authoritative.
+   *  `origin` distinguishes the DERIVED stand-in from the model's answer: only
+   *  the second closes the titling sequence, and writing both as 'auto' is what
+   *  froze every workspace on the first line of its own prompt (#18).
    *  `false` means a manual rename claimed the title first, which is what
    *  makes the owner's choice win a race with the model call above. */
-  protected abstract persistAutoTitle(displayName: string): Promise<boolean>;
+  protected abstract persistAutoTitle(displayName: string, origin: NameOrigin): Promise<boolean>;
 
   /** The naming state the title policy decides against. The base reads the
    *  actor's own config — which IS the authority for a subordinate's
@@ -5978,8 +5982,9 @@ export abstract class ActorAgent extends Agent<Env> {
       model: assembled.model,
       modelContext: {
         id: assembled.promptModel.id,
-        contextWindow: assembled.contextWindow,
-        modelOutputLimit: this.modelCatalog.modelOutputLimit(),
+        contextWindow: assembled.window.contextWindow,
+        windowMeasured: assembled.window.windowMeasured,
+        modelOutputLimit: assembled.window.modelOutputLimit,
       },
       system: assembled.system,
       attachments: {
@@ -6023,7 +6028,7 @@ export abstract class ActorAgent extends Agent<Env> {
         scaffoldSpend: { source: 'scaffold', report: (report) => this.reportModelCall(report), operations: this.modelOperations },
       },
       sessionKey: this.name,
-      contextWindow: assembled.contextWindow,
+      contextWindow: assembled.window.contextWindow,
       historyLength: assembled.rawMessages.length,
     };
   }
@@ -6300,7 +6305,13 @@ export abstract class ActorAgent extends Agent<Env> {
     // recordTurnTelemetry writes the next measurement against the same number.
     const rawMessages = this._cliCwd ? withCliCwdContext(input.history, this._cliCwd) : input.history;
     this._turnDurableLength = rawMessages.length;
-    this._turnContextWindow = this.sessionContextWindow();
+    // AWAITED, once per turn, before anything is submitted. The synchronous
+    // catalog reads answer from the static stand-in table while the lookup is
+    // still in flight, which on the first turn of a fresh isolate is how a
+    // 1M-window model was measured against 128k and refused (#20). Every
+    // synchronous read for the rest of this turn answers from what this landed.
+    const window = await this.modelCatalog.resolved();
+    this._turnContextWindow = window.contextWindow;
     const measured = measureCompactionTrigger(this.compactionState, this.name, rawMessages.length);
 
     // The forced rebuild was armed either by overflow recovery (onChatResponse,
@@ -6367,7 +6378,7 @@ export abstract class ActorAgent extends Agent<Env> {
 
     return {
       profile, profileInputs, system: systemOverride, model: languageModel, tools, activeTools: effectiveActiveTools, activeToolSurface,
-      rawMessages, turnLocal, measured, contextWindow: this._turnContextWindow, memoryTail, countInputTokens,
+      rawMessages, turnLocal, measured, window, memoryTail, countInputTokens,
       cacheOptions, reasoningOptions, promptModel: model,
     };
   }

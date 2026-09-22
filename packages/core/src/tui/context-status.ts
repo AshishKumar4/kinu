@@ -25,7 +25,7 @@ export function estimateContextTokens(messages: readonly TextForContextEstimate[
 }
 
 export function formatContextUsage(modelSpec: string | null | undefined, usedTokens: number, reportedContextWindow?: number): string {
-  const window = reportedContextWindow ?? contextWindowForModel(modelSpec ?? '');
+  const window = reportedContextWindow ?? contextWindowForModel(modelSpec ?? '').window;
 
   return `ctx ~${formatTokenCount(usedTokens)}/${formatTokenCount(window)}`;
 }

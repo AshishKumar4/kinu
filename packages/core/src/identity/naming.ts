@@ -237,13 +237,32 @@ export function fallbackWorkspaceIdentity(mission: string, id: string): Suggeste
   };
 }
 
+/**
+ * Who a shown title came from, and therefore who may replace it.
+ *
+ *   'user'        somebody typed it. Never touched.
+ *   'auto'        a model wrote it. The automatic path is finished here.
+ *   'provisional' the system DERIVED it — the mission's first line, or the
+ *                 persona it names — as a stand-in for the seconds before a
+ *                 model answers.
+ *
+ * The third value is the whole of #18. A derived title used to be stored as
+ * 'auto', which is what a GENERATED title is stored as, so the two became
+ * indistinguishable the moment they were written: `planWorkspaceTitle` read the
+ * stand-in as "already named" and every later pass — the genesis turn's
+ * `auto_title` effect, the lazy heal, a hired actor's first message — left the
+ * truncated prompt standing as the workspace's permanent name. A stand-in that
+ * says it is one stays replaceable until the model's answer arrives.
+ */
+export type NameOrigin = 'user' | 'auto' | 'provisional';
+
 /** A workspace's stored naming state, as both backends keep it: the raw slug
  *  the workspace is addressed by, the shown title, how that title came about,
  *  and the mission to title from (the opening request, or SOUL.md's mission). */
 export interface WorkspaceTitleState {
   slug: string;
   displayName: string | null;
-  nameOrigin: 'user' | 'auto' | null;
+  nameOrigin: NameOrigin | null;
   mission: string;
 }
 
@@ -297,8 +316,8 @@ export function isPlaceholderWorkspaceTitle(displayName: string | null | undefin
  * manual rename can land while the model is thinking and the owner's choice
  * wins that race.
  */
-export function autoTitleMayReplace(currentOrigin: 'user' | 'auto' | null | undefined): boolean {
-  return currentOrigin === 'auto';
+export function autoTitleMayReplace(currentOrigin: NameOrigin | null | undefined): boolean {
+  return currentOrigin === 'auto' || currentOrigin === 'provisional';
 }
 
 /**
@@ -307,70 +326,107 @@ export function autoTitleMayReplace(currentOrigin: 'user' | 'auto' | null | unde
  * check for itself. False says the owner claimed the title first.
  */
 export function persistAutoTitle(
-  config: Pick<AgentConfigStore, 'getNameOrigin' | 'setDisplayNameOrigin'>, title: string,
+  config: Pick<AgentConfigStore, 'getNameOrigin' | 'setDisplayNameOrigin'>,
+  title: string,
+  origin: 'provisional' | 'auto',
 ): boolean {
   if (!autoTitleMayReplace(config.getNameOrigin())) return false;
-  config.setDisplayNameOrigin(title, 'auto');
+  config.setDisplayNameOrigin(title, origin);
 
   return true;
 }
 
-/** The shared plan/persist title policy, synchronous, for a backend whose
- *  actors are spoken to without a chat session's `auto_title` terminal effect. */
-export function titleActorFromMessage(actor: Pick<ActorHandle, 'name' | 'config'>, message: string): boolean {
+/**
+ * The shared plan/persist title policy for a backend whose actors are spoken to
+ * without a chat session's `auto_title` terminal effect — a hosted subordinate,
+ * whose first admitted message is its brief.
+ *
+ * `suggest` is the SAME upgrade the root gets, offered to the caller that can
+ * reach a model. Admission cannot: it runs inside the request that hands the
+ * work over, and a model call there delays the handoff. So admission calls this
+ * without one and lands the stand-in; the runner calls it again with one, once
+ * the turn it admitted is over, and the stand-in becomes a name. Answers
+ * whether the shown title changed, which is what the caller announces on.
+ */
+export async function titleActorFromMessage(
+  actor: Pick<ActorHandle, 'name' | 'config'>,
+  message: string,
+  suggest?: (mission: string) => Promise<string | null>,
+): Promise<boolean> {
   const config = actor.config;
 
-  const plan = planWorkspaceTitle({
+  const effects: Parameters<typeof applyWorkspaceTitle>[1] = {
+    persist: (title, origin) => persistAutoTitle(config, title, origin),
+  };
+
+  if (suggest) effects.suggest = suggest;
+
+  const titled = await applyWorkspaceTitle({
     slug: actor.name,
     displayName: config.getDisplayName(),
     nameOrigin: config.getNameOrigin(),
     mission: message,
-  });
+  }, effects);
 
-  return plan?.provisional ? persistAutoTitle(config, plan.provisional) : false;
+  return titled !== null;
 }
 
 /** Decide whether a workspace should be auto-titled, and from what.
  *
  *  `null` means leave it alone: the title is the operator's (or nobody's, see
- *  {@link autoTitleMayReplace}), there is no mission to title from, or it
- *  already carries a title it was deliberately given. Otherwise the workspace
- *  is still showing its raw slug. */
+ *  {@link autoTitleMayReplace}), there is no mission to title from, or a model
+ *  has already answered for it. Otherwise the workspace is showing its raw
+ *  slug, its codename, or a stand-in this policy wrote itself — and a stand-in
+ *  is replaceable however un-placeholder it reads, which is the difference
+ *  between a title and the first line of somebody's prompt (#18). */
 export function planWorkspaceTitle(state: WorkspaceTitleState): WorkspaceTitlePlan | null {
   if (!autoTitleMayReplace(state.nameOrigin)) return null;
 
   if (isPlaceholderMission(state.mission)) return null;
 
-  if (!isPlaceholderWorkspaceTitle(state.displayName, state.slug)) return null;
+  if (state.nameOrigin !== 'provisional' && !isPlaceholderWorkspaceTitle(state.displayName, state.slug)) return null;
   const mission = state.mission.trim();
 
   return { provisional: workspaceTitleFromMission(mission) || null, mission };
 }
 
-/** Auto-title a workspace: persist the deterministic title at once so the
- *  placeholder never survives a failed model call, then upgrade to the
- *  generated one. `persist` writes the title AND marks its origin 'auto',
- *  which is what makes this one-shot — the plan can no longer match.
+/**
+ * Auto-title a workspace: persist the deterministic stand-in at once so a
+ * placeholder never survives a failed model call, then upgrade it to the
+ * generated one.
  *
- *  A failed generation is not swallowed here. The deterministic title has
- *  already landed by then, so it stands whatever happens next, and the caller
- *  is the one that knows whether a titling failure is worth reporting — a
- *  catch here reported "titled" for a dead review model, an unroutable
- *  provider and a failing `persist` alike. */
+ * `persist` is told WHICH of the two it is writing, and that is what makes the
+ * sequence resumable rather than one-shot. Both used to land as 'auto', so a
+ * process that died between them — or a create that wrote the stand-in with no
+ * model in reach at all, which is every cloud workspace — left a title the plan
+ * would never look at again, and the first line of the person's prompt became
+ * the workspace's name (#18). A 'provisional' title still plans; only the
+ * model's answer closes the sequence.
+ *
+ * A failed generation is not swallowed here. The deterministic title has
+ * already landed by then, so it stands whatever happens next, and the caller
+ * is the one that knows whether a titling failure is worth reporting — a
+ * catch here reported "titled" for a dead review model, an unroutable
+ * provider and a failing `persist` alike.
+ */
 export async function applyWorkspaceTitle(
   state: WorkspaceTitleState,
   effects: {
-    persist: (title: string) => boolean | void | Promise<boolean | void>;
+    persist: (title: string, origin: 'provisional' | 'auto') => boolean | void | Promise<boolean | void>;
     suggest?: (mission: string) => Promise<string | null>;
   },
 ): Promise<string | null> {
   const plan = planWorkspaceTitle(state);
 
   if (!plan) return null;
-  let title: string | null = null;
+  // A stand-in is written ONCE. A workspace whose stored title is ALREADY
+  // provisional keeps the one it is showing: re-deriving would let the newest
+  // thing said to an actor rename it while it is still waiting to be named
+  // properly, which is a second defect wearing the first one's clothes.
+  let title: string | null = state.nameOrigin === 'provisional' ? state.displayName : null;
 
-  if (plan.provisional) {
-    const persisted = await effects.persist(plan.provisional);
+  if (plan.provisional && title === null) {
+    const persisted = await effects.persist(plan.provisional, 'provisional');
 
     if (persisted === false) return null;
     title = plan.provisional;
@@ -378,11 +434,12 @@ export async function applyWorkspaceTitle(
 
   const suggested = (await effects.suggest?.(plan.mission))?.trim();
 
-  if (suggested && suggested !== title) {
-    const persisted = await effects.persist(suggested);
+  if (suggested) {
+    const persisted = await effects.persist(suggested, 'auto');
 
     if (persisted === false) return null;
-    title = suggested;
+
+    return suggested;
   }
 
   return title;

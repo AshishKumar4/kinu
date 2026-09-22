@@ -484,7 +484,6 @@ const ORCHESTRATOR_METHODS = [
   'runTaskFromMcp',
   'saveNoteFromMcp',
   'sendPeerFromMcp',
-  'setAutoDisplayName',
   'setEmailAllowlist',
   'setEmailNotifications',
   'setInitialDisplayName',

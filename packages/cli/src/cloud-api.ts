@@ -11,6 +11,7 @@ import {
   type DeviceSandboxStatus,
   type JsonValue,
   type MissionBudgetSnapshot,
+  type NameOrigin,
   type ProducerSpend,
   type ProfileCatalog,
   type ProfileCatalogEnvelope,
@@ -43,6 +44,9 @@ export interface CloudAgent {
   name: string;
   displayName: string;
   createdAt: number;
+  /** How the shown title came about. `provisional` is the deterministic
+   *  stand-in a create stores before a model has named the workspace. */
+  nameOrigin?: NameOrigin;
 }
 
 export interface CloudDeviceRegistration {
@@ -167,6 +171,7 @@ const CliAuthPollSchema: v.GenericSchema<CliAuthPoll> = v.object({
 
 const CloudAgentSchema: v.GenericSchema<CloudAgent> = v.object({
   name: v.string(), displayName: v.string(), createdAt: v.number(),
+  nameOrigin: v.optional(v.picklist(['user', 'auto', 'provisional'])),
 });
 
 const CloudDeviceRegistrationSchema: v.GenericSchema<CloudDeviceRegistration> = v.object({

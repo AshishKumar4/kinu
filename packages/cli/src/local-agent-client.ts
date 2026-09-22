@@ -176,7 +176,7 @@ export async function autoTitleLocalWorkspace(
     nameOrigin: config.getNameOrigin(),
     mission: source.mission,
   }, {
-    persist: (title) => persistAutoTitle(config, title),
+    persist: (title, origin) => persistAutoTitle(config, title, origin),
     suggest: async (text) => (await suggestAgentIdentityFromMission(text, opts)).displayName,
   });
 }

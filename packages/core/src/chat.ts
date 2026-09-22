@@ -27,7 +27,7 @@ import {
   type PromptModelContext,
 } from './prompting/model-profile';
 import { applyCacheBreakpoints, hasCacheMarkers, type CacheBreakpointPlan } from './prompting/cache-breakpoints';
-import type { ModelWindow } from './prompting/step-prune';
+import type { ResolvedModelWindow } from './prompting/step-prune';
 import type { CacheRetention } from './providers/types';
 import type { TurnContextMeter } from './context-meter';
 import { composePrepareStep, type StepContextPlane, type StepDynamicContext } from './prompting/prepare-step';
@@ -753,15 +753,27 @@ function suppressDeferredRejections(
   for (const deferred of [result.steps, result.finishReason, result.rawFinishReason, result.totalUsage]) deferred.then(undefined, ignore);
 }
 
-/** The window a turn is assembled, admitted and pruned against, and the answer allowance inside it. */
-function turnWindow(opts: ChatOptions): ModelWindow {
-  const contextWindow = opts.modelContext?.contextWindow ?? contextWindowForModel(opts.modelContext?.id ?? '');
+/**
+ * The window this turn is assembled, admitted and pruned against, the answer
+ * allowance inside it, and where the window's number came from.
+ *
+ * A caller that resolved the catalog states the provenance
+ * (`ModelCatalogSession.resolved`); one that did not — a head, a scaffold
+ * candidate, any caller holding only a spec — leaves it to the static table,
+ * which answers for itself. Neither invents the other's answer, and admission
+ * refuses only on a window somebody measured (orchestrator/turn-context.ts).
+ */
+function turnWindow(opts: ChatOptions): ResolvedModelWindow {
+  const table = contextWindowForModel(opts.modelContext?.id ?? '');
 
-  // An unreported answer allowance says nothing about how much of the window
-  // the answer may take, so the honest reading is the whole window and
-  // `outputReserveTokens` splits from there. A picked number here would put a
-  // fact in the catalog's mouth.
-  return { contextWindow, modelOutputLimit: opts.modelContext?.modelOutputLimit ?? contextWindow };
+  return {
+    contextWindow: opts.modelContext?.contextWindow ?? table.window,
+    windowMeasured: opts.modelContext?.windowMeasured ?? table.measured,
+    // An unreported allowance reserves NOTHING (prompting/step-prune.ts): the
+    // whole window read as the answer's share halved the allocation of every
+    // model the catalog had not answered for.
+    modelOutputLimit: opts.modelContext?.modelOutputLimit ?? null,
+  };
 }
 
 /**
@@ -815,7 +827,8 @@ export async function* runChat(opts: ChatOptions): AsyncGenerator<ChatEvent> {
   const modelSpec = opts.modelContext?.id;
 
   let stepCount = 0;
-  const { contextWindow, modelOutputLimit } = turnWindow(opts);
+  const window = turnWindow(opts);
+  const { contextWindow, modelOutputLimit } = window;
 
   // The shared turn-context assembly (orchestrator/turn-context.ts): attachment
   // sanitize → extension onTurnStart → awaited transformContext (compaction) →
@@ -843,7 +856,7 @@ export async function* runChat(opts: ChatOptions): AsyncGenerator<ChatEvent> {
   assembly.admission = {
     count: opts.countInputTokens,
     tools,
-    limits: { contextWindow, modelOutputLimit },
+    limits: window,
   };
 
   const stepContext = opts.stepContext;
