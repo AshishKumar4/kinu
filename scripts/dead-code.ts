@@ -435,14 +435,26 @@ export function referencesPackage(file: string, text: string, forms: ReferenceFo
   return false;
 }
 
+/** Each file's module edges, computed once per text. The census asks every file
+ *  once PER DECLARED PACKAGE, and a parse per question made this gate the
+ *  heaviest of the commit tier: measured 2026-09-22 at ad61dea6c under load ~80,
+ *  the census alone passed 10 GiB resident and the gate more than 180 CPU-s,
+ *  where both knip runs together took 27. The key is the file and its exact
+ *  text, so an answer never outlives the bytes it was read from. */
+const modulesOf = new Map<string, { readonly text: string; readonly modules: readonly string[] }>();
+
 /** The module graph's own edges out of one file: every static and dynamic
  *  import specifier, plus the literal argument of each `require(…)` call. */
 function namedModules(file: string, text: string): readonly string[] {
+  const known = modulesOf.get(file);
+
+  if (known?.text === text) return known.modules;
   const tree = parse(file, text).root;
   const out = [...moduleSpecifiers(tree)];
   walk(tree, (node) => {
     if (node.raw.type === 'CallExpression' && identifierCalleeName(node) === 'require') out.push(...stringArguments(node));
   });
+  modulesOf.set(file, { text, modules: out });
 
   return out;
 }
