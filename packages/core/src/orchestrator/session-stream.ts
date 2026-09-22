@@ -293,7 +293,7 @@ export class SessionStream {
       if (last >= 0xd800 && last <= 0xdbff) {
         part.buffered = text.slice(-1);
         part.bufferedDeltas = 1;
-        part.bufferedBytes = 3;
+        part.bufferedBytes = utf8.encode(part.buffered).byteLength;
         text = text.slice(0, -1);
       }
     }
@@ -315,10 +315,10 @@ export class SessionStream {
   /** The container's message row, open. It joins the working context only
    *  when it seals: a context revision names immutable content, never a
    *  message a stream is still extending. */
-  private openContainer(container: StreamContainer, write: () => void): void {
+  private openContainer(container: StreamContainer, write?: () => void): void {
     this.fenced(() => {
       container.reference = this.history.messages.open(container.role, container.id, container.working ? 'output' : 'render', { requestId: this.requestId, slot: this.nativeProducer ? container.slot : this.step * 3 + container.slot });
-      write();
+      write?.();
     });
   }
 
@@ -375,7 +375,7 @@ export class SessionStream {
 
       const sealed = await this.history.messages.prepareContent(parts);
 
-      if (container.reference === null) this.openContainer(container, () => {});
+      if (container.reference === null) this.openContainer(container);
       this.sealContainer(container, sealed, envelope);
       await this.history.messages.bindSource(message, { messageId: container.id });
     }
