@@ -363,6 +363,10 @@ export interface OwedTerminalEffectsInput {
   readonly credited: string | null;
   readonly messageId: string;
   readonly userText: string;
+  /** The `kinuEvent` a signal opened this turn under; undefined for a turn a
+   *  person's message opened. Read off the settling turn itself, so the roster
+   *  never answers from a later or earlier turn's item. */
+  readonly event: string | undefined;
   readonly assistantText: string;
   readonly completed: boolean;
   /** Whether the turn was CUT rather than failing. A task child's caller is
@@ -1745,6 +1749,7 @@ export class ChatSession {
         }),
         messageId: answerId,
         userText: item.text,
+        event: input.event,
         assistantText: input.assistantText,
         completed: runError === null,
         interrupted: input.interrupted,

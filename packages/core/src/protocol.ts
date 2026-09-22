@@ -160,7 +160,7 @@ export interface SubordinateRosterEntry {
 	actorId: string | null;
 	displayName: string;
 	role: string;
-	nameOrigin?: "user" | "auto" | "provisional";
+	nameOrigin?: "user" | "auto";
 	createdBy: "orchestrator" | "user";
 	status: SubordinateStatus;
 	currentTask: string | null;
