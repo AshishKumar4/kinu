@@ -71,7 +71,7 @@ import {
 import { getSandbox } from "@cloudflare/sandbox";
 import type { SupervisorOpEnvelope } from '@nimbus-sh/core/workspace/supervisor-op.js';
 import type { SupervisorOpResult } from '@kinu.run/core/workspace';
-import type { ActivitySnapshot, TabPresence } from "@kinu.run/core";
+import type { ActivitySnapshot, TabPresence, TurnClaimState } from "@kinu.run/core";
 import type { SubordinateRosterEntry } from "@kinu.run/core/protocol";
 import { teamPeers } from "./lib/workspace-roster";
 import { nextAlarmTime } from '@kinu.run/core';
@@ -383,6 +383,10 @@ const WAKE_ARM_FAILURE = {
   reconcile: {
     event: 'event.delivery_reconcile_failed',
     doing: 'arming the wake that finishes what a dead activation owed',
+  },
+  recovery: {
+    event: 'turn.recovery_wake_arm_failed',
+    doing: 'arming the wake that resumes work a stranded turn fenced',
   },
 } as const;
 
@@ -6155,7 +6159,53 @@ export class OrchestratorAgent extends ActorAgent {
     return {
       status, tools, memoryContent, executors, executorOutputs, lastActiveExecutor, activePlan,
       tabPresence, slates, pendingSteers: this.pendingSteerRuns(), branchRuns,
+      turnClaim: this.turnClaimState(),
     };
+  }
+
+  /**
+   * The durable answer to "is a turn running", for the one client fold that
+   * decides both the composer's actions and the transcript's live tail.
+   *
+   * `unsettled()` is the claim ledger's wedged-turn query and it is the only
+   * record that outlives the isolate. A claim this isolate is NOT executing
+   * is stranded: the turn it fenced ended with the object that admitted it,
+   * nothing will settle it, and every later send is refused by `assertLive`
+   * while the surface offers a Stop that reaches nobody.
+   */
+  private turnClaimState(): TurnClaimState {
+    const open = this.claims.unsettled(1)[0];
+
+    if (open === undefined) return { kind: 'settled' };
+
+    return {
+      kind: this._inFlight || this.actorSession.inFlight ? 'admitted' : 'stranded',
+      turnId: open.turnId, claimedAt: open.claimedAt,
+    };
+  }
+
+  /**
+   * Settle a claim nobody is executing, and re-pend the work it fenced.
+   *
+   * The claim is sealed `indeterminate` — what the interrupted turn achieved
+   * is unknown, and naming any run-end reason would assert something this
+   * never observed. Owed work then decides the rest: an actor that still owes
+   * a wake gets one, so the turn resumes rather than being silently dropped.
+   */
+  @callable() async recoverStrandedTurn(): Promise<{ readonly recovered: 'sealed' | 'requeued' | 'none' }> {
+    const state = this.turnClaimState();
+
+    if (state.kind !== 'stranded') return { recovered: 'none' };
+    const claim = this.claims.read(state.turnId);
+
+    if (claim === null) return { recovered: 'none' };
+    this.claims.settleRecovered(claim.turnId, claim.epoch, 'indeterminate');
+    diagnostics.event('turn.claim_recovered', { turnId: claim.turnId, epoch: claim.epoch });
+
+    if (!this.owedWorkExists()) return { recovered: 'sealed' };
+    this.armOwedWorkWake('recovery');
+
+    return { recovered: 'requeued' };
   }
 
   /**

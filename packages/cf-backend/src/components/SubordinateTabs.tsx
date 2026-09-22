@@ -4,7 +4,7 @@ import { Button } from "@cloudflare/kumo";
 import { FilledButton } from "./ui/FilledButton";
 import { tabCls, tabStripH } from "./ui/form";
 import { InlineRenameTitle } from "./WorkspaceBar";
-import { HouseIcon, PlusIcon, TrashIcon } from "@phosphor-icons/react";
+import { CaretDownIcon, CaretRightIcon, HouseIcon, PlusIcon, TrashIcon } from "@phosphor-icons/react";
 import type { SubordinateRosterEntry } from "@kinu.run/core/protocol";
 import { codenameFor } from "@kinu.run/core";
 import { Modal } from "./ui/Modal";
@@ -26,6 +26,11 @@ export function agentTitle(entry: Pick<SubordinateRosterEntry, "name" | "display
 
 interface SubordinateTabsProps {
   workspace: string;
+  /** Every agent this workspace RETAINS, dismissed ones included. A dismissed
+   *  child keeps its conversation, so a strip filtered on employability takes
+   *  the only route to that conversation away with the tab — the reported
+   *  disappearance. The strip decides presentation; the roster decides nothing
+   *  about reachability. */
   subordinates: readonly SubordinateRosterEntry[];
   activeName?: string;
   /** One-click create — identity only, no form. WorkspacePage owns the action
@@ -64,6 +69,13 @@ export function SubordinateTabs({
   const [dismissError, setDismissError] = useState<string | null>(null);
   const [deleting, setDeleting] = useState<string | null>(null);
   const [deleteError, setDeleteError] = useState<string | null>(null);
+  // Open when the reader is looking at a dismissed agent: a deep link into a
+  // kept conversation must not land on a collapsed section that hides the tab
+  // it arrived through.
+  const dismissed = subordinates.filter((entry) => entry.status === "dismissed");
+  const employable = subordinates.filter((entry) => entry.status !== "dismissed");
+  const [showDismissed, setShowDismissed] = useState(false);
+  const dismissedOpen = showDismissed || dismissed.some((entry) => entry.name === activeName);
 
   const mainPath = `/workspace/${workspace}`;
 
@@ -94,7 +106,7 @@ export function SubordinateTabs({
             <HouseIcon size={13} weight={!activeName ? "fill" : "regular"} />
             Main
           </Link>
-          {subordinates.map((subordinate) => {
+          {employable.map((subordinate) => {
             const active = activeName === subordinate.name;
             const title = agentTitle(subordinate);
 
@@ -179,11 +191,46 @@ export function SubordinateTabs({
           >
             <PlusIcon size={14} className={creating ? "animate-pulse" : undefined} />
           </button>
+          {dismissed.length > 0 && (
+            <button
+              type="button"
+              onClick={() => setShowDismissed(!dismissedOpen)}
+              aria-expanded={dismissedOpen}
+              className={`${tabCls} h-full shrink-0 px-2.5 p-text-3`}
+              title="Agents no longer taking work. Their conversations are kept."
+            >
+              {dismissedOpen ? <CaretDownIcon size={11} /> : <CaretRightIcon size={11} />}
+              Dismissed ({dismissed.length})
+            </button>
+          )}
         </nav>
         {trailing && (
           <div className="flex shrink-0 items-center gap-2 pl-2 pr-3">{trailing}</div>
         )}
       </div>
+      {dismissed.length > 0 && dismissedOpen && (
+        // A row, not tabs: these agents take no work, and a tab beside the
+        // employable ones would say they do. The link is the point — a
+        // dismissed agent's conversation is kept, so it stays reachable.
+        <div className="flex shrink-0 flex-wrap items-center gap-2 border-b p-border px-3 py-1.5">
+          <span className="p-eyebrow p-text-4">Dismissed</span>
+          {dismissed.map((subordinate) => (
+            <Link
+              key={subordinate.name}
+              data-agent-tab={subordinate.name}
+              to={`${mainPath}/agents/${subordinate.name}`}
+              aria-current={activeName === subordinate.name ? "page" : undefined}
+              title={`Open ${agentTitle(subordinate)}'s kept conversation`}
+              className={`inline-flex max-w-52 items-center gap-1.5 rounded-sm px-1.5 py-0.5 p-row-text ${
+                activeName === subordinate.name ? "p-accent font-medium" : "p-text-3 hover:p-text"
+              }`}
+            >
+              <span className="size-1.5 shrink-0 rounded-full p-dot-neutral opacity-60" aria-hidden />
+              <span className="truncate">{agentTitle(subordinate)}</span>
+            </Link>
+          ))}
+        </div>
+      )}
 
       {dismissTarget && dismissTarget.createdBy !== "user" && (
         <Modal

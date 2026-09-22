@@ -1147,7 +1147,7 @@ export abstract class ActorAgent extends Agent<Env> {
   }
 
   protected async subordinateViews(): Promise<SubordinateView[]> {
-    return Promise.all(this.subordinateRoster.list().map(
+    return Promise.all(this.subordinateRoster.listAll().map(
       async (entry) => this.subordinateView(entry.name),
     ));
   }

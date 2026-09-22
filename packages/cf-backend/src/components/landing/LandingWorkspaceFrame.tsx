@@ -20,10 +20,10 @@ import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useStat
 import { flushSync } from 'react-dom';
 import { MemoryRouter } from 'react-router-dom';
 import type { UIMessage } from 'ai';
-import { planReviewAwaitingDecision, type PlanReview } from '@kinu.run/core';
+import { planReviewAwaitingDecision, threadLiveTail, type PlanReview } from '@kinu.run/core';
 
 import { Composer, type ChatMode } from '@/components/Composer';
-import { MessageView } from '@/components/MessageView';
+import { ChatLiveTail, MessageView } from '@/components/MessageView';
 import { ModelPicker } from '@/components/ModelPicker';
 import { PreviewChrome } from '@/components/PreviewFrame';
 import { SidebarRail } from '@/components/SidebarRail';
@@ -90,16 +90,21 @@ function SlateBody(): ReactElement {
 const Transcript = memo(function Transcript(
   { messages, streaming }: { messages: readonly UIMessage[]; streaming: boolean },
 ): ReactElement {
+  const tail = threadLiveTail({
+    last: messages.at(-1),
+    liveness: streaming ? { kind: 'live', turnId: null } : { kind: 'idle' },
+  });
+
   return (
     <>
       {messages.map((message, index) => (
         <MessageView
           key={message.id}
           message={message}
-          isLast={index === messages.length - 1}
-          isStreaming={streaming && index === messages.length - 1}
+          liveTail={index === messages.length - 1 ? tail : null}
         />
       ))}
+      <ChatLiveTail tail={tail} />
     </>
   );
 });
@@ -577,7 +582,7 @@ export default function LandingWorkspaceFrame({ kind }: { kind: LandingFrameKind
                       onStop={() => {}}
                       placeholder="Send a message..."
                       disabled={false}
-                      streaming={false}
+                      liveness={{ kind: 'idle' }}
                       mode={{ value: mode, onChange: setMode, locked: planLocked }}
                       attachments={{ parts: [], onAdd: () => {}, onRemove: () => {} }}
                       modelPicker={<ModelPicker models={LANDING_MODELS} value={model} onChange={setModel} size="xs" />}

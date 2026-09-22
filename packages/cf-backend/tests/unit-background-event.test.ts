@@ -104,7 +104,6 @@ describe('genesis in the transcript', () => {
 
     const genesis = renderToStaticMarkup(createElement(MessageView, {
       message: genesisMessage,
-      isLast: false, isStreaming: false,
     }));
 
     expect(genesis).not.toContain('workspace has just been created');
@@ -117,7 +116,6 @@ describe('genesis in the transcript', () => {
 
     const owner = renderToStaticMarkup(createElement(MessageView, {
       message: ownerMessage,
-      isLast: false, isStreaming: false,
     }));
 
     expect(owner).toContain('Audit the checkout flow.');
@@ -130,7 +128,6 @@ describe('genesis in the transcript', () => {
 
     const job = renderToStaticMarkup(createElement(MessageView, {
       message: jobMessage,
-      isLast: false, isStreaming: false,
     }));
 
     expect(job.length).toBeGreaterThan(0);

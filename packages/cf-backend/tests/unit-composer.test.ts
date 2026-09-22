@@ -54,7 +54,7 @@ function markupFor(notices: readonly ComposerNotice[]): string {
     onSend: () => {},
     placeholder: 'Send a message...',
     disabled: false,
-    streaming: false,
+    liveness: { kind: 'idle' } as const,
     onStop: () => {},
     notices,
   }));
@@ -118,7 +118,7 @@ describe('the mode control', () => {
       onSend: () => {},
       placeholder: 'Send a message...',
       disabled: false,
-      streaming: false,
+      liveness: { kind: 'idle' } as const,
       onStop: () => {},
       mode: { value: 'build', onChange: () => {}, locked: false },
     }));
@@ -157,7 +157,7 @@ describe('a failed attachment', () => {
       onSend: () => {},
       placeholder: 'Send a message...',
       disabled: false,
-      streaming: false,
+      liveness: { kind: 'idle' } as const,
       onStop: () => {},
       attachments: {
         parts: [],

@@ -4,7 +4,7 @@ import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import type { TextUIPart, ToolUIPart, UIMessage } from 'ai';
 import type { JsonObject, JsonValue } from '@kinu.run/core';
-import { callFailed } from '@kinu.run/core';
+import { callFailed, threadLiveTail } from '@kinu.run/core';
 import { MessageView } from '../src/components/MessageView';
 
 type Part = UIMessage['parts'][number];
@@ -30,10 +30,11 @@ function text(content: string): TextUIPart {
   return { type: 'text', text: content };
 }
 
-function render(parts: Part[], isStreaming = false): string {
+function render(parts: Part[], streaming = false): string {
   const message: UIMessage = { id: 'turn-1', role: 'assistant', parts };
+  const liveTail = threadLiveTail({ last: message, liveness: streaming ? { kind: 'live', turnId: null } : { kind: 'idle' } });
 
-  return renderToStaticMarkup(createElement(MessageView, { message, isLast: true, isStreaming }));
+  return renderToStaticMarkup(createElement(MessageView, { message, liveTail }));
 }
 
 /** Parse buttons so commented-out markup cannot satisfy the assertions. */

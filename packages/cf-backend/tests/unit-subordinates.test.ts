@@ -3,12 +3,18 @@
 // backend-specific is which names this backend's source exposes where, so most
 // of these read that source directly. The exception is the deps gate, which is
 // exercised through the raw ToolSet each actor class builds.
+import './helpers/ui-module-globals';
 import { describe, expect, test } from 'bun:test';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { createElement } from 'react';
+import { renderToStaticMarkup } from 'react-dom/server';
+import { MemoryRouter } from 'react-router-dom';
 import {
   BUILTIN_TOOLS, DEPS_GATED_TOOLS, observedActionEnum, REPORT_TOOL, TASK_TURN_ENDINGS, terminalTaskReport,
 } from '@kinu.run/core';
+import type { SubordinateRosterEntry } from '@kinu.run/core/protocol';
+import { SubordinateTabs } from '../src/components/SubordinateTabs';
 import { mockAgentsSdk } from './helpers/agents-sdk';
 import { hostedSubordinateHarness, orchestratorHarness } from './helpers/actor-harness';
 
@@ -331,5 +337,74 @@ describe('subordinate wiring', () => {
     );
 
     expect(changed).not.toContain('parentAdmitsSubordinateReport');
+  });
+});
+
+describe('a dismissed agent keeps its conversation reachable', () => {
+  /** The roster row a chat surface enumerates, for a child that was hired and
+   *  then dismissed. Dismissal gives up employability; it explicitly keeps the
+   *  conversation ("Its conversation is kept, not deleted"), so the row a
+   *  surface reads has to survive it. */
+  async function dismissedChild() {
+    const parent = orchestratorHarness();
+    const name = 'quiet-harbor-1a4e20';
+
+    const child = await hostedSubordinateHarness(parent, {
+      name, displayName: 'Quiet Harbor', nameOrigin: 'user', mission: 'Build the chess app', roleId: 'task',
+    });
+
+    parent.agent.harnessRoster().create({
+      name, actorReference: { ...child.actor.reference }, birth: null, deleteRequested: false,
+      createdBy: 'user', status: 'idle', currentTask: null, createdAt: 1, dismissedAt: null,
+      lifetime: 'durable', taskEventId: null,
+    });
+    parent.agent.harnessRoster().dismiss(name, 200);
+
+    return { parent, name };
+  }
+
+  test('the roster a chat surface reads still lists it', async () => {
+    const { parent, name } = await dismissedChild();
+    const listed = await parent.agent.listSubordinates();
+
+    expect(listed.map((entry) => entry.name)).toContain(name);
+    expect(listed.find((entry) => entry.name === name)?.status).toBe('dismissed');
+  });
+
+  const ROSTER: SubordinateRosterEntry[] = [
+    {
+      name: 'busy-mill-01', displayName: 'Busy Mill', role: 'task', createdBy: 'user',
+      status: 'working', currentTask: 'Build the chess app', createdAt: 1, dismissedAt: null,
+    },
+    {
+      name: 'quiet-harbor-1a4e20', displayName: 'Quiet Harbor', role: 'task', createdBy: 'user',
+      status: 'dismissed', currentTask: null, createdAt: 2, dismissedAt: 200,
+    },
+  ];
+
+  const strip = (activeName?: string) => renderToStaticMarkup(createElement(MemoryRouter, null,
+    createElement(SubordinateTabs, {
+      workspace: 'hardy-workshop', subordinates: ROSTER, activeName,
+      onCreate: async () => {}, creating: false,
+      onDismiss: async () => {}, onRename: async () => '',
+    })));
+
+  test('the strip announces the dismissed agents it is holding', () => {
+    const markup = strip();
+
+    expect(markup).toContain('/workspace/hardy-workshop/agents/busy-mill-01');
+    // The reported disappearance: the dismissed child left the strip entirely,
+    // so nothing on screen said the conversation still existed.
+    expect(markup).toContain('Dismissed (1)');
+    expect(markup).toContain('aria-expanded="false"');
+  });
+
+  test('a deep link into a dismissed agent opens the section it lives in', () => {
+    // Navigating back to a kept conversation must not land on a strip that
+    // hides the tab the reader arrived through.
+    const markup = strip('quiet-harbor-1a4e20');
+
+    expect(markup).toContain('/workspace/hardy-workshop/agents/quiet-harbor-1a4e20');
+    expect(markup).toContain('aria-expanded="true"');
   });
 });
