@@ -260,6 +260,21 @@ const CONSENT_FREE_DEVICE_METHODS = {
   checkpointPlan: true,
 } as const satisfies Record<string, true>;
 
+/** The agent a device call's consent is keyed on, or undefined when the call
+ *  is not gated: stopping work never is, and an owner reading a checkpoint
+ *  through a workspace tier reaches one of the consent-free methods above. */
+function consentAgentFor(
+  resolved: ResolvedCaller,
+  claimed: string | undefined,
+  call: { stopping: boolean; ownerRead: boolean },
+): string | undefined {
+  if (call.stopping) return undefined;
+
+  if (resolved.kind !== 'workspace') return claimed;
+
+  return call.ownerRead ? undefined : resolved.workspace;
+}
+
 const CLI_AGENT_CONNECT_TICKET_TTL_MS = 60 * 1000;
 
 const CLI_AGENT_WEBSOCKET_CAPABILITY = 'agent.websocket' as const;
@@ -3007,11 +3022,7 @@ export class UserDO extends Agent<Env> {
     const stopping = method === DEVICE_CANCEL_METHOD;
     const ownerRead = opts?.agentName === undefined && Object.hasOwn(CONSENT_FREE_DEVICE_METHODS, method);
 
-    let consentAgent: string | undefined;
-
-    if (!stopping && !(resolved.kind === 'workspace' && ownerRead)) {
-      consentAgent = resolved.kind === 'workspace' ? resolved.workspace : opts?.agentName;
-    }
+    const consentAgent = consentAgentFor(resolved, opts?.agentName, { stopping, ownerRead });
 
     const deviceId = await this.resolveDeviceForCall(opts?.deviceId, consentAgent);
 
