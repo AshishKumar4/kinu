@@ -754,12 +754,12 @@ describe('a plane with no compare-and-write says so, once, in one voice', () => 
     const target = '/home/head-cw2/report.md';
     await plane.writeFile(target, 'the previous file');
 
-    const refused = await writeExecutorFileOp(lookupFor(plane), 'workspace', target, new TextEncoder().encode('the replacement'), 3);
+    const refused = await writeExecutorFileOp(lookupFor(plane), 'workspace', target, { bytes: new TextEncoder().encode('the replacement'), expectedRevision: 3 });
 
     if (!('unsupported' in refused)) throw new Error('expected the unsupported refusal');
     expect(await plane.readFile(target, { encoding: 'utf8' })).toBe('the previous file');
 
-    expect(await writeExecutorFileOp(lookupFor(plane), 'workspace', target, new TextEncoder().encode('the replacement'))).toEqual({ ok: true });
+    expect(await writeExecutorFileOp(lookupFor(plane), 'workspace', target, { bytes: new TextEncoder().encode('the replacement') })).toEqual({ ok: true });
     expect(await plane.readFile(target, { encoding: 'utf8' })).toBe('the replacement');
   });
 
@@ -770,7 +770,7 @@ describe('a plane with no compare-and-write says so, once, in one voice', () => 
     const target = '/home/head-cw3/notes.md';
     await plane.writeFile(target, 'editable text');
 
-    const refused = await writeExecutorFileOp(lookupFor(plane), 'workspace', target, new TextEncoder().encode('an edit'), 7);
+    const refused = await writeExecutorFileOp(lookupFor(plane), 'workspace', target, { bytes: new TextEncoder().encode('an edit'), expectedRevision: 7 });
 
     if (!('unsupported' in refused)) throw new Error('expected the unsupported refusal');
     const viewed = await readExecutorFile(lookupFor(plane), 'workspace', target);

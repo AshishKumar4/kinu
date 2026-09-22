@@ -66,7 +66,7 @@ describe("writeExecutorFileOp", () => {
   test("workspace upload round-trips binary content through the VFS", async () => {
     const { deps, written } = makeDeps();
     const bytes = new Uint8Array([0, 1, 2, 255, 0, 128]); // includes NULs — binary-safe path
-    const result = await writeExecutorFileOp(deps, "workspace", "/uploads/blob.bin", bytes);
+    const result = await writeExecutorFileOp(deps, "workspace", "/uploads/blob.bin", { bytes: bytes });
     expect(result).toEqual({ ok: true });
     expect(written.get("/uploads/blob.bin")).toEqual(bytes);
   });
@@ -76,13 +76,13 @@ describe("writeExecutorFileOp", () => {
     const bin = new Uint8Array([0x89, 0x50, 0x00, 0xff, 0xfe]);
     // Each environment gets the path in ITS OWN namespace — no prefix is added
     // and none is stripped, because there is no namespace above them to map.
-    expect(await writeExecutorFileOp(deps, "sandbox", "/workspace/logo.png", bin)).toEqual({ ok: true });
+    expect(await writeExecutorFileOp(deps, "sandbox", "/workspace/logo.png", { bytes: bin })).toEqual({ ok: true });
     expect(written.get("/workspace/logo.png")).toEqual(bin);
 
-    expect(await writeExecutorFileOp(deps, "nimbus", "/home/user/a.bin", bin)).toEqual({ ok: true });
+    expect(await writeExecutorFileOp(deps, "nimbus", "/home/user/a.bin", { bytes: bin })).toEqual({ ok: true });
     expect(written.get("/home/user/a.bin")).toEqual(bin);
 
-    expect(await writeExecutorFileOp(deps, "device", "/home/me/proj/b.bin", bin)).toEqual({ ok: true });
+    expect(await writeExecutorFileOp(deps, "device", "/home/me/proj/b.bin", { bytes: bin })).toEqual({ ok: true });
     expect(written.get("/home/me/proj/b.bin")).toEqual(bin);
   });
 
@@ -92,13 +92,13 @@ describe("writeExecutorFileOp", () => {
       error: "the sandbox container is not running",
     });
 
-    const result = await writeExecutorFileOp(deps, "sandbox", "/workspace/x", new TextEncoder().encode("y"));
+    const result = await writeExecutorFileOp(deps, "sandbox", "/workspace/x", { bytes: new TextEncoder().encode("y") });
     expect(result).toMatchObject({ error: expect.stringContaining("not running") });
   });
 
   test("an environment with no file plane → typed error, not a throw", async () => {
     const result = await writeExecutorFileOp(
-      { getProvider: () => undefined }, "ghost", "/a", new TextEncoder().encode("x"),
+      { getProvider: () => undefined }, "ghost", "/a", { bytes: new TextEncoder().encode("x") },
     );
 
     expect(result).toEqual({ error: 'Executor "ghost" has no file plane' });
@@ -107,8 +107,8 @@ describe("writeExecutorFileOp", () => {
   test("rejects a missing path and a directory path", async () => {
     const one = new Uint8Array([1]);
     const { deps, written } = makeDeps();
-    expect(await writeExecutorFileOp(deps, "workspace", "", one)).toEqual({ error: "file path required" });
-    expect(await writeExecutorFileOp(deps, "workspace", "/uploads/", one)).toEqual({ error: "file path required" });
+    expect(await writeExecutorFileOp(deps, "workspace", "", { bytes: one })).toEqual({ error: "file path required" });
+    expect(await writeExecutorFileOp(deps, "workspace", "/uploads/", { bytes: one })).toEqual({ error: "file path required" });
     expect(written.size).toBe(0);
   });
 
@@ -121,7 +121,7 @@ describe("writeExecutorFileOp", () => {
     // for an app-level cap to protect.
     const { deps, written } = makeDeps();
     const big = new Uint8Array(3 * 1024 * 1024);
-    expect(await writeExecutorFileOp(deps, "workspace", "/uploads/big.bin", big)).toEqual({ ok: true });
+    expect(await writeExecutorFileOp(deps, "workspace", "/uploads/big.bin", { bytes: big })).toEqual({ ok: true });
     const stored = written.get("/uploads/big.bin");
 
     if (!(stored instanceof Uint8Array)) throw new Error("binary upload was not stored as bytes");
@@ -306,7 +306,7 @@ describe("readExecutorFileBytes", () => {
   test("binary bytes round-trip untouched — the text viewer's refusal does not apply here", async () => {
     const { deps } = makeTree({});
     const bytes = new Uint8Array([0, 1, 2, 255, 0, 128]);
-    await writeExecutorFileOp(deps, "workspace", "/home/user/blob.bin", bytes);
+    await writeExecutorFileOp(deps, "workspace", "/home/user/blob.bin", { bytes: bytes });
     const out = await readExecutorFileBytes(deps, "workspace", "/home/user/blob.bin");
 
     if ("error" in out) throw new Error(out.error);
