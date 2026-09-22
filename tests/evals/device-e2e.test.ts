@@ -31,7 +31,7 @@ import { describe, expect, test } from 'bun:test';
 import { homedir, tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 
-import { UNCONFIGURED_LLM } from '@kinu.run/test-utils';
+import { EVAL_DEPLOYMENT_ORIGIN, UNCONFIGURED_LLM } from '@kinu.run/test-utils';
 import { AGENT_HOME } from '../../packages/cli/src/config';
 import evalsConfig from '../../vitest.evals.config';
 import { resolvePublicSessionPlan, type PublicExecutorResult } from './public-session';
@@ -46,8 +46,6 @@ import {
  *  borrowing the real name would put a skip line for a suite this file does not
  *  run into every credential-free tier's log. */
 const PROBE_SUITE = 'Device Gate Probe';
-
-const DEPLOYMENT = 'https://kinu.run';
 
 /** A resolution with no plan, as the arm sees one. The remedy text is the
  *  session resolver's; this file asserts what the ARM does with it. */
@@ -101,7 +99,7 @@ describe('the device arm runs on the cloud backend and nowhere else', () => {
       plan: {
         describe: 'probe',
         llm: UNCONFIGURED_LLM,
-        origin: DEPLOYMENT,
+        origin: EVAL_DEPLOYMENT_ORIGIN,
         identity: { kind: 'secret', secret: 'probe' },
         open: () => { throw new Error('the gate never opens a session'); },
       },

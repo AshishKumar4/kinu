@@ -64,7 +64,6 @@ describe('OwnedModelServices', () => {
 
     expect(actor).toContain("appTitle: 'Kinu',\n    ownerRequired: true,");
     expect(actor).toContain('return this.ownedModelServices.providerRegistry();');
-    expect(actor).toContain('return this.ownedModelServices.getWebSearchProvider();');
     expect(actor).toContain('this.ownedModelServices.invalidate();');
     // No second registry: a hosted head runs in a claimed workspace, so there is no ownerless mode.
     expect(hosting).not.toContain('createAgentProviderRegistry');

@@ -213,7 +213,7 @@ describe('the socket retires a delta on every fact that ends one', () => {
   test('a dropped socket forgets every head — the gap is unheard, not empty', () => {
     // The SDK classifies terminal closes (`isTerminalCloseEvent`); a second code-reading authority
     // here would be a second answer to the same question.
-    const at = HOOK.indexOf('// No close-code list here.');
+    const at = HOOK.indexOf('onClose: useCallback(', HOOK.indexOf('const agentOptions'));
     expect(at).toBeGreaterThan(-1);
     const onClose = HOOK.slice(at, HOOK.indexOf('onError: useCallback', at));
     expect(onClose).toContain('setConnectionStatus("disconnected")');

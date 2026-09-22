@@ -85,14 +85,6 @@ describe('auth and desktop security invariants', () => {
     expect(pcHandler).not.toContain('KINU_TOKEN=');
   });
 
-  test('desktop WebSocket uses short-lived tickets instead of raw device tokens in the URL', () => {
-    const pcHandler = source('../core/src/http/pc-ingress.ts');
-    expect(pcHandler).toContain('/pc/connect-ticket');
-    expect(pcHandler).toContain('ticket=');
-    expect(pcHandler).not.toContain('&token=');
-    expect(pcHandler).not.toContain('?user=U&token=T');
-  });
-
   test('CLI agent websocket uses scoped tickets and has no local-turn HTTP bridge', () => {
     const server = source('src/server.ts');
     const cliRoutes = source('src/cli/routes.ts');

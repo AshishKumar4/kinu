@@ -14,10 +14,12 @@
  */
 
 import { describe, expect, test } from 'bun:test';
+import { join } from 'node:path';
 
 import {
   DROP_CLASSES, auditCorpus, auditFile, census, keyOf, type DropClass,
 } from './silent-drop';
+import { readLock } from './gate-ratchet';
 import { readSources } from './sources';
 
 /** `file` matters: `parse` selects tsx by extension, and two of these cases are
@@ -274,11 +276,10 @@ export function readCredential(read: () => string): string | null {
     expect(catches).toBeGreaterThan(0);
 
     // A census over the real tree, so a scan that silently stopped parsing is a
-    // failure here rather than a clean report. The floor is deliberately far
-    // below the 254 instances measured at 2b7b020f: this asserts the scan RUNS,
-    // and the lock asserts which sites.
+    // failure here rather than a clean report. The floor is the population the
+    // lock records, which shrinks as drops are fixed; the lock asserts which sites.
     const counts = census(auditCorpus(sources));
     const total = DROP_CLASSES.reduce((sum, name) => sum + (counts.get(name) ?? 0), 0);
-    expect(total).toBeGreaterThan(20);
+    expect(total).toBeGreaterThanOrEqual(readLock(join(import.meta.dir, 'silent-drop.lock.json')).length);
   });
 });
