@@ -29,7 +29,6 @@ export function readPalette(): ArtPalette {
   };
 }
 
-/** The edges of a box in page pixels: what `getBoundingClientRect` answers. */
 export interface Rect {
   readonly left: number;
   readonly top: number;
@@ -39,8 +38,7 @@ export interface Rect {
   readonly height: number;
 }
 
-/** The headline's box in the host's view units, or null when the headline
- *  is missing or the host has no size: what the tree keeps its growth out of. */
+/** Headline box in view units, or null without a headline or host size. */
 export function keepOutOf(host: Rect, headline: Rect | null): KeepOut | null {
   if (headline === null || host.width <= 0 || host.height <= 0) return null;
 
@@ -68,10 +66,8 @@ export function boxOf(host: HTMLElement): Box {
   };
 }
 
-/** A tab that was hidden resumes with one ordinary step, not the whole gap. */
 const MAX_STEP = 0.05;
 
-/** The last RING samples of a measurement. */
 const RING = 240;
 
 function push(ring: number[], value: number): void {
@@ -80,39 +76,27 @@ function push(ring: number[], value: number): void {
   if (ring.length > RING) ring.shift();
 }
 
-/** Tailwind's `lg`: the width at which the hero copy's grid gains its second
- *  column (`lg:grid-cols-…` in LandingHero.tsx). Below it the copy stacks,
- *  the tree would run through the paragraph, and the hero swaps its backdrop. */
+/** Tailwind `lg`: below it the hero copy stacks (LandingHero.tsx) and the tree would cross the paragraph. */
 const WIDE_HERO_QUERY = '(min-width: 64rem)';
 
-/** True while the viewport is at least `lg` wide; follows the media query live. */
 export function useWideHero(): boolean {
   return useMediaQuery(WIDE_HERO_QUERY);
 }
 
 export interface FrameTimes {
-  /** Milliseconds one tick spent in `advance`. */
   readonly work: readonly number[];
-  /** Wall milliseconds between consecutive ticks. */
   readonly interval: readonly number[];
 }
 
 export interface Playback {
-  /** The last RING frames' cost. */
   frameTimes(): FrameTimes;
-  /** Start or stop the loop to match `wanted()`, the host's presence on screen, and the tab's visibility; idempotent. */
   sync(): void;
-  /** Stop the loop; the next start begins with an ordinary step, not the gap. */
   stop(): void;
   /** `stop()` and release the observers; not reusable. */
   dispose(): void;
 }
 
-/**
- * A requestAnimationFrame loop for a hero layer. It runs only while `wanted()`
- * holds, the host intersects the viewport, and the document is visible, and
- * hands `advance` the elapsed seconds, clamped so a hidden tab never replays its gap.
- */
+/** rAF loop running only while `wanted()`, on screen and visible; elapsed time is clamped so a hidden tab never replays its gap. */
 export function createPlayback(host: HTMLElement, wanted: () => boolean, advance: (step: number) => void): Playback {
   const work: number[] = [];
   const interval: number[] = [];

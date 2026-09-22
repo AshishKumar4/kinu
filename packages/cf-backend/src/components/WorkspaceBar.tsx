@@ -1,15 +1,4 @@
-/**
- * The workspace bar — the mock's 56px top bar.
- *
- * It is the ONLY place the workspace's name is rendered inside a workspace.
- * Identity lives here because this is the only row present at BOTH altitudes:
- * in Supervise there is no chat header to carry it.
- *
- * Workspace-scoped status rides with it: the connection and task indicators,
- * the next-turn model, theme, and Work/Supervise altitude. Settings lives
- * with the workspace row in the Sidebar; anything about one conversation
- * (which tab, clearing its history) stays on the chat column's tab strip.
- */
+/** The only place a workspace's name renders inside a workspace: the one row present in both Work and Supervise. */
 import { useEffect, useState, type FormEvent } from "react";
 import { Tabs, type TabsItem } from "@cloudflare/kumo";
 import { Link } from "react-router-dom";
@@ -27,8 +16,7 @@ const ALTITUDE_TABS = [
     value: "run",
     label: "Work",
     className: ALTITUDE_TAB_CLASS,
-    // TabsItem has no title prop: the render element carries it, and Base UI
-    // merges its props (children included) onto the tab trigger.
+    // TabsItem has no title prop; Base UI merges the render element's props onto the trigger.
     render: (props) => <button {...props} title="Work: the current task and its record" aria-description="Work: the current task and its record" />,
   },
   {
@@ -41,29 +29,19 @@ const ALTITUDE_TABS = [
 
 export interface WorkspaceBarProps {
   title: string;
-  /** The stored title the rename field opens with — "" on an untitled
-   *  workspace so saving cannot persist the "Untitled workspace" label as a
-   *  name. See InlineRenameTitle. */
+  /** "" on an untitled workspace so saving cannot persist the "Untitled workspace" label. */
   editValue?: string;
   onRename: (displayName: string) => Promise<string>;
   connectionStatus: ConnectionStatus;
-  /** The agent is mid-turn — the pulse the whole workspace shares. */
   working: boolean;
-  /** The provider wait a model call is sleeping out right now — what the
-   *  indicator says instead of a bare "working", because a rate-limited turn
-   *  is waiting, not thinking. Null = nothing is being waited on. */
   providerWait?: { provider: string; waitMs: number } | null;
-  /** An approval the agent cannot proceed without: actions, consents, or both. */
   waitingOnYou?: boolean;
-  /** The resolved model spec for the next turn, when the workspace has one. */
   model?: string;
-  /** Present on a forked workspace: a link back to the one it was cut from. */
   forkParent?: { workspace: string; forkedAt: number };
   altitude: Altitude;
   onAltitude: (altitude: Altitude) => void;
 }
 
-/** `<provider>/<modelId>` → the wire id the mock's chip shows (`deepseek-v4-pro-0813`). */
 function modelChipLabel(spec: string): string {
   const withoutCompatPrefix = spec.replace(/^openai-compat:[^/]+\//, "");
 
@@ -81,7 +59,7 @@ const CONNECTION_TONE: Record<ConnectionStatus, { dot: string; word: string }> =
   error: { dot: "p-dot-danger", word: "Offline" },
 };
 
-/** The socket, dot plus word at every state — a dot alone is hue alone. */
+/** Dot plus word at every state: a dot alone is hue alone. */
 function ConnectionIndicator({ status }: { status: ConnectionStatus }) {
   const tone = CONNECTION_TONE[status];
 
@@ -123,8 +101,7 @@ export function WorkspaceBar({
   const { mode } = useTheme();
 
   return (
-    // Fixed 56px like the mock; below ~30rem it wraps rather than clipping —
-    // a phone cannot hold a name, a pill and a switch on one line.
+    // Below ~30rem it wraps rather than clipping.
     <div className="@container flex min-h-14 shrink-0 flex-wrap items-center gap-x-3 gap-y-2 border-b p-border p-sidebar px-5 py-2">
       <div className="flex min-w-0 basis-full items-center gap-3 @[30rem]:basis-0 @[30rem]:flex-1">
         <InlineRenameTitle title={title} editValue={editValue} onRename={onRename} subject="workspace" />
@@ -176,22 +153,10 @@ export function WorkspaceBar({
   );
 }
 
-/**
- * The click-to-edit identity control, shared by the workspace bar and each
- * agent conversation's header — one rename affordance, whatever it names.
- * `subject` labels the accessible controls; `textClass` carries the mounting
- * row's type scale AND its text colour, so the still text and the editor agree
- * and the row decides how its own name reads. No colour is added here: a role
- * in Tailwind's utility layer outranks the grammar the name sits in, so one
- * written here could not be overruled by the row.
- */
+/** `textClass` carries the row's type scale and colour; none is set here because a utility-layer role would outrank the row. */
 export function InlineRenameTitle({ title, editValue, onRename, subject, textClass = "text-[15px] font-semibold p-text" }: {
   title: string;
-  /** What the field opens with. The shown title is the label a person reads —
-   *  "Untitled workspace" included — and pre-filling it would persist the
-   *  label AS the title on a save without edits, so the caller passes the
-   *  stored value it actually renames from. Defaults to `title`: every
-   *  already-titled surface wants the name it shows. */
+  /** Stored title to edit from; pre-filling the shown label would persist "Untitled workspace". Defaults to `title`. */
   editValue?: string;
   onRename: (displayName: string) => Promise<string>;
   subject: string;
@@ -262,7 +227,6 @@ export function InlineRenameTitle({ title, editValue, onRename, subject, textCla
       className="group/title flex min-w-0 items-center gap-1.5 rounded-md px-1 py-0.5 -mx-1 transition-colors hover:bg-[var(--c-elevated)]"
       title={`Rename ${subject}`}
     >
-      {/* 15px/600 is the mock's top-bar name weight; headers pass their own. */}
       <span className={`truncate ${textClass}`}>{title}</span>
       <PencilSimpleIcon size={11} className="shrink-0 p-text-4 opacity-0 transition-opacity group-hover/title:opacity-100" />
     </button>

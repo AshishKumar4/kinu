@@ -1,4 +1,3 @@
-/** Cumulative changes on the selected execution environment. */
 import { useState, useEffect, useCallback, useRef, type ReactNode } from "react";
 import { Button, Badge, Loader } from "@cloudflare/kumo";
 import { GitDiffIcon, CheckIcon, CaretDownIcon, CaretRightIcon } from "@phosphor-icons/react";
@@ -40,7 +39,6 @@ export function DiffsSurface({ executors, lastActiveExecutor, rpc, onPresence }:
   const [busy, setBusy] = useState(false);
   const [actionErr, setActionErr] = useState<string | null>(null);
 
-  // Selector options: available execution devices first, internal state VFS last.
   const availableDevices = executors
     .filter(isActiveExecutionDevice)
     .sort((a, b) => executorSortKey(a.name) - executorSortKey(b.name) || a.name.localeCompare(b.name))
@@ -51,13 +49,11 @@ export function DiffsSurface({ executors, lastActiveExecutor, rpc, onPresence }:
   const userSelected = useRef(false);
   const [exec, setExec] = useState(defaultExecutor);
 
-  // Executor status arrives after the surface mounts. Follow the place where
-  // work actually happened until the user deliberately chooses another chip.
+  // Executor status arrives after mount: follow it until the user picks a chip.
   useEffect(() => {
     if (!userSelected.current && options.includes(defaultExecutor)) setExec(defaultExecutor);
   }, [defaultExecutor, options]);
 
-  // If the selected executor disappears, resume following the live default.
   useEffect(() => {
     if (!options.includes(exec)) {
       userSelected.current = false;
@@ -81,9 +77,7 @@ export function DiffsSurface({ executors, lastActiveExecutor, rpc, onPresence }:
   const loaded = lastValue(resource);
   const result = loaded?.executor === exec ? loaded.result : null;
 
-  // Re-baselining is what "Mark reviewed" means: without a catch a failed
-  // write left the button un-busying with the change-set still on screen,
-  // while the user believed the baseline had moved.
+  // A failed re-baseline must surface; otherwise the user believes the baseline moved.
   const markReviewed = useCallback(async () => {
     setBusy(true);
     setActionErr(null);
@@ -93,11 +87,8 @@ export function DiffsSurface({ executors, lastActiveExecutor, rpc, onPresence }:
     finally { setBusy(false); }
   }, [rpc, reload, clearExpanded]);
 
-
   const files = result?.files ?? [];
   useEffect(() => { onPresence(loaded?.hasChanges === true || resource.status === "error" || Boolean(result?.error)); }, [loaded?.hasChanges, resource.status, result?.error, onPresence]);
-  // What stands in for the file list: a read that has not landed, the
-  // executor's own refusal, or a tree with nothing in it.
   let notice: ReactNode = null;
 
   if (result === null && resource.status === "error") {

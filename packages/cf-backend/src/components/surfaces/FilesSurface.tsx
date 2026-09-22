@@ -1,21 +1,4 @@
-/**
- * Files surface — the workspace's ONE drive. The composite file plane
- * (workspace tree + /pc and /sandbox mounts, core/src/vfs/mounts.ts) browsed
- * whole: folder tree, listing, preview, upload, download, rename, delete.
- *
- * Every byte crosses the EXISTING file plane: listings and text previews ride
- * the executor-file RPCs against the `workspace` executor — whose file view
- * IS the mount-table plane — and raw bytes (upload, download, image/PDF
- * preview src) ride the files HTTP route, because the RPC transport is the
- * chat WebSocket and its 1 MiB frame ceiling sits below ordinary file sizes.
- * There is no second pipeline: a mount is an ordinary folder here, wearing a
- * small origin badge, and every boundary the owning executor enforces
- * (device consent, path scoping) is enforced on the mounted path too.
- *
- * An OFFLINE mount is a stated absence rather than a missing row: the plane's
- * root listing only carries live mounts, so the root view appends the absent
- * ones as disabled rows naming their reason (connect your PC, no container).
- */
+/** Raw bytes ride the files HTTP route: the RPC transport is the chat WebSocket, whose 1 MiB frame ceiling is below ordinary file sizes. */
 import {
   useCallback, useEffect, useMemo, useRef, useState,
   type DragEvent as ReactDragEvent, type KeyboardEvent as ReactKeyboardEvent,
@@ -48,14 +31,12 @@ type WriteResult = { ok: true } | { error: string };
 
 interface UploadState { name: string; status: "uploading" | "error"; error?: string }
 
-/** Root entry name → the executor serving it, off the one mount table. */
 const MOUNT_EXECUTOR: Record<string, string> = Object.fromEntries(
   Object.entries(MOUNT_EXECUTORS).map(([mount, executor]) => [mount.slice(1), executor]),
 );
 
 
 
-/** Relative "when", for the Modified column. Coarse on purpose. */
 function fmtWhen(mtimeMs: number | undefined): string {
   if (!mtimeMs) return "";
   const delta = Date.now() - mtimeMs;
@@ -74,18 +55,13 @@ function fmtWhen(mtimeMs: number | undefined): string {
 export interface FilesSurfaceProps {
   rpc: Rpc;
   executors: ExecutorInfo[];
-  /** One-shot navigation intent from another surface (an Environment card's
-   *  Files action). The nonce distinguishes two jumps to the same path. */
   jump?: { path: string; nonce: number } | null;
-  /** Open the connect panel over this surface — the same one the Environment
-   *  tab opens, so an offline device is linked without leaving the drive. */
   onConnectDevice: () => void;
 }
 
 export function FilesSurface({ rpc, executors, jump, onConnectDevice }: FilesSurfaceProps) {
   const agentName = useParams().agentId ?? "";
   const [path, setPath] = useState("/");
-  /** One failure line for row operations (rename/delete/download prep). */
   const [notice, setNotice] = useState<string | null>(null);
   const [filter, setFilter] = useState("");
   const [preview, setPreview] = useState<string | null>(null);
@@ -94,15 +70,11 @@ export function FilesSurface({ rpc, executors, jump, onConnectDevice }: FilesSur
   const [confirmDelete, setConfirmDelete] = useState<string | null>(null);
   const [uploads, setUploads] = useState<UploadState[]>([]);
   const [dragOver, setDragOver] = useState(false);
-  /** Lazy directory cache for the tree, revalidated against each fresh listing
-   *  (see `nextTreeCache`); the listing itself always refetches. */
   const [treeCache, setTreeCache] = useState<ReadonlyMap<string, CachedDir>>(new Map());
   const { set: expanded, toggle: toggleExpanded } = useToggledSet(() => new Set(["/"]));
   const uploadInputRef = useRef<HTMLInputElement>(null);
   const listRef = useRef<HTMLDivElement>(null);
 
-  // Mount roster: origin badges, liveness, and the offline rows the root
-  // listing honestly omits.
   const loadMounts = useCallback(() => rpc<MountInfo[]>("listMounts"), [rpc]);
   const { resource: mountsResource, reload: reloadMounts } = useAsyncResource(loadMounts);
   const mounts = lastValue(mountsResource) ?? [];
@@ -113,28 +85,17 @@ export function FilesSurface({ rpc, executors, jump, onConnectDevice }: FilesSur
     if (r.error) throw new Error(r.error);
     const listed = r.entries ?? [];
     const at = r.path ?? dir;
-    // A fresh listing is the authority over everything cached beneath it: an
-    // entry it names at a new revision, or no longer names at all, invalidates
-    // that subtree instead of leaving it on screen.
     setTreeCache((prev) => nextTreeCache(prev, at, listed));
 
     return { path: at, entries: listed };
   }, [rpc]);
 
-  // Keyed on `path`: a listing for the OLD directory must never render under
-  // the NEW one's breadcrumb. `useAsyncResource`'s identity check forces the
-  // rendered value to "loading" the instant `path` changes, in the SAME
-  // render as the navigation — closing the window a `useEffect`-driven fetch
-  // otherwise leaves open between the crumb bar updating and the listing
-  // arriving. A slow scheduler widens that window; it cannot reopen this one.
+  // Keyed on `path` so an old directory's listing never renders under the new breadcrumb.
   const loadListing = useCallback(async (): Promise<DirEntry[]> => {
     try {
       const listed = await listDir(path);
 
-      // Asked for a bare mount point, the plane lists the machine's CONSENTED
-      // directory rather than its `/`, and says which one it listed. Adopt it:
-      // the crumb bar and every child path are built from `path`, so naming
-      // `/pc` while showing `/pc/home/kinu` sends the next click nowhere.
+      // A bare mount point lists the consented directory; adopt the returned path so child paths resolve.
       if (listed.path !== path) setPath(listed.path);
 
       return listed.entries;
@@ -157,7 +118,6 @@ export function FilesSurface({ rpc, executors, jump, onConnectDevice }: FilesSur
     setConfirmDelete(null);
   }, [path]);
 
-  // A jump is consumed exactly once per nonce.
   const lastJump = useRef(0);
   useEffect(() => {
     if (!jump || jump.nonce === lastJump.current) return;
@@ -167,7 +127,6 @@ export function FilesSurface({ rpc, executors, jump, onConnectDevice }: FilesSur
     setPath(jump.path);
   }, [jump]);
 
-  /** Row-operation runner: every rejection lands in the notice banner. */
   const run = useCallback(async (op: () => Promise<void>) => {
     setNotice(null);
 
@@ -183,9 +142,7 @@ export function FilesSurface({ rpc, executors, jump, onConnectDevice }: FilesSur
     + `?executor=${encodeURIComponent(PLANE)}&path=${encodeURIComponent(full)}${download ? "&download=1" : ""}`,
   [agentName]);
 
-  // Takes a MATERIALIZED array, never a live FileList: an input's FileList
-  // empties the instant its value is cleared, and a dataTransfer's when the
-  // drop handler returns — a live reference here uploaded nothing, silently.
+  // Takes a materialized array: a live FileList empties when the input clears or the drop handler returns.
   const uploadFiles = useCallback(async (list: readonly File[]) => {
     if (list.length === 0) return;
     setUploads(list.map((f) => ({ name: f.name, status: "uploading" as const })));
@@ -252,7 +209,6 @@ export function FilesSurface({ rpc, executors, jump, onConnectDevice }: FilesSur
   const atRoot = path === "/";
   const segments = path.split("/").filter(Boolean);
 
-  // Offline mounts, appended to the root view as stated absences.
   const offlineMounts = atRoot
     ? mounts.filter((m) => !m.live && Object.values(MOUNT_EXECUTOR).includes(m.name))
     : [];
@@ -287,15 +243,7 @@ export function FilesSurface({ rpc, executors, jump, onConnectDevice }: FilesSur
     }
   }, [path]);
 
-  /**
-   * The revision the CURRENT listing reports for the open preview.
-   *
-   * Read off `entries` rather than remembered at open time, so a listing that
-   * refetched — a refresh, a save, an upload, a rename — hands the viewer a new
-   * revision and it re-reads. `""` while the file is not in this directory's
-   * listing (a tree click into a folder the reader has since left), which is
-   * stable and therefore causes no re-read of its own.
-   */
+  /** Read from the current `entries` so any refetch hands the viewer a new revision; `""` when not listed. */
   const previewRevision = useMemo(() => {
     if (!preview) return "";
     const name = preview.slice(preview.lastIndexOf("/") + 1);
@@ -307,10 +255,8 @@ export function FilesSurface({ rpc, executors, jump, onConnectDevice }: FilesSur
     return entry ? entryRevision(entry) : "";
   }, [entries, path, preview]);
 
-  // Keyboard: the list is a roving-focus widget. Arrows move, Enter opens,
-  // Backspace goes up, F2 renames, Delete asks, Escape backs out.
   const onKeyDown = useCallback((e: ReactKeyboardEvent) => {
-    if (renaming) return; // the rename input owns the keyboard
+    if (renaming) return;
     const current = filtered[selected];
 
     if (e.key === "ArrowDown") { e.preventDefault(); setSelected((i) => Math.min(i + 1, filtered.length - 1)); }
@@ -336,7 +282,6 @@ export function FilesSurface({ rpc, executors, jump, onConnectDevice }: FilesSur
 
   return (
     <div className="@container flex h-full -m-5 min-h-0" data-files-surface>
-      {/* ── File tree (hidden on narrow widths; the breadcrumb still navigates) ── */}
       <div className="hidden @[44rem]:block w-52 shrink-0 border-r p-border overflow-y-auto py-2">
         <TreeNode
           dir="/" label="Workspace" depth={0}
@@ -352,9 +297,7 @@ export function FilesSurface({ rpc, executors, jump, onConnectDevice }: FilesSur
         />
       </div>
 
-      {/* ── Listing + preview ── */}
       <div className="flex-1 min-w-0 flex flex-col relative">
-        {/* Path bar: the address AND the way up — every ancestor is a target. */}
         <div className="px-3 py-2 border-b p-border flex items-center gap-1 text-xs font-mono shrink-0 overflow-x-auto">
           <button data-files-crumb onClick={() => setPath("/")}
             className="p-text-3 hover:p-text shrink-0" title="Drive root">/</button>
@@ -385,11 +328,7 @@ export function FilesSurface({ rpc, executors, jump, onConnectDevice }: FilesSur
             <button onClick={() => uploadInputRef.current?.click()}
               className="flex items-center gap-1 p-text-3 hover:p-text p-1"
               title={`Upload files to ${path}`}><UploadSimpleIcon size={11} />Upload</button>
-            {/* Refresh is the reader saying "show me what is there now", so it
-                drops every cached listing rather than only the current one. A
-                plane that reports no mtime (the container synthesizes stat from
-                a listing) gives `nextTreeCache` nothing to compare, and this is
-                then the only way its tree can be revalidated at all. */}
+            {/* Drops every cached listing: a plane without mtime gives `nextTreeCache` nothing to compare. */}
             <button onClick={() => run(async () => {
               setTreeCache(new Map());
               await reloadListing();
@@ -400,7 +339,6 @@ export function FilesSurface({ rpc, executors, jump, onConnectDevice }: FilesSur
           </div>
         </div>
 
-        {/* Filter-as-you-type over the current directory. */}
         <div className="px-3 py-1.5 border-b p-border flex items-center gap-1.5 shrink-0">
           <MagnifyingGlassIcon size={12} className="p-text-3 shrink-0" />
           <input
@@ -454,9 +392,6 @@ export function FilesSurface({ rpc, executors, jump, onConnectDevice }: FilesSur
               className="flex items-center gap-2 w-full text-left font-mono px-3 py-1 p-text-3 hover:p-text p-row-hover"
             ><ArrowUpIcon size={12} className="shrink-0" /><span>..</span></button>
           )}
-          {/* Tiles, in the SAME order and with the SAME selection index the
-              keyboard already moves through: a grid is a presentation of the
-              one listing, not a second model of it. */}
           {!loading && filtered.length > 0 && (
             <div
               data-files-grid
@@ -523,22 +458,12 @@ export function FilesSurface({ rpc, executors, jump, onConnectDevice }: FilesSur
           )}
         </div>
 
-        {/* Viewer: a side panel where there is room, an overlay where not. */}
         {preview && (
           <FileViewer
             path={preview} rpc={rpc}
-            // What the CURRENT listing says this file's bytes are. The viewer
-            // re-reads whenever it changes, so a refresh, a save, an upload or
-            // a rename revalidates the open preview instead of leaving text
-            // that the file no longer holds on screen.
             revision={previewRevision}
             rawHref={rawUrl(preview, false)}
             downloadHref={rawUrl(preview, true)}
-            // `reload` is the hook's sync runner: no promise comes back,
-            // because a failed re-read is settled into the resource's error
-            // tri-state — the banner this pane renders — rather than rejected
-            // to its caller. So there is nothing here to chain a handler onto
-            // and nothing a bare call can drop.
             onSaved={() => { reloadListing(); }}
             onClose={() => setPreview(null)}
           />
@@ -548,15 +473,6 @@ export function FilesSurface({ rpc, executors, jump, onConnectDevice }: FilesSur
   );
 }
 
-/* ── File tree ───────────────────────────────────────────────────── */
-
-/**
- * The tree carries FILES as well as folders. Dropping file entries on recursion
- * leaves the one persistent navigation pane in the surface unable to reach a
- * file — a folder-only view of a plane that answers with both kinds. A folder
- * navigates; a file opens in the preview pane, the same thing a listing row
- * does.
- */
 function TreeNode({ dir, label, depth, path, previewPath, expanded, cache, badgeFor, onNavigate, onOpenFile, onToggle }: {
   dir: string;
   label: string;
@@ -622,8 +538,6 @@ function TreeNode({ dir, label, depth, path, previewPath, expanded, cache, badge
             title={child.name}
             className={`flex items-center gap-1 pr-2 py-0.5 text-xs cursor-pointer p-row-hover ${
               previewPath === full ? "p-fill p-text font-medium" : "p-text-2"}`}
-            // Aligned with a folder's own label rather than its caret: the
-            // caret's width is what separates "can open" from "can expand".
             style={{ paddingLeft: `${20 + (depth + 1) * 12}px` }}
             onClick={() => onOpenFile(full)}
           >
@@ -636,14 +550,6 @@ function TreeNode({ dir, label, depth, path, previewPath, expanded, cache, badge
   );
 }
 
-/* ── One listing tile ────────────────────────────────────────────── */
-
-/**
- * One entry, as a tile: kind, name, and the one line of metadata that made the
- * old row's four columns worth their width. Rename, delete and download keep
- * the same hooks and the same hover-reveal, so the drive's keyboard and the
- * browser gate both address the tile exactly as they addressed the row.
- */
 function EntryTile({ entry, badge, selected, previewing, renaming, confirming, downloadHref, onSelect, onOpen, onRenameDraft, onRenameCommit, onRenameCancel, onAskDelete, onDelete, onCancelDelete }: {
   entry: DirEntry;
   badge: string | null;

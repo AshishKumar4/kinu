@@ -1,21 +1,6 @@
 /**
- * `/updates` — this deployment's own Updates page (docs/SELF-DEPLOY.md §
- * Updates).
- *
- * THE DEPLOYMENT PULLS, AND THE OWNER DECIDES. The page reads what this Kinu
- * is running and what its channel publishes, and the button runs THE SAME PLAN
- * from inside this deployment with its own key. There is no push: kinu.run
- * never reaches into the account after the first sitting.
- *
- * The run is watched by polling rather than over a socket. The ledger is a
- * dozen durable rows and the answer to "where is it now" is one read, so a
- * second socket surface — on a page that already needs a session — would buy
- * nothing a two-second read does not.
- *
- * A REPLACED WORKER IS THE POINT, which is why the last rows are expected to
- * be seen across a restart: the upload is what serves the next request, so a
- * poll that fails mid-run is the update working. The page says so instead of
- * reporting an error.
+ * `/updates` (docs/SELF-DEPLOY.md § Updates). The deployment pulls; there is no push.
+ * A poll failing mid-run is expected: the Worker being replaced is the update working.
  */
 import { useCallback, useEffect, useState } from "react";
 import { Loader } from "@cloudflare/kumo";
@@ -29,9 +14,6 @@ import * as v from "valibot";
 import { FilledButton } from "@/components/ui/FilledButton";
 import { StepRow } from "@/components/deploy/DeployStepRow";
 
-/** How often the ledger is re-read while a run is going. Shorter than the MCP
- *  roster's poll because these rows are what a person is watching move, and the
- *  read is one durable snapshot from one object. */
 const RUN_POLL_MS = 2000;
 
 async function read<Schema extends v.GenericSchema>(
@@ -61,8 +43,6 @@ function Build({ label, build }: { label: string; build: UpdateBuild | null }) {
 }
 
 export default function UpdatesPage({ fixture, fixtureRun }: {
-  /** The offer, for the gallery and for a test: the page renders it rather
-   *  than reading it. */
   fixture?: UpdateOffer;
   fixtureRun?: DeploySnapshot;
 } = {}) {
@@ -70,10 +50,7 @@ export default function UpdatesPage({ fixture, fixtureRun }: {
   const [offer, setOffer] = useState<UpdateOffer | null>(fixture ?? null);
   const [run, setRun] = useState<DeploySnapshot | null>(fixtureRun ?? null);
   const [err, setErr] = useState<string | null>(null);
-  /** What the last poll failed with, or null while the polls are answering. A
-   *  mid-run read that does not answer is expected — the Worker being replaced
-   *  is the update working — but the page holds WHAT did not answer, so a poll
-   *  failing for any other reason is on the page instead of nowhere. */
+  /** Last poll failure, or null; held so a failure other than the restart still shows on the page. */
   const [restarting, setRestarting] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
@@ -87,9 +64,7 @@ export default function UpdatesPage({ fixture, fixtureRun }: {
       .then((held) => { if (mounted) setOffer(held); })
       .catch(failed);
 
-    // The run this deployment is already installing, if any. `apply` answers
-    // before the first step runs, so a page opened or reloaded in the middle of
-    // an update reads the ledger rather than waiting for a click.
+    // `apply` answers before the first step runs, so a page opened mid-update reads the ledger.
     read(DeploySnapshotSchema, "/api/updates/run")
       .then((held) => { if (mounted && held.steps.length > 0) setRun(held); })
       .catch(failed);
@@ -103,11 +78,7 @@ export default function UpdatesPage({ fixture, fixtureRun }: {
     if (!live || !going) return;
     let mounted = true;
 
-    // The Worker this page is talking to is the one being replaced. A read that
-    // does not answer mid-run is that replacement, not a failure — so the cause
-    // is held as the reason the rows are late, beside the restart notice, and
-    // never dropped: a poll that stopped answering for any other reason then
-    // says so on the page instead of nowhere.
+    // A mid-run read failure is the Worker being replaced; the cause is held beside the restart notice, never dropped.
     const late = (...rejection: [unknown]): void => {
       if (mounted) setRestarting(renderThrownChain({ cause: rejection[0] }));
     };

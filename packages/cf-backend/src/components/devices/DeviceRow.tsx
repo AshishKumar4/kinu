@@ -1,11 +1,3 @@
-/**
- * One linked machine as a row: its live link state, its name (renameable in
- * place), the Sandbox switch with the mode the hub will enforce, and the
- * workspaces granted reach — a granted workspace is a chip that can be
- * dropped, a denied one is named as denied. A revoked machine is the incident
- * row instead: what Kinu could not confirm stopped, and the acknowledge that
- * clears it.
- */
 import { useState } from "react";
 import { startTransition } from "react";
 import {
@@ -19,17 +11,14 @@ import { DEVICE_UPDATE_COPY } from "@/hooks/use-device-roster";
 import { describeGpuNodes, effectiveDeviceMode, type DeviceMode } from "@kinu.run/core";
 import { renderThrownChain } from "@kinu.run/core/obs";
 
-/** The one line under the switch, per mode. `effectiveDeviceMode` decides the
- *  mode; the hub enforces the same function, so the row explains exactly what
- *  the hub will do. The first two are the owner's own words. */
+/** The hub enforces the same `effectiveDeviceMode`, so this line matches what it does. */
 const SANDBOX_MODE_COPY = {
   sandboxed: "Sandboxed.",
   raw: "Off.",
   files_only: "Files only.",
 } satisfies Record<DeviceMode, string>;
 
-/** What a revoked machine is said to have left running. An unknown count is
- *  still a warning: the hub could not confirm anything stopped. */
+/** An unknown count is still a warning: the hub could not confirm anything stopped. */
 function unstoppedLine(count: number | undefined): string {
   if (count === undefined) return "Commands may still run.";
 
@@ -44,7 +33,6 @@ export function DeviceRow({
 }: {
   device: UserDevice;
   grants: DeviceConsent[];
-  /** The roster must be re-read: this row renamed the device or moved its switch. */
   onDeviceChanged: () => void;
   onGrantsChanged: () => void;
   onError: (message: string) => void;
@@ -77,9 +65,7 @@ export function DeviceRow({
                 try {
                   await onAcknowledge();
                 } catch (cause) {
-                  // `onAcknowledge` reports its own failures into this row's
-                  // `onError`; a rejection that escapes that path still leaves
-                  // the row visibly unacknowledged.
+                  // A rejection escaping `onError` still leaves the row visibly unacknowledged.
                   onError(`Could not acknowledge the command warning: ${renderThrownChain({ cause })}`);
                 } finally {
                   setAcknowledging(false);
@@ -118,8 +104,7 @@ export function DeviceRow({
   const mode = effectiveDeviceMode(sandbox);
   const cannotSandbox = sandbox.capability !== "sandboxed";
 
-  // Off is the one direction that asks: it names the machine and what "off"
-  // means. On needs no confirmation — it only ever narrows what a command reaches.
+  // Only turning off asks; on only narrows what a command reaches.
   const setSandbox = async (on: boolean) => {
     if (!on && !confirm(`Turn Sandbox off for "${device.label}"? The agent will run as you with full access.`)) return;
     setSwitching(true);
@@ -163,24 +148,15 @@ export function DeviceRow({
         )}
         {device.hostname && <span className="p-annotation p-text-3">{device.hostname}{device.os ? ` · ${device.os}` : ""}</span>}
         <span className={`ml-auto px-2 py-0.5 ${device.connected ? "p-badge-success" : "p-badge-neutral"}`}>{device.connected ? "connected" : "offline"}</span>
-        {/* The machine's software beside its link state: one word when the
-            daemon is behind the served build (the hub pushes the update and
-            the daemon restarts itself), when its owner turned that off, or
-            when the build is a source install the hub leaves alone. A current
-            or unreporting daemon says nothing here. */}
+        {/* Daemon version note: behind, updates off, or source install; silent when current. */}
         {(device.update === "behind" || device.update === "off" || device.update === "unstamped") && (
           <span role="status" data-device-update={device.update} title={device.version === null ? undefined : `${device.version} installed; ${device.servedVersion ?? ""} served`}
             className={`px-2 py-0.5 ${device.update === "behind" ? "p-badge-warning" : "p-badge-neutral"}`}>
             {DEVICE_UPDATE_COPY[device.update]}
           </span>
         )}
-        {/* The one action here that takes something away sits apart from the
-            facts, past a hairline, in danger ink. */}
         <button onClick={onRevoke} title="Revoke device" className="ml-1 border-l p-border pl-3 p-text-3 hover:p-danger"><TrashIcon size={13} /></button>
       </div>
-      {/* The switch, then its consequence. One line of copy per mode; the badge
-          is a machine fact the switch cannot change, so it sits beside the switch
-          rather than inside the sentence. */}
       <div className="mt-3 flex flex-wrap items-center gap-2">
         <label className="inline-flex items-center gap-2 p-text">
           <button

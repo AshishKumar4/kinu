@@ -21,10 +21,6 @@ interface WorkspaceRosterValue {
   readonly entries: readonly WorkspaceEntry[];
   readonly total: number;
   readonly error: string | null;
-  /** Whether a roster read is in flight: true from `refresh` until the read
-   *  has either published or been retired. The one signal a reader has that
-   *  a held reply has been consumed, so a fixture can prove a retired list
-   *  published nothing without watching a clock. */
   readonly pending: boolean;
   readonly refresh: () => void;
   readonly upsert: (entry: WorkspaceEntry) => void;
@@ -45,23 +41,9 @@ export function WorkspaceRosterProvider({ children }: { readonly children: React
   const [error, setError] = useState<string | null>(null);
   const [pending, startTransition] = useTransition();
   const knownNames = useRef(new Set<string>());
-  /**
-   * Which roster read may publish.
-   *
-   * Bumped by every read AND by every local edit, because both make an older
-   * reply wrong. Four things trigger a refresh — mount, a 30s interval, window
-   * focus, a visibility change — so two are routinely in flight at once and the
-   * slower one would otherwise land last and win. It would also undo the
-   * optimistic edits: a workspace created or deleted while a list is in flight
-   * reappears, or vanishes, when that list arrives.
-   */
+  /** Bumped by every read and every local edit, so an older reply never publishes over either. */
   const generation = useRef(0);
 
-  /**
-   * A read returns its generation with either data or failure. The load checks
-   * that generation after the lexical catch, so stale success and stale failure
-   * both publish nothing while the current failure reaches the UI.
-   */
   type RosterRead =
     | { readonly kind: "roster"; readonly roster: { readonly entries: WorkspaceEntry[]; readonly total: number } }
     | { readonly kind: "failure"; readonly cause: unknown };
@@ -101,10 +83,7 @@ export function WorkspaceRosterProvider({ children }: { readonly children: React
     startTransition(async () => { await loadRoster(); });
   }, [loadRoster, startTransition]);
 
-  // Every local edit retires whatever read is in flight. A list fetched before
-  // the edit does not know about it, so publishing it would undo the edit —
-  // which is how a just-deleted workspace came back and a just-created one
-  // disappeared. The next refresh brings the server's own account.
+  // A local edit retires any in-flight read; publishing it would undo the edit.
   const retireReads = useCallback((): void => { generation.current += 1; }, []);
 
   const upsert = useCallback((entry: WorkspaceEntry): void => {

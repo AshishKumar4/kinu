@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 
-/** Whether `query` matches, following the media query live. Starts true with no window so a server render leans wide. */
+/** Starts true with no window so a server render leans wide. */
 export function useMediaQuery(query: string): boolean {
   const [matches, setMatches] = useState(
     () => globalThis.window === undefined || globalThis.window.matchMedia(query).matches,

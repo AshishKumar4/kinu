@@ -1,9 +1,3 @@
-/**
- * Per-agent settings page. Credentials + defaults live in /user/settings;
- * this page covers concerns scoped to ONE agent: identity, model choice,
- * MCTS knobs, shell-approval mode, GEPA optimisation, pinned skills.
- * (Scaffold promote/rollback + the per-trial verdict live on the Self surface.)
- */
 import { startTransition, useState, useEffect, useCallback, useRef } from "react";
 import { useParams, Link } from "react-router-dom";
 import { Loader } from "@cloudflare/kumo";
@@ -52,7 +46,6 @@ const SkillNamesSchema = v.object({ names: v.array(v.string()) });
 
 type ApprovalMode = "strict" | "allow_all" | "deny_all";
 
-/** What each mode does, in the words the buttons say. */
 const APPROVAL_LABEL: Record<ApprovalMode, string> = {
   strict: "Strict (review)",
   allow_all: "Allow all",
@@ -66,29 +59,17 @@ interface MctsConfig {
   branchBudget: number;
 }
 
-/** The advisor's two knobs, as the slice of the evolution config they ride on. */
 type AdvisorConfig = Pick<EvolutionConfigView, "advisorEnabled" | "advisorMinSeverity">;
 
 
-/**
- * One settings field: an AsyncResource read from the server with the user's
- * in-progress edit layered on top, written back only when that edit exists.
- *
- * Writing every field unconditionally, gated on the socket being open rather
- * than on the data having arrived, is how a save before hydration — or after a
- * read whose `.catch` substituted a default — wipes SOUL.md and resets tuned
- * MCTS values to whatever placeholder the form happens to hold. A field that
- * never loaded has nothing to save, and says so instead of guessing.
- */
+/** A field that never loaded has nothing to save: an unconditional write before hydration wipes stored settings. */
 interface SettingField<T> {
   resource: AsyncResource<T>;
-  /** What the form shows: the pending edit if there is one, else what loaded. */
   value: T | null;
   dirty: boolean;
   edit: (value: T) => void;
   hydrate: (value: T) => void;
   fail: (thrown: { cause: unknown }) => void;
-  /** Commit a written value: it is now both the stored value and clean. */
   markSaved: (value: T) => void;
 }
 
@@ -98,8 +79,7 @@ function useSettingField<T>(): SettingField<T> {
   const [edited, setEdited] = useState<{ value: T } | null>(null);
 
   const edit = useCallback((next: T) => setEdited({ value: next }), []);
-  // A later refresh updates the stored value without disturbing the edit in
-  // progress — the form keeps showing what the user typed.
+  // A later refresh updates the stored value without disturbing an edit in progress.
   const hydrate = useCallback((next: T) => setResource(loadSucceeded(next)), []);
   const fail = useCallback((thrown: { cause: unknown }) => setResource((prev) => loadFailed(prev, thrown)), []);
 
@@ -116,10 +96,6 @@ function useSettingField<T>(): SettingField<T> {
   };
 }
 
-/**
- * The tri-state around one editable field, so no card renders a placeholder as
- * if it were the stored setting.
- */
 function FieldState<T>({ field, what, onRetry, children }: {
   field: SettingField<T>;
   what: string;
@@ -135,7 +111,6 @@ function FieldState<T>({ field, what, onRetry, children }: {
   return <p className="text-xs p-text-3">Loading {what}…</p>;
 }
 
-/** What Save says: the write in flight, the write that landed, or the offer. */
 function saveLabel(saving: boolean, saved: boolean): string {
   if (saving) return "Saving…";
 
@@ -147,9 +122,7 @@ function saveLabel(saving: boolean, saved: boolean): string {
 export default function SettingsPage() {
   const { agentId } = useParams();
   const state = useKinu(agentId);
-  // Stable pieces only — `state` itself is a fresh object every render, so
-  // depending on it from load/save creates a self-sustaining refetch loop
-  // that clobbers in-progress edits.
+  // Stable pieces only: `state` is a fresh object every render, and depending on it loops refetches that clobber edits.
   const { rpc, connectionStatus, agentStatus, error: snapshotError, retryLoad } = state;
 
   const displayName = useSettingField<string>();
@@ -162,7 +135,7 @@ export default function SettingsPage() {
   const [saved, setSaved] = useState(false);
   const [err, setErr] = useState<string | null>(null);
 
-  // Identity rides the workspace snapshot, so it hydrates — or fails — with it.
+  // Identity rides the workspace snapshot, so it hydrates or fails with it.
   const { hydrate: hydrateDisplayName, fail: failDisplayName } = displayName;
   const { hydrate: hydrateSoul, fail: failSoul } = soul;
   useEffect(() => {
@@ -179,13 +152,7 @@ export default function SettingsPage() {
   const { hydrate: hydrateMcts, fail: failMcts } = mcts;
   const { hydrate: hydrateAdvisor, fail: failAdvisor } = advisor;
 
-  // These effect and retry callers are synchronous. React owns the async
-  // transition, while this reader records every failed field in place rather
-  // than inventing a value Save could write over the stored setting.
-  //
-  // Named for the fields it reads rather than `load`: four card components in
-  // this file declare a `load` of their own, and they are async loaders that
-  // propagate a rejection, so sharing the name makes both calls unreadable.
+  // A failed field is recorded in place rather than given a value Save could write over the stored setting.
   const loadRpcFields = useCallback((): void => {
     startTransition(async () => {
       try {
@@ -216,7 +183,6 @@ export default function SettingsPage() {
     hydrateAdvisor, failAdvisor,
   ]);
 
-  // Fetch once per agent connection — not on every render.
   const loaded = useRef(false);
   useEffect(() => {
     if (connectionStatus !== "connected" || loaded.current) return;
@@ -228,8 +194,7 @@ export default function SettingsPage() {
     || advisor.dirty;
 
   const save = useCallback(async () => {
-    // Only edited fields are written. Everything else is either still loading
-    // or failed to load, and the form has no authority over it.
+    // Only edited fields are written; the form has no authority over fields still loading or failed.
     const writes: Array<Promise<JsonValue | undefined | void>> = [];
     const commits: Array<() => void> = [];
 
@@ -289,7 +254,6 @@ export default function SettingsPage() {
               <ArrowLeftIcon size={12} /> Back to chat
             </Link>
             <p className="p-eyebrow">Workspace</p>
-            {/* Page title in the display face at 26px: above the workbench scale by design. */}
             <h1 className="p-display mt-1 text-[26px] leading-8">Workspace settings</h1>
             <p className="mt-1.5 flex flex-wrap items-center gap-x-1.5 gap-y-1 p-row-text p-text-3">
               <span className="font-mono">{agentId}</span>
@@ -319,7 +283,6 @@ export default function SettingsPage() {
         {err && <div className="p-notice-danger px-4 py-3 text-xs">{err}</div>}
 
         <div className="space-y-5">
-        {/* Identity */}
         <Card title="Identity" icon={BrainIcon}>
           <Field label="Display name">
             <FieldState field={displayName} what="the display name" onRetry={retryLoad}>
@@ -339,7 +302,6 @@ export default function SettingsPage() {
         </Card>
 
 
-        {/* Advisor */}
         <Card title="Advisor" icon={EyeIcon}>
           <FieldState field={advisor} what="the advisor settings" onRetry={loadRpcFields}>
             {(value) => (
@@ -380,7 +342,6 @@ export default function SettingsPage() {
         </Card>
 
 
-        {/* Approval */}
         <Card title="Shell-command approval" icon={ShieldIcon}>
           <FieldState field={approval} what="the approval mode" onRetry={loadRpcFields}>
             {(value) => (
@@ -399,32 +360,23 @@ export default function SettingsPage() {
         <StandingApprovalsCard rpc={rpc} />
         <InstructionApprovalsCard rpc={rpc} />
 
-        {/* MCTS knobs */}
         <Card title="MCTS settings" icon={TreeStructureIcon}>
           <FieldState field={mcts} what="the MCTS settings" onRetry={loadRpcFields}>
             {(value) => (
               <div className="grid grid-cols-2 gap-3">
                 <NumField label="Exploration constant" value={value.explorationConstant} step={0.1} onChange={(next) => mcts.edit({ ...value, explorationConstant: next })} />
                 <NumField label="Max iterations" value={value.maxIterations} step={1} onChange={(next) => mcts.edit({ ...value, maxIterations: next })} />
-                {/* No depth field. It sat here beside "Max iterations" offering a
-                    second spelling of one limit, which is the reading the owner
-                    gave it; the engine's own cap owns depth now. */}
                 <NumField label="Branch budget" value={value.branchBudget} step={1} onChange={(next) => mcts.edit({ ...value, branchBudget: next })} />
               </div>
             )}
           </FieldState>
         </Card>
 
-        {/* Scaffold shadow rollout — promote/rollback + per-trial verdict now
-            live on the agent's Self surface (single source of truth). */}
 
-        {/* Always-active skills */}
         <AlwaysActiveSkillsCard rpc={rpc} />
 
-        {/* Backup */}
         <WorkspaceBackupCard rpc={rpc} workspace={agentId ?? ""} />
 
-        {/* GEPA offline scaffold optimisation */}
         <GepaOptimizationCard rpc={rpc} />
         </div>
       </div>
@@ -432,21 +384,8 @@ export default function SettingsPage() {
   );
 }
 
-// ── Standing shell approvals ─────────────────────────────────────
 
-/**
- * The grants "Always" minted, and the only way to take one back.
- *
- * `getShellApprovalGrants` / `revokeShellApprovalGrants` have been live
- * `@callable`s with no caller: the queue could hand out a standing permission
- * that nothing in the product could show you or withdraw. It sits under the
- * approval mode because it is the same decision at a finer grain — the mode
- * says whether to ask, and these are the specific questions already answered.
- *
- * A grant is scoped to one rule on one executor and nothing wider. It stops
- * the asking; it never widens what a command can reach, and it cannot soften
- * a rule the gate refuses outright.
- */
+/** A grant is scoped to one rule on one executor: it stops the asking, never widens reach, and cannot soften a refused rule. */
 export function StandingApprovalsCard({ rpc }: { rpc: Rpc }) {
   const [busy, setBusy] = useState<string | null>(null);
   const [err, setErr] = useState<string | null>(null);
@@ -473,8 +412,6 @@ export function StandingApprovalsCard({ rpc }: { rpc: Rpc }) {
     }
   };
 
-  // Nothing granted is the common case and says all it has to say in the
-  // card above; a permanently empty card is furniture.
   if (resource.status !== "error" && grants !== null && grants.length === 0) return null;
 
   return (
@@ -510,9 +447,7 @@ export function StandingApprovalsCard({ rpc }: { rpc: Rpc }) {
   );
 }
 
-// ── Workspace instruction files ──────────────────────────────────
 
-/** What a row says has been decided about it. */
 const DECISION_WORD: Record<InstructionSourceRow["decision"], string> = {
   grandfathered: "carried over",
   approved: "approved",
@@ -520,21 +455,7 @@ const DECISION_WORD: Record<InstructionSourceRow["decision"], string> = {
   none: "not decided",
 };
 
-/**
- * Which instruction files in this workspace may speak as system instructions
- * (KINU-N028).
- *
- * AGENTS.md and the files under /workspace/skills are read on every turn, and
- * the agent can write all of them with its own file tool and shell. So an
- * approval binds the exact BYTES: the digest below is what was approved, and any
- * later edit stops matching it and drops the file back to reference material
- * without anyone having to notice.
- *
- * "Carried over" rows are the files that were already in the workspace when
- * trust arrived. They were kept at full force so nobody's project rules went
- * quiet on upgrade, but they were never read by you — which is why they say so,
- * and why revoking one is a click.
- */
+/** Approval binds the exact bytes: any later edit stops matching the digest and drops the file back to reference material. */
 function InstructionApprovalsCard({ rpc }: { rpc: Rpc }) {
   const [busy, setBusy] = useState<string | null>(null);
   const [err, setErr] = useState<string | null>(null);
@@ -551,8 +472,7 @@ function InstructionApprovalsCard({ rpc }: { rpc: Rpc }) {
   const { resource, reload } = useAsyncResource(load);
   const page = lastValue(resource);
 
-  // Opening a row reads THAT file and nothing else; the listing itself carries
-  // no bytes, so a workspace full of agent-written skills costs one page.
+  // Opening a row reads that file only; the listing carries no bytes.
   const read = async (row: InstructionSourceRow) => {
     if (open?.path === row.path) {
       setOpen(null);
@@ -578,8 +498,7 @@ function InstructionApprovalsCard({ rpc }: { rpc: Rpc }) {
 
     try {
       if (action === "approve") {
-        // Approval binds the digest the owner was just shown. If the file has
-        // moved on, nothing is granted and the row stays reference material.
+        // Approval binds the digest the owner was just shown; if the file moved on, nothing is granted.
         const opened = open?.path === row.path
           ? open
           : await rpc<InstructionSourceView | null>("readInstructionApproval", [row.path]);
@@ -690,13 +609,8 @@ function InstructionApprovalsCard({ rpc }: { rpc: Rpc }) {
   );
 }
 
-// ── Workspace backup ─────────────────────────────────────────────
 
-/** Download this workspace's archive — the same format `kinu export`
- *  writes and `kinu import` restores. The export RPC answers one bounded
- *  page at a time, so the browser walks the cursor and assembles the file
- *  locally; a workspace with a long history takes several pages, and the
- *  record count is shown while it does. */
+/** The export RPC answers one bounded page at a time, so the browser walks the cursor and assembles the archive. */
 function WorkspaceBackupCard({
   rpc, workspace,
 }: {
@@ -764,9 +678,7 @@ function WorkspaceBackupCard({
   );
 }
 
-// ── GEPA offline optimisation ────────────────────────────────────
 
-/** Where an optimisation run got to, in one dot. */
 const GEPA_DOT = {
   completed: 'p-dot-success', running: 'p-dot-warning', aborted: 'p-dot-neutral',
 } satisfies Record<v.InferOutput<typeof GepaRunSchema>['status'], string>;
@@ -779,8 +691,7 @@ function GepaOptimizationCard({
   const [running, setRunning] = useState(false);
   const [msg, setMsg] = useState<string | null>(null);
 
-  // "No optimisation runs yet" is a claim about the agent's own tuning
-  // history, so it may only be made about a listing that actually came back.
+  // "No optimisation runs yet" may only be claimed about a listing that actually came back.
   const load = useCallback(
     async () => v.parse(v.array(GepaRunSchema), await rpc('getGepaRuns', [10])),
     [rpc],
@@ -794,8 +705,7 @@ function GepaOptimizationCard({
     setMsg('Testing candidate scaffolds against recent tasks. This can take a few minutes.');
 
     try {
-      // No evalSize override — the agent's configured budget is the one
-      // tuned against cost, and a smaller one cannot resolve a winner.
+      // No evalSize override: a budget smaller than the configured one cannot resolve a winner.
       const r = v.parse(GepaOptimizationResultSchema,
         await rpc('runScaffoldGepaOptimization', [{ maxIterations: 4 }]));
 
@@ -856,9 +766,7 @@ function GepaOptimizationCard({
   );
 }
 
-// ── Scaffold pending detail + promote/rollback controls ──────────
 
-// ── Always-active skills pinning ─────────────────────────────────
 
 function AlwaysActiveSkillsCard({
   rpc,
@@ -870,8 +778,7 @@ function AlwaysActiveSkillsCard({
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
 
-  // The mount effect invokes a synchronous reader; React owns its asynchronous
-  // transition so a malformed response reaches this card's visible error.
+  // React owns the async transition so a malformed response reaches this card's visible error.
   const refresh = useCallback((): void => {
     startTransition(async () => {
       try {

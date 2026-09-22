@@ -1,16 +1,10 @@
-/**
- * A kept conversation's rows, oldest first, as a read-only pane draws them.
- *
- * An entry the server could not read for this pane (`ChatHistoryEntry.unavailable`:
- * its content spilled to a dismissed agent's private files) keeps its place and
- * is named for what it is: never an empty bubble, never skipped.
- */
+/** An unavailable entry (`ChatHistoryEntry.unavailable`) keeps its place with a note:
+ *  never an empty bubble, never skipped. */
 import type { TranscriptEntry } from "@kinu.run/core";
 import { MessageView } from "@/components/MessageView";
 
 export function KeptTranscript({ entries, unavailable }: {
   entries: readonly TranscriptEntry[];
-  /** Ids of the entries whose page marked them unavailable. */
   unavailable: ReadonlySet<string>;
 }) {
   return (

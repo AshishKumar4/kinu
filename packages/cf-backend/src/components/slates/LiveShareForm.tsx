@@ -1,11 +1,4 @@
-/**
- * The live half of the share dialog: what a viewer would reach through this
- * slate, drawn from the capability graph core computes, with one checkbox per
- * mutating member. Read members are granted by construction; a mutating one is
- * granted only when the owner ticks it after reading what it does, to whom,
- * under whose credentials. The grant the server cuts is exactly the read set
- * plus the ticked set — the dialog renders, it never decides.
- */
+/** The server grant is the read set plus the ticked set; the dialog renders, never decides. */
 import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
 import { Button, Loader } from "@cloudflare/kumo";
 import { GlobeIcon, UsersIcon } from "@phosphor-icons/react";
@@ -37,7 +30,6 @@ function approvalKey(approval: Approval): string {
   return JSON.stringify([approval.slate, approval.binding, approval.member]);
 }
 
-/** What the binding reaches, in the owner's words. */
 function capabilityLabel(capability: SlateCapability): string {
   switch (capability.kind) {
     case "executor": return `${capability.namespace} executor`;

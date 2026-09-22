@@ -130,13 +130,7 @@ const STATUS_TONE = {
   superseded: "p-badge-neutral",
 } satisfies Record<PlanReview["status"], string>;
 
-/**
- * The sentence under the plan, which is the only place the reader is told
- * which of five review states they are looking at. One chain, because the
- * states are ordered: read-only history outranks an open revision, an open
- * revision outranks a decision the agent has not picked up, and only then does
- * the plan's own status choose the wording.
- */
+/** States are ordered: read-only history, open revision, unpicked decision, then plan status. */
 function footerNote(
   { readOnly, editable, handoffPending, approved }: {
     readOnly: boolean; editable: boolean; handoffPending: boolean; approved: boolean;
@@ -216,9 +210,7 @@ export default function PlanReviewView({ plan, rpc, readOnly = false }: PlanRevi
   const blocks = useMemo(() => planReviewBlocks(plan?.content ?? ""), [plan?.content]);
   const frontmatter = useMemo(() => extractFrontmatter(plan?.content ?? "").frontmatter, [plan?.content]);
 
-  /* A title is the first block or it is not a title. A later h1 stays where
-   * the agent wrote it. The header uses Viewer for the promoted block so its
-   * Markdown and annotation anchors follow the same path as the document. */
+  /* Only a first-block h1 is promoted to the title; later h1s stay in place. */
   const titleBlock = useMemo(() => {
     const lead = blocks[0];
 
@@ -266,10 +258,7 @@ export default function PlanReviewView({ plan, rpc, readOnly = false }: PlanRevi
 
   const changeAnnotations = useCallback(async (next: Annotation[]) => {
     if (decisionInFlight.current) return;
-    // The save rejecting is an outcome this view reports, and the plan moving
-    // under an in-flight save is a separate, expected fact — the panel the
-    // failure belonged to is gone. Both are decided after the handler, so a
-    // superseded revision cannot read the same as a save that never failed.
+    // Decided after the handler so a superseded revision does not read as a failed save.
     let thrown: { readonly cause: unknown } | undefined;
 
     try {

@@ -1,32 +1,14 @@
-/**
- * Shared pieces of the admin control plane's views.
- *
- * They exist as one module because the control plane's views all answer the same
- * awkward question in the same way: a read here has FIVE outcomes, not two — a
- * value, "you are not an operator", "your sign-in went stale", "this deployment
- * has no control plane", and a genuine failure. A page that reduced those to
- * loading/loaded would show an empty table to somebody who was simply not
- * allowed to ask, which is the worst possible answer.
- */
+/** A control-plane read has five outcomes: value, not operator, stale sign-in, no control plane, failure. */
 import { useCallback, useEffect, useState, type ReactNode } from 'react';
 import { diagnostics, renderThrownChain, toKinuError } from '@kinu.run/core/obs';
 import { Loader } from '@cloudflare/kumo';
 import { ArrowClockwiseIcon, LockKeyIcon, WarningIcon } from '@phosphor-icons/react';
 import type { ControlAnswer } from '../../lib/control-api';
 
-/** A read's state, before it becomes a rendered panel. */
 export type Load<Value> =
   | { phase: 'loading' }
   | { phase: 'settled'; answer: ControlAnswer<Value> };
 
-/**
- * Run a control-plane read, and re-run it when `deps` change.
- *
- * `reload` is returned rather than exposed as a nonce because every view here
- * has a refresh affordance and an action that should refresh after it lands.
- */
-/** A live read and the handle that re-runs it. Named because every view here
- *  destructures both, and an anonymous pair would be restated seven times. */
 export interface ControlRead<Value> {
   load: Load<Value>;
   reload: () => void;
@@ -43,9 +25,7 @@ export function useControlRead<Value>(
     let live = true;
     setLoad({ phase: 'loading' });
 
-    // `control()` names HTTP-level failures in its answer, so a rejection is
-    // the transport itself refusing. Settled as `failed` rather than left as
-    // an unhandled rejection with the panel spinning on `loading` forever.
+    // `control()` names HTTP failures in its answer, so a rejection is the transport; settle it as `failed`.
     const readFailed = (...rejection: [unknown]): void => {
       const [thrown] = rejection;
 
@@ -67,21 +47,13 @@ export function useControlRead<Value>(
     );
 
     return () => { live = false; };
-    // `read` is a fresh closure every render, so it is deliberately not a
-    // dependency: the caller's `deps` state what the read actually depends on,
-    // and including `read` would re-fire on every render.
+    // `read` is a fresh closure every render, so `deps` stand in for it.
   }, [...deps, nonce]);
 
   return { load, reload: useCallback(() => setNonce((n) => n + 1), []) };
 }
 
-/**
- * Render a read.
- *
- * Each non-ok arm says something an operator can act on. `forbidden` is the one
- * that matters most: the server answers 404 to a non-operator so a probe learns
- * nothing, and this is where that becomes a sentence instead of a blank page.
- */
+/** The server answers 404 to a non-operator so a probe learns nothing; `forbidden` renders that as a sentence. */
 export function Panel<Value>(
   { load, children }: { load: Load<Value>; children: (value: Value) => ReactNode },
 ): ReactNode {
@@ -134,8 +106,6 @@ export function Notice(
   );
 }
 
-/** A labelled number. The control plane is mostly counts, and a count with no
- *  label beside it is a number nobody can act on. */
 export function Stat({ label, value, hint }: { label: string; value: string; hint?: string }): ReactNode {
   return (
     <div className="p-card p-4">
@@ -173,15 +143,7 @@ export function SectionHeader(
   );
 }
 
-/**
- * The cursor walk.
- *
- * `status: 'end'` is the store's direct evidence that a query ran off the end of
- * the data — it over-fetches one row and reports the extra's absence — so this
- * shows "no more" only when that is a fact rather than an inference from a page
- * that happened to be full. Which is exactly why the button is driven off
- * `status` and not off `items.length`.
- */
+/** Driven off `status: 'end'` (the store over-fetches one row), not `items.length`. */
 export function PageWalker(
   { status, onNext, onFirst, page }: {
     status: 'more' | 'end'; onNext: () => void; onFirst: () => void; page: number;
@@ -202,15 +164,13 @@ export function PageWalker(
   );
 }
 
-/** Epoch millis as something a person reads. Absent renders as an em dash rather
- *  than as the epoch, which is what `new Date(0)` would show. */
+/** Absent renders as an em dash, not the epoch. */
 export function when(at: number | null | undefined): string {
   if (at === null || at === undefined || at <= 0) return '—';
 
   return new Date(at).toLocaleString();
 }
 
-/** A byte count at the precision an operator needs, which is one decimal. */
 export function bytes(count: number | null): string {
   if (count === null) return '—';
 

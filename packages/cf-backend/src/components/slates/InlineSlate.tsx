@@ -23,8 +23,7 @@ const SlatePreviewSchema = v.strictObject({
 
 type SlatePreview = v.InferOutput<typeof SlatePreviewSchema>;
 
-/** The theme tokens the host page resolves, mirrored into the slate. Read
- *  inside effects only: `document` does not exist under the static renderer. */
+/** Read inside effects only: `document` does not exist under the static renderer. */
 function readThemeTokens() {
   const styles = getComputedStyle(document.documentElement);
   const variables: Record<string, string> = {};
@@ -41,16 +40,10 @@ function readThemeTokens() {
 const browserOrigin = (): string =>
   'window' in globalThis && window.location !== undefined ? window.location.origin : '';
 
-/**
- * One slate preview, both surfaces. `display="pane"` is the work surface's
- * full-height frame with the URL chrome; `display="inline"` is the chat card —
- * a slim header and a height the slate itself reports over postMessage.
- */
 export function InlineSlate({ id, rpc, display, reloadKey = 0, onReady }: {
   id: string;
   rpc: Rpc;
   display: 'inline' | 'pane';
-  /** Bumped when the slate changes, so its preview URL is re-read. */
   reloadKey?: number;
   onReady?: () => void;
 }) {
@@ -62,9 +55,7 @@ export function InlineSlate({ id, rpc, display, reloadKey = 0, onReady }: {
   const [height, setHeight] = useState<number | null>(null);
   const frame = useRef<HTMLIFrameElement | null>(null);
 
-  // What the host page knows, rebuilt when anything it holds changes. The
-  // iframe src snapshots this object once through `contextRef` (below); from
-  // then on the same values go to the frame as postMessages.
+  // The iframe src snapshots this once via `contextRef`; later values go over postMessage.
   const context = useMemo(() => buildSlateHostContext({
     theme: theme.mode,
     variables: 'document' in globalThis ? readThemeTokens() : {},
@@ -114,19 +105,14 @@ export function InlineSlate({ id, rpc, display, reloadKey = 0, onReady }: {
   }, [id, rpc, display, reloadKey, onReady]);
 
   const previewOrigin = useMemo(() => (preview === null ? null : new URL(preview.url).origin), [preview]);
-  // The src is a point-in-time snapshot of the context — recomputing it on a
-  // theme flip would reload the slate, which is exactly what postMessage is
-  // for. It is derived the moment a preview exists and stays until the
-  // preview itself changes.
+  // The src is a snapshot; recomputing it on a theme flip would reload the slate.
 
   const src = useMemo(
     () => (preview === null ? null : slateFrameSrc(preview.url, contextRef.current)),
     [preview],
   );
 
-  // Push later context — a theme flip, a width change — into the live frame.
-  // The frame's own `load` marks its window navigated to the preview origin;
-  // posting before then targets about:blank and the browser throws.
+  // Post only after the frame's `load`: before it the target is about:blank and the browser throws.
   const [loaded, setLoaded] = useState(false);
 
   useEffect(() => setLoaded(false), [src]);
@@ -138,8 +124,6 @@ export function InlineSlate({ id, rpc, display, reloadKey = 0, onReady }: {
     window_.postMessage({ kinu: SLATE_HOST_CONTEXT_MESSAGE, context }, previewOrigin);
   }, [context, previewOrigin, loaded]);
 
-  // The slate reports its own content height; the inline card follows it
-  // inside the schema's band, the pane ignores it entirely.
   useEffect(() => {
     if (display !== 'inline' || previewOrigin === null) return;
 
@@ -201,8 +185,7 @@ export function InlineSlate({ id, rpc, display, reloadKey = 0, onReady }: {
     );
   }
 
-  // Every element here is a span (block/flex by class): the card renders inside
-  // the markdown paragraph, and a <div> under <p> trips React's dev validator.
+  // Spans only: the card renders inside a markdown <p>, where a <div> trips React's dev validator.
   return (
     <span ref={attach} data-slate-inline={id} className="block my-2 overflow-hidden rounded-lg border p-border p-fill">
       <span className="flex items-center gap-1.5 px-3 py-1.5 border-b p-border">

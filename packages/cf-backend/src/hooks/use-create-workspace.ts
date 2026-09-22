@@ -1,12 +1,4 @@
-/**
- * The single agent-creation flow, shared by the home-screen mission composer
- * and the home screen's mission card: models-connected gate, busy/error
- * state, createWorkspaceFromMission, and navigation into the new workspace.
- *
- * The mission does not ride along as a chat message. It is what the workspace
- * IS — its SOUL.md and its title — so the server owns it and the conversation
- * opens empty, waiting for the first thing to do.
- */
+/** Shared agent-creation flow. The mission becomes the workspace's SOUL.md and title server-side, not a chat message. */
 import { useCallback, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { createWorkspaceFromMission } from "@/lib/create-workspace";
@@ -15,7 +7,6 @@ import { useWorkspaceRoster } from "@/hooks/use-workspace-roster";
 import { lastValue, useAsyncResource } from "@/hooks/use-async-resource";
 import { renderThrownChain } from '@kinu.run/core/obs';
 
-/** The one creation surface's wording, kept beside the action it explains. */
 export const MISSION_LABEL = "Mission";
 
 export const MISSION_PLACEHOLDER = "What would you like help with?";
@@ -31,15 +22,10 @@ export function useCreateWorkspace() {
   const loadModels = useCallback(() => listAvailableModels(), []);
   const { resource } = useAsyncResource(loadModels);
   const menu = lastValue(resource);
-  /**
-   * `false` — and only `false` — blocks creation behind the Connect Workers AI
-   * wall, so it may be said only of a listing that came back empty. A failed
-   * read leaves this null: creation stays enabled, and if there really is no
-   * provider the create call says so itself.
-   */
+  /** Only `false` (an empty listing) blocks creation; a failed read leaves null and the create call reports it. */
   const hasModels = menu === null ? null : menu.models.length > 0;
 
-  /** Create + navigate. `onBeforeNavigate` lets a modal dismiss itself first. */
+  /** `onBeforeNavigate` lets a modal dismiss itself first. */
   const create = useCallback(async (mission: string, onBeforeNavigate?: () => void) => {
     const m = mission.trim();
 

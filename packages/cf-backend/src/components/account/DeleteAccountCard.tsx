@@ -1,13 +1,4 @@
-/**
- * The one action that cannot be undone, in a card of its own at the foot of
- * the Account section — below the profile it erases, never inside it.
- *
- * Two steps, both local: a quiet button opens the modal, and the modal asks
- * for the account's own email before its danger button wakes up. The rule the
- * field applies is `confirmsAccountDelete`, the same one the route applies, so
- * a phrase the field accepts is a phrase the server accepts. There is no rate
- * limit behind it by design; the typed phrase is the gate.
- */
+/** The confirm field applies `confirmsAccountDelete`, the same rule as the route. No rate limit by design; the typed phrase is the gate. */
 import { startTransition, useState } from "react";
 import { Button, Loader } from "@cloudflare/kumo";
 import { WarningIcon } from "@phosphor-icons/react";
@@ -32,9 +23,7 @@ export function DeleteAccountCard({ email }: { email: string }) {
 
     try {
       await deleteAccount(confirm);
-      // The object is gone and with it every session row; /logout clears the
-      // cookie and lands on the signed-out door. The next sign-in builds a
-      // fresh object and lands on onboarding.
+      // /logout clears the cookie; the next sign-in builds a fresh object.
       window.location.assign('/logout?return_to=/');
     } catch (cause) {
       setError(renderThrownChain({ cause }));

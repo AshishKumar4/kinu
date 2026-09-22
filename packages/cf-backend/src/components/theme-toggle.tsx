@@ -1,11 +1,7 @@
 import { MoonIcon, SunIcon } from "@phosphor-icons/react";
 import { useTheme, toggleMode } from "../hooks/use-theme";
 
-/**
- * The labelled mode row in the Sidebar user menu. Shares the theme store with
- * the compact footer toggle, so both affordances stay in sync — one source of
- * truth for the one axis the design has.
- */
+/** Shares the theme store with the compact footer toggle. */
 export function ModeToggle() {
   const { mode } = useTheme();
 

@@ -1,8 +1,4 @@
-/**
- * The home page's setup card: the three account-setup doors, opened in place
- * as a modal rather than navigated to — the page behind is the mission form,
- * and leaving it would lose a half-typed mission.
- */
+/** Opens setup as a modal so a half-typed mission on the page behind is not lost. */
 import { useState } from "react";
 import { AccountPanelModal, type AccountPanel } from "@/components/account/AccountPanelModal";
 

@@ -1,23 +1,4 @@
-/**
- * The living background behind the signed-in shell: a connectome, fixed
- * behind the rail and the page, that breathes while nothing runs, fires
- * toward one lobe while a workspace is working, and flashes a lobe once
- * when a decision arrives. Its whole input is the overview read model of the
- * recent workspaces, watched through `useRosterActivity`; nothing in it is a
- * decoration loop disconnected from the product.
- *
- * It mounts through the hero's living canvas: WebGPU where there is an
- * adapter, Canvas2D otherwise or after a GPU fault, one evolved still under
- * `prefers-reduced-motion` and on a phone, the tab hidden or the host off
- * screen means no work at all. It is lightly blurred, and a mask keeps it
- * faintest over the page's column and whole at the edges, on top of the
- * tissue's own falloff to nothing across the middle. The copy
- * itself never has tissue under it: every run of text on the ground
- * (`ground-text.ts`) is a keep-out box the picture fades under, re-read
- * when the page's contents change, scroll or resize.
- *
- * It shows on the home page only; every other route is a working surface.
- */
+/** Home-page background driven by the overview read model via `useRosterActivity`. */
 import { useEffect, useRef, type ReactElement } from 'react';
 import { useLocation } from 'react-router-dom';
 
@@ -33,31 +14,19 @@ import { keepOutOf, type FrameTimes } from './landing/search-tree/stage';
 /** Seeded apart from the landing hero's on purpose: the two artworks never rhyme. */
 const BACKGROUND_SEED = 1729;
 
-/** The still a visitor without motion sees: the tissue this far in, mid-breath, a signal or two in flight. */
 const STILL_SECONDS = 7;
 
 const STILL_STEP = 1 / 30;
 
-/** Physical pixels per CSS pixel as a share of the device's own: the rim
- *  draws at the device's own resolution, as the hero does, with a light
- *  blur on top; the copy never has tissue under it, so nothing sharp sits
- *  behind text either way. */
 const RESOLUTION = 1;
 
-/** Tailwind's `md`: the width at which the shell shows its rail
- *  (`md:block` on the aside in layout.tsx). Narrower is a phone, and a phone
- *  gets the still, the hero's rule. */
+/** Tailwind's `md` (the shell's rail breakpoint); narrower gets the still. */
 const RAIL_QUERY = '(min-width: 48rem)';
 
-/** The tissue is the home page's alone; every other surface is a working
- *  view and reads flat. */
 const SHOWN_ROUTES: Partial<Record<ReportedRoute, true>> = {
   [APP_ROUTES.home]: true,
 };
 
-/** What a gate can read off the live background: which renderer took the
- *  canvas, the last frames' cost, the picture's clock, what the tissue is
- *  doing, and how strongly the pointer holds it. */
 export interface AppBackgroundHandle {
   renderer(): 'webgpu' | 'canvas' | 'static' | 'pending';
   frameTimes(): FrameTimes;
@@ -66,11 +35,7 @@ export interface AppBackgroundHandle {
   pointer(): number;
 }
 
-/** The stepping controls a GALLERY page adds to the handle: freeze the rAF
- *  loop, step the picture by hand, let it run again — how a pixel readback
- *  is taken off a picture that is not moving under it. Never on the shipped
- *  handle: the gallery declares itself before the shell mounts
- *  (`__kinuGalleryStepping`), and only then are these attached. */
+/** Gallery-only stepping controls; attached only when `__kinuGalleryStepping` is set before the shell mounts. */
 export interface AppBackgroundStepping {
   advance(dt: number): void;
   freeze(): void;
@@ -82,21 +47,15 @@ declare global {
     __kinuAppBackground?: AppBackgroundHandle & Partial<AppBackgroundStepping>;
     /** Set by the gallery's own page script, never by the shipped app. */
     __kinuGalleryStepping?: true;
-    /** Set by a gallery TEST before the shell mounts: the picture starts
-     *  frozen at its seed, so a readback is a pure function of the test's
-     *  own `advance` steps and not of the wall clock before the freeze. */
+    /** Start frozen at the seed so a readback depends only on the test's `advance` steps. */
     __kinuGalleryFrozen?: true;
   }
 }
 
-/** `known` outlives the tissue: it is what the shell last saw, carried
- *  across the routes that hide the canvas, so a decision that arrived while
- *  the chat was open flashes on the way back and one seen before does not. */
+/** `known` outlives the tissue so a decision that arrived on another route still flashes on return. */
 function Tissue({ known }: { readonly known: { current: ConnectomeActivity } }): ReactElement {
   const hostRef = useRef<HTMLDivElement>(null);
   const wide = useMediaQuery(RAIL_QUERY);
-  // The pointer answers only where a cursor can hover and motion is wanted:
-  // touch screens and reduced-motion visitors keep the undisturbed picture.
   const hoverable = useMediaQuery('(hover: hover)');
   const calm = useMediaQuery('(prefers-reduced-motion: reduce)');
   const { working, decisions } = useRosterActivity();
@@ -117,7 +76,6 @@ function Tissue({ known }: { readonly known: { current: ConnectomeActivity } }):
     let stale = true;
     let scheduled = 0;
 
-    /** The copy's boxes in the host's view units, re-listing the elements only after the page changed. */
     const keepOut = (): KeepOut[] => {
       if (stale) {
         copy = groundTextElements(shell, host);
@@ -137,9 +95,7 @@ function Tissue({ known }: { readonly known: { current: ConnectomeActivity } }):
       return boxes;
     };
 
-    // The full mat for the GPU half; Canvas2D — the fallback and every
-    // still — strokes a sparser one from the same seed, and a GPU fault
-    // mid-run hands the sparser one over rather than stroking the full mat.
+    // A GPU fault mid-run hands Canvas2D the sparser mat, not the full one.
     const mat = (aspect: number, renderer: RendererKind): Connectome => {
       picture = new Connectome({ seed: BACKGROUND_SEED, aspect, segments: renderer === 'webgpu' ? MESH_SEGMENTS : CANVAS_SEGMENTS, activity: known.current });
 
@@ -163,9 +119,6 @@ function Tissue({ known }: { readonly known: { current: ConnectomeActivity } }):
       canvasClassName: 'absolute inset-0 size-full',
     });
 
-    // The copy moves when the page scrolls, and changes when it renders; one
-    // frame later the picture learns the new boxes. A scroll re-reads boxes
-    // only; a mutation re-lists the elements too.
     const align = (): void => {
       scheduled = 0;
       mounted.align();
@@ -184,17 +137,13 @@ function Tissue({ known }: { readonly known: { current: ConnectomeActivity } }):
     changes.observe(shell, { childList: true, subtree: true, characterData: true, attributes: true, attributeFilter: ['class', 'style', 'hidden'] });
     shell.addEventListener('scroll', onScroll, { capture: true, passive: true });
 
-    // The pointer feeds the simulation, never the renderer: viewport units,
-    // null when it leaves. The host itself is pointer-transparent, so the
-    // window hears what the picture cannot. Stills never listen.
+    // The host is pointer-transparent, so the window listens instead.
     const toView = (clientX: number, clientY: number): readonly [number, number] => {
       const box = host.getBoundingClientRect();
 
       return [(clientX - box.left) / box.width, (clientY - box.top) / box.height];
     };
 
-    /** One pointer handler for both inputs: a move feeds the hold, a press
-     *  radiates the wave. Touch does neither. */
     const onPointer = (press: boolean) => (event: PointerEvent): void => {
       if (event.pointerType === 'touch') return;
       const [x, y] = toView(event.clientX, event.clientY);

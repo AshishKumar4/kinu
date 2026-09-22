@@ -1,13 +1,6 @@
-/**
- * A set of open/expanded keys with one toggle — the tree-expansion state two
- * surfaces (Files' folder tree, Output's changed-file list) each held as an
- * inline `useState<Set> + toggle` pair until the duplication gate flagged the
- * second copy.
- */
 
 import { useCallback, useState } from "react";
 
-/** What a consumer gets: the live set, one toggle, and a reset to empty. */
 export interface ToggledSet {
 	readonly set: ReadonlySet<string>;
 	readonly toggle: (member: string) => void;

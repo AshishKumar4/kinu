@@ -1,7 +1,3 @@
-/**
- * Kinu agent hooks — useAgent() + useAgentChat() from Agents SDK.
- */
-
 import { useState, useCallback, useEffect, useRef, useMemo } from "react";
 import { useAgent } from "agents/react";
 import {
@@ -52,11 +48,8 @@ import { pruneSlateReloads } from "../components/surfaces/presence";
 
 export type { ExecutorInfo };
 
-/** One command's row in the executor terminal's scrollback.
- *
- *  `stdout`/`stderr` are CLIPPED by the server; `stdout_len`/`stderr_len` are the
- *  stored lengths. The pane needs both because it must say what it withheld —
- *  showing a prefix as if it were the output is the lie this pair prevents. */
+/** `stdout`/`stderr` are clipped by the server; `*_len` are the stored lengths, so the pane
+ *  can say what it withheld. */
 export interface ExecutorOutput {
   id: string; command: string;
   stdout: string; stdout_len: number;
@@ -76,35 +69,26 @@ const KinuActorAddressSchema = v.object({
   subordinate: v.optional(v.string()),
 });
 
-/** One Steer-as-Branch run as the chat chip renders it — driven entirely by
- *  the server's branch_status broadcasts (single source of truth). */
+/** Driven entirely by the server's branch_status broadcasts. */
 export interface BranchRun {
   branchId: string;
   task: string;
   status: "running" | "settled" | "error";
-  /** Settled: the persisted takes set + the turn it is claimed against. */
   takeSetId?: string;
   turnId?: string;
-  /** Errored: the honest reason the branch produced no comparison. */
   message?: string;
 }
 
-/** Where `sendChat` put the message: a turn this pane started, or the actor's
- *  running turn — whose `settled` answer says whether it was spliced there or,
- *  the turn having just ended, run as the next turn. That answer is the
- *  server's steer_status for the message, decided where it happens, so it can
- *  arrive long after the call; it rejects when the message did not land — the
- *  actor refused it, or a stop handed the words back. Null: nothing was sent. */
+/** `settled` is the server's steer_status for the message and can arrive long after the call;
+ *  it rejects when the message did not land. Null: nothing was sent. */
 export type SendAdmission =
   | { readonly landed: "turn" }
   | { readonly landed: "mid-turn"; readonly settled: Promise<SendLanding> }
   | null;
 
-/** A composer's wait for one message's landing. */
 type SendLandingResolvers = ReturnType<typeof Promise.withResolvers<SendLanding>>;
 
-/** The landing an admitted message is owed, once its admission held: a call
- *  the actor refused takes the waiter with it, and the refusal is the answer. */
+/** A call the actor refused takes the waiter with it; the refusal is the answer. */
 async function landingAfter(
   admission: Promise<void>,
   landings: Map<string, SendLandingResolvers>,
@@ -121,9 +105,7 @@ async function landingAfter(
   return landing;
 }
 
-/** Answer the composer awaiting this message, if one is: read by the model
- *  (`mid-turn`), run as a turn of its own (`turn`), or handed back. `queued`
- *  decides nothing. */
+/** `queued` decides nothing. */
 function settleSendLanding(
   landings: Map<string, SendLandingResolvers>,
   status: { readonly steerId: string; readonly status: "queued" | "landed" | "returned" | "turn" },
@@ -141,17 +123,8 @@ function settleSendLanding(
   }
 }
 
-/** One mid-turn steer as the chat renders it — driven entirely by the server's
- *  steer_status broadcasts, so every open tab agrees about whether the model
- *  has it yet.
- *
- *  `queued` and `landed` are deliberately separate: "we took your words" and
- *  "the model is reading them" are different facts, and collapsing them is how
- *  a composer ends up silently swallowing input. A `returned` steer is removed
- *  outright — an interrupt dropped it and it goes back to the composer.
- *
- *  The same shape the durable rows resolve to, so the thread places a live
- *  steer and the row it becomes through one function. See read-models/transcript.ts. */
+/** Driven by steer_status broadcasts. `queued` (taken) and `landed` (model reading it) stay
+ *  distinct; a `returned` steer is removed and goes back to the composer. */
 export type { InlineSteer as SteerRun } from "@kinu.run/core";
 
 export interface ForkLineage {
@@ -173,47 +146,27 @@ export interface AgentStatus {
   craftedToolCount: number;
   messageCount: number;
   model: string;
-  /** Why `model` is what it is — the tier source the turn profile resolved:
-   *  the workspace pin, an explicit tier, the role's tier, or the default
-   *  alias. Set on agent panes, where the picker is read-only. */
+  /** The tier source the turn profile resolved. Set on agent panes, where the picker is read-only. */
   modelSource?: TierSource;
-  /** The effort its turns run at — its own setting, else the workspace's,
-   *  else the tier's; null when the server has no resolution yet. */
+  /** Own setting, else the workspace's, else the tier's; null before the server resolves one. */
   reasoningEffort: ReasoningEffort | null;
   forkLineage: ForkLineage | null;
 }
 
-/** One-round-trip initial-load payload (server: getWorkspaceSnapshot).
- *
- *  Everything a workspace needs before the chat pane can paint, and nothing a
- *  surface that is not open needs. The exploration canvas and the run timeline
- *  stay off: they are 95% of the bytes on every workspace open, the
- *  Exploration surface reads its own canvas page, and nothing reads the
- *  timeline at all. See the server RPC's note for the measurements. */
-/** The one round trip a facet tab makes when it opens. Held to the server's
- *  return literal and to the gallery stub by `unit-snapshot-contract`, for the
- *  reason `WorkspaceSnapshot` is: a field this declares and the server or the
- *  stub omits reads `undefined`, and the composer dies on the first `.some`. */
+/** Held to the server's return literal and the gallery stub by `unit-snapshot-contract`: a field
+ *  either omits reads `undefined` and crashes the composer. */
 export interface SubordinateSnapshot {
   name: string;
-  /** The actor behind this name, as the directory resolved it. The pane's own
-   *  identity: {@link admitsActorFrame} compares a stamped frame against it,
-   *  and it is answered here because this read is the one round trip the tab
-   *  already makes and the resolver is the same one the stamp comes from. */
+  /** The pane's own identity, compared by {@link admitsActorFrame}. */
   actorId: string;
   displayName: string;
   role: RoleId;
   mission: string;
-  /** The actor's effective model and the tier source that chose it — the same
-   *  resolution the turn makes, not the actor's own (unset) pin. */
+  /** The resolution the turn makes, not the actor's own (unset) pin. */
   model: { model: string; source: TierSource };
-  /** The effort its turns run at: its own setting, else the workspace's, else the tier's. */
   reasoningEffort: ReasoningEffort;
   activePlan: unknown;
-  /** The facet's own acknowledged-and-not-landed steers, from its durable
-   *  rows. Read here for the same reason the root reads them off its
-   *  snapshot: no live broadcast repeats a queue for a tab that was gone
-   *  when the steer was taken. */
+  /** No live broadcast repeats the queue for a tab that was gone when the steer was taken. */
   pendingSteers: InlineSteer[];
 }
 
@@ -225,25 +178,15 @@ export interface WorkspaceSnapshot {
   executors: ExecutorInfo[];
   executorOutputs: Array<{ name: string; outputs: ExecutorOutput[] }>;
   lastActiveExecutor: string | null;
-  /** The plan waiting on the owner, if any. On the snapshot because it decides
-   *  the composer's mode and the opening surface: fetching it a beat later made
-   *  a plan-gated workspace paint in build mode and then jump. */
+  /** On the snapshot so a plan-gated workspace does not paint in build mode and then jump. */
   activePlan: unknown;
-  /** Whether the gated right-pane tabs have content. On the snapshot so the
-   *  strip is right from the first paint; re-read by the live cycle. */
+  /** On the snapshot so the strip is right from first paint. */
   tabPresence: TabPresence;
-  /** The steers the server has ACKNOWLEDGED and not yet landed, from its
-   *  durable `pending_steers` rows. On the snapshot because a tab that
-   *  reconnects learns queued work no live broadcast will repeat. */
+  /** Acknowledged, not yet landed. A reconnecting tab learns queued work no broadcast repeats. */
   pendingSteers: InlineSteer[];
-  /** Branch runs still running, from the durable head journal. Same reason:
-   *  a branch that started or settled while this tab was gone is invisible to
-   *  a state fed only by broadcasts. */
+  /** Same reason: a branch that started or settled while this tab was gone. */
   branchRuns: Array<{ branchId: string; task: string; status: "running" }>;
-  /** The actor's durable turn claim — admitted, settled, or stranded. The one
-   *  fact the composer's actions and the thread's live tail are both folded
-   *  from, so a turn the client has not seen a token for is still live and a
-   *  claim nobody is executing reads as stuck rather than as work. */
+  /** A turn with no tokens seen yet is still live; a claim nobody executes reads as stuck. */
   turnClaim: TurnClaimState;
 }
 
@@ -347,17 +290,8 @@ const SubordinateActivityEventSchema = v.object({
   timestamp: v.number(),
 });
 
-/**
- * The one frame the arrival plumbing consumes: a plan reference and nothing
- * else, because a workspace announces THAT a plan exists and the exact
- * authorized read is what says anything about it.
- *
- * Exported so a caller that PUSHES this frame builds it through the same
- * schema this hook parses it with — the gallery's transport fixture does, and
- * its `type` comes off `entries.type.literal` rather than a second copy of the
- * event name. A fixture with a stale name is otherwise a frame this hook
- * silently drops, which a browser gate sees as a timeout three steps later.
- */
+/** Exported so a pushing caller (the gallery fixture) builds the frame through this schema;
+ *  a stale event name would otherwise be silently dropped. */
 export const WorkspacePlanUpdatedFrameSchema = v.strictObject({
   type: v.literal("workspace_plan_updated"),
   reference: WorkspacePlanReferenceSchema,
@@ -365,20 +299,15 @@ export const WorkspacePlanUpdatedFrameSchema = v.strictObject({
 
 const SocketMessageSchema = v.variant("type", [
   v.object({ type: v.literal("workspace_renamed"), displayName: v.optional(v.string()) }),
-  // The server's statement of what this conversation IS, sent unconditionally
-  // on an idle connect (`Think._buildIdleConnectMessages`). Its ARRIVAL is what
-  // the chat pane waits on — the payload is the SDK's business, so nothing is
-  // parsed out of it here.
+  // Arrival is what the chat pane waits on; the payload is the SDK's business.
   v.looseObject({ type: v.literal("cf_agent_chat_messages") }),
   v.object({
     type: v.literal("cf_agent_use_chat_response"),
     error: v.optional(v.boolean()), done: v.optional(v.boolean()), body: v.optional(v.string()),
     id: v.optional(v.string()),
   }),
-  // The server announcing which request id it is about to resume. For a
-  // RETAINED terminal record that id is the failed turn's, and the error frame
-  // that follows carries the same one — which is how a replay is told from a
-  // live failure without guessing.
+  // For a retained terminal record the id is the failed turn's, matching the error frame that
+  // follows: that tells a replay from a live failure.
   v.object({ type: v.literal("cf_agent_stream_resuming"), id: v.string() }),
   MctsProgressMessageSchema,
   v.object({
@@ -392,10 +321,8 @@ const SocketMessageSchema = v.variant("type", [
     devices: v.array(v.object({ id: v.string(), label: v.string(), lastSeenAt: v.nullable(v.number()) })),
   }),
   v.object({ type: v.literal("device_available"), deviceId: v.string(), label: v.string() }),
-  // The turn is waiting on the provider — a 429/529's declared sleep, a
-  // backoff, or a sibling's cooldown — NOT thinking in silence. `waitMs` is
-  // what the transport is about to sleep; `attempt` is which refusal it was
-  // (0 when the wait precedes the first attempt: a pacer cooldown join).
+  // Waiting on the provider (429/529 sleep, backoff, sibling cooldown), not thinking. `attempt`
+  // is 0 when the wait precedes the first attempt.
   v.object({
     type: v.literal("provider_wait"),
     provider: v.string(),
@@ -415,9 +342,7 @@ const SocketMessageSchema = v.variant("type", [
     turnId: v.optional(v.string()), message: v.optional(v.string()),
   }),
   v.object({ type: v.literal("head_activity"), headId: v.string() }),
-  /** Transient intra-step output from a running head — the provider's own
-   *  deltas, in the two streams it separates. Best-effort paint: the durable
-   *  step is the truth, and `head_activity` above retires this. */
+  /** Best-effort paint of a head's provider deltas; the durable step is the truth. */
   v.object({
     type: v.literal("head_stream"), headId: v.string(),
     kind: v.picklist(["text", "reasoning"]), delta: v.string(),
@@ -425,16 +350,12 @@ const SocketMessageSchema = v.variant("type", [
   v.object({
     type: v.literal("steer_status"), steerId: v.string(), text: v.string(),
     status: v.picklist(["queued", "landed", "returned", "turn"]),
-    /** Present on `landed`: the step of the running turn the model read it in,
-     *  which is where the thread draws it. */
+    /** On `landed`: the step the model read it in. */
     atStep: v.optional(v.number()),
-    /** The hosted actor whose steer this is — see {@link admitsActorFrame}.
-     *  Declared so the parse KEEPS it: `v.object` drops what it does not name,
-     *  and a stripped stamp is a frame nothing can attribute. */
+    /** Declared so `v.object` keeps the stamp; see {@link admitsActorFrame}. */
     actorId: v.optional(v.string()),
   }),
-  /** Loose for the card payload, which {@link parseSignalCardEvent} owns, and
-   *  explicit about the one field this hook decides on: the actor stamp. */
+  /** Loose: {@link parseSignalCardEvent} owns the payload; this hook reads only the actor stamp. */
   v.looseObject({ type: v.literal("signal_card"), actorId: v.optional(v.string()) }),
   v.object({ type: v.literal("plan_updated"), plan: PlanReviewSchema }),
   WorkspacePlanUpdatedFrameSchema,
@@ -452,8 +373,7 @@ function parseSocketMessage(data: MessageEvent["data"]) {
 
   if (!text.success) return null;
 
-  // A frame that is not JSON is not one of ours. Any other failure here is a
-  // real fault and must not be read back as "no message".
+  // Non-JSON is not ours; any other failure is a real fault, not "no message".
   const decoded = v.safeParse(
     SocketMessageSchema,
     tolerate<unknown>(() => JSON.parse(text.output), "malformed-input"),
@@ -463,28 +383,10 @@ function parseSocketMessage(data: MessageEvent["data"]) {
 }
 
 /**
- * Whether a socket frame is this pane's to apply.
- *
- * One Durable Object serves the whole workspace, so `broadcast` reaches every
- * connected socket: a subordinate's chat and the workspace's chat are one
- * stream on the wire. What separates them is the stamp the hosting seam puts
- * on every hosted actor's broadcast (`orchestrator.ts`, the host seams'
- * `broadcast(actorId, event)`). The two frames a hosted actor's `BackendHost`
- * emits are its Inbox's own — the card lifecycle (`signal_card`) and the steer
- * lifecycle (`steer_status`) — and nothing else on this wire is per-actor.
- *
- * A frame with NO stamp is the workspace's own broadcast: the root's Inbox
- * reaches clients through the object's own `broadcast`, never the seam, so
- * every pane keeps applying it. `provider_wait` carries an `actorId` and is
- * still not per-actor — the object stamps its own actor on a notice it emits
- * whichever actor's turn is sleeping, and reading that as ownership would hide
- * a hosted turn's wait from the tab watching it.
- *
- * So the workspace pane admits no stamped frame at all (no stamp ever names
- * the root), and an agent pane admits the frames stamped with the actor it is
- * looking at. A pane whose actor is not resolved yet admits none: the failure
- * this closes is another actor's card in someone else's chat, so the closed
- * direction is the safe one.
+ * One Durable Object broadcasts to every socket, so hosted actors' frames (`signal_card`,
+ * `steer_status`) carry an actor stamp. Unstamped frames are the workspace's own. `provider_wait`'s
+ * `actorId` is not ownership. The workspace pane admits no stamped frame; an agent pane admits
+ * its own actor's; an unresolved pane admits none.
  */
 function admitsActorFrame(
   msg: v.InferOutput<typeof SocketMessageSchema>,
@@ -497,9 +399,6 @@ function admitsActorFrame(
   return pane.isSubordinate && pane.ownActorId === msg.actorId;
 }
 
-/** This pane's frame off the wire, or null. The decode and the pane's own
- *  admission are one question: a frame stamped for another actor's chat is no
- *  more this pane's message than an unreadable one is. */
 function paneFrame(
   data: MessageEvent["data"],
   pane: { readonly isSubordinate: boolean; readonly ownActorId: string | null },
@@ -512,20 +411,15 @@ function paneFrame(
 }
 
 
-/** Runtime admission for plan broadcasts/RPC results. The browser treats the
- * actor boundary as untrusted even though both ends share the TypeScript type. */
+/** The browser treats the actor boundary as untrusted despite the shared type. */
 function parsePlanReview({ value }: { value: unknown }): PlanReview | null {
   const parsed = v.safeParse(PlanReviewSchema, value);
 
   return parsed.success ? parsed.output : null;
 }
 
-/** Where a surfaced failure came from — each source owns (and clears) its own
- *  message so a recovery in one never hides a still-broken other.
- *
- *  Every entry is a READ of this actor, the one-round-trip snapshot included:
- *  they fail together when the transport does. Each source stores the bare
- *  reason and never a sentence, because the sentence has one author, below. */
+/** Each source owns and clears its own message, so one recovery never hides another failure.
+ *  Sources store the bare reason; the sentence is composed once, below. */
 export type LiveRefreshSource =
   | "snapshot"
   | "roster"
@@ -564,11 +458,7 @@ const LIVE_REFRESH_DESCRIPTORS: readonly LiveRefreshDescriptor[] = [
   { source: "plan", label: "active plan" },
 ];
 
-/** The live sources the workspace snapshot reads for itself (loadAllData).
- *  A snapshot that landed IS a fresh read of each of them, so its success
- *  clears their failures: leaving them set left the banner reporting stale
- *  data for surfaces the same round trip had just refreshed, and across a
- *  flapping socket no 5s poll ever completed to clear them. */
+/** A landed snapshot is a fresh read of each of these, so it clears their failures. */
 const SNAPSHOT_SEEDED_SOURCES: readonly LiveRefreshSource[] = [
   "memoryContent",
   "tools",
@@ -578,9 +468,7 @@ const SNAPSHOT_SEEDED_SOURCES: readonly LiveRefreshSource[] = [
   "slates",
 ];
 
-/** A failed read, plus the two failures that belong to an action the user
- *  asked for: those name what did not happen, which no refresh sentence can
- *  say for them, so they keep their own prose. */
+/** Action failures keep their own prose: they name what did not happen. */
 type ErrorSource = LiveRefreshSource | "model" | "memory" | "recover";
 
 export type WorkspaceErrors = Partial<Record<ErrorSource, string>>;
@@ -628,14 +516,7 @@ export function createLiveRefreshAdmission(): LiveRefreshAdmission {
   };
 }
 
-/**
- * Every failed read's label, and the distinct reasons behind them.
- *
- * A snapshot failure SUBSUMES the surfaces the snapshot re-reads when they
- * failed on its reason: that is one round trip dropping, and naming each of its
- * five surfaces beside the workspace is one outage listed six times. A seeded
- * surface that failed for a reason of its own keeps its label.
- */
+/** A snapshot failure subsumes seeded surfaces that failed on the same reason (one outage, one line). */
 function collectReadFailures(errors: LiveRefreshErrors) {
   const subsumed = errors.snapshot;
   const labels: string[] = [];
@@ -656,36 +537,18 @@ function collectReadFailures(errors: LiveRefreshErrors) {
   return { labels, reasons };
 }
 
-/**
- * The workspace notice, split the way the surface needs it.
- *
- * `severity` is which reads failed: the snapshot is the essential one, and a
- * failed essential read is `blocking` — nothing the workspace shows can be
- * trusted yet. A failed optional read (tools, memory, executors, presence,
- * slates, pending actions) is `partial`: the conversation is available and
- * the composer stays enabled, and only the resource that failed is named.
- * `retry` is the recovery the notice may offer — the label for `retryLoad`,
- * which re-reads the snapshot and every live resource — or null when the
- * failure is a user-initiated action the owner re-issues themselves.
- */
+/** `blocking`: the essential snapshot read failed. `partial`: an optional read failed; the composer
+ *  stays enabled. `retry` is null for user-initiated actions the owner re-issues. */
 export interface WorkspaceNotice {
   severity: "blocking" | "partial";
   title: string;
   scope: string;
-  /** The raw reasons, secret-masked, for the expandable technical region. */
   detail: string;
   retry: string | null;
 }
 
-/**
- * The secret-field policy, for a rendered string rather than a payload.
- *
- * `redactPayload` reads field names; an error's text has none, so the only
- * defensible matches are `name = value` / `name: value` pairs whose name is
- * secret-shaped by the same list, and the one scheme secret by shape alone
- * (`Bearer …`). One policy list, two shapes — a second heuristic here would
- * drift from core's the first time either is extended.
- */
+/** `redactPayload`'s secret-name list applied to `name = value` / `name: value` pairs and `Bearer`;
+ *  one policy list, so it cannot drift from core's. */
 function redactErrorText(text: string): string {
   return text
     .replace(/([A-Za-z][\w-]*)(\s*[=:]\s*)("([^"\\]|\\.)*"|'[^']*'|\S+)/g,
@@ -694,18 +557,8 @@ function redactErrorText(text: string): string {
     .replace(/\bBearer\s+\S+/gi, "Bearer <redacted>");
 }
 
-/**
- * The one notice the workspace shows about its failed reads.
- *
- * `loaded` is whether this workspace has ever produced a snapshot. Until it
- * has there is no last known data, so a failed essential read is a failed
- * OPEN and the title says that: "Showing last known data" over a workspace
- * that has never shown any is a claim about data the reader cannot see.
- *
- * Every read shares one title and each distinct reason appears once. One
- * dropped connection fails the snapshot and every poll in the same instant,
- * and the detail prints that single reason once, not once per surface.
- */
+/** Until the first snapshot there is no last known data, so a failed essential read is a failed open.
+ *  Each distinct reason appears once. */
 export function formatWorkspaceError(errors: WorkspaceErrors, loaded: boolean): WorkspaceNotice | null {
   const action = errors.model ?? errors.memory ?? errors.recover ?? null;
   const { labels, reasons } = collectReadFailures(errors);
@@ -723,9 +576,7 @@ export function formatWorkspaceError(errors: WorkspaceErrors, loaded: boolean): 
   const available = loaded ? "The conversation is available. Showing last known data." : "The conversation is available.";
   const scope = blocking ? blocked : available;
 
-  // The labels are a noun list; the reasons are whatever an RPC rejected with,
-  // so they are set down one after another rather than conjoined — "Network
-  // connection lost. and MEMORY.md is unreadable" is not a sentence.
+  // Reasons are arbitrary RPC text, so they are listed one after another, not conjoined.
   const list = formatNaturalList(labels);
 
   const sentenceCased = `${list.slice(0, 1).toUpperCase()}${list.slice(1)}`;
@@ -742,23 +593,12 @@ export function formatWorkspaceError(errors: WorkspaceErrors, loaded: boolean): 
   return { severity: blocking ? "blocking" : "partial", title, scope, detail, retry };
 }
 
-/** What one snapshot load settled as. `superseded` is neither outcome: a newer
- *  load, or a different actor, took the surface while this one was in flight,
- *  so it reports nothing and nothing may be scheduled for it. */
+/** `superseded`: a newer load or a different actor took the surface; it reports nothing and
+ *  nothing may be scheduled for it. */
 export type SnapshotLoad = "loaded" | "superseded" | { failed: string };
 
-/**
- * Read the workspace snapshot and settle every source it speaks for.
- *
- * The snapshot is a read like any poll, so it is admitted the same way: its own
- * key for the load, plus one per surface it re-seeds. A snapshot that landed IS
- * a fresh read of each of those surfaces, so its success clears their failures
- * — except any whose own refresh was admitted after this load started, because
- * that read is newer and owns the surface.
- *
- * The reason is returned rather than acted on: the retry cadence belongs to the
- * caller, and nothing else has to interpret a transport error.
- */
+/** A landed snapshot clears its seeded surfaces' failures, except any whose own refresh was
+ *  admitted after this load started. The reason is returned; retry cadence is the caller's. */
 export async function loadWorkspaceSnapshot(
   read: (
     isCurrent: () => boolean,
@@ -795,8 +635,6 @@ export async function loadWorkspaceSnapshot(
   }
 }
 
-/** One live read: the surface it speaks for, how to get it, what to do with
- *  what came back, and who says whether this reader still owns the surface. */
 export interface LiveResourceRead<Value> {
   readonly source: LiveRefreshSource;
   readonly read: () => Promise<Value>;
@@ -822,12 +660,10 @@ export async function refreshLiveResource<Value>(
   }
 }
 
-/** A registered machine that was not connected when a device call was refused. */
 export interface UnavailableDevice { id: string; label: string; lastSeenAt: number | null }
 
 export type ConsentDecision = "once" | "always" | "deny";
 
-/** One consent decision on its way to the object, and the row it retires. */
 export interface PendingConsentResolution {
   readonly consentId: string;
   readonly decision: ConsentDecision;
@@ -849,25 +685,15 @@ export function resolvePendingConsent(
   });
 }
 
-/** Initial-load retry backoff. Doubling from 1s, capped so a long outage keeps
- *  a slow heartbeat instead of hammering the DO. */
+/** Doubling from 1s, capped so a long outage keeps a slow heartbeat instead of hammering the DO. */
 const RETRY_BASE_MS = 1_000;
 
 const RETRY_MAX_MS = 30_000;
 
-/** Memory search fires from an onChange handler, so it settles on the typed
- *  query rather than issuing an RPC per keystroke. */
 const MEMORY_SEARCH_DEBOUNCE_MS = 200;
 
-/**
- * The cadence every surface-level read the server never pushes runs at.
- *
- * Exported because a surface that renders TWO of those reads side by side has
- * to poll both on the same clock or it will contradict itself: the needs-you
- * queue and the journal below it are the same ledger seen twice, and the
- * journal reading once at mount while the queue re-read every tick is exactly
- * how "1 self-change you have not seen" ended up over "nothing has settled".
- */
+/** Exported so surfaces showing two of these reads side by side poll both on the same clock
+ *  and cannot contradict each other. */
 export const LIVE_DATA_REFRESH_MS = 5_000;
 
 interface CallableAgent {
@@ -878,7 +704,6 @@ function bindRpc(agent: CallableAgent): Rpc {
   return <T = unknown>(method: string, args: unknown[] = []) => agent.call<T>(method, args);
 }
 
-/** A lightweight agent connection for surfaces that only need callable RPCs. */
 export function useWorkspaceRpc(agentId: string) {
   const [connectionStatus, setConnectionStatus] = useState<ConnectionStatus>("connecting");
 
@@ -896,33 +721,15 @@ export function useWorkspaceRpc(agentId: string) {
   return { rpc, connectionStatus };
 }
 
-/**
- * One arrived plan reference, and the claim that spends it.
- *
- * A `workspace_plan_updated` frame carries a reference and nothing else, so
- * the pane that resolves it is the only place that learns whether the exact
- * read authorized it. That is why the reference stays exposed for as long as
- * this connection holds it, long after the hint was acted on: the pane
- * re-reads it every cycle, which is what keeps the arrived plan reachable in
- * the history it merges.
- *
- * `claim` answers the other question — has this connection already ACTED on
- * this reference? — and says yes exactly once. That memory belongs to the
- * connection, not to a pane: panes are remounted by every conversation
- * switch, and an honoured hint that replays on the fresh mount takes the
- * reader off the conversation they just opened. Both halves ride in one value
- * so they cannot be half-wired through the components that thread them.
- */
+/** The reference stays exposed while the connection holds it so the pane re-reads it every cycle.
+ *  `claim` says yes exactly once per connection, not per pane: panes remount on conversation
+ *  switches, and a replayed hint would pull the reader off the conversation they just opened. */
 export interface WorkspacePlanArrival {
   readonly reference: WorkspacePlanReference;
   claim(reference: WorkspacePlanReference): boolean;
 }
 
 
-/**
- * Full agent hook for WorkspacePage — connects to a specific DO instance.
- * Fetches all surface data via @callable RPCs on connect.
- */
 export function useKinu(target?: string | KinuActorAddress) {
   const targetString = v.safeParse(v.string(), target);
   const targetAddress = v.safeParse(KinuActorAddressSchema, target);
@@ -952,9 +759,7 @@ export function useKinu(target?: string | KinuActorAddress) {
   const [memory, setMemory] = useState<MemoryEntry[]>([]);
   const [mctsTrees, setMctsTrees] = useState<ReadonlyMap<string, ForkNode>>(new Map());
   const [memoryContent, setMemoryContent] = useState<string>("");
-  // Failures keyed by source, so one source recovering never erases another's
-  // error, and none of them expire on a timer: an unread failure that quietly
-  // vanishes leaves the surfaces it broke looking authoritative.
+  // Keyed by source so one recovery never erases another's error; none expire on a timer.
   const [errors, setErrors] = useState<Partial<Record<ErrorSource, string>>>({});
   const [consentResolutionErrors, setConsentResolutionErrors] = useState<ReadonlyMap<string, string>>(new Map());
 
@@ -1009,10 +814,8 @@ export function useKinu(target?: string | KinuActorAddress) {
     ? errors
     : { ...errors, consentResolution: formatNaturalList(consentResolutionReasons) };
 
-  // `agentStatus` is written only by a completed snapshot and cleared only by a
-  // workspace switch, so it IS "this workspace has last known data" — the fact
-  // the banner needs to choose its sentence and the panes need before any of
-  // them may say "none".
+  // `agentStatus` is set only by a completed snapshot and cleared only by a workspace switch,
+  // so it means "this workspace has last known data".
   const loadedStatus: AsyncResource<AgentStatus> = agentStatus === null
     ? { status: "loading" }
     : { status: "ready", value: agentStatus };
@@ -1025,83 +828,44 @@ export function useKinu(target?: string | KinuActorAddress) {
   const [executors, setExecutors] = useState<ExecutorInfo[]>([]);
   const [executorOutputs, setExecutorOutputs] = useState<Map<string, ExecutorOutput[]>>(new Map());
   const [lastActiveExecutor, setLastActiveExecutor] = useState<string | null>(null);
-  // Pinned ports for canonical-workspace and sandbox previews. Refreshed with the live-data
-  // poll on every surface so auto-switch-to-preview, the Output badge and the
-  // Environment preview auto-focus stay live wherever the user is. Listing
-  // ports never provisions a sandbox: getExposedPorts returns [] server-side
+  // Refreshed on every surface. Listing ports never provisions a sandbox: getExposedPorts returns []
   // unless the executor is already active.
   const [pinnedPorts, setPinnedPorts] = useState<PinnedPreviewPort[]>([]);
   const [previewError, setPreviewError] = useState<string | null>(null);
   const exposedPortsRefreshGeneration = useRef(0);
   const subordinateRefreshGeneration = useRef(0);
-  /** This pane's own actor, read off its snapshot: the id {@link
-   *  admitsActorFrame} compares a stamped frame against, and the one a page
-   *  request names so an actor pane's older history is that actor's
-   *  ({@link useChatThread}). Held twice on purpose — the socket handler reads
-   *  it inside an effect that must not re-subscribe (its cleanup forgets the
-   *  live head paint), and the history walk reads it as a render dependency.
-   *  Null on the workspace pane — no stamp ever names the root — and null
-   *  until the load resolves it, which admits no stamped frame and starts no
-   *  walk in the meantime. */
+  /** Held in a ref too: the socket handler's effect must not re-subscribe (its cleanup forgets the
+   *  live head paint). Null on the workspace pane and until the load resolves it. */
   const ownActorIdRef = useRef<string | null>(null);
   const [paneActorId, setPaneActorId] = useState<string | null>(null);
-  // Background jobs (auto-detached >30s tool calls) — single source for the
-  // Work surface's Now half and its journal.
   const [backgroundJobs, setBackgroundJobs] = useState<BackgroundJob[]>([]);
-  // Slates Kinu published for this workspace — the agent-authored tabs at
-  // the right of the work-surface strip. Refreshed with the rest of the live
-  // data, because publishing one is a mid-turn workspace write. The
-  // slates_changed broadcast re-lists at once and bumps the remount
-  // counter of every open tab among its ids.
+  // The slates_changed broadcast re-lists at once and bumps the remount counter of open tabs among its ids.
   const [slates, setSlates] = useState<SlateSummary[]>([]);
-  /** Messages sent to the running turn whose landing a composer awaits, by
-   *  the id each went under; settled by the server's steer_status for it. */
   const sendLandings = useRef(new Map<string, SendLandingResolvers>());
   const knownSlates = useRef<Set<string> | null>(null);
   const knownPorts = useRef<Set<string> | null>(null);
   const [previewFocus, setPreviewFocus] = useState<string | null>(null);
   const [planFocus, setPlanFocus] = useState<string | null>(null);
   const [arrivedReference, setArrivedReference] = useState<WorkspacePlanReference | null>(null);
-  // Two different memories, kept apart because they answer two different
-  // questions. `knownWorkspacePlans` is which references this connection has
-  // been TOLD about, so a repeated frame is not a second arrival.
-  // `claimedWorkspacePlans` is which ones a pane has already ACTED on, so an
-  // honoured hint never fires twice — not on the next read cycle, and not on
-  // the fresh pane a conversation switch mounts.
+  // `knownWorkspacePlans`: references this connection was told about (dedupes repeated frames).
+  // `claimedWorkspacePlans`: references a pane already acted on, so a hint never fires twice.
   const knownWorkspacePlans = useRef(new Set<string>());
   const claimedWorkspacePlans = useRef(new Set<string>());
   const knownPlans = useRef(new Set<string>());
   const [slateReloads, setSlateReloads] = useState<ReadonlyMap<string, number>>(new Map());
-  // Pending device-consent requests — an agent wants to use a connected device;
-  // the chat renders a card and the user decides (ask-once-then-remember).
   const [pendingConsents, setPendingConsents] = useState<PendingConsent[]>([]);
-  /** A refused device call named the registered machines that are not
-   *  connected, or null when no notice is up. A connect clears it. */
+  /** A connect clears it. */
   const [unavailableDevices, setUnavailableDevices] = useState<UnavailableDevice[] | null>(null);
-  // Everything asynchronous waiting on the owner — pending release approvals,
-  // a scaffold version under trial, failed jobs, unseen self-changes,
-  // curriculum proposals. ONE read behind both the Work tab's queue and the one
-  // accent badge on the strip, so the badge can never say something the queue
-  // does not show. Host-owned: see the RPC's note on VIEW_DATA_SOURCES.
+  // One read behind both the Work queue and the strip's accent badge, so they cannot disagree.
   const [pendingActions, setPendingActions] = useState<PendingAction[]>([]);
-  // Whether the gated right-pane tabs have content. Unknown until the first
-  // read lands — an optimistic absence would flip the strip to Files before
-  // the snapshot that names the workspace's real lanes.
+  // Unknown until the first read: an optimistic absence would flip the strip to Files first.
   const [tabPresence, setTabPresence] = useState<TabPresence | undefined>(undefined);
-  // Unseen self-changes, kept only for the sidebar roster's dot — the tab badge
-  // is the queue's length now.
+  // Only for the sidebar roster's dot; the tab badge is the queue's length.
   const [changelogUnseen, setChangelogUnseen] = useState(0);
-  // Steer-as-Branch runs — the split progress chips near the streaming answer.
   const [branchRuns, setBranchRuns] = useState<BranchRun[]>([]);
-  /** The durable turn claim, replaced by every snapshot. A pane that has not
-   *  loaded one yet answers `settled`; the socket's own streaming flag covers
-   *  the window before the first snapshot lands. */
+  /** `settled` until a snapshot loads; the socket's own streaming flag covers that window. */
   const [turnClaim, setTurnClaim] = useState<TurnClaimState>({ kind: "settled" });
-  // Per-branch write counter, bumped by the `head_activity` broadcast. Counts
-  // rather than timestamps: an open transcript only has to notice that ITS
-  // branch moved, and a counter says that unambiguously without a clock the two
-  // ends would have to agree on. Keyed by head id — a Map because the keys are
-  // whatever branches this workspace has run.
+  // Counts, not timestamps: a transcript only needs to notice its branch moved, without a shared clock.
   const [headActivity, setHeadActivity] = useState<ReadonlyMap<string, number>>(new Map());
 
   const bumpHeadActivity = useCallback((headId: string) => {
@@ -1113,26 +877,14 @@ export function useKinu(target?: string | KinuActorAddress) {
     });
   }, []);
 
-  /**
-   * The step each running head is writing but has not journalled yet, keyed by
-   * head id — its prose and its reasoning, because `head_stream` carries the
-   * provider's own deltas and the provider separates those two streams.
-   *
-   * EPHEMERAL AND SUBORDINATE. The durable step is the truth; this exists only
-   * so the step being written is visible while it is written. It is retired the
-   * moment that step lands — by the `head_activity` push, by a reader whose own
-   * re-read found the step (`HeadDeltas.retire`), by a branch reaching a
-   * terminal status, by a cancelled turn, and by the socket dropping. Nothing
-   * reads it back, nothing persists it, and a dropped delta needs no repair:
-   * the step that replaces it arrives anyway.
-   */
+  /** Ephemeral: the durable step is the truth. Retired when the step lands (`head_activity`,
+   *  `HeadDeltas.retire`), on a terminal branch status, a cancelled turn, or socket drop. */
   const [headDeltaMap, setHeadDeltaMap] = useState<ReadonlyMap<string, HeadDelta>>(new Map());
 
   const retireDelta = useCallback((headId: string) => {
     setHeadDeltaMap((previous) => retireHeadDelta(previous, headId));
   }, []);
 
-  // Nothing is being written any more: the socket went away, or the work did.
   const forgetDeltas = useCallback(() => { setHeadDeltaMap(new Map()); }, []);
 
   const headDeltas = useMemo<HeadDeltas>(() => ({
@@ -1140,40 +892,17 @@ export function useKinu(target?: string | KinuActorAddress) {
     retire: retireDelta,
   }), [headDeltaMap, retireDelta]);
 
-  // Mid-turn steers — what the user typed while the agent was working, shown in
-  // the thread from the moment the server takes it until the durable user row
-  // it becomes arrives in `messages`.
+  // Shown from the moment the server takes a steer until its durable user row arrives.
   const [steerRuns, setSteerRuns] = useState<InlineSteer[]>([]);
-  // Chat-turn error — the turn failed (provider error, stream break) and the
-  // error card in the thread shows the honest body. Fed by BOTH channels a
-  // terminal error can arrive on: useChat's live stream error, and the
-  // on-connect `cf_agent_use_chat_response` replay frame (whose request id is
-  // no longer active, so the ws transport drops it). Cleared on the next send.
-  //
-  // `replayed` separates the two, because they are not the same claim. The
-  // server RETAINS its last terminal record until a later turn supersedes it
-  // (agents SDK `_replayTerminalOnAck`), so a workspace whose last turn failed
-  // and has not been used since re-serves that failure to every client that
-  // connects, forever. Measured on `sunlit-stone-4a20`: a turn that ended
-  // 2026-08-17T19:08:41Z still answers a resume ACK today with
-  // `{"body":"Unauthorized","done":true,"error":true}`, and the card called it
-  // "the last turn" as though it had just happened. It IS the last turn — it is
-  // just not recent, and a card that cannot say so is a card that misdates the
-  // workspace's state.
-  //
-  // The discriminator is the server's own: it announces the pending record's
-  // request id in a `cf_agent_stream_resuming` frame and only then replays the
-  // terminal for that same id. An id this connection saw announced is a replay;
-  // anything else is this session's turn failing live.
+  // Fed by useChat's live stream error and the on-connect replay frame (the ws transport drops
+  // its stale request id). The server retains its last terminal record until a later turn
+  // supersedes it (agents SDK `_replayTerminalOnAck`); an id announced in `cf_agent_stream_resuming`
+  // marks a replay, anything else a live failure.
   const resumedRequestIds = useRef(new Set<string>());
   const [chatError, setChatError] = useState<ChatTurnError | null>(null);
 
-  /** A model call this turn is making is sleeping out a provider-mandated
-   *  wait — the difference between "thinking" and "waiting on the provider".
-   *  Set on `provider_wait` frames, cleared on the next stream frame, the
-   *  socket closing, or a timer keyed to the declared wait (the frame that
-   *  would clear it may never come if the request never leaves the retry
-   *  loop's sleep). */
+  /** Cleared on the next stream frame, socket close, or a timer keyed to the declared wait: the
+   *  clearing frame may never come if the request stays in the retry loop's sleep. */
   const [providerWait, setProviderWait] = useState<{
     provider: string;
     modelId?: string;
@@ -1184,14 +913,10 @@ export function useKinu(target?: string | KinuActorAddress) {
   const providerWaitTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [subordinates, setSubordinates] = useState<SubordinateRosterEntry[]>([]);
   const [subordinateEvents, setSubordinateEvents] = useState<SubordinateActivityEvent[]>([]);
-  /** Background-event cards, from the delivery seam's own lifecycle stream. */
   const [signalCards, setSignalCards] = useState<readonly SignalCard[]>([]);
   const [activePlan, setActivePlan] = useState<PlanReview | null>(null);
-  // Has the server said what this conversation is? Set by the connect frame,
-  // and the ONLY thing that entitles the pane to draw an empty conversation: a
-  // workspace with four hundred messages spent the whole wake-plus-transfer
-  // window claiming it had none, and then replaced that claim with the
-  // transcript. False is "not yet", never "nothing".
+  // Set by the connect frame; the only thing that entitles the pane to draw an empty conversation.
+  // False is "not yet", never "nothing".
   const [transcriptSeeded, setTranscriptSeeded] = useState(false);
 
   const clearProviderWait = useCallback(() => {
@@ -1203,9 +928,7 @@ export function useKinu(target?: string | KinuActorAddress) {
     setProviderWait(null);
   }, []);
 
-  // The declared wait is the honest window: the notice's own `waitMs`, plus a
-  // grace for the next frame to arrive (a turn under a whole chain of waits
-  // updates with each one, so this only ever stands in for the LAST sleep).
+  // The notice's `waitMs` plus a grace for the next frame; each wait in a chain updates it.
   const showProviderWait = useCallback((notice: { provider: string; modelId?: string; waitMs: number; attempt: number }) => {
     clearProviderWait();
     setProviderWait(notice);
@@ -1215,32 +938,20 @@ export function useKinu(target?: string | KinuActorAddress) {
   const agentOptions: Parameters<typeof useAgent>[0] = {
     agent: ORCHESTRATOR_AGENT_SLUG,
     name: actorAddress.workspace,
-    // The SDK's localhost default is ws, even when this document uses HTTPS.
     protocol: window.location.protocol === "https:" ? "wss" : "ws",
-    // onOpen always wins — even if a prior onError pinned the status to
-    // "error", a successful reopen must recover the UI. Without this, a
-    // single transient error event traps the user on the disconnect
-    // banner forever (STABILITY-AUDIT §A1).
+    // onOpen always wins: a successful reopen must recover from a prior onError.
     onOpen: useCallback(() => setConnectionStatus("connected"), []),
     onClose: useCallback(() => {
-      // No close-code list here. The SDK classifies a terminal close itself
-      // (`isTerminalCloseEvent`: 1008 or 4000-4999) and publishes the outcome
-      // as `connectionError`, so a second reading of the same codes in this
-      // file would be a duplicate authority that could disagree with it.
+      // No close-code list: the SDK classifies terminal closes (`isTerminalCloseEvent`) and
+      // publishes `connectionError`.
       setConnectionStatus("disconnected");
-      // The live paint belongs to this socket. Across the gap a head keeps
-      // working and nothing here hears it, so a half-written step left on
-      // screen would claim to be current for as long as the reconnect takes.
-      // The durable steps arrive again either way.
+      // A half-written step would claim to be current across the reconnect gap.
       forgetDeltas();
-      // A wait this socket heard about is that socket's claim: with it gone
-      // the deadline may still be real, but nothing can re-announce it.
+      // Nothing can re-announce this socket's wait once it is gone.
       clearProviderWait();
     }, [forgetDeltas, clearProviderWait]),
-    // Don't clobber a healthy status; partysocket auto-reconnects in the
-    // background and the next onOpen recovers. onError is a transient no-op.
+    // Transient no-op; partysocket auto-reconnects and the next onOpen recovers.
     onError: useCallback(() => {}, []),
-    // Live AI auto-title: update both actor state and the shared roster store.
     onMessage: useCallback((ev: MessageEvent) => {
       const data = parseSocketMessage(ev.data);
 
@@ -1259,20 +970,14 @@ export function useKinu(target?: string | KinuActorAddress) {
       } else if (data?.type === "provider_wait") {
         showProviderWait(data);
       } else if (data?.type === "cf_agent_use_chat_response") {
-        // A stream frame IS the wait's end: tokens are flowing again. It is
-        // also the terminal record replay on connect — a workspace whose last
-        // turn died mid-wait must not paint "waiting" from the replay.
+        // A stream frame ends the wait; the on-connect replay must not paint "waiting" either.
         clearProviderWait();
         const failed = terminalChatError(data, resumedRequestIds.current);
 
         if (failed !== null) setChatError(failed);
       } else {
-        // Terminal-error frame. During a live stream the transport also
-        // surfaces it as useChat's `error`; on connect the server REPLAYS
-        // the last terminal error with a stale request id the transport
-        // drops — this handler is the only place that frame is seen. The
-        // RULE lives in `chat-turn-error.ts`, where an inverted replay test
-        // or a dropped `done` check fails a test instead of reading correct.
+        // On connect the server replays the last terminal error with a stale request id the transport
+        // drops; this handler is the only place that frame is seen. The rule lives in `chat-turn-error.ts`.
         const failed = data === null ? null : terminalChatError(data, resumedRequestIds.current);
 
         if (failed !== null) setChatError(failed);
@@ -1281,11 +986,8 @@ export function useKinu(target?: string | KinuActorAddress) {
   };
 
   if (subordinate) {
-    // The actor's own chat path under this workspace's room — NOT the SDK's
-    // `sub` facet hop, whose rendered path names a child class and key: there
-    // is no child Durable Object to hop to, so this transport refuses that
-    // path and the socket never opened. `hostedActorSocketPath` carries the
-    // measurement.
+    // The actor's own chat path under this room, not the SDK's `sub` facet hop: there is no child
+    // Durable Object, so that path is refused. See `hostedActorSocketPath`.
     agentOptions.path = hostedActorSocketPath(subordinate);
   }
 
@@ -1303,47 +1005,23 @@ export function useKinu(target?: string | KinuActorAddress) {
     connectionError,
   } = useAgentChat({
     agent,
-    // Coalesce chat state updates during high-frequency token deltas (50ms ≈
-    // 20fps). The SDK's own default since cloudflare/agents#2058; stated so a
-    // default change upstream cannot move this pane's render rate.
+    // Matches the SDK default (cloudflare/agents#2058), pinned so an upstream change cannot move it.
     throttle: 50,
   });
 
-  /**
-   * A turn this pane started or observed is live — what every surface reading
-   * `isStreaming` means by "busy".
-   *
-   * The SDK's own flag is `status === 'streaming' || isServerStreaming`, so it
-   * is FALSE for the whole `submitted` window: the message is on the socket and
-   * the turn has begun, but no token has arrived yet. Over that window the old
-   * value said idle — the composer offered Send, the working chip was absent,
-   * and a second press was admitted. `status` is the SDK's own reactive state
-   * for exactly that phase, so this is one derivation over state that already
-   * exists rather than a second flag to keep in step with the latch below.
-   */
+  /** The SDK's flag is false during `submitted` (message sent, no token yet); including it keeps
+   *  the composer from admitting a second press in that window. */
   const isStreaming = streamingTokens || chatStatus === "submitted";
 
-  /**
-   * THE ONE ANSWER to "is a turn live", folded over the durable claim and the
-   * socket above. The composer's actions and the thread's live tail both read
-   * this; before it they read two different things and disagreed whenever a
-   * turn was admitted with no assistant row written yet.
-   *
-   * `isStreaming` stays as the socket's own view, which this fold consumes —
-   * the claim is snapshot-paced and a turn opens between snapshots, so a
-   * client watching its own tokens is live regardless of when the last
-   * snapshot landed.
-   */
+  /** The one answer to "is a turn live", folded over the durable claim and the socket. The claim
+   *  is snapshot-paced, so a client seeing its own tokens is live regardless. */
   const liveness = useMemo(
     () => turnLiveness({ claim: turnClaim, streaming: isStreaming }),
     [turnClaim, isStreaming],
   );
 
-  /**
-   * SEND ADMISSION. The latch lives in `send-admission.ts` — a ref mutated in
-   * the same statement that reads it, so a second press inside one tick sees it
-   * held. `isStreaming` above only MIRRORS it for rendering; it never decides.
-   */
+  /** The latch is mutated in the statement that reads it, so a second press in one tick sees it
+   *  held. `isStreaming` only mirrors it for rendering. */
   const sendLatch = useRef(newSendLatch());
 
   const startTurn = useCallback(
@@ -1351,26 +1029,13 @@ export function useKinu(target?: string | KinuActorAddress) {
     [],
   );
 
-  // The live-stream error channel: the ws transport turns an in-band
-  // `error:true` frame into useChat's `error` state — fold it into the same
-  // exposed chat-error surface as the on-connect replay. This one is always
-  // live: the transport only reaches it for a request id still in flight.
+  // Always live: the transport only surfaces this for a request id still in flight.
   useEffect(() => {
     if (streamError) setChatError({ body: streamError.message || String(streamError), replayed: false });
   }, [streamError]);
 
-  // ── Version-skew signal: /api/health's build sha, read once per PAGE as the
-  // baseline and compared on each reconnect. A supersede the socket rode
-  // through leaves the running SPA stale against the deployment now serving
-  // it — say so once, with a reload affordance, instead of waiting for the
-  // next dynamic import to fail on a chunk that no longer exists.
-  //
-  // The baseline is `pageDeployedBuildSha`, not a ref this hook fills at mount:
-  // WorkspacePage is keyed on the workspace, so this hook is remounted on every
-  // workspace navigation and a per-hook baseline re-read itself onto whatever
-  // was live at that moment — losing the skew it exists to report. One read per
-  // document also means the render-failure report and this notice can never
-  // disagree about which build the page is running.
+  // Version skew: /api/health's build sha compared on each reconnect. The baseline is per page
+  // (`pageDeployedBuildSha`) because this hook remounts on every workspace navigation.
   const [newerDeployedBuild, setNewerDeployedBuild] = useState(false);
 
   const refreshDeployedBuild = useCallback(async () => {
@@ -1379,17 +1044,13 @@ export function useKinu(target?: string | KinuActorAddress) {
     if (isNewerDeployedBuild(baseline, live)) setNewerDeployedBuild(true);
   }, []);
 
-  // ── A2: resume the durable stream on EVERY reconnect, not just first mount.
-  // The framework's resume effect fires once; partysocket reconnects don't
-  // retrigger it. We listen for the agent's "open" event and request the
-  // server's buffered chunks from
-  // cf_ai_chat_stream_chunks. (STABILITY-AUDIT §A2.)
+  // Resume the durable stream on every reconnect: the framework's resume effect fires only once.
   const isFirstOpen = useRef(true);
   useEffect(() => {
     if (!agent) return;
 
     const onOpen = () => {
-      // Skip the very first open — useChat's mount-time resume handles it.
+      // useChat's mount-time resume handles the first open.
       if (isFirstOpen.current) {
         isFirstOpen.current = false;
 
@@ -1409,12 +1070,8 @@ export function useKinu(target?: string | KinuActorAddress) {
 
   const isConnected = connectionStatus === "connected";
 
-  // The live overlay is keyed by root just like the canvas's polled tree map.
-  // Its payload folds the search rows and in-progress journal together, so a
-  // push cannot hide a running node that the poll already knows about.
-  //
-  // A socket can replay a frame after reconnect. `pushSeq` is per root, so an
-  // old A cannot reject a fresh B and an old A cannot replace A's newer tree.
+  // A socket can replay a frame after reconnect; `pushSeq` is per root, so frames for different
+  // roots cannot reject or replace each other.
   const mctsProgressState = useRef(createMctsProgressState<ForkNode>(actorKey));
 
   const setMctsTreeFromProgress = useCallback((progress: MctsProgress) => {
@@ -1430,23 +1087,14 @@ export function useKinu(target?: string | KinuActorAddress) {
     setMctsTrees(next.trees);
   }, [actorKey]);
 
-  // Fetch all tab data. Keyed on a generation counter because a ref cannot
-  // retrigger an effect: on failure the error is sticky and a backoff retry
-  // bumps the counter; every WS 'open' beyond the session's first bumps it
-  // too (session-recovery), so a reconnect re-fetches even when React never
-  // observed an intermediate disconnected state; `retryLoad` is the same
-  // path, driven by the user. The load does not wait for `isConnected`:
-  // while the socket is down the call queues client-side and flushes on the
-  // next dial, so recovery starts the moment transport returns.
+  // A generation counter, because a ref cannot retrigger an effect. Bumped by backoff retry, every
+  // reconnect after the first, and `retryLoad`. Calls queue client-side while the socket is down.
   const [loadGeneration, setLoadGeneration] = useState(0);
   const failureStreak = useRef(0);
-  // Loads can overlap during reconnect and a workspace switch. Retain each
-  // lifecycle task through settlement; admission still decides what may publish.
   const snapshotLoadTaskId = useRef(0);
   const snapshotLoadTasks = useRef(new Map<number, Promise<void>>());
 
-  // The corpse detector + forced-redial policy. Created once; `agentRef`
-  // indirection keeps its callbacks stable across renders.
+  // `agentRef` indirection keeps the recovery callbacks stable across renders.
   const agentRef = useRef(agent);
   agentRef.current = agent;
   const sessionRecoveryRef = useRef<SessionRecovery | null>(null);
@@ -1457,10 +1105,8 @@ export function useKinu(target?: string | KinuActorAddress) {
   });
 
   const sessionRecovery = sessionRecoveryRef.current;
-  // ── Session recovery: every reconnect re-fetches what the dead transport
-  // silently missed, and a corpse socket — OPEN by readyState, timed-out by
-  // every RPC — is forced to redial once the evidence is unambiguous. The
-  // policy lives in core utils/session-recovery.ts; this is the wiring.
+  // Policy lives in core utils/session-recovery.ts; a corpse socket (open but every RPC times out)
+  // is forced to redial.
   const recoveryFirstOpen = useRef(true);
   useEffect(() => {
     if (!agent) return;
@@ -1487,9 +1133,7 @@ export function useKinu(target?: string | KinuActorAddress) {
     return () => agent.removeEventListener("open", onOpen);
   }, [agent, refreshDeployedBuild, sessionRecovery]);
 
-  // Keep the transport stable within one read generation. A reconnect or
-  // manual retry changes its identity so mounted resource readers also reload.
-  // Snapshot-only refresh left Files on a failed read until a manual refresh.
+  // A reconnect or manual retry changes the transport identity so mounted readers reload too.
   const rpc = useMemo(() => {
     const call = bindRpc(agent);
 
@@ -1506,9 +1150,8 @@ export function useKinu(target?: string | KinuActorAddress) {
     };
   }, [agent, sessionRecovery, loadGeneration]);
 
-  // Root sockets keep the existing application heartbeat. Subordinate sockets
-  // need an acknowledged frame: without the root surface's live-data polls, an
-  // OPEN corpse otherwise produces no RPC evidence for the recovery controller.
+  // Subordinate sockets have no live-data polls, so an open corpse produces no RPC evidence
+  // without this acknowledged ping.
   useEffect(() => {
     if (connectionStatus !== "connected") return;
 
@@ -1522,9 +1165,7 @@ export function useKinu(target?: string | KinuActorAddress) {
       }
 
       try {
-        // Any ACKNOWLEDGED frame answers the liveness question; this one is the
-        // read the tab already depends on, so a corpse fails the ping and the
-        // load identically instead of two surfaces disagreeing about the socket.
+        // The read the tab already depends on, so a corpse fails the ping and the load identically.
         await rpc("getActorSnapshot", [subordinate]);
         setSourceError("snapshot", null);
       } catch (cause) {
@@ -1535,9 +1176,7 @@ export function useKinu(target?: string | KinuActorAddress) {
     return () => clearInterval(id);
   }, [agent, connectionStatus, isSubordinate, rpc, setSourceError]);
 
-  // A subordinate's snapshot seeds none of the polled surfaces, so it speaks
-  // only for itself. Cancellation is the admission's job, not this effect's:
-  // re-running it admits a newer load, which retires this one.
+  // Speaks only for itself. Re-running admits a newer load, which retires this one.
   useEffect(() => {
     let timer: ReturnType<typeof setTimeout> | undefined;
     let disposed = false;
@@ -1587,9 +1226,7 @@ export function useKinu(target?: string | KinuActorAddress) {
     setBackgroundJobs,
   ), [refreshCurrentLiveResource, rpc]);
 
-  // The queue and the changelog's unseen count come from one call: the queue
-  // already folds the unseen digest into a row, and the sidebar dot reads the
-  // same answer rather than a second poll that could disagree with it.
+  // One call feeds the queue and the sidebar dot's unseen count so they cannot disagree.
   const refreshPendingActions = useCallback(() => refreshCurrentLiveResource(
     "pendingActions",
     () => rpc<PendingAction[]>("listPendingActions", []),
@@ -1626,26 +1263,17 @@ export function useKinu(target?: string | KinuActorAddress) {
     (listing) => applySlates(listing, true),
   ), [applySlates, refreshCurrentLiveResource, rpc]);
 
-  // Stable identity: it is an effect dependency in the changelog hook, which
-  // re-reads on a timer now — an inline arrow re-armed that effect on every
-  // render and fired a markChangelogSeen RPC with it.
+  // Stable identity: an inline arrow re-armed the changelog hook's effect and fired markChangelogSeen
+  // every render.
   const clearChangelogUnseen = useCallback(() => {
     setChangelogUnseen(0);
     setPendingActions((prev) => prev.filter((a) => a.kind !== "unseen_changes"));
   }, []);
 
-  /**
-   * Stop this turn. Aborts the live LLM request through the SDK and the server
-   * turn through the RPC in parallel. The SDK's cancel frame interrupts the
-   * loop, which hands back every message the model had not read: each comes
-   * off the thread on its `returned` broadcast and its awaiting composer puts
-   * the words back in the draft. Releases the send latch on settle, success
-   * or failure, so the next Send is admitted at once.
-   */
+  /** Aborts the SDK request and the server turn in parallel. Unread messages come back on their
+   *  `returned` broadcasts. Releases the send latch on settle, success or failure. */
   const abortChat = useCallback(async (): Promise<void> => {
-    // Snapshot BEFORE the awaits: a new Send admitted while the two RPCs below
-    // are in flight owns the latch now, and releasing it would open the door for
-    // a concurrent turn — the exact failure the latch prevents.
+    // Snapshot before the awaits: a Send admitted meanwhile owns the latch and must keep it.
     const aborting = sendLatch.current.owner;
 
     try {
@@ -1670,16 +1298,12 @@ export function useKinu(target?: string | KinuActorAddress) {
     }
   }, [stop, rpc, refreshBackgroundJobs, isSubordinate]);
 
-  // Listen for MCTS progress broadcasts from the server. We attach to the
-  // outer `agent` EventTarget — NOT the inner `_ws` private field — so the
-  // listener survives partysocket auto-reconnects without a close→open gap
-  // dropping events. (STABILITY-AUDIT §A3.)
+  // Attach to the outer `agent` EventTarget, not the private `_ws`, so the listener survives
+  // partysocket reconnects without dropping events.
   useEffect(() => {
     if (!agent) return;
 
     const handler = async (event: MessageEvent) => {
-      // A frame stamped for another actor's pane belongs to that chat, and this
-      // socket carries every pane's — so the decode is this pane's decode.
       const msg = paneFrame(event.data, { isSubordinate, ownActorId: ownActorIdRef.current });
 
       if (!msg) return;
@@ -1712,8 +1336,6 @@ export function useKinu(target?: string | KinuActorAddress) {
         } else if (msg.type === "device_available") {
           setUnavailableDevices(null);
         } else if (msg.type === "work_cancelled") {
-          // Every head stopped mid-step. Whatever they had written is either
-          // journalled or gone, and neither case is still being written.
           forgetDeltas();
 
           try {
@@ -1726,10 +1348,7 @@ export function useKinu(target?: string | KinuActorAddress) {
             }));
           }
         } else if (msg.type === "pending_actions_changed") {
-          // A command was parked on the owner, or they decided one. The queue
-          // is polled, so the server pushes the fact rather than the rows —
-          // one re-read keeps the tab badge and the queue the same answer,
-          // and updates every open tab, not just the one that clicked.
+          // The server pushes the fact, not the rows; one re-read updates every open tab.
           try {
             await refreshPendingActions();
           } catch (cause) {
@@ -1740,9 +1359,7 @@ export function useKinu(target?: string | KinuActorAddress) {
             }));
           }
         } else if (msg.type === SLATES_CHANGED_EVENT) {
-          // A Slate changed on disk. Re-list at once so the strip learns
-          // renames the next poll would only find later, and remount every
-          // open tab among the changed ids so its preview URL re-reads.
+          // Re-list now and remount changed tabs so their preview URLs re-read.
           setSlateReloads((previous) => {
             const next = new Map(previous);
 
@@ -1764,9 +1381,8 @@ export function useKinu(target?: string | KinuActorAddress) {
           const settledOrRunning = msg.status === "error" ? "error" : "running";
           const status = msg.status === "settled" ? "settled" : settledOrRunning;
 
-          // A branch that has stopped is writing nothing. Its head id is
-          // derived from the run id, so the accumulator can be retired without
-          // waiting for a journal write that a failed branch never makes.
+          // The head id derives from the run id, so retire without waiting for a journal write a
+          // failed branch never makes.
           if (status !== "running") retireDelta(branchHeadId(msg.branchId));
           setBranchRuns((prev) => [
             ...prev.filter((b) => b.branchId !== msg.branchId),
@@ -1780,24 +1396,14 @@ export function useKinu(target?: string | KinuActorAddress) {
             },
           ]);
         } else if (msg.type === "head_activity") {
-          // A branch recorded a step or filed its report. Same push-the-fact
-          // shape as `pending_actions_changed`: an open transcript re-reads the
-          // journal it already renders from, so the stream and the store cannot
-          // drift, and a reader with nothing open pays nothing.
-          //
-          // This also RETIRES the in-progress paint for that head: the step it
-          // was painting has landed, so the durable read replaces it and the
-          // two can never both be on screen.
+          // The step landed: re-read the journal and retire its in-progress paint so both never show.
           retireDelta(msg.headId);
           bumpHeadActivity(msg.headId);
         } else if (msg.type === "head_stream") {
           setHeadDeltaMap((previous) => appendHeadDelta(previous, msg.headId, msg.kind, msg.delta));
         } else if (msg.type === "steer_status") {
           settleSendLanding(sendLandings.current, msg);
-          // `returned` is a removal: the abort dropped it and the composer has
-          // it back, so leaving a bubble in the thread would claim the agent
-          // was given something it never saw. `turn` is one too: the message
-          // is a user turn of its own now, drawn from the transcript.
+          // `returned` (handed back to the composer) and `turn` (now its own user turn) both remove the bubble.
           setSteerRuns((prev) => msg.status === "returned" || msg.status === "turn"
             ? prev.filter((s) => s.id !== msg.steerId)
             : [
@@ -1850,8 +1456,7 @@ export function useKinu(target?: string | KinuActorAddress) {
 
     return () => {
       agent.removeEventListener("message", handler);
-      // The paint belongs to a socket. A new one cannot know what a running
-      // head had half-written, and the durable steps arrive again anyway.
+      // A new socket cannot know what a running head had half-written.
       forgetDeltas();
     };
   }, [
@@ -1907,8 +1512,6 @@ export function useKinu(target?: string | KinuActorAddress) {
     });
   }, [rpc, refreshCurrentLiveResource, applySlates]);
 
-  // Timer ticks and user/reconnect refreshes may overlap. Each cycle retains
-  // its own task through settlement instead of borrowing a global catch sink.
   const liveRefreshTaskId = useRef(0);
   const liveRefreshTasks = useRef(new Map<number, Promise<void>>());
 
@@ -1965,21 +1568,14 @@ export function useKinu(target?: string | KinuActorAddress) {
   const retryLoad = useCallback(() => {
     failureStreak.current = 0;
     setSourceError("model", null);
-    // The SDK stops auto-redialling exactly when it sets `connectionError`,
-    // so that is the condition under which Retry must force one.
+    // The SDK stops auto-redialling exactly when it sets `connectionError`, so Retry must force one.
     sessionRecovery.manualRetry(agentRef.current?.connectionError != null);
 
     if (!isSubordinate) refreshLiveData();
   }, [isSubordinate, refreshLiveData, sessionRecovery, setSourceError]);
 
-  /** Settle a stranded claim on the server, then re-read the snapshot the
-   *  affordance is derived from. The press never edits the claim locally: the
-   *  server's next answer is what retires the button, so a recovery that
-   *  refused leaves the turn shown as stuck. */
-  /** Settle a stranded turn. Resolves the failure reason, or null once the
-   *  claim is settled; the reason is also the workspace's notice, like every
-   *  other action the user asked for, so the caller reads a value and never a
-   *  rejection. */
+  /** Never edits the claim locally: the server's next snapshot retires the button, so a refused
+   *  recovery still shows as stuck. Resolves the failure reason (also the workspace notice) or null. */
   const recoverTurn = useCallback(async (): Promise<string | null> => {
     setSourceError("recover", null);
     let thrown: { cause: unknown } | null = null;
@@ -2002,7 +1598,6 @@ export function useKinu(target?: string | KinuActorAddress) {
     return null;
   }, [refreshLiveData, rpc, setSourceError]);
 
-  // Refresh surface data when a turn completes (streaming ends).
   const wasStreaming = useRef(false);
   useEffect(() => {
     if (isSubordinate) return;
@@ -2015,9 +1610,7 @@ export function useKinu(target?: string | KinuActorAddress) {
     }
   }, [isStreaming, isSubordinate, refreshLiveData]);
 
-  // Full surface refresh on a steady 5s cadence. The chat stream already
-  // carries the conversation, so streaming only adds a faster (1s) poll of
-  // the run timeline for near-real-time spans — not every surface RPC.
+  // Streaming adds only a faster (1s) timeline poll; the chat stream carries the conversation.
   useEffect(() => {
     if (!isConnected || isSubordinate) return;
     const interval = setInterval(refreshLiveData, LIVE_DATA_REFRESH_MS);
@@ -2025,16 +1618,8 @@ export function useKinu(target?: string | KinuActorAddress) {
     return () => clearInterval(interval);
   }, [isConnected, isSubordinate, refreshLiveData]);
 
-  // Initial load — ONE round-trip, and it stays one: a second awaited RPC here
-  // for the active plan is how a plan-gated workspace paints its composer in
-  // build mode and moves a beat later.
-  //
-  // The exploration canvas is deliberately NOT seeded from here. It is the
-  // largest thing this path could carry (499-824 KiB per workspace, measured
-  // against production 2026-08-20) and its only effect would be to pre-fill a
-  // tree map that the Exploration surface rebuilds from its own
-  // `getExplorationCanvas` when it mounts, and that `useForkRunTree` fetches per
-  // run when it does not. Live trees still arrive on the `mcts_update` broadcast.
+  // One round trip: a second awaited RPC for the active plan makes a plan-gated composer paint in
+  // build mode and jump. The exploration canvas is not seeded here; its surface fetches its own.
   async function loadAllData(
     isCurrent: () => boolean,
     isSourceCurrent: (source: LiveRefreshSource) => boolean,
@@ -2071,11 +1656,8 @@ export function useKinu(target?: string | KinuActorAddress) {
     if (isSourceCurrent("presence")) setTabPresence(snap.tabPresence);
 
     if (isSourceCurrent("slates")) applySlates(snap.slates);
-    // REPLACE, never merge. The durable rows are the authority for what is
-    // queued and what is running, so a tab that reconnects after a deploy or a
-    // corpse redial both LEARNS transitions it missed and DROPS chips for work
-    // that settled while it was away. A live broadcast that races this upserts
-    // by id afterwards, so the newer fact still wins.
+    // Replace, never merge: durable rows are the authority, so a reconnecting tab learns missed
+    // transitions and drops settled chips. A racing broadcast upserts by id afterwards.
     setSteerRuns(snap.pendingSteers);
     setBranchRuns(snap.branchRuns.map((run) => ({
       branchId: run.branchId, task: run.task, status: run.status,
@@ -2094,16 +1676,12 @@ export function useKinu(target?: string | KinuActorAddress) {
   }
 
   async function loadSubordinateData(isCurrent: () => boolean): Promise<void> {
-    // `getActorSnapshot`: the root answers this capability in process, keyed on
-    // the actor name this tab is looking at. The name is what the root resolves
-    // through its directory, so a tab cannot ask about an actor that is not a
-    // child of this workspace.
+    // The root resolves the name through its directory, so a tab cannot ask about a non-child actor.
     const actorSnapshot = await rpc<SubordinateSnapshot>("getActorSnapshot", [subordinate]);
 
     if (!isCurrent()) return;
-    // This pane's own actor, before anything it can admit or ask for: the
-    // frames the hosting seam stamps are only this chat's while the id
-    // matches, and a page request without it reads the workspace's rows.
+    // Set before anything is admitted: stamped frames are this chat's only while the id matches,
+    // and a page request without it reads the workspace's rows.
     ownActorIdRef.current = actorSnapshot.actorId;
     setPaneActorId(actorSnapshot.actorId);
     setAgentStatus({
@@ -2128,8 +1706,6 @@ export function useKinu(target?: string | KinuActorAddress) {
     setSteerRuns(actorSnapshot.pendingSteers);
   }
 
-  // Roster loads may overlap across reconnects; their generation decides which
-  // result is current, while this map keeps every started task owned to settle.
   const subordinateRefreshTasks = useRef(new Map<number, Promise<void>>());
 
   const refreshSubordinates = useCallback((): void => {
@@ -2137,9 +1713,7 @@ export function useKinu(target?: string | KinuActorAddress) {
     const generation = ++subordinateRefreshGeneration.current;
     let task: Promise<void> | null = null;
     task = (async () => {
-      // The roster's failure, tested against the generation after the handler: a
-      // later reconnect owns this surface now, and its own load is what says
-      // what the roster is.
+      // Tested against the generation after the handler: a later reconnect owns the roster now.
       let thrown: { cause: unknown } | null = null;
 
       try {
@@ -2176,10 +1750,8 @@ export function useKinu(target?: string | KinuActorAddress) {
     failureStreak.current = 0;
     wasStreaming.current = false;
     isFirstOpen.current = true;
-    // This conversation is a different one now, so the send latch belongs to
-    // nobody. The abandoned turn's own settle can no longer release it — the
-    // owner token it holds is stale — which is exactly the ordering that keeps
-    // a late completion from opening the door for whoever holds it next.
+    // The abandoned turn's stale owner token can no longer release the latch, so a late
+    // completion cannot open it for the next holder.
     abandonTurn(sendLatch.current);
     searchSeq.current += 1;
     clearTimeout(searchTimer.current);
@@ -2216,19 +1788,13 @@ export function useKinu(target?: string | KinuActorAddress) {
     setSubordinates([]);
     setSubordinateEvents([]);
     setSignalCards([]);
-    // A different conversation is a different actor, and the last one's id
-    // would admit its frames here and page its history. The load resolves
-    // this pane's own.
+    // The last actor's id would admit its frames here and page its history.
     ownActorIdRef.current = null;
     setPaneActorId(null);
   }, [workspace, subordinate]);
 
-  /** Spend one arrived reference. True exactly once per reference for the
-   *  lifetime of this connection, false forever after. Claiming records only
-   *  the key it was handed: a newer arrival is a different key, so honouring
-   *  one hint can never suppress the next, and the held reference itself is
-   *  never cleared — the pane keeps resolving it so the arrived plan stays in
-   *  the history it merges. */
+  /** True exactly once per reference per connection. Records only the key handed in, so a newer
+   *  arrival is never suppressed; the held reference is never cleared. */
   const claimWorkspacePlan = useCallback((reference: WorkspacePlanReference): boolean => {
     const key = JSON.stringify(reference);
 
@@ -2246,27 +1812,10 @@ export function useKinu(target?: string | KinuActorAddress) {
   );
 
   /**
-   * Send this text and these attachments to the actor — the composer's one
-   * submit, whatever the actor is doing.
-   *
-   * Nothing is running: the send starts a turn under this conversation's send
-   * latch, through the SDK's own chat path (that IS the start-a-turn path), and
-   * answers `'turn'`. A turn holds the latch or is streaming: the message goes
-   * through the actor's `send` RPC, which splices it into the running turn's
-   * next step — or, when that turn had just ended, runs it as the next ordinary
-   * turn itself, atomically in its own queue — and `settled` says which. Either
-   * way the text has landed somewhere, which is why nothing here re-sends it.
-   * `null` means nothing was sent (an empty draft); the caller keeps it.
-   *
-   * The decision reads the latch, not reactive streaming state alone: two
-   * presses inside one tick both see the not-yet-committed `isStreaming`, and
-   * the latch is what makes the second one a message to the first's turn
-   * rather than a second turn beside it.
-   *
-   * File attachments ride as data-URL FileUIParts ahead of the text part on
-   * both paths — the whole downstream pipeline (WS transport, DO persistence,
-   * Think's convertToModelMessages, the inbox's merged user message) natively
-   * carries them to multimodal models.
+   * Idle: starts a turn under the send latch via the SDK chat path, answering `'turn'`. Otherwise
+   * the actor's `send` RPC splices it into the running turn or runs it as the next turn, and
+   * `settled` says which; nothing here re-sends. `null`: nothing was sent. The decision reads the
+   * latch, not `isStreaming`: two presses in one tick both see stale reactive state.
    */
   const sendChat = useCallback((
     content: string,
@@ -2290,15 +1839,11 @@ export function useKinu(target?: string | KinuActorAddress) {
       if (admitted) return { landed: "turn" };
     }
 
-    // `mode` rides the message as its `kinuMode`, the same fact the SDK path
-    // binds: a Plan-locked composer whose message misses its turn must run a
-    // PLAN turn, not silently become a build one.
+    // A Plan-locked message that misses its turn must still run as a Plan turn.
     const attachments = files.map((file) => ({ filename: file.filename ?? "attachment", mediaType: file.mediaType, url: file.url }));
 
-    // The message goes under an id minted here, so its landing — the server's
-    // steer_status for that id — is awaited before the call that admits it
-    // returns, and no broadcast can precede the listener. The call answers
-    // the admission alone: it has a deadline, the landing has none.
+    // Id minted here so the landing listener exists before any broadcast. The call has a
+    // deadline; the landing has none.
     const id = crypto.randomUUID();
     const landing = Promise.withResolvers<SendLanding>();
     sendLandings.current.set(id, landing);
@@ -2306,21 +1851,8 @@ export function useKinu(target?: string | KinuActorAddress) {
     return { landed: "mid-turn", settled: landingAfter(rpc<void>("send", [content, id, attachments, mode]), sendLandings.current, id, landing.promise) };
   }, [startTurn, sendMessage, isStreaming, rpc]);
 
-  /**
-   * Re-run the turn that failed — the SDK's own `regenerate`, not a fresh send.
-   *
-   * `sendMessage` APPENDED a copy of the last user message on every press, so
-   * three attempts at one failed turn left three identical user turns in the
-   * durable transcript and three chances for the model to answer the same
-   * question twice. `regenerate` drops the assistant message being retried
-   * (or keeps the trailing user message when the turn produced none), sends
-   * `trigger: 'regenerate-message'`, and the host reconciles against its own
-   * history rather than growing it.
-   *
-   * Under the SAME latch as `sendChat`: a retry starts a turn, so two presses
-   * of the error card's Retry are one turn for the same reason two presses of
-   * Send are. One admission authority, not two.
-   */
+  /** `regenerate`, not `sendMessage`, which appended a duplicate user message per press. Under the
+   *  same latch as `sendChat`: a retry starts a turn. */
   const retryLastMessage = useCallback((): boolean => {
     if (messages.length === 0) return false;
 
@@ -2331,9 +1863,7 @@ export function useKinu(target?: string | KinuActorAddress) {
     });
   }, [startTurn, messages.length, regenerate]);
 
-  // Ordering for the memory search: a searchMemoryHybrid per keystroke with
-  // nothing ordering the replies lets a slow early query land last and leave
-  // the pane showing results for a prefix the user has already typed past.
+  // Orders replies so a slow earlier query cannot land last over a newer prefix.
   const searchSeq = useRef(0);
   const searchTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   useEffect(() => () => clearTimeout(searchTimer.current), []);
@@ -2343,7 +1873,6 @@ export function useKinu(target?: string | KinuActorAddress) {
     const seq = ++searchSeq.current;
 
     if (!q.trim()) {
-      // Empty search — re-parse full content
       setSourceError("memory", null);
 
       if (memoryContent) setMemory(memoryRows(memoryContent));
@@ -2352,9 +1881,7 @@ export function useKinu(target?: string | KinuActorAddress) {
     }
 
     searchTimer.current = setTimeout(async () => {
-      // The search's failure, published only while this query is still the
-      // newest: a keystroke past it retired this sequence number, and the pane
-      // belongs to the prefix the user actually has.
+      // Published only while this query is still the newest.
       let thrown: { cause: unknown } | null = null;
 
       try {
@@ -2379,15 +1906,9 @@ export function useKinu(target?: string | KinuActorAddress) {
     }, MEMORY_SEARCH_DEBOUNCE_MS);
   }, [rpc, memoryContent, setSourceError]);
 
-  /** Switch this agent's model. Resolves `null` once the write landed, or the
-   *  failure reason when it didn't — the reason is recorded on `error` and the
-   *  picker is rolled back before returning, so a caller that reports "Saved"
-   *  (Workspace settings) must check the result instead of assuming success.
-   *  Reporting here and rejecting as well would force every fire-and-forget
-   *  picker to silence a rejection it has nothing to add to. */
+  /** Resolves null on success or the failure reason, which is also recorded on `error` after the
+   *  picker is rolled back. Callers reporting "Saved" must check the result; it never rejects. */
   const setModel = useCallback(async (modelId: string): Promise<string | null> => {
-    // Optimistically reflect in the UI so the dropdown doesn't snap back
-    // while the RPC is in flight.
     setAgentStatus(prev => prev ? { ...prev, model: modelId } : prev);
 
     try {
@@ -2395,7 +1916,7 @@ export function useKinu(target?: string | KinuActorAddress) {
         ? await rpc<{ ok?: boolean; spec?: string }>("setModel", [modelId])
         : await rpc<{ ok?: boolean; spec?: string }>("setActorModel", [subordinate, modelId]);
 
-      // Server may have normalized the spec — sync the UI to authoritative value.
+      // The server may have normalized the spec.
       const spec = r?.spec;
 
       if (spec) setAgentStatus((prev) => prev ? { ...prev, model: spec } : prev);
@@ -2403,8 +1924,7 @@ export function useKinu(target?: string | KinuActorAddress) {
 
       return null;
     } catch (err) {
-      // Roll the picker back to the actually-stored spec so it can't keep
-      // showing a model that was never saved.
+      // Roll back to the stored spec so the picker never shows an unsaved model.
       let reason = `Could not switch model: ${errorMessage({ cause: err })}`;
 
       try {
@@ -2414,8 +1934,6 @@ export function useKinu(target?: string | KinuActorAddress) {
 
         setAgentStatus(prev => prev ? { ...prev, model: stored.spec ?? '' } : prev);
       } catch (rollbackErr) {
-        // The rollback read failed too, so the picker is still showing a model
-        // that was never stored. Say so rather than leaving it looking saved.
         reason += `. Could not re-read the saved model either (${errorMessage({ cause: rollbackErr })}), so the picker may not show the saved model`;
       }
 
@@ -2425,8 +1943,7 @@ export function useKinu(target?: string | KinuActorAddress) {
     }
   }, [rpc, setSourceError, subordinate]);
 
-  /** The thinking level for this pane's actor; null clears it back to the
-   *  tier's. Optimistic, rolled back on refusal. */
+  /** Null clears to the tier's. Optimistic, rolled back on refusal. */
   const setReasoningEffort = useCallback(async (effort: ReasoningEffort | null): Promise<void> => {
     const before = agentStatus?.reasoningEffort ?? null;
     setAgentStatus((prev) => prev ? { ...prev, reasoningEffort: effort } : prev);
@@ -2448,18 +1965,12 @@ export function useKinu(target?: string | KinuActorAddress) {
     return saved;
   }, [rpc]);
 
-  // Single source of truth: the server-side broadcast. executeInExecutor ONLY
-  // fires the RPC; the broadcast handler below renders the row. This prevents
-  // the double-output bug where the optimistic append AND the broadcast both
-  // fired for one invocation (race-ordering made dedup windows unreliable).
+  // Fires the RPC only; the broadcast renders the row. An optimistic append double-rendered output.
   const executeInExecutor = useCallback((executorId: string, command: string) => {
     return rpc<ExecutorCommandResult>("executeInExecutor", [executorId, command]);
   }, [rpc]);
 
-  // Listen for executor-output broadcasts — emitted by the orchestrator on
-  // every exec completion (user- or agent-triggered). Attach to the outer
-  // `agent` EventTarget so the listener survives reconnects (STABILITY-AUDIT
-  // §A3, D5).
+  // Attach to the outer `agent` EventTarget so the listener survives reconnects.
   useEffect(() => {
     if (!agent) return;
 
@@ -2470,10 +1981,7 @@ export function useKinu(target?: string | KinuActorAddress) {
           setExecutorOutputs(prev => {
             const next = new Map(prev);
             const existing = next.get(msg.executor) ?? [];
-            // The live echo is the whole output of a command that just ran, so
-            // the stored length IS what is shown — nothing was withheld here.
-            // A reload reads the same row back through the clipped SQL and the
-            // pane says so then.
+            // A live echo is the whole output, so the stored length is what is shown.
             const stdout = msg.stdout ?? "";
             const stderr = msg.stderr ?? "";
             next.set(msg.executor, [...existing, {
@@ -2495,50 +2003,29 @@ export function useKinu(target?: string | KinuActorAddress) {
 
   return {
     messages,
-    /** The wait a model call is sleeping out right now — set by the server's
-     *  `provider_wait` broadcast, cleared by the next stream frame, a socket
-     *  close, or the declared wait's own timer. Null = nothing is being waited
-     *  on, which is what "working" vs "waiting on {provider}" reads. */
+    /** Null when nothing is being waited on: "working" vs "waiting on {provider}". */
     providerWait,
     isStreaming,
-    /** Whether a turn is live, stuck, or neither — the one value both the
-     *  composer and the thread's live tail read. */
     liveness,
-    /** Settle a claim nobody is executing and re-pend what it fenced, then
-     *  re-read the snapshot so the affordance retires on the server's answer
-     *  rather than on the press. */
     recoverTurn,
-    /** True once the server has stated this conversation's contents. Until then
-     *  `messages` being empty means "not delivered", not "there is nothing". */
+    /** Until true, empty `messages` means "not delivered", not "there is nothing". */
     transcriptSeeded,
     connectionStatus,
-    /** Set when the socket closed for a reason reconnecting cannot change —
-     *  the workspace is not this caller's, or it is not there. Carries the
-     *  close code and the server's own reason. The SDK owns the
-     *  classification and clears this on open, so there is nothing to
-     *  mirror. */
+    /** Set when reconnecting cannot help (not this caller's workspace, or gone). The SDK owns the
+     *  classification and clears it on open. */
     terminalClose: connectionError,
-    /** The deployment's build sha changed since this page loaded — the tab is
-     *  stale against the server now answering it. Latched once per page load;
-     *  the surface renders the reload affordance from this. */
+    /** Latched once per page load. */
     newerDeployedBuild,
-    /** The one sticky failure line — never auto-expires. Says the workspace
-     *  could not OPEN while nothing has loaded, and names the stale surfaces
-     *  once a snapshot has. */
+    /** Never auto-expires. */
     error,
-    /** Re-run the initial load now (also cancels the pending backoff retry and
-     *  clears a stale action error). The `error` banner's way out. */
+    /** Also cancels the pending backoff retry and clears a stale action error. */
     retryLoad,
-    /** The last chat turn's terminal error (live stream error or the
-     *  on-connect replay) — rendered as an error card in the thread. */
     chatError,
     clearChatError: () => setChatError(null),
     retryLastMessage,
     agentStatus,
-    /** The snapshot as this repo's tri-state, for the surfaces it seeds: a pane
-     *  may only report "none" for a read that came back, and `agentStatus`
-     *  alone cannot tell a load still coming from one that failed. Carries no
-     *  reason — `error` says why, once. */
+    /** A pane may only report "none" for a read that came back; `agentStatus` alone cannot tell
+     *  loading from failed. */
     snapshot,
     tools,
     memory,
@@ -2556,74 +2043,48 @@ export function useKinu(target?: string | KinuActorAddress) {
     executorOutputs,
     lastActiveExecutor,
     executeInExecutor,
-    /** Exposed ports across the canonical Workspace and Sandbox executors. */
     pinnedPorts,
     previewFocus, planFocus,
-    /** The plan reference this connection was last told about, paired with the
-     *  claim that spends it. Null until a frame arrives. */
     workspacePlanArrival,
     previewError,
     refreshExposedPorts,
-    /** Background jobs — the Work surface's Now half and its journal. */
     backgroundJobs,
     refreshBackgroundJobs,
-    /** Everything waiting on the owner: the Work queue and its strip badge. */
     pendingActions,
-    /** Re-read the queue — what Work's decide calls so a decided row leaves
-     *  the list the same moment its box unticks, not on the next poll. */
+    /** Called by Work's decide so a decided row leaves the list at once, not on the next poll. */
     refreshPendingActions,
-    /** Whether the gated tabs (Releases, Swarms) have content. */
     tabPresence,
-    /** Agent-authored Slates, as tabs, with their per-id remount counters. */
     slates,
     slateReloads,
-    /** Pending device-consent requests + the resolver (chat consent cards). */
     pendingConsents,
     resolveConsent,
-    /** Machines a refused device call named, until a connect clears the notice. */
     unavailableDevices,
-    /** Whether unseen self-changes remain — the sidebar roster's dot. Work
-     *  marks them seen server-side, then calls the clear. */
+    /** Work marks self-changes seen server-side, then calls the clear. */
     changelogUnseen,
     clearChangelogUnseen,
-    /** Steer-as-Branch chips (running → settled/error) + the dismiss. */
     branchRuns,
     dismissBranchRun: (branchId: string) =>
       setBranchRuns((prev) => prev.filter((b) => b.branchId !== branchId)),
-    /** Per-branch write counter — what makes an open node transcript live. A
-     *  reader whose branch id ticked re-reads the journal; every other reader
-     *  sees an unchanged number and does nothing. */
+    /** A reader whose branch id ticked re-reads the journal. */
     headActivity,
-    /** The step each running head is writing — prose and reasoning — with the
-     *  retire a reader calls when its own re-read found that step. Best-effort
-     *  paint under `headActivity`: retired the moment the step lands, so a
-     *  reader never shows the same text twice. */
+    /** Retired the moment the step lands, so a reader never shows the same text twice. */
     headDeltas,
-    /** Mid-turn steers the server has taken, queued → landed. Dropped ones are
-     *  removed by the server's `returned` broadcast, not by the surface. */
+    /** Returned steers are removed by the server's broadcast, not by the surface. */
     steerRuns,
-    /**
-     * Fork this agent at a message. Returns the new agent's navigation URL
-     * on success, or throws on error ('agent busy', 'fork point not found',
-     * 'agent name already exists', etc.).
-     */
+    /** Throws on error ('agent busy', 'fork point not found', 'agent name already exists'). */
     forkAgent: (untilMessageId: string, opts?: { name?: string }) =>
       rpc<{ id: string; name: string; url: string; forkPointMs: number }>("forkAgent", [untilMessageId, opts ?? {}]),
     rpc,
     rawAgent: agent,
     actorAddress,
     isSubordinate,
-    /** This pane's own actor id, or null on the workspace pane and until an
-     *  actor pane's snapshot has resolved it. What a cursored read of this
-     *  chat's older history is addressed by. */
+    /** Addresses cursored reads of this chat's older history. */
     paneActorId,
     subordinates,
     subordinateEvents,
     signalCards,
     refreshSubordinates,
-    /** One-click additional agent: identity only, no role/mission form. The
-     *  server answers with a blank displayName — the UI shows "New agent"
-     *  until the first-message titler lands over `subordinates_changed`. */
+    /** The server answers a blank displayName; the UI shows "New agent" until the titler lands. */
     createSubordinate: async () => {
       const result = await rpc<{
         name: string;
@@ -2640,8 +2101,7 @@ export function useKinu(target?: string | KinuActorAddress) {
 
       return result;
     },
-    /** Owner rename. Lands on the parent roster AND the child's own identity;
-     *  a user-chosen name permanently blocks auto-retitling (server-side). */
+    /** A user-chosen name permanently blocks auto-retitling (server-side). */
     renameSubordinate: async (name: string, displayName: string) => {
       const result = v.parse(
         SubordinateMutationEnvelopeSchema,
@@ -2670,13 +2130,8 @@ export function useKinu(target?: string | KinuActorAddress) {
   };
 }
 
-// ── Helpers ──────────────────────────────────────────────────────
-
-/** The chain, then the two shapes an RPC can reject with that are not `Error` at
- *  all: a bare string from a JSON error body, and an object with no message.
- *  `renderThrownChain` owns the first case for every reader in the repo; the two
- *  fallbacks are this surface's own, because a browser panel showing
- *  `[object Object]` has told the reader nothing. */
+/** Beyond `renderThrownChain`: a bare string from a JSON error body, and an object with no
+ *  message, which would otherwise render as `[object Object]`. */
 function errorMessage({ cause }: { cause: unknown }): string {
   if (cause instanceof Error && cause.message) return renderThrownChain({ cause });
   const text = v.safeParse(v.string(), cause);
@@ -2724,22 +2179,13 @@ interface ToolDescResult {
   }>;
 }
 
-/** Map a getToolDescriptions result into the UI's ToolInfo[] — single source
- *  for the mapping used by both the initial load and live refresh.
- *
- *  `exposure` and `wired` both come from the orchestrator: the first is the
- *  registry's declared reach, the second is whether THIS agent wires the
- *  capability. Neither is recomputed here — a single guessed word cannot tell
- *  absence from codemode-only reach. */
+/** `exposure` and `wired` come from the orchestrator; neither is recomputed here. */
 function mapToolDescriptions(r: ToolDescResult): ToolInfo[] {
-  // Crafted tools are the agent's own concern — scored and selected by its
-  // evolution loop — and are not listed to the user; only the built-ins are.
+  // Crafted tools are the evolution loop's concern and are not listed to the user.
   return r.builtIn.map((t) => ({ ...t, learned: false, qualityScore: 1, usageCount: 0 }));
 }
 
-/** MEMORY.md as pane rows. The heading the notes are read out of belongs to
- *  `memory/note.ts`, which writes it; all this adds is the score, and a note is
- *  not a search hit, so every note scores 1. */
+/** The heading format belongs to `memory/note.ts`; a note is not a search hit, so every note scores 1. */
 function memoryRows(content: string): MemoryEntry[] {
   return parseMemoryNotes(content).map((note) => ({ ...note, matchScore: 1 }));
 }

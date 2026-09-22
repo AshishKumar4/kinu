@@ -9,22 +9,13 @@ import { WorkspaceRosterProvider } from "@/hooks/use-workspace-roster";
 import { WorkspaceOverviewsProvider } from "@/hooks/use-workspace-overviews";
 import { AppBackground } from "./AppBackground";
 
-/**
- * Top-level shell — the rail lane (`SidebarRail`) + the route outlet. Below md
- * the rail becomes a drawer summoned from the mobile header, so phones get the
- * same roster, New-agent flow, theme toggle and sign-out as desktop.
- *
- * The living background sits behind both, fixed, under the root's own
- * ground: the root isolates its stacking so the negative-z canvas paints
- * above that ground and under every in-flow child.
- */
+/** The root isolates its stacking so the negative-z canvas paints above its ground and under in-flow children. */
 
 export default function Layout() {
   const [drawerOpen, setDrawerOpen] = useState(false);
   const navigate = useNavigate();
   const location = useLocation();
 
-  // Any navigation (agent link, settings, new-agent create) closes the drawer.
   useEffect(() => { setDrawerOpen(false); }, [location]);
 
   return (
@@ -59,7 +50,6 @@ export default function Layout() {
 
       <SidebarRail />
 
-      {/* Mobile drawer */}
       {drawerOpen && (
         <div className="fixed inset-0 z-50 animate-fade-in md:hidden">
           <div className="p-scrim absolute inset-0" onClick={() => setDrawerOpen(false)} aria-hidden="true" />

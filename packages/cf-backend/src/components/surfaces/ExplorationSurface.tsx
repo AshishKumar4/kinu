@@ -1,24 +1,6 @@
 /**
- * Exploration — every time the agent tried more than one path.
- *
- * ONE list and ONE tree, not a tab per mechanism. Splitting MCTS from Branches
- * mirrors a storage split — a search writes `search_nodes` for its tree and
- * `head_journal` for each node's transcript — so exploring alternatives lands
- * in a different tab depending on which store a run happened to fill, which is
- * how the owner twice found an empty pane where his searches should have been.
- *
- * The unification is honest because a run IS a tree either way: one level with a
- * branch per candidate is that tree at depth 1, and a deeper search is the same
- * tree with more levels and scores on it. A run carries both halves at once, so
- * the two facts a row reports are `hasSearchTree` and `hasNodeTranscripts`
- * rather than one tag admitting one store. Master-detail rather than
- * latest-versus-past tabs: every search the workspace ever ran is a row, newest
- * first, the live one selected on arrival.
- *
- * NOT the chat's thinking text — that streams inline as reasoning blocks in the
- * transcript, which is why this surface does not wear that word. GEPA and the
- * quality scoreboard are not here either: they measure the agent's trajectory
- * across scaffold versions and live under Agent → Evolution.
+ * Exploration: every run's search tree in one list and one canvas. A run can fill both
+ * `search_nodes` and `head_journal`, so rows report `hasSearchTree` and `hasNodeTranscripts`.
  */
 import { useState, useCallback, useMemo } from "react";
 import { Link, useParams } from "react-router-dom";
@@ -53,21 +35,15 @@ import {
 } from "@kinu.run/core";
 
 export interface ExplorationSurfaceProps {
-  /** Trees of the searches in flight, keyed by search, fed by `mcts-progress`
-   *  broadcasts. Used in place of the polled rows for the searches they cover,
-   *  so a running search redraws per iteration rather than per poll. Keyed
-   *  because a workspace runs several searches at once and one slot made them
-   *  overwrite each other. */
+  /** Live trees from `mcts-progress`, keyed by search; they replace polled rows so a
+   *  running search redraws per iteration. */
   liveTrees: ReadonlyMap<string, ForkNode>;
-  /** A turn is in flight — new forks and branches land while it is. */
   isStreaming: boolean;
   /** Detached work can create or continue a fork without a streaming turn. */
   backgroundJobs: readonly BackgroundJob[];
   rpc: Rpc;
-  /** Per-branch journal-write counter, from the `head_activity` broadcast. What
-   *  makes an OPEN branch's transcript grow as that branch works. */
+  /** Per-branch journal-write counter from the `head_activity` broadcast. */
   headActivity: ReadonlyMap<string, number>;
-  /** The live deltas — the step a running branch is writing. */
   headDeltas?: HeadDeltas;
 }
 
@@ -76,18 +52,7 @@ export function ExplorationSurface({
 }: ExplorationSurfaceProps) {
   const { agentId } = useParams();
   const [focusedRunId, setFocusedRunId] = useState<string | null>(null);
-  /**
-   * What the detail pane is showing: a run, and optionally one node inside it.
-   *
-   * Null means "nothing opened yet", which is not the same as "no run": the pane
-   * falls back to the focused run, so it always describes something. Null still
-   * matters below `@6xl`, where the pane takes the canvas's place and must not
-   * do so until the reader asked for it.
-   *
-   * A NODE is a field of this rather than a state beside it because a branch is
-   * read inside the run it belongs to — the run's own liveness is the context
-   * that makes one branch's trace mean anything.
-   */
+  /** Null means nothing opened; below `@6xl` the pane replaces the canvas only once set. */
   const [inspect, setInspect] = useState<{ runId: string; nodeId: string | null } | null>(null);
 
   const {
@@ -95,8 +60,7 @@ export function ExplorationSurface({
     exhausted, loadingMore, pageError, loadMore,
   } = useExplorationCanvas({ rpc, isStreaming, backgroundJobs, liveTrees, headActivity });
 
-  // The list is the scroll container in both layouts, so the trigger lives on it
-  // rather than on the canvas beside it.
+  // The list is the scroll container in both layouts.
   const listRef = useGrowingScroll({
     grows: "down", content: runs, fetched: runs, onReachEdge: loadMore,
   });
@@ -111,16 +75,9 @@ export function ExplorationSurface({
     return <EmptyState icon={<GitForkIcon size={28} />} title="No swarms" />;
   }
 
-  // The newest fork is what the operator came to look at, so it is focused on
-  // arrival; once they pick another, a later poll must not move the focus.
+  // Focus the newest fork on arrival only; later polls must not move the focus.
   const focused = runs.find((run) => run.id === focusedRunId) ?? runs[0];
-  /**
-   * What the detail pane is showing. The focused run wherever nothing has been
-   * opened, so the pane is never empty and choosing a run from the list always
-   * changes it — which is the whole of the "clicking a run does nothing"
-   * report: focusing a band that was already focused was the click's ONLY
-   * effect, and on a workspace with one search that is no effect at all.
-   */
+  /** Falls back to the focused run so the pane is never empty. */
   const inspecting = inspect ?? { runId: focused.id, nodeId: null };
   const opened = runs.find((run) => run.id === inspecting.runId) ?? focused;
 
@@ -129,15 +86,8 @@ export function ExplorationSurface({
       {resource.status === "error" && (
         <LoadFailure what="fresh fork runs" message={resource.message} onRetry={reload} />
       )}
-      {/* Three panes once there is room for them: the runs, the canvas, the run
-          under inspection. The canvas takes the whole height of its column and
-          every spare pixel of width, which is the proportion the tree needs and
-          the one a stack of fixed-height cards could never give it.
-
-          Narrower than that, three columns would leave the tree ~200px, so the
-          detail pane takes the canvas's place while it is open — and stacked
-          narrowest of all, the list is content-height (capped, then it scrolls)
-          so it cannot stretch into dead space above the canvas. */}
+      {/* Three panes at `@6xl`. Narrower, the detail pane replaces the canvas while open;
+          stacked, the list is height-capped. */}
       <div className="flex-1 min-h-0 grid gap-3 grid-rows-[auto_minmax(0,1fr)] @3xl:grid-rows-1 @3xl:grid-cols-[minmax(220px,280px)_minmax(0,1fr)] @6xl:grid-cols-[minmax(200px,250px)_minmax(0,1fr)_minmax(330px,400px)]">
         <div ref={listRef}
           className="min-h-0 max-h-44 @3xl:max-h-none overflow-y-auto rounded-xl border p-border p-surface p-1.5 space-y-0.5">
@@ -181,17 +131,9 @@ export function ExplorationSurface({
   );
 }
 
-/* ── the run list ──────────────────────────────────────────────── */
-
 /**
- * The run's state as a dot, in the product's own status vocabulary.
- *
- * `running` is the ACCENT, pulsing: that is what work in flight looks like in
- * the sidebar, on a subordinate, in the composer and on a tool call, and this
- * surface was the one place it was drawn as a WARNING instead. Two costs, both
- * reported: a healthy search read as a problem, and in light mode `--c-warning`
- * (#7E5205) sits a hair from `--c-text-3` (#5E5344), so running and
- * stopped-without-an-answer were the same brown dot.
+ * `running` uses the pulsing accent as elsewhere in the product; in light mode
+ * `--c-warning` is indistinguishable from `--c-text-3`.
  */
 const RUN_DOT = {
   running: "p-dot-accent",
@@ -200,22 +142,9 @@ const RUN_DOT = {
   partial: "p-dot-neutral",
 } satisfies Record<ForkRunSummary["status"], string>;
 
-
 /**
- * What the run is DOING, in one line.
- *
- * The one sentence the run list, the detail pane and the band caption all say, so
- * they cannot come to disagree about a run three surfaces are describing at once.
- *
- * NOT what the run was CONFIGURED as. `preset=ideate · settle=merge · 0
- * branches` on the row, over the canvas and on every band is what the owner's
- * *"User doesnt have to be shoved all these stuff into their faces"* is about,
- * and none of it answers the question a reader of this surface actually has.
- * The resolution is one click away in {@link SwarmConfigDisclosure}; what leads
- * is the state.
- *
- * A refusal's distinct reason follows its stored status, so the row names both
- * the canonical state and why it reached no answer.
+ * The run's current state in one line, shared by the list, detail pane and band caption
+ * so they agree. A refusal's reason follows its stored status.
  */
 export function runStateLine(
   run: ForkRunSummary, liveness: RunLiveness | null, refusal: RunRefusal | null,
@@ -231,29 +160,14 @@ export function runStateLine(
   return parts.join(" · ");
 }
 
-/**
- * What KIND of search a run was, one word — the preset's name, or `custom`
- * for a composition. The type rides beside a run's name wherever the name
- * does: two searches of one task differ by their name, and two runs of one
- * name differ by their kind.
- */
+/** The preset's name, or `custom` for a composition. */
 function runKind(resolution: SwarmResolution | undefined): string | null {
   if (resolution === undefined) return null;
 
   return resolution.kind === "preset" ? resolution.preset : "custom";
 }
 
-/**
- * One run, as a row: its NAME and kind, what became of it, and what its
- * nodes are doing — and NOTHING about how it was dispatched. No
- * `preset=ideate · settle=merge · 0 branches` leading the row; the owner's
- * ruling governs: *"User doesnt have to be shoved all these stuff into their
- * faces. They can maybe look at the config IF they want to."* The resolution
- * and the axes live behind the disclosure on the selected run.
- *
- * The name leads because a truncated task paragraph is not an identity; the
- * full task stays on the row as its tooltip.
- */
+/** The name leads; the full task is the tooltip. Config stays behind the disclosure. */
 function ForkRunRow(
   { run, kind, liveness, refusal, selected, onSelect }: {
     run: ForkRunSummary;
@@ -287,14 +201,8 @@ function ForkRunRow(
 }
 
 /**
- * The nodes, counted by what they are doing. One phrase, and only the parts that
- * are non-zero: `5 running · 2 reported` on a live search, `8 reported` on a
- * settled one. A tally of zeroes would assert that nodes exist and are idle,
- * which is the false reading the owner was given.
- *
- * Takes the counts and not the whole liveness, so a LEVEL is tallied by the same
- * function as a run. Two sentences for the same four numbers is how "5 running"
- * at the top comes to disagree with the levels under it.
+ * Non-zero counts only: a tally of zeroes would claim idle nodes exist. Shared by run
+ * and level so the two cannot disagree.
  */
 function nodeTally(counted: Pick<RunLiveness, "running" | "reported" | "failed" | "total">): string {
   const parts: string[] = [];
@@ -308,19 +216,9 @@ function nodeTally(counted: Pick<RunLiveness, "running" | "reported" | "failed" 
   return parts.length === 0 ? `${counted.total} nodes` : parts.join(" · ");
 }
 
-/* ── one run: its tree, and whatever the selected branch actually was ── */
-
 /**
- * One run's per-node journal — why each node exists, what it reported, and how far
- * it got.
- *
- * Asked for EVERY run that HAS one, never for one settle tag. An agent-unit search
- * writes `search_nodes` for the tree AND `head_journal` for each node's own agent
- * run, so a tag that admits one store per run could not say whether this read has an
- * answer — the run's own `hasNodeTranscripts` can, and a run with none is spared the
- * request rather than answered null by the server. It is also the only record of
- * which nodes fanned a level in and of the preset the run resolved, so skipping it
- * for a search is what left both invisible.
+ * Fetched for every run with `hasNodeTranscripts`; the journal is the only record of
+ * fan-in and of the resolved preset.
  */
 function useForkRunDetail(run: ForkRunSummary, rpc: Rpc, hasActiveWork: boolean) {
   const load = useCallback(
@@ -343,18 +241,8 @@ function useForkRunDetail(run: ForkRunSummary, rpc: Rpc, hasActiveWork: boolean)
 }
 
 /**
- * One run's tree and its resolution — the single-run drill-down.
- *
- * A search in flight is served by the broadcast tree instead of a fetch: the
- * engine pushes a tree per iteration, and polling for that would be both slower
- * and noisier. The canvas does not use this — it has every tree from one
- * projection.
- *
- * BOTH halves fold, through the one fold the canvas uses. Choosing between them
- * — search rows if there are any, the journal only if there are none — drew a
- * running swarm as its root alone: the root's tree row lands at dispatch, so
- * "there are search rows" is true from the first millisecond and every node
- * still working was in the half that was never read.
+ * A live search uses the broadcast tree. Search rows and journal always both fold: the
+ * root's row lands at dispatch, so reading one half hides nodes still working.
  */
 export function useForkRunTree(
   run: ForkRunSummary, rpc: Rpc, liveTree: ForkNode | null, hasActiveWork: boolean,
@@ -375,51 +263,28 @@ export function useForkRunTree(
 
   const { resource, reload } = useAsyncResource(load, revalidate, `search:${run.id}`);
   const rows = lastValue(resource);
-  // Which half a reader is WAITING on, and the resolution's discriminator. Not
-  // which half the tree is folded from — both are.
+  // Which half a reader is waiting on; the tree folds from both.
   const searched = run.hasSearchTree;
   const fetched = explorationForkTree({ tree: rows ?? [], head: detail.headRun });
 
   return {
     tree: liveTree ?? fetched,
     headRun: detail.headRun,
-    // Only a SEARCH writes both stores, and `head_runs.rationale` means two
-    // different things depending on which kind of run wrote it — a search's
-    // preset-or-label, or a pre-swarm split's prose "why". Holding both halves is
-    // the discriminator; see the note on `resolutions` in ./fork-runs.
+    // Only a search writes both stores, and `head_runs.rationale` differs by run kind;
+    // see `resolutions` in ./fork-runs.
     resolution: searched ? swarmResolutionOf(detail.headRun?.rationale) ?? undefined : undefined,
     fanIn: fanInVertices(detail.headRun),
     why: nodeRationales(detail.headRun),
     refusal: runRefusal(run, detail.headRun),
-    // The tree read is what a reader is waiting on, so its failure is the one
-    // reported. A journal that failed beside a tree that arrived costs the fan-in
-    // marks and nothing else, and reporting it would hide the picture over a
-    // caption.
+    // Only the tree read's failure is reported; a failed journal costs just the fan-in marks.
     resource: searched ? resource : detail.resource,
     reload: searched ? reload : detail.reload,
   };
 }
 
-/* ── one RUN, opened ───────────────────────────────────────────── */
-
 /**
- * A run, opened.
- *
- * The owner's requirement for this slot: *"this section — does it only show the
- * node? WHY? It should show everything about a particular run in detail
- * including it's live branches being updated live."* A pane that stays blank
- * until a node is clicked on the canvas, and then shows one node, does not meet
- * it.
- *
- * So the pane is the RUN: its objective, what its nodes are doing right now,
- * every report that landed, and its configuration behind a disclosure. A branch
- * opens INSIDE it — {@link ForkBranchView} nested rather than swapped in —
- * because a branch's trace only means something beside the run's own state, and
- * leaving the run to read a node is what made the surface a node viewer.
- *
- * Everything it renders comes from the page's one read: `head` is the journal,
- * which is the only store that holds a node that has not reported, and `tree` is
- * the folded tree, which is where a node's score lives.
+ * The whole run: objective, live node state, reports, config; a branch opens inside it.
+ * `head` (journal) holds unreported nodes; `tree` holds scores.
  */
 function RunDetailView({
   run, params, resolution, journal, tree, frontier, branchId, trees, rpc, headActivity, headDeltas, onOpenBranch, onClose,
@@ -429,18 +294,15 @@ function RunDetailView({
   resolution: SwarmResolution | undefined;
   journal: HeadRunView | null;
   tree: ForkNode | null;
-  /** The settled Pareto front. Null for every run that settled to one number. */
+  /** Null unless the run settled to a Pareto front. */
   frontier: ExplorationFrontier | null;
-  /** The branch open inside this run, or null for the run itself. */
   branchId: string | null;
   trees: ReadonlyMap<string, ForkNode>;
   rpc: Rpc;
   headActivity: ReadonlyMap<string, number>;
   headDeltas?: HeadDeltas;
   onOpenBranch: (branchId: string | null) => void;
-  /** Give the column back to the canvas. Only reachable below `@6xl`, where the
-   *  pane took the canvas's place; wider, the two are side by side and there is
-   *  nothing to give back. */
+  /** Only reachable below `@6xl`, where the pane replaced the canvas. */
   onClose: () => void;
 }) {
   const liveness = runLiveness(journal);
@@ -459,9 +321,7 @@ function RunDetailView({
           </div>
           <RunObjective task={run.task} />
           <div className="mt-0.5 p-meta p-text-3 tabular-nums">
-            {/* The tally is stated in the liveness panel below, so the header
-                carries the outcome and the winner only — one number in two places
-                is how a surface starts contradicting itself. */}
+            {/* The tally is in the liveness panel; the header carries outcome and winner only. */}
             {runStateLine(run, null, refusal)}
           </div>
         </div>
@@ -486,14 +346,9 @@ function RunDetailView({
   );
 }
 
-/** How much objective reads as a heading rather than as a wall. Matched to
- *  `NodeTranscript`'s own clamp, because they are the same kind of text in the
- *  same column and two different thresholds would read as a bug. */
+/** Matches `NodeTranscript`'s clamp: same kind of text in the same column. */
 const OBJECTIVE_CLAMP = 240;
 
-/** The run's objective, pinned and expandable — the same treatment a node's task
- *  gets, for the same reason: it is a paragraph often enough that clamping it is
- *  right, and the thing every other fact in the pane is about. */
 function RunObjective({ task }: { task: string }) {
   const [expanded, setExpanded] = useState(false);
   const long = task.length > OBJECTIVE_CLAMP;
@@ -515,18 +370,8 @@ function RunObjective({ task }: { task: string }) {
 }
 
 /**
- * Is it alive, and where is the work.
- *
- * The one thing a running search could not say about itself. `runRefusal` is null
- * while a run is running — correctly — so the surface's whole vocabulary for a
- * live run was the word `running` and a picture, which the owner read as dead on
- * six separate occasions.
- *
- * Level by level, from the journal's own depth, because "5 running" over a
- * depth-3 search does not say which level is moving. The newest event is the
- * number that actually answers "is it alive": a run whose last step was four
- * seconds ago is working whatever its status column says, and one whose last step
- * was an hour ago is not.
+ * Per-level liveness from journal depth. The newest event time is what shows a run is
+ * alive; `runRefusal` is null while running.
  */
 export function RunLivenessPanel({ live, running }: { live: RunLiveness; running: boolean }) {
   return (
@@ -537,9 +382,7 @@ export function RunLivenessPanel({ live, running }: { live: RunLiveness; running
           {running ? "last step " : "last activity "}{timeAgo(live.lastEventAt)}
         </span>
       </div>
-      {/* One line per level, and only when there is more than one: a flat search
-          says everything it has to say in the tally above, and a second row
-          repeating it is the clutter this surface is being cleared of. */}
+      {/* Per-level rows only when there is more than one level. */}
       {live.levels.length > 1 && (
         <div className="mt-1 space-y-0.5">
           {live.levels.map((level) => <RunLevelRow key={level.depth} level={level} />)}
@@ -558,15 +401,7 @@ function RunLevelRow({ level }: { level: RunLevel }) {
   );
 }
 
-/**
- * A settled Pareto front: the run's answer when it settled to a frontier
- * rather than to one number.
- *
- * A `settle:'front'` run has no winner — `best` is null by design — so without
- * this panel its header reads `completed` beside a tree and never says what the
- * search found. Each candidate opens its branch, because a frontier row without
- * the report behind it is a score without the work.
- */
+/** A `settle:'front'` run has null `best`; this panel shows what it found. */
 export function FrontierPanel({ frontier, onOpen }: {
   frontier: ExplorationFrontier;
   onOpen: (nodeId: string) => void;
@@ -593,17 +428,7 @@ export function FrontierPanel({ frontier, onOpen }: {
   );
 }
 
-/**
- * Every node of the run, and what it is doing.
- *
- * The reachable list the canvas is not: a node is a dot on a graph there, and a
- * reader who wants to open the one that just reported has to find it. Newest
- * activity first, so the node that just moved is the node at the top.
- *
- * From the JOURNAL, never from the tree: the journal is the only store holding a
- * node that has not reported, and a list built from settled rows is the same
- * blindness that drew a running swarm as its root alone.
- */
+/** Built from the journal, the only store holding unreported nodes; newest activity first. */
 function RunNodeList({ journal, tree, activity, onOpen }: {
   journal: HeadRunView | null;
   tree: ForkNode | null;
@@ -637,8 +462,7 @@ function RunNodeList({ journal, tree, activity, onOpen }: {
   );
 }
 
-/** Every scored node of the folded tree, by id. A node the journal has and the
- *  tree has not is a node still running, and it carries no score by design. */
+/** A node in the journal but not the tree is still running and has no score. */
 function nodeScores(tree: ForkNode | null): ReadonlyMap<string, number> {
   const scores = new Map<string, number>();
 
@@ -656,17 +480,13 @@ function nodeScores(tree: ForkNode | null): ReadonlyMap<string, number> {
 function RunNodeRow({ node, score, moving, onOpen }: {
   node: HeadRunView["heads"][number];
   score: number | null;
-  /** This node has written to its journal since the surface mounted — the
-   *  `head_activity` push, the same signal the canvas pulses a node on. */
+  /** Written to since mount, via the `head_activity` push. */
   moving: boolean;
   onOpen: () => void;
 }) {
   const live = node.status === "running";
-  // The provider told this turn to wait, and it still produced nothing. That is
-  // capacity to pace against, not a wedge to investigate, so it does not get the
-  // same red prose as a fault. Classified through the one classifier `chat.ts`
-  // exports beside the code that writes these messages, never a regex here — a
-  // reworded sentence must not silently reclassify.
+  // A provider-paced empty turn is capacity, not a fault. Classified via `chat.ts`'s
+  // classifier, never a regex here, so rewording cannot reclassify.
   const rateLimited = node.errorMessage !== null && isRateLimitedTurnError(node.errorMessage);
 
   return (
@@ -684,10 +504,6 @@ function RunNodeRow({ node, score, moving, onOpen }: {
             ? ` · ${node.lastStepAt === null ? "no step yet" : `last step ${timeAgo(node.lastStepAt)}`}`
             : node.wallClockMs > 0 && ` · ${Math.round(node.wallClockMs / 1000)}s`}
         </div>
-        {/* The finding, not a summary of the node. One line of it here and the
-            whole of it in the transcript: this list is scanned for which node
-            found something, and a node with a report but no visible trace of one
-            is why the owner could not tell a working search from a dead one. */}
         {node.summary !== null && (
           <div className="mt-0.5 p-row-text p-text-2 line-clamp-2">{node.summary}</div>
         )}
@@ -703,41 +519,18 @@ function RunNodeRow({ node, score, moving, onOpen }: {
   );
 }
 
-/* ── one branch, opened inside its run ─────────────────────────── */
-
-/**
- * A branch, opened.
- *
- * The owner's ask was for the chat, not a card: *"it should just be like a chat
- * view except there are no user inputs or user messages."* So the body is
- * {@link NodeTranscript}, which renders every step through the SAME
- * `MessageView` the main thread uses; what stays here is the way back to the run
- * it belongs to.
- *
- * The metadata card this replaced (a verdict grid, a clamped summary, and a step
- * list that truncated reasoning to three lines and tool output to 160
- * characters) could not answer "what did this branch actually do", which is the
- * whole reason a reader opens one.
- *
- * It closes back to the RUN, not to the canvas: the run is where the reader came
- * from and the frame this now sits inside, so the header says which run and the
- * control returns to it.
- */
+/** The body is `NodeTranscript` (same `MessageView` as the main thread); closes back to the run. */
 function ForkBranchView({
   run, branchId, trees, rpc, headActivity, headDeltas, nodeCount, onBack, onOpenBranch,
 }: {
   run: ForkRunSummary;
   branchId: string;
-  /** Every drawn tree, keyed by run — the transcript names a node from it when
-   *  the store has no record of that node at all. */
+  /** Keyed by run; names a node the store has no record of. */
   trees: ReadonlyMap<string, ForkNode>;
   rpc: Rpc;
   headActivity: ReadonlyMap<string, number>;
   headDeltas?: HeadDeltas;
-  /** How many nodes the list behind this one holds. The JOURNAL's count, because
-   *  `ForkRunSummary.branches` counts settled search rows: on a live run those
-   *  disagree by every node still working, and "all 2 nodes" over a list of nine
-   *  is the same kind of wrong number as the tree that drew two of them. */
+  /** The journal's count; `ForkRunSummary.branches` counts only settled search rows. */
   nodeCount: number;
   onBack: () => void;
   onOpenBranch: (branchId: string) => void;
@@ -758,26 +551,12 @@ function ForkBranchView({
   );
 }
 
-/** The canvas card's hairline, top and bottom — the difference between the box
- *  the column measures and the box the graph is laid out in. */
+/** Card hairline, top and bottom: the measured box vs. the graph's layout box. */
 const CARD_BORDER = 2;
 
 /**
- * The canvas: every tree the workspace has grown, on ONE surface.
- *
- * Rendering exactly one tree — the run selected in the list — leaves a workspace
- * with five forks showing one of them while the other four exist only as rows.
- * One FIXED-HEIGHT canvas per run, stacked in cards, is worse in the way that
- * matters: the room a tree can use is decided before anyone knows how big the
- * tree is, so a three-node merge holds 300px it cannot fill while a hundred-node
- * search is squeezed into the same 300px, and a card's chrome and gutter are
- * spent on every run.
- *
- * One canvas, one zoom, one scene. Every run is a band inside it under a soft
- * boundary, sized to the tree it holds; the selected band is lit and the others
- * recede without leaving. Choosing from the list FOCUSES a band — the view
- * refits to it — rather than filtering to it, so the comparison that made the
- * reader open the tab stays on screen.
+ * Every run as a band on one canvas, sized to its tree. Choosing from the list focuses
+ * (refits to) a band rather than filtering.
  */
 function ForkCanvas({
   runs, trees, journals, focusedId, selection, onFocus, onSelectNode, expandTo,
@@ -785,37 +564,24 @@ function ForkCanvas({
 }: {
   runs: readonly ForkRunSummary[];
   trees: ReadonlyMap<string, ForkNode>;
-  /** Per-run node journals — what makes a fan-in vertex visible in the picture. */
+  /** Per-run node journals; source of fan-in vertices. */
   journals: ReadonlyMap<string, HeadRunView>;
   focusedId: string;
   selection: ExplorerSelection | null;
   onFocus: (runId: string) => void;
   onSelectNode: (selection: ExplorerSelection) => void;
-  /** Full-screen permalink for the focused run, or null outside a workspace. */
   expandTo: string | null;
-  /** Per-node journal write counters — what makes a working node visible IN THE
-   *  PICTURE. This reached the branch panel and stopped there, so the canvas
-   *  could not say which of a hundred nodes was moving. */
+  /** Per-node journal write counters; pulse working nodes on the canvas. */
   activity: ReadonlyMap<string, number>;
 }) {
-  /** Three measurements, each of a box that cannot be the one it constrains.
-   *  `cell` is the column's whole height and never shrinks, so it is a stable
-   *  budget; `chrome` is the header stack above the graph; `size` is the graph
-   *  box, read for its WIDTH only — its height is set here, so measuring it for
-   *  height would be a loop that could only ever ratchet down. */
+  /** `cell`: column height, a stable budget. `chrome`: header stack. `size`: read for width
+   *  only, since its height is set here (measuring it would ratchet down). */
   const { attach: attachCell, size: cell } = useElementSize();
   const { attach: attachChrome, size: chrome } = useElementSize();
   const { attach, size } = useElementSize();
 
-  // Memoised on the identities the render actually depends on: the tree objects
-  // only swap when their rows changed, so a poll that changed nothing does not
-  // rebuild the scene. A fresh array here would redraw every tree per poll.
-  //
-  // A band's caption says what its run is DOING — the same sentence the list and
-  // the detail pane say. Not the resolution and the branch count: those put
-  // `preset=audit (undeclared) · 2 branches` across the top of every tree on the
-  // canvas — config over a picture, on the surface whose whole complaint is
-  // config over a picture. The resolution is in the disclosure.
+  // Memoised on tree identities so a no-op poll does not rebuild the scene. Band
+  // captions use the run's state sentence, not its config.
   const regions = useMemo(
     () => runs.flatMap((run) => {
       const root = trees.get(run.id);
@@ -836,55 +602,30 @@ function ForkCanvas({
   const focused = runs.find((run) => run.id === focusedId) ?? null;
   const refusal = focused === null ? null : runRefusal(focused, journals.get(focusedId) ?? null);
 
-  /** What the searches WANT, measured off the same layout the canvas draws with
-   *  — never a second stacking rule that could disagree with it. Null where
-   *  there is no tree to want anything: the box then holds a sentence, and a
-   *  sentence is centred in the room it is given. */
+  /** Measured off the canvas's own layout. Null with no tree: the box holds a centred sentence. */
   const natural = useMemo(
     () => (regions.length === 0 ? null : naturalCanvasHeight(regions)),
     [regions],
   );
 
-  /** The column's remaining height, capped at that. Zero until the cell has
-   *  been measured, which the graph box below renders as "sizing" rather than
-   *  as an empty canvas.
-   *
-   *  The card's own hairline is subtracted because `cell` is measured OUTSIDE
-   *  it and the graph is laid out inside: without it the graph is two pixels
-   *  taller than the card can hold and `overflow-hidden` takes them off the
-   *  bottom of the key. */
+  /** Remaining column height minus the card hairline (`cell` is measured outside the card).
+   *  Zero until measured. */
   const budget = Math.max(0, cell.h - CARD_BORDER - chrome.h);
   const canvasH = natural === null ? budget : Math.min(budget, natural);
-  /** Until both axes are known the graph has no box to draw in. */
   const measured = size.w > 0 && canvasH > 0;
 
   return (
-    // Two boxes, not one. The outer is the column's whole height and is what
-    // the canvas budget is measured against; the card inside HUGS what it
-    // holds, so a workspace of short searches does not draw a bordered box
-    // with several hundred pixels of nothing under its trees.
+    // The outer box is the measured budget; the inner card hugs its content.
     <div ref={attachCell} className="h-full min-h-0">
       <div data-tree-card className="flex max-h-full flex-col rounded-xl border p-border p-surface overflow-hidden">
         <div ref={attachChrome} className="shrink-0">
-          {/* What the bar does NOT carry: the run count, the focused task and
-              a config chip over every search at once — three facts about ONE
-              run sitting in the GLOBAL area. The count is the list's job, the
-              task is the band caption's, and the resolution lives in the detail
-              pane's disclosure. The bar is the refusal note when the focused
-              run has one; Expand floats on the canvas itself. */}
           {refusal !== null && <RunRefusalNote refusal={refusal} />}
         </div>
-        {/* The graph gets every pixel the searches can USE and no more: the
-            column's remaining height, capped at what the scene wants at 1:1.
-            `flex-1` alone gives a three-node merge the whole column, which is the
-            fixed-height-card defect from the other direction. */}
+        {/* Remaining height capped at the scene's 1:1 size; `flex-1` alone over-sizes small trees. */}
         <div ref={attach} className="relative shrink-0 min-h-0" style={{ height: canvasH }}>
           {regions.length === 0 && (
             <div className="h-full flex items-center justify-center px-6 text-center p-t-status p-text-3">
-              {/* Said in the present tense for a search that is still going, because
-                  the past tense is a false claim about it: "each stopped before its
-                  first expansion" over a run that is working reports a live search
-                  as dead, which is what the liveness panel exists to prevent. */}
+              {/* Present tense for a running search; past tense would report it as dead. */}
               {focused?.status === "running"
                 ? "The search has not written a branch yet."
                 : "These searches wrote no branches. Each stopped before its first expansion."}
@@ -913,21 +654,7 @@ function ForkCanvas({
   );
 }
 
-/**
- * The run's configuration, ASKED FOR.
- *
- * The whole of what the exploration surface knows about how a run was dispatched
- * — the preset or composition it resolved, the six axes it resolved to, the caps,
- * the judge clamp and the dispatch parameters — behind one summary chip.
- *
- * Never unconditional chrome above every tree — the owner's ruling on that is
- * quoted at {@link ForkRunRow}. The chip is not nothing, though: the resolved
- * name is the one fact that distinguishes two runs of the same task, so it
- * stays visible and only the tuple folds away.
- *
- * ONE component for both surfaces. A second copy in the full-screen explorer is
- * how the same clutter reaches the reader twice.
- */
+/** Run config behind one chip; the resolved name stays visible. Shared with the full-screen explorer. */
 export function SwarmConfigDisclosure(
   { resolution, paramRows = [], judges = null }: {
     resolution: SwarmResolution | undefined;
@@ -955,20 +682,8 @@ export function SwarmConfigDisclosure(
 }
 
 /**
- * The resolution a run resolved: which preset, and the tuple that preset resolved TO.
- *
- * The tuple and not the name alone. `resolve(preset) → SwarmConfig` is a table, and
- * the same name resolving differently is precisely what a reader needs to see — so
- * the six axes are printed beside the name, each carrying the parameter that
- * belongs to its value, and `settle` beside them is DERIVED from two of those axes
- * rather than chosen.
- *
- * Three resolutions and three renderings. A preset that cannot be constructed as printed
- * says so and quotes what the table has not stated, because an empty axis list
- * would read as "unknown" when what is true is "undeclared". A composition reaches
- * the client as its provenance label alone — its resolved axes live in a records
- * digest with no read model — and the panel says that rather than leaving a reader
- * to assume the axes were the defaults.
+ * Preset name plus the tuple it resolved to; `settle` is derived from two axes. A
+ * composition reaches the client as its provenance label only, and the panel says so.
  */
 function SwarmResolutionBody(
   { resolution, paramRows, judges }: {
@@ -990,9 +705,6 @@ function SwarmResolutionBody(
       className="mt-1 rounded-md border p-border p-recessed px-3 py-2">
       {resolution !== undefined && (
         <>
-      {/* One line naming the run, and ONE accent on it. Everything else in this
-          panel is a fact about the tuple; the name is the thing a reader is
-          looking for, so it is the only thing coloured. */}
       <div className="flex flex-wrap items-baseline gap-x-2 gap-y-1">
         <span className="p-eyebrow shrink-0">
           {resolution.kind === "custom" ? "composition" : "preset"}
@@ -1008,12 +720,7 @@ function SwarmResolutionBody(
         )}
       </div>
 
-      {/* THE TUPLE, as a tuple. Six `axis:value` chips in one wrapping sentence
-          read as a run of mono text at any width and as a wall of it at 313px,
-          which is the crowding the owner named. A grid of labelled cells fitted
-          to the available width — no breakpoint, `auto-fit` decides — gives every
-          axis its own column, so a value has room to WRAP rather than truncate
-          and no axis is ever the one that got hidden. */}
+      {/* `auto-fit` grid so each axis value wraps rather than truncates. */}
       {resolution.kind === "preset" && (
         <dl className="mt-1.5 grid gap-x-3 gap-y-1.5 [grid-template-columns:repeat(auto-fit,minmax(5.25rem,1fr))]">
           {swarmAxisRows(resolution.config).map((row) => (
@@ -1048,10 +755,7 @@ function SwarmResolutionBody(
         </div>
       )}
 
-      {/* What the run was DISPATCHED with, beside what its preset resolved to.
-          Two different facts — the caps a preset states are not the budget a
-          caller passed — and they belong in the same disclosure because a reader
-          who opens one wants both. */}
+      {/* Dispatch parameters beside the preset's stated caps; they differ. */}
       {paramRows.length > 0 && (
         <div className="mt-1.5 flex flex-wrap items-baseline gap-x-3 gap-y-0.5 border-t p-border pt-1.5 p-annotation p-text-3">
           {paramRows.map((row) => (
@@ -1065,12 +769,7 @@ function SwarmResolutionBody(
   );
 }
 
-/**
- * What each axis DECIDES, one line each, quoted from the declarations in
- * `core/src/strategy/swarm.ts` rather than paraphrased here — the panel is the
- * only place a first-time reader meets these six words, and a gloss that drifts
- * from the axis it names is worse than none.
- */
+/** Quoted from the declarations in `core/src/strategy/swarm.ts`, not paraphrased. */
 const AXIS_MEANING = {
   unit: "what one node produces",
   context: "what a child starts from",
@@ -1081,20 +780,8 @@ const AXIS_MEANING = {
 } as const satisfies Record<SwarmAxis, string>;
 
 /**
- * A run that reached nothing, said as a refusal rather than left to a picture of
- * nothing.
- *
- * Reason first — the vocabulary every refusal in this tree carries, so a reader
- * branches on the class rather than parsing the prose — then the cause, which is a
- * branch's own error message wherever one recorded it.
- *
- * A BANNER above the tree, never a replacement for it, and that is the whole of the
- * design decision here. A refused run still has a root, and often has branches that
- * failed for a reason worth reading; swapping the canvas for a card would hide them,
- * and on the shared canvas it would hide every OTHER search because one of them was
- * refused. What the banner fixes is the actual defect: a one-dot canvas under a
- * settled-looking label, which reads as "the search found nothing" and is a claim
- * about the world rather than about this run.
+ * A banner above the tree, never replacing it: a refused run still has branches worth
+ * reading, and on the shared canvas a replacement would hide other runs.
  */
 export function RunRefusalNote({ refusal }: { refusal: RunRefusal }) {
   return (

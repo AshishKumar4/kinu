@@ -1,12 +1,3 @@
-/**
- * The chat message renderer — one `UIMessage` as the transcript shows it.
- *
- * Lives beside the transcripts that render it rather than inside the workspace
- * route, so the main chat, a node transcript and the gallery can all reach the
- * one renderer without importing a page. Everything a message can contain owns
- * a piece of this file: prose, reasoning, tool runs, files, the programmatic
- * turns the backend enqueued, and the per-message affordances.
- */
 import { Fragment, memo, useState, useRef, useEffect, useCallback, type ReactNode } from "react";
 import {
   WrenchIcon, CaretDownIcon, CaretRightIcon,
@@ -55,8 +46,7 @@ const MessageCreatedAtSchema = v.looseObject({
 });
 
 
-/** The SDK's message type declares no timestamp, so the stamp the transport
- *  carried is read off the value itself. */
+/** The SDK's message type declares no timestamp; the transport's stamp is read off the value. */
 function messageCreatedAt(message: UIMessage): string | number | Date | undefined {
   const parsed = v.safeParse(MessageCreatedAtSchema, message);
 
@@ -67,8 +57,6 @@ function formatTime(date: Date): string {
   return date.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
 }
 
-/** Render one file part inside a message: inline preview for images, a
- *  filename chip for everything else. */
 function FilePartView({ part }: { part: FileUIPart }) {
   return part.mediaType.startsWith("image/")
     ? <img src={part.url} alt={part.filename ?? "image"} className="max-h-48 max-w-full rounded-lg border p-border" />
@@ -84,33 +72,15 @@ function MessageTimestamp({ createdAt }: { createdAt?: string | number | Date })
   return <span className="p-annotation p-text-3 mt-1 block">{formatTime(d)}</span>;
 }
 
-/**
- * The gap above a render block, by how much air the block needs.
- *
- * One uniform `space-y-5` sat between every pair of blocks, so a run of quiet
- * 32px tool rows read as a sparse list of unrelated events — the reported
- * density complaint. A settled call is a LINE in a list and takes a line's
- * gap; prose and a grouped card are SECTIONS and keep their air. The block
- * carries its own margin rather than the stack imposing one, because a stack
- * utility cannot be overridden per child.
- */
+// A settled call takes a line's gap, prose and grouped cards a section's. The block carries
+// its own margin because a stack utility cannot be overridden per child.
 const BLOCK_GAP = {
   row: "mt-1.5 first:mt-0",
   section: "mt-4 first:mt-0",
 } as const;
 
-/**
- * ONE "Thinking" affordance, and two things wear it.
- *
- * A pause between steps and a reasoning block are the same fact to a reader —
- * the model is thinking — and they were drawn as two unrelated shapes: a dotted
- * shimmering row for the pause, a bordered block with a pulsing word for the
- * reasoning. A turn that reasons, pauses, reasons again swapped between them on
- * every transition, which is the "Thinking appears and disappears" the owner
- * reported. So the LABEL is one component and the block is the label plus its
- * words; a reasoning part that arrives while the pause row is showing adds its
- * text under the same line rather than replacing it with another shape.
- */
+// A pause and a reasoning block share one "Thinking" label so the indicator keeps its shape
+// across transitions; reasoning text lands under the same line.
 function ThinkingLabel({ live }: { live: boolean }) {
   return (
     <span className="flex items-center gap-2">
@@ -120,10 +90,7 @@ function ThinkingLabel({ live }: { live: boolean }) {
   );
 }
 
-/** The live tail when nothing is arriving — between a settled call and whatever
- *  the model does next, or before its first token. Rendered only where
- *  `liveTail` says the stream is open with no active part, so it stops the
- *  moment anything lands. */
+/** Rendered only while the stream is open with no active part. */
 function ThinkingRow() {
   return (
     <div data-live-indicator="thinking" className="animate-fade-in py-1.5" aria-live="polite">
@@ -132,16 +99,8 @@ function ThinkingRow() {
   );
 }
 
-/**
- * The thread's live tail, rendered by the surface that owns the whole thread.
- *
- * It is a SIBLING of the message list rather than a child of its last message
- * because a turn that has not written an assistant row yet has no message to
- * hang it on — the state the wedge report was taken in. A tail that points at
- * a part (text, reasoning, a call in flight) is drawn by that part's own row,
- * so this draws only the between-parts case, and the thread carries exactly
- * one indicator either way.
- */
+// A sibling of the message list, not a child of its last message: a turn with no assistant
+// row yet has nothing to hang it on.
 export function ChatLiveTail({ tail }: { tail: LiveTail | null }) {
   return tail?.kind === "thinking" ? <ThinkingRow /> : null;
 }
@@ -180,9 +139,6 @@ function ReasoningBlock({ text, live = false }: { text: string; live?: boolean }
   );
 }
 
-/** The turn stopped with work still pending — the loop ended while the model
- *  was still calling tools. Durable, from the answer row's own metadata, so it
- *  survives a reload rather than living in one tab's stream state. */
 function StoppedMidWorkRow() {
   return (
     <div className="flex items-center gap-2 p-row-text p-text-3" role="status">
@@ -241,12 +197,9 @@ function toolIcon(toolName: string): ReactNode {
 function ToolCallBlock({ toolName, input, output, effect, isRunning, isError, errorText, expanded, onToggleExpand }: {
   toolName: string; input?: JsonObject; output?: JsonValue; isRunning: boolean; isError: boolean;
   effect: ToolCallEffect;
-  /** The transport's own reason for a protocol-level failure (a crashed
-   *  executor, a timeout) — distinct from `output`, which a tool that caught
-   *  its own failure returns as an ordinary result. Never present together. */
+  /** Protocol-level failure reason; never present together with `output`. */
   errorText?: string;
-  /** Expansion lives on the message, keyed by toolCallId: a row that folds
-   *  into a group mid-stream remounts, and local state would not survive it. */
+  /** Keyed by toolCallId on the message: a row folding into a group mid-stream remounts. */
   expanded: boolean;
   onToggleExpand: () => void;
 }) {
@@ -256,49 +209,36 @@ function ToolCallBlock({ toolName, input, output, effect, isRunning, isError, er
 
   useEffect(() => {
     if (isRunning) {
-      // Tool just started running — record the start time
       startTime.current = Date.now();
       wasRunning.current = true;
       setElapsed(null);
     } else if (wasRunning.current && startTime.current) {
-      // Tool finished — we actually observed it running, so compute real duration
       setElapsed(Date.now() - startTime.current);
       wasRunning.current = false;
     }
-    // If component mounts with isRunning=false and wasRunning is false,
-    // we never observed the tool running — don't show any duration.
+    // Mounted already settled: never observed running, so no duration.
   }, [isRunning]);
 
   const durationLabel = elapsed !== null && elapsed > 100 ? `${(elapsed / 1000).toFixed(1)}s` : null;
 
-  // Surface the runtime the `shell` tool dispatched on so the user can see
-  // at a glance whether the agent ran something in workspace / sandbox /
-  // device. Default = workspace.
   const runtime = toolName === 'shell'
     ? (jsonString(input, "runtime") ?? 'workspace')
     : null;
 
   const provisionErr = parseProvisionError(output);
-  // What this call is actually about, from its own arguments — without it a
-  // row of `agents` chips is six identical rows for six different calls.
   const summary = summarizeToolCall(toolName, input);
   const description = describeToolCall(toolName, input);
 
   const failed = isError || provisionErr !== null;
   const prominent = effect === 'mutate' || isRunning;
 
-  // The free-text previews — an eval program or a run command —
-  // render their argument verbatim rather than as pretty-printed JSON, so the
-  // structured `redactPayload` walk never reaches them. They pass through the
-  // same policy's value-level half (`redactSecrets`) before render: a token
-  // inside a shell command is the same leak as one inside a named field.
+  // Free-text previews bypass the structured `redactPayload` walk, so they pass through
+  // `redactSecrets` here.
   let codePreview: string | null = null;
 
   if (toolName === "eval") codePreview = jsonString(input, "code");
   else if (toolName === "shell") codePreview = jsonString(input, "command");
 
-  // The call's state once: the marker the tests read, the chip's colour and its
-  // words, so the three can never disagree.
   let stateName = "done";
   let stateTone = "p-badge-success";
   let stateBadge: ReactNode = <><CheckCircleIcon size={11} weight="fill" />{durationLabel ?? "Done"}</>;
@@ -363,24 +303,13 @@ function ToolCallBlock({ toolName, input, output, effect, isRunning, isError, er
       )}
       {expanded && (
         <div className="border-t border-dashed border-[var(--c-dash)] px-4 py-3 space-y-2 animate-scale-in bg-[var(--c-recessed)]">
-          {/* A protocol-level failure (crashed executor, timeout) carries its
-              reason here, never in `output` — without this, expanding one of
-              these showed a red row and then nothing: the actual cause was
-              dropped on the floor. */}
           {errorText && (
             <div>
               <div className="p-eyebrow mb-1 p-danger">Error</div>
               <pre className="p-t-code p-danger max-h-40 overflow-auto whitespace-pre-wrap m-0">{redactSecrets(errorText)}</pre>
             </div>
           )}
-          {/* eval is the agent's primary doing-mechanism: render the
-              LLM-authored JS program legibly, not as escaped JSON. A `shell`
-              command gets the same treatment — its args are just
-              {runtime, command}, and pretty-printed JSON turns every quote
-              and newline in the command into an escape sequence, which is
-              unreadable for exactly the multi-line commands worth expanding
-              to read. The runtime stays visible in the collapsed row's `@x`
-              badge, so nothing is lost by not repeating it here. */}
+          {/* eval and shell args render as source, not JSON: JSON escapes every quote and newline. */}
           {codePreview !== null && (
             <CodeBlock className={toolName === "eval" ? "language-js" : "language-bash"}>{redactSecrets(codePreview)}</CodeBlock>
           )}
@@ -442,7 +371,6 @@ function ToolCallGroup({ parts, expandedCalls, onToggleCall }: {
   );
 }
 
-/** One tool part: its row, plus the live preview a tool can return. */
 function ToolCallPart({ part, expanded, onToggleExpand }: { part: AnyToolPart; expanded: boolean; onToggleExpand: () => void }) {
   const output = partOutput(part);
   const input = partInput(part);
@@ -470,12 +398,9 @@ function ToolCallPart({ part, expanded, onToggleExpand }: { part: AnyToolPart; e
   );
 }
 
-/** Whether the agent has read this event yet. An event is shown to the user
- *  when it HAPPENS; the agent reads it at its next step, which may be a while
- *  later — so the card says which of the two it is, and flips in place. */
+/** Shown when the event happens; the agent reads it at its next step. */
 type CardState = SignalCard["state"];
 
-/** The lifecycle caption, in the event cards' existing language. */
 function ShownCaption({ state }: { state: CardState }) {
   return (
     <>
@@ -485,7 +410,6 @@ function ShownCaption({ state }: { state: CardState }) {
   );
 }
 
-/** How a returned job reads: its mark, its tone and what it did. */
 function backgroundEventMeta(status: string) {
   if (status === "completed") return { Icon: CheckCircleIcon, tone: "p-success", verb: "completed" };
 
@@ -494,8 +418,6 @@ function backgroundEventMeta(status: string) {
   return { Icon: WarningCircleIcon, tone: "p-danger", verb: "failed" };
 }
 
-/** A background job returning into the conversation — a full-width system row.
- *  The agent's synthesis reply follows as normal. */
 function BackgroundEventCard({ kind, status, state }: { kind: string; status: string; state: CardState }) {
   const meta = backgroundEventMeta(status);
 
@@ -513,8 +435,6 @@ function BackgroundEventCard({ kind, status, state }: { kind: string; status: st
   );
 }
 
-/** One hub event inside a drain card: what it was and where it came from, with
- *  the body the agent read on demand. */
 function DrainedEventRow({ event }: { event: DrainedEvent }) {
   const [expanded, setExpanded] = useState(false);
 
@@ -543,17 +463,12 @@ function DrainedEventRow({ event }: { event: DrainedEvent }) {
   );
 }
 
-/** The reactor's drain: events that arrived while the operator was away, handed
- *  to the agent as turn input or spliced into the turn it was already running.
- *  The operator did not type this, so it never wears their bubble — it is a
- *  captioned, quieter event card. */
+/** The operator did not type drained events, so they never wear the user bubble. */
 function DrainedEventsCard({ text, state }: { text: string; state: CardState }) {
   const events = parseDrainedEvents(text);
 
   return (
     <div className="animate-fade-in">
-      {/* The mock's System notice: a full-width gold-tinted row in the
-          transcript measure, not a small card floating in its centre. */}
       <div className="w-full rounded-lg border border-[rgba(224,164,88,.25)] bg-[rgba(224,164,88,.05)] px-4 py-2.5">
         <div className="flex items-baseline gap-2.5 p-row-text">
           <LightningIcon size={11} className={`shrink-0 ${state === "pending" ? "p-text-4" : "p-accent"}`} weight="fill" />
@@ -572,9 +487,7 @@ function DrainedEventsCard({ text, state }: { text: string; state: CardState }) 
   );
 }
 
-/** The owner's answer on commands the agent parked, coming back to the agent.
- *  Says approved/denied and how many — never "ran": the approved commands have
- *  not executed yet, and the agent re-issuing them is what runs them. */
+/** Approved commands have not executed yet (the agent re-issuing them runs them), so never "ran". */
 function DeferredApprovalCard({ decision, count, state }: {
   decision: string; count: number; state: CardState;
 }) {
@@ -596,17 +509,9 @@ function DeferredApprovalCard({ decision, count, state }: {
   );
 }
 
-/** One centered inline system row. The workspace opening and the refused-call
- *  notice share the pill; each renders it inline rather than through a shared
- *  component, because a shared wrapper with exactly two same-file callers is
- *  the export the wiring gate reports as unwired. */
+/** Rendered inline, not via a shared wrapper: a two-caller same-file export trips the wiring gate. */
 const SYSTEM_PILL = "inline-flex items-center gap-2 px-3 py-1.5 rounded-full p-elevated border p-border p-row-text p-text-2";
 
-/**
- * A refused device call, as one inline system row. The call already failed;
- * this names which machines were not there to reach. Null renders nothing —
- * the connect notice removes the row, not the thread.
- */
 export function DeviceOfflineRow({ devices }: { devices: ReadonlyArray<UnavailableDevice> | null }) {
   if (devices === null) return null;
   const [only] = devices;
@@ -630,16 +535,6 @@ export function DeviceOfflineRow({ devices }: { devices: ReadonlyArray<Unavailab
 }
 
 
-/**
- * Every other turn the harness enqueued: the ones with no card of their own —
- * a fork whose heads were left running, a context-overflow retry, the one-shot
- * completion gate, the take the owner picked being handed back.
- *
- * Collapsed, because the words are the harness talking to the model and the
- * owner needs to know one happened far more often than they need to read it.
- * Never a bubble: rendering this population in the owner's own would put the
- * harness's words four lines above things they had actually typed.
- */
 function SystemEventCard({ event, text, state }: {
   event: string; text: string; state: CardState;
 }) {
@@ -670,18 +565,12 @@ function SystemEventCard({ event, text, state }: {
   );
 }
 
-/** The severity ladder as surfaces: `nit` is an ordinary quiet card, `concern`
- *  wears the warning notice, `blocker` the danger one. The tints and borders
- *  are the notice tokens the composer already uses, so both themes hold. */
 const ADVISOR_TONES = {
   nit: { panel: "border p-border p-elevated", icon: "p-text-3", badge: "p-badge-neutral" },
   concern: { panel: "p-notice-warning", icon: "p-warning", badge: "p-badge-warning" },
   blocker: { panel: "p-notice-danger", icon: "p-danger", badge: "p-badge-danger" },
 } satisfies Record<AdvisorSeverity, { panel: string; icon: string; badge: string }>;
 
-/** The advisor's one note on a finished turn. Unlike `SystemEventCard` the
- *  words are FOR the owner, not the model, so the note is never folded behind
- *  a disclosure — severity carries the colour, the note carries the point. */
 function AdvisorCard({ severity, text, state }: {
   severity: AdvisorSeverity; text: string; state: CardState;
 }) {
@@ -702,9 +591,6 @@ function AdvisorCard({ severity, text, state }: {
   );
 }
 
-/** One programmatic turn as the chat shows it — the durable message a queued
- *  signal became, or the live card of one spliced into a running turn. Same
- *  classifier, same cards, one rendering. */
 export function ProgrammaticTurnCard({ turn, text, state }: {
   turn: ClassifiedProgrammaticTurn; text: string; state: CardState;
 }) {
@@ -730,24 +616,10 @@ export function ProgrammaticTurnCard({ turn, text, state }: {
   return <DrainedEventsCard text={text} state={state} />;
 }
 
-/** The user bubble, shared verbatim by a durable user row and a steer (a steer
- *  IS one — see SteerBubble). `wrap-anywhere` because a long unbroken token — a
- *  URL, a hash, a pasted path — must break inside the bubble rather than widen
- *  it through the column; text with ordinary break opportunities wraps exactly
- *  as it always did. */
+/** `wrap-anywhere`: a long unbroken token must break inside the bubble, not widen the column. */
 const USER_BUBBLE_CLASS =
   "relative max-w-[min(80%,42rem)] rounded-t-2xl rounded-br-[4px] rounded-bl-2xl border p-user-border px-[18px] py-3 p-user-bubble p-t-chat whitespace-pre-wrap wrap-anywhere";
 
-/**
- * A steer as the thread draws it — the SAME bubble a user message gets, because
- * it IS one. The only difference worth drawing is whether the model has it yet.
- *
- * It keeps the fork affordance for the same reason: the steer is a real user
- * row in the session tree and the walk-back cut can pivot on it, so a steer the
- * conversation turned on is one of the most useful places to branch from. A
- * steer with no durable row yet has nothing to fork at, and says so by not
- * offering it.
- */
 export function SteerBubble({ steer, onFork }: {
   steer: InlineSteer;
   onFork?: (messageId: string) => void;
@@ -771,9 +643,6 @@ export function SteerBubble({ steer, onFork }: {
   );
 }
 
-/** The label a user message carries when it reached the model mid-turn instead
- *  of starting a turn of its own. Without it a user bubble in the middle of an
- *  assistant's work reads like a rendering bug rather than the steer it is. */
 function SteeredMark({ state }: { state: "queued" | "landed" }) {
   return (
     <span className="mt-1 inline-flex items-center gap-1 p-meta p-text-3">
@@ -783,61 +652,35 @@ function SteeredMark({ state }: { state: "queued" | "landed" }) {
   );
 }
 
-// Memoized: @ai-sdk's replaceMessage only clones the streaming message, so
-// historical messages keep referential identity across stream ticks and skip
-// re-rendering (and re-parsing their markdown) entirely.
+// Memoized: @ai-sdk's replaceMessage clones only the streaming message, so history keeps
+// referential identity and skips re-rendering.
 export const MessageView = memo(function MessageView({
   message, liveTail: tail = null, onFork, onFeedback, feedback, onRevert, takesChip,
   signalState, steers,
 }: {
   message: UIMessage;
-  /** Where the live turn is, when this message is the row that carries it.
-   *  The thread's owner resolves it once (`threadLiveTail`) and passes it to
-   *  the last row only; null means this message is history. A message never
-   *  infers its own liveness — `isLast && isStreaming && !isUser` was that
-   *  inference, and it answered no for every turn before its first token. */
+  /** Resolved once by the thread owner (`threadLiveTail`), passed to the last row only; null means history. */
   liveTail?: LiveTail | null;
-  /** For a message a signal enqueued: where that signal's card is in its
-   *  lifecycle. Undefined once the card's live state is gone (a reload, or a
-   *  session that started after it landed) — history is by definition shown. */
   signalState?: CardState;
-  /** Called with the message id when user clicks "Fork from here". */
   onFork?: (messageId: string) => void;
-  /** Walk the conversation back to before this turn (user messages only — a
-   *  turn is keyed on the message that opened it). The surface asks what else
-   *  the walk-back may take with it; this reports the press. */
   onRevert?: (messageId: string) => void;
-  /** Called with the message id + new feedback when user clicks 👍 / 👎.
-   *  Pass null to clear. Rejects on RPC failure. */
+  /** Pass null to clear. Rejects on RPC failure. */
   onFeedback?: (messageId: string, feedback: 'positive' | 'negative' | null) => Promise<void>;
-  /** Server-recorded feedback for this message (hydrated on load). */
   feedback?: 'positive' | 'negative' | null;
-  /** Alternate-takes chrome for this message, supplied by the surface that owns
-   *  the takes data. A slot rather than an import: TakesChip opens a comparison
-   *  that renders a node transcript, which renders MessageView. */
+  /** A slot rather than an import: TakesChip renders a node transcript, which renders MessageView. */
   takesChip?: ReactNode;
-  /** Steers the model read INSIDE this turn, each at the step it read them.
-   *  The turn's parts are cut at those boundaries so the operator's words sit
-   *  between the work that preceded them and the work they changed. */
   steers?: readonly PlacedSteer[];
 }) {
   const isUser = message.role === "user";
   const isLive = tail !== null;
-  // Fork button disabled on the mid-stream last assistant — that message
-  // isn't durably persisted yet.
+  // The mid-stream last assistant message is not persisted yet, so it cannot be forked.
   const canFork = !isLive && onFork !== undefined && message.id !== "";
-  // Expansion keyed by toolCallId on the message: a row that folds into a
-  // group on the next stream update remounts, and row-local state would reset
-  // with it.
   const { set: callToggles, toggle: toggleCall } = useToggledSet();
 
   const callExpanded = (part: AnyToolPart) => callToggles.has(part.toolCallId);
 
-  // Turns the backend enqueued on the agent's behalf are stored as `user`
-  // messages so the model reads them as its input — but the operator did not
-  // type them, so they get their own presentation instead of a user bubble.
-  // The id goes in too: it is the provenance marker on rows written before the
-  // author stamp existed, and the owner's oldest workspaces are full of them.
+  // Backend-enqueued turns are stored as `user` rows. The id is the provenance marker on rows
+  // written before the author stamp existed.
   const programmatic = classifyProgrammaticTurn({ metadata: message.metadata, id: message.id });
 
   if (programmatic) {
@@ -847,10 +690,6 @@ export const MessageView = memo(function MessageView({
     );
   }
 
-  // A row the transcript walk already reported as the harness's, which is what
-  // it does for a programmatic row whose stored metadata the walk could not
-  // read. It is not the operator and it is not the agent; without this it fell
-  // through to the assistant rendering, complete with a fork affordance.
   if (message.role === "system") {
     return <ProgrammaticTurnCard turn={{ kind: "system_event", event: "system" }}
       text={getMessageText(message)} state={signalState ?? "shown"} />;
@@ -894,13 +733,8 @@ export const MessageView = memo(function MessageView({
     );
   }
 
-  // Cut at the steers the model read inside this turn. With none — which is
-  // nearly always — this is one segment holding every part, and the rendering
-  // is what it was.
   const segments = segmentBySteers(message.parts, steers ?? []);
-  // The turn's own fork affordance belongs on the first segment that draws
-  // anything: a steer at step 0 leaves the first segment empty, and hanging the
-  // button off a segment that renders nothing takes it off the message.
+  // The fork button goes on the first segment that draws anything: a steer at step 0 leaves the first empty.
   const forkSegment = segments.findIndex((segment) => segment.parts.length > 0);
 
   const renderContentPart = (part: UIMessage["parts"][number], key: string | number) => {
@@ -922,9 +756,7 @@ export const MessageView = memo(function MessageView({
 
       if (!t) return null;
 
-      // `p-streaming` draws the caret inside the last block the markdown
-      // emitted. As a sibling element it landed on a line of its own below
-      // the paragraph, which is the misplacement that was reported.
+      // `p-streaming` draws the caret inside the last markdown block; a sibling element would land on its own line.
       return (
         <div key={key} {...(isTailPart ? { "data-live-indicator": "text" } : {})}
           className={`prose-chat p-text${isTailPart ? " p-streaming" : ""}`}>
@@ -1013,7 +845,7 @@ function MessageFeedback({
     if (busy) return;
     setBusy(true);
     setFailed(false);
-    const apply = current === next ? null : next; // click again to clear
+    const apply = current === next ? null : next;
 
     try {
       await onFeedback(messageId, apply);
@@ -1026,7 +858,6 @@ function MessageFeedback({
   }, [busy, current, messageId, onFeedback]);
 
   return (
-    // Hidden until the pointer or focus is on the message; a recorded choice stays shown.
     <div className={`flex items-center gap-1 transition-opacity ${current === null ? 'opacity-0 group-hover/msg:opacity-100 focus-within:opacity-100' : ''}`}>
       <button
         type="button"

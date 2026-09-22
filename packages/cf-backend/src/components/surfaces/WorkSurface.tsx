@@ -1,5 +1,4 @@
-/** Workspace navigation: titled live previews first, then work/read surfaces.
- * Preview identity comes from the existing slate and executor owners. */
+/** Workspace navigation: titled live previews first, then work/read surfaces. */
 import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import {
   GaugeIcon, SparkleIcon,
@@ -32,15 +31,10 @@ import { SLATE_PREFIX, SURFACES, firstVisibleSurface, resolveGatedSurface, surfa
 import { useSurfaceFocus } from "./use-surface-focus";
 import { ConnectDeviceDialog } from "@/components/ConnectDevicePanel";
 
-
-/** Not one of the segmented work surfaces: Activity is about the run rather
- *  than a place to work in it, so it sits apart at the right of the strip and
- *  carries no label. */
+/** Activity sits apart at the right of the strip, unlabelled. */
 export const ACTIVITY_SURFACE = "Activity";
 
-/** Tabs Kinu wrote. Namespaced rather than mixed into the tuple above so a
- *  Slate can never collide with a host surface by picking its id, and so every
- *  render path can tell the two apart without a lookup. */
+/** Namespaced so a Slate can never collide with a host surface id. */
 export type SlateSurfaceKind = `${typeof SLATE_PREFIX}${string}`;
 
 export type SurfaceKind = (typeof SURFACES)[number] | typeof ACTIVITY_SURFACE | SlateSurfaceKind | `preview:${string}`;
@@ -68,60 +62,43 @@ export interface WorkSurfaceProps {
   workspacePlanArrival?: WorkspacePlanArrival | null;
   onReviewActor?: (name: string) => void | Promise<void>;
   onSurface: (s: SurfaceKind) => void;
-  // Preview and actor-owned plans
   pinnedPorts: PinnedPort[];
   previewError: string | null;
   onRefreshPorts: () => void;
   plan: PlanReview | null;
-  /** The actor that owns `plan`. Other surfaces remain workspace-scoped. */
   planRpc?: Rpc;
-  // Agent
   snapshot: AsyncResource<AgentStatus>;
   tools: ToolInfo[];
   memory: MemoryEntry[];
   memoryContent: string;
   onRetryLoad: () => void;
   onSearchMemory: (q: string) => void;
-  // Exploration — the tree of the search in flight, pushed by the engine.
   mctsTrees: ReadonlyMap<string, ForkNode>;
-  /** Per-branch journal-write counter, pushed by `head_activity` — what makes an
-   *  open branch's transcript grow while that branch works. */
+  /** Per-branch journal-write counter, pushed by `head_activity`. */
   headActivity: ReadonlyMap<string, number>;
-  /** The live deltas — what a running branch is writing right now, drawn under
-   *  the durable steps until each one lands. */
+  /** Live deltas, drawn under the durable steps until each one lands. */
   headDeltas?: HeadDeltas;
-  /** A turn is in flight — the live surfaces revalidate while it is. */
   isStreaming: boolean;
-  // Environment (mounts + terminals)
   executors: ExecutorInfo[];
   executorOutputs: Map<string, ExecutorOutput[]>;
   lastActiveExecutor?: string | null;
   onExecute: (id: string, cmd: string) => Promise<ExecutorCommandResult>;
-  // Work
   backgroundJobs: BackgroundJob[];
   onRefreshJobs: () => void;
-  /** Everything asynchronous waiting on the owner. One read feeds both the
-   *  Work tab's queue and the one accent badge on the strip. */
+  /** One read feeds both the Work queue and the strip's accent badge. */
   pendingActions: PendingAction[];
-  /** Re-read that read — what Work's queue calls after a decision, so a
-   *  decided row leaves on the click instead of on the next ambient poll. */
+  /** Called after a decision so the decided row leaves on click, not on the next poll. */
   onRefreshQueue?: () => void;
-  /** The changelog was seen inside Work — zero the unseen count upstream. */
   onChangelogSeen?: () => void;
-  /** Authored previews, titled and placed before the fixed surfaces. */
   slates?: readonly SlateSummary[];
-  /** Per-Slate remount counter, bumped by the `slates_changed` broadcast —
-   *  what makes an open frame re-read its preview URL. */
+  /** Per-Slate remount counter from `slates_changed`; makes an open frame re-read its URL. */
   slateReloads?: ReadonlyMap<string, number>;
-  /** Whether the gated surfaces have content. Absent in fixture frames,
-   *  which keeps every tab visible — unknown is not empty. */
+  /** Absent in fixture frames, which keeps every tab visible: unknown is not empty. */
   tabPresence?: TabPresence;
   rpc: Rpc;
-  /** Signed-out sample content in place of a network preview. */
   slateBody?: (slate: SlateSummary) => ReactNode;
-  /** The workspace name the share control publishes from. Absent in fixture frames without an owner. */
   workspace?: string;
-  /** A slate forked from a blueprint whose bindings are still unmapped: its tab opens on the panel, not the preview. */
+  /** A blueprint fork with unmapped bindings opens on the panel, not the preview. */
   unmappedSlate?: string | null;
   onUnmappedOpened?: () => void;
 }
@@ -151,7 +128,6 @@ export function WorkSurface(props: WorkSurfaceProps) {
   const ports = props.pinnedPorts.filter(port => !props.slates?.some(slate => port.executor === "workspace" && slate.port === port.port));
   const openPort = surface.startsWith("preview:") ? ports.find(port => surface === `preview:${port.executor}:${port.port}`) : undefined;
   const previewSelected = surface.startsWith(SLATE_PREFIX) || surface.startsWith("preview:");
-  // An unpublished Slate or an empty gated surface loses its selected tab.
   useEffect(() => {
     const duplicate = surface.startsWith("preview:workspace:") ? props.slates?.find(slate => `preview:workspace:${slate.port}` === surface) : undefined;
 
@@ -163,8 +139,7 @@ export function WorkSurface(props: WorkSurfaceProps) {
 
     if (resolved !== surface) focus.navigate(resolved);
   }, [surface, focus.navigate, props.tabPresence, props.mctsTrees, props.slates, hasDiffs, openPort]);
-  // A one-shot cross-surface intent: an Environment card's Files action lands
-  // the Files tab at that environment's own root on the composite plane.
+  // One-shot intent: an Environment card's Files action opens that environment's root.
   const [filesJump, setFilesJump] = useState<{ path: string; nonce: number } | null>(null);
 
   const openFiles = useCallback((path: string) => {
@@ -172,7 +147,6 @@ export function WorkSurface(props: WorkSurfaceProps) {
     focus.navigate("Files");
   }, [focus.navigate]);
 
-  // The frame uses the summary for its header and the counter for preview reloads.
   const openSlate = slateId(surface);
 
   const openSlateSummary = openSlate === null
@@ -180,17 +154,13 @@ export function WorkSurface(props: WorkSurfaceProps) {
     : props.slates?.find((slate) => slate.id === openSlate);
 
   const openSlateReloadKey = openSlate === null ? 0 : (props.slateReloads?.get(openSlate) ?? 0);
-  // Linking a machine is asked for from three places in this column — an
-  // offline Environment card, that card's call-to-action, and the drive's
-  // offline row — and none of them is a link to Account settings, which
-  // is a page change in the middle of a job. One dialog, owned here, because
-  // only one of those surfaces is mounted at a time.
+  // One connect dialog owned here: three surfaces in this column request it, and only
+  // one is mounted at a time.
   const [connecting, setConnecting] = useState(false);
   const openConnect = useCallback(() => setConnecting(true), []);
   const closeConnect = useCallback(() => setConnecting(false), []);
 
-  // A surface can be selected without being clicked (a deep link, a restored
-  // tab) — keep the current one in view when the strip has to scroll.
+  // A surface can be selected without a click (deep link, restored tab); keep it in view.
   useEffect(() => {
     const container = strip.current;
     const selected = container?.querySelector('[aria-current="true"]');
@@ -204,7 +174,6 @@ export function WorkSurface(props: WorkSurfaceProps) {
     if (tab.left < left) container.scrollLeft += tab.left - left;
     else if (tab.right > right) container.scrollLeft += tab.right - right;
   }, [surface]);
-  // A preview fills its pane; a read surface scrolls inside its own padding.
   const bodyFit = previewSelected ? "overflow-hidden" : "overflow-y-auto py-[18px] pl-[18px] pr-6";
 
   let slatePanel: ReactNode = null;
@@ -221,14 +190,10 @@ export function WorkSurface(props: WorkSurfaceProps) {
 
   return (
     <div className="@container flex flex-col h-full p-sidebar">
-      {/* Activity sits OUTSIDE the scrolling strip. Pinning it right with
-          `ml-auto` holds only while the tabs fit; Kinu can append its own, so
-          the strip overflows and an `ml-auto` button scrolls away with
-          everything else. */}
+      {/* Activity sits outside the scrolling strip: appended tabs overflow it, and an
+          `ml-auto` button inside would scroll away. */}
       <div className={`border-b p-border shrink-0 flex items-stretch ${tabStripH}`}>
-        {/* The strip's scroll covers are painted in ITS ground — this column is
-            `p-sidebar`, not the canvas — or they show as darker bands and
-            hairlines at both ends of the tabs. */}
+        {/* Scroll covers use this column's `p-sidebar` ground, not the canvas's. */}
         <div ref={strip} className={`p-tabstrip [--scroll-ground:var(--c-sidebar)] flex items-center min-w-0 flex-1 px-3 gap-0.5 -mb-px ${tabStripH}`}>
           {props.slates?.map(slate => {
             const kind = slateSurface(slate.id);
@@ -241,7 +206,6 @@ export function WorkSurface(props: WorkSurfaceProps) {
           })}
           {ports.map(port => {
             const kind: SurfaceKind = `preview:${port.executor}:${port.port}`;
-            // An unnamed port, and one named with nothing, are titled by where it is.
             const title = port.name === undefined || port.name === "" ? `${port.executor} :${port.port}` : port.name;
 
             return <button key={kind} onClick={() => focus.navigate(kind)} title={title} aria-label={title}
@@ -257,13 +221,7 @@ export function WorkSurface(props: WorkSurfaceProps) {
             </button>
           ))}
         </div>
-        {/* Icons inside the strip's own rule: the row is one flex line with
-            one bottom rule, so the gauge and the collapse chevron sit on the
-            same edge the tabs underline — never a ruled strip beside an
-            unruled icon column with a visible break between them. This column
-            carries the rule itself rather than hanging a pixel below it with
-            `-mb-px`, or its edge lands a row below the strip's and leaves a
-            step where the tabs' rule meets it. */}
+        {/* Icons sit inside the strip's own bottom rule; `-mb-px` would leave a step. */}
         <div className={`flex shrink-0 items-center border-b p-border ${tabStripH}`}>
         <ShareSlateControl workspace={props.workspace} slate={openSlateSummary} rpc={props.rpc} />
         {chip !== null && (
@@ -292,9 +250,7 @@ export function WorkSurface(props: WorkSurfaceProps) {
       <div className={`flex-1 min-h-0 ${surface === "Diffs" ? "hidden" : bodyFit}`}>
         <div className={surface === "Work" ? "" : "hidden"}>
           <ErrorBoundary label="Work">
-            {/* Keyed by workspace, never by agent: Work is the workspace's own
-                plan, journal and jobs, and a chat-tab switch must not remount
-                or refetch it — only Agent and Activity are per agent. */}
+            {/* Keyed by workspace, never by agent: a chat-tab switch must not remount Work. */}
             <WorkTab key="workspace"
               plan={props.plan}
               planOwner={props.planOwner}

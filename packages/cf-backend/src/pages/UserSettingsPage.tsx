@@ -1,32 +1,4 @@
-/**
- * User-level settings — credentials, devices and defaults that apply across
- * ALL of this user's agents. Connect ChatGPT once → every agent sees it.
- *
- * FIVE SECTIONS, ONE AT A TIME. This was one column of eight stacked cards,
- * and the owner's report was that it is hard to navigate: the thing you came
- * for is somewhere in a scroll, and a link that lands you on it lands you
- * mid-page with no way to tell where you are. The section is now in the URL
- * hash, the rail says which one you are reading, the section head says what
- * it changes, and every deep link that existed (`/user/settings#devices`)
- * opens its section instead of scrolling to it.
- *
- * One grammar inside a section: a `Card` names a group and what it applies
- * to; a `Field` names one setting and what it does; lists are `p-group` rows;
- * anything that takes something away is a quiet button in danger ink, kept
- * apart from the facts beside it.
- *
- *   #account    profile
- *   #devices    the machines linked to this account
- *   #providers  Cloudflare AI, ChatGPT, API keys, MCP servers
- *   #models     the default model and the role/tier catalog
- *   #cli        the one command that installs the CLI
- *
- * The page's own read is the profile alone, because it decides the page's
- * loading and failure states. A section's reads belong to the section: the
- * providers panel owns the connection reads, and the devices card its own
- * roster — a section switch mounts its reads fresh rather than re-reading an
- * account that has not changed.
- */
+/** Sections live in the URL hash (`/user/settings#devices`); each section owns its own reads. */
 import { useState } from "react";
 import { Link, useLocation } from "react-router-dom";
 import { Button, Loader } from "@cloudflare/kumo";
@@ -50,9 +22,6 @@ import { DeleteAccountCard } from "@/components/account/DeleteAccountCard";
 import { DevicesCard } from "@/components/devices/DevicesCard";
 import { renderThrownChain } from '@kinu.run/core/obs';
 
-/** The Profile card's editable half: the shared DisplayNameField plus the
- *  quiet Save that stays asleep until the name actually changed. Kept out of
- *  the CardSlot body because it owns state. */
 function ProfileNameEditor({ profile, onSaved }: {
   profile: { email: string; displayName: string | null } | null;
   onSaved: () => void;
@@ -87,8 +56,6 @@ function ProfileNameEditor({ profile, onSaved }: {
   );
 }
 
-/** The page frame both states of the page share: the way back, the title,
- *  and what everything under it applies to. */
 function PageHeader() {
   return (
     <header className="border-b p-border pb-6">
@@ -96,7 +63,6 @@ function PageHeader() {
         <ArrowLeftIcon size={12} /> Home
       </Link>
       <p className="p-eyebrow">Account</p>
-      {/* Page title in the display face at 26px: above the workbench scale by design. */}
       <h1 className="p-display mt-1 text-[26px] leading-8">Account settings</h1>
       <p className="mt-1.5 p-row-text p-text-3">
         What you set here applies to every workspace you own.
@@ -108,13 +74,9 @@ function PageHeader() {
 export default function UserSettingsPage() {
   const profile = useAsyncResource(getProfile);
 
-  // Section state lives in the URL, so a deep link, a reload and the browser's
-  // Back button all land on the same section.
+  // Section state lives in the URL so deep links, reloads and Back agree.
   const section = settingsSection(useLocation().hash);
 
-  // Before the profile read settles there is one quiet page loader, and when it
-  // fails there is one failure — a second copy of either says nothing more.
-  // The sections read for themselves: each card publishes on its own.
   if (profile.resource.status === "loading" || profile.resource.status === "error") {
     return (
       <div className="h-full overflow-y-auto">
@@ -132,8 +94,6 @@ export default function UserSettingsPage() {
     <div className="h-full overflow-y-auto">
       <div className="mx-auto max-w-5xl space-y-8 px-5 py-8 sm:px-6">
         <PageHeader />
-        {/* A side rail needs room the workspace sidebar has already taken:
-            below 64rem the same entries become a tab strip above the section. */}
         <div className="flex flex-col gap-7 lg:flex-row lg:gap-10">
           <SettingsRail active={section} />
           <div className="min-w-0 flex-1 lg:max-w-[820px]">
@@ -168,9 +128,6 @@ export default function UserSettingsPage() {
 
         {section === "cli" && <CliInstallCard />}
 
-        {/* Devices — account-level PC/device registration; every agent can use
-            a connected device (with consent). The workspace surfaces open the
-            same connect panel in place; this is where the roster lives. */}
         {section === "devices" && <DevicesCard />}
 
         {section === "providers" && (

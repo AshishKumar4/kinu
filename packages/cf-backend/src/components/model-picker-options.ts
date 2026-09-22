@@ -1,5 +1,3 @@
-// Pure shaping logic for the model picker — kept free of React/kumo so the
-// grouping/filtering/formatting behavior is unit-testable.
 import type { ModelMenuEntry } from "../lib/user-api";
 
 export interface ModelMenuGroup {
@@ -7,11 +5,7 @@ export interface ModelMenuGroup {
   models: ModelMenuEntry[];
 }
 
-/**
- * Group the flat model menu by provider, preserving the server's provider
- * order (the registry's preference order — connected providers only), with
- * the current model pinned: its group moves first and the entry leads it.
- */
+/** Preserves the server's provider order; the current model's group moves first and it leads. */
 export function groupModelMenu(models: readonly ModelMenuEntry[], currentSpec?: string | null): ModelMenuGroup[] {
   const groups = new Map<string, ModelMenuEntry[]>();
 
@@ -34,8 +28,7 @@ export function groupModelMenu(models: readonly ModelMenuEntry[], currentSpec?: 
   return out;
 }
 
-/** Token match across label, spec, and provider (every whitespace-separated
- *  token must hit somewhere) — what the combobox uses as its filter. */
+/** Every whitespace-separated token must match label, spec, or provider. */
 export function modelMatchesQuery(model: ModelMenuEntry, query: string): boolean {
   const tokens = query.toLowerCase().split(/\s+/).filter(Boolean);
 
@@ -45,8 +38,7 @@ export function modelMatchesQuery(model: ModelMenuEntry, query: string): boolean
   return tokens.every((token) => haystack.includes(token));
 }
 
-/** Capabilities worth badging — every chat model streams and (in our
- *  catalogs) supports tools, so only the differentiators surface. */
+/** Every chat model streams and supports tools, so only the differentiators are badged. */
 export function badgeCapabilities(model: ModelMenuEntry): string[] {
   const interesting = ['reasoning', 'vision'];
 

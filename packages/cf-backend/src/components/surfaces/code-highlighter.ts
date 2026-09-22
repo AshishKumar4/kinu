@@ -9,8 +9,7 @@ const getCodeHighlighter = makeSingletonHighlighter(createBundledHighlighter({
   engine: () => createJavaScriptRegexEngine(),
 }));
 
-/** This module loads only for a named code fence or source preview. Shiki owns
- * the grammar names, aliases, loading and singleton cache. */
+/** Loads only for a named code fence or source preview. */
 export async function highlightCode(code: string, language: string) {
   const name = language.toLowerCase();
   const grammar = bundledLanguagesInfo.find((entry) => entry.id === name || entry.aliases?.includes(name));

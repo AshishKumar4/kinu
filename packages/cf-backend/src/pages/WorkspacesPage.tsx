@@ -1,11 +1,4 @@
-/**
- * Every workspace the account owns, each saying exactly one thing about its
- * state — `overviewHeadline`, the same rule the card reads — under a control
- * row that filters by that state. The list is the 56px line; the tiles are a
- * grid for an account with too many rows to scan. The choice is the owner's
- * and it sticks, in localStorage, because a view that resets on every visit
- * is a view nobody chose.
- */
+/** Every workspace, filtered by `overviewHeadline` state; list or tiles, persisted in localStorage. */
 import { useMemo, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { Button } from "@cloudflare/kumo";
@@ -26,17 +19,14 @@ const ViewSchema = v.picklist(["list", "tiled"]);
 
 type View = v.InferOutput<typeof ViewSchema>;
 
-/** The stored choice, or the list when nothing valid was stored. Read once
- *  at mount: the page is the only writer, and it writes through `setView`. */
+/** Read once at mount: the page is the only writer, via `setView`. */
 function storedView(): View {
   const parsed = v.safeParse(ViewSchema, localStorage.getItem(VIEW_KEY));
 
   return parsed.success ? parsed.output : "tiled";
 }
 
-/** The filter's buckets, cut from the same priorities the chip states: what
- *  waits on the owner, what is moving, everything else. A workspace whose
- *  overview has not landed reads as idle rather than disappearing. */
+/** A workspace whose overview has not landed reads as idle rather than disappearing. */
 type Bucket = "needs" | "working" | "idle";
 
 const BUCKET_IDS = ["all", "needs", "working", "idle"] as const;

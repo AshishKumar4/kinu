@@ -10,39 +10,24 @@ import { codenameFor } from "@kinu.run/core";
 import { Modal } from "./ui/Modal";
 import { diagnostics, toKinuError, renderThrownChain } from "@kinu.run/core/obs";
 
-/* A workspace's title is answered in core — `workspaceDisplayTitle` in
- * read-models/workspace-title — because the slug stored as a title is the
- * defect this file's callers all share; there is no local copy of the rule. */
 
-/** The plus button's label: an ACTION, never a name. */
 const ADD_AGENT_LABEL = "New agent";
 
-/** A roster entry's shown name. An agent is born with its slug's codename,
- *  so a blank here is a row from before codenames and shows the same word
- *  pair it would have been born with. */
+/** A blank name is a pre-codename row; it shows the word pair it would have been born with. */
 export function agentTitle(entry: Pick<SubordinateRosterEntry, "name" | "displayName">): string {
   return entry.displayName.trim() || codenameFor(entry.name);
 }
 
 interface SubordinateTabsProps {
   workspace: string;
-  /** Every agent this workspace RETAINS, dismissed ones included. A dismissed
-   *  child keeps its conversation, so a strip filtered on employability takes
-   *  the only route to that conversation away with the tab — the reported
-   *  disappearance. The strip decides presentation; the roster decides nothing
-   *  about reachability. */
+  /** Every retained agent, dismissed included: a dismissed child keeps its conversation, so its tab must stay reachable. */
   subordinates: readonly SubordinateRosterEntry[];
   activeName?: string;
-  /** One-click create — identity only, no form. WorkspacePage owns the action
-   *  and its failure banner because the sidebar can invoke it while this strip
-   *  is not mounted. */
+  /** WorkspacePage owns the action and its failure banner: the sidebar can invoke it while this strip is unmounted. */
   onCreate: () => Promise<void>;
   creating: boolean;
   onDismiss: (name: string, keepHistory?: boolean) => Promise<void>;
-  /** Retitle the open agent from its own tab; resolves to the saved title. */
   onRename: (name: string, displayName: string) => Promise<string>;
-  /** Controls for the conversation this strip has open, pinned to its right
-   *  edge — the chat column has no other chrome row to hang them on. */
   trailing?: ReactNode;
 }
 
@@ -69,9 +54,7 @@ export function SubordinateTabs({
   const [dismissError, setDismissError] = useState<string | null>(null);
   const [deleting, setDeleting] = useState<string | null>(null);
   const [deleteError, setDeleteError] = useState<string | null>(null);
-  // Open when the reader is looking at a dismissed agent: a deep link into a
-  // kept conversation must not land on a collapsed section that hides the tab
-  // it arrived through.
+  // Open on a dismissed agent so a deep link does not land on a collapsed section hiding its tab.
   const dismissed = subordinates.filter((entry) => entry.status === "dismissed");
   const employable = subordinates.filter((entry) => entry.status !== "dismissed");
   const [showDismissed, setShowDismissed] = useState(false);
@@ -81,20 +64,7 @@ export function SubordinateTabs({
 
   return (
     <>
-      {/* One tab grammar with the work surfaces: a bottom edge, not a box.
-
-          The ROW owns the rule and the strip reaches one pixel over it, so the
-          open tab's bar lands ON that rule and the two read as one line. The
-          rule cannot live on the strip itself: the strip clips vertically —
-          a tab's overhang is enough to raise a scrollbar beside a single row
-          of tabs — and a bar drawn past the strip's own edge is clipped away.
-          `h-full` with `items-stretch` makes each tab the strip's own height,
-          so the bar stays inside the box the strip shows.
-
-          The trailing controls are a SIBLING of the strip, not content inside
-          it: the strip scrolls horizontally once the roster outgrows the
-          column, and anything within it scrolls away with the tabs. The row's
-          rule runs under both, so the two still read as one line. */}
+      {/* The row owns the bottom rule: the strip clips vertically, so a bar drawn past its edge is clipped. Trailing controls sit outside the strip so they do not scroll away. */}
       <div className={`flex shrink-0 items-stretch border-b p-border ${tabStripH}`}>
         <nav aria-label="Workspace agents" className={`p-tabstrip -mb-px flex min-w-0 flex-1 items-stretch gap-2 px-2 ${tabStripH}`}>
           <Link
@@ -113,12 +83,7 @@ export function SubordinateTabs({
             return (
               <div key={subordinate.name} data-agent-tab={subordinate.name} className="group/tab relative shrink-0">
                 {active ? (
-                  // The open tab is not a link anywhere; it is where the agent is renamed.
                   <div aria-current="page" className={`${tabCls} p-tab-active h-full max-w-64 pl-3 pr-8 font-medium`}>
-                    {/* The mounting row names the colour its title reads in,
-                        so the open tab hands the rename control its accent. An
-                        agent still under its codename keeps the italic; a lit
-                        tab never prints its name muted. */}
                     <InlineRenameTitle
                       title={title}
                       editValue={subordinate.displayName}
@@ -176,9 +141,7 @@ export function SubordinateTabs({
               try {
                 await onCreate();
               } catch (cause) {
-                // WorkspacePage shows the failure banner; this catch owns the
-                // strip's own click, so a parent that rejects is recorded
-                // rather than becoming an unhandled rejection with no context.
+                // WorkspacePage shows the banner; catching here keeps a rejection from going unhandled.
                 diagnostics.failure("subordinates.create_failed", toKinuError({
                   doing: "create a subordinate agent", cause, otherwise: "io",
                 }));
@@ -209,9 +172,7 @@ export function SubordinateTabs({
         )}
       </div>
       {dismissed.length > 0 && dismissedOpen && (
-        // A row, not tabs: these agents take no work, and a tab beside the
-        // employable ones would say they do. The link is the point — a
-        // dismissed agent's conversation is kept, so it stays reachable.
+        // A row, not tabs: these agents take no work. The link keeps a dismissed agent's conversation reachable.
         <div className="flex shrink-0 flex-wrap items-center gap-2 border-b p-border px-3 py-1.5">
           <span className="p-eyebrow p-text-4">Dismissed</span>
           {dismissed.map((subordinate) => (
@@ -261,9 +222,6 @@ export function SubordinateTabs({
             </FilledButton>
           </>}
         >
-          {/* What this button does, and what it does NOT do. The copy names no
-              second action: an agent's own helper has no delete here, and
-              "deleting would…" described a control the reader cannot reach. */}
           <p className="text-xs leading-relaxed p-text-2">
             Dismissing closes the tab and stops this agent being given work. Its conversation is kept, not deleted.
           </p>

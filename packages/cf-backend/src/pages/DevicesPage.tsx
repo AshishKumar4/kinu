@@ -1,9 +1,3 @@
-/**
- * Devices — every machine linked to this account, with the live link state
- * the roster publishes and the workspaces each consent grants or denies.
- * One row answers both halves of the question a bare "allowed" could not:
- * whether the machine is online, and which workspaces it may act for.
- */
 import { DesktopTowerIcon } from "@phosphor-icons/react";
 import { DevicesCard } from "@/components/devices/DevicesCard";
 

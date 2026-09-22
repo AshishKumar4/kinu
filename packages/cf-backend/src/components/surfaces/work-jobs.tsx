@@ -1,14 +1,4 @@
-/**
- * Background jobs — auto-detached >30s tool calls (forks, long eval /
- * run) — as cards in the Work surface, with the operator controls: hard-cancel
- * a running job, retry / dismiss a settled one.
- *
- * A job was never a to-do item, and it was never a separate question either: a
- * running job belongs beside the plan it is working through and a settled one
- * belongs in the journal beside everything else that finished. This file owns
- * the card and the lifecycle RPCs; the Work surface decides which half of it
- * a given job lands in.
- */
+/** Background jobs (auto-detached >30s tool calls) as Work cards, with cancel, retry and dismiss. */
 import { useState, useCallback } from "react";
 import { Button } from "@cloudflare/kumo";
 import {
@@ -29,15 +19,7 @@ function statusMeta(status: BackgroundJob["status"]) {
   }
 }
 
-/**
- * What a running job's card says about having been interrupted.
- *
- * The resume count is durable, and without this note it appears nowhere a
- * reader can see: a job that was evicted and re-driven says nothing at all
- * about it, and no give-up ends the work to mention it either.
- *
- * Null when there is nothing to say, so an ordinary job's card is unchanged.
- */
+/** The durable resume count, shown nowhere else. Null when there is nothing to say. */
 function interruptionNote(job: BackgroundJob, now: number): string | null {
   const attempts = job.resumeAttempts ?? 0;
 
@@ -51,8 +33,7 @@ function interruptionNote(job: BackgroundJob, now: number): string | null {
   return `Interrupted and re-driven ${times}. The work was not lost.${waiting}`;
 }
 
-/** How long until an armed instant, in the same coarse words the cards use
- *  elsewhere. Rounded up, so a wait that exists never reads as "in 0s". */
+/** Rounded up, so a wait that exists never reads as "in 0s". */
 function timeUntil(ms: number): string {
   const seconds = Math.ceil(ms / 1000);
 
@@ -63,7 +44,6 @@ function timeUntil(ms: number): string {
 
 export interface JobCardProps {
   job: BackgroundJob;
-  /** Render inside the journal's shared grouped-row container. */
   grouped?: boolean;
   /** Re-fetch after a mutation; the hook also polls on its own cadence. */
   onRefresh: () => void;

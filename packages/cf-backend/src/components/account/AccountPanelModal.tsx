@@ -1,8 +1,3 @@
-/**
- * The three account panels, hosted in the one Modal shell, so a surface that
- * points at setup work — the home card, the plugins page, the onboarding
- * wizard — opens it in place instead of navigating away.
- */
 import type { ComponentType } from "react";
 import { Button } from "@cloudflare/kumo";
 import { PlugIcon, PlugsConnectedIcon, TerminalIcon } from "@phosphor-icons/react";

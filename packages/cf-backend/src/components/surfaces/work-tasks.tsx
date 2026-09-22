@@ -1,18 +1,4 @@
-/**
- * The agent's own plan, as the agent keeps it.
- *
- * Read-only, deliberately. The list is the agent's plan: it writes it with the
- * `tasks` tool and re-reads its open half out of the live context block at
- * every step, so an owner edit here would swap the plan underneath a running
- * turn with nothing to tell it so. Changing what the agent is doing already
- * has a channel — say so in chat — and one writer is what keeps this list and
- * the agent's own view of it the same list.
- *
- * These were a tab of their own beside Jobs, which split one glance ("what is
- * this thing working through?") across two mostly-empty columns. The rows live
- * in the Work surface now: the open half under Now, the closed half in the
- * journal.
- */
+/** Read-only: the agent re-reads this plan every step, so an owner edit would swap it under a running turn. */
 import { Badge } from "@cloudflare/kumo";
 import { CircleIcon, CircleDashedIcon, CheckCircleIcon, ProhibitIcon } from "@phosphor-icons/react";
 import type { AgentTask, AgentTaskTree, TaskStatus } from "@kinu.run/core";
@@ -24,12 +10,10 @@ const STATUS_META = {
   dropped: { icon: ProhibitIcon, tone: "p-text-3", label: "Dropped", weight: "regular", text: "p-text-3 line-through" },
 } satisfies Record<TaskStatus, { icon: typeof CircleIcon; tone: string; label: string; weight: "fill" | "regular"; text: string }>;
 
-/** Settled items stay legible but stop competing with the work in hand. */
 function isSettled(status: TaskStatus): boolean {
   return status === "done" || status === "dropped";
 }
 
-/** A whole tree has closed only once every subtask has. */
 export function isClosedTree(task: AgentTaskTree): boolean {
   return isSettled(task.status) && task.subtasks.every((sub) => isSettled(sub.status));
 }
@@ -67,14 +51,11 @@ export function TaskTree({ task, grouped = false, owner }: { task: AgentTaskTree
   );
 }
 
-/** How much of the plan is left — the one line the Now section leads with. */
 export function PlanProgress({ tasks }: { tasks: AgentTaskTree[] }) {
   const rows = tasks.flatMap((task) => [task, ...task.subtasks]);
   const remaining = rows.filter((task) => !isSettled(task.status));
   const active = remaining.filter((task) => task.status === "active");
-  // A dropped item is not work outstanding and was not work done, so it is out
-  // of the denominator entirely — counting it would report a plan as bigger
-  // than the agent ever committed to.
+  // Dropped items are out of the denominator: neither outstanding nor done.
   const counted = rows.filter((task) => task.status !== "dropped").length;
 
   return (

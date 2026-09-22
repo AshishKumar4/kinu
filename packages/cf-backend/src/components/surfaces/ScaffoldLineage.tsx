@@ -1,17 +1,3 @@
-/**
- * Scaffold lineage — the moat, as the first block of Agent → Evolution. The
- * agent rewrites its own inference loop; this makes that legible + tryable: a
- * git-style version lineage, the line diff of what changed, the shadow-eval
- * per-trial verdict grid that drives promotion, and Preview-live / Promote /
- * Rollback actions.
- *
- * Renders bare rather than in its own fold: it sits inside the Evolution
- * section beside the passes that generate its candidates and the scoreboard
- * that judges them, and three nested collapsibles is a fold to fight.
- *
- * Binds to wired RPCs: listScaffoldVersions, getScaffoldDiff, getShadowVerdict,
- * applyScaffoldDecision, previewScaffoldLive.
- */
 import { useState, useCallback, type ReactNode } from "react";
 import { Button, Badge, Loader } from "@cloudflare/kumo";
 import { FilledButton } from "@/components/ui/FilledButton";
@@ -30,7 +16,6 @@ interface ShadowTrial { id: string; task: string; currentScore: number | null; p
 
 interface ShadowVerdict { version: number | null; trials: ShadowTrial[]; summary: { trials: number; pendingWins: number; currentWins: number; ties: number; winRate: number } }
 
-/** A judged trial's dot. An unjudged one takes the neutral mark below. */
 const WINNER_DOT: Record<"current" | "pending" | "tie", string> = {
   pending: "p-dot-success",
   current: "p-dot-danger",
@@ -87,7 +72,6 @@ function VerdictGrid({ verdict }: { verdict: ShadowVerdict }) {
   );
 }
 
-/** The selected version's diff, or what stands between the reader and it. */
 function VersionDiff({ detail, version, onRetry }: {
   detail: AsyncResource<{ diff: ScaffoldDiff; verdict: ShadowVerdict }>;
   version: number;
@@ -115,8 +99,7 @@ export function ScaffoldLineage({ rpc, currentVersion }: ScaffoldLineageProps) {
   const [previewTask, setPreviewTask] = useState("");
   const [previewOut, setPreviewOut] = useState<string | null>(null);
 
-  // "no rewrites yet" is a claim about the agent's own evolution. It may only
-  // be made about a listing that actually came back.
+  // "no rewrites yet" may only be claimed about a listing that came back.
   const loadVersions = useCallback(() => rpc<ScaffoldVersion[]>("listScaffoldVersions", [20]), [rpc]);
   const { resource: lineage, reload } = useAsyncResource(loadVersions);
   const versions = lastValue(lineage) ?? [];
@@ -124,8 +107,7 @@ export function ScaffoldLineage({ rpc, currentVersion }: ScaffoldLineageProps) {
   const loadDetail = useCallback(async (version: number) => {
     setDetail({ status: "loading" });
 
-    // An absent verdict is an ordinary empty result, not a failure, so either
-    // read failing here is the surface's failure rather than a blank grid.
+    // An absent verdict is an empty result, not a failure.
     try {
       const [diff, verdict] = await Promise.all([
         rpc<ScaffoldDiff>("getScaffoldDiff", [version]),
@@ -173,8 +155,6 @@ export function ScaffoldLineage({ rpc, currentVersion }: ScaffoldLineageProps) {
 
   const selectedV = versions.find((v) => v.version === selected);
   const isPending = selectedV?.status === "pending";
-  // What stands in for the lineage: a first read that failed, one in flight, or
-  // a workspace whose scaffold has never been rewritten.
   let notice: ReactNode = null;
 
   if (lineage.status === "error" && versions.length === 0) {
@@ -193,7 +173,6 @@ export function ScaffoldLineage({ rpc, currentVersion }: ScaffoldLineageProps) {
       </div>
       {notice ?? (
         <div className="space-y-2">
-          {/* Version lineage */}
           <div className="space-y-1">
             {versions.map((v) => (
               <button key={v.version} onClick={() => select(v.version)}
@@ -206,7 +185,6 @@ export function ScaffoldLineage({ rpc, currentVersion }: ScaffoldLineageProps) {
             ))}
           </div>
 
-          {/* Selected version detail */}
           {selected != null && (
             <div className="space-y-3 pt-1">
               {detail.status === "ready" && detail.value.verdict.trials.length > 0 && (
@@ -214,7 +192,6 @@ export function ScaffoldLineage({ rpc, currentVersion }: ScaffoldLineageProps) {
               )}
               <VersionDiff detail={detail} version={selected} onRetry={() => loadDetail(selected)} />
 
-              {/* Preview-live a candidate before promoting */}
               <div className="space-y-1.5">
                 <div className="flex items-center gap-2">
                   <input value={previewTask} onChange={(e) => setPreviewTask(e.target.value)}
@@ -230,7 +207,6 @@ export function ScaffoldLineage({ rpc, currentVersion }: ScaffoldLineageProps) {
                 )}
               </div>
 
-              {/* Promote / Rollback — only meaningful while this version is pending */}
               {isPending && (
                 <div className="flex items-center gap-2">
                   <FilledButton disabled={busy !== null} onClick={() => decide("promote")}>
