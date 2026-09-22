@@ -99,8 +99,16 @@ const BodySchema = v.object({
 
 type Body = v.InferOutput<typeof BodySchema>;
 
-function json<Answer>(payload: Answer, status = 200): Response {
-  return new Response(JSON.stringify(payload), { status, headers: { 'content-type': 'application/json' } });
+/** One driver answer: the payload a route built, and the status it answers
+ *  with. Nothing here reads inside the payload — only `JSON.stringify` does,
+ *  and an RPC result carries `Disposable` beside its own fields. */
+interface Answer {
+  readonly payload: unknown;
+  readonly status?: number;
+}
+
+function json(answer: Answer): Response {
+  return new Response(JSON.stringify(answer.payload), { status: answer.status ?? 200, headers: { 'content-type': 'application/json' } });
 }
 
 /** Constant-time bearer comparison; an absent expected token refuses everything. */
@@ -127,16 +135,16 @@ async function body(request: Request): Promise<Body> {
 
 export default {
   async fetch(request: Request, env: MeasureEnv): Promise<Response> {
-    if (!authorized(request, env.MEASURE_TOKEN)) return json({ ok: false, error: 'unauthorized' }, 401);
+    if (!authorized(request, env.MEASURE_TOKEN)) return json({ payload: { ok: false, error: 'unauthorized' }, status: 401 });
     const url = new URL(request.url);
 
-    if (request.method === 'GET' && url.pathname === '/health') return json({ ok: true });
+    if (request.method === 'GET' && url.pathname === '/health') return json({ payload: { ok: true } });
     let input: Body;
 
     try {
       input = await body(request);
     } catch (error) {
-      return json({ ok: false, error: `malformed body: ${describeThrown({ cause: error })}` }, 400);
+      return json({ payload: { ok: false, error: `malformed body: ${describeThrown({ cause: error })}` }, status: 400 });
     }
 
     const box = getSandbox(env.MeasureBox, BOX_ID, { transport: 'rpc', keepAlive: true });
@@ -150,52 +158,52 @@ export default {
           if (input.cwd !== undefined) options.cwd = input.cwd;
           const result = await box.exec(input.command ?? 'true', options);
 
-          return json({
+          return json({ payload: {
             ok: result.exitCode === 0, exitCode: result.exitCode, stdout: result.stdout, stderr: result.stderr,
             ms: Date.now() - started,
-          });
+          } });
         }
 
         case 'POST /put': {
           const path = input.path ?? '';
 
-          if (path.length === 0) return json({ ok: false, error: 'path is required' }, 400);
+          if (path.length === 0) return json({ payload: { ok: false, error: 'path is required' }, status: 400 });
           await box.writeFile(path, input.content ?? '');
 
-          return json({ ok: true, path, bytes: (input.content ?? '').length, ms: Date.now() - started });
+          return json({ payload: { ok: true, path, bytes: (input.content ?? '').length, ms: Date.now() - started } });
         }
 
         case 'POST /start': {
           const processId = input.processId ?? '';
 
-          if (processId.length === 0) return json({ ok: false, error: 'processId is required' }, 400);
+          if (processId.length === 0) return json({ payload: { ok: false, error: 'processId is required' }, status: 400 });
           const existing = await box.getProcess(processId);
 
           if (existing !== null) {
-            return json({ ok: true, processId, status: existing.status, started: false, ms: Date.now() - started });
+            return json({ payload: { ok: true, processId, status: existing.status, started: false, ms: Date.now() - started } });
           }
 
           const process = await box.startProcess(input.command ?? 'true', { processId, autoCleanup: false });
 
-          return json({ ok: true, processId, status: process.status, started: true, ms: Date.now() - started });
+          return json({ payload: { ok: true, processId, status: process.status, started: true, ms: Date.now() - started } });
         }
 
         case 'POST /mount': {
           const path = input.path ?? '';
 
-          if (path.length === 0) return json({ ok: false, error: 'path is required' }, 400);
+          if (path.length === 0) return json({ payload: { ok: false, error: 'path is required' }, status: 400 });
           await box.mountStore(path, input.prefix ?? 'measure');
 
-          return json({ ok: true, path, ms: Date.now() - started });
+          return json({ payload: { ok: true, path, ms: Date.now() - started } });
         }
 
         case 'POST /unmount': {
           const path = input.path ?? '';
 
-          if (path.length === 0) return json({ ok: false, error: 'path is required' }, 400);
+          if (path.length === 0) return json({ payload: { ok: false, error: 'path is required' }, status: 400 });
           await box.unmountStore(path);
 
-          return json({ ok: true, path, ms: Date.now() - started });
+          return json({ payload: { ok: true, path, ms: Date.now() - started } });
         }
 
         case 'GET /head': {
@@ -203,15 +211,15 @@ export default {
           // reader of R2's own checksums, which no HTTP receipt carries.
           const key = url.searchParams.get('key') ?? '';
 
-          if (key.length === 0) return json({ ok: false, error: 'key is required' }, 400);
+          if (key.length === 0) return json({ payload: { ok: false, error: 'key is required' }, status: 400 });
           const object = await env.BACKUP_BUCKET.head(key);
 
-          if (object === null) return json({ ok: false, key, exists: false, ms: Date.now() - started }, 404);
+          if (object === null) return json({ payload: { ok: false, key, exists: false, ms: Date.now() - started }, status: 404 });
 
           const hex = (bytes: ArrayBuffer | undefined): string | null =>
             bytes === undefined ? null : [...new Uint8Array(bytes)].map((b) => b.toString(16).padStart(2, '0')).join('');
 
-          return json({
+          return json({ payload: {
             ok: true, key, exists: true, size: object.size, etag: object.etag, httpEtag: object.httpEtag,
             uploaded: object.uploaded.toISOString(),
             checksums: {
@@ -219,7 +227,7 @@ export default {
               sha384: hex(object.checksums.sha384), sha512: hex(object.checksums.sha512),
             },
             ms: Date.now() - started,
-          });
+          } });
         }
 
         case 'POST /purge': {
@@ -235,20 +243,20 @@ export default {
             purged += keys.length;
           }
 
-          return json({ ok: true, purged, ms: Date.now() - started });
+          return json({ payload: { ok: true, purged, ms: Date.now() - started } });
         }
 
         case 'POST /destroy': {
           await box.destroy();
 
-          return json({ ok: true, ms: Date.now() - started });
+          return json({ payload: { ok: true, ms: Date.now() - started } });
         }
 
         default:
-          return json({ ok: false, error: `no route for ${request.method} ${url.pathname}` }, 404);
+          return json({ payload: { ok: false, error: `no route for ${request.method} ${url.pathname}` }, status: 404 });
       }
     } catch (error) {
-      return json({ ok: false, error: describeThrown({ cause: error }), ms: Date.now() - started }, 502);
+      return json({ payload: { ok: false, error: describeThrown({ cause: error }), ms: Date.now() - started }, status: 502 });
     }
   },
 };

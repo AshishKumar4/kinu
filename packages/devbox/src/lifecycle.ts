@@ -846,7 +846,7 @@ export function releaseWorkdirHoldersCommand(workdir: string): string {
   // The parent chain of this shell, walked once through /proc. The comm field
   // can hold spaces and parentheses, so ppid is read AFTER the last `)` rather
   // than by column number — `pid (comm) state ppid …`.
-  const ancestors = 'mine=" $$ "; a=$$; '
+  const ancestorPids = 'mine=" $$ "; a=$$; '
     + 'while [ -n "$a" ] && [ "$a" != 0 ] && [ "$a" != 1 ]; do '
     + `a=$(sed 's/.*) //' /proc/$a/stat 2>/dev/null | cut -d' ' -f2); `
     + 'if [ -n "$a" ]; then mine="$mine$a "; fi; done; ';
@@ -869,7 +869,7 @@ export function releaseWorkdirHoldersCommand(workdir: string): string {
     + 'cwdh="$cwdh $entry"; fi; fi; '
     + 'done; }; ';
 
-  return `${ancestors}${scan}__devbox_hold; `
+  return `${ancestorPids}${scan}__devbox_hold; `
     // The pre-signal picture, on stderr, split by what this command is willing
     // to do about each class. Only fd holders that are strangers are signalled.
     + 'if [ -n "$kin" ]; then echo "not signalled, this session\'s own:$kin" >&2; fi; '
@@ -1134,15 +1134,19 @@ function atOrUnder(outer: string, inner: string): boolean {
  * with everything at or beneath it, in either direction — a recursive delete of
  * `/a` and a write to `/a/b/c` are the same resource seen from two ends.
  */
+function scopesTouch(left: ResourceScope, right: ResourceScope): boolean {
+  if (left.subtree) return atOrUnder(left.path, right.path);
+
+  if (right.subtree) return atOrUnder(right.path, left.path);
+
+  return left.path === right.path;
+}
+
 export function scopesOverlap(
   left: readonly ResourceScope[],
   right: readonly ResourceScope[],
 ): boolean {
-  return left.some(a => right.some(b => (
-    a.subtree ? atOrUnder(a.path, b.path)
-      : b.subtree ? atOrUnder(b.path, a.path)
-        : a.path === b.path
-  )));
+  return left.some(a => right.some(b => scopesTouch(a, b)));
 }
 
 export interface ResourceLane {

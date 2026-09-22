@@ -585,7 +585,7 @@ export class Devbox<Env = unknown> extends Sandbox<Env> {
   #lastInteractionPersisted = 0;
   /** Every strategy checkpoint on this instance runs through one gate, so two
    *  overlapping entry points can never interleave inside a strategy. */
-  #lane = createCheckpointLane();
+  readonly #lane = createCheckpointLane();
   /** Public work with no resource name: shell commands and supervised starts.
    *  Resource and checkpoint work reports directly through their own lanes. */
   #activeCallers = 0;
@@ -613,7 +613,7 @@ export class Devbox<Env = unknown> extends Sandbox<Env> {
   /** One caller at a time per container resource, shared by every facet of this
    *  workspace because they all reach this object. See
    *  {@link createResourceLane} and the banner below. */
-  #resources = createResourceLane();
+  readonly #resources = createResourceLane();
 
   /**
    * Sweep dead schedule rows at OBJECT ACTIVATION, ahead of the alarm loop.
@@ -1021,9 +1021,9 @@ export class Devbox<Env = unknown> extends Sandbox<Env> {
         await this.#settle({ phase: 'repair', incomplete: reason });
         await this.#record('process', reason);
       } else {
-        const generation = this.#generation;
+        const recoveryGeneration = this.#generation;
         const claim = await this.#claimRecovery();
-        await this.#recover(generation, claim, { cause });
+        await this.#recover(recoveryGeneration, claim, { cause });
       }
     }
 
@@ -1626,12 +1626,14 @@ export class Devbox<Env = unknown> extends Sandbox<Env> {
 
     if (!this.#owns(generation)) return;
 
-    const stamped = expected === undefined && retryBootStamp
-      ? await steps.run(async () => await this.#stampBootId(generation), () => undefined)
-      : expected === undefined ? { kind: 'pending' as const } : { kind: 'done' as const };
+    let stamped: keyof typeof STAMP_MISSING | 'done' = expected === undefined ? 'pending' : 'done';
+
+    if (expected === undefined && retryBootStamp) {
+      stamped = (await steps.run(async () => await this.#stampBootId(generation), () => undefined)).kind;
+    }
 
     if (!this.#owns(generation)) return;
-    await this.#settle(settledRestoration(restored, stamped.kind));
+    await this.#settle(settledRestoration(restored, stamped));
   }
 
   /** Does the attempt that started on `generation` still own this lifecycle?

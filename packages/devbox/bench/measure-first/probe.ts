@@ -212,9 +212,18 @@ const StoreHeadSchema = v.looseObject({
 
 const DaemonReplySchema = v.looseObject({ op: v.string(), ms: v.number(), reply: v.looseObject({ ok: v.boolean() }) });
 
+/** One request to the probe deployment, and the contract its reply must match. */
+interface ProbeRequest<TSchema extends v.GenericSchema> {
+  readonly deployment: Deployment;
+  readonly method: 'GET' | 'POST';
+  readonly path: string;
+  readonly schema: TSchema;
+  readonly input?: RequestBody;
+  readonly timeoutMs?: number;
+}
+
 async function call<TSchema extends v.GenericSchema>(
-  deployment: Deployment, method: 'GET' | 'POST', path: string, schema: TSchema,
-  input?: RequestBody, timeoutMs = REQUEST_TIMEOUT_MS,
+  { deployment, method, path, schema, input, timeoutMs = REQUEST_TIMEOUT_MS }: ProbeRequest<TSchema>,
 ): Promise<v.InferOutput<TSchema>> {
   const headers = new Headers({ authorization: `Bearer ${deployment.token}` });
   const init: RequestInit = { method, headers, signal: AbortSignal.timeout(timeoutMs) };
@@ -248,7 +257,14 @@ async function call<TSchema extends v.GenericSchema>(
 }
 
 async function exec(deployment: Deployment, command: string, timeoutMs = REQUEST_TIMEOUT_MS): Promise<ExecReply> {
-  const reply = await call(deployment, 'POST', '/exec', ExecSchema, { command, timeoutMs }, timeoutMs + 10_000);
+  const reply = await call({
+    deployment,
+    method: 'POST',
+    path: '/exec',
+    schema: ExecSchema,
+    input: { command, timeoutMs },
+    timeoutMs: timeoutMs + 10_000,
+  });
 
   if (reply.exitCode !== 0) {
     throw new Error(`container command failed (${String(reply.exitCode)}): ${command}\n${reply.stderr ?? reply.error ?? reply.stdout ?? ''}`);
@@ -273,8 +289,19 @@ function parseOutput<TSchema extends v.GenericSchema>(
   return v.parse(schema, decoded);
 }
 
+/** One container command whose stdout is JSON, and the contract it must match. */
+interface ExecJson<TSchema extends v.GenericSchema> {
+  readonly deployment: Deployment;
+  readonly command: string;
+  readonly schema: TSchema;
+  /** What the command is, for the message a malformed reply raises. */
+  readonly what: string;
+  /** Read only the last stdout line, for a command that also logs. */
+  readonly lastLine?: boolean;
+}
+
 async function execJson<TSchema extends v.GenericSchema>(
-  deployment: Deployment, command: string, schema: TSchema, what: string, lastLine = false,
+  { deployment, command, schema, what, lastLine = false }: ExecJson<TSchema>,
 ): Promise<v.InferOutput<TSchema>> {
   return parseOutput(await exec(deployment, command), schema, what, lastLine);
 }
@@ -491,7 +518,7 @@ function fioCommand(name: string, filename: string, args: string): string {
 async function fio(
   deployment: Deployment, name: string, filename: string, args: string,
 ): Promise<v.InferOutput<typeof FioSchema>> {
-  return await execJson(deployment, fioCommand(name, filename, args), FioSchema, name);
+  return await execJson({ deployment, command: fioCommand(name, filename, args), schema: FioSchema, what: name });
 }
 
 async function startDaemon(deployment: Deployment, variant: string, binary: string): Promise<{
@@ -503,15 +530,28 @@ async function startDaemon(deployment: Deployment, variant: string, binary: stri
   const state = `${base}/state`;
   const socket = `${state}/control.sock`;
   await exec(deployment, `rm -rf '${base}' && mkdir -p '${root}' '${mount}' '${state}'`);
-  await call(deployment, 'POST', '/start', AckSchema, {
-    processId: `daemon-${variant}`,
-    command: `exec '${binary}' --root '${root}' --mount '${mount}' --state '${state}' --socket '${socket}' >'${base}/daemon.log' 2>&1`,
+  await call({
+    deployment,
+    method: 'POST',
+    path: '/start',
+    schema: AckSchema,
+    input: {
+      processId: `daemon-${variant}`,
+      command: `exec '${binary}' --root '${root}' --mount '${mount}' --state '${state}' --socket '${socket}' >'${base}/daemon.log' 2>&1`,
+    },
   });
 
   for (let attempt = 1; attempt <= 20; attempt += 1) {
-    const mounted = await call(deployment, 'POST', '/exec', ExecSchema, {
-      command: `mountpoint -q '${mount}'`, timeoutMs: 30_000,
-    }, 40_000);
+    const mounted = await call({
+      deployment,
+      method: 'POST',
+      path: '/exec',
+      schema: ExecSchema,
+      input: {
+        command: `mountpoint -q '${mount}'`, timeoutMs: 30_000,
+      },
+      timeoutMs: 40_000,
+    });
 
     if (mounted.exitCode === 0) return { root, mount, state, socket };
 
@@ -527,12 +567,25 @@ async function startDaemon(deployment: Deployment, variant: string, binary: stri
 }
 
 async function stopDaemon(deployment: Deployment, variant: string, socket: string): Promise<void> {
-  await execJson(deployment, `bun '${CONTAINER_HELPER}' daemon '${socket}' stop`, DaemonReplySchema, `${variant} stop`, true);
+  await execJson({
+    deployment,
+    command: `bun '${CONTAINER_HELPER}' daemon '${socket}' stop`,
+    schema: DaemonReplySchema,
+    what: `${variant} stop`,
+    lastLine: true,
+  });
 
   for (let attempt = 1; attempt <= 20; attempt += 1) {
-    const reply = await call(deployment, 'POST', '/exec', ExecSchema, {
-      command: `mountpoint -q '${ROOT}/${variant}/mount'`, timeoutMs: 30_000,
-    }, 40_000);
+    const reply = await call({
+      deployment,
+      method: 'POST',
+      path: '/exec',
+      schema: ExecSchema,
+      input: {
+        command: `mountpoint -q '${ROOT}/${variant}/mount'`, timeoutMs: 30_000,
+      },
+      timeoutMs: 40_000,
+    });
 
     if (reply.exitCode !== 0) return;
     await delay(250);
@@ -588,32 +641,55 @@ async function measureFilesystem(
       const smallDir = `${mount}/small-${String(run)}`;
       await exec(deployment, `mkdir -p '${smallDir}'`);
 
-      const small = await execJson(deployment,
-        `bun '${CONTAINER_HELPER}' smallstat '${smallDir}' 1000`, SmallStatSchema, `${variant} small-stat`, true);
+      const small = await execJson({
+        deployment,
+        command: `bun '${CONTAINER_HELPER}' smallstat '${smallDir}' 1000`,
+        schema: SmallStatSchema,
+        what: `${variant} small-stat`,
+        lastLine: true,
+      });
 
       await exec(deployment, `rm -rf '${smallDir}'`);
 
       const metaDir = `${mount}/meta-${String(run)}`;
       await exec(deployment, `mkdir -p '${metaDir}'`);
 
-      const meta = await execJson(deployment,
-        `metabench '${metaDir}' 10000 256`, MetaSchema, `${variant} metadata`, true);
+      const meta = await execJson({
+        deployment,
+        command: `metabench '${metaDir}' 10000 256`,
+        schema: MetaSchema,
+        what: `${variant} metadata`,
+        lastLine: true,
+      });
 
       await exec(deployment, `rmdir '${metaDir}'`);
 
       const sqliteDir = `${mount}/sqlite-${String(run)}`;
-      await execJson(deployment,
-        `bun '${DECISIVE_HELPER}' --root '${sqliteDir}' --workload sqlite --seed ${String(20260902 + run)} --segment 0 --size-mib 64 --segments 4`,
-        DecisiveSchema, `${variant} sqlite fill`, true);
+      await execJson({
+        deployment,
+        command: `bun '${DECISIVE_HELPER}' --root '${sqliteDir}' --workload sqlite --seed ${String(20260902 + run)} --segment 0 --size-mib 64 --segments 4`,
+        schema: DecisiveSchema,
+        what: `${variant} sqlite fill`,
+        lastLine: true,
+      });
 
-      const sqlite = await execJson(deployment,
-        `bun '${DECISIVE_HELPER}' --root '${sqliteDir}' --workload sqlite --seed ${String(20260902 + run)} --segment 1 --size-mib 64 --segments 4`,
-        DecisiveSchema, `${variant} sqlite rewrite`, true);
+      const sqlite = await execJson({
+        deployment,
+        command: `bun '${DECISIVE_HELPER}' --root '${sqliteDir}' --workload sqlite --seed ${String(20260902 + run)} --segment 1 --size-mib 64 --segments 4`,
+        schema: DecisiveSchema,
+        what: `${variant} sqlite rewrite`,
+        lastLine: true,
+      });
 
       await exec(deployment, `rm -rf '${sqliteDir}'`);
 
-      const sync = await execJson(deployment,
-        `fsyncbench '${mount}/fsync-${String(run)}.bin' 128`, FsyncSchema, `${variant} fsync`, true);
+      const sync = await execJson({
+        deployment,
+        command: `fsyncbench '${mount}/fsync-${String(run)}.bin' 128`,
+        schema: FsyncSchema,
+        what: `${variant} fsync`,
+        lastLine: true,
+      });
 
       const jobWrite = randomWrite.jobs[0];
       const jobRead = randomRead.jobs[0];
@@ -660,9 +736,13 @@ async function measureFence(deployment: Deployment, output: FenceSample[]): Prom
           `dd if=/dev/zero of='${started.mount}/tree.bin' bs=${String(dirtyBytes)} count=1 conv=notrunc status=none`,
         );
 
-        const fenced = await execJson(deployment,
-          `bun '${CONTAINER_HELPER}' daemon '${started.socket}' fence`, DaemonReplySchema,
-          `fence ${String(dirtyBytes)} run ${String(run)}`, true);
+        const fenced = await execJson({
+          deployment,
+          command: `bun '${CONTAINER_HELPER}' daemon '${started.socket}' fence`,
+          schema: DaemonReplySchema,
+          what: `fence ${String(dirtyBytes)} run ${String(run)}`,
+          lastLine: true,
+        });
 
         output.push({ variant, dirtyBytes, run, ms: fenced.ms });
         await exec(deployment, `rm -rf '${started.state}'/stage-* '${started.state}'/fence-*`);
@@ -686,24 +766,46 @@ async function measureR2(
   deployment: Deployment,
   puts: PutSample[], ranges: RangeSample[],
 ): Promise<v.InferOutput<typeof PutSchema>> {
-  await call(deployment, 'POST', '/mount', AckSchema, { path: STORE_MOUNT, prefix: STORE_PREFIX });
+  await call({
+    deployment,
+    method: 'POST',
+    path: '/mount',
+    schema: AckSchema,
+    input: { path: STORE_MOUNT, prefix: STORE_PREFIX },
+  });
   await exec(deployment, `mountpoint -q '${STORE_MOUNT}' && grep -F ' ${STORE_MOUNT} ' /proc/mounts`);
 
   for (let run = 1; run <= RUNS; run += 1) {
     const key = `put-32m-run-${String(run)}.bin`;
 
-    const receipt = await execJson(deployment,
-      `bun '${CONTAINER_HELPER}' r2 put '${key}' ${String(32 * MiB)} sha256`, PutSchema, `32 MiB PUT ${String(run)}`, true);
+    const receipt = await execJson({
+      deployment,
+      command: `bun '${CONTAINER_HELPER}' r2 put '${key}' ${String(32 * MiB)} sha256`,
+      schema: PutSchema,
+      what: `32 MiB PUT ${String(run)}`,
+      lastLine: true,
+    });
 
-    const stored = await call(deployment, 'GET', `/head?key=${encodeURIComponent(`${STORE_KEY_PREFIX}/${key}`)}`, StoreHeadSchema);
+    const stored = await call({
+      deployment,
+      method: 'GET',
+      path: `/head?key=${encodeURIComponent(`${STORE_KEY_PREFIX}/${key}`)}`,
+      schema: StoreHeadSchema,
+    });
+
     puts.push({ run, receipt, stored });
   }
 
   const objectBytes = 512 * MiB;
   const key = 'range-512m.bin';
 
-  const fixturePut = await execJson(deployment,
-    `bun '${CONTAINER_HELPER}' r2 put '${key}' ${String(objectBytes)} none`, PutSchema, 'range fixture PUT', true);
+  const fixturePut = await execJson({
+    deployment,
+    command: `bun '${CONTAINER_HELPER}' r2 put '${key}' ${String(objectBytes)} none`,
+    schema: PutSchema,
+    what: 'range fixture PUT',
+    lastLine: true,
+  });
 
   await exec(deployment, `test "$(stat -c %s '${STORE_MOUNT}/${key}')" = '${String(objectBytes)}'`);
 
@@ -715,9 +817,13 @@ async function measureR2(
         log(`R2 ${String(rangeBytes)} bytes x ${String(concurrency)}, run ${String(run)}/${String(RUNS)}`);
         const seed = rangeBytes + concurrency * 101 + run * 1009;
 
-        const direct = await execJson(deployment,
-          `bun '${CONTAINER_HELPER}' r2 range '${key}' ${String(objectBytes)} ${String(rangeBytes)} ${String(concurrency)} ${String(requests)} ${String(seed)}`,
-          RangeSchema, 'direct range GET', true);
+        const direct = await execJson({
+          deployment,
+          command: `bun '${CONTAINER_HELPER}' r2 range '${key}' ${String(objectBytes)} ${String(rangeBytes)} ${String(concurrency)} ${String(requests)} ${String(seed)}`,
+          schema: RangeSchema,
+          what: 'direct range GET',
+          lastLine: true,
+        });
 
         ranges.push({
           path: 'direct-http', rangeBytes, concurrency, run, requests: direct.requests,
@@ -725,9 +831,13 @@ async function measureR2(
           mibPerSec: direct.mibPerSec,
         });
 
-        const s3fs = await execJson(deployment,
-          `rangeread '${STORE_MOUNT}/${key}' ${String(rangeBytes)} ${String(concurrency)} ${String(requests)} ${String(seed)}`,
-          RangeSchema, 's3fs range GET', true);
+        const s3fs = await execJson({
+          deployment,
+          command: `rangeread '${STORE_MOUNT}/${key}' ${String(rangeBytes)} ${String(concurrency)} ${String(requests)} ${String(seed)}`,
+          schema: RangeSchema,
+          what: 's3fs range GET',
+          lastLine: true,
+        });
 
         ranges.push({
           path: 's3fs', rangeBytes, concurrency, run, requests: s3fs.requests,
@@ -738,7 +848,7 @@ async function measureR2(
     }
   }
 
-  await call(deployment, 'POST', '/unmount', AckSchema, { path: STORE_MOUNT });
+  await call({ deployment, method: 'POST', path: '/unmount', schema: AckSchema, input: { path: STORE_MOUNT } });
 
   return fixturePut;
 }
@@ -756,8 +866,13 @@ async function collectIdentity(deployment: Deployment): Promise<Identity> {
 
   await exec(deployment, `mkdir -p '${ROOT}/caps'`);
 
-  const capabilities = await execJson(deployment,
-    `fuse-caps '${ROOT}/caps'`, CapabilitySchema, 'FUSE capability probe', true);
+  const capabilities = await execJson({
+    deployment,
+    command: `fuse-caps '${ROOT}/caps'`,
+    schema: CapabilitySchema,
+    what: 'FUSE capability probe',
+    lastLine: true,
+  });
 
   const first = (raw.stdout ?? '').split('\n').find((line) => line.startsWith('uname-r='));
 
@@ -766,11 +881,23 @@ async function collectIdentity(deployment: Deployment): Promise<Identity> {
 
 async function installHelpers(deployment: Deployment): Promise<void> {
   await exec(deployment, `mkdir -p '${ROOT}'`);
-  await call(deployment, 'POST', '/put', AckSchema, {
-    path: CONTAINER_HELPER, content: readFileSync(CONTAINER_SOURCE, 'utf8'),
+  await call({
+    deployment,
+    method: 'POST',
+    path: '/put',
+    schema: AckSchema,
+    input: {
+      path: CONTAINER_HELPER, content: readFileSync(CONTAINER_SOURCE, 'utf8'),
+    },
   });
-  await call(deployment, 'POST', '/put', AckSchema, {
-    path: DECISIVE_HELPER, content: readFileSync(DECISIVE_SOURCE, 'utf8'),
+  await call({
+    deployment,
+    method: 'POST',
+    path: '/put',
+    schema: AckSchema,
+    input: {
+      path: DECISIVE_HELPER, content: readFileSync(DECISIVE_SOURCE, 'utf8'),
+    },
   });
 }
 
@@ -811,7 +938,7 @@ async function cleanup(
 
   if (deployment !== null) {
     try {
-      const purged = await call(deployment, 'POST', '/purge', AckSchema, { prefix: '' });
+      const purged = await call({ deployment, method: 'POST', path: '/purge', schema: AckSchema, input: { prefix: '' } });
       evidence.purgeReplies.push(JSON.stringify(purged));
     } catch (error) {
       evidence.errors.push(`purge: ${describeThrown({ cause: error })}`);
@@ -819,7 +946,7 @@ async function cleanup(
 
     for (const pass of [1, 2]) {
       try {
-        const destroyed = await call(deployment, 'POST', '/destroy', AckSchema, {});
+        const destroyed = await call({ deployment, method: 'POST', path: '/destroy', schema: AckSchema, input: {} });
         evidence.destroyReplies.push(JSON.stringify(destroyed));
       } catch (error) {
         evidence.errors.push(`destroy pass ${String(pass)}: ${describeThrown({ cause: error })}`);

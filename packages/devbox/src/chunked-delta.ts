@@ -355,6 +355,15 @@ export function deltaBaseStatCommand(paths: readonly string[], lowerBase: string
   return lines.join('\n');
 }
 
+/** What `stat --format=%F` prints, as the delta's own kind. A socket, a fifo or
+ *  a device names none of these and travels as `other`. */
+const BASE_KIND = new Map<string, DeltaBaseKind>([
+  ['regular file', 'file'],
+  ['regular empty file', 'file'],
+  ['directory', 'dir'],
+  ['symbolic link', 'link'],
+]);
+
 /** Parse what {@link deltaBaseStatCommand} printed, in path order. */
 export function parseDeltaBaseStat(stdout: string, paths: readonly string[]): Map<string, DeltaBaseFact | null> {
   const lines = stdout.split('\n').filter((line) => line !== '' && !line.startsWith('#'));
@@ -364,27 +373,21 @@ export function parseDeltaBaseStat(stdout: string, paths: readonly string[]): Ma
   }
 
   const out = new Map<string, DeltaBaseFact | null>();
-  paths.forEach((path, at) => {
+
+  for (const [at, path] of paths.entries()) {
     const line = lines[at];
 
     if (line === 'ABSENT') {
       out.set(path, null);
-
-      return;
+      continue;
     }
 
     const lastSpace = line.lastIndexOf(' ');
     const size = Number(line.slice(lastSpace + 1));
 
     if (!Number.isSafeInteger(size) || size < 0) throw new Error(`the delta base stat holds no size for ${path}`);
-    const words = line.slice(0, lastSpace);
-
-    const kind: DeltaBaseKind = words === 'regular file' || words === 'regular empty file'
-      ? 'file'
-      : words === 'directory' ? 'dir' : words === 'symbolic link' ? 'link' : 'other';
-
-    out.set(path, { kind, size });
-  });
+    out.set(path, { kind: BASE_KIND.get(line.slice(0, lastSpace)) ?? 'other', size });
+  }
 
   return out;
 }
