@@ -569,8 +569,10 @@ function summarizeRun(runId: string, events: DebugRunEvent[]): RunStats {
       stats.toolCalls++;
       const args = v.safeParse(JsonObjectSchema, e.args);
 
-      if (e.name === 'agent' && args.success && args.output.jobResult !== undefined) {
-        if (handledJobIds.has(String(args.output.jobResult))) stats.jobPollsAfterHandle++;
+      const polledJob = args.success ? v.safeParse(v.string(), args.output.jobResult) : null;
+
+      if (e.name === 'agent' && polledJob?.success === true && handledJobIds.has(polledJob.output)) {
+        stats.jobPollsAfterHandle++;
       }
 
       const result = v.safeParse(JsonObjectSchema, e.result);
@@ -668,6 +670,29 @@ const DEFAULT_RECORD_PAGE = 200;
  * decision constrains the other, so they are separate declarations on purpose.
  */
 const RECORD_PAGE_CAP = 50;
+
+/** Every record in one cell, page by page, up to the cap. */
+async function writeCellOccupants(
+  handle: RecordCellHandle,
+  source: DebugSource,
+  writer: BundleWriter,
+  safe: <T>(section: string, work: Promise<T>, fallback: T) => Promise<T>,
+): Promise<void> {
+  let cursor: SeekCursor | null = null;
+
+  for (let page = 0; page < RECORD_PAGE_CAP; page += 1) {
+    const occupants: Page<ExplorationRecord> = await safe(
+      'record_occupants',
+      source.recordOccupants(handle, cursor, DEFAULT_RECORD_PAGE),
+      { status: 'end', items: [] },
+    );
+
+    for (const row of occupants.items) writer.write(explorationRecordRecord(row));
+
+    if (occupants.status === 'end') return;
+    cursor = occupants.next;
+  }
+}
 
 export async function debugCommand(name: string, opts: DebugOpts = {}): Promise<void> {
   const target = resolveAgentTarget(name);
@@ -777,21 +802,7 @@ export async function debugCommand(name: string, opts: DebugOpts = {}): Promise<
           floorDigest: objective.floorDigest, descriptor: cell.descriptor,
           occupants: cell.occupants, elite: cell.elite?.artifactDigest ?? null,
         });
-        const handle = { ...objectiveHandle, descriptor: cell.descriptor };
-        let cursor: SeekCursor | null = null;
-
-        for (let page = 0; page < RECORD_PAGE_CAP; page += 1) {
-          const occupants: Page<ExplorationRecord> = await safe(
-            'record_occupants',
-            source.recordOccupants(handle, cursor, DEFAULT_RECORD_PAGE),
-            { status: 'end', items: [] },
-          );
-
-          for (const row of occupants.items) writer.write(explorationRecordRecord(row));
-
-          if (occupants.status === 'end') break;
-          cursor = occupants.next;
-        }
+        await writeCellOccupants({ ...objectiveHandle, descriptor: cell.descriptor }, source, writer, safe);
       }
     }
 
@@ -808,7 +819,7 @@ export async function debugCommand(name: string, opts: DebugOpts = {}): Promise<
     const scaffoldVersions = await safe('scaffold_versions', source.scaffoldVersions(sectionLimit), []);
     summary.scaffoldVersionCount = scaffoldVersions.length;
 
-    for (const v of scaffoldVersions) writer.write({ t: 'scaffold_version', ...v });
+    for (const version of scaffoldVersions) writer.write({ t: 'scaffold_version', ...version });
 
     const gepaRuns = await safe('gepa_runs', source.gepaRuns(sectionLimit), []);
     summary.gepaRunCount = gepaRuns.length;
@@ -877,6 +888,20 @@ function printJsonSummary(summary: DebugSummary, outPath: string): void {
   printJson(redactDeep(decodeJsonValue({ value: { bundle: outPath, ...summary } })));
 }
 
+/** How a run ended: its own reason, else whether an end was recorded at all. */
+function runStatusTag(run: RunStats): string {
+  if (run.endReason !== null && run.endReason !== '') return OK(run.endReason);
+
+  return run.endedAt === null ? WARN('no run_end') : OK('ended');
+}
+
+/** How long a background job has been running, or how long it took. */
+function jobDurationTag(job: DebugBackgroundJob): string {
+  if (job.status === 'running') return WARN(` — running ${formatElapsed(Date.now() - job.createdAt)}`);
+
+  return job.settledAt === null ? '' : ` — took ${formatElapsed(job.settledAt - job.createdAt)}`;
+}
+
 function printHumanSummary(name: string, mode: string, summary: DebugSummary, outPath: string): void {
   console.log(`\n${ACCENT(name)} ${DIM(`(${mode})`)} — bundle: ${DIM(outPath)}\n`);
 
@@ -896,7 +921,7 @@ function printHumanSummary(name: string, mode: string, summary: DebugSummary, ou
 
   for (const r of summary.runs.slice(0, 10)) {
     const when = r.startedAt ? new Date(r.startedAt).toLocaleString() : '?';
-    const status = r.endReason ? OK(r.endReason) : r.endedAt ? OK('ended') : WARN('no run_end');
+    const status = runStatusTag(r);
     const errTag = r.errors.length ? ERR(` ${r.errors.length} error(s)`) : '';
     const pollTag = r.jobPollsAfterHandle > 0 ? WARN(` polled job ${r.jobPollsAfterHandle}x after backgrounding`) : '';
     console.log(`  ${DIM(when)} ${ACCENT(r.runId.slice(0, 8))} ${r.causedBy ?? '?'} — ${r.eventCount} events, ${r.toolCalls} tool calls, ${status}${errTag}${pollTag}`);
@@ -965,9 +990,7 @@ function printHumanSummary(name: string, mode: string, summary: DebugSummary, ou
       // created_at/settled_at) — this is the honest answer to "how long has
       // this actually been running", computed rather than left for the
       // operator to do the timestamp math that hid the 12-hour job.
-      const durationTag = j.status === 'running'
-        ? WARN(` — running ${formatElapsed(Date.now() - j.createdAt)}`)
-        : j.settledAt ? ` — took ${formatElapsed(j.settledAt - j.createdAt)}` : '';
+      const durationTag = jobDurationTag(j);
 
       console.log(`  ${DIM(new Date(j.createdAt ?? 0).toLocaleString())} ${ACCENT(j.id.slice(0, 8))} ${j.kind} ${j.status}${durationTag}${labelTag}${j.error ? ERR(` — ${j.error}`) : ''}`);
     }
