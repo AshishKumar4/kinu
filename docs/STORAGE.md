@@ -1,62 +1,66 @@
 # Data model
 
-A hosted workspace has one durable authority: the OrchestratorAgent Durable
-Object. Nimbus, held as a library over its `ctx.storage.sql`, owns the
-workspace files and execution state. The `OrchestratorAgent` Durable Object
-SQLite owns relational actor state. Each subsystem owns its tables and creates
-them idempotently. No shadow VFS or sync path runs between the two.
+A hosted workspace has one durable authority: its `OrchestratorAgent` Durable
+Object. Nimbus runs as a library over that object's `ctx.storage.sql` and owns
+the workspace files and execution state. The same SQLite database holds the
+relational actor state. Each subsystem owns its tables and creates them
+idempotently. No shadow VFS or sync path runs between files and actor state.
 
-Two other Durable Object classes hold isolated databases of their own.
-Only `OrchestratorAgent` bears actors: every subordinate, head, swarm node, and
-MCTS branch is a logical actor row inside the workspace's own SQLite
-(`packages/cf-backend/src/subordinate-hosting.ts`,
-`packages/cf-backend/src/exploration-hosting.ts`), never a second object and
-never a second database. `UserDO` holds the per-user `user_*` and
-`device_*` tables and the owner `experience_library`. Those tables belong to the
-user, not to any workspace.
+Only `OrchestratorAgent` holds actors. Every subordinate, head, swarm node, and
+MCTS branch is a logical actor, one `workspace_actors` row inside the
+workspace's own SQLite (`packages/cf-backend/src/subordinate-hosting.ts`,
+`packages/cf-backend/src/exploration-hosting.ts`). None is a second object or a
+second database. The other Durable Object classes in `wrangler.jsonc` keep
+databases of their own. The one with user data is `UserDO`: it holds the
+per-user `user_*` and `device_*` tables and the owner's `experience_library`.
+Those tables belong to the user, not to any workspace.
 
-Four things live outside actor SQLite entirely. Browser auth lives in the `AUTH_KV`
-KV namespace. Sandbox `/workspace` backups live in the `BACKUP_BUCKET` R2 bucket.
-The authoritative Nimbus workspace lives in DO storage. Optional embedding recall
-lives in the `MEMORY_VECTORS` Vectorize index. Vectorize extends FTS5. It is never
-the source of truth.
+Three stores sit outside actor SQLite:
 
-`AUTH_KV` holds only expiring records: browser sessions, one-time OAuth
-handoff state, CLI browser-approval state, each carrying its own TTL. None of
-it is a source of truth. A user identity lives in their `UserDO`, keyed on a
-userId derived from the verified email. An emptied namespace costs everyone
-a fresh sign-in and nothing more. The handoff record keeps the hash of a
-binding cookie the initiating browser holds. A callback URL is worth nothing
+- Browser auth: the `AUTH_KV` KV namespace.
+- Sandbox `/workspace` backups: the `BACKUP_BUCKET` R2 bucket.
+- Optional embedding recall: the `MEMORY_VECTORS` Vectorize index. It extends
+  FTS5 and is never the source of truth.
+
+`AUTH_KV` holds only expiring records, each with its own TTL: browser
+sessions, one-time OAuth handoff state, and CLI browser-approval state. None of
+it is a source of truth. A user's identity lives in their `UserDO`, keyed on a
+userId derived from the verified email. If the namespace is emptied, every user
+signs in again and nothing else is lost. The handoff record keeps the hash of a
+binding cookie that the initiating browser holds, so a callback URL is useless
 away from the browser that started that sign-in.
 
-A session cookie KV record is a projection. What the cookie stands for and
-whether it is still live are both one row in the signing-in user's own
-`UserDO`. That row is written once at sign-in and read on every cookie check. KV needs up
-to a minute to reach every colo in either direction, so it can answer neither
-question. A copied cookie replayed at a lagging colo would outlive logout by
-that window. The first request after a sign-in redirect would read as
-signed out at a colo the write had not reached. It would then enter a
-sign-in that loses the same race. The row answers both, from every colo.
-Logout deletes it first. The KV delete that follows is cleanup. A failed
-cleanup never reports a revocation that landed as one that did not.
+A session cookie's KV record is a projection. What the cookie stands for, and
+whether it is still live, is one `user_browser_sessions` row in the user's own
+`UserDO`. Sign-in writes that row once, and every cookie check reads it. KV can
+take up to a minute to reach every colo in either direction, so it can answer
+neither question. A copied cookie replayed at a lagging colo would outlive
+logout by that window. The first request after a sign-in redirect would read as
+signed out at a colo the write had not reached, and would start a sign-in that
+loses the same race. The row answers both questions from every colo. Logout
+deletes the row first. The KV delete that follows is cleanup, and a failed
+cleanup never reports a completed revocation as failed.
 
-A store that will not answer gives a 503. That answer never admits the request.
-It never sends the 401 that would tell a signed-in user to sign in again. A sign-out
-that cannot reach the store keeps the cookie and offers a retry. The cookie is
-the only handle that can still revoke that session. Clearing it would leave
-the session live with nothing able to reach it. A session whose row is gone or
-lapsed is not signed in. A record KV does not hold is not a sign-out
-on its own. The row still says what the cookie stands for. Every path that
-ends a session deletes that row first. An absent record can never revive a
-revoked one. A record that no longer decodes is both a fault and a dead
-credential. I report it once, clear it from the row and from KV, and still
-answer as not signed in. The browser can then sign in again instead of sitting
-trapped behind a cookie it cannot replace.
+When the store does not answer, the request gets a 503
+(`packages/cf-backend/src/auth/session.ts`). It is never admitted, and it never
+gets the 401 that would send a signed-in user to sign in again. A sign-out that
+cannot reach the store keeps the cookie and offers a retry, because the cookie
+is the only handle that can still revoke that session. A session whose row is
+gone or lapsed is not signed in. A missing KV record alone is not a sign-out:
+the row still says what the cookie stands for, and every path that ends a
+session deletes the row first, so a missing record cannot revive a revoked
+session. A record that no longer decodes is both a fault and a dead credential.
+The Worker reports it once, clears it from the row and from KV, and answers as
+not signed in (`discardCorruptSession` in `packages/cf-backend/src/auth/store.ts`).
+The browser can then sign in again instead of staying behind a cookie it cannot
+replace.
 
 ## Entity relationship
 
-The relational workspace tables, as created by the Core schema initializers
-and agent-utils stores; workspace files live in the Nimbus filesystem below.
+The core relational workspace tables, as the core schema initializers and the
+agent-utils stores create them. Workspace files live in the Nimbus filesystem
+described below. Most actor-scoped tables also carry `actor_id` as the first
+primary-key column.
 
 ```mermaid
 erDiagram
@@ -67,7 +71,16 @@ erDiagram
         TEXT mission "One-line summary, written by writeSoul"
         INTEGER created_at "Epoch ms"
     }
-    agent_config {
+    workspace_actors {
+        TEXT actor_id PK "Actor ID"
+        TEXT parent_actor_id FK "Parent actor"
+        TEXT name "Actor name"
+        TEXT kind "main/subordinate/head/node/branch"
+        TEXT lifetime "durable/task"
+        INTEGER created_at "Epoch ms"
+    }
+    actor_config {
+        TEXT actor_id PK "Actor"
         TEXT key PK "Config key (model, reasoning effort, skills)"
         TEXT value "Config value (NOT NULL)"
     }
@@ -89,6 +102,9 @@ erDiagram
         TEXT params "JSON Schema for input"
         TEXT code "Async arrow function body"
         TEXT scope "local or shared"
+        REAL score "EMA score (default 0.5)"
+        INTEGER uses "Usage count (default 0)"
+        INTEGER last_used_at "Epoch ms"
         INTEGER created_at "Epoch ms"
         INTEGER updated_at "Epoch ms"
     }
@@ -97,6 +113,7 @@ erDiagram
         TEXT description "FTS5 virtual table"
     }
     search_nodes {
+        TEXT actor_id PK "Actor that owns the search"
         TEXT id PK "Node ID (nanoid)"
         TEXT parent_id FK "Parent node"
         TEXT root_id "The search run this node belongs to"
@@ -110,7 +127,8 @@ erDiagram
         REAL value "Running mean score (default 0)"
         TEXT status "open/terminal/pruned/failed"
         TEXT msg_id "Session message ID"
-        TEXT branch_agent_key "Facet agent key"
+        TEXT branch_agent_key "Branch actor key"
+        TEXT evaluation_json "Evaluation of the node"
         INTEGER created_at "Epoch ms"
     }
     evolution_events {
@@ -129,13 +147,6 @@ erDiagram
         TEXT status "current/pending/rolled_back/historical"
         INTEGER parent_version "DGM lineage, the version this branched from"
         TEXT pathology "The failure cell this version was written to fix"
-    }
-    craft_scores {
-        TEXT tool_name PK "Crafted tool name"
-        REAL score "EMA score (default 0.5)"
-        INTEGER uses "Usage count (default 0)"
-        INTEGER last_used_at "Epoch ms"
-        INTEGER created_at "Epoch ms"
     }
     scaffold_regression_fixtures {
         TEXT id PK "Random hex ID"
@@ -161,6 +172,7 @@ erDiagram
         TEXT actor_id PK "Actor whose message this is"
         TEXT message_id PK "Message ID"
         TEXT role "user/assistant/system/tool"
+        TEXT native_content_kind "string/parts"
         TEXT origin "input/output/edit/context_transform/render"
         TEXT envelope_json "Message fields other than role and content"
         INTEGER sealed_at "Epoch ms once the content is committed"
@@ -172,6 +184,7 @@ erDiagram
         TEXT actor_id PK "Actor"
         TEXT message_id PK "Open message"
         INTEGER part_no PK "Part"
+        INTEGER segment PK "Continuation row of a long part"
         TEXT descriptor_json "The part without its text"
         TEXT text "Accumulated text, extended in place"
         INTEGER ended "1 once the part's stream ended"
@@ -180,10 +193,19 @@ erDiagram
         TEXT actor_id PK "Actor whose conversation this is"
         TEXT session_id PK "Session ('default' chat, 'mcts' search)"
         TEXT id PK "Entry ID"
-        TEXT parent_id "Parent entry. These edges ARE the session tree"
+        TEXT parent_id "Parent entry. These edges are the session tree"
         TEXT role "user/assistant/system/tool"
+        TEXT turn_id "Turn that wrote the entry"
+        TEXT run_id "Run that wrote the entry"
         TEXT context_id "Working context the entry recorded"
+        INTEGER context_revision "Revision of that context"
         INTEGER recorded_at "Epoch ms"
+    }
+    conversation_entry_parts {
+        TEXT entry_id PK "Entry"
+        INTEGER position PK "Order within the entry"
+        TEXT message_id "Message whose part it shows"
+        INTEGER part_no "Part of that message"
     }
     conversation_heads {
         TEXT actor_id PK "Actor"
@@ -237,13 +259,14 @@ erDiagram
         TEXT path PK "A file this unpublished transfer already published"
     }
 
+    workspace_actors ||--o{ workspace_actors : "parent_actor_id"
     memory_chunks ||--|| memory_chunks_fts : "FTS5 external content"
     crafted_tools ||--|| crafted_tools_fts : "FTS5 sync triggers"
     session_messages ||--o{ stream_parts : "an open message's accumulating parts"
-    session_messages ||--o{ conversation_entries : "entry parts reference message parts"
+    conversation_entries ||--o{ conversation_entry_parts : "parts the entry shows"
+    session_messages ||--o{ conversation_entry_parts : "message_id, part_no"
     conversation_entries ||--o| conversation_heads : "one head per session"
     conversation_entries ||--o{ conversation_fts : "local transcript index"
-    crafted_tools ||--o| craft_scores : "tool_name"
     search_nodes ||--o{ search_nodes : "parent_id"
     scaffold_versions ||--o{ task_history : "scaffold_version"
 ```
@@ -251,204 +274,213 @@ erDiagram
 ## Agent identity (SOUL.md)
 
 The identity document is `SOUL.md` in the workspace filesystem, on both
-backends. `readSoul`, `writeSoul`, and `seedSoul` (`core/src/identity/soul.ts`) are
-the accessors. The system prompt, the evolution engine, and the `setSoul` RPC go through
-them. `writeSoul` also maintains `workspace_identity.mission`. A
-read-only listing reads the mission from that row. The owner may edit SOUL.md.
-The agent never rewrites its own identity.
+backends. `readSoul`, `writeSoul`, and `seedSoul` (`core/src/identity/soul.ts`)
+are the accessors. The system prompt, the evolution engine, and the `setSoul`
+RPC go through them. `writeSoul` also maintains `workspace_identity.mission`,
+and a read-only listing reads the mission from that row. The owner may edit
+SOUL.md. The agent never rewrites its own identity.
 
 ## The workspace filesystem
 
 Both backends run the Nimbus workspace filesystem over their own SQLite. The
 class is `SqliteVFS`, from `@nimbus-sh/core`. Nothing in this repository
-implements a filesystem.
+implements a filesystem. Both backends build it with the same `createWorkspace`
+(`core/src/vfs/nimbus-workspace.ts`, exported as `@kinu.run/core/workspace`).
+On hosted, `cf-backend/src/workspace-host.ts` calls it over the orchestrator's
+`ctx.storage.sql`, and `core/src/execution/nimbus.ts` maps the resulting
+workspace box to Kinu's executor contract. On local, `cli-backend/src/runtime.ts`
+imports it as `createWorkspaceFilesystem` and calls it over `bun:sqlite` in the
+session's own database.
 
-On hosted, the workspace lives in the actor's own Durable Object storage. It is reached
-through the remote session adapter in `core/src/execution/nimbus.ts`. The
-orchestrator DO creates none of the filesystem tables. On local, `createWorkspace`
-(`core/src/vfs/nimbus-workspace.ts`, imported as `createWorkspaceFilesystem`)
-builds the same component over `bun:sqlite` in the session's own database
-(`cli-backend/src/runtime.ts:493`).
-
-Nimbus owns those bytes and their tables.
-`core/src/conformance/manifest.ts` declares the exact set. That set is what
-`NimbusWorkspace.destroy()` drops. An addition means the dependency changed
-its storage contract. The set is
-`inodes`, `file_chunks`, `content_lifecycle`, `vfs_schema_migrations`,
-`vfs_append_receipts`, `vfs_append_writer_state`, `vfs_append_module_state`,
-`vfs_append_pid_revocations`, `vfs_append_acked_gaps`, plus Kinu's own
-`kinu_workspace_generation`. All ten are declared present on the CLI root and
-absent on both hosted roots.
+Nimbus owns those bytes and their tables. `core/src/conformance/manifest.ts`
+declares the exact set, which is what `NimbusWorkspace.destroy()` drops. An
+addition means the dependency changed its storage contract. At
+`@nimbus-sh/core` 0.12.0 the set is `inodes`, `file_chunks`,
+`content_lifecycle`, `vfs_schema_migrations`, `vfs_append_receipts_v2`,
+`vfs_append_writer_state_v2`, `vfs_append_module_state_v2`,
+`vfs_append_pid_revocations_v2`, `vfs_append_acked_gaps_v2`,
+`nimbus_filesystem_identity`, `nimbus_filesystem_devices`, and
+`vfs_ino_allocator`. Kinu adds its own `kinu_workspace_generation`. The
+manifest declares all of them present on every root (`cf-orchestrator`,
+`cf-subordinate`, `cli`).
 
 Three properties follow:
 
 - Content addressing: `inodes(path, content_id)` points at
   `file_chunks(content_id, chunk_id, data)`, with a `content_lifecycle` GC
   table. A snapshot of the plane copies the small inode index and no blobs.
-- Real POSIX semantics: one filesystem, addressed identically by
+- POSIX semantics: one filesystem, addressed the same way by
   `vfs.readFile('/etc/passwd')` and by `run "cat /etc/passwd"`. Relative paths
-  resolve at `WORKSPACE_ROOT` (`/home/user`). Ownership is uid/gid/mode on real
-  inodes. That is how a swarm node `/home/<node>` and its private `/tmp` form
-  a boundary rather than a convention (`core/src/vfs/agent-home.ts`).
+  resolve at `WORKSPACE_ROOT` (`/home/user`). Ownership is uid/gid/mode on
+  inodes. That makes a swarm node's `/home/<node>` and its private `/tmp` an
+  enforced boundary, not a convention (`core/src/vfs/agent-home.ts`).
 - Chunked blobs: `SqliteVFS` splits file content into `file_chunks` rows of
   `CHUNK_SIZE` bytes, 65,536 as `@nimbus-sh/platform` declares it. Merge-back
-  costs a write batch against the same constant. This repository imports it
-  rather than restating the number (`core/src/strategy/merge-back.ts:55`).
+  sizes its write batches with the same constant, imported rather than
+  restated (`core/src/strategy/merge-back.ts:60`).
 
 `packages/agent-utils` supplies the `VFS` interface both planes satisfy
 (`agent-utils/src/vfs/types.ts`) and nothing else on this axis: no filesystem
-implementation, no shell emulator. The shell is the Nimbus `runtime-bash`.
+implementation and no shell emulator. The shell is the Nimbus `runtime-bash`.
 Memory indexing reads through the active VFS on either backend, so relational
 `memory_chunks` never becomes a second file authority.
 
 One table named `vfs_files` still appears in the tree, in
-`packages/cli/tests/export-import.test.ts`. The test creates it there as a blob
+`packages/cli/tests/export-import.test.ts`. The test creates it as a blob
 fixture for the archive reader. No product path creates or reads it.
 
 ## MemoryStore (FTS5 search)
 
 `@kinu.run/agent-utils` provides FTS5 full-text search over markdown files in
-the workspace filesystem. It keeps a `memory_chunks` table with a `memory_chunks_fts`
-virtual table (external content via `content='memory_chunks'`) and one DDL
-(`initMemoryChunkTables`, which `MemoryStore.ensureSchema()` delegates to).
-Files split into chunks with a line-aware sliding window
-(`DEFAULT_CHUNK_TARGET_CHARS` 1600, `DEFAULT_CHUNK_OVERLAP_CHARS` 320). Each
-chunk carries a SHA-256 hash so the next pass skips unchanged chunks. Search
-is FTS5 MATCH with BM25 ranking. `sanitizeFtsQuery` removes operators and stop
-words. It falls back to OR-joined tokens when the AND query returns nothing.
+the workspace filesystem. It keeps a `memory_chunks` table and a
+`memory_chunks_fts` virtual table (external content via
+`content='memory_chunks'`), both from one DDL (`initMemoryChunkTables`, which
+`MemoryStore.ensureSchema()` delegates to). Files split into chunks with a
+line-aware sliding window (`DEFAULT_CHUNK_TARGET_CHARS` 1600,
+`DEFAULT_CHUNK_OVERLAP_CHARS` 320). Each chunk carries a SHA-256 hash so the
+next pass skips unchanged chunks. Search is FTS5 MATCH with BM25 ranking.
+`sanitizeFtsQuery` removes operators and stop words. When the AND query
+returns nothing, search falls back to OR-joined tokens.
 
 ## The canonical conversation store
 
 Every actor's chat, root and hosted alike, on both backends, lives in one
 relational store under `packages/core/src/session` (`SessionHistory`, built by
-`createAgentStores`). It has two layers:
+`createAgentStores` in `core/src/state/agent-stores.ts`). It has two layers:
 
-- The messages: `session_messages` is one row per message the model read or
-  produced (`role`, `origin`, `native_content_kind`, `envelope_json`), with
-  its content committed once as one parts array (`content_json`, or
-  `content_path` plus digest in the actor's file plane over a size threshold)
-  and `sealed_at` stamped. A message inserted whole is sealed in its insert.
+- The messages: `session_messages` has one row per message the model read or
+  produced (`role`, `origin`, `native_content_kind`, `envelope_json`). Its
+  content is committed once as one parts array (`content_json`, or
+  `content_path` plus digest in the actor's file plane above a size threshold)
+  and `sealed_at` is stamped. A message inserted whole is sealed in its insert.
   A streamed answer accumulates in `stream_parts`, one row per open part
-  extended in place by windows of deltas, and seals once at its step's end;
-  the seal deletes its stream rows. A reader folds the stream rows of an
-  open message and reads the content row of a sealed one.
+  segment, extended in place by windows of deltas, and seals once at the end of
+  its step. The seal deletes the stream rows. A reader folds the stream rows of
+  an open message and reads the content row of a sealed one.
 - The conversation: `conversation_entries` is the public chain (`id`,
   `parent_id`, `role`, `turn_id`, `run_id`, `recorded_at`, and the working
-  context the entry recorded), keyed by actor and session (`default` is the
-  chat; `mcts` holds lifetime-search trajectories and is never browsed as
-  chat). `conversation_entry_parts` references the message parts each entry
-  displays. `conversation_heads` names the entry the
-  next turn chains from; a walk-back moves it without deleting anything
-  (`SessionHistory.revertTo`), and a fork carries the chain to the cut
-  (`identity/fork.ts`, the `ForkTargetWriter` staging then publishing in one
-  transaction).
+  context the entry recorded), keyed by actor and session. `default` is the
+  chat. `mcts` holds lifetime-search trajectories and is never browsed as
+  chat. `conversation_entry_parts` references the message parts each entry
+  displays. `conversation_heads` names the entry the next turn chains from. A
+  walk-back moves the head without deleting anything
+  (`SessionHistory.revertTo`). A fork carries the chain to the cut:
+  `ForkTargetWriter` (`identity/fork-writer.ts`) stages it, then publishes it in
+  one transaction.
 
-The working context sits beside the chain: `actor_contexts`,
-`context_revisions`, `context_memberships` and `actor_context_selection`
+The working context sits beside the chain. `actor_contexts`,
+`context_revisions`, `context_memberships`, and `actor_context_selection`
 record which messages the model reads at each revision, and
-`context_proposals` the edits staged against it; the `/context` mount
-(`vfs/context-plane.ts`) is how an owner or the actor reads and edits them.
+`context_proposals` holds edits staged against it. The owner or the actor reads
+and edits them through the `/context` mount (`vfs/context-plane.ts`).
 
 Readers answer from the entries: the chat pane's page walk
-(`read-models/status.ts` `getChatHistoryPage` over `session/page.ts`),
-`memory/conversation-search.ts`
-(`scroll`, `browse`, the FTS index keyed on entry rowid), the
-inherited context a spawned head receives
-(`orchestrator/heads-support.ts`), the evolution joins and the export. The
-Agents SDK's `assistant_messages` is the SDK's own table and is neither
-written nor read by Kinu; the `/get-messages` seed a reconnecting tab receives
-is projected from the canonical entries (`actor-agent.ts`).
+(`getChatHistoryPage` in `read-models/status.ts`, over `session/page.ts`),
+`memory/conversation-search.ts` (`scroll`, `browse`, and the FTS index keyed
+on entry rowid), the inherited context a spawned head receives
+(`orchestrator/heads-support.ts`), the evolution joins, and the export. The
+Agents SDK's `assistant_messages` is the SDK's own table, and Kinu neither
+writes nor reads it. The `/get-messages` seed a reconnecting tab receives is
+projected from the canonical entries (`cf-backend/src/actor-agent.ts`).
 `gate:vendor-schema` (`scripts/vendor-schema.ts`) prepares every Kinu
-statement over any vendor-created table against the installed vendor's DDL,
-so a read of a vendor table is caught at the gate rather than met at runtime.
+statement over a vendor-created table against the installed vendor's DDL, so
+the gate catches a bad read of a vendor table before runtime does.
 
 ## The rest of the schema
 
-The ER diagram above covers the shared actor substrate. Every subsystem added
-since owns its own DDL. All of it is `IF NOT EXISTS`. All of it runs from the same
-`initWorkspaceSchema()` pass:
+The ER diagram covers the shared actor substrate. Every other subsystem owns
+its own DDL, all of it `IF NOT EXISTS`, all of it run from the same
+`initWorkspaceSchema()` pass. The main groups:
 
 | Subsystem | Tables | Owner |
 |---|---|---|
 | Events hub | `agent_log`, `reply_channels`, `triggers` (+ views `events_v`, `run_event_v`, `turn_phase_log_v`) | `core/src/events/hub/schema.ts` |
 | Run-event log | `run_events` | `core/src/events/recorder.ts` |
-| Turn outcomes | `turn_outcomes`, `lessons`, `outcome_labels`, `outcome_ensemble_labels` | `core/src/evolution/outcomes.ts` |
+| Turn outcomes | `turn_outcomes`, `lessons`, `outcome_labels`, `outcome_ensemble_labels`, `pattern_extractions` | `core/src/evolution/outcomes.ts` |
 | Replay eval | `replay_evals` | `core/src/evolution/replay.ts` |
-| GEPA | `gepa_runs`, `gepa_candidates`, `gepa_pareto_membership` | `core/src/evolution/gepa/persistence.ts` |
+| Refinement | `refinement_requests` | `core/src/evolution/refinement.ts` |
+| GEPA | `gepa_runs`, `gepa_candidates` | `core/src/evolution/gepa/persistence.ts` |
 | Branching heads | `head_runs`, `head_journal`, `head_evidence`, `head_steps`, `head_merge_results` | `core/src/heads/schema.ts` |
 | MCTS | `mcts_search_runs` (durable checkpoints), `alternate_takes` | `core/src/mcts/search-store.ts`, `takes.ts` |
 | Swarm leaderboard | `exploration_records` (cumulative across runs) | `core/src/strategy/records.ts` |
 | Swarm node content | `swarm_node_records` (what a swarm re-entry reads) | `core/src/strategy/swarm-resume.ts` |
 | Scaffold shadow mode | `scaffold_evaluations`, `scaffold_trial_queue` | `core/src/scaffold/shadow.ts` |
+| Turn lifecycle | `actor_turn_claims` and the session tables above | `core/src/orchestrator/actor-claims.ts` |
+| Once-only effects | `tool_effect_claims`, `effect_tombstones` | `core/src/tools/effect-claim.ts`, `core/src/identity/effect-tombstones.ts` |
 | Facts | `agent_facts` | `core/src/memory/facts.ts` |
-| Conversation search | `conversation_fts` (derived FTS5 index) | `core/src/memory/conversation-search.ts` |
+| Conversation search | `conversation_fts` (derived FTS5 index) | `core/src/memory/conversation-search.ts`, created by the store on first use |
 | Background jobs | `background_jobs` | `core/src/jobs/store.ts` |
-| Task list | `agent_tasks` (one plan per actor) | `core/src/tasks/store.ts` |
-| Deferred approvals | `deferred_approvals` | `core/src/safety/deferred-approval.ts` |
+| Task list | `agent_tasks` (one plan per actor), `agent_task_notes`, `plan_task_links` | `core/src/tasks/store.ts` |
+| Approvals | `deferred_approvals`, `device_consent_requests`, `instruction_approvals` | `core/src/safety/deferred-approval.ts`, `device-consent.ts`, `instruction-trust.ts` |
 | Plan review | `plan_reviews` | `core/src/plans/review.ts` |
 | Curriculum | `proposed_tasks` | `core/src/curriculum/proposer.ts` |
-| Release lane | `release_sources`, `release_changes`, `release_checks`, `release_approvals`, `release_deployments` | `core/src/release/sql-store.ts` (CLI session; on cf the board lives in the owner's UserDO) |
 | Imported experience | `imported_experience` (staged until a turn outcome settles it) | `core/src/experience/imports.ts` |
 | Compaction | `compaction_state`, `compaction_archive` | `core/src/state/workspace-schema.ts` (the DDL lives in core because `@kinu.run/compaction` sits above it in the dependency graph) |
-| Typed config | `agent_config` | `core/src/config/store.ts` |
+| Typed config | `actor_config` | `core/src/config/store.ts` |
 | Prompt sections | `prompt_section_versions`, `prompt_section_evaluations` | `core/src/prompting/section-store.ts` |
+| Slates | `slates`, `slate_versions`, `slate_publications`, `slate_deployments` and the other `slate_*` tables | `core/src/state/workspace-schema.ts`, `core/src/slates/` |
 
-Five more groups are created outside that pass, by the root that owns each:
+These are created outside that pass, by the root that owns each:
 
 | Subsystem | Tables | Owner |
 |---|---|---|
-| Subordinates | `workspace_subordinates` (every actor that can hire), `subordinate_identity` (child DO) | `core/src/subordinates/support.ts` |
+| Release lane | `release_sources`, `release_changes`, `release_checks`, `release_approvals`, `release_deployments` | `core/src/release/sql-store.ts`: the CLI session's database; on cf the board lives in the owner's `UserDO` |
+| Subordinate roster | `actor_subordinates` (every actor that can hire) | `core/src/subordinates/roster.ts` |
+| Local subordinate identity | `subordinate_identity` (CLI only; a hosted actor's identity is its `workspace_actors` row) | `core/src/subordinates/support.ts` |
 | Workspace-diff baseline | `vfs_baseline` | `core/src/read-models/workspace-diff.ts`, called by each root's schema pass |
-| Orchestrator-local | `turn_feedback`, `turn_craft_usage` | `cf-backend/src/orchestrator.ts`, inline |
-| Email + webhooks | no boot DDL; the outbound mail rows are the shared outbox's `outbox_email` | `packages/cf-backend/src/email/outbound.ts` |
-| Ingress gates | `webhook_rate_windows`, `webhook_secrets` (both backends) | `core/src/events/ingress/rate-limit.ts`, `secrets.ts` |
+| Orchestrator-local | `turn_feedback`, `sleep_time_updates`, `turn_craft_usage` | `cf-backend/src/orchestrator.ts`, inline |
+| Webhook ingress (cf only) | `webhook_rate_windows`, `webhook_replay_claims`, `webhook_secrets` | `core/src/events/ingress/webhook.ts` (`initWebhookIngressTables`), `rate-limit.ts`, `secrets.ts` |
 
-Three tables are created lazily: `session_window` and `turn_review_queue` by
-the evolution engine constructor, `mission_budget` by the mission governor
-first write.
+Two tables are created lazily: `completed_turns` by the `EvolutionEngine`
+constructor (`initCompletedTurnTable`), and `mission_budget` by
+`MissionBudgetLedger` (`core/src/mission-budget.ts`).
 
-Two durable retry outboxes are lazy too. `@nimbus-sh/fabric` creates them on the
-first queue or drain: `outbox_peer` for the peer transport and `outbox_email`
-for outbound mail. Their schema belongs to the library.
+Two durable retry outboxes are lazy too. `@nimbus-sh/fabric` creates them on
+the first queue or drain: `outbox_peer` for the peer transport and
+`outbox_email` for outbound mail. Their schema belongs to the library.
 `core/src/events/outbox.ts` supplies the SQL handle and the alarm.
 
-`core/src/conformance/manifest.ts` declares every one of these per root
-(`cf-orchestrator`, `cf-subordinate`, `cli`), wired or deliberately absent with
-a stated reason. The conformance suite compares the declaration against the
-real `sqlite_master`. Read the manifest first. This page narrates over it.
+`core/src/conformance/manifest.ts` declares every table per root
+(`cf-orchestrator`, `cf-subordinate`, `cli`) as wired, lazy, or absent with a
+stated reason. The conformance suite compares that declaration with the real
+`sqlite_master`. The manifest is the complete list; this page describes it.
 
 ## Schema initialization
 
 `initWorkspaceSchema()` (`core/src/state/workspace-schema.ts`) is the one
-answer to which tables a workspace has. Every composition root calls it: the
-orchestrator DO `ensureSchema()`, the subordinate DO, `openWorkspaceCLI`,
-the local session constructor, and `kinu create`. One list, because parallel
-lists disagree and each disagreement is a real bug: a `craft_scores` created
-only by `kinu create` makes every EMA read on a workspace opened any other way
-silently no-op.
+answer to which tables a workspace has. Every workspace root calls it: the
+orchestrator DO's `ensureSchema()`, `openWorkspaceCLI`, the local session
+constructor, and `kinu create`. A local facet session calls only the actor
+half, `initActorStateSchema()`. One list, because parallel lists drift
+apart and each drift is a bug: a table created only by `kinu create` is
+missing on a workspace opened any other way, and every read of it fails or
+silently does nothing.
 
 The pass runs in this order:
 
-1. `initAllTables` (`core/src/identity/schema.ts`): `workspace_identity`, then
-   `initActorTables` (the actor substrate plus `initSearchTables` and
-   `initScaffoldTables`), then `fork_lineage`, `fork_transfer` and
-   `fork_staged_files`.
-2. Each subsystem's own `init*` from the tables above.
+1. `initWorkspaceOwnershipTables` (`core/src/identity/schema.ts`):
+   `workspace_identity`, `fork_lineage`, `fork_transfer`, and
+   `fork_staged_files`. Then `initWorkspaceActorTable` (`workspace_actors`).
+2. `initActorStateSchema`: `initActorTables` (the actor substrate plus
+   `initSearchTables`, `initScaffoldTables`, and `initCraftedToolsTables`),
+   then each subsystem's own `init*` from the tables above, ending with
+   `initMemoryChunkTables`.
+3. The slate tables.
 
 Then each root adds what only it carries. The orchestrator DO also runs
-`initWorkspaceBaselineTable`, `initWebhookRateLimitTables`,
-`subordinateRoster.ensureSchema()` and its two inline turn tables. The whole
-call is gated by an in-memory flag so it runs once per activation. No
-persistent schema version is tracked because a cold activation always re-runs.
+`initWorkspaceBaselineTable`, `initWebhookIngressTables`,
+`subordinateRoster.ensureSchema()`, and its inline turn tables. An in-memory
+flag makes the whole call run once per activation. No persistent schema
+version is tracked, because a cold activation always re-runs it.
 
 Each table has exactly one owning module. A second definition of
 `search_nodes` is how `code_language` went missing on a live workspace. A
 second `scaffold_versions` is how `status` and `parent_version` did.
 
 A table's `CREATE TABLE IF NOT EXISTS` is its genesis. No module carries a
-column reconcile, a `CHECK`-widening rebuild or a row backfill: this tree
+column reconcile, a `CHECK`-widening rebuild, or a row backfill. This tree
 deploys as a reset (docs/DEPLOYMENT.md, the migrations paragraph), so every
-row it ever writes is under the DDL in the tree. `scripts/schema-drift.ts`
-holds that DDL to `scripts/schema-genesis.lock.json` in both directions. A
-shipped table whose shape must change has two fixes: a table of its own for
-the new columns, or another reset with a re-lock.
+row it writes is under the DDL in the tree. `scripts/schema-drift.ts` holds
+that DDL to `scripts/schema-genesis.lock.json` in both directions. A shipped
+table whose shape must change has two fixes: a new table of its own for the
+new columns, or another reset with a re-lock.

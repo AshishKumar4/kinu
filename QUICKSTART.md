@@ -1,8 +1,8 @@
 # Kinu quick start
 
-Kinu gives agents a durable computer of their own. It adapts with use, runs
-locally or in the cloud, and solves hard tasks by trying several approaches
-and letting executable checks pick the winner.
+Kinu gives an agent a computer of its own that persists between sessions. It
+adapts as you use it, runs locally or in the cloud, and takes on hard tasks by trying
+several approaches and letting executable checks pick the winner.
 
 ## CLI
 
@@ -15,10 +15,10 @@ kinu run triage "find the slowest query"
 I test on Linux. It also runs on macOS without CI coverage. The installer adds
 `~/.kinu/bin` to PATH when needed and runs setup unless you pass `--no-setup`.
 
-`--mode cloud` gives a persistent cloud workspace that uses your desktop daemon
-as its local execution engine. `--mode local` gives a fully local bun:sqlite
-workspace. Both come with the workspace default agent inside. That agent owns the
-files, execution environments, and sessions.
+`--mode cloud` gives you a persistent cloud workspace that can also run commands
+on your machine through the desktop daemon. `--mode local` keeps everything on
+your machine in bun:sqlite. Either way the workspace comes with its default
+agent, which owns the files, execution environments, and sessions.
 
 [docs/USER-GUIDE.md](docs/USER-GUIDE.md) covers daily use.
 [docs/CLI.md](docs/CLI.md) is the full command reference.
@@ -32,7 +32,7 @@ kinu provider list                    # see what's connected, with status inline
 kinu provider connect openai          # or: anthropic, openrouter, codex, openai-compatible
 ```
 
-Once signed in, a local workspace gets Workers AI with no separate key.
+Once you're signed in, a local workspace gets Workers AI with no separate key.
 It defaults to `workers-ai/@cf/zai-org/glm-5.3` (paid Workers
 access or prepaid AI Gateway credits). Your AI Gateway appears as
 `my-gateway/{author}/{model}` once the OAuth grant includes `aig.write`. Run
@@ -50,8 +50,8 @@ Kinu drives the official `claude` binary, which owns its own login. Kinu never
 reads your credentials. A cloud workspace needs an Anthropic API key instead
 (`kinu provider connect anthropic`).
 
-Web search: the `web` tool `search` and `fetch` actions need no keys.
-They run over DuckDuckGo and the Cloudflare markdown service. For ranked,
+Web search needs no keys: the `web` tool's `search` and `fetch` actions run
+over DuckDuckGo and Cloudflare's HTML-to-markdown conversion. For ranked,
 answer-augmented results, store a Tavily key as the `tavily` credential.
 
 ## Web UI development
@@ -61,8 +61,8 @@ bun install
 bun run dev
 ```
 
-Open the printed Vite URL. Dev servers must bind to `0.0.0.0`. Port `3000` is
-reserved by the platform relay.
+Open the printed Vite URL. Dev servers bind to `0.0.0.0`, and port `3000` is
+reserved.
 
 ## CLI from a checkout
 
@@ -72,5 +72,5 @@ bun run cli -- setup
 bun run cli -- create jarvis --mode local --alias jarvis
 ```
 
-Source checkouts default to `https://kinu.run`. Override with `--origin` or
-`KINU_ORIGIN` only for alternate deployments.
+A source checkout talks to `https://kinu.run` by default. Use `--origin` or
+`KINU_ORIGIN` only for another deployment.

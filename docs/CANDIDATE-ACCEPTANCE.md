@@ -2,7 +2,7 @@
 
 I accepted this protection in OWNER-MESSAGES m1099 on 2026-09-12: "move the trajectory family onto the deploy path before publish, so an agent that stops acting correctly blocks the upload rather than being discovered after it". It remains unmet.
 
-Before `4f4c0af36`, the pre-publish tier called production. The candidate had not been uploaded, so a failing old build could block the build carrying its repair. That commit moved trajectory after publication. It corrected which build the tier measured. It removed the protection I accepted.
+Before `4f4c0af36`, the pre-publish tier called production. The candidate had not been uploaded, so a failing old build could block the build carrying its repair. That commit moved trajectory after publication. The tier now measures the right build, and the protection I accepted is gone.
 
 ## Why version previews cannot close the gap
 
@@ -14,9 +14,9 @@ The [Containers deployment guide](https://developers.cloudflare.com/containers/g
 
 Cloudflare's [With Durable Objects](https://developers.cloudflare.com/workers/versions-and-deployments/gradual-deployments/with-durable-objects/) page, updated 2026-07-15, assigns each object a version from the deployment percentages. All requests to that object use that version until another deployment changes its assignment.
 
-This is not a caller-selectable pin. [Worker version affinity](https://developers.cloudflare.com/workers/versions-and-deployments/gradual-deployments/version-affinity/) uses `Cloudflare-Workers-Version-Key`; Cloudflare explicitly says "you do not choose which version a key maps to". Worker overrides are not proof of a Durable Object's version.
+This is not a pin a caller can select. [Worker version affinity](https://developers.cloudflare.com/workers/versions-and-deployments/gradual-deployments/version-affinity/) uses `Cloudflare-Workers-Version-Key`, and Cloudflare says "you do not choose which version a key maps to". Worker overrides do not prove which version a Durable Object runs.
 
-`ActorAgent.installedBuildIdentity()` already reads `CF_VERSION_METADATA.id` inside the object and records it in turn claims. The tier could use that evidence to verify a selected workspace's version. It does not currently assert it. `/api/health` reads Worker assets, not a Durable Object.
+`ActorAgent.installedBuildIdentity()` already reads `CF_VERSION_METADATA.id` inside the object and records it in turn claims. The tier could use it to verify a selected workspace's version, but does not assert it today. `/api/health` reads Worker assets, not a Durable Object.
 
 ## The decision still needed
 
@@ -24,4 +24,4 @@ A. Keep post-publish acceptance. All production traffic is exposed while the tie
 
 B. Build gradual acceptance. Allocate a small percentage to the candidate. Prove the tier's eval workspaces received that version. Then promote on green or roll back on red. That percentage of traffic and object assignments is exposed during acceptance. This is not zero-exposure protection. Candidate-workspace selection and version assertions, rollback, and deploy-contract red/green tests do not exist yet. A mechanism that forces only eval objects onto the candidate is undocumented and unproven. Shared UserDO and Sandbox versions also need checking.
 
-Neither option is implemented by this investigation. I need to choose the exposure policy before the pipeline changes.
+Neither option is built. I need to choose the exposure policy before the pipeline changes.
