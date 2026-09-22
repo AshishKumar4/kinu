@@ -283,6 +283,10 @@ export function createLocalOrchestration(input: LocalOrchestrationInput): LocalO
 
   engine.onEvent((event) => { input.session().reportEvolutionEvent(event); });
 
+  const reportRunEvent = (event: Extract<RunEventInput, { type: 'tool_call_end' | 'step_finish' }>): void => {
+    input.session().reportActorRunEvent(input.runtime.actor, event);
+  };
+
   return {
     engine,
     budget,
@@ -319,8 +323,8 @@ export function createLocalOrchestration(input: LocalOrchestrationInput): LocalO
       refinementLane: () => input.session().runRefinementLane(),
       sinks: {
         logActivity: (event, detail) => { input.session().logActivity(event, detail); },
-        onToolCallEvent: (ev) => { input.session().reportActorRunEvent(input.runtime.actor, { type: 'tool_call_end', ...ev }); },
-        onStepEvent: (ev) => { input.session().reportActorRunEvent(input.runtime.actor, { type: 'step_finish', ...ev }); },
+        onToolCallEvent: (ev) => { reportRunEvent({ type: 'tool_call_end', ...ev }); },
+        onStepEvent: (ev) => { reportRunEvent({ type: 'step_finish', ...ev }); },
       },
     },
   };
@@ -419,6 +423,17 @@ export type { SessionEvent } from '@kinu.run/core';
  *  decide, leaving the standing approval mode's own answer in force. */
 export type ShellApprovalHandler =
   (req: ShellApprovalRequest) => Promise<ShellApprovalOutcome | null>;
+
+/** How a task child's turn ended, from the two facts the turn reports. A turn
+ *  that neither completed nor was interrupted failed, which is what the parent
+ *  is owed rather than silence. */
+function taskTurnEnding(completed: boolean, interrupted: boolean): TaskTurnEnding {
+  if (completed) return 'answered';
+
+  if (interrupted) return 'interrupted';
+
+  return 'errored';
+}
 
 export interface LocalAgentSessionOpts {
   rt: CLIRuntime;
@@ -714,7 +729,7 @@ export class LocalAgentSession implements BackendHost {
 
   /** Steer-as-Branch redirects launched against the in-flight turn — each runs
    *  as one budgeted head and settles into Alternate Takes at turn end. */
-  private pendingBranches: PendingBranch[] = [];
+  private readonly pendingBranches: PendingBranch[] = [];
   /** The raw handle, for the ONE thing the SqlExecutor port cannot express: a
    *  transaction. What the answer, the run row and the frozen roster are
    *  committed inside, and what core's terminal claim commits its roster
@@ -997,7 +1012,7 @@ export class LocalAgentSession implements BackendHost {
       inbox: this.actorSession.orchestrator.inbox,
       remember: (grants) => { this.config.grantShellApproval(grants); },
       audit: (record) => {
-        this.eventRecorder.emit(this.chat.currentRunId || WORKSPACE_RUN_ID, { type: 'approval_consumed', ...record });
+        this.eventRecorder.emit(this.chat.currentRunId ?? WORKSPACE_RUN_ID, { type: 'approval_consumed', ...record });
       },
       announce: () => { this.broadcast({ type: 'pending_actions_changed' }); },
     });
@@ -1459,7 +1474,7 @@ export class LocalAgentSession implements BackendHost {
 
   // ── BackendHost ────────────────────────────────────────────────────
 
-  broadcast<Event extends BroadcastEvent>(event: Event): void {
+  broadcast(event: BroadcastEvent): void {
     this.emit({ type: 'broadcast', event });
   }
 
@@ -1636,7 +1651,7 @@ export class LocalAgentSession implements BackendHost {
         producer: 'external_tool',
       },
     });
-    this.mcpClose = conn.close;
+    this.mcpClose = () => conn.close();
     // A server that never came up is stated in the turn's live context, not
     // only in a diagnostic the model never sees. Its tools are simply ABSENT
     // otherwise, so the model plans as if a capability the user configured
@@ -1748,7 +1763,7 @@ export class LocalAgentSession implements BackendHost {
    * the entry is gone, which is what terminates `joinBackgroundFibers`.
    */
   private tracked(settle: () => Promise<void>): void {
-    const { promise, resolve } = Promise.withResolvers<void>();
+    const { promise, resolve: markPruned } = Promise.withResolvers<void>();
     this.backgroundFibers.add(promise);
 
     // BOTH outcomes prune, and the entry resolves only after it is gone — which
@@ -1757,7 +1772,7 @@ export class LocalAgentSession implements BackendHost {
     // nothing ever removes, so the rejection path is named rather than voided.
     const prune = (): void => {
       this.backgroundFibers.delete(promise);
-      resolve();
+      markPruned();
     };
 
     settle().then(prune, prune);
@@ -2488,7 +2503,7 @@ export class LocalAgentSession implements BackendHost {
         loopVersion: await this.rt.identity.scaffold.version(),
         chat: liveTurn,
         extensions: [this.compactionExtension],
-        dynamic: (profile, tools) => this.dynamicContextSnapshot(memoryTail, profile, tools),
+        dynamic: (requestProfile, tools) => this.dynamicContextSnapshot(memoryTail, requestProfile, tools),
         scaffoldSpend: { source: 'scaffold', report: this.modelCallSink, operations: this.modelOperations },
       },
       sessionKey: cache.sessionKey,
@@ -2559,9 +2574,7 @@ export class LocalAgentSession implements BackendHost {
     // child's terminal answer and a durable child's progress note are different
     // reports for different reasons, and both are the host's decision because
     // only it knows this child's lifetime and whether the parent drove the turn.
-    const ending: TaskTurnEnding = input.completed
-      ? 'answered'
-      : input.interrupted ? 'interrupted' : 'errored';
+    const ending = taskTurnEnding(input.completed, input.interrupted);
 
     const relay = this.parentRelay;
     const parentReport = relay?.owed(ending, input.assistantText) ?? null;
@@ -2892,8 +2905,7 @@ export class LocalAgentSession implements BackendHost {
    *  Lazy because the effect bodies close over stores the constructor is still
    *  assembling when the field would otherwise be initialised. */
   private get terminal(): TerminalTransitions {
-    if (!this.terminalTransitions) {
-      this.terminalTransitions = new TerminalTransitions({
+    this.terminalTransitions ??= new TerminalTransitions({
         sql: this.rt.storage.sql,
         actor: this.rt.actor,
         effects: this.terminalEffectTable(),
@@ -2910,9 +2922,8 @@ export class LocalAgentSession implements BackendHost {
         // for it. Without this the close deleted the live claim and the next
         // interruption replayed an external tool with no guard.
         turnIsLive: (turnId) => this.chat.pumping && this.chat.currentTurnId === turnId,
-        scheduleRetry: (atMs) => this.scheduleTerminalRetry(atMs),
-      });
-    }
+      scheduleRetry: (atMs) => this.scheduleTerminalRetry(atMs),
+    });
 
     return this.terminalTransitions;
   }
@@ -3265,7 +3276,7 @@ export class LocalAgentSession implements BackendHost {
 
   /** Passthrough SkillsVfs adapter over rt.storage.vfs (core turn-surface). */
   private getSkillsVfs(): SkillsVfs {
-    if (!this.skillsVfs) this.skillsVfs = skillsVfsOver(this.rt.storage.vfs);
+    this.skillsVfs ??= skillsVfsOver(this.rt.storage.vfs);
 
     return this.skillsVfs;
   }
@@ -3692,8 +3703,8 @@ export class LocalAgentSession implements BackendHost {
     return createActorHost({
       storage: {
         sql: this.rt.storage.sql,
-        transactionSync: this.rt.storage.transactionSync,
-        exec: hubSql.exec,
+        transactionSync: (write) => this.rt.storage.transactionSync(write),
+        exec: (query, ...bindings) => hubSql.exec(query, ...bindings),
       },
       directory,
       // Same reason the ActorSession above records none: nothing stamps a
@@ -4452,7 +4463,7 @@ export { serializeContentForHeads } from '@kinu.run/core';
  *  is always cleared, so a fast settle leaves nothing holding the event loop. */
 async function raceDeadline(work: Promise<unknown>, ms: number): Promise<void> {
   let timer: ReturnType<typeof setTimeout> | undefined;
-  const expiry = new Promise<void>((resolve) => { timer = setTimeout(resolve, ms); });
+  const expiry = new Promise<void>((expire) => { timer = setTimeout(expire, ms); });
 
   try { await Promise.race([work, expiry]); }
   finally { if (timer) clearTimeout(timer); }

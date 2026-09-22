@@ -113,7 +113,7 @@ test('a released branch leaves no store of its own and gives up its name', async
     // does not name, so anything else is a child that exits before `ready`.
     const spawner = createBranchSpawner(parentDbPath, { llm: endpoint.llm, parent: parentRuntime.actor });
     const handle = await spawner.spawn('cleanup-success');
-    const exploration = await handle.explore(HISTORY, [], LANGUAGES, 'build');
+    const exploration = await handle.explore({ priorHistory: HISTORY, craftedTools: [], languages: LANGUAGES, mode: 'build' });
     // The rollout really ran, in the branch's own process, over that database.
     expect(exploration.text).toContain('parse with a PEG');
     const live = branchRow('cleanup-success');

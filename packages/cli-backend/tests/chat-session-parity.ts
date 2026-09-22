@@ -231,7 +231,8 @@ function promptView(prompt: readonly PromptMessage[]): JsonValue {
           output: part.output.type === 'text' || part.output.type === 'error-text' ? part.output.value : part.output.type,
         };
 
-        default: return { type: part.type };
+        case 'file':
+        case 'reasoning': return { type: part.type };
       }
     });
 

@@ -43,6 +43,7 @@ import {
 } from '@kinu.run/compaction';
 import { createCLIRuntime, makeWorkspaceSchemaSql } from '../src/runtime';
 import { scratchPath } from '@kinu.run/test-utils';
+import * as v from 'valibot';
 
 const SESSION = 'kinu-itest:default';
 
@@ -123,9 +124,10 @@ function messageText(m: PromptMessage): string {
 
 function ephemeralBlocks(prompt: PromptMessage[]): number[] {
   const indices: number[] = [];
-  prompt.forEach((m, i) => {
+
+  for (const [i, m] of prompt.entries()) {
     if (m.role === 'user' && messageText(m).startsWith('<dynamic_context fingerprint="')) indices.push(i);
-  });
+  }
 
   return indices;
 }
@@ -246,9 +248,10 @@ describe('default compaction over the real storage plane', () => {
     const workspace = rt.executionRouter?.getProvider('workspace');
 
     if (!workspace) throw new Error('expected the workspace executor');
-    const readBack = await workspace.tools.readFile.execute(snapshot.transcriptRelativePath);
-    expect(String(readBack)).toContain('output-0 ');
-    expect(String(readBack)).toContain('Task 0: please run step 0');
+    const readBack = v.parse(v.string(), await workspace.tools.readFile.execute(snapshot.transcriptRelativePath));
+
+    expect(readBack).toContain('output-0 ');
+    expect(readBack).toContain('Task 0: please run step 0');
 
     // ── Ledger ordering: reset fired BEFORE the weave, so exactly ONE fresh
     // block exists and it sits at the compacted tail (a stale frozen block
@@ -386,8 +389,8 @@ describe('default compaction over the real storage plane', () => {
     const bytes = prompts.map((p) => p.map(cacheableBytes));
 
     for (let i = 1; i < bytes.length; i++) {
-      expect(bytes[i]!.slice(0, bytes[i - 1]!.length)).toEqual(bytes[i - 1]!);
-      expect(bytes[i]!.length).toBeGreaterThan(bytes[i - 1]!.length);
+      expect(bytes[i].slice(0, bytes[i - 1].length)).toEqual(bytes[i - 1]);
+      expect(bytes[i].length).toBeGreaterThan(bytes[i - 1].length);
     }
 
     // ── The pressure turn: the provider reports 8_600 against an 8_500
@@ -406,7 +409,7 @@ describe('default compaction over the real storage plane', () => {
     expect(remaining).toHaveLength(1);
     // What survived is the NEWEST block — the live state the model reads —
     // still at the frozen position it was born at, not re-created at the tail.
-    expect(messageText(relieved[remaining[0]!]!)).toContain('- fact 2:');
+    expect(messageText(relieved[remaining[0]])).toContain('- fact 2:');
     expect(remaining[0]).toBeLessThan(relieved.length - 1);
     // The prefix break is real and is the point: this request is CHEAPER than
     // the one before it, which no append-only weave can ever be.
@@ -421,6 +424,6 @@ describe('default compaction over the real storage plane', () => {
     expect(ledger.size).toBe(2);
     const after = prompts.at(-1) ?? [];
     expect(ephemeralBlocks(after)).toHaveLength(2);
-    expect(messageText(after[after.length - 1]!)).toContain('- fact 3:');
+    expect(messageText(after[after.length - 1])).toContain('- fact 3:');
   });
 });

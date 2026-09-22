@@ -97,11 +97,16 @@ const stillOwed = (rt: CLIRuntime) =>
 
 /** The restart: a fresh session over the same database, driven through the one
  *  startup path every real CLI entry point takes. */
-async function restart(
-  rt: CLIRuntime, db: Database, model: TestLanguageModelV2, events: SessionEvent[],
-  opts: { oneShot?: boolean; generation?: number } = {},
-): Promise<ProbeSession> {
-  const { generation = 1, ...sessionOpts } = opts;
+interface RestartOptions {
+  rt: CLIRuntime;
+  db: Database;
+  model: TestLanguageModelV2;
+  events: SessionEvent[];
+  oneShot?: boolean;
+  generation?: number;
+}
+
+async function restart({ rt, db, model, events, generation = 1, ...sessionOpts }: RestartOptions): Promise<ProbeSession> {
   const next = new ProbeSession({ rt, db, model, onEvent: (e) => events.push(e), ...sessionOpts });
   next.skipBackoff(generation);
   await next.recoverBackgroundJobs();
@@ -140,7 +145,7 @@ describe('an interrupted terminal sequence is finished by the next start', () =>
     // question it asks.
     captureTakes(rt, 'root-b', Date.now() + 2_000);
 
-    const next = await restart(rt, db, model, events);
+    const next = await restart({ rt, db, model, events });
 
     expect(claimedTakes(rt)).toBe(1);
     expect(completedTurns(rt)).toBe(1);
@@ -178,7 +183,7 @@ describe('an interrupted terminal sequence is finished by the next start', () =>
         // The sequence stopped where it was cut, so the lane behind it is untouched.
         expect(state.titleCalls).toBe(0);
 
-        const next = await restart(rt, db, model, events);
+        const next = await restart({ rt, db, model, events });
 
         expect(observe(rt)).toBe(1);
         expect(state.titleCalls).toBe(1);
@@ -228,7 +233,7 @@ describe('an interrupted terminal sequence is finished by the next start', () =>
     expect(asked()).toBe(0);
     expect(probed).toEqual([]);
 
-    const next = await restart(gated, db, model, events, { oneShot: true });
+    const next = await restart({ rt: gated, db, model, events, oneShot: true });
 
     expect(asked()).toBe(1);
     expect(probed.length).toBeGreaterThan(0);
@@ -241,7 +246,7 @@ describe('an interrupted terminal sequence is finished by the next start', () =>
 
     // The confirming turn IS on disk now, so the next start completes the row
     // from that fact and does not ask a second time.
-    const third = await restart(gated, db, model, events, { oneShot: true, generation: 2 });
+    const third = await restart({ rt: gated, db, model, events, oneShot: true, generation: 2 });
 
     expect(asked()).toBe(1);
     expect(stillOwed(gated)).toEqual([]);
@@ -266,7 +271,7 @@ describe('an interrupted terminal sequence is finished by the next start', () =>
     expect(settled.trials).toBe(1);
     expect(stillOwed(rt)).toEqual([]);
 
-    const next = await restart(rt, db, model, events);
+    const next = await restart({ rt, db, model, events });
 
     expect(completedTurns(rt)).toBe(settled.turns);
     expect(queuedTrials(rt)).toBe(settled.trials);
@@ -380,7 +385,7 @@ describe('a killed CLI process is recovered by the next start', () => {
 
     const { model, state } = scriptedModel('recovered');
     const events: SessionEvent[] = [];
-    const next = await restart(rt, db, model, events);
+    const next = await restart({ rt, db, model, events });
 
     expect(completedTurns(rt)).toBe(1);
     expect(queuedTrials(rt)).toBe(1);
@@ -408,7 +413,7 @@ describe('a killed CLI process is recovered by the next start', () => {
 
     const { model, state } = scriptedModel('recovered');
     const events: SessionEvent[] = [];
-    const next = await restart(rt, db, model, events);
+    const next = await restart({ rt, db, model, events });
 
     // The acknowledged send re-enters the pump — the at-least-once half of the
     // same rule that keeps its row — and its turn commits whole this time:
@@ -440,7 +445,7 @@ describe('a killed CLI process is recovered by the next start', () => {
 
     const { model, state } = scriptedModel('recovered');
     const events: SessionEvent[] = [];
-    const next = await restart(rt, db, model, events);
+    const next = await restart({ rt, db, model, events });
 
     // The row settles, and the replay pays for NOTHING: persisting a title
     // stamps `name_origin`, so the plan no longer matches and the lane is a
@@ -614,7 +619,7 @@ describe('a recovery reads the record, not the session that finds it', () => {
     // The inverse, and the reason the decision travels rather than the flag: this
     // recovery HAS auto-evolution, and a turn that owed no evolution state must
     // not acquire one from whichever host happens to finish it.
-    const next = await restart(rt, db, model, events);
+    const next = await restart({ rt, db, model, events });
 
     expect(completedTurns(rt)).toBe(0);
     expect(stillOwed(rt)).toEqual([]);
@@ -710,7 +715,7 @@ describe('a recovery reads the record, not the session that finds it', () => {
 
     // And it is not wedged: the next start reads the message that is now on disk
     // and completes the row without asking again.
-    const third = await restart(gated, db, model, events, { oneShot: true, generation: 3 });
+    const third = await restart({ rt: gated, db, model, events, oneShot: true, generation: 3 });
     expect(asked()).toBe(1);
     expect(stillOwed(gated)).toEqual([]);
     await third.end();

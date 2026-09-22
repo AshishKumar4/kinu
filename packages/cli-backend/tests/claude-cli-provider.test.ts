@@ -15,7 +15,7 @@ import { createLocalModelResolver } from '../src/model-resolver';
 import { createCLIRuntime , makeWorkspaceSchemaSql } from '../src/runtime';
 import { LocalAgentSession, type SessionEvent } from '../src/local-session';
 import type { LanguageModelV2, LanguageModelV2CallOptions, LanguageModelV2StreamPart, LanguageModelV2Usage } from '@ai-sdk/provider';
-import { scratchPath } from '@kinu.run/test-utils';
+import { present, scratchPath } from '@kinu.run/test-utils';
 
 // ─── stream-json fixtures (captured from the real `claude` binary) ───────────
 
@@ -177,6 +177,16 @@ async function finishUsage(model: LanguageModelV2): Promise<LanguageModelV2Usage
   }
 }
 
+/** Probe-only spawn: the binary answers `--version`, `auth status` reports what
+ *  the case is about. */
+function probeSpawn(loggedIn: boolean): FakeSpawn {
+  return fakeSpawn((args) => args[0] === '--version'
+    ? { stdout: '2.1.174\n', code: 0 }
+    : { stdout: JSON.stringify({ loggedIn }), code: 0 });
+}
+
+function deps() { return { env: {}, getAuth: async () => null, hasCredential: async () => false }; }
+
 // ─── doStream parsing ────────────────────────────────────────────────────────
 
 describe('claude-cli provider — doStream', () => {
@@ -202,7 +212,7 @@ describe('claude-cli provider — doStream', () => {
     expect(await result.finishReason).toBe('stop');
 
     // The -p invocation uses the opus alias + tools off + stream-json.
-    const pCall = calls.find((a) => a[0] === '-p')!;
+    const pCall = present(calls.find((a) => a[0] === '-p'), 'the `claude -p` invocation');
     expect(pCall).toContain('--output-format');
     expect(pCall).toContain('stream-json');
     expect(pCall).toContain('--tools');
@@ -248,7 +258,7 @@ describe('claude-cli provider — doStream', () => {
     const provider = createClaudeCliProvider({ spawn });
     const model = provider.createModel('claude-haiku-4-x', { env: {}, getAuth: async () => null, hasCredential: async () => false });
     await generateText({ model, system: 'You are terse.', prompt: 'hi' });
-    const pCall = calls.find((a) => a[0] === '-p')!;
+    const pCall = present(calls.find((a) => a[0] === '-p'), 'the `claude -p` invocation');
     const sysIdx = pCall.indexOf('--system-prompt');
     expect(sysIdx).toBeGreaterThan(-1);
     expect(pCall[sysIdx + 1]).toBe('You are terse.');
@@ -344,25 +354,26 @@ describe('claude-cli provider — abort', () => {
 // ─── availability gating ───────────────────────────────────────────────────
 
 describe('claude-cli provider — availability', () => {
-  function deps() { return { env: {}, getAuth: async () => null, hasCredential: async () => false }; }
-
   test('available when the binary is present and logged in', async () => {
     const provider = createClaudeCliProvider({ probe: async () => ({ binary: true, loggedIn: true }) });
     expect(await provider.isAvailable(deps())).toBe(true);
-    expect(await provider.unavailableReason!(deps())).toBeUndefined();
+    const reason = present(provider.unavailableReason, 'the provider unavailable reason hook');
+    expect(await reason(deps())).toBeUndefined();
   });
 
-  test('binary absent → honest install hint', async () => {
-    const provider = createClaudeCliProvider({ probe: async () => ({ binary: false, loggedIn: false }) });
-    expect(await provider.isAvailable(deps())).toBe(false);
-    expect(await provider.unavailableReason!(deps())).toMatch(/Install Claude Code/i);
-  });
+  const probed = [
+    { name: 'binary absent → honest install hint', binary: false, hint: /Install Claude Code/i },
+    { name: 'logged out → actionable sign-in hint', binary: true, hint: /sign in to your Claude subscription/i },
+  ];
 
-  test('logged out → actionable sign-in hint', async () => {
-    const provider = createClaudeCliProvider({ probe: async () => ({ binary: true, loggedIn: false }) });
-    expect(await provider.isAvailable(deps())).toBe(false);
-    expect(await provider.unavailableReason!(deps())).toMatch(/sign in to your Claude subscription/i);
-  });
+  for (const c of probed) {
+    test(c.name, async () => {
+      const provider = createClaudeCliProvider({ probe: async () => ({ binary: c.binary, loggedIn: false }) });
+      expect(await provider.isAvailable(deps())).toBe(false);
+      const reason = present(provider.unavailableReason, 'the provider unavailable reason hook');
+      expect(await reason(deps())).toMatch(c.hint);
+    });
+  }
 
   test('default probe: binary present + auth status loggedIn → available', async () => {
     const { spawn } = availableSpawn();
@@ -379,31 +390,23 @@ describe('claude-cli provider — availability', () => {
 
     const provider = createClaudeCliProvider({ spawn });
     expect(await provider.isAvailable(deps())).toBe(false);
-    expect(await provider.unavailableReason!(deps())).toMatch(/Install Claude Code/i);
+    const reason = present(provider.unavailableReason, 'the provider unavailable reason hook');
+    expect(await reason(deps())).toMatch(/Install Claude Code/i);
   });
 
   test('default probe: auth status not loggedIn → logged out', async () => {
-    const spawn = fakeSpawn((args) => {
-      if (args[0] === '--version') return { stdout: '2.1.174\n', code: 0 };
-
-      return { stdout: JSON.stringify({ loggedIn: false }), code: 0 };
-    }).spawn;
-
-    const provider = createClaudeCliProvider({ spawn });
+    const provider = createClaudeCliProvider({ spawn: probeSpawn(false).spawn });
     expect(await provider.isAvailable(deps())).toBe(false);
-    expect(await provider.unavailableReason!(deps())).toMatch(/sign in/i);
+    const reason = present(provider.unavailableReason, 'the provider unavailable reason hook');
+    expect(await reason(deps())).toMatch(/sign in/i);
   });
 
   test('probes `claude auth status` with no unsupported flags', async () => {
-    const fake = fakeSpawn((args) => {
-      if (args[0] === '--version') return { stdout: '2.1.174\n', code: 0 };
-
-      return { stdout: JSON.stringify({ loggedIn: true }), code: 0 };
-    });
+    const fake = probeSpawn(true);
 
     const provider = createClaudeCliProvider({ spawn: fake.spawn });
     await provider.isAvailable(deps());
-    const authCall = fake.calls.find((a) => a[0] === 'auth')!;
+    const authCall = present(fake.calls.find((a) => a[0] === 'auth'), 'the `claude auth` invocation');
     // `claude auth status` prints JSON by default; --output-format is rejected.
     expect(authCall).toEqual(['auth', 'status']);
   });
@@ -503,7 +506,7 @@ describe('claude-cli provider — tool loop composition', () => {
     expect(turnEnd.turn.assistantResponse).toBe('The capital of France is Paris.');
 
     // The model was driven through the real `claude -p` invocation (opus alias).
-    const pCall = calls.find((a) => a[0] === '-p')!;
+    const pCall = present(calls.find((a) => a[0] === '-p'), 'the `claude -p` invocation');
     expect(pCall[pCall.indexOf('--model') + 1]).toBe('opus');
     await session.end();
   });
@@ -523,12 +526,10 @@ describe('claude-cli provider — tool calls', () => {
     '</function_calls>',
   ].join('\n');
 
-  function modelDeps() { return { env: {}, getAuth: async () => null, hasCredential: async () => false }; }
-
   test('a function_calls block becomes a real tool call the SDK executes', async () => {
     const { spawn } = availableSpawn(FC_BLOCK);
     const provider = createClaudeCliProvider({ spawn });
-    const model = provider.createModel('claude-opus-4-x', modelDeps());
+    const model = provider.createModel('claude-opus-4-x', deps());
 
     let executed: { query: string } | undefined;
 
@@ -557,7 +558,7 @@ describe('claude-cli provider — tool calls', () => {
   test('doStream emits tool-call parts and finishes tool-calls', async () => {
     const { spawn } = availableSpawn(FC_BLOCK);
     const provider = createClaudeCliProvider({ spawn });
-    const model = provider.createModel('claude-opus-4-x', modelDeps());
+    const model = provider.createModel('claude-opus-4-x', deps());
 
     const { stream } = await model.doStream({
       prompt: [{ role: 'user', content: [{ type: 'text', text: 'q' }] }],
@@ -609,7 +610,7 @@ describe('claude-cli provider — tool calls', () => {
 
     const { spawn } = availableSpawn(twoBlocks);
     const provider = createClaudeCliProvider({ spawn });
-    const model = provider.createModel('claude-opus-4-x', modelDeps());
+    const model = provider.createModel('claude-opus-4-x', deps());
 
     const { stream } = await model.doStream({
       prompt: [{ role: 'user', content: [{ type: 'text', text: 'q' }] }],

@@ -98,7 +98,7 @@ export function createNodeCodemodeToolFactory(deps: NodeExecuteToolFactoryDeps =
       description: renderCodemodeDescription(
         [
           toolsDeclaration,
-          ...providers.map((provider) => provider.types).filter((types) => !!types),
+          ...providers.map((provider) => provider.types).filter((types) => types !== undefined && types !== ''),
         ].join('\n\n'),
         'local',
       ),
@@ -198,11 +198,11 @@ function adaptExecutorProvider(
 ): CodemodeProvider {
   const tools: CodemodeProvider['tools'] = {};
 
-  for (const [name, tool] of Object.entries(provider.tools)) {
+  for (const [name, executorTool] of Object.entries(provider.tools)) {
     tools[name] = {
-      description: tool.description,
+      description: executorTool.description,
       execute: async (...args) => {
-        const result = await tool.execute(...args);
+        const result = await executorTool.execute(...args);
 
         return result === undefined ? undefined : decodeJsonValue({ value: result });
       },

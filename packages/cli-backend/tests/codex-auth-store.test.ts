@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'bun:test';
 import { lstatSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { scratchDir } from '@kinu.run/test-utils';
+import { present, scratchDir } from '@kinu.run/test-utils';
 import { CODEX_CRED_KEY, createFileCodexAuthStore } from '../src/codex-auth-store';
 import { asFetchFunction, JsonObjectSchema, type JsonObject } from '@kinu.run/core';
 import * as v from 'valibot';
@@ -37,7 +37,7 @@ describe('createFileCodexAuthStore', () => {
 
     const store = createFileCodexAuthStore(configPath, {
       fetch: asFetchFunction(async (input) => {
-        calls.push(String(input));
+        calls.push(input instanceof Request ? input.url : input.toString());
 
         return Response.json({
           access_token: jwt({ exp: Math.floor(Date.now() / 1000) + 3600 }),
@@ -87,7 +87,9 @@ describe('createFileCodexAuthStore', () => {
 
     const store = createFileCodexAuthStore(configPath, {
       fetch: asFetchFunction(async (_input, init) => {
-        submitted.push(String(new URLSearchParams(String(init?.body)).get('refresh_token')));
+        const form = new URLSearchParams(v.parse(v.string(), init?.body));
+
+        submitted.push(present(form.get('refresh_token'), 'the refresh token the provider submitted'));
         midFlight.resolve();
         // Yield before answering, so the refresh is genuinely mid-flight — the
         // state in which a lock released at the callback's first await is gone.

@@ -77,7 +77,7 @@ async function workspace(): Promise<{ bind: (name: string) => Bound; rt: AgentRu
     });
 
     const runtime: AgentRuntime = { ...rt, actor: handle, identity: { ...rt.identity, id: handle.actorId, name: handle.name } };
-    const stores = createAgentStores(() => runtime.storage.sql, () => handle, runtime.storage.transactionSync, async () => ({ vfs: runtime.storage.vfs, artifactDirectory: '/actors/' + handle.actorId }));
+    const stores = createAgentStores(() => runtime.storage.sql, () => handle, (write) => runtime.storage.transactionSync(write), async () => ({ vfs: runtime.storage.vfs, artifactDirectory: '/actors/' + handle.actorId }));
 
     const actor: ActorSession = new ActorSession({ history: stores.history, runtime, claims: stores.claims, installedBuild: null,
     orchestration: {
@@ -239,7 +239,7 @@ test('a cold reader recovers the claimed program identity and the exact context 
 
   // A SECOND store bundle over the same database, bound to the same issued
   // actor: this is what an activation that did not run the turn can see.
-  const cold = createAgentStores(() => left.runtime.storage.sql, () => left.handle, left.runtime.storage.transactionSync, async () => ({ vfs: left.runtime.storage.vfs, artifactDirectory: '/actors/' + left.handle.actorId }));
+  const cold = createAgentStores(() => left.runtime.storage.sql, () => left.handle, (write) => left.runtime.storage.transactionSync(write), async () => ({ vfs: left.runtime.storage.vfs, artifactDirectory: '/actors/' + left.handle.actorId }));
 
   const claim = cold.claims.read('turn-cold');
   expect(claim).toMatchObject({ turnId: 'turn-cold', epoch: 1, status: 'settled', outcome: 'completed' });
@@ -610,10 +610,13 @@ test('claim recovery preserves native binary and URL attachment carriers', async
   const bytes = parts.find((part) => part.type === 'file' && part.mediaType === 'application/octet-stream');
   const url = parts.find((part) => part.type === 'file' && part.mediaType === 'application/pdf');
   const decodedBytes = bytes && 'data' in bytes ? bytes.data : undefined;
+  const decodedUrl = url && 'data' in url ? url.data : undefined;
 
   if (!(decodedBytes instanceof Uint8Array)) throw new Error('the binary part must decode to bytes');
   expect([...decodedBytes]).toEqual([0, 1, 254, 255]);
-  expect(url && 'data' in url ? String(url.data) : null).toBe('https://example.invalid/a.pdf');
+
+  if (!(decodedUrl instanceof URL)) throw new Error('the url part must decode to a URL');
+  expect(decodedUrl.href).toBe('https://example.invalid/a.pdf');
 });
 
 test('a consumer failure preserves text already emitted by the actor', async () => {

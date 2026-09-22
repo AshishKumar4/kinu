@@ -80,8 +80,8 @@ test('concurrent explores resolve to their own results', async () => {
   const handle = await spawn('rpc-correlation');
 
   try {
-    const first = handle.explore([{ role: 'user', content: 'first task' }], [], LANGUAGES, 'plan', []);
-    const second = handle.explore([{ role: 'user', content: 'second task' }], [], LANGUAGES, 'plan', []);
+    const first = handle.explore({ priorHistory: [{ role: 'user', content: 'first task' }], craftedTools: [], languages: LANGUAGES, mode: 'plan', siblings: [] });
+    const second = handle.explore({ priorHistory: [{ role: 'user', content: 'second task' }], craftedTools: [], languages: LANGUAGES, mode: 'plan', siblings: [] });
     const [firstResult, secondResult] = await Promise.all([first, second]);
     expect(firstResult.text).toBe(FIRST_TEXT);
     expect(secondResult.text).toBe(SECOND_TEXT);

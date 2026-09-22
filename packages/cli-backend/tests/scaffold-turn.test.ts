@@ -197,29 +197,27 @@ describe('a promoted scaffold drives a local turn', () => {
     expect(rows.map((row) => row.role)).toEqual(['user', 'assistant']);
   });
 
-  test('a delegating scaffold still runs the default loop, faithfully', async () => {
-    const { rt, session, events } = await setup('the default loop answered');
-    await installScaffold(rt, {
-      version: 1, status: 'current',
-      code: `async function run({ task }) { await host.defaultInference(); }`,
+  const delegating = [
+    {
+      name: 'a delegating scaffold still runs the default loop, faithfully',
+      version: 1, code: `async function run({ task }) { await host.defaultInference(); }`,
+    },
+    {
+      name: 'an un-evolved agent (bootstrap v0) is untouched by the seam',
+      version: 0, code: `async function* run(rt, task) { yield { type: 'chunk', data: 'v0 must not run' }; }`,
+    },
+  ];
+
+  for (const c of delegating) {
+    test(c.name, async () => {
+      const { rt, session, events } = await setup('the default loop answered');
+      await installScaffold(rt, { version: c.version, status: 'current', code: c.code });
+
+      await session.send('who answers?');
+
+      expect(streamed(events)).toBe('the default loop answered');
     });
-
-    await session.send('who answers?');
-
-    expect(streamed(events)).toBe('the default loop answered');
-  });
-
-  test('an un-evolved agent (bootstrap v0) is untouched by the seam', async () => {
-    const { rt, session, events } = await setup('the default loop answered');
-    await installScaffold(rt, {
-      version: 0, status: 'current',
-      code: `async function* run(rt, task) { yield { type: 'chunk', data: 'v0 must not run' }; }`,
-    });
-
-    await session.send('who answers?');
-
-    expect(streamed(events)).toBe('the default loop answered');
-  });
+  }
 
   test('a scaffold can reach the agent tool surface through host.callTool', async () => {
     const { rt, session, events } = await setup('unused');

@@ -299,7 +299,19 @@ export function requireLocalActorWorkspace(origin: ActorHandle, actor: ActorHand
 
 const retiring = new WeakMap<WorkspaceActorDirectory, Map<string, Promise<void>>>();
 
-async function retireLocalCreation(scope: LocalActorScope, caller: ActorReference, parentPath: readonly string[], name: string, reference: ActorReference, cleanup: (storageKey: string) => Promise<void>): Promise<void> {
+/** One retirement: the scope it runs in, the directory row it names, and the
+ *  physical cleanup that must succeed before the row is released. */
+interface LocalRetirement {
+  scope: LocalActorScope;
+  caller: ActorReference;
+  parentPath: readonly string[];
+  name: string;
+  reference: ActorReference;
+  cleanup: (storageKey: string) => Promise<void>;
+}
+
+async function retireLocalCreation(retirement: LocalRetirement): Promise<void> {
+  const { scope, caller, parentPath, name, reference, cleanup } = retirement;
   let pending = retiring.get(scope.directory);
 
   if (!pending) { pending = new Map(); retiring.set(scope.directory, pending); }
@@ -322,7 +334,7 @@ async function retireLocalCreation(scope: LocalActorScope, caller: ActorReferenc
 
 export async function retireLocalActor(parent: ActorHandle, name: string, reference: ActorReference, cleanup: (storageKey: string) => Promise<void>): Promise<void> {
   const scope = scopeFor(parent);
-  await retireLocalCreation(scope, parent, scope.path, name, reference, cleanup);
+  await retireLocalCreation({ scope, caller: parent, parentPath: scope.path, name, reference, cleanup });
 }
 
 /**
@@ -352,6 +364,13 @@ export async function recoverLocalActorRetirements(root: ActorHandle, cleanup: (
   if (root.parentActorId !== null) throw new KinuError('denied', 'Only the local root owns physical retirement recovery.');
 
   for (const actor of scope.directory.retirements()) {
-    await retireLocalCreation(scope, actor.caller, actor.parentPath, actor.name, actor.reference, (key) => cleanup([...actor.parentPath, key]));
+    await retireLocalCreation({
+      scope,
+      caller: actor.caller,
+      parentPath: actor.parentPath,
+      name: actor.name,
+      reference: actor.reference,
+      cleanup: (key) => cleanup([...actor.parentPath, key]),
+    });
   }
 }

@@ -15,7 +15,7 @@
  */
 
 import { createHash } from 'node:crypto';
-import { execFile } from 'node:child_process';
+import { execFile, type ExecFileException } from 'node:child_process';
 import { promises as fs, existsSync, realpathSync, statSync } from 'node:fs';
 import { homedir, devNull, tmpdir } from 'node:os';
 import { join, resolve, dirname } from 'node:path';
@@ -26,7 +26,8 @@ import {
   CHECKPOINT_EXCLUDES, checkpointSubject, parseCheckpointSubject, checkpointRefTimestampMs,
   checkpointReason, diagnoseStaging,
   type CheckpointAvailability, type CheckpointTurnMeta, type FileCheckpoints,
-  type FileCheckpointEntry, type FileRestoreChange, type FileRestorePlan, type FileRestoreResult,
+  type FileCheckpointEntry, type FileRestoreChange, type FileRestoreKind,
+  type FileRestorePlan, type FileRestoreResult,
 } from '@kinu.run/core';
 import { classify, tolerate, tolerateAsync } from '@kinu.run/core/obs';
 
@@ -63,6 +64,26 @@ interface GitEnvironment { [name: string]: string }
 /** One staged tree, plus the paths that are NOT in it because this process may
  *  not read them. */
 interface StagedTree { tree: string; unreadable: string[] }
+
+/** A `diff-tree --name-status` letter read in restore direction
+ *  current→checkpoint: A = restore re-creates it, D = restore deletes it
+ *  (added since), M/T = restore rewrites it. */
+function restoreKindOf(status: string): FileRestoreKind {
+  if (status === 'A') return 'create';
+
+  if (status === 'D') return 'delete';
+
+  return 'modify';
+}
+
+/** execFile reports a failing git in `err.code`. A kill by signal carries no
+ *  numeric code and is still a failure, so it reports 1 rather than success. */
+function gitExitCode(err: ExecFileException | null): number {
+  if (err === null) return 0;
+  const reported = Number(err.code);
+
+  return Number.isFinite(reported) ? reported : 1;
+}
 
 export function createHostCheckpoints(opts: HostCheckpointsOpts): FileCheckpoints {
   const agent = opts.agent.replace(/[^A-Za-z0-9_-]/g, '_');
@@ -128,9 +149,7 @@ export function createHostCheckpoints(opts: HostCheckpointsOpts): FileCheckpoint
         }
 
         gitAvailable = true;
-        const reportedCode = Number(err?.code);
-        const code = err && Number.isFinite(reportedCode) ? reportedCode : err ? 1 : 0;
-        resolveRun({ code, stdout: String(stdout), stderr: String(stderr) });
+        resolveRun({ code: gitExitCode(err), stdout: String(stdout), stderr: String(stderr) });
       });
     });
   }
@@ -190,7 +209,7 @@ export function createHostCheckpoints(opts: HostCheckpointsOpts): FileCheckpoint
     return res.stdout.split('\n').filter(Boolean).map((line) => {
       const [ref, id, ...rest] = line.split('|');
 
-      return { ref: ref!, id: id!, subject: rest.join('|') };
+      return { ref, id, subject: rest.join('|') };
     });
   }
 
@@ -313,9 +332,7 @@ export function createHostCheckpoints(opts: HostCheckpointsOpts): FileCheckpoint
       if (tab < 0) continue;
       const status = line.slice(0, tab);
       const path = line.slice(tab + 1);
-      // Direction current→checkpoint: A = restore re-creates it, D = restore
-      // deletes it (added since), M/T = restore rewrites it.
-      files.push({ path, kind: status === 'A' ? 'create' : status === 'D' ? 'delete' : 'modify' });
+      files.push({ path, kind: restoreKindOf(status) });
     }
 
     return files;
@@ -337,7 +354,7 @@ export function createHostCheckpoints(opts: HostCheckpointsOpts): FileCheckpoint
       return await snapshot(abs, turn, reason);
     },
 
-    async list(opts: { limit?: number; turnId?: string } = {}): Promise<FileCheckpointEntry[]> {
+    async list(query: { limit?: number; turnId?: string } = {}): Promise<FileCheckpointEntry[]> {
       if (!(await probeGit())) return [];
       const stores = await tolerateAsync(() => fs.readdir(agentBase), 'enoent') ?? [];
       const entries: FileCheckpointEntry[] = [];
@@ -352,7 +369,7 @@ export function createHostCheckpoints(opts: HostCheckpointsOpts): FileCheckpoint
         for (const ref of await storeRefs(gitDir, workdir)) {
           const meta = parseCheckpointSubject(ref.subject);
 
-          if (opts.turnId !== undefined && meta.turnId !== opts.turnId) continue;
+          if (query.turnId !== undefined && meta.turnId !== query.turnId) continue;
           entries.push({ id: ref.id, dir: workdir, at: checkpointRefTimestampMs(ref.ref), ...meta });
         }
       }
@@ -361,7 +378,7 @@ export function createHostCheckpoints(opts: HostCheckpointsOpts): FileCheckpoint
 
       // Truncation is LAST, after any turn filter, so a limit can never hide a
       // checkpoint that exists — see FileCheckpoints.list.
-      return entries.slice(0, Math.max(1, opts.limit ?? 50));
+      return entries.slice(0, Math.max(1, query.limit ?? 50));
     },
 
     async plan(dir: string, id: string): Promise<FileRestorePlan> {

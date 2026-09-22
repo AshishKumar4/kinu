@@ -7,7 +7,7 @@
  */
 import { describe, expect, test } from 'bun:test';
 import { mkdirSync, writeFileSync, readFileSync, existsSync, rmSync, chmodSync } from 'node:fs';
-import { scratchDir, git } from '@kinu.run/test-utils';
+import { scratchDir, git, present } from '@kinu.run/test-utils';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { Database } from 'bun:sqlite';
@@ -47,8 +47,8 @@ describe('createHostCheckpoints', () => {
 
     const list = await engine.list();
     expect(list).toHaveLength(2);
-    expect(list[0]!.turnId).toBe('turn-2');
-    expect(list[1]!.turnId).toBe('turn-1');
+    expect(list[0].turnId).toBe('turn-2');
+    expect(list[1].turnId).toBe('turn-1');
     expect(list.map((e) => [e.sessionId, e.dir])).toEqual([['sess-1', work], ['sess-1', work]]);
   });
 
@@ -60,7 +60,7 @@ describe('createHostCheckpoints', () => {
     const first = await engine.ensureCheckpoint(work);
     engine.beginTurn({ turnId: 't2', sessionId: 's' });
     const second = await engine.ensureCheckpoint(work); // nothing changed
-    expect(second).toBe(first!);
+    expect(second).toBe(first);
     expect(await engine.list()).toHaveLength(1);
   });
 
@@ -73,7 +73,8 @@ describe('createHostCheckpoints', () => {
     writeFileSync(join(work, 'doomed.txt'), 'will be deleted by the agent');
 
     engine.beginTurn({ turnId: 'turn-1', sessionId: 's' });
-    const id = await engine.ensureCheckpoint(work);
+    const id = present(await engine.ensureCheckpoint(work), 'the turn checkpoint id');
+
     expect(id).toBeTruthy();
 
     // The "agent" then mutates everything: edit, delete, create.
@@ -82,7 +83,7 @@ describe('createHostCheckpoints', () => {
     rmSync(join(work, 'doomed.txt'));
     writeFileSync(join(work, 'new-junk.txt'), 'created after the checkpoint');
 
-    const plan = await engine.plan(work, id!);
+    const plan = await engine.plan(work, id);
     const kinds = Object.fromEntries(plan.files.map((f) => [f.path, f.kind]));
     expect(kinds['src/main.ts']).toBe('modify');
     expect(kinds['README.md']).toBe('modify');
@@ -90,7 +91,8 @@ describe('createHostCheckpoints', () => {
     expect(kinds['new-junk.txt']).toBe('delete');   // restore removes it
     expect(summarizeRestorePlan(plan.files)).toEqual({ modified: 2, created: 1, deleted: 1 });
 
-    const result = await engine.restore(work, id!);
+    const result = await engine.restore(work, id);
+
     expect(result.preRestoreId).toBeTruthy();
     expect(readFileSync(join(work, 'src', 'main.ts'), 'utf8')).toBe('original main');
     expect(readFileSync(join(work, 'README.md'), 'utf8')).toBe('original readme');
@@ -98,7 +100,7 @@ describe('createHostCheckpoints', () => {
     expect(existsSync(join(work, 'new-junk.txt'))).toBe(false);
 
     // Undo-the-undo: the pre-restore snapshot restores the clobbered state.
-    await engine.restore(work, result.preRestoreId!);
+    await engine.restore(work, present(result.preRestoreId, 'the pre-restore snapshot id'));
     expect(readFileSync(join(work, 'src', 'main.ts'), 'utf8')).toBe('CLOBBERED');
     expect(existsSync(join(work, 'doomed.txt'))).toBe(false);
     expect(readFileSync(join(work, 'new-junk.txt'), 'utf8')).toBe('created after the checkpoint');
@@ -109,21 +111,22 @@ describe('createHostCheckpoints', () => {
 
     writeFileSync(join(work, 'a.txt'), 'original');
     engine.beginTurn({ turnId: 'turn-1', sessionId: 's' });
-    const id = await engine.ensureCheckpoint(work);
+    const id = present(await engine.ensureCheckpoint(work), 'the turn checkpoint id');
+
     writeFileSync(join(work, 'a.txt'), 'damage');
 
     // The turn is still armed when /undo restores mid-session; the safety
     // snapshot must NOT inherit it, or /undo groups it with turn-1 and
     // "/undo 1" after a restore lands back on the pre-turn state.
-    const result = await engine.restore(work, id!);
+    const result = await engine.restore(work, id);
     const entries = await engine.list();
-    const preRestore = entries.find((e) => e.id === result.preRestoreId);
-    expect(preRestore).toBeDefined();
-    expect(preRestore!.reason).toBe('pre-restore');
-    expect(preRestore!.turnId).toBeNull();
-    expect(preRestore!.sessionId).toBeNull();
-    const turnSnapshot = entries.find((e) => e.id === id);
-    expect(turnSnapshot!.turnId).toBe('turn-1');
+    const preRestore = present(entries.find((e) => e.id === result.preRestoreId), 'the pre-restore snapshot entry');
+    const turnSnapshot = present(entries.find((e) => e.id === id), 'the turn snapshot entry');
+
+    expect(preRestore.reason).toBe('pre-restore');
+    expect(preRestore.turnId).toBeNull();
+    expect(preRestore.sessionId).toBeNull();
+    expect(turnSnapshot.turnId).toBe('turn-1');
   });
 
   test("the user's own .git repo is never snapshotted or touched", async () => {
@@ -139,9 +142,10 @@ describe('createHostCheckpoints', () => {
     const userHeadBefore = git(work, 'rev-parse', 'HEAD').trim();
 
     engine.beginTurn({ turnId: 't', sessionId: 's' });
-    const id = await engine.ensureCheckpoint(work);
+    const id = present(await engine.ensureCheckpoint(work), 'the turn checkpoint id');
+
     writeFileSync(join(work, 'file.txt'), 'v2');
-    await engine.restore(work, id!);
+    await engine.restore(work, id);
 
     // The user's repo is untouched: same HEAD, fully functional, no shadow
     // refs leaked into it.
@@ -149,7 +153,8 @@ describe('createHostCheckpoints', () => {
     const refs = git(work, 'for-each-ref');
     expect(refs).not.toContain('refs/kinu');
     // And the snapshot itself excluded .git entirely.
-    const plan = await engine.plan(work, id!);
+    const plan = await engine.plan(work, id);
+
     expect(plan.files.filter((f) => f.path.startsWith('.git/'))).toEqual([]);
     expect(readFileSync(join(work, 'file.txt'), 'utf8')).toBe('v1');
   });
@@ -223,8 +228,8 @@ describe('createHostCheckpoints', () => {
     // the limit cannot bury it, because the store filters before it truncates.
     const keyed = await engine.list({ turnId: buried, limit: 6 });
     expect(keyed).toHaveLength(1);
-    expect(keyed[0]!.turnId).toBe(buried);
-    expect(keyed[0]!.dir).toBe(dirs[0]);
+    expect(keyed[0].turnId).toBe(buried);
+    expect(keyed[0].dir).toBe(dirs[0]);
 
     // And a turn that genuinely has no checkpoint still reads empty, so the
     // fix does not make every turn look restorable.
@@ -248,9 +253,10 @@ describe('createHostCheckpoints', () => {
 
     writeFileSync(join(work, 'a.txt'), 'x');
     engine.beginTurn({ turnId: 't', sessionId: 's' });
-    const id = await engine.ensureCheckpoint(work);
+    const id = present(await engine.ensureCheckpoint(work), 'the turn checkpoint id');
+
     rmSync(work, { recursive: true, force: true });
-    await expect(engine.plan(work, id!)).rejects.toThrow('checkpoint staging failed: working directory not found: ');
+    await expect(engine.plan(work, id)).rejects.toThrow('checkpoint staging failed: working directory not found: ');
     expect(await engine.status()).toEqual({ available: true }); // git is still here
   });
 
@@ -276,19 +282,20 @@ describe('createHostCheckpoints', () => {
       chmodSync(foreign, 0o000);
 
       engine.beginTurn({ turnId: 't', sessionId: 's' });
-      const id = await engine.ensureCheckpoint(work, 'file write');
+      const id = present(await engine.ensureCheckpoint(work, 'file write'), 'the turn checkpoint id');
+
       expect(id).toBeTruthy();
 
       // RECORDED, not swallowed: the snapshot says which paths are missing from
       // it, so an incomplete restore is explainable rather than surprising.
       const [entry] = await engine.list();
-      expect(entry!.reason).toBe('file write [skipped 2 unreadable: locked.txt systemd-private-9f2c]');
+      expect(entry.reason).toBe('file write [skipped 2 unreadable: locked.txt systemd-private-9f2c]');
 
       // And the readable tree is WHOLE — including the file that sorts after the
       // refusals, which is what an aborted staging pass would have dropped.
       writeFileSync(join(work, 'a.txt'), 'clobbered');
       rmSync(join(work, 'zz.txt'));
-      await engine.restore(work, id!);
+      await engine.restore(work, id);
       expect(readFileSync(join(work, 'a.txt'), 'utf8')).toBe('mine');
       expect(readFileSync(join(work, 'zz.txt'), 'utf8')).toBe('also mine');
 
@@ -361,8 +368,8 @@ describe('checkpointed runtime shell', () => {
       expect(readFileSync(join(work, 'precious.txt'), 'utf8').trim()).toBe('CLOBBERED');
 
       const [entry] = await checkpoints.list();
-      expect(entry!.turnId).toBe('shell-turn');
-      await checkpoints.restore(work, entry!.id);
+      expect(entry.turnId).toBe('shell-turn');
+      await checkpoints.restore(work, entry.id);
       expect(readFileSync(join(work, 'precious.txt'), 'utf8')).toBe('original');
     } finally {
       db.close();

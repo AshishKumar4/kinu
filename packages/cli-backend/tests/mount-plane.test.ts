@@ -11,10 +11,11 @@ import { describe, expect, test } from 'bun:test';
 import { Database } from 'bun:sqlite';
 import { readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { createCLIRuntime } from '../src/runtime';
+import { createCLIRuntime, type CLIRuntime } from '../src/runtime';
+import * as v from 'valibot';
 import { walkRecursive } from '@kinu.run/agent-utils/vfs';
-import { isVfsError } from '@kinu.run/core';
-import { scratchDir, scratchPath } from '@kinu.run/test-utils';
+import { isVfsError, type ExecutionRouter } from '@kinu.run/core';
+import { present, scratchDir, scratchPath } from '@kinu.run/test-utils';
 
 function freshRuntime(cwd?: string) {
   const db = new Database(scratchPath('mount-plane', 'agent.db'), { create: true });
@@ -29,11 +30,16 @@ function freshRuntime(cwd?: string) {
   return createCLIRuntime(db, config);
 }
 
+/** Every local runtime installs one, so its absence is a broken fixture. */
+function routerOf(rt: CLIRuntime): ExecutionRouter {
+  return present(rt.executionRouter, 'the runtime execution router');
+}
+
 describe('the local backend file plane', () => {
   test('the workspace is the one executor: no device runtime, bound or not', () => {
     const dir = scratchDir('mount-plane-bound');
-    expect(freshRuntime().executionRouter!.listExecutors().map((e) => e.name)).toEqual(['workspace']);
-    expect(freshRuntime(dir).executionRouter!.listExecutors().map((e) => e.name)).toEqual(['workspace']);
+    expect(routerOf(freshRuntime()).listExecutors().map((e) => e.name)).toEqual(['workspace']);
+    expect(routerOf(freshRuntime(dir)).listExecutors().map((e) => e.name)).toEqual(['workspace']);
   });
 
   test('a bound directory IS the workspace: its real files, whole, through the one plane', async () => {
@@ -58,8 +64,9 @@ describe('the local backend file plane', () => {
     expect(readFileSync(join(dir, 'written.txt'), 'utf8')).toBe('from the agent');
 
     // And the workspace shell runs THERE: the machine is the workspace.
-    const out = await rt.executionRouter!.getProvider('workspace')!.tools.exec!.execute('cat existing.txt');
-    expect(String(out)).toContain('from the host');
+    const workspace = present(routerOf(rt).getProvider('workspace'), 'the workspace executor');
+    const out = await workspace.tools.exec.execute('cat existing.txt');
+    expect(v.parse(v.string(), out)).toContain('from the host');
   });
 
   test('/pc states its absence: no machine is mounted in the CLI', async () => {

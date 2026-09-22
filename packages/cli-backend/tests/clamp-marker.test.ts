@@ -8,7 +8,8 @@ import { describe, expect, test } from 'bun:test';
 import { Database } from 'bun:sqlite';
 import { buildBuiltinTools, DEFAULT_TOOL_RESULT_MAX_CHARS } from '@kinu.run/core';
 import { createCLIRuntime } from '../src/runtime';
-import { scratchDir, scratchPath, toolExecute } from '@kinu.run/test-utils';
+import { present, scratchDir, scratchPath, toolExecute } from '@kinu.run/test-utils';
+import * as v from 'valibot';
 
 /** A session bound to a directory: the machine is the workspace, and its
  *  shell is the real one there. */
@@ -39,16 +40,17 @@ describe('clamped run output on the local backend', () => {
     expect(clamped).toContain('FINAL-ERROR-LINE');
     expect(clamped).not.toContain('runtime "workspace"');
 
-    const path = /full result at (\S+)\]/.exec(clamped)?.[1];
+    const path = present(/full result at (\S+)\]/.exec(clamped)?.[1], 'the offload path the clamp marker names');
     expect(path).toBeTruthy();
 
     // Following the marker's own instruction: the eval workspace
     // surface restores the full text.
-    const workspace = rt.executionRouter!.getProvider('workspace')!;
-    const restored = await workspace.tools.readFile!.execute(path);
-    expect(String(restored)).toContain('padding log line 0');
-    expect(String(restored)).toContain('FINAL-ERROR-LINE');
-    expect(String(restored).length).toBeGreaterThan(DEFAULT_TOOL_RESULT_MAX_CHARS);
+    const router = present(rt.executionRouter, 'the runtime execution router');
+    const workspace = present(router.getProvider('workspace'), 'the workspace executor');
+    const restored = v.parse(v.string(), await workspace.tools.readFile.execute(path));
+    expect(restored).toContain('padding log line 0');
+    expect(restored).toContain('FINAL-ERROR-LINE');
+    expect(restored.length).toBeGreaterThan(DEFAULT_TOOL_RESULT_MAX_CHARS);
 
     // The offload lands in the agent's OWN filesystem, so the workspace shell
     // can also grep it — a remedy the marker could not offer while that shell

@@ -46,7 +46,7 @@ function sessions() {
     const enqueued: ProgrammaticTurn[] = [];
     // The REAL store bundle, so a turn's claim is written through the same
     // memoized ledger production uses rather than a fixture beside it.
-    const stores = createAgentStores(() => runtime.storage.sql, () => handle, runtime.storage.transactionSync, async () => ({ vfs: runtime.storage.vfs, artifactDirectory: '/actors/' + handle.actorId }));
+    const stores = createAgentStores(() => runtime.storage.sql, () => handle, (write) => runtime.storage.transactionSync(write), async () => ({ vfs: runtime.storage.vfs, artifactDirectory: '/actors/' + handle.actorId }));
 
     const actor: ActorSession = new ActorSession({ history: stores.history, runtime, claims: stores.claims, installedBuild: null, orchestration: {
       engine: new EvolutionEngine(runtime, stores.history, { enabled: false }), eventLog: new EventLog(eventSql, handle),
@@ -71,7 +71,15 @@ function sessions() {
   return { left: create('left'), right: create('right'), db };
 }
 
-async function bind(actor: ActorSession, turnId: string, mode: WorkMode, message: ModelMessage, tools: ToolSet = {}) {
+interface TurnBinding {
+  actor: ActorSession;
+  turnId: string;
+  mode: WorkMode;
+  message: ModelMessage;
+  tools?: ToolSet;
+}
+
+async function bind({ actor, turnId, mode, message, tools = {} }: TurnBinding) {
   const lease = actor.beginTurn({ runId: `run-${turnId}`, turnId }, mode, Date.now());
   actor.bindProfile(lease, resolveTurnProfile({ ...profiles, roleId: 'task', workMode: mode,
     availableTools: Object.keys(tools), activeSkills: [] }), profiles);
@@ -120,8 +128,8 @@ test('logical actors in one store keep live context, mode and structured tool da
     { type: 'file', data: new Uint8Array([1, 2, 3]), mediaType: 'application/pdf' },
   ] };
 
-  const leftLease = await bind(left.actor, 'left-turn', 'build', leftInput, tools);
-  const rightLease = await bind(right.actor, 'right-turn', 'plan', { role: 'user', content: 'right private input' });
+  const leftLease = await bind({ actor: left.actor, turnId: 'left-turn', mode: 'build', message: leftInput, tools });
+  const rightLease = await bind({ actor: right.actor, turnId: 'right-turn', mode: 'plan', message: { role: 'user', content: 'right private input' } });
   const events: ChatEvent[] = [];
 
   const leftRun = left.actor.execute(leftLease, { task: 'left', loopVersion: 0,
@@ -238,8 +246,8 @@ test.each(['dispatch', 'published'])('interrupting one actor at %s preserves its
     },
   }) };
 
-  const first = await bind(left.actor, 'cancelled-turn', 'build', { role: 'user', content: 'hold this tool' }, tools);
-  const second = await bind(right.actor, 'sibling-turn', 'build', { role: 'user', content: 'finish your work' });
+  const first = await bind({ actor: left.actor, turnId: 'cancelled-turn', mode: 'build', message: { role: 'user', content: 'hold this tool' }, tools });
+  const second = await bind({ actor: right.actor, turnId: 'sibling-turn', mode: 'build', message: { role: 'user', content: 'finish your work' } });
   const events: ChatEvent[] = [];
 
   const running = left.actor.execute(first, { task: 'hold', loopVersion: 0, chat: { model, system: 'sys', tools }, extensions: [], dynamic: () => ({}) }, event => {
@@ -315,7 +323,7 @@ test('bound steer persistence reserves on accept and lands rows at the drain', a
       return 'held';
     } }) };
 
-  const lease = await bind(actor, 'steer-turn', 'build', { role: 'user', content: 'hold on' }, tools);
+  const lease = await bind({ actor, turnId: 'steer-turn', mode: 'build', message: { role: 'user', content: 'hold on' }, tools });
 
   const run = actor.execute(lease, {
     task: 'hold', loopVersion: 0,
@@ -336,7 +344,7 @@ test('bound steer persistence reserves on accept and lands rows at the drain', a
     await secondCall.promise;
     expect(drained).toEqual([['steer-1']]);
 
-    const texts = prompts[1]!
+    const texts = prompts[1]
       .filter((m): m is Extract<ModelMessage, { role: 'user' }> => m.role === 'user')
       .flatMap((m) => (Array.isArray(m.content)
         ? m.content.filter((p) => p.type === 'text').map((p) => p.text)

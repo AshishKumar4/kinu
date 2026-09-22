@@ -10,5 +10,7 @@ import { homedir } from 'node:os';
 import { join, resolve } from 'node:path';
 
 export function kinuHome(): string {
-  return resolve(process.env.KINU_HOME?.trim() || join(homedir(), '.kinu'));
+  const configured = process.env.KINU_HOME?.trim();
+
+  return resolve(configured === undefined || configured === '' ? join(homedir(), '.kinu') : configured);
 }

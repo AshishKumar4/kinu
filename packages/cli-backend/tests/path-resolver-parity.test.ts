@@ -97,6 +97,14 @@ function bothResolvers(dir: string) {
   };
 }
 
+/** Neither side finds a binary here, and they agree about that. */
+function bothFindNothing(dir: string): void {
+  const { daemon: d, bun: b } = bothResolvers(dir);
+
+  expect(d).toEqual(b);
+  expect(d).toEqual([]);
+}
+
 describe('PATH resolver parity', () => {
   test('a real executable resolves on both sides', () => {
     withPathDir(
@@ -133,11 +141,7 @@ describe('PATH resolver parity', () => {
   test('a non-executable file is not a binary on either side', () => {
     withPathDir(
       (dir) => writeFileSync(join(dir, 'python3'), 'not a program', { mode: 0o644 }),
-      (dir) => {
-        const { daemon: d, bun: b } = bothResolvers(dir);
-        expect(d).toEqual(b);
-        expect(d).toEqual([]);
-      },
+      bothFindNothing,
     );
   });
 
@@ -161,11 +165,7 @@ describe('PATH resolver parity', () => {
   test('a dangling symlink is absent on both sides', () => {
     withPathDir(
       (dir) => symlinkSync(join(dir, 'gone'), join(dir, 'git')),
-      (dir) => {
-        const { daemon: d, bun: b } = bothResolvers(dir);
-        expect(d).toEqual(b);
-        expect(d).toEqual([]);
-      },
+      bothFindNothing,
     );
   });
 

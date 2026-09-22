@@ -267,7 +267,7 @@ function messageText(message: LanguageModelV2CallOptions['prompt'][number]): str
       if (output.type === 'text' || output.type === 'error-text') parts.push(output.value);
       else parts.push(JSON.stringify(output.value));
     } else if (part.type === 'tool-call') {
-      parts.push(`[called ${part.toolName}(${part.input})]`);
+      parts.push(`[called ${part.toolName}(${JSON.stringify(part.input)})]`);
     }
   }
 
@@ -820,7 +820,7 @@ async function collectGenerate(
     } else if (value.type === 'error') error = value.error;
   }
 
-  if (error && !text && toolCalls.length === 0) throw error instanceof Error ? error : new Error(String(error));
+  if (error && !text && toolCalls.length === 0) throw error instanceof Error ? error : new Error(renderThrownChain({ cause: error }));
 
   return {
     content: [

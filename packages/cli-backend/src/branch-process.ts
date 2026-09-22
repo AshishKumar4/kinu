@@ -229,9 +229,13 @@ export function createBranchSpawner(
       // The handle retains the parent-defined tools contract. Crafted tools
       // never reach the wire: the worker reads them from the workspace's own
       // database, which is now the database it is already bound to.
-      explore: (history, _tools, languages, mode, siblings = []) =>
-        call(BRANCH_EXPLORE, { history, languages: [...languages], mode, siblings: [...siblings] })
-          .then((reply) => resultOf(reply, BRANCH_EXPLORE)),
+      explore: (request) =>
+        call(BRANCH_EXPLORE, {
+          history: request.priorHistory,
+          languages: [...request.languages],
+          mode: request.mode,
+          siblings: [...request.siblings ?? []],
+        }).then((reply) => resultOf(reply, BRANCH_EXPLORE)),
       generateReflection: (task, outcome) =>
         call(BRANCH_REFLECT, outcome ? { task, outcome } : { task })
           .then((reply) => resultOf(reply, BRANCH_REFLECT)),

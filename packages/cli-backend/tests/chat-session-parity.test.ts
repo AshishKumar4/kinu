@@ -45,14 +45,20 @@ describe('ChatSession steering and recovery', () => {
     //    with the result the ledger holds, then the steer, and asks for
     //    exactly the remaining call: the tool is not run again and the
     //    process makes one call for the re-opened turn and one for "five".
-    const calls = v.parse(v.array(v.array(v.looseObject({ role: v.string(), parts: v.optional(v.array(v.looseObject({ type: v.string() }))) }))), now.restartedCalls);
+    const messageSchema = v.looseObject({ role: v.string(), parts: v.optional(v.array(v.looseObject({ type: v.string() }))) });
+    const calls = v.parse(v.array(v.array(messageSchema)), now.restartedCalls);
+
+    const opensFour = (message: v.InferOutput<typeof messageSchema>) =>
+      message.role === 'user' && message.parts?.some((part) => v.is(v.object({ text: v.literal('four') }), part));
+
     expect(calls).toHaveLength(2);
     const continuation = calls[0] ?? [];
-    const fourAt = continuation.findIndex((message) => message.role === 'user' && message.parts?.some((part) => v.is(v.object({ text: v.literal('four') }), part)));
+    const fourAt = continuation.findIndex(opensFour);
+
     expect(fourAt).toBeGreaterThan(-1);
     expect(continuation[fourAt + 1]).toMatchObject({ role: 'assistant', parts: [{ type: 'tool-call', toolName: 'memory' }] });
     expect(continuation[fourAt + 2]).toMatchObject({ role: 'tool', parts: [{ type: 'tool-result' }] });
-    expect(continuation.filter((message) => message.role === 'user' && message.parts?.some((part) => v.is(v.object({ text: v.literal('four') }), part)))).toHaveLength(1);
+    expect(continuation.filter(opensFour)).toHaveLength(1);
   });
 
   test('a second restart carries each recovered tool exchange only once', async () => {

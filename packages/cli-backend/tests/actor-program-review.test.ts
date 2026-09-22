@@ -143,6 +143,20 @@ test('a native refusal keeps the same failed outcome at capture and scaffold bou
   expect(capture.toolCalls).toMatchObject([{ outcome: { success: false, reason: 'denied' } }]);
 });
 
+/** Two steps: a reasoning part with one `probe` call, then the closing text. */
+function probeThenFinish(reasoning: string, toolCallId: string) {
+  let step = 0;
+
+  return scriptedTurnModel({ doGenerate: () => {
+    const first = step++ === 0;
+
+    return { content: first
+      ? [{ type: 'reasoning', text: reasoning }, { type: 'tool-call', toolCallId, toolName: 'probe', input: '{}' }]
+      : [{ type: 'text', text: 'finished' }],
+    finishReason: { unified: first ? 'tool-calls' : 'stop', raw: undefined }, usage, warnings: [] };
+  } });
+}
+
 const CUSTOM_STREAM_SOURCE = 'async function run() { await host.llmStream({ system: "sys", messages: [{ role: "user", content: "go" }] }); }';
 
 const programs = [
@@ -153,16 +167,7 @@ const programs = [
 
 for (const program of programs) test(`${program.name} preserves reasoning and actual tool conversation for the next owner`, async () => {
   const { rt } = await runtime(program.source, program.version);
-  let step = 0;
-
-  const model = scriptedTurnModel({ doGenerate: () => {
-    const first = step++ === 0;
-
-    return { content: first
-      ? [{ type: 'reasoning', text: 'thinking marker' }, { type: 'tool-call', toolCallId: 'probe-call', toolName: 'probe', input: '{}' }]
-      : [{ type: 'text', text: 'finished' }],
-    finishReason: { unified: first ? 'tool-calls' : 'stop', raw: undefined }, usage, warnings: [] };
-  } });
+  const model = probeThenFinish('thinking marker', 'probe-call');
 
   const capture = new HeadCapture();
   const tools = withHeadCaptureRecording({ probe: tool({ inputSchema, execute: async () => 'private result nonce1842' }) }, capture);
@@ -199,16 +204,8 @@ test('the transform executes its pinned version even if live and version files l
 
 test('the turn receives a tool\'s actual output data, not its model-side rendering', async () => {
   const { rt } = await runtime(CUSTOM_STREAM_SOURCE);
-  let step = 0;
   const value = { error: 'business data', nonce: 'raw-output' };
-
-  const model = scriptedTurnModel({ doGenerate: () => {
-    const first = step++ === 0;
-
-    return { content: first ? [{ type: 'reasoning', text: 'hidden by UI option' }, { type: 'tool-call', toolCallId: 'raw-call', toolName: 'probe', input: '{}' }]
-      : [{ type: 'text', text: 'finished' }],
-    finishReason: { unified: first ? 'tool-calls' : 'stop', raw: undefined }, usage, warnings: [] };
-  } });
+  const model = probeThenFinish('hidden by UI option', 'raw-call');
 
   const tools = { probe: tool({ inputSchema, execute: async () => value,
     toModelOutput: () => ({ type: 'text', value: 'model-only representation' }),
