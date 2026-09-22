@@ -1,26 +1,7 @@
 /**
- * `agent.*` — the agent's self-direction codemode namespace.
- *
- * Lets the LLM steer ITSELF from inside eval: propose + accept its own
- * Voyager-style curriculum, and schedule future autonomous turns (delivered by
- * the event→turn reactor). Registered exactly like every other codemode provider — zero new
- * top-level builtins, so it respects the 6-tool surface.
- *
- * Every method here calls back into the host, so nothing about it is
- * platform-shaped and both backends register the same provider. Written twice,
- * it drifted the way tool surfaces do: the local copy accepted a cron
- * expression its scheduler could never fire, and told the model nothing about
- * the threshold that hands it a { jobId } instead of a result. Neither is a
- * crash — they are an agent quietly worse at steering itself.
- *
- * Deliberately NOT here: `forkAgent` — the workspace-clone RPC behind the UI's
- * fork-chat, which copies the whole agent DO at a message and rejects while a
- * turn is in flight. Cloning the actor mid-script is not delegation.
- *
- * Delegation itself is NOT absent from the sandbox — it just isn't duplicated
- * here. The `agents.*` namespace projects the existing `agents` tool over the
- * actor's own deps (core delegation/agents-codemode.ts), so there is still exactly
- * one spawn/join implementation, with one more caller.
+ * `agent.*` codemode namespace: the agent's own curriculum and scheduled turns. Every method calls
+ * the host, so both backends register this one provider. `forkAgent` is excluded (it clones the DO
+ * and rejects mid-turn); delegation is `agents.*` (delegation/agents-codemode.ts).
  */
 import * as v from 'valibot';
 import type { CodemodeProvider } from './sandbox-contract';
@@ -56,9 +37,8 @@ export interface AgentSelfHost {
   /** The cumulative spend governor — a schedule declares its mission budget
    *  here, and `agent.budget` reads it back. */
   readonly budget: MissionGovernor;
-  /** `caller` is stated by every caller and defaulted by none: the operator's
-   *  surfaces pass `'owner'`, and this tool passes `'self'`, which is what
-   *  stops a turn revoking an owner-created webhook it merely read the id of. */
+  /** `caller` has no default: operator surfaces pass `'owner'`, this tool `'self'`, so a turn
+   *  cannot revoke an owner-created webhook. */
   cancelTrigger(id: string, caller: TrustLevel): Promise<{ ok: boolean; changed: boolean; error?: string }>
     | { ok: boolean; changed: boolean; error?: string };
   jobResult(jobId: string): Promise<BackgroundJob | null>;
@@ -138,14 +118,7 @@ const TYPES = `export declare const agent: {
 };
 `;
 
-/**
- * What the model is told about auto-backgrounding.
- *
- * Both thresholds, named with the rule that picks them, and read from
- * BACKGROUND_POLICY rather than written down: the surface is a property of the
- * TURN on this backend, and this provider is built once per DO, so a single
- * hardcoded number was necessarily wrong on half the turns the agent serves.
- */
+/** Thresholds read from BACKGROUND_POLICY: the provider is built once per DO but the threshold is per turn. */
 const BACKGROUND_DESCRIPTION =
   'Read a background job\'s settled result. A fork backgrounds the moment it spawns on a live chat '
   + 'session; other long tool calls background once they outrun this turn\'s threshold '
@@ -155,11 +128,7 @@ const BACKGROUND_DESCRIPTION =
   + 'when the job settles — the wake is the delivery. Call this for the job a wake named, or to '
   + 're-read an old result; a job still running has no result to read.';
 
-/** What a jobResult read hands the model. A SETTLED job is the row itself —
- *  the result is there to read. A job still RUNNING is NOT an empty row to
- *  re-poll: the read states the wake contract instead, so a poll loop has
- *  nothing to spin on. (The measured lesson behind the shape: prose alone
- *  converts at 0%, mechanisms do — this return value is the mechanism.) */
+/** A running job reads as the wake contract, not an empty row, so a poll loop has nothing to spin on. */
 interface RunningJobRead {
   id: string;
   kind: string;
@@ -290,9 +259,7 @@ export function createAgentSelfProvider(host: AgentSelfHost): CodemodeProvider {
           if (cron && nextCronFire(cron, Date.now()) === null) return { error: `agent.schedule: unsupported cron expression: ${cron}` };
 
           if (atMs !== undefined && atMs <= Date.now()) return { error: 'agent.schedule: atMs must be in the future' };
-          // The ledger is declared BEFORE the trigger so the schedule can carry
-          // its label from the first fire; a named label re-enters the existing
-          // cumulative row rather than starting a fresh one.
+          // Declared before the trigger so the first fire carries the label; a named label re-enters its row.
           const limits = readMissionLimits(opts);
 
           const declaredLabel = opts.budget_label?.trim();
