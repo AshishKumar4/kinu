@@ -18,13 +18,14 @@ import {
   type ReasoningEffort,
   type HeadInput, type WebSearchProvider, type JsonObject, type WriteObserver,
   type ModelCallReport, type ModelOperationEvent,
-  type HeadStreamFrame,
+  type HeadStreamFrame, type ExecutionRouter, type AgentRuntime,
 } from '@kinu.run/core';
 import {
   MERGE_POLICY_BINDING, MERGE_POLICY_JUDGE_MODEL, MERGE_POLICY_SPEND_SOURCE,
-  mergePolicyProfile, scratchDir, scratchPath, toolExecute, scriptedTurnModel, createTestActorsOver,
+  mergePolicyProfile, present, scratchDir, scratchPath, toolExecute, scriptedTurnModel, createTestActorsOver,
   type ScriptedTurnResult,
 } from '@kinu.run/test-utils';
+import * as v from 'valibot';
 import { createCLIHeadRuntime, type CLIHeadRuntimeDeps } from '../src/head-runtime';
 import { makeSql, makeExecRaw, makeWorkspaceSchemaSql, createCLIRuntime, type CLIRuntime } from '../src/runtime';
 import { createHeadRuntime, headSeatFactory, localTestActorHost } from './actor-fixture';
@@ -51,6 +52,27 @@ const stubWeb: WebSearchProvider = {
  * needs the same connection the parent holds, not a second one.
  */
 type LocalParent = CLIRuntime & { readonly db: Database };
+
+type DoGenerateResult = Awaited<ReturnType<LanguageModelV2['doGenerate']>>;
+
+/** The doGenerate reply both probe models below answer with. Only the modelId
+ *  naming the fixture differs, so it is the parameter. */
+function probeEnvelope(
+  modelId: string,
+): (content: DoGenerateResult['content'], finishReason: 'tool-calls' | 'stop') => DoGenerateResult {
+  return (content, finishReason) => ({
+    content,
+    finishReason,
+    usage: { inputTokens: 1, outputTokens: 1, totalTokens: 2 },
+    response: { id: 'r', modelId, timestamp: new Date(0) },
+    warnings: [],
+  });
+}
+
+/** Every local runtime installs one, so its absence is a broken fixture. */
+function routerOf(rt: AgentRuntime): ExecutionRouter {
+  return present(rt.executionRouter, 'the runtime execution router');
+}
 
 function makeParent(cwd?: string): LocalParent {
   const dbPath = scratchPath('head-runtime-parent', 'parent.db');
@@ -532,7 +554,7 @@ describe('createCLIHeadRuntime — full split → run → merge', () => {
       parentBudget: { maxDepth: 2, maxWallClockMs: 60_000, spawnedAt: Date.now() },
     });
 
-    const run = journal.readRun(result.headIds[0]!.split('-d')[0]!);
+    const run = journal.readRun(result.headIds[0].split('-d')[0]);
     const heads = run?.heads ?? [];
     expect(heads).toHaveLength(2);
 
@@ -608,15 +630,15 @@ describe('a local head forks the parent runtime (the caffe-fork capability)', ()
 
     // The parent's workspace, through the parent EXECUTOR — the exact thing the
     // old :memory:-backed fork could not see.
-    const parentExec = rt.executionRouter!.getProvider('parent')!;
+    const parentExec = present(routerOf(rt).getProvider('parent'), 'the parent executor');
     expect(await parentExec.tools.readFile.execute('hello.txt')).toBe('from the parent workspace');
     // And its real shell, in one call rather than a per-file walk.
-    expect(String(await parentExec.tools.exec.execute('cat hello.txt')))
+    expect(v.parse(v.string(), await parentExec.tools.exec.execute('cat hello.txt')))
       .toContain('from the parent workspace');
 
     // No device runtime: the machine is the workspace, and an unbound parent
     // offers no machine at all.
-    expect(rt.executionRouter!.getProvider('device')).toBeUndefined();
+    expect(routerOf(rt).getProvider('device')).toBeUndefined();
 
     // Its own filesystem is PRIVATE scratch — not the host, not the parent.
     await rt.storage.vfs.writeFile(`/home/head-${rt.actor.storageKey}/scratch.txt`, 'head-only');
@@ -663,13 +685,13 @@ describe('a local head forks the parent runtime (the caffe-fork capability)', ()
    */
   test('its own workspace plane scores the tools it crafts', async () => {
     const rt = await createHeadRuntime(makeParent(), 'h3');
-    const workspace = rt.executionRouter!.getProvider('workspace')!;
+    const workspace = present(routerOf(rt).getProvider('workspace'), 'the workspace executor');
 
-    expect(await workspace.tools.listTools!.execute()).toEqual([]);
-    expect(await workspace.tools.createTool!.execute(
+    expect(await workspace.tools.listTools.execute()).toEqual([]);
+    expect(await workspace.tools.createTool.execute(
       'echo_back', 'Return its argument.', 'async (args) => args',
     )).toEqual({ ok: true, name: 'echo_back', action: 'created' });
-    expect(await workspace.tools.listTools!.execute()).toEqual([
+    expect(await workspace.tools.listTools.execute()).toEqual([
       { name: 'echo_back', description: 'Return its argument.', qualityScore: CRAFT_NEUTRAL_PRIOR },
     ]);
   });
@@ -699,16 +721,7 @@ function barrier(n: number, onRelease: () => void): () => Promise<void> {
 function scratchProbeModel(arrive: () => Promise<void>, scratchPathFor: (name: string) => string): LanguageModel {
   const stepsByHead = new Map<string, number>();
 
-  const envelope = (
-    content: Awaited<ReturnType<LanguageModelV2['doGenerate']>>['content'],
-    finishReason: 'tool-calls' | 'stop',
-  ): Awaited<ReturnType<LanguageModelV2['doGenerate']>> => ({
-    content,
-    finishReason,
-    usage: { inputTokens: 1, outputTokens: 1, totalTokens: 2 },
-    response: { id: 'r', modelId: 'fake-scratch', timestamp: new Date(0) },
-    warnings: [],
-  });
+  const envelope = probeEnvelope('fake-scratch');
 
   return new TestLanguageModelV2({
     provider: 'fake', modelId: 'fake-scratch',
@@ -791,7 +804,7 @@ describe("a local head's state is its own actor's rows in the parent's ONE datab
 
     // Private: each head read back its OWN marker, and the sibling's is absent.
     // Read through the journal, so this also proves the trace arrived there.
-    const root = inputs[0]!.rootId;
+    const root = inputs[0].rootId;
     expect(readBack(journal, root, 'alpha')).toContain('scratch-of-alpha');
     expect(readBack(journal, root, 'alpha')).not.toContain('scratch-of-beta');
     expect(readBack(journal, root, 'beta')).toContain('scratch-of-beta');
@@ -833,16 +846,7 @@ describe("a local head's state is its own actor's rows in the parent's ONE datab
 function sharedWorkspaceProbeModel(arrive: () => Promise<void>): LanguageModel {
   const stepsByHead = new Map<string, number>();
 
-  const envelope = (
-    content: Awaited<ReturnType<LanguageModelV2['doGenerate']>>['content'],
-    finishReason: 'tool-calls' | 'stop',
-  ): Awaited<ReturnType<LanguageModelV2['doGenerate']>> => ({
-    content,
-    finishReason,
-    usage: { inputTokens: 1, outputTokens: 1, totalTokens: 2 },
-    response: { id: 'r', modelId: 'fake-shared', timestamp: new Date(0) },
-    warnings: [],
-  });
+  const envelope = probeEnvelope('fake-shared');
 
   return new TestLanguageModelV2({
     provider: 'fake', modelId: 'fake-shared',
@@ -973,7 +977,7 @@ describe('createCLIHeadRuntime — the mission ledger', () => {
     expect(report.status).toBe('completed');
     expect(report.summary).toBe('did the work');
     // The exhausted label is untouched: nothing bound this head to it.
-    expect(governor.snapshot('someone-elses-mission')[0]!.calls).toBe(1);
+    expect(governor.snapshot('someone-elses-mission')[0].calls).toBe(1);
   });
 
   test('a head carrying labels charges them as it runs', async () => {
@@ -988,7 +992,7 @@ describe('createCLIHeadRuntime — the mission ledger', () => {
     const head = await runtime.spawnHead(aHeadInput({ missionLabels: ['sweep'] }));
     expect((await head.run()).status).toBe('completed');
 
-    const snap = governor.snapshot('sweep')[0]!;
+    const snap = governor.snapshot('sweep')[0];
     expect(snap.calls).toBe(1);
     expect(snap.spent.tokens).toBe(2);
   });
@@ -1120,9 +1124,9 @@ describe("the merge synthesis' operation lifecycle", () => {
 
     expect(operations.map((e) => e.phase)).toEqual(['start', 'end']);
     expect(operations.map((e) => [e.source, e.op])).toEqual([['judge', 'generate_json'], ['judge', 'generate_json']]);
-    expect(operations[1]!.outcome).toBe('ok');
-    expect(operations[1]!.usage).toEqual({ input: 8, output: 12 });
-    expect(operations[1]!.modelId).toBe('fake-merge');
+    expect(operations[1].outcome).toBe('ok');
+    expect(operations[1].usage).toEqual({ input: 8, output: 12 });
+    expect(operations[1].modelId).toBe('fake-merge');
     // The cost report is unchanged by the lifecycle beside it.
     expect(reports).toEqual([{ source: 'judge', usage: { input: 8, output: 12 }, modelId: 'fake-merge' }]);
   });
@@ -1136,10 +1140,10 @@ describe("the merge synthesis' operation lifecycle", () => {
     await expect(runtime.mergeLLM('merging the findings of 2 heads', MergeOutputSchema)).rejects.toThrow('socket hung up');
 
     expect(operations.map((e) => e.phase)).toEqual(['start', 'end']);
-    expect(operations[1]!.outcome).toBe('failed');
-    expect(operations[1]!.error).toContain('socket hung up');
+    expect(operations[1].outcome).toBe('failed');
+    expect(operations[1].error).toContain('socket hung up');
     // No provider answer ⇒ no usage anywhere, and no cost report either.
-    expect(operations[1]!.usage).toBeUndefined();
+    expect(operations[1].usage).toBeUndefined();
     expect(reports).toEqual([]);
   });
 
@@ -1151,8 +1155,8 @@ describe("the merge synthesis' operation lifecycle", () => {
     // The OPERATION succeeded — the provider answered and was billed; whether
     // the output parses is the controller's verdict, not this frame's.
     expect(operations.map((e) => e.phase)).toEqual(['start', 'end']);
-    expect(operations[1]!.outcome).toBe('ok');
-    expect(operations[1]!.usage).toEqual({ input: 8, output: 12 });
+    expect(operations[1].outcome).toBe('ok');
+    expect(operations[1].usage).toEqual({ input: 8, output: 12 });
     expect(reports).toHaveLength(1);
   });
 });

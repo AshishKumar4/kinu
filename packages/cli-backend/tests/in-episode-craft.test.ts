@@ -15,7 +15,7 @@ import { initWorkspaceSchema } from '@kinu.run/core';
 import { CRAFT_NEUTRAL_PRIOR } from '@kinu.run/core';
 import { createCLIRuntime, type CLIRuntime , makeWorkspaceSchemaSql } from '../src/runtime';
 import { LocalAgentSession, type SessionEvent } from '../src/local-session';
-import { scratchPath } from '@kinu.run/test-utils';
+import { present, scratchPath } from '@kinu.run/test-utils';
 
 const DUMMY_LLM: LLMProviderConfig = {
   name: 'fake', baseURL: 'http://localhost:0', headers: {}, model: 'fake-model',
@@ -125,15 +125,15 @@ describe('in-episode craft loop — one turn, no user, no turn boundary', () => 
     );
 
     expect(toolResults).toHaveLength(2);
-    expect(toolResults[1]!.result).toContain('42');
+    expect(toolResults[1].result).toContain('42');
 
     // Scored on execution, with no follow-up, no turn boundary and no cadence.
-    const score = craftScore(db, 'doubleIt')!;
+    const score = present(craftScore(db, 'doubleIt'), 'the crafted-tool score row for doubleIt');
     expect(score.uses).toBe(1);
     expect(score.score).toBeGreaterThan(CRAFT_NEUTRAL_PRIOR);
 
     // And the whole loop is legible to a benchmark from the durable log.
-    const row = craftCycleRow(session, rt, db)!;
+    const row = present(craftCycleRow(session, rt, db), 'the turn\'s craft_cycle run event');
     expect(row.crafted).toEqual(['doubleIt']);
     expect(row.reused).toEqual(['doubleIt']);
     expect(row.returned).toBe(1);
@@ -164,15 +164,15 @@ describe('in-episode craft loop — one turn, no user, no turn boundary', () => 
 
     expect(results).toHaveLength(6);
     // Every call while it was still injected named the tool that raised.
-    expect(results[1]!.result).toContain('[crafted:brokenIt]');
+    expect(results[1].result).toContain('[crafted:brokenIt]');
     // …and the last step no longer sees it.
-    expect(results[5]!.result).toContain('undefined');
+    expect(results[5].result).toContain('undefined');
 
-    const score = craftScore(db, 'brokenIt')!;
+    const score = present(craftScore(db, 'brokenIt'), 'the crafted-tool score row for brokenIt');
     expect(score.uses).toBe(4);
     expect(score.score).toBeLessThan(0.2);
 
-    const row = craftCycleRow(session, rt, db)!;
+    const row = present(craftCycleRow(session, rt, db), 'the turn\'s craft_cycle run event');
     expect(row.raised).toBe(4);
     expect(row.returned).toBe(0);
     expect(row.dropped).toEqual(['brokenIt']);
@@ -214,7 +214,7 @@ describe('in-episode craft loop — one turn, no user, no turn boundary', () => 
       (e): e is Extract<SessionEvent, { type: 'tool-result' }> => e.type === 'tool-result',
     );
 
-    expect(results[1]!.result).toContain('42');
+    expect(results[1].result).toContain('42');
     expect(craftScore(off.db, 'doubleIt')).toEqual({ score: CRAFT_NEUTRAL_PRIOR, uses: 0 });
 
     await off.session.end();

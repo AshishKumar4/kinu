@@ -551,7 +551,7 @@ describe('LocalAgentSession.send — a user turn', () => {
     expect(kinds(events)).toContain('text-delta');
     expect(kinds(events)).toContain('turn-end');
 
-    const start = turnStarts(events)[0]!;
+    const start = turnStarts(events)[0];
     expect(start.kind).toBe('user');
     expect(start.text).toBe('hi');
 
@@ -571,7 +571,7 @@ describe('LocalAgentSession.send — a user turn', () => {
     const rows = await transcript(rt);
 
     expect(rows.map((row) => row.role)).toEqual(['user', 'assistant']);
-    expect(rows[1]!.content).toBe('hello there');
+    expect(rows[1].content).toBe('hello there');
   });
 
   test('a streamed answer mints a revision per step and a row per window, and the next step reads all of it', async () => {
@@ -626,7 +626,7 @@ describe('LocalAgentSession.send — a user turn', () => {
     // The next turn's model call carries the WHOLE streamed answer: the
     // cutoff the context pinned at the step's end is its final sequence.
     await session.send('and again');
-    const prior = prompts[1]!.filter((message) => message.role === 'assistant');
+    const prior = prompts[1].filter((message) => message.role === 'assistant');
     const seen = prior.flatMap((message) => message.content).filter((part) => part.type === 'text').map((part) => part.text).join('');
 
     expect(seen).toBe(words.map((word) => `${word} `).join(''));
@@ -657,7 +657,7 @@ describe('LocalAgentSession.send — a user turn', () => {
     const turns = events.filter((event): event is Extract<SessionEvent, { type: 'turn-end' }> => event.type === 'turn-end');
     expect(errors.some((event) => event.message.includes('forced persist failure'))).toBe(true);
     expect(turns).toHaveLength(2);
-    expect(turns[0]!.turn).toMatchObject({
+    expect(turns[0].turn).toMatchObject({
       userMessage: 'first',
       // The terminal event carries NO answer: the deltas went out, but a
       // restart reads this turn back as one that produced nothing, so
@@ -666,8 +666,8 @@ describe('LocalAgentSession.send — a user turn', () => {
       assistantResponse: '',
       hadError: true,
     });
-    expect(turns[1]!.turn.userMessage).toBe('second');
-    expect(turns[1]!.turn.hadError).toBe(false);
+    expect(turns[1].turn.userMessage).toBe('second');
+    expect(turns[1].turn.hadError).toBe(false);
 
     const assistants = (await transcript(rt)).filter((row) => row.role === 'assistant');
 
@@ -726,7 +726,7 @@ describe('LocalAgentSession.send — a user turn', () => {
     });
 
     // No file part survives to the model request.
-    const observed = captures[0]!;
+    const observed = captures[0];
 
     const fileParts = observed.flatMap((message) =>
       message.role === 'system' ? [] : message.content.filter((part) => part.type === 'file'));
@@ -751,7 +751,7 @@ describe('LocalAgentSession.send — a user turn', () => {
     // reference — byte-stable, so the prompt-cache prefix holds.
     await session.send('continue');
 
-    const again = captures[1]!.find((m) =>
+    const again = captures[1].find((m) =>
       m.role === 'user' && JSON.stringify(m.content).includes('attachments/'));
 
     expect(again).toBeDefined();
@@ -1091,9 +1091,9 @@ describe('LocalAgentSession — shadow-git checkpoint wiring', () => {
     await session.send('first');
     await session.send('second');
     expect(turns).toHaveLength(2);
-    expect(turns[0]!.sessionId).toBe('default');
-    expect(turns[1]!.sessionId).toBe('default');
-    expect(turns[0]!.turnId).not.toBe(turns[1]!.turnId);
+    expect(turns[0].sessionId).toBe('default');
+    expect(turns[1].sessionId).toBe('default');
+    expect(turns[0].turnId).not.toBe(turns[1].turnId);
   });
 
   test('the checkpoint surface degrades honestly when no engine is configured', async () => {
@@ -1122,8 +1122,8 @@ describe('LocalAgentSession — programmatic turns (reactor / background-job wak
 
     const starts = turnStarts(events);
     expect(starts.map((s) => s.kind)).toEqual(['user', 'programmatic']);
-    expect(starts[0]!.text).toBe('do it');
-    expect(starts[1]!.event).toBe('background_job');
+    expect(starts[0].text).toBe('do it');
+    expect(starts[1].event).toBe('background_job');
   });
 
   test('enqueueTurn self-starts the pump when idle (a wake with no user turn)', async () => {
@@ -1131,7 +1131,7 @@ describe('LocalAgentSession — programmatic turns (reactor / background-job wak
     await session.enqueueTurn({ text: 'wake up', metadata: { kinuEvent: 'background_job' } });
     const starts = turnStarts(events);
     expect(starts).toHaveLength(1);
-    expect(starts[0]!.kind).toBe('programmatic');
+    expect(starts[0].kind).toBe('programmatic');
     expect(events.some((e) => e.type === 'turn-end')).toBe(true);
   });
 
@@ -1166,7 +1166,7 @@ describe('LocalAgentSession — programmatic turns (reactor / background-job wak
       SELECT metadata_json FROM conversation_entries WHERE id = ${expectedId}`[0];
 
     expect(row).toBeDefined();
-    expect(JSON.parse(row!.metadata_json!)).toMatchObject({
+    expect(JSON.parse(row.metadata_json!)).toMatchObject({
       kinuEvent: 'background_job',
       jobId: JOB,
       [TURN_AUTHOR_METADATA_KEY]: 'harness',
@@ -1216,8 +1216,8 @@ describe('LocalAgentSession — overflow recovery (context_length turn failures)
     expect(events.some((e) => e.type === 'error')).toBe(true);
     const starts = turnStarts(events);
     expect(starts.map((s) => s.kind)).toEqual(['user', 'programmatic']);
-    expect(starts[1]!.event).toBe('overflow_retry');
-    expect(starts[1]!.text).toContain('compacted');
+    expect(starts[1].event).toBe('overflow_retry');
+    expect(starts[1].text).toContain('compacted');
 
     // The retry turn completed…
     const streamed = events
@@ -1756,7 +1756,7 @@ describe('LocalAgentSession — BackendHost + lifecycle', () => {
 
     expect(created.kind).toBe('timer_oneshot');
     expect(created.nextFireAt).toBe(fireAt);
-    expect(hub(db).triggers()[0]!.next_fire_at).toBe(fireAt);
+    expect(hub(db).triggers()[0].next_fire_at).toBe(fireAt);
 
     const outcome = await session.fireDueTriggers(fireAt);
     expect(outcome.fired).toBe(1);
@@ -1764,14 +1764,14 @@ describe('LocalAgentSession — BackendHost + lifecycle', () => {
 
     const recent = hub(db).recent({ variant: 'timer', limit: 5 });
     expect(recent).toHaveLength(1);
-    expect(recent[0]!.trust).toBe('owner');
-    expect(recent[0]!.payload).toMatchObject({
+    expect(recent[0].trust).toBe('owner');
+    expect(recent[0].payload).toMatchObject({
       trigger_id: created.id,
       scheduled_fire_at: fireAt,
       label: 'follow-up',
       user_payload: { reason: 'test' },
     });
-    expect(turnStarts(events)[0]!.text).toContain('[timer]');
+    expect(turnStarts(events)[0].text).toContain('[timer]');
     expect(hub(db).pending()).toEqual([]);
 
     const trigger = hub(db).triggers().find((t) => t.id === created.id)!;
@@ -2488,7 +2488,7 @@ describe('LocalAgentSession — BackendHost + lifecycle', () => {
     await session.send('do the slow thing then finish');
 
     expect(step).toBeGreaterThanOrEqual(3);
-    const thirdStepMessages = capturedSteps[2]!;
+    const thirdStepMessages = capturedSteps[2];
 
     const injectedTexts = thirdStepMessages
       .filter((m) => m.role === 'user')
@@ -3044,14 +3044,14 @@ describe('LocalAgentSession — AGENTS.md + session transcript recall', () => {
     const store = new ConversationSearchStore(rt.storage.sql, rt.actor, (sessionId) => rt.stores.history.transcript(sessionId));
     const hits = await store.search('wrangler staging');
     expect(hits.length).toBeGreaterThan(0);
-    expect(hits[0]!.conversationId).toBe('default');
+    expect(hits[0].conversationId).toBe('default');
 
-    const view = (await store.scroll(hits[0]!.messageId, 2))!;
+    const view = (await store.scroll(hits[0].messageId, 2))!;
     expect(view.messages.some((m) => m.content.includes('how did we deploy'))).toBe(true);
 
     const conversations = await store.browse();
-    expect(conversations[0]!.conversationId).toBe('default');
-    expect(conversations[0]!.preview).toContain('how did we deploy');
+    expect(conversations[0].conversationId).toBe('default');
+    expect(conversations[0].preview).toContain('how did we deploy');
     await session.end();
   });
 });
@@ -3170,7 +3170,7 @@ describe('LocalAgentSession.steer — mid-turn steering (Hermes steer-drain)', (
     // The second model call (post-tool step) sees exactly one injected user
     // message, merged from both steers, AFTER the tool-result message.
     expect(prompts.length).toBe(2);
-    const second = prompts[1]!;
+    const second = prompts[1];
     const injected = userTexts(second).filter((text) => text.includes('also check X'));
     expect(injected).toEqual(['also check X\n\nand Y']);
     const roles = second.map((m) => m.role);
@@ -3186,8 +3186,8 @@ describe('LocalAgentSession.steer — mid-turn steering (Hermes steer-drain)', (
     const rows = await transcript(rt);
 
     expect(rows.map((row) => row.role)).toEqual(['user', 'user', 'user', 'assistant']);
-    expect(rows[1]!.content).toBe('also check X');
-    expect(rows[2]!.content).toBe('and Y');
+    expect(rows[1].content).toBe('also check X');
+    expect(rows[2].content).toBe('and Y');
     await session.end();
   });
 
@@ -3209,7 +3209,7 @@ describe('LocalAgentSession.steer — mid-turn steering (Hermes steer-drain)', (
     await turn;
     expect(await steer).toBe('mid-turn');
 
-    const second = prompts[1]!;
+    const second = prompts[1];
     const injected = userTexts(second).filter((text) => text.includes('also check X') || text.includes('mail from bob'));
     expect(injected).toHaveLength(2);
     expect(injected[0]).toBe('also check X');
@@ -3241,7 +3241,7 @@ describe('LocalAgentSession.steer — mid-turn steering (Hermes steer-drain)', (
     await fireTimer(session, 'arrived after the turn');
     await session.flushPendingDrains();
     await waitFor(() => turnStarts(events).length >= 2);
-    expect(turnStarts(events)[1]!.kind).toBe('programmatic');
+    expect(turnStarts(events)[1].kind).toBe('programmatic');
     await session.end();
   });
 
@@ -3261,7 +3261,7 @@ describe('LocalAgentSession.steer — mid-turn steering (Hermes steer-drain)', (
 
     const starts = turnStarts(events);
     expect(starts).toHaveLength(2);
-    expect(starts[1]!).toMatchObject({ kind: 'user', text: 'follow up please' });
+    expect(starts[1]).toMatchObject({ kind: 'user', text: 'follow up please' });
 
     const rows = await transcript(rt);
 
@@ -3609,7 +3609,7 @@ describe('LocalAgentSession.steer — mid-turn steering (Hermes steer-drain)', (
     // part ahead of its text, exactly as a send() attachment does. (The tail
     // user message is the workspace-instructions block, so match the steer's
     // own words rather than position.)
-    const userTurnPrompt = prompts[2]!;
+    const userTurnPrompt = prompts[2];
 
     const steerMessage = userTurnPrompt.find((m) => m.role === 'user'
       && JSON.stringify(m).includes('the operator said this'))!;
@@ -3830,7 +3830,7 @@ describe('LocalAgentSession — a pending send is durable before it is acknowled
 
     // The restored steer landed in the recovered turn's first step — the
     // model saw it on the very first request that turn made.
-    const first = nextPrompts[0]!;
+    const first = nextPrompts[0];
 
     const texts = first
       .filter((m): m is Extract<PromptMessage, { role: 'user' }> => m.role === 'user')
@@ -3843,7 +3843,7 @@ describe('LocalAgentSession — a pending send is durable before it is acknowled
     const steered = (await transcript(rt)).filter((entry) => entry.content === 'lost mid-turn');
 
     expect(steered).toHaveLength(1);
-    expect(await rt.stores.history.transcript(CHAT_SESSION_ID).metadata(steered[0]!.id))
+    expect(await rt.stores.history.transcript(CHAT_SESSION_ID).metadata(steered[0].id))
       .toMatchObject({ [STEER_METADATA_KEY]: true });
 
     // The dead session's turn is still parked; interrupt releases it cleanly,
@@ -3866,9 +3866,9 @@ describe('LocalAgentSession — a pending send is durable before it is acknowled
     await waitFor(() => events.some((e) => e.type === 'turn-start'));
     const pending = pendingSends(db);
     expect(pending).toHaveLength(1);
-    expect(pending[0]!.text).toBe('queued behind nothing');
+    expect(pending[0].text).toBe('queued behind nothing');
     // No turn owned it yet when it was accepted — the queue IS the record.
-    expect(pending[0]!.turn_id).toBeNull();
+    expect(pending[0].turn_id).toBeNull();
 
     // Process death: the model gate never releases. The next session must
     // re-enter the message in the pump — in seq order, as a turn of its own.
@@ -4143,11 +4143,11 @@ describe('LocalAgentSession — Alternate Takes parity', () => {
     expect(result).toMatchObject({ outcome: 'corrected', changedAnswer: true, continuationQueued: true });
 
     const row = rt.storage.sql<{ outcome: string; source: string; followup: string | null; turn_id: string }>`
-      SELECT outcome, source, followup, turn_id FROM turn_outcomes`[0]!;
+      SELECT outcome, source, followup, turn_id FROM turn_outcomes`[0];
 
     expect(row).toMatchObject({ outcome: 'corrected', source: 'take_pick', followup: 'go with approach B', turn_id: set.turnId });
-    expect(rt.storage.sql<{ status: string }>`SELECT status FROM search_nodes WHERE id = 'alt'`[0]!.status).toBe('terminal');
-    expect(rt.storage.sql<{ status: string }>`SELECT status FROM search_nodes WHERE id = 'win'`[0]!.status).toBe('pruned');
+    expect(rt.storage.sql<{ status: string }>`SELECT status FROM search_nodes WHERE id = 'alt'`[0].status).toBe('terminal');
+    expect(rt.storage.sql<{ status: string }>`SELECT status FROM search_nodes WHERE id = 'win'`[0].status).toBe('pruned');
 
     // The gentle continuation runs as a programmatic turn with the chosen take.
     await waitFor(() => turnStarts(events).some((s) => s.kind === 'programmatic' && s.event === 'take_pick'));
@@ -4165,7 +4165,7 @@ describe('LocalAgentSession — Alternate Takes parity', () => {
 
     const result = await session.pickAlternateTake(set.id, 'win');
     expect(result).toMatchObject({ outcome: 'accepted', changedAnswer: false, continuationQueued: false });
-    expect(rt.storage.sql<{ source: string }>`SELECT source FROM turn_outcomes`[0]!.source).toBe('take_pick');
+    expect(rt.storage.sql<{ source: string }>`SELECT source FROM turn_outcomes`[0].source).toBe('take_pick');
     expect(turnStarts(events).every((s) => s.kind === 'user')).toBe(true);
     await session.end();
   });
@@ -4284,7 +4284,7 @@ describe('LocalAgentSession.branch — Steer-as-Branch (mid-turn parallel redire
     expect(set.source).toBe('branch');
     expect(set.candidates.map((c) => c.text)).toEqual(['the live answer', 'the branch answer']);
     expect(set.candidates.map((c) => c.origin)).toEqual(['live', 'branch']);
-    expect(set.winnerNodeId).toBe(set.candidates[0]!.nodeId);
+    expect(set.winnerNodeId).toBe(set.candidates[0].nodeId);
 
     const assistant = (await transcript(rt)).filter((entry) => entry.role === 'assistant').at(-1);
 
@@ -4313,7 +4313,7 @@ describe('LocalAgentSession.branch — Steer-as-Branch (mid-turn parallel redire
     expect(result).toMatchObject({ outcome: 'corrected', changedAnswer: true, continuationQueued: true });
 
     const ledger = rt.storage.sql<{ outcome: string; source: string; followup: string | null }>`
-      SELECT outcome, source, followup FROM turn_outcomes`[0]!;
+      SELECT outcome, source, followup FROM turn_outcomes`[0];
 
     expect(ledger).toMatchObject({ outcome: 'corrected', source: 'take_pick', followup: 'the branch answer' });
 
@@ -4502,7 +4502,7 @@ describe('LocalAgentSession — the durable run-event log', () => {
     const { session, events } = setup('hello there');
     await session.send('hi');
 
-    const runId = session.listRuns().items[0]!.runId;
+    const runId = session.listRuns().items[0].runId;
 
     const streamed = events
       .filter((e): e is Extract<SessionEvent, { type: 'run-event' }> => e.type === 'run-event')
@@ -4618,17 +4618,17 @@ describe('LocalAgentSession — the durable run-event log', () => {
 
     const errors = events.filter((e) => e.type === 'error');
     expect(errors).toHaveLength(1);
-    expect(errors[0]!.type === 'error' && errors[0].message).toContain('Too Many Requests');
+    expect(errors[0].type === 'error' && errors[0].message).toContain('Too Many Requests');
 
     const ends = events.filter((e) => e.type === 'turn-end');
     expect(ends).toHaveLength(1);
-    expect(ends[0]!.type === 'turn-end' && ends[0].turn.hadError).toBe(true);
+    expect(ends[0].type === 'turn-end' && ends[0].turn.hadError).toBe(true);
 
     // The durable ledger has to agree — an open run is a run nothing can read
     // back as finished.
     const runs = session.listRuns().items;
     expect(runs).toHaveLength(1);
-    const runEvents = session.getRunEvents(runs[0]!.runId);
+    const runEvents = session.getRunEvents(runs[0].runId);
     expect(runEvents.at(-1)?.type).toBe('run_end');
     const end = runEvents.find((e) => e.type === 'run_end');
     expect(end?.reason).toBe('error');
@@ -4702,7 +4702,7 @@ describe('LocalAgentSession — the durable run-event log', () => {
     expect(end.turn.hadError).toBe(true);
     const errors = events.filter((e) => e.type === 'error');
     expect(errors).toHaveLength(1);
-    expect(errors[0]!.type === 'error' && errors[0].message).toContain('disk image is malformed');
+    expect(errors[0].type === 'error' && errors[0].message).toContain('disk image is malformed');
 
     // Nothing durable claims otherwise: no answer entry, and the run is sealed
     // as the failure it was.
@@ -4710,7 +4710,7 @@ describe('LocalAgentSession — the durable run-event log', () => {
       WHERE actor_id = ${rt.actor.actorId} AND role = 'assistant'`).toEqual([]);
     const runs = session.listRuns().items;
     expect(runs).toHaveLength(1);
-    const runEnd = session.getRunEvents(runs[0]!.runId).find((e) => e.type === 'run_end');
+    const runEnd = session.getRunEvents(runs[0].runId).find((e) => e.type === 'run_end');
     expect(runEnd?.reason).toBe('error');
 
     await session.end();
@@ -4755,9 +4755,9 @@ describe('LocalAgentSession — the durable run-event log', () => {
 
     const runs = session.listRuns().items;
     expect(runs).toHaveLength(1);
-    expect(runs[0]!.eventCount).toBeGreaterThan(0);
+    expect(runs[0].eventCount).toBeGreaterThan(0);
 
-    const events = session.getRunEvents(runs[0]!.runId);
+    const events = session.getRunEvents(runs[0].runId);
     // Profile resolution lands before the step. A first turn records no
     // steering row: the step-0 delegation hint is gone, so nothing is spliced
     // and nothing is counted. The provider call's `model_operation` pair
@@ -4789,7 +4789,7 @@ describe('LocalAgentSession — the durable run-event log', () => {
 
     expect(events.map((e) => e.eventIndex)).toEqual([0, 1, 2, 3, 4, 5, 6, 7, 8]);
     // …and `since` replays the tail, exactly as an SSE Last-Event-ID does.
-    expect(session.getRunEvents(runs[0]!.runId, { since: 7 }).map((e) => e.type))
+    expect(session.getRunEvents(runs[0].runId, { since: 7 }).map((e) => e.type))
       .toEqual(['turn_end', 'run_end']);
 
     await session.end();
@@ -4824,7 +4824,7 @@ describe('LocalAgentSession — the durable run-event log', () => {
     const { session } = setup('unused', exploding);
     await session.send('hi');
 
-    const run = session.listRuns().items[0]!;
+    const run = session.listRuns().items[0];
     const end = session.getRunEvents(run.runId).at(-1);
     expect(end?.type).toBe('run_end');
     expect(end).toMatchObject({ reason: 'error', error: expect.stringContaining('upstream is on fire') });
@@ -4946,7 +4946,7 @@ describe('LocalAgentSession — the durable run-event log', () => {
 
     await session.send('hi');
 
-    const runId = session.listRuns().items[0]!.runId;
+    const runId = session.listRuns().items[0].runId;
     expect(runId).not.toBe(WORKSPACE_RUN_ID);
     expect(session.getRunEvents(runId).filter((e) => e.type === 'model_call'))
       .toMatchObject([{ source: 'reflection', usage: { input: 3 } }]);
@@ -5007,7 +5007,7 @@ describe('LocalAgentSession — the durable run-event log', () => {
     await waitFor(() => session.modelPricing() !== null);
     await session.send('hi');
 
-    const runId = session.listRuns().items[0]!.runId;
+    const runId = session.listRuns().items[0].runId;
     const rows = session.getRunEvents(runId).filter((e) => e.type === 'model_call');
     expect(rows).toMatchObject([{ source: 'fast', spec: 'openai-compatible/house-model', usd: 2 }]);
     expect(session.getEffectiveModelSpec()).toBe('openai-compatible/house-model');

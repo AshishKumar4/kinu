@@ -153,7 +153,7 @@ describe('branch-worker protocol — no self-rating', () => {
     const handle = await spawn('uncapped-branch');
 
     try {
-      const exploration = await handle.explore(HISTORY, [], LANGUAGES, 'plan', []);
+      const exploration = await handle.explore({ priorHistory: HISTORY, craftedTools: [], languages: LANGUAGES, mode: 'plan', siblings: [] });
       expect(exploration.text).toBe(BRANCH_ANSWER);
       const reflection = await handle.generateReflection('ship a parser', 'the fixture corpus still fails');
       expect(reflection.text).toBe(BRANCH_ANSWER);
@@ -257,7 +257,7 @@ describe('branch worker failure replies', () => {
       // would travel back as `error: ''`.
       endpoint.reply.status = 400;
       endpoint.reply.body = { error: { message: '' } };
-      await expect(handle.explore(HISTORY, [], LANGUAGES, 'plan', [])).rejects.toThrow();
+      await expect(handle.explore({ priorHistory: HISTORY, craftedTools: [], languages: LANGUAGES, mode: 'plan', siblings: [] })).rejects.toThrow();
       // One reply, and it parsed as the envelope — so `error` is a string by the
       // schema above, and what is left to hold is that it is there and says
       // something.
@@ -268,7 +268,7 @@ describe('branch worker failure replies', () => {
       // And when the provider did say something, that is what comes back —
       // never a constant standing in for it.
       endpoint.reply.body = { error: { message: 'upstream exploded' } };
-      await expect(handle.explore(HISTORY, [], LANGUAGES, 'plan', []))
+      await expect(handle.explore({ priorHistory: HISTORY, craftedTools: [], languages: LANGUAGES, mode: 'plan', siblings: [] }))
         .rejects.toThrow('upstream exploded');
       expect(replies).toHaveLength(2);
       expect(replies[1]?.error).toBe('upstream exploded');
@@ -295,7 +295,7 @@ describe('branch worker failure replies', () => {
 
       // Neither error nor result: the reply is outside the protocol, and the
       // wait rejects instead of handing the engine `undefined`.
-      const noResult = handle.explore(HISTORY, [], LANGUAGES, 'plan', []);
+      const noResult = handle.explore({ priorHistory: HISTORY, craftedTools: [], languages: LANGUAGES, mode: 'plan', siblings: [] });
       proc.emit('message', { method: 'explore', id: 2 });
       await expect(noResult).rejects.toThrow('Branch worker sent a malformed reply');
     } finally {

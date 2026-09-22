@@ -13,6 +13,7 @@ import { chmodSync, mkdirSync, writeFileSync, readFileSync, existsSync } from 'n
 
 import { join } from 'node:path';
 import { createHostCheckpoints } from '../src/checkpoints';
+import { present } from '@kinu.run/test-utils';
 import * as v from 'valibot';
 
 const require = createRequire(import.meta.url);
@@ -84,7 +85,7 @@ describe('shadow-git store parity (TS engine ↔ pc-agent daemon)', () => {
 
     writeFileSync(join(work, 'a.txt'), 'host wrote this');
     host.beginTurn({ turnId: 'turn-ts', sessionId: 'sess-1' });
-    const id = await host.ensureCheckpoint(work);
+    const id = present(await host.ensureCheckpoint(work), 'the host engine snapshot id');
     expect(id).toBeTruthy();
 
     // The daemon reads the SAME store: identical id, turn meta, and dir.
@@ -96,11 +97,11 @@ describe('shadow-git store parity (TS engine ↔ pc-agent daemon)', () => {
 
     writeFileSync(join(work, 'a.txt'), 'damage');
     writeFileSync(join(work, 'junk.txt'), 'extra');
-    const plan = device.plan(AGENT, work, id!);
+    const plan = device.plan(AGENT, work, id);
     expect(plan.files.map((f) => `${f.kind}:${f.path}`).sort())
       .toEqual(['delete:junk.txt', 'modify:a.txt']);
 
-    const result = device.restore(AGENT, work, id!);
+    const result = device.restore(AGENT, work, id);
     expect(readFileSync(join(work, 'a.txt'), 'utf8')).toBe('host wrote this');
     expect(existsSync(join(work, 'junk.txt'))).toBe(false);
     // The daemon's pre-restore safety snapshot is null-turn, same as the
@@ -113,7 +114,7 @@ describe('shadow-git store parity (TS engine ↔ pc-agent daemon)', () => {
     const { work, host, device } = setup();
 
     writeFileSync(join(work, 'b.txt'), 'daemon wrote this');
-    const id = device.ensure({ agent: AGENT, dir: work, turnId: 'turn-js', sessionId: 'sess-2' });
+    const id = present(device.ensure({ agent: AGENT, dir: work, turnId: 'turn-js', sessionId: 'sess-2' }), 'the daemon engine snapshot id');
     expect(id).toBeTruthy();
 
     const listed = await host.list();
@@ -123,10 +124,10 @@ describe('shadow-git store parity (TS engine ↔ pc-agent daemon)', () => {
     });
 
     writeFileSync(join(work, 'b.txt'), 'damage');
-    const plan = await host.plan(work, id!);
+    const plan = await host.plan(work, id);
     expect(plan.files).toEqual([{ path: 'b.txt', kind: 'modify' }]);
 
-    await host.restore(work, id!);
+    await host.restore(work, id);
     expect(readFileSync(join(work, 'b.txt'), 'utf8')).toBe('daemon wrote this');
   });
 
@@ -145,11 +146,11 @@ describe('shadow-git store parity (TS engine ↔ pc-agent daemon)', () => {
     const stores = (await import('node:fs')).readdirSync(join(root, 'shadow', AGENT));
     expect(stores).toHaveLength(2);
     const [a, b] = stores.map((name) => join(root, 'shadow', AGENT, name));
-    expect(readFileSync(join(a!, 'info', 'exclude'), 'utf8')).toBe(readFileSync(join(b!, 'info', 'exclude'), 'utf8'));
+    expect(readFileSync(join(a, 'info', 'exclude'), 'utf8')).toBe(readFileSync(join(b, 'info', 'exclude'), 'utf8'));
     // Marker files differ only by the recorded target dir: each names exactly
     // the project its store shadows, so a marker aimed at the wrong tree
     // fails here rather than restoring one project from another's history.
-    const markers = [a, b].map((s) => readFileSync(join(s!, 'KINU_WORKDIR'), 'utf8').trim()).sort();
+    const markers = [a, b].map((s) => readFileSync(join(s, 'KINU_WORKDIR'), 'utf8').trim()).sort();
     expect(markers).toEqual([work, workB].sort());
   });
 
@@ -166,28 +167,28 @@ describe('shadow-git store parity (TS engine ↔ pc-agent daemon)', () => {
 
       for (const [index, dir] of [work, workB].entries()) {
         writeFileSync(join(dir, 'mine.txt'), 'kept');
-        mkdirSync(foreign[index]!);
-        writeFileSync(join(foreign[index]!, 'theirs.txt'), 'not mine');
-        chmodSync(foreign[index]!, 0o000);
+        mkdirSync(foreign[index]);
+        writeFileSync(join(foreign[index], 'theirs.txt'), 'not mine');
+        chmodSync(foreign[index], 0o000);
       }
 
       host.beginTurn({ turnId: 't', sessionId: 's' });
-      const hostId = await host.ensureCheckpoint(work, 'file write');
-      const deviceId = device.ensure({ agent: AGENT, dir: workB, turnId: 't', sessionId: 's' }, undefined);
+      const hostId = present(await host.ensureCheckpoint(work, 'file write'), 'the host engine snapshot id');
+      const deviceId = present(device.ensure({ agent: AGENT, dir: workB, turnId: 't', sessionId: 's' }, undefined), 'the daemon engine snapshot id');
       expect(hostId).toBeTruthy();
       expect(deviceId).toBeTruthy();
 
       const byId = new Map(device.list(AGENT).map((e) => [e.id, e.reason]));
-      expect(byId.get(hostId!)).toBe('file write [skipped 1 unreadable: systemd-private-1]');
+      expect(byId.get(hostId)).toBe('file write [skipped 1 unreadable: systemd-private-1]');
       // The daemon's own default reason, with the same note appended by the
       // same encoding.
-      expect(byId.get(deviceId!)).toBe('pre-mutation [skipped 1 unreadable: systemd-private-1]');
+      expect(byId.get(deviceId)).toBe('pre-mutation [skipped 1 unreadable: systemd-private-1]');
 
       // And each snapshot still holds the readable file, read back through the
       // OTHER engine.
       writeFileSync(join(work, 'mine.txt'), 'damaged');
-      expect((await host.plan(work, hostId!)).files).toEqual([{ path: 'mine.txt', kind: 'modify' }]);
-      expect(device.plan(AGENT, workB, deviceId!).files).toEqual([]);
+      expect((await host.plan(work, hostId)).files).toEqual([{ path: 'mine.txt', kind: 'modify' }]);
+      expect(device.plan(AGENT, workB, deviceId).files).toEqual([]);
     } finally {
       for (const dir of foreign) chmodSync(dir, 0o700);
 

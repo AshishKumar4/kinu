@@ -386,8 +386,8 @@ describe('default compaction over the real storage plane', () => {
     const bytes = prompts.map((p) => p.map(cacheableBytes));
 
     for (let i = 1; i < bytes.length; i++) {
-      expect(bytes[i]!.slice(0, bytes[i - 1]!.length)).toEqual(bytes[i - 1]!);
-      expect(bytes[i]!.length).toBeGreaterThan(bytes[i - 1]!.length);
+      expect(bytes[i].slice(0, bytes[i - 1].length)).toEqual(bytes[i - 1]);
+      expect(bytes[i].length).toBeGreaterThan(bytes[i - 1].length);
     }
 
     // ── The pressure turn: the provider reports 8_600 against an 8_500
@@ -406,7 +406,7 @@ describe('default compaction over the real storage plane', () => {
     expect(remaining).toHaveLength(1);
     // What survived is the NEWEST block — the live state the model reads —
     // still at the frozen position it was born at, not re-created at the tail.
-    expect(messageText(relieved[remaining[0]!]!)).toContain('- fact 2:');
+    expect(messageText(relieved[remaining[0]])).toContain('- fact 2:');
     expect(remaining[0]).toBeLessThan(relieved.length - 1);
     // The prefix break is real and is the point: this request is CHEAPER than
     // the one before it, which no append-only weave can ever be.
@@ -421,6 +421,6 @@ describe('default compaction over the real storage plane', () => {
     expect(ledger.size).toBe(2);
     const after = prompts.at(-1) ?? [];
     expect(ephemeralBlocks(after)).toHaveLength(2);
-    expect(messageText(after[after.length - 1]!)).toContain('- fact 3:');
+    expect(messageText(after[after.length - 1])).toContain('- fact 3:');
   });
 });

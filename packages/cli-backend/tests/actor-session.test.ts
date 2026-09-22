@@ -336,7 +336,7 @@ test('bound steer persistence reserves on accept and lands rows at the drain', a
     await secondCall.promise;
     expect(drained).toEqual([['steer-1']]);
 
-    const texts = prompts[1]!
+    const texts = prompts[1]
       .filter((m): m is Extract<ModelMessage, { role: 'user' }> => m.role === 'user')
       .flatMap((m) => (Array.isArray(m.content)
         ? m.content.filter((p) => p.type === 'text').map((p) => p.text)

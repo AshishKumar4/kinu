@@ -47,8 +47,8 @@ describe('createHostCheckpoints', () => {
 
     const list = await engine.list();
     expect(list).toHaveLength(2);
-    expect(list[0]!.turnId).toBe('turn-2');
-    expect(list[1]!.turnId).toBe('turn-1');
+    expect(list[0].turnId).toBe('turn-2');
+    expect(list[1].turnId).toBe('turn-1');
     expect(list.map((e) => [e.sessionId, e.dir])).toEqual([['sess-1', work], ['sess-1', work]]);
   });
 
@@ -60,7 +60,7 @@ describe('createHostCheckpoints', () => {
     const first = await engine.ensureCheckpoint(work);
     engine.beginTurn({ turnId: 't2', sessionId: 's' });
     const second = await engine.ensureCheckpoint(work); // nothing changed
-    expect(second).toBe(first!);
+    expect(second).toBe(first);
     expect(await engine.list()).toHaveLength(1);
   });
 
@@ -223,8 +223,8 @@ describe('createHostCheckpoints', () => {
     // the limit cannot bury it, because the store filters before it truncates.
     const keyed = await engine.list({ turnId: buried, limit: 6 });
     expect(keyed).toHaveLength(1);
-    expect(keyed[0]!.turnId).toBe(buried);
-    expect(keyed[0]!.dir).toBe(dirs[0]);
+    expect(keyed[0].turnId).toBe(buried);
+    expect(keyed[0].dir).toBe(dirs[0]);
 
     // And a turn that genuinely has no checkpoint still reads empty, so the
     // fix does not make every turn look restorable.
@@ -282,7 +282,7 @@ describe('createHostCheckpoints', () => {
       // RECORDED, not swallowed: the snapshot says which paths are missing from
       // it, so an incomplete restore is explainable rather than surprising.
       const [entry] = await engine.list();
-      expect(entry!.reason).toBe('file write [skipped 2 unreadable: locked.txt systemd-private-9f2c]');
+      expect(entry.reason).toBe('file write [skipped 2 unreadable: locked.txt systemd-private-9f2c]');
 
       // And the readable tree is WHOLE — including the file that sorts after the
       // refusals, which is what an aborted staging pass would have dropped.
@@ -361,8 +361,8 @@ describe('checkpointed runtime shell', () => {
       expect(readFileSync(join(work, 'precious.txt'), 'utf8').trim()).toBe('CLOBBERED');
 
       const [entry] = await checkpoints.list();
-      expect(entry!.turnId).toBe('shell-turn');
-      await checkpoints.restore(work, entry!.id);
+      expect(entry.turnId).toBe('shell-turn');
+      await checkpoints.restore(work, entry.id);
       expect(readFileSync(join(work, 'precious.txt'), 'utf8')).toBe('original');
     } finally {
       db.close();

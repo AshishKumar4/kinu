@@ -132,8 +132,8 @@ describe('resuming a workspace whose fork was interrupted', () => {
     );
 
     expect(abandoned).toHaveLength(1);
-    expect(abandoned[0]!.message).toContain(ROOT);
-    expect(abandoned[0]!.message).toContain(`${HEADS}/${HEADS}`);
+    expect(abandoned[0].message).toContain(ROOT);
+    expect(abandoned[0].message).toContain(`${HEADS}/${HEADS}`);
 
     await session.end();
   });

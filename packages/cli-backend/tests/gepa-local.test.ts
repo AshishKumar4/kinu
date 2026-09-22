@@ -22,7 +22,7 @@ import {
 import type { ActorHandle } from '@kinu.run/core';
 import { createCLIRuntime, makeSql, makeWorkspaceSchemaSql } from '../src/runtime';
 import { LocalAgentSession } from '../src/local-session';
-import { scratchPath } from '@kinu.run/test-utils';
+import { present, scratchPath } from '@kinu.run/test-utils';
 
 const DUMMY_LLM: LLMProviderConfig = {
   name: 'fake', baseURL: 'http://localhost:0', headers: {}, model: 'fake-model',
@@ -146,22 +146,25 @@ describe('GEPA runs on the local backend', () => {
     expect(result.error).toBeUndefined();
     expect(result.ok).toBe(true);
     expect(result.runId).toBeTruthy();
+    const runId = present(result.runId, 'the completed GEPA run id');
+    const selection = present(result.selection, 'the GEPA winner selection');
+    const seedScore = present(result.seedScore, 'the GEPA seed score');
     // The winner is selected out of sample: held-out failures plus guards.
-    expect(result.selection!.heldOutNegatives).toBeGreaterThan(0);
-    expect(result.selection!.guards).toBeGreaterThan(0);
-    expect(result.seedScore!.n).toBe(result.selection!.heldOutNegatives + result.selection!.guards);
+    expect(selection.heldOutNegatives).toBeGreaterThan(0);
+    expect(selection.guards).toBeGreaterThan(0);
+    expect(seedScore.n).toBe(selection.heldOutNegatives + selection.guards);
     expect(result.bestScore).toBeDefined();
 
     // The lineage `kinu gepa` and the web surface read.
     const runs = listGepaRuns(rt.storage.sql, rt.actor, 10);
     expect(runs.length).toBe(1);
-    expect(runs[0]!.runId).toBe(result.runId!);
-    expect(runs[0]!.status).toBe('completed');
+    expect(runs[0].runId).toBe(runId);
+    expect(runs[0].status).toBe('completed');
     // Reflection really ran: metric calls beyond the seed's out-of-sample
     // scoring are minibatch rollouts of reflection-proposed candidates. Each
     // one is a full scaffold execution plus a judge call.
-    expect(runs[0]!.metricCalls).toBeGreaterThan(result.seedScore!.n);
-    expect(judgeCalls()).toBe(runs[0]!.metricCalls);
+    expect(runs[0].metricCalls).toBeGreaterThan(seedScore.n);
+    expect(judgeCalls()).toBe(runs[0].metricCalls);
     const candidates = db.query<{ c: number }, []>(`SELECT COUNT(*) AS c FROM gepa_candidates`).get();
 
     if (!candidates) throw new Error('GEPA candidate count row is missing');
