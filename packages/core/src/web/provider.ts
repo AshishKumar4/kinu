@@ -27,6 +27,7 @@ import { decodeEntities, htmlToMarkdown as localHtmlToMarkdown, looksLikeHtml, s
 import type { AuthResolver } from '../providers/types';
 import { TOOL_REACH } from '../tools/registry';
 import { readExecSignal } from '../execution/signal';
+import { codemodeText } from '../tools/sandbox-contract';
 import { diagnostics, toKinuError, tolerate } from '../obs/index';
 import { REAL_CLOCK, type Clock } from '../types/clock';
 
@@ -477,7 +478,7 @@ export function createWebCodemodeProvider(provider: WebSearchProvider) {
         planAllowed: true,
         description: 'web.search(query, { limit? }) → { results: [{ title, url, snippet, date, position }], answer?, source }',
         execute: async (...args: unknown[]) => {
-          const query = stringArgument({ value: args[0] });
+          const query = codemodeText({ value: args[0], parameter: 'web.search(query)' });
           const parsedOpts = v.safeParse(WebSearchOptionsSchema, args[1]);
           const opts = parsedOpts.success ? parsedOpts.output : undefined;
 
@@ -489,19 +490,10 @@ export function createWebCodemodeProvider(provider: WebSearchProvider) {
       fetch: {
         planAllowed: true,
         description: 'web.fetch(url) → { url, title?, retrievedAt, markdown }',
-        execute: async (...args: unknown[]) => provider.fetch(stringArgument({ value: args[0] }), { signal: readExecSignal({ context: args[1] }) }),
+        execute: async (...args: unknown[]) => provider.fetch(codemodeText({ value: args[0], parameter: 'web.fetch(url)' }), { signal: readExecSignal({ context: args[1] }) }),
       },
     },
   };
-}
-
-/** A codemode argument as the text it holds. Anything that is not a string —
- *  a number, an object, a missing argument — states no query and no url, and
- *  the empty string is what the provider refuses by name. */
-function stringArgument(input: { value: unknown }): string {
-  const parsed = v.safeParse(v.string(), input.value);
-
-  return parsed.success ? parsed.output : '';
 }
 
 function clampLimit(limit: number | undefined): number {

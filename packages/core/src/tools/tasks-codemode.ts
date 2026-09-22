@@ -7,7 +7,7 @@
  * SAME TaskListStore instance — a script and a direct tool call see and
  * mutate the identical list, never a shadow copy.
  */
-import type { CodemodeProvider } from './sandbox-contract';
+import { codemodeText, type CodemodeProvider } from './sandbox-contract';
 import * as v from 'valibot';
 import { TASK_STATUSES, type TaskListStore } from '../tasks/store';
 import type { AgentConfigStore } from '../config/store';
@@ -78,16 +78,17 @@ export function createTasksCodemodeProvider(
         planAllowed: true,
         description: 'Move one task to active/done/dropped by id.',
         execute: (...args: unknown[]) => branchableToolCall(async () => {
-          const status = v.safeParse(TaskStatusSchema, args[1]);
-          const id = v.safeParse(v.string(), args[0]);
+          const status = args[1] === undefined ? undefined : v.safeParse(TaskStatusSchema, args[1]);
 
-          if (!id.success) throw new KinuError('bad_input', 'tasks.update(id, status) takes the task id as a string');
+          if (status !== undefined && !status.success) {
+            throw new KinuError('bad_input', `tasks.update(id, status) takes status as one of ${TASK_STATUSES.join(', ')}`);
+          }
 
           return decodeJsonValue({
             value: run({
               action: 'update',
-              id: id.output,
-              status: status.success ? status.output : undefined,
+              id: codemodeText({ value: args[0], parameter: 'tasks.update(id)' }),
+              status: status?.output,
             }),
           });
         }),
