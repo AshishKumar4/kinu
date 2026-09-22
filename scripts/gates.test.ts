@@ -247,30 +247,59 @@ describe('capability parity gate', () => {
     expect(movable[0].closure).toBe('cf');
   });
 
-  test('the same module is silent once it lives in a shared package', () => {
-    const { movable } = findMovable(withShared({
-      'packages/core/src/summary.ts': "import * as v from 'valibot';\nexport const s = v.string();\n",
-    }));
+  /** Each file set reports nothing movable, for the reason its name gives. */
+  const PINNED: readonly { readonly name: string; readonly files: Record<string, string> }[] = [
+    {
+      name: 'the same module is silent once it lives in a shared package',
+      files: {
+        'packages/core/src/summary.ts': "import * as v from 'valibot';\nexport const s = v.string();\n",
+      },
+    },
+    {
+      name: 'a platform import pins the module where it is',
+      files: {
+        'packages/cf-backend/src/do.ts': "import { Agent } from 'agents';\nexport const a = Agent;\n",
+      },
+    },
+    {
+      name: 'the block is transitive: a pure module importing a platform one stays put',
+      files: {
+        'packages/cf-backend/src/do.ts': "import { Agent } from 'agents';\nexport const a = Agent;\n",
+        'packages/cf-backend/src/pure.ts': "import { a } from './do.ts';\nexport const b = a;\n",
+      },
+    },
+    {
+      name: 'a stylesheet is a real dependency a shared package cannot take',
+      files: {
+        'packages/cf-backend/src/styled.ts': "import './theme.css';\nexport const s = 1;\n",
+      },
+    },
+    {
+      name: 'a relative reach into node_modules is a dependency, not tracked source',
+      // The live instance is nimbus-programmatic.ts: `@nimbus-sh/worker` exports
+      // no `./dist/session/*` subpath, so the module is held through the
+      // installed tree. The resolver must read that as a DEPENDENCY that pins
+      // its importer — before this arm existed it threw `resolves to no tracked
+      // source file` over a file that resolves fine at build time.
+      files: {
+        'packages/cf-backend/src/reach.ts':
+          "export { deep } from '../../../node_modules/@x/y/dist/inner.js';\n",
+      },
+    },
+    {
+      name: "the `@/` alias resolves, so an aliased platform import still blocks",
+      files: {
+        'packages/cf-backend/src/do.ts': "import { Agent } from 'agents';\nexport const a = Agent;\n",
+        'packages/cf-backend/src/uses.ts': "import { a } from '@/do';\nexport const b = a;\n",
+      },
+    },
+  ];
 
-    expect(movable).toEqual([]);
-  });
-
-  test('a platform import pins the module where it is', () => {
-    const { movable } = findMovable(withShared({
-      'packages/cf-backend/src/do.ts': "import { Agent } from 'agents';\nexport const a = Agent;\n",
-    }));
-
-    expect(movable).toEqual([]);
-  });
-
-  test('the block is transitive: a pure module importing a platform one stays put', () => {
-    const { movable } = findMovable(withShared({
-      'packages/cf-backend/src/do.ts': "import { Agent } from 'agents';\nexport const a = Agent;\n",
-      'packages/cf-backend/src/pure.ts': "import { a } from './do.ts';\nexport const b = a;\n",
-    }));
-
-    expect(movable).toEqual([]);
-  });
+  for (const pinned of PINNED) {
+    test(pinned.name, () => {
+      expect(findMovable(withShared(pinned.files)).movable).toEqual([]);
+    });
+  }
 
   test("the allowlist is derived: a library core does not use is a blocker", () => {
     const files = {
@@ -285,43 +314,12 @@ describe('capability parity gate', () => {
     expect(findMovable(widened).movable.map((m) => m.file)).toEqual(['packages/cf-backend/src/pure.ts']);
   });
 
-  test('a stylesheet is a real dependency a shared package cannot take', () => {
-    const { movable } = findMovable(withShared({
-      'packages/cf-backend/src/styled.ts': "import './theme.css';\nexport const s = 1;\n",
-    }));
-
-    expect(movable).toEqual([]);
-  });
-
-  test('a relative reach into node_modules is a dependency, not tracked source', () => {
-    // The live instance is nimbus-programmatic.ts: `@nimbus-sh/worker` exports
-    // no `./dist/session/*` subpath, so the module is held through the
-    // installed tree. The resolver must read that as a DEPENDENCY that pins
-    // its importer — before this arm existed it threw `resolves to no tracked
-    // source file` over a file that resolves fine at build time.
-    const { movable } = findMovable(withShared({
-      'packages/cf-backend/src/reach.ts':
-        "export { deep } from '../../../node_modules/@x/y/dist/inner.js';\n",
-    }));
-
-    expect(movable).toEqual([]);
-  });
-
   test('an intra-package import resolving to nothing is fatal, never a pass', () => {
     // The silent version of this reports the importer as dependency-free, which
     // is the shape that turns a resolver bug into a wider finding set.
     expect(() => findMovable(withShared({
       'packages/cf-backend/src/broken.ts': "import { y } from './gone.ts';\nexport const z = y;\n",
     }))).toThrow(/resolves to no tracked source file/);
-  });
-
-  test("the `@/` alias resolves, so an aliased platform import still blocks", () => {
-    const { movable } = findMovable(withShared({
-      'packages/cf-backend/src/do.ts': "import { Agent } from 'agents';\nexport const a = Agent;\n",
-      'packages/cf-backend/src/uses.ts': "import { a } from '@/do';\nexport const b = a;\n",
-    }));
-
-    expect(movable).toEqual([]);
   });
 
   test('the resolver reports how many edges it resolved, so a broken one is visible', () => {
@@ -735,17 +733,27 @@ describe('egress interception invariant — red in every direction it claims', (
     expect(audit.violations).toEqual([]);
   });
 
-  test('a class that LOST `enableInternet = false` is the open path', () => {
-    const { violations } = auditInterception(at('  interceptHttps = true;'), ['KinuSandbox']);
+  // One class body each, and the single refusal it must draw.
+  const REFUSED_BODIES = [
+    {
+      name: 'a class that LOST `enableInternet = false` is the open path',
+      body: '  interceptHttps = true;',
+      reason: 'does not declare `enableInternet = false` — see this gate\'s header for the path that opens',
+    },
+    {
+      name: 'a field present at the wrong value is reported with both values',
+      body: '  enableInternet = true;\n  interceptHttps = true;',
+      reason: 'declares `enableInternet = true`, must be `false`',
+    },
+  ];
 
-    expect(violations.map((v) => v.reason)).toEqual(['does not declare `enableInternet = false` — see this gate\'s header for the path that opens']);
-  });
+  for (const refused of REFUSED_BODIES) {
+    test(refused.name, () => {
+      const { violations } = auditInterception(at(refused.body), ['KinuSandbox']);
 
-  test('a field present at the wrong value is reported with both values', () => {
-    const { violations } = auditInterception(at('  enableInternet = true;\n  interceptHttps = true;'), ['KinuSandbox']);
-
-    expect(violations.map((v) => v.reason)).toEqual(['declares `enableInternet = true`, must be `false`']);
-  });
+      expect(violations.map((v) => v.reason)).toEqual([refused.reason]);
+    });
+  }
 
   test('a host allow or deny list is refused even beside a correct pair', () => {
     const { violations } = auditInterception(

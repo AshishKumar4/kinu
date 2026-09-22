@@ -189,7 +189,8 @@ async function anchors(page: Page): Promise<Record<string, Rect>> {
     const learns = byText(document.body, 'LEARNS FROM USE');
     put('claims', learns === null ? null : learns.parentElement);
     const claimCells = document.querySelectorAll('.claims > *');
-    claimCells.forEach((cell, i) => put(`claim_${i}`, cell));
+
+    for (const [i, cell] of claimCells.entries()) put(`claim_${i}`, cell);
 
     for (const id of ['platform', 'quickstart', 'clients', 'evolution', 'swarm', 'deploy', 'cta']) {
       put(`h2_${id}`, (document.getElementById(id) ?? document).querySelector('h2'));
@@ -269,7 +270,7 @@ async function waitArtifactSettled(page: Page): Promise<void> {
     const data = ctx.getImageData(0, 0, canvas.width, canvas.height).data;
     let painted = 0;
 
-    for (let i = 3; i < data.length; i += 4 * 37) if (data[i]! > 8) painted += 1;
+    for (let i = 3; i < data.length; i += 4 * 37) if (data[i] > 8) painted += 1;
 
     return painted > 300;
   }, { timeout: 20_000, polling: 'raf' });
@@ -343,16 +344,16 @@ try {
     const anchorDrift: Record<string, { dx: number; dy: number }> = {};
 
     for (const name of Object.keys(artifactAnchors)) {
-      const ar = artifactAnchors[name]!; const pr = portAnchors[name]!;
+      const ar = artifactAnchors[name]; const pr = portAnchors[name];
+
+      if (ar.x < 0 || pr.x < 0) continue;
       const dx = Math.abs(pr.x - ar.x); const dy = Math.abs(pr.y - ar.y);
 
-      if (ar.x >= 0 && pr.x >= 0) {
-        anchorDrift[name] = { dx, dy };
+      anchorDrift[name] = { dx, dy };
 
-        if (dx > maxDx) maxDx = dx;
+      if (dx > maxDx) maxDx = dx;
 
-        if (dy > maxDy) maxDy = dy;
-      }
+      if (dy > maxDy) maxDy = dy;
     }
 
     const drift: Record<string, number> = {};
@@ -364,8 +365,8 @@ try {
     const driftReport: DriftReport = {
       artifactHeightPx: artifactYs.__pageHeight,
       portHeightPx: portYs.__pageHeight,
-      artifactRatio: +(artifactYs.__pageHeight / width).toFixed(2),
-      portRatio: +(portYs.__pageHeight / width).toFixed(2),
+      artifactRatio: Number((artifactYs.__pageHeight / width).toFixed(2)),
+      portRatio: Number((portYs.__pageHeight / width).toFixed(2)),
       sectionHeights: secsTable(artifactYs, portYs),
       driftPx: drift,
     };
@@ -408,11 +409,11 @@ function secsTable(a: SectionYs, p: SectionYs): DriftReport['sectionHeights'] {
   const out: DriftReport['sectionHeights'] = {};
 
   for (let i = 0; i < SECTION_IDS.length; i++) {
-    const id = SECTION_IDS[i]!;
-    const nextId = i + 1 < SECTION_IDS.length ? SECTION_IDS[i + 1]! : null;
+    const id = SECTION_IDS[i];
+    const nextId = i + 1 < SECTION_IDS.length ? SECTION_IDS[i + 1] : null;
     const nextA = nextId === null ? a.__pageHeight : a[nextId];
     const nextP = nextId === null ? p.__pageHeight : p[nextId];
-    out[id] = { artifact: nextA - a[id]!, port: nextP - p[id]! };
+    out[id] = { artifact: nextA - a[id], port: nextP - p[id] };
   }
 
   return out;

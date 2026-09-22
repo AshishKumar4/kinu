@@ -208,18 +208,31 @@ describe('awaited dynamic import consumers', () => {
 
     expect(census(new Map([[lazyFile, lazySource], [`${BASE}main.ts`, source]]))).toEqual([unused]);
   });
-  test('block and catch bindings shadow imported names', () => {
-    expect(inspect('const { highlightCode: render } = await import("./lazy"); { const render = () => "local"; render(); }'))
-      .toEqual([highlight, unused]);
-    expect(inspect('const { highlightCode: render } = await import("./lazy"); try {} catch (render) { console.log(render); }'))
-      .toEqual([highlight, unused]);
-  });
-  test('a reassignment or namespace escape cannot credit an export', () => {
-    expect(inspect('let { highlightCode: render } = await import("./lazy"); render = () => "local"; render();'))
-      .toEqual([highlight, unused]);
-    expect(inspect('const module = await import("./lazy"); consume(module);'))
-      .toEqual([highlight, unused]);
-  });
+
+  // Each body binds the export and then loses it, so neither export is credited.
+  const LOST_BINDINGS = [
+    {
+      name: 'block and catch bindings shadow imported names',
+      bodies: [
+        'const { highlightCode: render } = await import("./lazy"); { const render = () => "local"; render(); }',
+        'const { highlightCode: render } = await import("./lazy"); try {} catch (render) { console.log(render); }',
+      ],
+    },
+    {
+      name: 'a reassignment or namespace escape cannot credit an export',
+      bodies: [
+        'let { highlightCode: render } = await import("./lazy"); render = () => "local"; render();',
+        'const module = await import("./lazy"); consume(module);',
+      ],
+    },
+  ];
+
+  for (const lost of LOST_BINDINGS) {
+    test(lost.name, () => {
+      for (const body of lost.bodies) expect(inspect(body)).toEqual([highlight, unused]);
+    });
+  }
+
   test('static JSX imports remain production consumers', () => {
     const source = 'import { highlightCode as View } from "./lazy"; if (import.meta.main) console.log(<View />);';
     expect(census(new Map([[lazyFile, lazySource], [`${BASE}main.tsx`, source]]))).toEqual([unused]);
@@ -321,48 +334,152 @@ describe('an optional field production reads', () => {
     expect(census(fixture(body))).toEqual([PROVISION_HOME, LOGGER, MISSION]);
   });
 
-  test('is NOT reported when `Object.assign` supplies it', () => {
-    // Two fields of the real `SwarmRunDeps` are wired exactly this way, and were
-    // false positives until this arm existed.
-    const body = `${SUPPLY(`{ rt: 'x', mission: 'm' }`)}\n  Object.assign(deps, { logger: 'l' });`;
-    expect(census(fixture(body))).toEqual([PROVISION_HOME]);
-  });
-
-  test('is NOT reported when a spread makes the site opaque', () => {
-    const body = `${SUPPLY(`{ rt: 'x', ...overrides }`)}`;
-    expect(census(fixture(body))).toEqual([PROVISION_HOME]);
-  });
-
-  test('is NOT reported when the supplying literal is returned through a ternary', () => {
-    // The false positive this direction locks. `AgentOrchestrator.scopeTurn`
-    // supplies `CompletedTurn.missionLabels` as
-    // `labels.length === 0 ? turn : { ...turn, missionLabels: [...labels] }`,
-    // and a detector reading only a ReturnStatement's DIRECT children saw no
-    // construction site there at all — so a field wired at both ends was
-    // reported connected at neither, which is the finding that gets a gate
-    // switched off.
-    const body = `  function scope(deps: RunDeps): RunDeps {
+  /**
+   * One construction site each, and the census that site must produce. An arm
+   * that credits the interface is followed by the failing direction that must not.
+   */
+  const SITES: readonly {
+    readonly name: string;
+    readonly body: string;
+    readonly extra?: readonly (readonly [string, string])[];
+    readonly expected: string[];
+  }[] = [
+    {
+      name: 'is NOT reported when `Object.assign` supplies it',
+      // Two fields of the real `SwarmRunDeps` are wired exactly this way, and were
+      // false positives until this arm existed.
+      body: `${SUPPLY(`{ rt: 'x', mission: 'm' }`)}\n  Object.assign(deps, { logger: 'l' });`,
+      expected: [PROVISION_HOME],
+    },
+    {
+      name: 'is NOT reported when a spread makes the site opaque',
+      body: `${SUPPLY(`{ rt: 'x', ...overrides }`)}`,
+      expected: [PROVISION_HOME],
+    },
+    {
+      name: 'is NOT reported when the supplying literal is returned through a ternary',
+      // The false positive this direction locks. `AgentOrchestrator.scopeTurn`
+      // supplies `CompletedTurn.missionLabels` as
+      // `labels.length === 0 ? turn : { ...turn, missionLabels: [...labels] }`,
+      // and a detector reading only a ReturnStatement's DIRECT children saw no
+      // construction site there at all — so a field wired at both ends was
+      // reported connected at neither, which is the finding that gets a gate
+      // switched off.
+      body: `  function scope(deps: RunDeps): RunDeps {
     return deps.rt === '' ? deps : { rt: 'x', mission: 'm', logger: 'l' };
   }
   void scope;
-${SUPPLY(`{ rt: 'x' }`)}`;
-
-    expect(census(fixture(body))).toEqual([PROVISION_HOME]);
-  });
-
-  test('is NOT reported when an `Omit<…>` draft of the interface supplies it', () => {
-    // The seam that mints `id` takes `Omit<DisplayMessage, 'id'>` drafts, and
-    // every optional field of that interface was supplied through them while
-    // this census read `Omit` as the shape. The first argument is the shape.
-    // One visible `RunDeps` literal without the optional fields (so the
-    // interface IS judged) and the draft that supplies them, as chat-app's
-    // `welcomeMessage()` and its `addMessage` drafts do.
-    const body = `${SUPPLY(`{ rt: 'x' }`)}
+${SUPPLY(`{ rt: 'x' }`)}`,
+      expected: [PROVISION_HOME],
+    },
+    {
+      name: 'is NOT reported when an `Omit<…>` draft of the interface supplies it',
+      // The seam that mints `id` takes `Omit<DisplayMessage, 'id'>` drafts, and
+      // every optional field of that interface was supplied through them while
+      // this census read `Omit` as the shape. The first argument is the shape.
+      // One visible `RunDeps` literal without the optional fields (so the
+      // interface IS judged) and the draft that supplies them, as chat-app's
+      // `welcomeMessage()` and its `addMessage` drafts do.
+      body: `${SUPPLY(`{ rt: 'x' }`)}
   const draft: Omit<RunDeps, 'rt'> = { mission: 'm', logger: 'l' };
-  runIt(fromSomewhereElse(draft));`;
+  runIt(fromSomewhereElse(draft));`,
+      expected: [PROVISION_HOME],
+    },
+    {
+      name: 'is NOT reported when a literal annotated with an `Omit<…>` ALIAS supplies it',
+      // `type LiveTurnOpts = Omit<ChatOptions, 'signal' | 'extensions'>` in
+      // `cli-backend/src/local-session.ts` annotates the one COMPLETE ChatOptions
+      // literal in the tree. The alias hid the interface behind it and four of
+      // its fields read as supplied by nothing. `runIt` supplies `rt` only, so
+      // the interface is judged and the alias is the only route to the rest.
+      body: "  const opts: TurnOpts = { mission: 'm', logger: 'l' };\n  void opts;\n"
+        + "  runIt({ rt: 'r' });",
+      extra: [[`${BASE}strategy/opts.ts`, "import type { RunDeps } from './run';\nexport type TurnOpts = Omit<RunDeps, 'rt'>;\n"]],
+      expected: [PROVISION_HOME],
+    },
+    {
+      name: 'a UNION alias supplies nothing of the interface',
+      // The failing direction of the arm above. A value of `A | B` need not carry
+      // B's keys, so an alias to a union must not credit either member — only an
+      // intersection and a single reference can.
+      body: "  const opts: TurnOpts = { mission: 'm', logger: 'l' };\n  void opts;\n"
+        + "  runIt({ rt: 'r' });",
+      extra: [[`${BASE}strategy/opts.ts`, "import type { RunDeps } from './run';\nexport type TurnOpts = RunDeps | { extra: number };\n"]],
+      expected: [PROVISION_HOME, LOGGER, MISSION],
+    },
+    {
+      name: 'is NOT reported when a field is ASSIGNED onto a binding of an alias',
+      // `liveTurnOpts.providerReportedTokens = …` is the only supply of that
+      // ChatOptions field anywhere, and the binding is annotated through the
+      // `Omit<…>` alias — so the assignment has to credit the BASE, exactly as a
+      // literal annotated with a subtype does.
+      body: "  const opts: TurnOpts = { mission: 'm' };\n  opts.logger = 'l';\n"
+        + "  runIt({ rt: 'r' });",
+      extra: [[`${BASE}strategy/opts.ts`, "import type { RunDeps } from './run';\nexport type TurnOpts = Omit<RunDeps, 'rt'>;\n"]],
+      expected: [PROVISION_HOME],
+    },
+    {
+      name: 'is NOT reported when a field is ASSIGNED onto a binding of a project-local MAPPED alias',
+      // `cli-backend/src/local-session.ts:333` writes
+      // `type Writable<T> = { -readonly [K in keyof T]: T[K] }` and finishes a
+      // terminal roster on `const parts: Writable<TerminalTurnParts> = {}`, so
+      // `parts.parentReport = …` at :3325 is the ONLY supply of that field in the
+      // tree. Credited to `Writable` — a name no interface declares — it read as
+      // connected at neither end while both ends were wired. The same blind spot
+      // put `TerminalTurnParts.completionGate` in the lock.
+      body: "  type Writable<T> = { -readonly [K in keyof T]: T[K] };\n"
+        + "  const opts: Writable<RunDeps> = { mission: 'm' };\n  opts.logger = 'l';\n"
+        + "  runIt({ rt: 'r' });",
+      expected: [PROVISION_HOME],
+    },
+    {
+      name: 'a SUBSET mapped alias supplies nothing of the interface',
+      // The failing direction of the arm above. `{ [P in K]: T[P] }` is the shape
+      // `Pick` has, and a value of it need not carry the keys outside K — so
+      // crediting it would report every other field as supplied by nothing, which
+      // is exactly why `Pick` is absent from INSTANCE_UTILITIES. Only a
+      // `keyof`-constrained mapping carries the interface's keys whole.
+      body: "  type Subset<T, K extends keyof T> = { [P in K]: T[P] };\n"
+        + "  const opts: Subset<RunDeps, 'mission'> = { mission: 'm' };\n  opts.logger = 'l';\n"
+        + "  runIt({ rt: 'r' });",
+      expected: [PROVISION_HOME, LOGGER, MISSION],
+    },
+    {
+      name: 'a mapped alias another file declares and this one never imported credits nothing',
+      // A name is not an identity. The table is keyed by DECLARING file and read
+      // through the caller's own import, so a second file's `Writable` cannot
+      // lend this one its meaning — breaking exactly that key is how the three
+      // collisions `8c313fcb1` repaired got in.
+      body: "  const opts: Writable<RunDeps> = { mission: 'm' };\n  opts.logger = 'l';\n"
+        + "  runIt({ rt: 'r' });",
+      extra: [[`${BASE}strategy/shape.ts`, "export type Writable<T> = { -readonly [K in keyof T]: T[K] };\n"]],
+      expected: [PROVISION_HOME, LOGGER, MISSION],
+    },
+    {
+      name: 'is NOT reported when a callback seam declared by its TYPE receives it',
+      // `type ModelCallSink = (report: ModelCallReport) => void`. NOTHING declares
+      // a function of the callback's name, so `reportModelCall?.({ … modelId })`
+      // in `core/src/web/provider-factory.ts` supplies that field through the
+      // binding's annotation and nowhere else.
+      body: "  type RunSink = (deps: RunDeps) => void;\n"
+        + "  function emitTo(report: RunSink): void { report({ rt: 'x', mission: 'm', logger: 'l' }); }\n"
+        + "  void emitTo;\n  runIt({ rt: 'r' });",
+      expected: [PROVISION_HOME],
+    },
+    {
+      name: 'a callback seam over a DIFFERENT shape credits nothing of the interface',
+      body: "  type OtherSink = (row: { emit: string }) => void;\n"
+        + "  function emitTo(report: OtherSink): void { report({ rt: 'x', mission: 'm', logger: 'l' }); }\n"
+        + "  void emitTo;\n  runIt({ rt: 'r' });",
+      expected: [PROVISION_HOME, LOGGER, MISSION],
+    },
+  ];
 
-    expect(census(fixture(body))).toEqual([PROVISION_HOME]);
-  });
+  for (const site of SITES) {
+    test(site.name, () => {
+      expect(census(fixture(site.body, site.extra))).toEqual(site.expected);
+    });
+  }
 
   test('does not treat a `Pick<…>` literal as building the whole interface', () => {
     // `providerFromEnv` returns `Pick<OAuthProviderConfig, 'id' | …>` and the
@@ -391,90 +508,6 @@ ${SUPPLY(`{ rt: 'x' }`)}`;
     expect(census(fixture(body))).toEqual([PROVISION_HOME]);
   });
 
-  test('is NOT reported when a literal annotated with an `Omit<…>` ALIAS supplies it', () => {
-    // `type LiveTurnOpts = Omit<ChatOptions, 'signal' | 'extensions'>` in
-    // `cli-backend/src/local-session.ts` annotates the one COMPLETE ChatOptions
-    // literal in the tree. The alias hid the interface behind it and four of
-    // its fields read as supplied by nothing. `runIt` supplies `rt` only, so
-    // the interface is judged and the alias is the only route to the rest.
-    const alias = `${BASE}strategy/opts.ts`;
-
-    const body = "  const opts: TurnOpts = { mission: 'm', logger: 'l' };\n  void opts;\n"
-      + "  runIt({ rt: 'r' });";
-
-    const corpus = fixture(body, [[alias, "import type { RunDeps } from './run';\nexport type TurnOpts = Omit<RunDeps, 'rt'>;\n"]]);
-    expect(census(corpus)).toEqual([PROVISION_HOME]);
-  });
-
-  test('a UNION alias supplies nothing of the interface', () => {
-    // The failing direction of the arm above. A value of `A | B` need not carry
-    // B's keys, so an alias to a union must not credit either member — only an
-    // intersection and a single reference can.
-    const alias = `${BASE}strategy/opts.ts`;
-
-    const body = "  const opts: TurnOpts = { mission: 'm', logger: 'l' };\n  void opts;\n"
-      + "  runIt({ rt: 'r' });";
-
-    const corpus = fixture(body, [[alias, "import type { RunDeps } from './run';\nexport type TurnOpts = RunDeps | { extra: number };\n"]]);
-    expect(census(corpus)).toEqual([PROVISION_HOME, LOGGER, MISSION]);
-  });
-
-  test('is NOT reported when a field is ASSIGNED onto a binding of an alias', () => {
-    // `liveTurnOpts.providerReportedTokens = …` is the only supply of that
-    // ChatOptions field anywhere, and the binding is annotated through the
-    // `Omit<…>` alias — so the assignment has to credit the BASE, exactly as a
-    // literal annotated with a subtype does.
-    const alias = `${BASE}strategy/opts.ts`;
-
-    const body = "  const opts: TurnOpts = { mission: 'm' };\n  opts.logger = 'l';\n"
-      + "  runIt({ rt: 'r' });";
-
-    const corpus = fixture(body, [[alias, "import type { RunDeps } from './run';\nexport type TurnOpts = Omit<RunDeps, 'rt'>;\n"]]);
-    expect(census(corpus)).toEqual([PROVISION_HOME]);
-  });
-
-  test('is NOT reported when a field is ASSIGNED onto a binding of a project-local MAPPED alias', () => {
-    // `cli-backend/src/local-session.ts:333` writes
-    // `type Writable<T> = { -readonly [K in keyof T]: T[K] }` and finishes a
-    // terminal roster on `const parts: Writable<TerminalTurnParts> = {}`, so
-    // `parts.parentReport = …` at :3325 is the ONLY supply of that field in the
-    // tree. Credited to `Writable` — a name no interface declares — it read as
-    // connected at neither end while both ends were wired. The same blind spot
-    // put `TerminalTurnParts.completionGate` in the lock.
-    const body = "  type Writable<T> = { -readonly [K in keyof T]: T[K] };\n"
-      + "  const opts: Writable<RunDeps> = { mission: 'm' };\n  opts.logger = 'l';\n"
-      + "  runIt({ rt: 'r' });";
-
-    expect(census(fixture(body))).toEqual([PROVISION_HOME]);
-  });
-
-  test('a SUBSET mapped alias supplies nothing of the interface', () => {
-    // The failing direction of the arm above. `{ [P in K]: T[P] }` is the shape
-    // `Pick` has, and a value of it need not carry the keys outside K — so
-    // crediting it would report every other field as supplied by nothing, which
-    // is exactly why `Pick` is absent from INSTANCE_UTILITIES. Only a
-    // `keyof`-constrained mapping carries the interface's keys whole.
-    const body = "  type Subset<T, K extends keyof T> = { [P in K]: T[P] };\n"
-      + "  const opts: Subset<RunDeps, 'mission'> = { mission: 'm' };\n  opts.logger = 'l';\n"
-      + "  runIt({ rt: 'r' });";
-
-    expect(census(fixture(body))).toEqual([PROVISION_HOME, LOGGER, MISSION]);
-  });
-
-  test('a mapped alias another file declares and this one never imported credits nothing', () => {
-    // A name is not an identity. The table is keyed by DECLARING file and read
-    // through the caller's own import, so a second file's `Writable` cannot
-    // lend this one its meaning — breaking exactly that key is how the three
-    // collisions `8c313fcb1` repaired got in.
-    const alias = `${BASE}strategy/shape.ts`;
-
-    const body = "  const opts: Writable<RunDeps> = { mission: 'm' };\n  opts.logger = 'l';\n"
-      + "  runIt({ rt: 'r' });";
-
-    const corpus = fixture(body, [[alias, "export type Writable<T> = { -readonly [K in keyof T]: T[K] };\n"]]);
-    expect(census(corpus)).toEqual([PROVISION_HOME, LOGGER, MISSION]);
-  });
-
   test("is NOT reported when a binding annotated `I['k']` supplies it", () => {
     // `const liveTurn: ActorExecutionInput['chat'] = { ...liveTurnOpts }`. An
     // indexed access that yielded the OWNER would be wrong in both directions
@@ -497,26 +530,6 @@ ${SUPPLY(`{ rt: 'x' }`)}`;
 
     const corpus = fixture(body, [[holder, "import type { RunDeps } from './run';\nexport interface Holder { readonly deps: RunDeps }\n"]]);
     expect(census(corpus)).toEqual([PROVISION_HOME, LOGGER, MISSION]);
-  });
-
-  test('is NOT reported when a callback seam declared by its TYPE receives it', () => {
-    // `type ModelCallSink = (report: ModelCallReport) => void`. NOTHING declares
-    // a function of the callback's name, so `reportModelCall?.({ … modelId })`
-    // in `core/src/web/provider-factory.ts` supplies that field through the
-    // binding's annotation and nowhere else.
-    const body = "  type RunSink = (deps: RunDeps) => void;\n"
-      + "  function emitTo(report: RunSink): void { report({ rt: 'x', mission: 'm', logger: 'l' }); }\n"
-      + "  void emitTo;\n  runIt({ rt: 'r' });";
-
-    expect(census(fixture(body))).toEqual([PROVISION_HOME]);
-  });
-
-  test('a callback seam over a DIFFERENT shape credits nothing of the interface', () => {
-    const body = "  type OtherSink = (row: { emit: string }) => void;\n"
-      + "  function emitTo(report: OtherSink): void { report({ rt: 'x', mission: 'm', logger: 'l' }); }\n"
-      + "  void emitTo;\n  runIt({ rt: 'r' });";
-
-    expect(census(fixture(body))).toEqual([PROVISION_HOME, LOGGER, MISSION]);
   });
 
   test('a same-named function in ANOTHER file neither builds the interface nor judges it', () => {
@@ -627,11 +640,19 @@ describe('entrypoint discovery', () => {
       expect(census(fixture(body, [[`${BASE}worker.ts`, worker]]))).toEqual([orphan]);
     });
 
-    test('confers nothing once nothing spawns it: the same symbol is reported again', () => {
-      const body = forking("void 'nothing spawns the worker';");
-      expect(census(fixture(body, [[`${BASE}worker.ts`, worker]])))
-        .toEqual([PROVISION_HOME, orphan]);
-    });
+    // Neither call roots the worker file, so `provisionHome` is reported again.
+    const UNROOTED = [
+      { name: 'confers nothing once nothing spawns it: the same symbol is reported again', call: "void 'nothing spawns the worker';" },
+      { name: 'a spawn naming a path this tree does not hold roots nothing', call: "fork(join(dirname(import.meta.url), '../absent-worker.ts'), ['db']);" },
+    ];
+
+    for (const unrooted of UNROOTED) {
+      test(unrooted.name, () => {
+        const body = forking(unrooted.call);
+        expect(census(fixture(body, [[`${BASE}worker.ts`, worker]])))
+          .toEqual([PROVISION_HOME, orphan]);
+      });
+    }
 
     test('still reports its OWN export that nothing references', () => {
       // The red direction of the new root. A file the OS enters is reachable;
@@ -639,12 +660,6 @@ describe('entrypoint discovery', () => {
       // file must not launder its neighbours.
       const body = forking("fork(join(dirname(import.meta.url), '../worker.ts'), ['db']);");
       expect(census(fixture(body, [[`${BASE}worker.ts`, worker]]))).toContain(orphan);
-    });
-
-    test('a spawn naming a path this tree does not hold roots nothing', () => {
-      const body = forking("fork(join(dirname(import.meta.url), '../absent-worker.ts'), ['db']);");
-      expect(census(fixture(body, [[`${BASE}worker.ts`, worker]])))
-        .toEqual([PROVISION_HOME, orphan]);
     });
   });
 

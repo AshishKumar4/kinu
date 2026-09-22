@@ -21,6 +21,20 @@ interface SearchTreeHandle {
   forceFault?(error: Error): void;
 }
 
+declare global {
+  interface Window {
+    /** Constructed by SearchTreeHero's mount when the mount lands, which the
+     *  suite's `data-settled` waits observe before reading it. */
+    __kinuSearchTree?: SearchTreeHandle;
+    /** The device the WebGPU row's own init script keeps hold of, so the row
+     *  can destroy it and watch the mount rebind to canvas. */
+    __kinuHeroDevice?: { destroy(): void };
+    /** The late-chunk row's own reading, taken in the page: `null` until the
+     *  drive it starts settles, then whether the plan frame kept its decisions. */
+    __lateChunk?: { decisions: boolean | null };
+  }
+}
+
 const PHONE = { width: 390, height: 844 } as const;
 
 const DESKTOP = { width: 1280, height: 900 } as const;
@@ -374,17 +388,10 @@ beforeAll(async () => {
       ));
       // The mount's own answer: which renderer took the canvas, and that the
       // canvas carries the same answer — the mount landed, whatever it landed on.
-      facts.heroMount = await page.evaluate(() => {
-        // SAFETY: `__kinuSearchTree` is constructed on this window by
-        // SearchTreeHero's mount when the mount lands — the suite's own
-        // `data-settled` wait above has already observed that landing.
-        const w = window as Window & { __kinuSearchTree?: SearchTreeHandle };
-
-        return {
-          renderer: w.__kinuSearchTree?.renderer(),
-          canvasRenderer: document.querySelector('canvas')?.dataset.renderer,
-        };
-      });
+      facts.heroMount = await page.evaluate(() => ({
+        renderer: window.__kinuSearchTree?.renderer(),
+        canvasRenderer: document.querySelector('canvas')?.dataset.renderer,
+      }));
       const settledTree = await page.$eval('canvas', (canvas) => canvas.toDataURL());
       await page.waitForFunction(
         (previous: string) => document.querySelector('canvas')?.toDataURL() !== previous,
@@ -997,17 +1004,14 @@ beforeAll(async () => {
       // resolves is the reading, and it is taken in the page. A drive that
       // rejects reads as a beat that did not hold, which is this row's red.
       await page.evaluate((at: number) => {
-        // SAFETY: `__lateChunk` is this row's own field on its own page, set
-        // on the next line before anything reads it.
-        const w = window as Window & { __lateChunk?: { decisions: boolean | null } };
-        w.__lateChunk = { decisions: null };
+        window.__lateChunk = { decisions: null };
         window.__kinuLandingMovie?.seek(at).then(
           () => {
-            w.__lateChunk = {
+            window.__lateChunk = {
               decisions: document.querySelector('[data-landing-frame="plan"] [data-plan-decisions]') !== null,
             };
           },
-          () => { w.__lateChunk = { decisions: false }; },
+          () => { window.__lateChunk = { decisions: false }; },
         );
       }, cues.planReady + 200);
 
@@ -1035,16 +1039,10 @@ beforeAll(async () => {
 
       for (const release of held) await release();
 
-      // SAFETY: the field is this row's own, written by the drive above.
-      await page.waitForFunction(
-        () => (window as Window & { __lateChunk?: { decisions: boolean | null } }).__lateChunk?.decisions !== null,
-      );
+      await page.waitForFunction(() => window.__lateChunk?.decisions !== null);
 
-      // SAFETY: the same field, now settled by the drive's own resolution.
       facts.lateChunk = {
-        decisionsOnReturn: await page.evaluate(
-          () => (window as Window & { __lateChunk?: { decisions: boolean | null } }).__lateChunk?.decisions === true,
-        ),
+        decisionsOnReturn: await page.evaluate(() => window.__lateChunk?.decisions === true),
       };
       await page.close();
     }
@@ -1167,11 +1165,6 @@ describe('the standalone landing runs', () => {
       const page = await freshPage();
       await page.setViewport(DESKTOP);
       await page.evaluateOnNewDocument(() => {
-        // SAFETY: this init script constructed `__kinuHeroDevice` on the
-        // window itself — the assertion names the shape the script's own
-        // write below guarantees.
-        const w = window as Window & { __kinuHeroDevice?: { destroy(): void } };
-
         // `gpu` in navigator is the capability itself; GPUAdapter is only
         // declared to pages where the flag landed, so reading it bare would
         // throw on a lane without WebGPU.
@@ -1181,7 +1174,7 @@ describe('the standalone landing runs', () => {
         if (requestDevice !== undefined) {
           GPUAdapter.prototype.requestDevice = async function (this: GPUAdapter, descriptor?: GPUDeviceDescriptor) {
             const device = await requestDevice.call(this, descriptor);
-            w.__kinuHeroDevice = device;
+            window.__kinuHeroDevice = device;
 
             return device;
           };
@@ -1190,45 +1183,24 @@ describe('the standalone landing runs', () => {
       await page.goto(`${freshOrigin}/landing.html`, { waitUntil: 'networkidle0' });
       await page.waitForSelector('canvas[data-settled="true"]');
 
-      const landed = await page.evaluate(() => {
-        // SAFETY: `__kinuSearchTree` is constructed on this window by
-        // SearchTreeHero's mount; the `data-settled` wait above observed it.
-        const w = window as Window & { __kinuSearchTree?: SearchTreeHandle };
-
-        return { renderer: w.__kinuSearchTree?.renderer(), time: w.__kinuSearchTree?.time() };
-      });
+      const landed = await page.evaluate(
+        () => ({ renderer: window.__kinuSearchTree?.renderer(), time: window.__kinuSearchTree?.time() }),
+      );
 
       const destroyed = await page.evaluate(() => {
-        // SAFETY: the init script above constructed `__kinuHeroDevice` on this
-        // window before the page's own scripts ran — an owner guarantee.
-        const w = window as Window & { __kinuHeroDevice?: { destroy(): void } };
-
-
-        if (w.__kinuHeroDevice === undefined) return false;
-        w.__kinuHeroDevice.destroy();
+        if (window.__kinuHeroDevice === undefined) return false;
+        window.__kinuHeroDevice.destroy();
 
         return true;
       });
 
-      await page.waitForFunction(() => {
-        // SAFETY: `__kinuSearchTree` is constructed on this window by
-        // SearchTreeHero's mount; the `data-settled` wait above observed it.
-        const w = window as Window & { __kinuSearchTree?: SearchTreeHandle };
+      await page.waitForFunction(() => window.__kinuSearchTree?.renderer() === 'canvas');
 
-        return w.__kinuSearchTree?.renderer() === 'canvas';
-      });
-
-      const after = await page.evaluate(() => {
-        // SAFETY: `__kinuSearchTree` is constructed on this window by
-        // SearchTreeHero's mount; the `data-settled` wait above observed it.
-        const w = window as Window & { __kinuSearchTree?: SearchTreeHandle };
-
-        return {
-          renderer: w.__kinuSearchTree?.renderer(),
-          time: w.__kinuSearchTree?.time(),
-          canvasRenderer: document.querySelector('canvas')?.dataset.renderer,
-        };
-      });
+      const after = await page.evaluate(() => ({
+        renderer: window.__kinuSearchTree?.renderer(),
+        time: window.__kinuSearchTree?.time(),
+        canvasRenderer: document.querySelector('canvas')?.dataset.renderer,
+      }));
 
       // The fallback is installed and named, and the clock went on rather
       // than restarting — the simulation itself survived the swap, which is
