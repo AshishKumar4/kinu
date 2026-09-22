@@ -43,7 +43,9 @@
  */
 import { env } from 'cloudflare:test';
 import { CHAT_MESSAGE_TYPES } from 'agents/chat';
-import { ORCHESTRATOR_AGENT_SLUG, hostedActorSocketPath } from '@kinu.run/core';
+import {
+  ChatHistoryEntrySchema, ORCHESTRATOR_AGENT_SLUG, hostedActorSocketPath, pageSchema, type JsonValue,
+} from '@kinu.run/core';
 import { describe, expect, it } from 'vitest';
 import * as v from 'valibot';
 
@@ -97,7 +99,7 @@ async function publicJson<T>(path: string, schema: v.GenericSchema<T>, init?: Re
 /** One `{type:'rpc', …}` frame — the shape the agents-SDK client sends for a
  *  callable method, which is what the web client's `rpc()` wrapper is bound to.
  *  The type word is a literal because the SDK exports no constant for it. */
-function rpcRequest(id: string, method: string, args: readonly string[]): string {
+function rpcRequest(id: string, method: string, args: readonly JsonValue[]): string {
   return JSON.stringify({ type: 'rpc', id, method, args: [...args] });
 }
 
@@ -387,6 +389,61 @@ describe('two panes on one workspace object are two chat rooms', () => {
 
     root.close();
     actor.close();
+    await env.SURFACE_CONTROL.resetModelLog();
+  });
+});
+
+describe('a hosted actor pane reads its own chat back from nothing', () => {
+  it('serves the actor its own words, not the workspace\'s, on both of the pane\'s reads', async () => {
+    await publicJson(`/api/user/credentials/openai-compat.default`, v.object({ ok: v.boolean() }), {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(FIXTURE_CREDENTIAL),
+    });
+
+    const created = await publicJson('/api/user/workspaces', WorkspaceEntrySchema, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ name: 'pool-kept-chat', displayName: 'Pool Kept Chat' }),
+    });
+
+    const rootPath = `/agents/${ORCHESTRATOR_AGENT_SLUG}/${encodeURIComponent(created.name)}`;
+    const root = await openPane(rootPath);
+
+    root.send(rpcRequest('pin', 'setModel', [PINNED_MODEL]));
+    expect((await root.rpc('pin', SetModelSchema)).spec).toContain(PINNED_MODEL);
+    root.send(rpcRequest('hire', 'createSubordinateAgent', []));
+    const actorName = (await root.rpc('hire', CreatedActorSchema)).name;
+    const actorPath = `${rootPath}/${hostedActorSocketPath(actorName)}`;
+
+    root.send(chatRequest(ROOT_MARKER, ROOT_MARKER));
+    await root.settled(ROOT_MARKER);
+    const actor = await openPane(actorPath);
+
+    actor.send(chatRequest(ACTOR_MARKER, ACTOR_MARKER));
+    await actor.settled(ACTOR_MARKER);
+    actor.close();
+    root.close();
+
+    // The pane's two reads, on fresh sockets: the seed on its own path, then the
+    // pager named by its snapshot's actor id (naming none answers the root's rows).
+    const seed = await publicJson(`${actorPath}/get-messages`, HistorySchema);
+    const seedText = seed.flatMap((row) => row.parts ?? []).map((part) => part.text ?? '').join('\n');
+    const pane = await openPane(actorPath);
+
+    pane.send(rpcRequest('snapshot', 'getActorSnapshot', [actorName]));
+    const { actorId } = await pane.rpc('snapshot', v.object({ actorId: v.string() }));
+
+    pane.send(rpcRequest('page', 'getChatHistoryPage', [{ actor: actorId, limit: 40 }]));
+    const page = await pane.rpc('page', pageSchema(ChatHistoryEntrySchema));
+    const pageText = page.items.map((entry) => entry.content).join('\n');
+
+    pane.close();
+
+    expect(seedText, 'the seed').toContain(ACTOR_MARKER);
+    expect(seedText, 'the seed').not.toContain(ROOT_MARKER);
+    expect(pageText, 'the pager').toContain(ACTOR_MARKER);
+    expect(pageText, 'the pager').not.toContain(ROOT_MARKER);
     await env.SURFACE_CONTROL.resetModelLog();
   });
 });
