@@ -5781,6 +5781,49 @@ export class OrchestratorAgent extends ActorAgent {
     return this.slates.admitBlueprint(bundle);
   }
 
+  /**
+   * The cross-workspace owner seam as JSON strings — the same rule
+   * `publishExperienceWire` states on UserDO. Every answer above is a
+   * `SlateAnswer`, and a stub's RPC mapping over one carrying `JsonValue`
+   * exceeds TypeScript's instantiation depth, so a holder of this object's
+   * stub reads them through these and decodes at `workspaceOwner`.
+   */
+  async slateAsWire(caller: SlateCaller, operation: SlateOperation): Promise<string> {
+    return JSON.stringify(await this.slateAs(caller, operation));
+  }
+
+  async slateBindingCallAsWire(caller: SlateCaller, id: string, name: string, request: SlateBindingRequest): Promise<string> {
+    return JSON.stringify(await this.slateBindingCallAs(caller, id, name, request));
+  }
+
+  async readBlueprintWire(share: string): Promise<string> {
+    return JSON.stringify(await this.readBlueprint(share));
+  }
+
+  async blueprintBundleWire(share: string): Promise<string> {
+    return JSON.stringify(await this.blueprintBundle(share));
+  }
+
+  async shareBlueprintWithWire(share: string, users: readonly ShareUser[]): Promise<string> {
+    return JSON.stringify(await this.shareBlueprintWith(share, users));
+  }
+
+  async admitBlueprintWire(bundle: BlueprintBundle): Promise<string> {
+    return JSON.stringify(await this.admitBlueprint(bundle));
+  }
+
+  async readLiveShareWire(share: string): Promise<string> {
+    return JSON.stringify(await this.readLiveShare(share));
+  }
+
+  async shareLiveWithWire(share: string, users: readonly ShareUser[]): Promise<string> {
+    return JSON.stringify(await this.shareLiveWith(share, users));
+  }
+
+  async liveShareBundleWire(share: string, userId: string): Promise<string> {
+    return JSON.stringify(await this.liveShareBundle(share, userId));
+  }
+
   @callable() async previewSlate(id: string): Promise<SlateCallResult> {
     return this.slates.preview(ROOT_SLATE_CALLER, id);
   }
