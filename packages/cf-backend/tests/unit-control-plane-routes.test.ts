@@ -186,6 +186,14 @@ function harness(options: World = {}): Harness {
     },
   };
 
+  /** A list read that records the call and answers with nothing — the three
+   *  surfaces below differ only in the method name the route reaches for. */
+  const emptyListStub = (workspace: string, method: string) => async () => {
+    rpc.calls.push({ workspace, method, args: [] });
+
+    return [];
+  };
+
   const workspaceStub = (name: string) => ({
     // The workspace's own identity check, in the shape `OrchestratorAgent`
     // implements it: an unclaimed object accepts the first claimant, a claimed
@@ -255,21 +263,9 @@ function harness(options: World = {}): Harness {
 
       return { spend: { usd: 0 } };
     },
-    async listBackgroundJobs() {
-      rpc.calls.push({ workspace: name, method: 'listBackgroundJobs', args: [] });
-
-      return [];
-    },
-    async listDeferredApprovals() {
-      rpc.calls.push({ workspace: name, method: 'listDeferredApprovals', args: [] });
-
-      return [];
-    },
-    async listPendingConsents() {
-      rpc.calls.push({ workspace: name, method: 'listPendingConsents', args: [] });
-
-      return [];
-    },
+    listBackgroundJobs: emptyListStub(name, 'listBackgroundJobs'),
+    listDeferredApprovals: emptyListStub(name, 'listDeferredApprovals'),
+    listPendingConsents: emptyListStub(name, 'listPendingConsents'),
     async getExecutors() {
       rpc.calls.push({ workspace: name, method: 'getExecutors', args: [] });
       throw new Error('the sandbox is not reachable');

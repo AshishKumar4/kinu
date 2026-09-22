@@ -22,6 +22,23 @@ const DEFAULT_ENVELOPE: ProfileCatalogEnvelope = {
   catalog: BUILTIN_PROFILE_CATALOG,
 };
 
+/** The registry write the fake user objects here share. `logged` is the call
+ *  line the case reads back and `at` the timestamp its reservation carries. */
+function registerWorkspaceStub(
+  calls: string[],
+  logged: (name: string, displayName?: string) => string,
+  at: number,
+) {
+  return async (_caller: UserCaller, name: string, displayName?: string) => {
+    calls.push(logged(name, displayName));
+
+    return {
+      entry: { name, displayName: displayName ?? name, createdAt: at, lastVisited: at, archivedAt: null },
+      status: 'created' as const,
+    };
+  };
+}
+
 interface TestNamespace<Stub> {
   idFromName(name: string): string;
   get(): Stub;
@@ -126,14 +143,7 @@ describe('cloud agent ownership safety', () => {
         return [];
       },
       async ensureWorkspaceCapability() {},
-      async registerWorkspace(_caller: UserCaller, name: string, displayName?: string) {
-        calls.push(`register:${name}:${displayName ?? ''}`);
-
-        return {
-          entry: { name, displayName: displayName ?? name, createdAt: 1, lastVisited: 1, archivedAt: null },
-          status: 'created' as const,
-        };
-      },
+      registerWorkspace: registerWorkspaceStub(calls, (name, displayName) => `register:${name}:${displayName ?? ''}`, 1),
       async removeWorkspace(_caller: UserCaller, name: string, ownerUserId: string) {
         calls.push(`remove:${name}:${ownerUserId}`);
       },
@@ -272,14 +282,7 @@ describe('cloud agent ownership safety', () => {
         return [];
       },
       async ensureWorkspaceCapability() {},
-      async registerWorkspace(_caller: UserCaller, name: string, displayName?: string) {
-        calls.push(`register:${name}:${displayName ?? ''}`);
-
-        return {
-          entry: { name, displayName: displayName ?? name, createdAt: 1, lastVisited: 1, archivedAt: null },
-          status: 'created' as const,
-        };
-      },
+      registerWorkspace: registerWorkspaceStub(calls, (name, displayName) => `register:${name}:${displayName ?? ''}`, 1),
       async releaseWorkspaceReservation(_caller: UserCaller, name: string, createdAt: number) {
         calls.push(`release:${name}:${String(createdAt)}`);
 
@@ -489,14 +492,7 @@ describe('cloud agent ownership safety', () => {
       },
       async listCredentials(_caller: UserCaller) { return []; },
       async ensureWorkspaceCapability() { calls.push('capability'); },
-      async registerWorkspace(_caller: UserCaller, name: string, displayName?: string) {
-        calls.push(`register:${name}`);
-
-        return {
-          entry: { name, displayName: displayName ?? name, createdAt: 5, lastVisited: 5, archivedAt: null },
-          status: 'created' as const,
-        };
-      },
+      registerWorkspace: registerWorkspaceStub(calls, (name) => `register:${name}`, 5),
       async releaseWorkspaceReservation() { calls.push('release');
 
  return true; },
@@ -644,14 +640,7 @@ describe('cloud agent ownership safety', () => {
         return 'https://api.cloudflare.com/client/v4/accounts/account/ai/v1';
       },
       async listCredentials() { return []; },
-      async registerWorkspace(_caller: UserCaller, name: string, displayName?: string) {
-        calls.push(`register:${name}`);
-
-        return {
-          entry: { name, displayName: displayName ?? name, createdAt: 1, lastVisited: 1, archivedAt: null },
-          status: 'created' as const,
-        };
-      },
+      registerWorkspace: registerWorkspaceStub(calls, (name) => `register:${name}`, 1),
       async ensureWorkspaceCapability(name: string, presentedHash: string | null) {
         calls.push(`ensure:${name}:${presentedHash ?? 'none'}`);
       },
