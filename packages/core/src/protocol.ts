@@ -155,6 +155,9 @@ export type SubordinateStatus = "idle" | "working" | "awaiting_input" | "dismiss
  * subordinates_changed socket event. */
 export interface SubordinateRosterEntry {
 	name: string;
+	/** The actor behind the name, which a kept conversation is paged by
+	 *  (`getChatHistoryPage({ actor })`); null until its birth confirms one. */
+	actorId: string | null;
 	displayName: string;
 	role: string;
 	nameOrigin?: "user" | "auto" | "provisional";

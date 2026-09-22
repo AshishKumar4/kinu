@@ -1,5 +1,5 @@
 /**
- * The CLOUD target: a real workspace on the staging deployment, behind the seam.
+ * The CLOUD target: a real workspace on the deployment, behind the seam.
  *
  * THIS IS THE ARM THAT WOULD HAVE CAUGHT THE STEP CAP. `agent://SwarmNoopRootCause`
  * established that the ten-step bound lives in `@cloudflare/think`, which the
@@ -18,7 +18,7 @@
  * table is both the allowlist and the auth policy, so this target can reach
  * exactly what a credentialed operator can reach and nothing more.
  *
- * WHO IT RUNS AS. The `eval-service` account against staging, resolved by
+ * WHO IT RUNS AS. The `eval-service` account against the deployment, resolved by
  * `scripts/eval-credentials.ts` through `eval-identity.ts` and handed to a suite
  * process as `KINU_ORIGIN` / `KINU_TOKEN`. Never a person's session: measured on
  * 2026-08-20, production held 28 workspaces of which 23 were test debris and
@@ -126,7 +126,7 @@ export interface CloudTargetOptions {
 }
 
 /**
- * Create a staging workspace and hand back the target over it.
+ * Create a deployed workspace and hand back the target over it.
  *
  * Throws rather than returning a degraded target, and refuses before it creates:
  * a workspace made against the wrong origin cannot be un-made by discovering the
@@ -180,7 +180,7 @@ class CloudEvalTarget implements AgentEvalTarget {
   }
 
   get describe(): string {
-    return `cloud staging (${this.why}) · ${this.origin} · workspace ${this.workspace} `
+    return `cloud (${this.why}) · ${this.origin} · workspace ${this.workspace} `
       + `· model ${this.opts.llm.model}`;
   }
 

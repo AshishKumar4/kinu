@@ -490,7 +490,7 @@ export function routeAnswer(url: string, status: number, body: JsonValue): Obser
   // only possible while this hostname's own, more specific route is gone: a
   // positive observation of absence, and the state a deleted Worker leaves
   // behind until the deploy that declares the route lands. Measured
-  // 2026-09-05 on staging.kinu.run against production's `*.kinu.run/*`.
+  // 2026-09-05 on a sub-route hostname (since retired) against production's `*.kinu.run/*`.
   if (v.safeParse(PreviewRefusal, body).success) {
     return { state: 'absent', detail: `${url} answered ${String(status)} NOT_A_PREVIEW: the wildcard `
       + 'preview route of another Kinu Worker caught the hostname, so its own route is not there' };

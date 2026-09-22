@@ -153,9 +153,9 @@ function cloudPlan(suite: string, target: LiveModelTarget, llm: LLMProviderConfi
     throw new Error(`${suite}: ${EVAL_BACKEND_ENV}=cloud needs a credential for a Kinu `
       + `deployment, and this run resolved a bare model endpoint (${target.via}). An AI Gateway `
       + 'fronts a model and no deployment, so there is no workspace API to create against. '
-      + 'Mint an eval-service credential instead: `kinu auth --origin https://staging.kinu.run` '
-      + 'then `kinu tokens create --name evals --scopes ai.proxy`, and export it as '
-      + 'KINU_EVAL_TOKEN.');
+      + 'Mint an eval-service credential instead with '
+      + '`KINU_EVAL_WEB_IDENTITY=... bun scripts/eval-session-mint.ts`, which '
+      + 'scripts/eval-credentials.ts then resolves as KINU_EVAL_TOKEN.');
   }
 
   const session = workerSession(llm);
@@ -164,7 +164,7 @@ function cloudPlan(suite: string, target: LiveModelTarget, llm: LLMProviderConfi
 
   return {
     backend: 'cloud',
-    describe: `cloud staging · ${session.origin} · ${target.describe}`,
+    describe: `cloud · ${session.origin} · ${target.describe}`,
     llm,
     model,
     provision: (request) => provisionCloudTarget({

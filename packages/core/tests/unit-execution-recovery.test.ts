@@ -1,14 +1,7 @@
 /**
- * Execution-recovery findings (evolution/recovery.ts) — the step clock's
- * knowledge channel, driven exactly as production drives it: the
- * orchestrator's turn extension observes tool results, the engine's ledger
- * takes the write, and the dynamic-context plane reads it back per step.
- *
- * These tests are the regression contract for the intra-episode loop: every
- * one of them fails if findings stop being recorded at the moment of
- * observation, stop being injectable mid-turn, or start leaking into surfaces
- * the ceiling forbids (MEMORY.md corroboration, the experience library's
- * corroborated-only export).
+ * Execution-recovery findings (evolution/recovery.ts) driven as production drives
+ * them. Fails if findings stop being recorded at observation, stop being injectable
+ * mid-turn, or leak into MEMORY.md corroboration or the corroborated-only export.
  */
 
 import { describe, expect, test } from 'bun:test';
@@ -46,15 +39,8 @@ function finding(overrides: Partial<RecoveryFinding> = {}): RecoveryFinding {
   };
 }
 
-/**
- * The lessons ledger, and the actor it belongs to.
- *
- * `lessons` is keyed by actor now, so a finding written under one handle and
- * listed under another comes back as an EMPTY injection window — which is
- * exactly what "no findings yet" looks like, and would pass most of the
- * assertions below. One actor, threaded through both halves, is what makes
- * that impossible; the cross-actor case is pinned at the end of the describe.
- */
+/** One actor threaded through both halves: under a mismatched handle an empty window
+ *  looks like "no findings yet". */
 function ledgerDb() {
   const db = new Database(':memory:');
   const sql = makeSql(db);
@@ -122,11 +108,7 @@ describe('the ledger', () => {
   });
 
   test("a sibling actor's window is EMPTY, and its own finding does not widen ours", () => {
-    // The ledger is per actor, and every other test here would pass just as well
-    // under a mismatched handle — an empty window is indistinguishable from "no
-    // recoveries observed yet". This is the assertion that tells them apart: the
-    // same database, two real actors, and neither one's finding is injectable
-    // into the other's next step.
+    // Two real actors on one database: neither's finding reaches the other's next step.
     const { sql, actor, sibling } = ledgerDb();
     const other = sibling('peer');
     expect(recordRecoveryFinding(sql, actor, finding(), 1_000)).toBe(true);
@@ -134,15 +116,12 @@ describe('the ledger', () => {
     expect(listRecoveryFindings(sql, actor)).toEqual([recoveryFindingText(finding())]);
     expect(listRecoveryFindings(sql, other)).toEqual([]);
 
-    // …and because the sibling cannot see ours, the SAME finding is new to it —
-    // the dedupe window is per actor too, not a shared one.
+    // The dedupe window is per actor too.
     expect(recordRecoveryFinding(sql, other, finding(), 2_000)).toBe(true);
     expect(listRecoveryFindings(sql, actor)).toHaveLength(1);
     expect(listRecoveryFindings(sql, other)).toHaveLength(1);
   });
 });
-
-// ── the loop, through the production seams ─────────────────────────────────
 
 const host: BackendHost = {
   broadcast: () => {},
@@ -151,14 +130,7 @@ const host: BackendHost = {
   setTimer: () => {},
 };
 
-/**
- * The orchestrator's event log, bound to the ONE actor whose turn it is.
- *
- * Its own database, because nothing here reads an event back — the log is the
- * seam the orchestrator requires, not a subject. The handle is real all the
- * same: the log captures `actorId` once and stamps every published row with it,
- * so a literal would be a fixture that cannot fail the binding.
- */
+/** A real handle, since the log stamps every row with its `actorId`. */
 function eventLog(): EventLog {
   const db = new Database(':memory:');
   const exec = makeSqlExec(db);
@@ -167,9 +139,7 @@ function eventLog(): EventLog {
   return new EventLog(exec, createTestActors(makeSql(db), makeExecRaw(db)).main);
 }
 
-/** Distinct failing calls, then one CHANGED call that runs clean — the shape
- *  the finding exists for. Driven through the same turn extension both
- *  backends register. */
+/** Distinct failing calls, then one changed call that runs clean. */
 async function grindThenRecover(orch: AgentOrchestrator): Promise<void> {
   const extension = orch.turnExtension;
 
@@ -198,7 +168,7 @@ describe('the loop, through the production seams', () => {
     orch.beginTurn(Date.now());
     await grindThenRecover(orch);
 
-    // Durable at the moment of observation — no turn boundary was crossed.
+    // Durable at observation; no turn boundary crossed.
     const injectable = listRecoveryFindings(rt.storage.sql, rt.actor);
     expect(injectable).toHaveLength(1);
     expect(injectable[0]).toContain('`shell` failed 3x in a row');
@@ -208,8 +178,7 @@ describe('the loop, through the production seams', () => {
     // The engine narrated it once.
     expect(events.filter((e) => e.message.startsWith('[execution recovery]'))).toHaveLength(1);
 
-    // The injection half: the same per-step snapshot read both backends wire
-    // carries the finding into the dynamic-context block.
+    // The per-step snapshot carries the finding into the dynamic-context block.
     const block = renderDynamicContextBlock(agentDynamicContext({
       factsBlock: undefined,
       memoryTail: undefined,
@@ -225,7 +194,7 @@ describe('the loop, through the production seams', () => {
     expect(block).toContain('## Proven by execution');
     expect(block).toContain('bun test');
 
-    // The turn's run record names the streak for the measurement query.
+    // The turn's run record names the streak.
     const snapshot = orch.recoverySnapshot();
     expect(snapshot?.recoveries).toHaveLength(1);
     expect(snapshot?.recoveries[0]).toMatchObject({ tool: 'shell', failures: 3 });
@@ -236,8 +205,7 @@ describe('the loop, through the production seams', () => {
     const { rt, stores } = createTestRuntime();
     const engine = new EvolutionEngine(rt, stores.history);
     const orch = new AgentOrchestrator({ host, engine, eventLog: eventLog() });
-    // The per-step pipeline exactly as both backends wire it: the ledger lives
-    // for the activation, the snapshot re-reads the lessons ledger per step.
+    // The per-step pipeline as both backends wire it.
     const ledger = new DynamicContextLedger();
 
     const step = async (stepNumber: number) => composePrepareStep({
@@ -273,8 +241,7 @@ describe('the loop, through the production seams', () => {
     const orch = new AgentOrchestrator({ host, engine, eventLog: eventLog() });
 
     orch.beginTurn(Date.now());
-    // Sequential by contract: both calls drive the same streak counter on one
-    // orchestrator, so the second grind must start after the first recovered.
+    // Sequential: both calls drive one orchestrator's streak counter.
     await grindThenRecover(orch);
     await grindThenRecover(orch);
     expect(listRecoveryFindings(rt.storage.sql, rt.actor)).toHaveLength(1);

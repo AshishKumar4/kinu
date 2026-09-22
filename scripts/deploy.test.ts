@@ -693,7 +693,7 @@ describe("deploy gate", () => {
   // ── The bootstrap option and the phase it selects ──────────────
   //
   // Without it, a deploy that DECLARES a resource only a deploy can create
-  // refuses itself: `ControlPlaneDO` landed in `migrations`, staging's 55 source gates
+  // refuses itself: `ControlPlaneDO` landed in `migrations`, the 55 source gates
   // passed, and the infrastructure gate then blocked the one upload that could
   // have created the namespace — telling the operator to run
   // `bun run infra:provision`, which cannot create a Durable Object namespace and
@@ -915,13 +915,12 @@ describe("deploy gate", () => {
 
 // ── One deploy path ───────────────────────────────────────────────────
 //
-// `scripts/deploy.sh` publishes both environments, and the way that stops being
+// `scripts/deploy.sh` is the one deploy path, and the way that stops being
 // true is a SECOND entry point rather than a change to this script. There was
-// one: `packages/cf-backend` declared `deploy:staging` as
-// `CLOUDFLARE_ENV=staging vite build && … && wrangler deploy && vite build`,
+// one: a per-package deploy script ran `vite build && … && wrangler deploy`,
 // which skips every required gate, the CLI download asset check and all six
-// post-deploy smoke checks — and docs/DEPLOYMENT.md § Staging documented it as
-// the way to deploy staging, so following the documentation was the bypass.
+// post-deploy smoke checks — and the deploy documentation named it, so
+// following the documentation was the bypass.
 //
 // The manifests, the workflows, the composite actions and the shell scripts all
 // come from the one repository enumerator, so a new package, a new workflow or a
@@ -945,9 +944,7 @@ describe("one deploy path", () => {
     "wrangler triggers deploy",
   ] as const;
 
-  /** Reaching `scripts/deploy.sh`: the root scripts, or the script itself.
-   *  `bun run deploy` is a prefix of `bun run deploy:staging`, so these two
-   *  words cover both environments and every documented spelling. */
+  /** Reaching `scripts/deploy.sh`: the root script, or the script itself. */
   const DEPLOY_ENTRYPOINTS = ["bun run deploy", "scripts/deploy.sh"] as const;
 
   /** A per-package deploy: `--cwd <package> deploy`. ONE shape, read by the
@@ -983,11 +980,8 @@ describe("one deploy path", () => {
     expect(manifests.length, "the manifest corpus collapsed").toBeGreaterThan(2);
   });
 
-  test("the root scripts are the deploy script, one per environment", () => {
-    const scripts = scriptsOf("package.json");
-
-    expect(scripts.deploy).toBe("bash scripts/deploy.sh");
-    expect(scripts["deploy:staging"]).toBeUndefined();
+  test("the root deploy script is the deploy script", () => {
+    expect(scriptsOf("package.json").deploy).toBe("bash scripts/deploy.sh");
   });
 
   test("no package script publishes anything itself", () => {

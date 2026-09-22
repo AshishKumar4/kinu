@@ -552,10 +552,10 @@ describe('the two gates are joined by the email, and both still apply', () => {
     expect(answer.denial).toBe('access_mismatch');
   });
 
-  test('a staging-shaped deployment admits nobody even with a valid assertion', async () => {
-    // `CONTROL_PLANE_ADMINS: ""` is staging's line, and it is the reason staging
-    // needs no Access application: with no operators the plane is unreachable
-    // whatever the outer gate says. Held here so the two are never conflated.
+  test('a deployment with no operators admits nobody even with a valid assertion', async () => {
+    // `CONTROL_PLANE_ADMINS: ""` means no operators, and with none the plane is
+    // unreachable whatever the outer gate says. Held here so the two are never
+    // conflated.
     const verified = await verifyControlPlaneAccess(assertedRequest(await token(ours)), ENV);
 
     if (!verified.ok) throw new Error('the fixture assertion should verify');
@@ -572,7 +572,7 @@ describe('the two gates are joined by the email, and both still apply', () => {
   });
 
   test('a dev identity is refused even when Access verified the same address', async () => {
-    // The staging trap, with the outer gate satisfied: `DEV_USER_EMAIL`
+    // The synthetic-identity trap, with the outer gate satisfied: `DEV_USER_EMAIL`
     // synthesizes one permanently-fresh identity for every request, so an
     // allowlist match there would be unauthenticated operator authority.
     const verified = await verifyControlPlaneAccess(assertedRequest(await token(ours)), ENV);

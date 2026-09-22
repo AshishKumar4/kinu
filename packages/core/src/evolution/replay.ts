@@ -1,20 +1,8 @@
 /**
- * Replay-eval harness — the system's measurable loss (audit R3 item 4).
- *
- * Samples stored outcome-labeled turns (turn_outcomes), re-runs each task
- * against the CURRENT config via the backend-supplied runner (cf: the live
- * scaffold rollout with the real tool surface; cli: the current prompt +
- * model), and scores the fresh response against the recorded outcome:
- *
- *   accepted  — the recorded response is a known-good reference; score
- *               whether the new response is at least as good (regression).
- *   corrected/frustrated — the recorded response failed and the user's
- *               follow-up says how; score whether the new response already
- *               addresses that correction (improvement).
- *
- * loss = 1 − mean(score), reported with the 95% interval around it (a mean of
- * a dozen judge verdicts is not a point). Persisted to `replay_evals` so the
- * curve is queryable over time (read-only RPC + agent.replayEvals helper).
+ * Replay-eval harness: re-runs outcome-labeled turns against the current config and
+ * scores the fresh response (accepted = regression guard; corrected/frustrated =
+ * does it address the correction). loss = 1 − mean(score) with a 95% interval,
+ * persisted to `replay_evals`.
  */
 
 import * as v from 'valibot';
@@ -44,15 +32,7 @@ export {
   type ReplayEvalSummary, type ReplayInstanceResult, type TurnOutcomeRow,
 } from '../types/evolution';
 
-/**
- * Instances per replay pass. Each one costs a full re-run of a past task
- * against the live config plus a judge call — the dominant cost in the
- * lifetime-evolution cycle, so this is chosen against the width it buys.
- * 95% half-width at a mean of 0.5: ±0.31 at 6 (the interval covers most of
- * [0,1] — the number says nothing), ±0.20 at 20, ±0.14 at 48. 20 is where the
- * curve stops being noise, for a bit over 3× the cost; 48 would cost 2.4×
- * again to take a third off the width.
- */
+/** Instances per pass; each costs a full re-run plus a judge call. 95% half-width at mean 0.5 is ±0.20 at 20. */
 export const DEFAULT_REPLAY_SAMPLE_SIZE = 20;
 
 export function initReplayTables(execRaw: RawSqlExec): void {
@@ -71,18 +51,15 @@ export function initReplayTables(execRaw: RawSqlExec): void {
     score_hi REAL,
     PRIMARY KEY (actor_id, id)
   )`);
-  // The curve is read newest-first WITHIN one actor, so the owner leads.
   execRaw(`CREATE INDEX IF NOT EXISTS idx_replay_evals_actor
              ON replay_evals(actor_id, ran_at DESC, id DESC)`);
 }
 
 export interface RunReplayEvalOpts {
   sql: SqlExecutor;
-  /** The actor whose ledger this pass samples and whose curve it extends. */
   actor: ActorHandle;
-  /** Judge LLM (rt.judgeModel ?? rt.llm). */
   judge: LLM;
-  /** Re-run a task against the CURRENT config; returns the response text. */
+  /** Re-run a task against the current config. */
   runTask: (task: string) => Promise<string>;
   sampleSize?: number;
   scaffoldVersion?: number | null;
@@ -131,16 +108,10 @@ async function judgeReplay(judge: LLM, row: TurnOutcomeRow, fresh: string): Prom
   };
 }
 
-/**
- * Run one replay-eval pass. Returns null when no outcome-labeled turns exist
- * yet (nothing to measure). A failed re-run or unusable judge verdict scores
- * the instance 0 — failing to reproduce a graded turn IS loss.
- */
+/** Null when no outcome-labeled turns exist. A failed re-run or unusable verdict scores 0. */
 export async function runReplayEval(opts: RunReplayEvalOpts): Promise<ReplayEvalSummary | null> {
   const size = Math.max(1, Math.floor(opts.sampleSize ?? DEFAULT_REPLAY_SAMPLE_SIZE));
 
-  // Balanced sample, newest first: regressions guard (accepted) + the
-  // failures the system should have learned from (corrected/frustrated).
   const negatives = listTurnOutcomes(opts.sql, opts.actor, {
     limit: Math.ceil(size / 2), outcomes: NEGATIVE_TURN_OUTCOMES,
   });
@@ -201,7 +172,7 @@ export async function runReplayEval(opts: RunReplayEvalOpts): Promise<ReplayEval
   return summary;
 }
 
-/** The persisted loss curve, newest first — what the UI could chart. */
+/** Newest first. */
 export function listReplayEvals(sql: SqlExecutor, actor: ActorHandle, limit = 50): ReplayEvalSummary[] {
   actor.assertCurrent();
 
@@ -214,8 +185,7 @@ export function listReplayEvals(sql: SqlExecutor, actor: ActorHandle, limit = 50
       ORDER BY ran_at DESC, id DESC LIMIT ${limit}`;
 
   return rows.map((r) => {
-    // Malformed details are the one tolerable corruption here: the summary
-    // numbers live in the row's own columns, so the point on the curve stands.
+    // Tolerable: the summary numbers live in the row's own columns.
     const details = tolerate(() => parseJsonValue(r.details), 'malformed-input');
     const parsed = v.safeParse(v.array(ReplayInstanceResultSchema), details);
 

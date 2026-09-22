@@ -1,19 +1,7 @@
 /**
- * The control-plane index and audit log, as functions over a `ControlPlaneSql`.
- *
- * Split from the Durable Object for the same reason `monitor/incidents.ts` is
- * split from `MonitorDO`: everything here is our own logic — cursor anchors,
- * upsert semantics, tombstones, the audit append — and none of it needs an
- * actor. So it is testable against a real SQLite database rather than against a
- * fake of the object that hosts it, and `ControlPlaneDO` is left holding exactly
- * two things it cannot delegate: the capability gate and the storage handle.
- *
- * WHAT IS DERIVED AND WHAT IS NOT. Every row except the audit log is a copy of
- * state a UserDO owns, which is what makes a stale row a performance problem
- * rather than a correctness one and what lets `replaceUserWorkspaces` repair one
- * account from its source at any moment. The audit log is this store's own
- * primary record, and it has no update and no delete path anywhere in this file —
- * an audit log an admin can edit is a diary.
+ * The control-plane index and audit log over a `ControlPlaneSql`. Every row except
+ * the audit log is derived from UserDO state; the audit log is primary and has no
+ * update or delete path beyond settling a pending outcome.
  */
 import { seekPage, type Page, type PageRequest } from '../session/page';
 import * as v from 'valibot';
@@ -26,10 +14,7 @@ import {
 
 export type { ControlPlaneSql } from './sql';
 
-/** Page sizes. `MAX` is a per-page ceiling, not a total: every list here is
- *  cursored, so a caller reaches row 5,000 by walking pages. A read that could
- *  only ever return its first 200 rows would be a silent truncation, which is the
- *  defect this repo's paging contract exists to prevent. */
+/** `MAX` is a per-page ceiling; every list is cursored. */
 export const CONTROL_PAGE_DEFAULT = 50;
 
 export const CONTROL_PAGE_MAX = 200;
@@ -37,9 +22,6 @@ export const CONTROL_PAGE_MAX = 200;
 const DAY_MS = 24 * 60 * 60 * 1000;
 
 const DDL = [
-  // A user this deployment has seen sign in. `email` is the verified address from
-  // the identity provider and the only human-readable handle an operator has for
-  // an account, so it is stored rather than digested.
   `CREATE TABLE IF NOT EXISTS cp_users (
      user_id       TEXT PRIMARY KEY,
      email         TEXT    NOT NULL,
@@ -48,10 +30,7 @@ const DDL = [
      last_seen_at  INTEGER NOT NULL
    )`,
   `CREATE INDEX IF NOT EXISTS cp_users_seen ON cp_users (last_seen_at DESC, user_id)`,
-  // Keyed by (owner, name), because a workspace name is unique WITHIN a UserDO
-  // and nowhere else — two accounts can both own `research`. Keying on the name
-  // alone would have one user's row overwrite another's, which is a cross-user
-  // data leak inside an admin list.
+  // Keyed by (owner, name): a workspace name is unique only within a UserDO.
   `CREATE TABLE IF NOT EXISTS cp_workspaces (
      user_id      TEXT    NOT NULL,
      name         TEXT    NOT NULL,
@@ -63,9 +42,6 @@ const DDL = [
    )`,
   `CREATE INDEX IF NOT EXISTS cp_workspaces_seen
      ON cp_workspaces (last_seen_at DESC, user_id, name)`,
-  // Feedback metadata. The column list is `FeedbackRecord`, whose producer owns
-  // the shape; it is not restated as a second declaration anywhere. The reads
-  // and writes live beside the contract until it joins core.
   `CREATE TABLE IF NOT EXISTS cp_feedback (
      id            TEXT PRIMARY KEY,
      created_at    INTEGER NOT NULL,
@@ -99,22 +75,18 @@ export function initControlPlaneSchema(sql: ControlPlaneSql): void {
   initPublicShareIndex(sql);
 }
 
-/* ── Row shapes crossing the RPC boundary ────────────────────────────────── */
-
 export interface ControlUserRow {
   userId: string;
   email: string;
   displayName: string | null;
   firstSeenAt: number;
   lastSeenAt: number;
-  /** Live workspaces this account owns, per the index. */
   workspaces: number;
 }
 
 export interface ControlWorkspaceRow {
   userId: string;
-  /** The owner's address, or empty when a workspace was indexed before its
-   *  owner's first observation landed. Stated rather than faked. */
+  /** Empty when the workspace was indexed before its owner was observed. */
   email: string;
   name: string;
   displayName: string;
@@ -124,20 +96,12 @@ export interface ControlWorkspaceRow {
 }
 
 
-/** What an operator did. `denied` and `failed` are kept apart because a refused
- *  attempt and a broken one are different facts, and pooling them makes both
- *  useless.
- *
- *  `pending` is the INTENT, written before the mutation runs. A row that is
- *  still pending is the evidence that an action was attempted and its result was
- *  never recorded — which is a fact an operator surface must be able to show,
- *  and the reason the write happens first. */
+/** `pending` is the intent, written before the mutation runs; a row still pending
+ *  means the result was never recorded. */
 export const AUDIT_OUTCOMES = ['pending', 'ok', 'denied', 'failed'] as const;
 
 export type AuditOutcome = (typeof AUDIT_OUTCOMES)[number];
 
-/** The outcomes an attempt can SETTLE on. `pending` is excluded by
- *  construction, so a settlement cannot write the row back to unfinished. */
 export type AuditSettlement = Exclude<AuditOutcome, 'pending'>;
 
 export interface ControlAuditRow {
@@ -149,8 +113,7 @@ export interface ControlAuditRow {
   targetKind: string;
   target: string;
   outcome: AuditOutcome;
-  /** Specifics an operator can act on — a job id, a refusal reason, an affected
-   *  count. Never a credential: nothing on this path holds one. */
+  /** Never a credential. */
   detail: string;
 }
 
@@ -176,13 +139,11 @@ export interface WorkspaceObservation {
   userId: string;
   name: string;
   displayName: string;
-  /** The registry's own creation timestamp when the feed has it, so the index
-   *  does not claim a workspace was created the first time somebody opened it. */
+  /** The registry's creation time when known, rather than first-open time. */
   createdAt?: number;
   at?: number;
 }
 
-/** The subset of a roster entry the index stores. */
 export interface RosterWorkspace {
   name: string;
   displayName: string;
@@ -190,11 +151,6 @@ export interface RosterWorkspace {
   lastVisited: number;
 }
 
-/* ── SQL row shapes ──────────────────────────────────────────────────────── */
-
-// One schema per table, applied on every read. `monitor/incidents.ts` declares
-// its `IncidentRowSchema` the same way and for the same reason: a durable row's
-// column set is a runtime fact.
 const UserSqlRowSchema = v.object({
   user_id: v.string(),
   email: v.string(),
@@ -218,9 +174,7 @@ const WorkspaceSqlRowSchema = v.object({
 
 type WorkspaceSqlRow = v.InferOutput<typeof WorkspaceSqlRowSchema>;
 
-// `outcome` is read as a plain string and narrowed in `projectAudit`, so a
-// hand-edited database reads as `failed` rather than throwing a parse error at
-// an operator who is trying to read the log.
+// `outcome` is narrowed in `projectAudit` so a hand-edited row reads as `failed`.
 const AuditSqlRowSchema = v.object({
   id: v.string(),
   at: v.number(),
@@ -235,30 +189,19 @@ const AuditSqlRowSchema = v.object({
 
 type AuditSqlRow = v.InferOutput<typeof AuditSqlRowSchema>;
 
-/* ── Paging ──────────────────────────────────────────────────────────────── */
-
 function clampPage(limit: number | undefined): number {
   if (limit === undefined || !Number.isFinite(limit)) return CONTROL_PAGE_DEFAULT;
 
   return Math.min(CONTROL_PAGE_MAX, Math.max(1, Math.trunc(limit)));
 }
 
-/**
- * A cursor anchor over a (descending timestamp, ascending tiebreak) ordering.
- *
- * One opaque string, because that is what `SeekCursor` carries. The tiebreak is
- * mandatory: `last_seen_at` is a millisecond clock and two rows written in the
- * same millisecond are not hypothetical when a feed observes a batch. Without it
- * a page boundary landing inside a tie would skip or repeat rows, which is the
- * paging defect hardest to notice.
- */
+/** The tiebreak is mandatory: rows can share a millisecond, and a page boundary
+ *  inside a tie would skip or repeat rows. */
 function anchor(at: number, ...tiebreak: string[]): string {
   return [String(at), ...tiebreak].join('\u0000');
 }
 
-/** Raised when a cursor cannot be decoded. Thrown rather than treated as "start
- *  from the beginning": restarting a walk from the top looks like success and
- *  silently repeats every row already seen. */
+/** Thrown rather than restarting the walk, which would silently repeat rows. */
 export class MalformedCursorError extends Error {
   constructor() {
     super('That control-plane cursor is not one this read issued.');
@@ -278,32 +221,15 @@ function readAnchor(cursor: PageRequest['cursor'], parts: number): ControlPlaneS
   return [at, ...pieces.slice(1)];
 }
 
-/** Bound a text column at the width the contract declares. The producer clamps
- *  too; this is the store declining to hold a row wider than its own shape, so a
- *  future writer cannot widen it by forgetting. */
 function clampText(value: string, max: number): string {
   return value.length <= max ? value : value.slice(0, max);
 }
 
-/**
- * Run a statement that returns nothing worth reading.
- *
- * Separate from `select` so a write never has to name a row schema it does not
- * have, and so the reads are visibly the only place a schema is applied.
- */
 function run(sql: ControlPlaneSql, query: string, ...bindings: ControlPlaneSqlValue[]): void {
   sql.exec(query, ...bindings);
 }
 
-/**
- * Run a query and PARSE its rows.
- *
- * Parsed rather than asserted, and this is not ceremony: these rows come out of
- * durable storage that earlier versions of this code wrote, so the column set a
- * row actually has is a runtime fact rather than a compile-time one. An assertion
- * would fabricate the shape and then trust it — which is exactly how a workspace
- * failed on a `no such column` after a table gained one.
- */
+/** Parsed, not asserted: stored rows may predate the current column set. */
 function select<Row>(
   sql: ControlPlaneSql, schema: v.GenericSchema<Row>, query: string, ...bindings: ControlPlaneSqlValue[]
 ): Row[] {
@@ -316,15 +242,7 @@ function count(sql: ControlPlaneSql, query: string, ...bindings: ControlPlaneSql
   return select(sql, CountRowSchema, query, ...bindings)[0]?.n ?? 0;
 }
 
-/* ── Feeds ───────────────────────────────────────────────────────────────── */
-
-/**
- * Record that an account exists and was seen.
- *
- * Upsert rather than insert-or-ignore: `last_seen_at` is what the users list is
- * ordered by, and `email` is refreshed because a provider can change the verified
- * address behind a stable subject.
- */
+/** Upsert: `email` is refreshed because a provider can change the verified address. */
 export function observeUser(sql: ControlPlaneSql, observation: UserObservation, now = Date.now()): void {
   const at = observation.at ?? now;
   run(sql,
@@ -337,13 +255,10 @@ export function observeUser(sql: ControlPlaneSql, observation: UserObservation, 
     observation.userId, observation.email, observation.displayName ?? null, at, at);
 }
 
-/** What every workspace observation records: it was seen just now, and it is
- *  not gone. */
 const WORKSPACE_SEEN = `
        last_seen_at = MAX(cp_workspaces.last_seen_at, excluded.last_seen_at),
        removed_at = NULL`;
 
-/** What an observation that KNOWS the workspace's title records on top. */
 const WORKSPACE_TITLED = `
        display_name = excluded.display_name,
        created_at = MIN(cp_workspaces.created_at, excluded.created_at),${WORKSPACE_SEEN}`;
@@ -360,34 +275,21 @@ function writeWorkspaceRow(
     observation.createdAt ?? at, at);
 }
 
-/** Record that a workspace exists under an account. Resurrects a row the index
- *  had tombstoned, because a same-name recreate is a live workspace and the
- *  registry treats it as one. */
+/** Resurrects a tombstoned row: a same-name recreate is a live workspace. */
 export function observeWorkspace(
   sql: ControlPlaneSql, observation: WorkspaceObservation, now = Date.now(),
 ): void {
   writeWorkspaceRow(sql, observation, now, WORKSPACE_TITLED);
 }
 
-/** Record that a workspace was used, without claiming its title.
- *
- * The ownership-gated use feed only knows the slug from the request path, so
- * it leaves a supplied title alone. Writing the slug as the title reset every
- * renamed workspace on next open. New rows still take the slug until a feed
- * that knows the title writes one. */
+/** Record use without claiming a title; the use feed only knows the slug. */
 export function touchWorkspace(
   sql: ControlPlaneSql, observation: WorkspaceObservation, now = Date.now(),
 ): void {
   writeWorkspaceRow(sql, observation, now, WORKSPACE_SEEN);
 }
 
-/**
- * Mark a workspace gone.
- *
- * A tombstone, not a delete. The row is how an operator answers "what happened
- * to it" afterwards, and the workspace it described is already unrecoverable — so
- * dropping the row would destroy the only remaining evidence it existed.
- */
+/** A tombstone, not a delete: the row is the only remaining evidence. */
 export function forgetWorkspace(
   sql: ControlPlaneSql, target: { userId: string; name: string; at?: number }, now = Date.now(),
 ): void {
@@ -398,31 +300,20 @@ export function forgetWorkspace(
 }
 
 
-/**
- * Replace one account's workspace rows from the registry that owns them.
- *
- * This is what makes the index safe to be incomplete: the feeds are best-effort
- * observations from the request path, and this reads through to the source of
- * truth and settles the difference, so a missed feed is never permanent and no
- * reconciliation job has to exist.
- *
- * Rows absent from `live` are tombstoned rather than deleted. An empty `live` is
- * NOT an early return: an account whose last workspace was removed must stop
- * showing rows.
- */
-/** What a reconcile settled: how many rows the registry still has, and how many
- *  the index had that it no longer does. */
 export interface ReconcileOutcome {
   present: number;
   tombstoned: number;
 }
 
+/**
+ * Settle one account's rows against the registry, so a missed feed is never
+ * permanent. Absent rows are tombstoned; an empty `live` tombstones all.
+ */
 export function replaceUserWorkspaces(
   sql: ControlPlaneSql, userId: string, live: readonly RosterWorkspace[], now = Date.now(),
 ): ReconcileOutcome {
   for (const row of live) {
-    // Keep last_seen_at monotone. The use feed advances this clock on
-    // observations the registry never sees, so an overwrite moves it backwards.
+    // Keep last_seen_at monotone: the use feed advances it beyond the registry.
     run(sql,
       `INSERT INTO cp_workspaces (user_id, name, display_name, created_at, last_seen_at, removed_at)
        VALUES (?, ?, ?, ?, ?, NULL)
@@ -452,8 +343,6 @@ export function replaceUserWorkspaces(
   return { present: live.length, tombstoned: before - after };
 }
 
-/* ── Reads ───────────────────────────────────────────────────────────────── */
-
 export function overview(sql: ControlPlaneSql, now = Date.now()): ControlOverview {
   return {
     users: count(sql, `SELECT COUNT(*) AS n FROM cp_users`),
@@ -467,8 +356,6 @@ export function overview(sql: ControlPlaneSql, now = Date.now()): ControlOvervie
   };
 }
 
-/** Accounts, most recently seen first. `workspaces` is counted per row rather
- *  than denormalized, so the number cannot drift from the rows it summarizes. */
 export function listUsers(sql: ControlPlaneSql, request: PageRequest = {}): Page<ControlUserRow> {
   const limit = clampPage(request.limit);
   const from = readAnchor(request.cursor, 2);
@@ -496,17 +383,11 @@ export function getUser(sql: ControlPlaneSql, userId: string): ControlUserRow | 
   return row ? projectUser(row) : null;
 }
 
-/** Which workspaces a list should carry. Named because the store, the Durable
- *  Object and the route all pass it, and three restatements of one filter is how
- *  a fourth reader gets it wrong. */
 export interface WorkspaceFilter {
   userId?: string;
-  /** Defaults false so the common list is live workspaces; the tombstones are
-   *  what an operator asks for deliberately. */
   includeRemoved?: boolean;
 }
 
-/** Workspaces across every account, or one account's when `userId` is given. */
 export function listWorkspaces(
   sql: ControlPlaneSql,
   request: PageRequest = {},
@@ -557,8 +438,6 @@ export function listAudit(sql: ControlPlaneSql, request: PageRequest = {}): Page
   return seekPage(found.map(projectAudit), limit, (row) => anchor(row.at, row.id));
 }
 
-/* ── The audit log's only writers ────────────────────────────────────────── */
-
 export interface AuditDraft {
   actorEmail: string;
   actorUserId: string;
@@ -570,19 +449,8 @@ export interface AuditDraft {
 }
 
 /**
- * Append one attempt.
- *
- * INSERT only, and every column it writes is written once: who acted, when, on
- * what. That is what append-only means for the part of the row that matters —
- * the record of the ATTEMPT can never be edited or removed, because the only
- * other statement in this file that touches `cp_audit` settles an outcome and
- * cannot reach any of those columns.
- *
- * THE ID AND THE CLOCK ARE THIS FUNCTION'S, never the draft's. A caller that
- * could choose the primary key of an append-only log could collide with a row
- * already in it, and one that could choose `at` could date an attempt into the
- * past. No caller needs either — `recordAudit` is the only writer and supplies
- * neither — and a test that needs a fixed clock passes `now`.
+ * Insert only. The id and clock are this function's, never the draft's, so a
+ * caller cannot collide with an existing row or backdate an attempt.
  */
 export function appendAudit(sql: ControlPlaneSql, draft: AuditDraft, now = Date.now()): ControlAuditRow {
   const row: ControlAuditRow = {
@@ -608,18 +476,8 @@ export function appendAudit(sql: ControlPlaneSql, draft: AuditDraft, now = Date.
 }
 
 /**
- * Settle a pending attempt.
- *
- * `WHERE outcome = 'pending'` is the whole safety property: an already-settled
- * row cannot be rewritten, so a replayed or duplicated settlement is a no-op
- * rather than a way to edit history. Nothing else in this file updates
- * `cp_audit`, and this statement names only `outcome` and `detail` — the actor,
- * the operation, the target and the timestamp stay exactly as the attempt wrote
- * them.
- *
- * Returns the settled row, or `null` when there was no pending row to settle —
- * which the caller must treat as a fact rather than as success, because it means
- * the attempt it thought it was finishing is not the row in this table.
+ * `WHERE outcome = 'pending'` keeps settled rows immutable. Returns `null` when
+ * no pending row matched; callers must not treat that as success.
  */
 export function settleAudit(
   sql: ControlPlaneSql,
@@ -641,18 +499,13 @@ export function settleAudit(
   return projectAudit(row);
 }
 
-/** Attempts whose outcome was never recorded. An operator reads this to find
- *  the actions that ran against a workspace while the audit log could not be
- *  finished — the one class of row this design deliberately leaves behind
- *  instead of hiding. */
+/** Attempts whose outcome was never recorded. */
 export function listPendingAudit(sql: ControlPlaneSql, limit = CONTROL_PAGE_DEFAULT): ControlAuditRow[] {
   return select(sql, AuditSqlRowSchema,
     `SELECT id, at, actor_email, actor_user, operation, target_kind, target, outcome, detail
        FROM cp_audit WHERE outcome = 'pending' ORDER BY at DESC, id ASC LIMIT ?`,
     clampPage(limit)).map(projectAudit);
 }
-
-/* ── Projections ─────────────────────────────────────────────────────────── */
 
 function projectUser(row: UserSqlRow): ControlUserRow {
   return {
@@ -686,8 +539,7 @@ function projectAudit(row: AuditSqlRow): ControlAuditRow {
     operation: row.operation,
     targetKind: row.target_kind,
     target: row.target,
-    // Written by `appendAudit` and `settleAudit` only, from a closed union —
-    // narrowed on read so a hand-edited database cannot widen the type.
+    // Narrowed on read so a hand-edited database cannot widen the type.
     outcome: AUDIT_OUTCOMES.find((known) => known === row.outcome) ?? 'failed',
     detail: row.detail,
   };
@@ -711,13 +563,9 @@ const FeedbackSqlRowSchema = v.object({
 
 type FeedbackSqlRow = v.InferOutput<typeof FeedbackSqlRowSchema>;
 
-/** Store one feedback submission's metadata. The screenshot bytes are already in
- *  R2 and are not touched here: the row carries `objectKey` and this store never
- *  holds an image. */
-/** What a stored submission answers with: the id the producer minted, echoed so
- *  the caller has one value to treat as its commit acknowledgement. */
 export interface FeedbackWritten { id: string }
 
+/** Screenshot bytes live elsewhere; the row carries only `objectKey`. */
 export function recordFeedback(sql: ControlPlaneSql, row: FeedbackRecord): FeedbackWritten {
   run(sql,
     `INSERT INTO cp_feedback

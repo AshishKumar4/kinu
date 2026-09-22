@@ -3,9 +3,10 @@
 // Primary path: app-owned OAuth/OIDC sessions in KV. Browser cookies are
 // opaque, HttpOnly session handles; KV stores only hashes.
 //
-// Local/staging dev: `env.DEV_USER_EMAIL` names ONE identity a caller may act
-// as without signing in. It says which identity, never that anyone may have it
-// — see `authenticateRequest`. Production must leave that variable unset.
+// `env.DEV_USER_EMAIL` names ONE identity a caller may act as without signing
+// in: a developer's own identity locally, the eval service account on the
+// deployment. It says which identity, never that anyone may have it — see
+// `authenticateRequest`.
 
 import { DEVICE_CONNECT_PATH, timingSafeEqual } from '@kinu.run/core';
 import {
@@ -217,8 +218,8 @@ export async function authenticateRequest<Id>(request: Request, env: AuthEnv<Id>
   }
 
   // A synthesized identity is a signed-in user without a sign-in, so what
-  // enables it must be POSSESSION, never the absence of a cookie. Staging
-  // publishes `DEV_USER_EMAIL` on a public route: gated on absence, every
+  // enables it must be POSSESSION, never the absence of a cookie. The
+  // deployment publishes `DEV_USER_EMAIL` on a public route: gated on absence, every
   // unauthenticated request that reached it arrived as the eval service account
   // holding ordinary user, workspace, MCP and feedback authority.
   //

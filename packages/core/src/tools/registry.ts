@@ -811,7 +811,7 @@ export const BUILTIN_TOOL_SPECS = {
       'Inside a container `nproc`, `/proc/cpuinfo` and `free` report the HOST, not your cgroup — sizing `-j` or worker counts from them will OOM the job. When the execution status lists cpus/mem for a runtime, those are the real limits: size parallelism from them. '
       + '`runtime: "workspace"` is the shell over the canonical durable workspace; its live execution status is authoritative for which programs and runtimes it supports. Separate containers and machines keep their own files and paths, so select those runtimes explicitly when the work lives there.',
     result: 'Returns the command output — both streams, labelled when both wrote — prefixed with the exit code when it is non-zero, or a structured runtime_not_provisioned error.',
-    example: "run({runtime:'workspace', command:'npm test'})",
+    example: "shell({runtime:'workspace', command:'npm test'})",
   },
   // ── The file plane (single source) ────────────────────────────────────────
   // ONE tool, three actions, for the same reason `memory` is one tool: reading

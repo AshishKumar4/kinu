@@ -26,28 +26,17 @@
 #     Writing downloads there publishes nothing.
 # Step 3 asserts this from wrangler's own output rather than trusting it.
 #
-# ONE SCRIPT FOR BOTH ENVIRONMENTS, and that is the whole reason staging is
-# trustworthy. Staging existed and served for days with nothing deploying it:
-# every push went to production and staging drifted. A second script would have
-# been a second place for the asset check and the smoke gate to be absent from,
-# and their absence is what shipped production assetless once. Here the two
-# environments differ in four values — the route, the wrangler `--env` flag, the
-# infrastructure scope and the label — and share every gate, the build, the asset
-# assertion and all six smoke checks by construction.
-#
 # Usage:
-#   bun run deploy                           # production
-#   bun run deploy:staging                   # staging
-#   bash scripts/deploy.sh [--bootstrap]
-#   CLOUDFLARE_ACCOUNT_ID=... scripts/deploy.sh staging
+#   bun run deploy
+#   bash scripts/deploy.sh [--bootstrap] [--gates-only] [--all]
 #
 # `--bootstrap` is for the deploy that DECLARES something only a deploy can
 # create — a Durable Object class new to `migrations`, a new container, a new
 # route. It moves the pre-deploy infrastructure phase to `bootstrap`, which
 # defers exactly those and nothing else. It skips no verification: every
 # external prerequisite still refuses the deploy before the upload, and step 5
-# below re-checks everything with no tolerance whatever, in both environments,
-# whether this flag was passed or not.
+# below re-checks everything with no tolerance whatever, whether this flag was
+# passed or not.
 #
 # Idempotent: safe to re-run. Exits on first failure.
 set -uo pipefail
@@ -82,7 +71,7 @@ KINU_WRANGLER_ARGS=()
 # pre-deploy check demanding that resource already exist, and no provisioning
 # command can close the gap: wrangler has no verb that creates a Durable Object
 # namespace, a container application or a route. Measured: `ControlPlaneDO` was
-# added to `migrations`, staging's pre-deploy gates (55 at the time) passed, and `gate:infra`
+# added to `migrations`, the pre-deploy gates (55 at the time) passed, and `gate:infra`
 # then refused the only deploy that could have created the namespace — naming
 # `bun run infra:provision` as the fix, which cannot.
 #
@@ -91,8 +80,8 @@ KINU_WRANGLER_ARGS=()
 # infrastructure manifest marks `wrangler-deploy`; every external prerequisite —
 # secrets, KV, R2, Vectorize, DNS, the AI Gateway — still refuses the deploy
 # before the upload, and so does any lookup that merely failed. Step 5 below
-# runs the full phase with no tolerance at all, unconditionally, in both
-# environments, and its findings fail the deployment.
+# runs the full phase with no tolerance at all, unconditionally, and its
+# findings fail the deployment.
 KINU_BOOTSTRAP=0
 # `--gates-only` runs every pre-publish wave exactly as a deploy would — same
 # gates, same barriers, same cost caps — and stops before the build. It is how
@@ -648,7 +637,7 @@ bun "$KINU_ROOT/scripts/build-worker-release.ts" "$KINU_RELEASE_VERSION" "$KINU_
 echo "Building the CLI distribution"
 bash "$KINU_ROOT/scripts/build-cli-dist.sh" || { echo -e "${RED}CLI distribution build failed${NC}"; exit 1; }
 
-# Neither environment may ship without every CLI download asset sitting in the
+# No deploy may ship without every CLI download asset sitting in the
 # directory wrangler publishes. A deploy missing one bricks every fresh install
 # and update on the platform it belongs to.
 KINU_CLI_ARTIFACTS=(kinu-runtime-cpython.tar.gz)
@@ -739,7 +728,7 @@ sleep 10
 
 SMOKE_FAIL=0
 
-# The environment's own route.
+# The production route.
 LIVE_STATUS=$(curl -so /dev/null -w '%{http_code}' --max-time 15 "$KINU_URL" 2>/dev/null || echo "000")
 if [ "$LIVE_STATUS" = "200" ]; then
   echo -e "${GREEN}✅ Kinu live site returns 200${NC} ($KINU_URL)"
@@ -904,7 +893,7 @@ run_phase post-publish
 
 # ── Step 5: Post-deploy infrastructure verification ──────────────
 #
-# UNCONDITIONAL, IN BOTH ENVIRONMENTS, AND RELAXED BY NOTHING. This is the other
+# UNCONDITIONAL AND RELAXED BY NOTHING. This is the other
 # half of the pre-deploy phase and the reason `--bootstrap` is allowed to defer
 # anything at all: the upload has run, so every resource the deployed version
 # declares — Durable Object namespaces, the container application, the routes,

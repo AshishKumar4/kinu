@@ -13,8 +13,7 @@ const write = (path: string): ToolCallRecord =>
 
 describe('delegationFeatures', () => {
   test('counts agents actions from a completed turn record', () => {
-    // Live turns call the unified `agents` tool; the evidence separates the
-    // persistent, search and messaging rungs by ACTION.
+    // The unified `agents` tool: rungs are separated by action.
     const toolCalls: ToolCallRecord[] = [
       call('eval', { code: 'a()' }),
       call('agents', { action: 'hire', role: 'r' }),
@@ -117,9 +116,7 @@ describe('executionPathSignals — redundancy', () => {
     expect(executionPathSignals(trace).redundantCalls).toBe(0);
   });
 
-  // A call with no arguments has no payload identity, so repeats of it are not
-  // evidence of repeated work. This also keeps the run-events reconstruction
-  // (which records names without arguments) from manufacturing signal.
+  // No arguments means no payload identity, so repeats are not evidence.
   test('argument-less calls are never counted as repeats', () => {
     const bare = call('eval');
     expect(executionPathSignals([bare, bare, bare, bare])).toEqual({
@@ -178,9 +175,7 @@ describe('executionPathSignals — backtracking', () => {
     expect(executionPathSignals(trace).backtrackCalls).toBe(0);
   });
 
-  // Precision over recall: the vocabularies run over free-form code and shell
-  // text, so only path-shaped tokens count. A bare word is skipped rather than
-  // risk a `>` comparison or an English phrase inventing a backtrack.
+  // Precision over recall: only path-shaped tokens count.
   test('tokens that do not look like paths are ignored on both sides', () => {
     const trace = [
       call('shell', { command: 'echo done > marker' }),
@@ -199,9 +194,7 @@ describe('executionPathSignals — backtracking', () => {
     expect(executionPathSignals(trace).backtrackCalls).toBe(1);
   });
 
-  // The `file` tool is the native file plane (read | edit | write). Its paths
-  // arrive as a typed field, so they are read from the action rather than
-  // pattern-matched out of free text.
+  // The `file` tool's paths arrive as a typed field.
   test('the file tool: a read of a path the turn wrote or edited is a backtrack', () => {
     expect(executionPathSignals([
       call('file', { action: 'write', path: '/src/auth.ts', content: 'x' }),

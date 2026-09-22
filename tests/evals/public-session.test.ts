@@ -50,7 +50,7 @@ import {
   streamResumingFrame,
 } from './fixtures/public-session-frames';
 
-const STAGING = 'https://staging.kinu.run';
+const DEPLOYMENT = 'https://kinu.run';
 
 /** The suite name the gating probes resolve under. NOT the trajectory suite's own
  *  name: `liveModelTarget` prints `[skip] <suite>` when it refuses, and a probe
@@ -413,7 +413,7 @@ describe('the live arm is reachable only under KINU_EVAL_BACKEND=cloud', () => {
     // Someone meant that to run. The seam throws rather than skipping so the
     // typo cannot read as "no credential here".
     expect(() => resolvePublicSessionPlan(PROBE_SUITE, '@cf/model', {
-      KINU_EVAL_BACKEND: 'staging',
+      KINU_EVAL_BACKEND: 'production',
     })).toThrow(/KINU_EVAL_BACKEND/);
   });
 
@@ -435,10 +435,10 @@ describe('the live arm is reachable only under KINU_EVAL_BACKEND=cloud', () => {
 
 describe('the browser plane names its own credential', () => {
   test('a remote origin with no secret prints both halves of the remedy', () => {
-    const resolution = resolveWebIdentity(STAGING, {});
+    const resolution = resolveWebIdentity(DEPLOYMENT, {});
 
     if (resolution.kind !== 'absent') {
-      throw new Error('a staging origin resolved a web identity out of an empty environment');
+      throw new Error('a deployed origin resolved a web identity out of an empty environment');
     }
 
     // The variable to export, and where the value comes from. Without the
@@ -451,7 +451,7 @@ describe('the browser plane names its own credential', () => {
   });
 
   test('the secret is taken from the environment, and loopback needs none', () => {
-    expect(resolveWebIdentity(STAGING, { [PUBLIC_IDENTITY_ENV]: 'sekret' }))
+    expect(resolveWebIdentity(DEPLOYMENT, { [PUBLIC_IDENTITY_ENV]: 'sekret' }))
       .toEqual({ kind: 'ready', identity: { kind: 'secret', secret: 'sekret' } });
     // A developer's own machine is already the trust boundary — the same rule
     // `authenticateRequest` applies (auth/session.ts:164).
@@ -459,7 +459,7 @@ describe('the browser plane names its own credential', () => {
       .toEqual({ kind: 'ready', identity: { kind: 'loopback' } });
     // Blank is absent, never a secret: an empty export would otherwise send an
     // empty header and read as a rejected identity at the deployment.
-    expect(resolveWebIdentity(STAGING, { [PUBLIC_IDENTITY_ENV]: '   ' }).kind).toBe('absent');
+    expect(resolveWebIdentity(DEPLOYMENT, { [PUBLIC_IDENTITY_ENV]: '   ' }).kind).toBe('absent');
   });
 });
 

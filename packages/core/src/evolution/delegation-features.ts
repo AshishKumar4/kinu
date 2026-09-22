@@ -3,18 +3,13 @@ import * as v from 'valibot';
 import { decodeJsonValue, isJsonObject, type JsonValue } from '../utils/json';
 import { stableStringify } from '../safety/argument-digest';
 
-/** Execution-path validity: three things a trace proves on its own, with no
- *  judge and therefore no judge bias. All three are wasted motion — the agent
- *  spending steps without advancing. */
+/** Judge-free wasted-motion signals a trace proves on its own. */
 export interface ExecutionPathSignals {
-  /** Calls inside an immediately-repeating cycle, beyond the cycle's first
-   *  pass — the agent stuck doing the same thing. */
+  /** Calls inside an immediately repeating cycle, beyond its first pass. */
   loopedCalls: number;
-  /** Repeats of an identical (tool, arguments) fingerprint anywhere in the
-   *  turn, beyond the first occurrence. A superset of loopedCalls: a cycle
-   *  repeats fingerprints, but a repeat need not be a cycle. */
+  /** Repeats of an identical (tool, arguments) fingerprint beyond the first; a superset of loopedCalls. */
   redundantCalls: number;
-  /** Calls that re-read or undid a path an EARLIER call in the turn wrote. */
+  /** Calls that re-read or undid a path an earlier call in the turn wrote. */
   backtrackCalls: number;
 }
 
@@ -29,18 +24,9 @@ export interface DelegationFeatures extends ExecutionPathSignals {
 
 type TurnProcessRecord = Pick<CompletedTurn, 'toolCalls' | 'steps' | 'durationMs'>;
 
-// ── Loop / redundancy ────────────────────────────────────────────
-
-/** Longest immediate repetition scanned for. Beyond four alternating calls the
- *  pattern is better described by the fingerprint-repeat count. */
 const MAX_CYCLE_LENGTH = 4;
 
-/**
- * A call's identity for repeat detection: its name plus its arguments in a
- * key-order-independent form. Calls with NO arguments return null and are
- * excluded — a call carrying no payload has no identity to repeat, so
- * invoking it twice is not evidence of doing the same work twice.
- */
+/** Name plus key-order-independent arguments; null for argument-less calls, which have no identity to repeat. */
 function fingerprint(call: ToolCallRecord): string | null {
   const keys = Object.keys(call.args);
 
@@ -49,18 +35,12 @@ function fingerprint(call: ToolCallRecord): string | null {
   return `${call.name}:${stableStringify(decodeJsonValue({ value: call.args }))}`;
 }
 
-/** Repeats of an identical fingerprint, beyond each fingerprint's first use. */
 function countRedundant(prints: ReadonlyArray<string>): number {
   return prints.length - new Set(prints).size;
 }
 
-/**
- * Calls belonging to an immediately-repeated block, beyond its first pass.
- * Greedy left-to-right: at each position take the SHORTEST block that repeats
- * immediately, consume every consecutive repetition of it, and charge the
- * repeats. `[A,A,A]` charges 2; `[A,B,A,B,A,B]` charges 4; `[A,B,C,A]` charges
- * 0 (a revisit, not a loop — countRedundant is the lens for that).
- */
+/** Greedy left-to-right: take the shortest immediately repeating block and charge its repeats.
+ *  `[A,A,A]` = 2; `[A,B,A,B,A,B]` = 4; `[A,B,C,A]` = 0 (a revisit, not a loop). */
 function countLooped(prints: ReadonlyArray<string>): number {
   let looped = 0;
   let i = 0;
@@ -98,24 +78,13 @@ function blockEquals(prints: ReadonlyArray<string>, a: number, b: number, length
   return true;
 }
 
-// ── Backtracking ─────────────────────────────────────────────────
-
-/**
- * Path effects readable from a call's arguments. Files are touched three ways:
- * the `file` tool (the native file plane, whose path is a typed field read by
- * `fileToolPath` below), code-mode (`workspace.readFile` / `workspace.writeFile`,
- * the documented VFS surface) and `shell` shell commands. The two text
- * vocabularies here cover the last two. Deliberately narrow: a missed effect
- * costs one missed signal, an invented one would poison the evidence line this
- * module feeds.
- */
+/** Code-mode and shell path effects (the `file` tool is read via `fileToolPath`). Deliberately narrow: an invented effect would poison the evidence. */
 const WRITE_PATTERNS: ReadonlyArray<RegExp> = [
   /\bworkspace\.writeFile\s*\(\s*['"`]([^'"`]+)/g,
   /(?:^|[|;&\n]|\s)>>?\s*(\S+)/g,
   /(?:^|[|;&\n]|\s)tee\s+(?:-\S+\s+)*(\S+)/g,
 ];
 
-/** Reading or removing a path is how a turn backtracks over its own write. */
 const REVISIT_PATTERNS: ReadonlyArray<RegExp> = [
   /\bworkspace\.readFile\s*\(\s*['"`]([^'"`]+)/g,
   /(?:^|[|;&\n]|\s)(?:cat|head|tail)\s+(?:-\S+\s+)*(\S+)/g,
@@ -123,7 +92,6 @@ const REVISIT_PATTERNS: ReadonlyArray<RegExp> = [
   /\bgit\s+(?:checkout\s+--|restore)\s+(\S+)/g,
 ];
 
-/** Every string leaf of an arguments object — the only place a path can hide. */
 function stringLeaves(value: JsonValue, into: string[] = []): string[] {
   const text = v.safeParse(v.string(), value);
 
@@ -136,10 +104,7 @@ function stringLeaves(value: JsonValue, into: string[] = []): string[] {
   return into;
 }
 
-/** Only path-shaped tokens (carrying a separator or an extension) count. The
- *  vocabularies above run over free-form code and shell text, and this is what
- *  keeps an English word after `tail` — or the right-hand side of a `>`
- *  comparison — out of the path sets. */
+/** Only path-shaped tokens count, keeping English words and `>` comparisons out of the path sets. */
 function normalizePath(raw: string): string | null {
   const path = raw.replace(/^['"`]+/, '').replace(/['"`;,)]+$/, '');
 
@@ -162,9 +127,7 @@ function pathsMatching(text: ReadonlyArray<string>, patterns: ReadonlyArray<RegE
   return found;
 }
 
-/** The path a `file` tool call touches, and how: `write` and `edit` leave the
- *  file changed, `read` revisits it. Read from the typed input rather than
- *  pattern-matched, because the tool carries its path as a field. */
+/** `write`/`edit` change the file, `read` revisits it. */
 function fileToolPath(call: ToolCallRecord): { path: string; effect: 'write' | 'revisit' } | null {
   if (call.name !== 'file') return null;
   const action = call.args.action;
@@ -179,7 +142,6 @@ function fileToolPath(call: ToolCallRecord): { path: string; effect: 'write' | '
   return null;
 }
 
-/** Calls that read or removed a path written by an earlier call in the turn. */
 function countBacktracks(calls: ReadonlyArray<ToolCallRecord>): number {
   const written = new Set<string>();
   let backtracks = 0;
@@ -201,7 +163,6 @@ function countBacktracks(calls: ReadonlyArray<ToolCallRecord>): number {
   return backtracks;
 }
 
-/** Deterministic execution-path validity for one turn's tool calls. */
 export function executionPathSignals(calls: ReadonlyArray<ToolCallRecord>): ExecutionPathSignals {
   const prints = calls.map(fingerprint).filter((print): print is string => print !== null);
 
@@ -212,8 +173,7 @@ export function executionPathSignals(calls: ReadonlyArray<ToolCallRecord>): Exec
   };
 }
 
-/** The unified `agents` tool carries one name; the delegation evidence
- *  separates exploration / hiring / messaging by ACTION. */
+/** The unified `agents` tool is separated by action. */
 function agentsAction(call: ToolCallRecord): string | null {
   if (call.name !== 'agents') return null;
   const input = v.safeParse(v.object({ action: v.optional(v.string()) }), call.args);
@@ -221,24 +181,17 @@ function agentsAction(call: ToolCallRecord): string | null {
   return input.success ? input.output.action ?? null : null;
 }
 
-/** The persistent rung's actions. */
 const STAFFING_ACTIONS = { hire: true, list: true, dismiss: true } satisfies Record<string, true>;
 
-/** The addressing action, plus the three verbs it replaced: these tables read
- *  STORED rows, so a turn recorded before the collapse still classifies. */
+/** Includes the three pre-collapse verbs so stored rows still classify. */
 const MESSAGING_ACTIONS = { msg: true, ask: true, send: true, reply: true } satisfies Record<string, true>;
 
-/** The ephemeral-search rung's action. */
 const EXPLORATION_ACTIONS = { swarm: true } satisfies Record<string, true>;
 
-/** Whether an action read off a stored row is in one of the tables above. The
- *  action is `string | null` off the wire, so the lookup narrows rather than
- *  indexing a known-key record with an unknown key. */
 function hasKey(table: Record<string, true>, action: string | null): boolean {
   return action !== null && action in table;
 }
 
-/** Deterministic process evidence derived from an existing completed turn. */
 export function delegationFeatures(turn: TurnProcessRecord): DelegationFeatures {
   const count = (predicate: (call: ToolCallRecord) => boolean): number =>
     turn.toolCalls.filter(predicate).length;
@@ -259,9 +212,7 @@ function compactDuration(ms: number): string {
 }
 
 export function renderDelegationFeatures(features: DelegationFeatures): string {
-  // The path clause is appended only when there is something to report: a
-  // clean path is the norm, and "0 loops, 0 redundant calls" would spend
-  // prompt tokens on every turn to say nothing.
+  // Only appended when non-zero, to save prompt tokens on clean turns.
   const path = [
     features.loopedCalls > 0 ? `${features.loopedCalls} looped` : null,
     features.redundantCalls > 0 ? `${features.redundantCalls} redundant` : null,
@@ -274,20 +225,7 @@ export function renderDelegationFeatures(features: DelegationFeatures): string {
     (path.length > 0 ? `. Wasted motion: ${path.join(', ')} tool calls` : '');
 }
 
-/**
- * What a reader of the evidence above is asked to DO with it.
- *
- * ONE string, printed beside the counts it reads, and stated by both readers of
- * {@link renderDelegationFeatures} — the turn reflection (evolution/engine.ts)
- * and the GEPA reflector (gepa/mutate.ts). Two independently-edited sentences
- * drift into two vocabularies for one ladder — `team`/`think`/`heads` against
- * `hire`/`search` — and neither vocabulary is what the evidence line above
- * actually prints.
- *
- * One clause per line, because they are three separate rules keyed on three
- * different turn outcomes. Fused into one sentence, a reader looking for the rule
- * that applies to ITS turn has to parse all three to find out that two do not.
- */
+/** Shared by both readers of {@link renderDelegationFeatures} (turn reflection and GEPA reflector) so their vocabularies cannot drift. One clause per line: three rules for three outcomes. */
 export const DELEGATION_RUBRIC = [
   'Delegation rubric, against the counts above:',
   '- A corrected or frustrated turn with 2+ independent parts, ground through inline with no hiring',
