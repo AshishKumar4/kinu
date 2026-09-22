@@ -839,6 +839,18 @@ Deltas now reach the rows in windows of 64 deltas or 4 KB, written ahead of
 the part's next non-delta update or by the step's final text (bun:sqlite,
 30,000 deltas: 7.2 s and 40,051 rows to 0.85 s and 682 rows; the workerd
 gate 256 ms and 297 ms). A cut turn keeps all but its last window.
+Review fixes (commit d8a16a673): a streamed answer joins the working
+context only when it seals, so a context revision names immutable content;
+every container seals before its step advances, so a step cancelled while
+reasoning keeps its buffered tail; a part whose text outgrows one row
+continues in the next `stream_parts` segment (262,144 UTF-16 units, under
+the payload inline bound and the platform row limit) and its descriptor
+follows the spill rule; an abandoned message is one whose request's claim
+is settled or superseded in epoch, sealed after an admission commits and
+never by one the store refuses. The delta window counts UTF-8 bytes.
+Pins: `packages/core/tests/unit-session-stream.test.ts` (five), the fork
+refusal in `packages/core/tests/unit-fork.test.ts`, and the row bound in
+`packages/core/tests/unit-session-context-store.test.ts`.
 Pins: `packages/cli-backend/tests/local-session.test.ts` "a streamed answer
 mints a revision per step" and `packages/core/tests/unit-session-context-store.test.ts`
 "a sealed message is projected once", both red on the old code.
@@ -881,6 +893,18 @@ tree: a 500-delta turn 219 ms on an empty transcript and 299 ms after twenty
 `*_sequence` columns with their FKs, 4 fork staging columns, 908 source
 lines against 544 added across 22 files (`git diff --numstat 0104882bb
 bd383b907 -- 'packages/*/src/**'`).
+Review fixes (commit d8a16a673): a streamed answer joins the working
+context only when it seals, so a context revision names immutable content;
+every container seals before its step advances, so a step cancelled while
+reasoning keeps its buffered tail; a part whose text outgrows one row
+continues in the next `stream_parts` segment (262,144 UTF-16 units, under
+the payload inline bound and the platform row limit) and its descriptor
+follows the spill rule; an abandoned message is one whose request's claim
+is settled or superseded in epoch, sealed after an admission commits and
+never by one the store refuses. The delta window counts UTF-8 bytes.
+Pins: `packages/core/tests/unit-session-stream.test.ts` (five), the fork
+refusal in `packages/core/tests/unit-fork.test.ts`, and the row bound in
+`packages/core/tests/unit-session-context-store.test.ts`.
 Pins: `packages/cli-backend/tests/local-session.test.ts` "a streamed answer
 holds one stream row per part while open and none once sealed" and
 `packages/core/tests/unit-session-context-store.test.ts` "an open message
