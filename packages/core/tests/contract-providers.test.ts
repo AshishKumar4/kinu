@@ -24,8 +24,7 @@ import {
   type ProviderDeps, type AuthResolution,
 } from '../src/index';
 import {
-  createMockFetch, ANTHROPIC_MESSAGE_BODY, CHAT_COMPLETION_BODY, OPENAI_RESPONSES_BODY,
-} from '@kinu.run/test-utils';
+  createMockFetch, ANTHROPIC_MESSAGE_BODY, CHAT_COMPLETION_BODY, OPENAI_RESPONSES_BODY, present } from '@kinu.run/test-utils';
 
 const CodexRequestBodySchema = v.object({
   instructions: v.optional(v.string()),
@@ -287,8 +286,8 @@ describe('Codex provider contract', () => {
       body: JSON.stringify({ model: 'gpt-5.5', instructions: 'Stay sharp.', store: true, input: 'hello' }),
     });
 
-    expect(out).toBeDefined();
-    const body = v.parse(CodexStoredBodySchema, JSON.parse(String(out?.body)));
+    const sent = present(out, 'the recorded codex request');
+    const body = v.parse(CodexStoredBodySchema, JSON.parse(v.parse(v.string(), sent.body)));
     expect(body.instructions).toBe('Stay sharp.');
     expect(body.store).toBe(false);
     expect(body.input).toBe('hello');

@@ -10,6 +10,7 @@
  */
 
 import { describe, test, expect } from 'bun:test';
+import { present } from '@kinu.run/test-utils';
 import { createTestRuntime } from './helpers';
 import { EvolutionEngine } from '../src/evolution/engine';
 import type { CompletedTurn } from '../src/evolution/types';
@@ -164,7 +165,11 @@ describe('EvolutionEngine.deferTurnReview — the one-shot turn-lane exit', () =
     expect(engine.sessionWindow.countQueuedReviews()).toBe(3);   // the rest waits for the next open
     // Oldest first: a later turn's lesson is worth more with the earlier one's
     // already in the ledger.
-    const graded = listTurnOutcomes(rt.storage.sql, rt.actor).map((r) => r.turnId).sort();
+
+    const graded = listTurnOutcomes(rt.storage.sql, rt.actor)
+      .map((r) => present(r.turnId, 'the graded turn id'))
+      .sort((a, b) => a.localeCompare(b));
+
     expect(graded).toEqual(['msg-0', 'msg-1', 'msg-2', 'msg-3', 'msg-4']);
   });
 

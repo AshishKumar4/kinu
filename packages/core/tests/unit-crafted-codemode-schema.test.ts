@@ -160,10 +160,10 @@ describe('Phase D — crafted tools reach the eval builder under tools.*', () =>
 
     let execCalls = 0;
 
-    const factory: CraftedToolExecute = (tool) => async (arg) => {
+    const factory: CraftedToolExecute = (crafted) => async (arg) => {
       execCalls++;
 
-      if (tool.name !== 'triple') throw new Error(`unexpected tool ${tool.name}`);
+      if (crafted.name !== 'triple') throw new Error(`unexpected tool ${crafted.name}`);
 
       return v.parse(v.number(), arg) * 3;
     };

@@ -349,7 +349,7 @@ function responsesSse(step: number, usage: JsonObject): string {
 
   events.push({ type: 'response.completed', response: { incomplete_details: null, usage } });
 
-  return events.map((data) => `event: ${String(data.type)}\ndata: ${JSON.stringify(data)}\n\n`).join('');
+  return events.map((data) => `event: ${v.parse(v.string(), data.type)}\ndata: ${JSON.stringify(data)}\n\n`).join('');
 }
 
 /** Chat-completions stream: a tool_calls delta on tool steps, usage on the

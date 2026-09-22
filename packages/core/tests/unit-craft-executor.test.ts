@@ -43,6 +43,29 @@ const createTestCraftedExecute = (): CraftedToolExecute => (source) => async (ar
 // binding holding pre-materialised crafted-tool executes. Mirrors
 // @kinu.run/cli-backend/createNodeCodemodeToolFactory at the level this test
 // needs.
+interface CraftedToolsCapture {
+  builder: CodemodeBuilder;
+  taken: () => (() => CraftedToolSet) | undefined;
+}
+
+/** A codemode builder that keeps the surface's crafted-tool resolver for the test. */
+function captureCraftedTools(): CraftedToolsCapture {
+  let resolve: (() => CraftedToolSet) | undefined;
+
+  return {
+    builder: (surface) => {
+      resolve = surface.craftedTools;
+
+      return tool({
+        description: 'capture crafted tools',
+        inputSchema: jsonSchema({ type: 'object' }),
+        execute: async () => null,
+      });
+    },
+    taken: () => resolve,
+  };
+}
+
 function createTestCodemodeBuilder(
   invoke: (tools: CraftedToolSet) => Promise<JsonValue | undefined>,
 ): CodemodeBuilder {
@@ -209,28 +232,20 @@ describe('crafted-tool execution integration', () => {
 
     let factoryCalls = 0;
 
-    const factory: CraftedToolExecute = (tool) => {
+    const factory: CraftedToolExecute = (crafted) => {
       factoryCalls++;
 
-      return async (arg) => `${tool.name}:${JSON.stringify(arg)}`;
+      return async (arg) => `${crafted.name}:${JSON.stringify(arg)}`;
     };
 
-    let resolve: (() => CraftedToolSet) | undefined;
+    const capture = captureCraftedTools();
 
-    const captureBuilder: CodemodeBuilder = (surface) => {
-      resolve = surface.craftedTools;
-
-      return tool({
-        description: 'capture crafted tools',
-        inputSchema: jsonSchema({ type: 'object' }),
-        execute: async () => null,
-      });
-    };
-
-    actorTools(rt, { craftedToolExecute: factory, codemode: captureBuilder });
+    actorTools(rt, { craftedToolExecute: factory, codemode: capture.builder });
     // Building resolves nothing — the sandbox asks per execute, which is what
     // makes a tool crafted mid-turn callable on the next call.
     expect(factoryCalls).toBe(0);
+
+    const resolve = capture.taken();
 
     if (!resolve) throw new Error('codemode-tool factory was not built');
     resolve();
@@ -263,19 +278,11 @@ describe('crafted-tool execution integration', () => {
       return async () => 'never';
     };
 
-    let resolve: (() => CraftedToolSet) | undefined;
-    actorTools(rt, {
-      craftedToolExecute: factory,
-      codemode: (surface) => {
-        resolve = surface.craftedTools;
+    const capture = captureCraftedTools();
 
-        return tool({
-          description: 'capture crafted tools',
-          inputSchema: jsonSchema({ type: 'object' }),
-          execute: async () => null,
-        });
-      },
-    });
+    actorTools(rt, { craftedToolExecute: factory, codemode: capture.builder });
+
+    const resolve = capture.taken();
 
     if (!resolve) throw new Error('codemode-tool builder was not called');
     expect(Object.keys(resolve())).toEqual([]);

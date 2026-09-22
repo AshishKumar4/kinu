@@ -4,13 +4,15 @@ import {
 } from '../src/index';
 import type { EvalResult } from '../src/index';
 
-function result(
-  caseId: string,
-  winner: 'a' | 'b' | 'tie',
-  scoreA: number,
-  scoreB: number,
-  extra?: { errorA?: string; errorB?: string },
-): EvalResult {
+interface EvalResultSeed {
+  caseId: string;
+  winner: 'a' | 'b' | 'tie';
+  scoreA: number;
+  scoreB: number;
+  extra?: { errorA?: string; errorB?: string };
+}
+
+function result({ caseId, winner, scoreA, scoreB, extra }: EvalResultSeed): EvalResult {
   return {
     caseId,
     strategyA: 'baseline',
@@ -24,9 +26,9 @@ function result(
 describe('buildEvalReport', () => {
   test('flattens results + computes aggregate/regression', () => {
     const results = [
-      result('c1', 'b', 0.4, 0.9),
-      result('c2', 'a', 0.8, 0.6),
-      result('c3', 'tie', 0.5, 0.5),
+      result({ caseId: 'c1', winner: 'b', scoreA: 0.4, scoreB: 0.9 }),
+      result({ caseId: 'c2', winner: 'a', scoreA: 0.8, scoreB: 0.6 }),
+      result({ caseId: 'c3', winner: 'tie', scoreA: 0.5, scoreB: 0.5 }),
     ];
 
     const report = buildEvalReport(results, {
@@ -45,7 +47,7 @@ describe('buildEvalReport', () => {
 
   test('carries per-run errors onto the case', () => {
     const report = buildEvalReport(
-      [result('boom', 'b', 0, 1, { errorA: 'strategy A crashed' })],
+      [result({ caseId: 'boom', winner: 'b', scoreA: 0, scoreB: 1, extra: { errorA: 'strategy A crashed' } })],
       { strategyA: 'a', strategyB: 'b' },
     );
 
@@ -54,14 +56,14 @@ describe('buildEvalReport', () => {
   });
 
   test('omits optional meta fields when absent', () => {
-    const report = buildEvalReport([result('c', 'tie', 0.5, 0.5)], { strategyA: 'a', strategyB: 'b' });
+    const report = buildEvalReport([result({ caseId: 'c', winner: 'tie', scoreA: 0.5, scoreB: 0.5 })], { strategyA: 'a', strategyB: 'b' });
     expect(report.modelA).toBeUndefined();
     expect(report.corpus).toBeUndefined();
   });
 });
 
 describe('evaluateGate', () => {
-  const report = buildEvalReport([result('c1', 'b', 0.5, 0.8)], { strategyA: 'a', strategyB: 'b' });
+  const report = buildEvalReport([result({ caseId: 'c1', winner: 'b', scoreA: 0.5, scoreB: 0.8 })], { strategyA: 'a', strategyB: 'b' });
 
   test('passes when aggregate clears the threshold', () => {
     const gate = evaluateGate(report, 0.7);
@@ -91,7 +93,7 @@ describe('evaluateGate', () => {
   // A dead provider scores every case as a 0.5 tie, which clears a 0.5 floor.
   test('a run whose strategies errored fails, however the aggregate lands', () => {
     const broken = buildEvalReport(
-      [result('c1', 'tie', 0.5, 0.5, { errorA: 'connection refused', errorB: 'connection refused' })],
+      [result({ caseId: 'c1', winner: 'tie', scoreA: 0.5, scoreB: 0.5, extra: { errorA: 'connection refused', errorB: 'connection refused' } })],
       { strategyA: 'a', strategyB: 'b' },
     );
 
@@ -104,7 +106,7 @@ describe('evaluateGate', () => {
 
   test('one errored case fails a run that would otherwise clear the floor', () => {
     const mixed = buildEvalReport(
-      [result('c1', 'b', 0.9, 0.95), result('c2', 'tie', 0.5, 0.5, { errorB: 'timeout' })],
+      [result({ caseId: 'c1', winner: 'b', scoreA: 0.9, scoreB: 0.95 }), result({ caseId: 'c2', winner: 'tie', scoreA: 0.5, scoreB: 0.5, extra: { errorB: 'timeout' } })],
       { strategyA: 'a', strategyB: 'b' },
     );
 
@@ -121,7 +123,7 @@ describe('evaluateGate', () => {
 describe('renderEvalSummary', () => {
   test('produces a readable multi-line summary with the gate verdict', () => {
     const report = buildEvalReport(
-      [result('c1', 'b', 0.4, 0.9), result('c2', 'a', 0.8, 0.6)],
+      [result({ caseId: 'c1', winner: 'b', scoreA: 0.4, scoreB: 0.9 }), result({ caseId: 'c2', winner: 'a', scoreA: 0.8, scoreB: 0.6 })],
       { strategyA: 'single-shot', strategyB: 'single-shot', modelB: 'gpt-x' },
     );
 
