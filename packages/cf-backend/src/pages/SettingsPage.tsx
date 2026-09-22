@@ -272,7 +272,7 @@ export default function SettingsPage() {
           <><Loader size="base" /><span>Connecting to {agentId}…</span></>
         ) : (
           <>
-            <span className="p-danger">No connection. Settings cannot load or save.</span>
+            <span className="p-danger">Not connected to this workspace. Settings cannot load or save until it reconnects.</span>
             <Link to={`/workspace/${agentId}`} className="text-xs p-accent underline">Back to chat</Link>
           </>
         )}
@@ -297,7 +297,7 @@ export default function SettingsPage() {
                 className="rounded-sm p-0.5 p-card-hover hover:p-text transition-colors" />
               <span>·</span>
               <Link to="/user/settings" className="hover:p-text inline-flex items-center gap-1">
-                <KeyIcon size={11} /> Account settings & credentials
+                <KeyIcon size={11} /> Account settings and credentials
               </Link>
               <span>·</span>
               <Link to={`/workspace/${agentId}?altitude=supervise`} className="hover:p-text inline-flex items-center gap-1">
@@ -356,7 +356,7 @@ export default function SettingsPage() {
                     ))}
                   </div>
                   <p className="p-meta p-text-3">
-                    Off by default. A second model can add one note after each turn. This uses one model call.
+                    Off by default. When on, a second model reads each turn and can add one note. That is one extra model call per turn.
                   </p>
                 </div>
                 <div className="space-y-1.5">
@@ -371,7 +371,7 @@ export default function SettingsPage() {
                     ))}
                   </div>
                   <p className="p-meta p-text-3">
-                    Notes at or above this severity reach the conversation. Lower notes appear in the Changelog. The default is concern.
+                    Notes at or above this severity show in the conversation. Lower ones go to the Changelog. The default is concern.
                   </p>
                 </div>
               </>
@@ -400,8 +400,8 @@ export default function SettingsPage() {
         <InstructionApprovalsCard rpc={rpc} />
 
         {/* MCTS knobs */}
-        <Card title="MCTS tunables" icon={TreeStructureIcon}>
-          <FieldState field={mcts} what="the MCTS tunables" onRetry={loadRpcFields}>
+        <Card title="MCTS settings" icon={TreeStructureIcon}>
+          <FieldState field={mcts} what="the MCTS settings" onRetry={loadRpcFields}>
             {(value) => (
               <div className="grid grid-cols-2 gap-3">
                 <NumField label="Exploration constant" value={value.explorationConstant} step={0.1} onChange={(next) => mcts.edit({ ...value, explorationConstant: next })} />
@@ -480,7 +480,7 @@ export function StandingApprovalsCard({ rpc }: { rpc: Rpc }) {
   return (
     <Card title="Standing approvals" icon={ShieldIcon}>
       <p className="p-meta p-text-3">
-        “Always” stops Kinu asking about this check in this environment. It does not grant more access.
+        “Always” stops Kinu asking about this check in this environment. It does not give the agent any more access.
       </p>
       {resource.status === "error" && grants === null && (
         <LoadFailure what="your standing approvals" message={resource.message} onRetry={reload} />
@@ -585,7 +585,7 @@ function InstructionApprovalsCard({ rpc }: { rpc: Rpc }) {
           : await rpc<InstructionSourceView | null>("readInstructionApproval", [row.path]);
 
         if (!opened) {
-          setErr("Kinu could not read that file, so it approved nothing.");
+          setErr("Kinu could not read that file, so nothing was approved. Try again.");
 
           return;
         }
@@ -611,8 +611,8 @@ function InstructionApprovalsCard({ rpc }: { rpc: Rpc }) {
   return (
     <Card title="Workspace instruction files" icon={ShieldIcon}>
       <p className="p-meta p-text-3">
-        Your agent can write these files. Kinu follows only the contents you approve as instructions.
-        Edits return them to reference material until you approve them again.
+        Your agent can write these files. Kinu follows a file as instructions only when you approve its
+        contents. After any edit it becomes reference material again until you approve it again.
       </p>
       {resource.status === "error" && rows === null && (
         <LoadFailure what="this workspace's instruction files" message={resource.message} onRetry={reload} />
@@ -748,9 +748,9 @@ function WorkspaceBackupCard({
   return (
     <Card title="Backup" icon={DownloadSimpleIcon}>
       <p className="p-meta p-text-3">
-        Download a portable archive of transcripts, memory, files, and evolution history. Restore it
-        with <code className="font-mono">kinu import &lt;file&gt;</code>. Create one before deleting a
-        workspace. The archive contains the full workspace, so store it like a password.
+        Download an archive of this workspace: transcripts, memory, files and evolution history. Restore it
+        with <code className="font-mono">kinu import &lt;file&gt;</code>. Download one before you delete a
+        workspace. The archive holds everything in the workspace, so keep it as safe as a password.
       </p>
       <button
         type="button"
@@ -791,7 +791,7 @@ function GepaOptimizationCard({
 
   const run = useCallback(async () => {
     setRunning(true);
-    setMsg('Optimising candidate scaffolds against recent tasks. This can take a few minutes…');
+    setMsg('Testing candidate scaffolds against recent tasks. This can take a few minutes.');
 
     try {
       // No evalSize override — the agent's configured budget is the one
@@ -809,16 +809,16 @@ function GepaOptimizationCard({
 
       const caveat = r.selectionWarning ? ` Caveat: ${r.selectionWarning}.` : '';
 
-      if (!r.ok) setMsg(`No run: ${r.error}`);
+      if (!r.ok) setMsg(`The run failed: ${r.error}`);
       else if (r.proposed) {
-        setMsg(`Proposed scaffold v${r.pendingVersion} (${scores}). Promote it under Agent → Evolution after shadow evaluation.${scoredOn}${caveat}`);
+        setMsg(`Proposed scaffold v${r.pendingVersion} (${scores}). After shadow evaluation, promote it under Agent → Evolution.${scoredOn}${caveat}`);
       } else {
         setMsg(`No improvement found (${r.skipReason ?? 'seed already best'}; ${scores}).${scoredOn}${caveat}`);
       }
 
       reload();
     } catch (e) {
-      setMsg(`Error: ${renderThrownChain({ cause: e })}`);
+      setMsg(`Optimisation failed: ${renderThrownChain({ cause: e })}`);
     } finally {
       setRunning(false);
     }
@@ -827,8 +827,8 @@ function GepaOptimizationCard({
   return (
     <Card title="Scaffold self-tuning" icon={SparkleIcon}>
       <p className="p-meta p-text-3">
-        Tests candidate agent loops against recent tasks and can propose an improved one for shadow
-        evaluation. Each run uses several model calls.
+        Tests candidate agent loops against recent tasks and may propose a better one for shadow
+        evaluation. Each run makes several model calls.
       </p>
       <button
         type="button"
@@ -918,16 +918,16 @@ function AlwaysActiveSkillsCard({
   return (
     <Card title="Always-active skills" icon={KeyIcon}>
       <p className="p-meta p-text-3">
-        Pin a workflow skill, such as <code className="font-mono">audit-implementation</code>, to run it
-        every turn without typing /name.
+        Pin a workflow skill, such as <code className="font-mono">audit-implementation</code>, and it runs
+        every turn without you typing /name.
       </p>
       <div className="flex flex-wrap gap-1.5">
         {names.length === 0
-          ? <span className="p-meta p-text-3 italic">(none pinned)</span>
+          ? <span className="p-meta p-text-3">No skills pinned.</span>
           : names.map(n => (
             <span key={n} className="inline-flex items-center gap-1 px-2 py-0.5 rounded-sm p-card p-meta font-mono">
               {n}
-              <button type="button" onClick={async () => { await remove(n); }} className="p-text-3 hover:p-text">×</button>
+              <button type="button" onClick={async () => { await remove(n); }} aria-label={`Unpin ${n}`} className="p-text-3 hover:p-text">×</button>
             </span>
           ))}
       </div>

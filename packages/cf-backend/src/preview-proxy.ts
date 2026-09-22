@@ -258,10 +258,10 @@ function renderNotReadyPage(host: string): Response {
 <body>
 <div class="card">
   <h1><span class="dot"></span> Preview not ready</h1>
-  <p>Port <code>${safePort}</code> is exposed publicly but the container did not accept the connection.</p>
-  <p>Usually that means nothing is listening on it yet: the agent exposed the port before starting a server. Ask the agent:</p>
-  <pre>You exposed port ${safePort} but the container isn't serving anything on it. Start a SUPERVISED server first &mdash; in chat: <code>sandbox.startProcess("python3 -m http.server ${safePort} --directory /workspace/&lt;app&gt;")</code> for a static site, or <code>sandbox.startProcess("node server.js", {cwd:"/workspace/&lt;app&gt;"})</code> for Node &mdash; then call <code>sandbox.exposePort(${safePort})</code> again.</pre>
-  <p class="hint">Supervised processes come back by themselves after a container restart; bare nohup jobs do not. If a supervised server was running, restart is already underway &mdash; refresh this page in a moment.</p>
+  <p>Port <code>${safePort}</code> is public, but the container did not accept the connection.</p>
+  <p>Usually nothing is listening on it yet: the agent exposed the port before it started a server. You can send the agent this:</p>
+  <pre>You exposed port ${safePort}, but nothing in the container is serving on it. Start a supervised server first. For a static site: <code>sandbox.startProcess("python3 -m http.server ${safePort} --directory /workspace/&lt;app&gt;")</code>. For Node: <code>sandbox.startProcess("node server.js", {cwd:"/workspace/&lt;app&gt;"})</code>. Then call <code>sandbox.exposePort(${safePort})</code> again.</pre>
+  <p class="hint">A supervised process comes back on its own after the container restarts; a bare nohup job does not. If a supervised server was running, it is already restarting, so reload this page in a moment.</p>
   <button onclick="location.reload()">Reload preview</button>
   <div class="meta">sandbox=${safeSandboxId} · port=${safePort}</div>
 </div>

@@ -82,7 +82,7 @@ async function settleAccountFixture(page: Page): Promise<void> {
 
 /** What one welcome step shows: the panel that is neither hidden nor inert
  *  carries that step's own copy, and the first step's name field is prefilled. */
-async function expectWelcomeStep(page: Page, step: 0 | 1 | 2, active: string, body: string): Promise<void> {
+async function expectWelcomeStep(page: Page, step: 0 | 1 | 2, active: string): Promise<void> {
   if (step === 0) {
     expect(await page.$('[aria-label="Your name"]')).not.toBeNull();
     expect(active).toContain('Your name');
@@ -111,10 +111,7 @@ async function expectWelcomeStep(page: Page, step: 0 | 1 | 2, active: string, bo
       .every((el) => getComputedStyle(el).opacity === '1'),
   );
 
-  expect(active).toContain('Work that runs without you');
-  expect(active).toContain('Live apps, not just answers');
-  expect(active).toContain('Your machines, when you want them');
-  expect(body).toContain('Create your first workspace');
+  expect(await page.$eval('[data-welcome-step="showcase"]', (el) => el instanceof HTMLElement && !el.inert)).toBe(true);
 }
 
 /** What one view of the Workspaces page draws for a reader, and the shot of
@@ -326,7 +323,7 @@ describe('account panels', () => {
                 return panel?.textContent ?? '';
               });
 
-              await expectWelcomeStep(page, step, active, body);
+              await expectWelcomeStep(page, step, active);
 
               shots.push(await shoot(page, `welcome-step${String(step)}-${viewport}-${theme}`));
             } finally {

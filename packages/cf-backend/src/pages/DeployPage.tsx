@@ -98,23 +98,14 @@ function inputsFrom(answers: Answers): DeployInputs {
 
 function NotConfigured({ reason }: { reason: string }) {
   return (
-    <section className="space-y-3" aria-label="The Cloudflare door is not configured">
+    <section className="space-y-3" aria-label="Deploying to Cloudflare is not set up">
       <div className="p-card px-5 py-4">
-        <h2 className="p-title p-text">The Cloudflare door is not open yet</h2>
+        <h2 className="p-title p-text">Deploying to Cloudflare is not set up here</h2>
         <p className="mt-1 text-sm p-text-2">{reason}</p>
         <p className="mt-3 p-meta p-text-3">
-          Registering the OAuth client is the owner's step, and it is a one-time one. Until it is
-          done, this page cannot deploy into a Cloudflare account.
+          The owner of this Kinu registers the OAuth client once. Until then, this page cannot
+          deploy into a Cloudflare account.
         </p>
-      </div>
-      <div className="p-card px-5 py-4">
-        <h2 className="p-title p-text">Your own machine works now</h2>
-        <p className="mt-1 text-sm p-text-2">
-          The same product runs under local workerd, with no account anywhere.
-        </p>
-        <pre className="mt-3 overflow-x-auto rounded-md bg-[var(--c-surface)] px-3 py-2 font-mono text-xs p-text">
-          curl -fsSL https://kinu.run/install-local.sh | bash
-        </pre>
       </div>
     </section>
   );
@@ -168,7 +159,7 @@ function Answered({ options, runId, onStarted }: {
   return (
     <section className="space-y-4" aria-label="Your deployment">
       <div className="p-card space-y-5 px-5 py-5">
-        <Field label="Cloudflare account" hint="Where this Kinu lives. Everything it creates is yours.">
+        <Field label="Cloudflare account" hint="Where Kinu is created. Everything it creates belongs to you.">
           <select
             className={inputCls}
             aria-label="Cloudflare account"
@@ -186,7 +177,7 @@ function Answered({ options, runId, onStarted }: {
             onChange={(event) => setAnswers({ ...answers, instanceName: event.target.value })}
           />
         </Field>
-        <Field label="Your email" hint="The one-time PIN goes here, and this address owns the deployment.">
+        <Field label="Your email" hint="This address owns the deployment and gets the one-time PIN when you sign in.">
           <input
             className={inputCls}
             type="email"
@@ -262,13 +253,13 @@ function Done({ snapshot, email }: { snapshot: DeploySnapshot; email: string }) 
           <a className="underline" href={origin}>{snapshot.address}</a>
         </p>
         <p className="mt-2 p-meta p-text-3">
-          Sign in with {email === "" ? "the email you gave" : email}: Cloudflare Access sends a
-          one-time PIN. Kinu {snapshot.version} is what is running, and it updates itself from its
-          own Updates page.
+          Sign in with {email === "" ? "the email you gave" : email}. Cloudflare Access sends you a
+          one-time PIN. It is running Kinu {snapshot.version}; install new versions from its
+          Updates page.
         </p>
       </div>
       <div className="p-card px-5 py-4">
-        <h2 className="p-title p-text">Connect this computer</h2>
+        <h2 className="p-title p-text">Connect this machine</h2>
         <pre className="mt-2 overflow-x-auto rounded-md bg-[var(--c-surface)] px-3 py-2 font-mono text-xs p-text">
           curl -fsSL {origin}/install.sh | bash
         </pre>
@@ -387,17 +378,17 @@ export default function DeployPage({ fixture, fixtureOptions }: {
               <h2 className="p-title p-text">Sign in with Cloudflare</h2>
               <p className="mt-1 text-sm p-text-2">
                 {snapshot?.state === "expired"
-                  ? "This run stopped holding your Cloudflare authorization, which it does an hour"
-                    + " after it last moved. Sign in again and it carries on from the step it reached."
-                  : "Kinu asks for the permissions it needs to create your Worker, its storage, and"
-                    + " its sign-in. The token stays on this run and is wiped when the run ends;"
-                    + " your deployment keeps its own from then on."}
+                  ? "Your Cloudflare sign-in for this run expired. It lasts an hour after the last"
+                    + " step. Sign in again and the run picks up from the step it reached."
+                  : "Kinu asks for the permissions it needs to create your Worker, its storage and"
+                    + " its sign-in. The token stays with this run and is deleted when the run ends."
+                    + " After that, your deployment uses its own."}
               </p>
               <FilledButton onClick={() => void signIn()} className="mt-4 !h-9 !px-4 !text-sm">
                 Sign in with Cloudflare
               </FilledButton>
             </div>
-            <p className="p-meta p-text-3">Kinu {options.version} is the version a run installs.</p>
+            <p className="p-meta p-text-3">This installs Kinu {options.version}.</p>
           </section>
         )}
         {options !== null && collecting && (

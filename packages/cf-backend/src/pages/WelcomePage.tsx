@@ -31,17 +31,17 @@ const SHOWCASE: { Icon: PhosphorIcon; title: string; copy: string }[] = [
   {
     Icon: SparkleIcon,
     title: 'Work that runs without you',
-    copy: 'Give a workspace a mission. It researches, writes and tests code, and keeps going in the background. Come back to a report, not a chat you have to babysit.',
+    copy: 'Give a workspace a task. The agent keeps working in the background, even with your device off, and you come back to a report.',
   },
   {
     Icon: AppWindowIcon,
-    title: 'Live apps, not just answers',
+    title: 'Live apps',
     copy: "A workspace can build a slate: a small live app you and your agents use together. Share one as a blueprint, or fork someone else's.",
   },
   {
     Icon: DesktopTowerIcon,
     title: 'Your machines, when you want them',
-    copy: 'Link a device or a server with one command. Agents can use it when you allow it, sandboxed by default.',
+    copy: 'Link a machine with one command. An agent can use it only in the workspaces you allow, and its commands run in a sandbox unless you turn that off.',
   },
 ];
 
@@ -233,7 +233,7 @@ export default function WelcomePage({ initialStep = 0 }: { initialStep?: number 
               </div>
             ) : (
               <FilledButton disabled={busy} onClick={finish}>
-                {busy && <Loader size="sm" />} Create your first workspace
+                {busy && <Loader size="sm" />} Finish setup
               </FilledButton>
             )}
           </div>

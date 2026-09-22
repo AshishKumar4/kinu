@@ -723,7 +723,7 @@ describe('the control plane in a browser', () => {
       expect(second).toContain('Workspace 200');
       expect(second).toContain('Workspace 249');
       expect(second).toContain('end of list');
-      expect(second).toContain('later page of the walk');
+      expect(second).not.toContain('Matched to this account');
       await browserPage.close();
     });
   });

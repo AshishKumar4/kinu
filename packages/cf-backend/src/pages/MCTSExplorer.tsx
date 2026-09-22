@@ -108,7 +108,7 @@ export default function MCTSExplorer() {
         <Link to={`/workspace/${agentId}`} className="shrink-0"><Button variant="ghost" size="sm" icon={<ArrowLeftIcon size={14} />}>Back</Button></Link>
         <div className="hidden sm:block h-4 w-px shrink-0 bg-[var(--c-border)]" />
         <GitForkIcon size={16} className="p-accent shrink-0" />
-        <span className="font-semibold text-sm p-text shrink-0">Search explorer</span>
+        <span className="font-semibold text-sm p-text shrink-0">Swarm explorer</span>
         {/* The NAME leads and the task is what it hands over on hover: at 640px
             this is the row that decided whether the title broke mid-word or
             simply ran out of room, and a name is short by construction. */}
@@ -125,8 +125,8 @@ export default function MCTSExplorer() {
           <CanvasNotice
             failure={selectionResource.status === "error" ? selectionResource.message : null}
             loading={selectionResource.status === "loading"}
-            what="the fork runs" waiting="Loading forks…"
-            empty={requestedRunMissing ? "Fork not found" : "No swarms"}
+            what="the swarms" waiting="Loading swarms…"
+            empty={requestedRunMissing ? "Swarm not found" : "No swarms"}
             onRetry={reloadSelection} />
         </div>
       )}
@@ -222,7 +222,7 @@ function ExplorerBody({
             <CanvasNotice
               failure={resource.status === "error" ? resource.message : null}
               loading={resource.status === "loading"}
-              what="this search" waiting="Loading tree…" empty="Nothing recorded"
+              what="this swarm" waiting="Loading tree…" empty="Nothing recorded for this swarm"
               onRetry={reload} />
           )}
           {tree && (dims.w > 0 && dims.h > 0 ? (

@@ -179,8 +179,8 @@ export default function UpdatesPage({ fixture, fixtureRun }: {
           <h2 className="p-eyebrow">{run.state === "done" ? "What it did" : "Installing"}</h2>
           {restarting !== null && (
             <p className="p-meta p-text-3" data-updates="restarting">
-              This deployment is restarting on the new version, so the last rows may arrive late.
-              The last read said: {restarting}
+              This deployment is restarting on the new version, so the last steps may show up late.
+              The last check failed with: {restarting}
             </p>
           )}
           <ul className="space-y-2">
@@ -188,7 +188,7 @@ export default function UpdatesPage({ fixture, fixtureRun }: {
           </ul>
           {run.state === "done" && (
             <p className="p-row-text p-text" data-updates="installed">
-              Kinu {run.version} is what is running now.
+              Kinu {run.version} is now running.
             </p>
           )}
         </section>
