@@ -295,24 +295,6 @@ export function ancestorsOf(path: string): string[] {
   return out;
 }
 
-/** Logical bytes of a file entry, for text comparison; small files only. */
-export function textOf(entry: NodeEntry): string | undefined {
-  if (entry.kind !== 'file' || entry.content === undefined) return undefined;
-
-  return new TextDecoder().decode(expandSmall(entry.content));
-}
-
-function expandSmall(content: FileContent): Uint8Array {
-  if (content.kind === 'dense') return content.bytes;
-
-  if (content.size > 64 * 1024 * 1024) throw new Error(`refusing to expand ${content.size} sparse bytes`);
-  const out = new Uint8Array(content.size);
-
-  for (const run of content.runs) out.set(run.bytes.subarray(0, Math.max(0, content.size - run.offset)), run.offset);
-
-  return out;
-}
-
 const ZEROS = new Uint8Array(1024 * 1024);
 
 export function logicalDigest(content: FileContent): string {

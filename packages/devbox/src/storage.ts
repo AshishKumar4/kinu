@@ -9,10 +9,8 @@ export type CheckpointKind = 'tick' | 'quiesce';
  *  A runtime array so a suite asserts every kind is exercised; a new kind turns it red. */
 export const ATTACH_OUTCOME_KINDS = ['empty', 'attached', 'already-attached'] as const;
 
-export type AttachOutcomeKind = (typeof ATTACH_OUTCOME_KINDS)[number];
-
 export interface AttachOutcome {
-  readonly kind: AttachOutcomeKind;
+  readonly kind: (typeof ATTACH_OUTCOME_KINDS)[number];
   /** One line, ids and counts only, for the event line and the bench driver.
    *  Never a key, a URL, or a credential. */
   readonly detail: string;
@@ -22,10 +20,8 @@ export interface AttachOutcome {
  *  to a console line, so the failure must reach the caller as a value to become an incident. */
 export const CHECKPOINT_OUTCOME_KINDS = ['skipped', 'committed', 'failed'] as const;
 
-export type CheckpointOutcomeKind = (typeof CHECKPOINT_OUTCOME_KINDS)[number];
-
 export interface CheckpointOutcome {
-  readonly kind: CheckpointOutcomeKind;
+  readonly kind: (typeof CHECKPOINT_OUTCOME_KINDS)[number];
   /** Present for `skipped` (why it declined) and `failed` (what went wrong). */
   readonly reason: string | undefined;
   /** Durable bytes the store holds after a `committed` commit, not bytes this commit wrote;

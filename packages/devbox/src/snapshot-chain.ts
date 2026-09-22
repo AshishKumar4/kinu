@@ -29,6 +29,7 @@ import {
   planDeltaPublication,
   mergeDeltaPublication,
   readDeltaIndex,
+  shellPath,
 } from './chunked-delta';
 import { DeltaFallbackSchema, type DeltaFallback, type StoragePhase } from './durability/contracts';
 import { describeThrown as describe, findMount } from './lifecycle';
@@ -152,7 +153,7 @@ class LayerUnreadable extends Error {
 
 /** Extraction-path archive lifetime only; never put a lifecycle rule on the chain prefix:
  *  it deletes by upload age and the once-written base would vanish from an active box. */
-export const EXTRACT_TTL_SECONDS = 30 * 24 * 60 * 60;
+const EXTRACT_TTL_SECONDS = 30 * 24 * 60 * 60;
 
 /** Excluded trees must be regenerable from kept lockfiles; never exclude a lockfile or `.git`,
  *  which holds unpushed commits and refs (a linked worktree's `.git` is a file). */
@@ -163,7 +164,7 @@ export const CHAIN_EXCLUDES = [
 
 /** Mirrors `@cloudflare/sandbox` `BackupService` normalisation exactly: a different one would
  *  exclude a different file set from the same policy; null means the pattern matches nothing. */
-export function normalizeArchiveExclude(pattern: string): string | null {
+function normalizeArchiveExclude(pattern: string): string | null {
   let normalized = pattern;
 
   while (normalized.startsWith('**/')) normalized = normalized.slice(3);
@@ -194,7 +195,7 @@ export function archiveExcludeFile(patterns: readonly string[]): string {
 
 /** Rebase once the delta outgrows the base by this factor: beyond it, every checkpoint
  *  moves more bytes than a fresh base would cost. */
-export const REBASE_DELTA_RATIO = 1;
+const REBASE_DELTA_RATIO = 1;
 
 /** Rebase only at a quiesce: it pays only if the upper is then empty, and emptying a live
  *  upper races every writer. A tick keeps appending however large the delta grows. */
@@ -2021,10 +2022,6 @@ export function snapshotChainStorage(ports: SnapshotChainPorts): DevboxStorage {
   };
 
   return { attach, checkpoint, discard };
-}
-
-function shellPath(path: string): string {
-  return `'${path.replaceAll("'", `'\\''`)}'`;
 }
 
 function shellPaths(paths: readonly string[]): string {

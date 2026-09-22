@@ -38,7 +38,7 @@ export const DELTA_TREE_DIR = '.devbox-delta/tree';
 
 const DELTA_CHUNK_DIR = '.devbox-delta/chunks';
 
-function shellPath(path: string): string {
+export function shellPath(path: string): string {
   return `'${path.replaceAll("'", `'\\''`)}'`;
 }
 

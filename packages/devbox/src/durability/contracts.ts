@@ -44,8 +44,6 @@ export const PublishWorkSchema = v.strictObject({
   casAttempts: CountSchema,
 });
 
-export type PublishWork = v.InferOutput<typeof PublishWorkSchema>;
-
 /** `containerStart` is the first command that answered: the RPC server comes up after admission.
  *  `storeMount`/`baseAttach` are stamped by the storage strategy; a box with no chain skips them. */
 export type RestorePhase = 'containerStart' | StoragePhase | 'attached' | 'bootId';

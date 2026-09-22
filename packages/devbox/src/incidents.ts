@@ -118,7 +118,7 @@ export async function reapDeliveredIncidents(store: IncidentStore): Promise<numb
     .sort(([, a], [, b]) => (a.deliveredAt ?? a.rejectedAt ?? a.at)
       - (b.deliveredAt ?? b.rejectedAt ?? b.at));
 
-  const excess = rows.size - Math.max(0, INCIDENT_LEDGER_MAX_ROWS);
+  const excess = rows.size - INCIDENT_LEDGER_MAX_ROWS;
 
   if (excess <= 0) return 0;
 
