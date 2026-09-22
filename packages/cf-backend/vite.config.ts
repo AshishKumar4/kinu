@@ -10,14 +10,8 @@ import { defineConfig } from "vite";
 import { promptText } from './vite-prompt-text';
 import { slateVendor } from './slate-vendor';
 
-/**
- * The Nimbus session worker loads its runtime artifacts — the node shims
- * bundle, esbuild/sqlite wasm, the vite/opencode/opentui payloads — from
- * `env.ASSETS` under `/_assets/*` (digest-pinned per package build). Stage the
- * pinned package's asset tree into the SPA's public dir as a symlink: dev
- * serving and the client build both carry it, and a version bump re-points it
- * here at config load instead of drifting.
- */
+/** Nimbus loads its runtime artifacts from `env.ASSETS` `/_assets/*`; symlink the pinned package's tree
+ *  into `public/` so dev and build carry it and a version bump re-points it. */
 const nimbusAssets = join(
   dirname(createRequire(import.meta.url).resolve("@nimbus-sh/worker/package.json")),
   "public/_assets",
@@ -36,21 +30,13 @@ if (!existsSync(staged)) {
   throw new Error(`Nimbus runtime assets missing at ${nimbusAssets} — is @nimbus-sh/worker installed?`);
 }
 
-/**
- * The client graph reaches node builtins through `@kinu.run/core` imports:
- * dev serves the barrel as source, so every module it re-exports loads in the
- * browser and an externalized `node:crypto` throws at module init, blanking
- * the app before React mounts. The production build tree-shakes these away.
- * Resolve them to stubs for the CLIENT environment only — the worker keeps
- * real node builtins (nimbus-route hashes with them).
- */
+/** Dev serves the core barrel as source, so a node builtin breaks the browser at module init; stub
+ *  them for the client environment only (the worker keeps real builtins for nimbus-route). */
 const clientNodeStubs = resolve(__dirname, "client-node-stubs.ts");
 
 const stubClientNodeBuiltins = {
   name: "kinu:stub-client-node-builtins",
   enforce: "pre" as const,
-  // The worker environment keeps real node builtins (nimbus-route hashes
-  // with them); only the browser graph gets stubs.
   resolveId(this: { environment?: { name: string } }, source: string): string | null {
     if (this.environment !== undefined && this.environment.name !== "client") return null;
 
@@ -66,21 +52,9 @@ const stubClientNodeBuiltins = {
 };
 
 /**
- * Source maps for the WORKER build only.
- *
- * `upload_source_maps` in wrangler.jsonc is what makes Cloudflare remap a
- * production stack trace, and the maps it uploads are the ones on disk: the
- * deploy runs through this plugin's generated config, which sets `no_bundle`, so
- * wrangler bundles nothing of its own and reads each module's
- * `sourceMappingURL`. Without this hook there is no map to read and the flag is
- * a silent no-op.
- *
- * The environment is named after the worker (`kinu`), so it is selected the way
- * the stub plugin above selects it — everything that is not `client`. Naming
- * the worker environment instead would lose the maps the day the name changes.
- *
- * The client is deliberately excluded: its output is published static assets, so
- * a map there is original TypeScript served from the public origin.
+ * Worker-only source maps: wrangler's `no_bundle` deploy reads each module's `sourceMappingURL` for
+ * `upload_source_maps`. Selected as not-`client` so a worker rename cannot drop them; the client is
+ * excluded so TypeScript is not served publicly.
  */
 const workerSourceMaps = {
   name: "kinu:worker-source-maps",
@@ -91,17 +65,7 @@ const workerSourceMaps = {
   },
 };
 
-/**
- * WGSL for the landing hero's WebGPU renderer, CLIENT environment only.
- *
- * vgpu's loader turns a `.wgsl` file into the shader source object `draw()`
- * and `effect()` take, resolving its `import`s across modules. Only the
- * browser graph imports one, and the plugin's transform already ignores every
- * other id — but a plugin that runs in the worker environment is a plugin
- * that could one day transform something there, so it is scoped the way the
- * stub plugin above selects its side: by environment name. The Worker build
- * never sees vgpu or a shader.
- */
+/** vgpu's WGSL loader, scoped to the client environment; the Worker build never sees a shader. */
 const wgslClientOnly = {
   ...wgslVitePlugin(),
   name: "kinu:wgsl-client",
@@ -111,38 +75,20 @@ const wgslClientOnly = {
 };
 
 /**
- * Where the dev server persists its Durable Objects, KV and R2.
- *
- * Default is the plugin's own `<root>/.wrangler/state`: ONE directory per
- * checkout, shared by every run on the box and older than the schema changes
- * made since it was written. Schema init is idempotent and there is no column
- * reconcile, so a table created before a column existed keeps its old shape
- * and the first route that names the column answers 500 — `no such column:
- * delete_pending`, which is what the deploy wave's browser tier hit at
- * 18fbea162 while the same file was green from a fresh worktree. A run that
- * must not inherit the box's leftovers names its own directory here.
- *
- * Measured 2026-09-18 against the installed @cloudflare/vite-plugin 1.53.1
- * (`getPersistenceRoot` in dist/index.mjs): the plugin resolves
- * `persistState.path` against the vite root, so an absolute path wins, and
- * appends `v3` itself. It never shells out to wrangler, so `--persist-to` is
- * not a seam that exists here.
+ * Dev persistence directory for DOs, KV and R2. The shared default `.wrangler/state` keeps pre-migration
+ * tables (no column reconcile), failing routes with `no such column`. Measured 2026-09-18 on
+ * @cloudflare/vite-plugin 1.53.1: `persistState.path` resolves against the vite root and appends `v3`.
  */
 const devStateDir = process.env.KINU_DEV_STATE_DIR;
 
 export default defineConfig({
-  // `slateVendor` is the virtual-module half of the runner's vendored bytes —
-  // registered for dev and build so `virtual:kinu-slate-vendor` resolves.
   plugins: [
     promptText(), slateVendor(), stubClientNodeBuiltins, workerSourceMaps, wgslClientOnly, agents(), react(),
     cloudflare(devStateDir === undefined ? {} : { persistState: { path: devStateDir } }),
     tailwindcss(),
   ],
-  // The fabric outbox is the one pre-bundled dep that imports a stubbed
-  // builtin; excluded, it serves as source and the resolveId hook reaches it.
-  // @plannotator/web-highlighter is the inverse: UMD-only (its `module` field
-  // names the same min.js), so served as source it has no `default` export
-  // and the plan surface dies in dev. Prebundled, interop applies.
+  // The fabric outbox imports a stubbed builtin, so it is served as source; the UMD-only highlighter
+  // has no `default` export as source, so it is prebundled.
   optimizeDeps: {
     exclude: ["@nimbus-sh/fabric/outbox.js"],
     include: ["@plannotator/web-highlighter"],
