@@ -183,17 +183,19 @@ describe('the surface has SIX axes, and each cut value is refused by its own nam
     expect(v.parse(SwarmConfigSchema, { expand: 'aggregate' })).toMatchObject({ expand: 'aggregate' });
   });
 
-  test('score:"agree" is refused by name as the judge it always was', () => {
-    const error = refusal({ score: { kind: 'agree' } });
-    expect(error).toContain('score:"agree" was cut');
-    expect(error).toContain('samples');
-  });
+  // A retired score is refused by name and says where its behaviour went.
+  const retiredScores = [
+    { name: 'score:"agree" is refused by name as the judge it always was', kind: 'agree', points_at: 'samples' },
+    { name: 'score:"novelty" is refused by name and says it MOVED rather than went', kind: 'novelty', points_at: 'advance:{kind:"archive", novelty:' },
+  ] as const;
 
-  test('score:"novelty" is refused by name and says it MOVED rather than went', () => {
-    const error = refusal({ score: { kind: 'novelty' } });
-    expect(error).toContain('score:"novelty" was cut');
-    expect(error).toContain('advance:{kind:"archive", novelty:');
-  });
+  for (const c of retiredScores) {
+    test(c.name, () => {
+      const error = refusal({ score: { kind: c.kind } });
+      expect(error).toContain(`score:"${c.kind}" was cut`);
+      expect(error).toContain(c.points_at);
+    });
+  }
 
   test('advance:"beam" is refused by name and does NOT claim an equivalent', () => {
     const error = refusal({ advance: { kind: 'beam' } });

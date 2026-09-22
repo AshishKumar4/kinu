@@ -883,20 +883,18 @@ describe('team action routing', () => {
     const actorDb = new Database(':memory:');
     const actor = createTestActor(makeTagged(actorDb), makeExecRaw(actorDb), 'transition-workspace', 'main');
 
+    const observe = (operation: 'assign' | 'message', name: string) => {
+      observed.push({ operation, roster: roster.get(name) });
+
+      return fakeHandoff('starts_now');
+    };
+
     const runtime: SubordinateRuntime = {
       async spawn() { return actorReferenceOf(actor); },
       async cancelBirth() { return actorReferenceOf(actor); },
-      async assign(name) {
-        observed.push({ operation: 'assign', roster: roster.get(name) });
-
-        return fakeHandoff('starts_now');
-      },
+      async assign(name) { return observe('assign', name); },
       async status() { return { lastActivity: null, recentSteps: [] }; },
-      async message(name) {
-        observed.push({ operation: 'message', roster: roster.get(name) });
-
-        return fakeHandoff('starts_now');
-      },
+      async message(name) { return observe('message', name); },
       async rename(name) { observed.push({ operation: 'rename', roster: roster.get(name) }); },
       async dismiss(name) { observed.push({ operation: 'dismiss', roster: roster.get(name) }); },
     };
@@ -1076,14 +1074,17 @@ describe('subordinate event admission', () => {
     expect(() => admitSubordinateTask(log, {
       fromWorkspace: 'main', kind: 'task', body: ' ', mode: 'build', now: 1,
     })).toThrow('body');
-    expect(() => admitSubordinateReport(log, {
-      fromSubordinate: 'researcher', status: 'progress', content: ' ',
-      sequenceId: 'settle:msg-1', mode: 'build', now: 1,
-    })).toThrow('content');
-    expect(() => admitSubordinateReport(log, {
-      fromSubordinate: 'researcher', status: 'progress', content: 'work',
-      sequenceId: ' ', mode: 'build', now: 1,
-    })).toThrow('sequenceId');
+
+    for (const blank of [
+      { content: ' ', sequenceId: 'settle:msg-1', names: 'content' },
+      { content: 'work', sequenceId: ' ', names: 'sequenceId' },
+    ]) {
+      expect(() => admitSubordinateReport(log, {
+        fromSubordinate: 'researcher', status: 'progress', content: blank.content,
+        sequenceId: blank.sequenceId, mode: 'build', now: 1,
+      })).toThrow(blank.names);
+    }
+
     expect(log.pending()).toEqual([]);
   });
 });

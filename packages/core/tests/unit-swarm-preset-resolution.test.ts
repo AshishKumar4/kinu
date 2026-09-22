@@ -276,8 +276,7 @@ describe('a judged tree is funded at the ensemble it was admitted at', () => {
       offersRunnableCode: false,
     });
 
-    expect(budget.ensemble).toBe(JUDGE_MARGINALISATION_MIN);
-    expect(budget.generatesChecks).toBe(false);
+    expect(budget).toMatchObject({ ensemble: JUDGE_MARGINALISATION_MIN, generatesChecks: false });
   });
 
   test('the pool is the request plus the suite call, at every size', () => {

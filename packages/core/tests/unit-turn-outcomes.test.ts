@@ -121,17 +121,22 @@ describe('the classifier prompt', () => {
     expect(prompt).toContain('"hm" / "what about the other one?" → nothing is settled');
   });
 
-  test('every outcome definition carries its own worked example', () => {
-    expect(prompt).toContain('("great, now add the retry"');
-    expect(prompt).toContain('("no, I said STAGING"');
-    expect(prompt).toContain('("why do you keep breaking the build"');
-  });
+  const promptClaims = [
+    {
+      name: 'every outcome definition carries its own worked example',
+      phrases: ['("great, now add the retry"', '("no, I said STAGING"', '("why do you keep breaking the build"'],
+    },
+    {
+      name: 'names the false-accept, so moving on is not read as approval',
+      phrases: ['Not evidence the answer worked:', 'changes the subject while the ask still stands', 'the user does the work themselves'],
+    },
+  ];
 
-  test('names the false-accept, so moving on is not read as approval', () => {
-    expect(prompt).toContain('Not evidence the answer worked:');
-    expect(prompt).toContain('changes the subject while the ask still stands');
-    expect(prompt).toContain('the user does the work themselves');
-  });
+  for (const c of promptClaims) {
+    test(c.name, () => {
+      for (const phrase of c.phrases) expect(prompt).toContain(phrase);
+    });
+  }
 
   test('an unsettled follow-up is directed at `confidence` rather than at a firmer verdict', () => {
     // Without this the model answers one of three labels whatever it saw, and

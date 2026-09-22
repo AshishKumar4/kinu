@@ -78,23 +78,22 @@ describe('classifyTurnFailure', () => {
 });
 
 describe('planOverflowRecovery', () => {
-  test('context_length failure → force compaction + ONE retry', () => {
-    expect(planOverflowRecovery({
-      error: 'context_length_exceeded',
-      lastPromptTokens: 120_000,
-      contextWindow: 128_000,
-      turnWasOverflowRetry: false,
-    })).toEqual({ failureClass: 'context_length', forceCompaction: true, enqueueRetry: true });
-  });
+  // An overflow always re-arms compaction; only the FIRST one buys a retry.
+  const overflowCases = [
+    { name: 'context_length failure → force compaction + ONE retry', wasRetry: false, enqueueRetry: true },
+    { name: 'a failed retry turn re-arms compaction but NEVER enqueues another retry', wasRetry: true, enqueueRetry: false },
+  ];
 
-  test('a failed retry turn re-arms compaction but NEVER enqueues another retry', () => {
-    expect(planOverflowRecovery({
-      error: 'context_length_exceeded',
-      lastPromptTokens: 120_000,
-      contextWindow: 128_000,
-      turnWasOverflowRetry: true,
-    })).toEqual({ failureClass: 'context_length', forceCompaction: true, enqueueRetry: false });
-  });
+  for (const c of overflowCases) {
+    test(c.name, () => {
+      expect(planOverflowRecovery({
+        error: 'context_length_exceeded',
+        lastPromptTokens: 120_000,
+        contextWindow: 128_000,
+        turnWasOverflowRetry: c.wasRetry,
+      })).toEqual({ failureClass: 'context_length', forceCompaction: true, enqueueRetry: c.enqueueRetry });
+    });
+  }
 
   test('rate limits and transient failures never force-compact', () => {
     expect(planOverflowRecovery({

@@ -65,17 +65,15 @@ describe('reciprocalRankFusion', () => {
 function makeMockIndex() {
   const records = new Map<string, { values: number[]; metadata?: JsonObject }>();
 
+  const write = (vecs: Parameters<VectorizeIndex['upsert']>[0]) => {
+    for (const vec of vecs) records.set(vec.id, { values: [...vec.values], metadata: vec.metadata });
+
+    return { ids: vecs.map((vec) => vec.id) };
+  };
+
   const index: VectorizeIndex = {
-    async insert(vecs) {
-      for (const v of vecs) records.set(v.id, { values: [...v.values], metadata: v.metadata });
-
-      return { ids: vecs.map((v) => v.id) };
-    },
-    async upsert(vecs) {
-      for (const v of vecs) records.set(v.id, { values: [...v.values], metadata: v.metadata });
-
-      return { ids: vecs.map((v) => v.id) };
-    },
+    async insert(vecs) { return write(vecs); },
+    async upsert(vecs) { return write(vecs); },
     async query(vector, options) {
       const topK = options?.topK ?? 10;
 

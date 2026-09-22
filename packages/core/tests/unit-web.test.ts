@@ -533,19 +533,21 @@ describe('url safety (SSRF + exfil guards)', () => {
     expect(isSafeUrl('http://[not-an-address]/')).toBe(false);
   });
 
-  test('provider.fetch refuses the mapped form too — nothing leaves the runtime', async () => {
-    const { fetch, calls } = stubFetch(() => ({ body: 'x' }));
-    const provider = createDefaultWebSearchProvider({ fetch });
-    await expect(provider.fetch('http://[::ffff:169.254.169.254]/')).rejects.toMatchObject({ retriable: false });
-    expect(calls.length).toBe(0);
-  });
+  // Both spellings of the metadata address: the refusal happens before the
+  // request, so nothing leaves the runtime either way.
+  const refusedUrls = [
+    { name: 'provider.fetch refuses the mapped form too — nothing leaves the runtime', url: 'http://[::ffff:169.254.169.254]/' },
+    { name: 'provider.fetch refuses an unsafe URL', url: 'http://169.254.169.254/' },
+  ];
 
-  test('provider.fetch refuses an unsafe URL', async () => {
-    const { fetch, calls } = stubFetch(() => ({ body: 'x' }));
-    const provider = createDefaultWebSearchProvider({ fetch });
-    await expect(provider.fetch('http://169.254.169.254/')).rejects.toMatchObject({ retriable: false });
-    expect(calls.length).toBe(0); // never left the runtime
-  });
+  for (const c of refusedUrls) {
+    test(c.name, async () => {
+      const { fetch, calls } = stubFetch(() => ({ body: 'x' }));
+      const provider = createDefaultWebSearchProvider({ fetch });
+      await expect(provider.fetch(c.url)).rejects.toMatchObject({ retriable: false });
+      expect(calls.length).toBe(0);
+    });
+  }
 });
 
 // ── Tool wiring ────────────────────────────────────────────────────────────
@@ -683,6 +685,6 @@ describe('web builtin', () => {
       code: 'const r = await web.fetch("https://example.com/p"); return r.markdown;',
     });
 
-    expect(String(fetched.result)).toContain('page body');
+    expect(v.parse(v.string(), fetched.result)).toContain('page body');
   });
 });
