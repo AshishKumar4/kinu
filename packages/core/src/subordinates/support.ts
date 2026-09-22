@@ -14,6 +14,7 @@
 import * as v from 'valibot';
 import type { EventLog, PublishResult } from '../events/hub/log';
 import type { SubordinateReportHandoff, SubordinateReportStatus } from '../events/hub/types';
+import type { SpilledContent } from '../events/hub/content-spill';
 import type { SerializedMessage } from '../heads/types';
 import type { SqlExec, SqlExecRow } from '../types/primitives';
 import type { ActorHandle } from '../identity/actor-handle';
@@ -482,11 +483,11 @@ export function parentAdmitsSubordinateReport(input: {
   return input.entry.currentTask !== null;
 }
 
-/** `contentPath` addresses the spill the caller already wrote for this exact
- *  content (`spillEventContent`), letting the parent's brief cite a report
- *  longer than the brief budget instead of dropping its tail. Producers spill
- *  BEFORE admission: the VFS write is async and admission runs inside the DO's
- *  synchronous storage transaction. */
+/** `spilled` is where the caller already spilled this exact content
+ *  (`spillEventContent`), letting the parent's brief cite a report longer than
+ *  the brief budget instead of dropping its tail, or say why it could not.
+ *  Producers spill BEFORE admission: the VFS write is async and admission runs
+ *  inside the DO's synchronous storage transaction. */
 export function admitSubordinateReport(log: EventLog, input: {
   fromSubordinate: string;
   status: SubordinateReportStatus;
@@ -496,7 +497,7 @@ export function admitSubordinateReport(log: EventLog, input: {
    *  side invented would be new on every replay. */
   sequenceId: string;
   task?: string;
-  contentPath?: string;
+  spilled?: SpilledContent;
   /** The structured handoff the `report` tool parsed, already trimmed and
    *  bounded there. Merged verbatim: this function does not re-shape it,
    *  because a second normalization is a second place for the stored payload
@@ -519,7 +520,9 @@ export function admitSubordinateReport(log: EventLog, input: {
 
   if (task) Object.assign(payload, { task });
 
-  if (input.contentPath) Object.assign(payload, { content_path: input.contentPath });
+  if (input.spilled?.path !== undefined) Object.assign(payload, { content_path: input.spilled.path });
+
+  if (input.spilled?.unsaved !== undefined) Object.assign(payload, { content_unsaved: input.spilled.unsaved });
 
   if (input.handoff) Object.assign(payload, input.handoff);
 

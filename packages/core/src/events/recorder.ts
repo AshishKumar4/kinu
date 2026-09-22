@@ -66,6 +66,8 @@ const HeadFileChangeSetSchema = v.object({
     added: v.number(),
     removed: v.number(),
     binary: v.optional(v.boolean()),
+    directory: v.optional(v.boolean()),
+    unreadable: v.optional(v.boolean()),
   })),
 });
 

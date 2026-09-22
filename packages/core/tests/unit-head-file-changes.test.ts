@@ -169,6 +169,43 @@ describe('HeadFileChanges — the review a parent gets', () => {
     expect(changes.snapshot()).toEqual([]);
   });
 
+  test('a deleted directory is reported as one, and never read', async () => {
+    const workspace = memVfs();
+    const changes = new HeadFileChanges();
+    let directoryReads = 0;
+
+    const vfs = observeWrites({
+      ...workspace,
+      async stat(path: string) {
+        return path === 'build' ? { size: 0, mtimeMs: 0, isDir: true } : workspace.stat(path);
+      },
+      async readFile(path: string) {
+        if (path !== 'build') return workspace.readFile(path);
+        directoryReads += 1;
+        throw makeVfsError('EISDIR', `illegal operation on a directory, read '${path}'`, path);
+      },
+    }, changes);
+
+    await vfs.unlink('build');
+
+    expect(changes.snapshot()).toEqual([{ path: 'build', status: 'removed', added: 0, removed: 0, directory: true }]);
+    expect(directoryReads).toBe(0);
+  });
+
+  test('a write over content that cannot be read still lands in the review, counts omitted', async () => {
+    const workspace = memVfs({ 'locked.ts': 'x\n' });
+    const changes = new HeadFileChanges();
+
+    const vfs = observeWrites({
+      ...workspace,
+      async readFile(path: string) { throw makeVfsError('EACCES', `permission denied, open '${path}'`, path); },
+    }, changes);
+
+    await vfs.writeFile('locked.ts', 'y\n');
+
+    expect(changes.snapshot()).toEqual([{ path: 'locked.ts', status: 'changed', added: 0, removed: 0, unreadable: true }]);
+  });
+
   test('changes are sorted by path', async () => {
     const { vfs, changes } = watched();
     await vfs.writeFile('z.ts', 'z\n');

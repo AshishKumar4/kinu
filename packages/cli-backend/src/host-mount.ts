@@ -14,7 +14,7 @@ import * as fs from 'node:fs/promises';
 import { dirname, isAbsolute, relative, resolve, sep } from 'node:path';
 import type { FileCheckpoints, VFS, VfsErrorCode } from '@kinu.run/core';
 import { ERRNO, makeVfsError, WORKSPACE_ROOT } from '@kinu.run/core';
-import { classify, tolerateAsync } from '@kinu.run/core/obs';
+import { tolerateAsync } from '@kinu.run/core/obs';
 import * as v from 'valibot';
 
 const nodeErrorSchema = v.object({
@@ -73,13 +73,10 @@ function createHostMountVFS(checkpoints: FileCheckpoints | undefined): VFS {
     },
     async stat(path) {
       try {
-        const s = await fs.stat(path);
+        const s = await tolerateAsync(() => fs.stat(path), 'enoent');
 
-        return { size: s.size, mtimeMs: s.mtimeMs, isDir: s.isDirectory() };
-      } catch (error) {
-        if (classify({ cause: error }) === 'enoent') return null;
-        throwVfsError({ error, syscall: 'stat', path });
-      }
+        return s === undefined ? null : { size: s.size, mtimeMs: s.mtimeMs, isDir: s.isDirectory() };
+      } catch (error) { throwVfsError({ error, syscall: 'stat', path }); }
     },
     async unlink(path) {
       await snapshot(path, 'file delete');

@@ -163,6 +163,9 @@ export interface WebhookPayload {
    *  reference-plus-digest pair the woken turn reads back — without it the
    *  agent is woken BY a delivery it can only see a fragment of. */
   body_path?: string;
+  /** Set instead of `body_path` when the spill failed: why the rest of the
+   *  body cannot be read back. The delivery still lands. */
+  body_unsaved?: string;
 }
 
 export interface ProcessDonePayload {
@@ -174,6 +177,10 @@ export interface ProcessDonePayload {
   duration_ms: number;
   full_stdout_handle?: string;
   full_stderr_handle?: string;
+  /** Set instead of the matching handle when that output's spill failed: why
+   *  the rest of it cannot be read back. */
+  stdout_unsaved?: string;
+  stderr_unsaved?: string;
 }
 
 export interface TimerPayload {
@@ -202,6 +209,9 @@ export interface PeerAgentPayload {
    *  the body outgrows the brief budget. The brief's slice plus this path is
    *  the reference-plus-digest pair the receiving turn reads back. */
   body_path?: string;
+  /** Set instead of `body_path` when the spill failed: why the rest of the
+   *  body cannot be read back. The message is still delivered. */
+  body_unsaved?: string;
   kinu_mode: WorkMode;
 }
 
@@ -301,6 +311,9 @@ export interface SubordinateReportPayload extends SubordinateReportHandoff {
    *  report outgrows the brief budget — without it the parent's turn would
    *  see only the brief's slice and the rest would be unreachable. */
   content_path?: string;
+  /** Set instead of `content_path` when the spill failed: why the rest of the
+   *  report cannot be read back. The report is still delivered. */
+  content_unsaved?: string;
   kinu_mode: WorkMode;
 }
 
@@ -329,6 +342,9 @@ export interface EmailPayload {
    *  outgrows the brief budget — without it the agent is woken BY a message it
    *  can only read the opening of, with no way to ask for the rest. */
   body_path?: string;
+  /** Set instead of `body_path` when the spill failed: why the rest of the
+   *  mail cannot be read back. The mail is still delivered. */
+  body_unsaved?: string;
 }
 
 export interface InternalPayload {
