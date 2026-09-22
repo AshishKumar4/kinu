@@ -231,15 +231,23 @@ describe("resolveLLMConfig — signed-in Cloudflare AI", () => {
 });
 
 describe("resolveLLMConfig — registry-only providers", () => {
-  test("a claude-subscription spec resolves without any other provider", () => {
-    const out = runResolveLLM({}, { KINU_MODEL: "claude/claude-sonnet-4-x" });
-    expect(out).toEqual({ name: "claude", baseURL: "", headers: {}, model: "claude-sonnet-4-x" });
-  });
+  const registryOnly = [
+    {
+      name: "a claude-subscription spec resolves without any other provider",
+      spec: "claude/claude-sonnet-4-x", provider: "claude", model: "claude-sonnet-4-x",
+    },
+    {
+      name: "an opencode spec resolves through its bridge marker",
+      spec: "opencode/openai/gpt-5.6-sol", provider: "opencode", model: "openai/gpt-5.6-sol",
+    },
+  ];
 
-  test("an opencode spec resolves through its bridge marker", () => {
-    const out = runResolveLLM({}, { KINU_MODEL: "opencode/openai/gpt-5.6-sol" });
-    expect(out).toEqual({ name: "opencode", baseURL: "", headers: {}, model: "openai/gpt-5.6-sol" });
-  });
+  for (const registry of registryOnly) {
+    test(registry.name, () => {
+      const out = runResolveLLM({}, { KINU_MODEL: registry.spec });
+      expect(out).toEqual({ name: registry.provider, baseURL: "", headers: {}, model: registry.model });
+    });
+  }
 
   test("nothing configured — signed out or expired — resolves to null", () => {
     expect(runResolveLLM({})).toBeNull();
