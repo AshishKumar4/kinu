@@ -32,7 +32,6 @@ had_error = events.had_error
 has_answer = events.has_answer
 parse_events = events.parse_events
 run_events = events.run_events
-session_id = events.session_id
 add_usage = events.add_usage
 sum_usages = events.sum_usages
 tool_calls = events.tool_calls
@@ -111,16 +110,6 @@ class AssistantText(unittest.TestCase):
 
     def test_an_empty_answer_is_returned_not_raised(self) -> None:
         self.assertEqual(assistant_text([{"type": "message_end", "text": ""}]), "")
-
-
-class SessionId(unittest.TestCase):
-    def test_reads_the_stream_header(self) -> None:
-        self.assertEqual(session_id(parse_events(REAL_TURN)), "20260727060006-687f10fb")
-
-    def test_absent_or_empty_session_is_none_so_resume_is_skipped(self) -> None:
-        self.assertIsNone(session_id([{"type": "turn_end"}]))
-        self.assertIsNone(session_id([{"type": "session", "id": ""}]))
-        self.assertIsNone(session_id([{"type": "session", "id": 17}]))
 
 
 class UsageReading(unittest.TestCase):

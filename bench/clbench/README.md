@@ -96,7 +96,7 @@ under your real `~/.kinu`, and anything inside the Kinu checkout.
 ## Running
 
 ```bash
-# Wiring check: one interaction, no trace, no baseline.
+# Wiring check: one interaction (never a second turn), no trace, no baseline.
 clbench smoke exploitable_poker --system kinu
 
 # The smallest slice with a real reward and a real baseline: 5 hands.
@@ -133,12 +133,14 @@ turns off turn- and session-level evolution and leaves durable state intact.
 Persistent state with evolution off is the control that says how much of any
 gain is evolution rather than plain memory.
 
-`single_conversation` (the counterpart of the Codex adapter's flag, on by
-default and in every config here) captures the CLI session id from the first
-turn's `session` event and passes it back with `--resume`, so Kinu would see
-its own prior turns and not only the task's latest observation. `kinu exec`
-at HEAD has no `--resume` option and exits with `unknown option '--resume'`,
-so with this flag on, the second turn of a run fails.
+Kinu sees its own earlier turns, not only the task's latest observation. A
+local workspace keeps one conversation and every `kinu exec` on it continues
+that conversation, so the adapter passes no session flag. Each system gets
+its own throwaway home, so the conversation never crosses into another run or
+baseline instance, and with `persist_workspace` off it resets with the
+workspace at every instance boundary. In a `quick_test` run against a loopback
+model on 2026-09-22, the stateful run's 20th request carried all 19 earlier
+turns, and the first request of each of the 5 baseline systems carried none.
 
 ## How a turn works
 

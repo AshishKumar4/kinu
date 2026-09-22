@@ -36,6 +36,10 @@ const RequestBodySchema = v.object({ stream: v.optional(v.boolean()) });
 
 const SessionEventSchema = v.object({ id: v.string() });
 
+const ChatRequestSchema = v.object({
+  messages: v.array(v.object({ role: v.string(), content: JsonValueSchema })),
+});
+
 const RunEventEnvelopeSchema = v.object({
   type: v.literal("run_event"),
   event: v.object({ type: v.string(), runId: v.string() }),
@@ -381,6 +385,16 @@ describe("kinu exec (headless)", () => {
       );
 
       expect(secondHeader.id).not.toBe(v.parse(SessionEventSchema, events[0]).id);
+
+      const secondTurnCall = present(
+        server.requests
+          .map((request) => v.parse(ChatRequestSchema, request).messages.map((m) => [m.role, m.content]))
+          .find((said) => said.some(([role, content]) => role === "user" && content === "Say hello again")),
+        "the second exec's model call",
+      );
+
+      expect(secondTurnCall).toContainEqual(["user", "Say hello"]);
+      expect(secondTurnCall).toContainEqual(["assistant", "Hello from mock."]);
     } finally {
       await server.stop();
     }
@@ -586,6 +600,8 @@ describe("kinu exec --json — the turn-end usage payload", () => {
 });
 
 function startMockLlm(answer: string, usage: JsonObject | null = { prompt_tokens: 5, completion_tokens: 7, total_tokens: 12 }) {
+  const requests: JsonValue[] = [];
+
   const server = Bun.serve({
     port: 0,
     hostname: "127.0.0.1",
@@ -594,7 +610,9 @@ function startMockLlm(answer: string, usage: JsonObject | null = { prompt_tokens
         return new Response("not found", { status: 404 });
       }
 
-      const body = v.parse(RequestBodySchema, await request.json());
+      const raw = v.parse(JsonValueSchema, await request.json());
+      requests.push(raw);
+      const body = v.parse(RequestBodySchema, raw);
 
       if (!body.stream) {
         const completion: JsonObject = {
@@ -632,7 +650,7 @@ function startMockLlm(answer: string, usage: JsonObject | null = { prompt_tokens
     },
   });
 
-  return { port: present(server.port, 'the mock server port'), stop: () => server.stop(true) };
+  return { port: present(server.port, 'the mock server port'), stop: () => server.stop(true), requests };
 }
 
 function startToolLoopMockLlm(

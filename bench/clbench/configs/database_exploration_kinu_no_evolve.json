@@ -4,8 +4,7 @@
     "params": {
       "name": "kinu_stateful_static",
       "auto_evolve": false,
-      "persist_workspace": true,
-      "single_conversation": true
+      "persist_workspace": true
     }
   },
   "task": {

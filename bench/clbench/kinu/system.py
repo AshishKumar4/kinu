@@ -20,9 +20,11 @@ is two claims and they need separating:
   leaving durable state intact. Persistent state without evolution is the
   control that says how much of any gain is evolution rather than memory.
 
-``single_conversation`` is the direct analogue of the Codex adapter's flag: the
-CLI session id is captured from the first turn and replayed with ``--resume``
-so Kinu sees its own prior turns, not just the task's latest observation.
+Turns share one conversation because a local workspace keeps exactly one:
+each ``kinu exec`` on it continues from the turns before it. The workspace
+belongs to this system object alone (its own throwaway home), so the
+conversation never crosses into another run, and ``persist_workspace=False``
+resets it at every instance boundary with the rest of the workspace.
 """
 
 from __future__ import annotations
@@ -58,7 +60,6 @@ from .events import (
     had_error,
     has_answer,
     parse_events,
-    session_id,
     sum_usages,
     tool_calls,
     turn_usage,
@@ -154,7 +155,6 @@ class KinuSystem(ContinualLearningSystem):
         timeout: int = 900,
         auto_evolve: bool = True,
         persist_workspace: bool = True,
-        single_conversation: bool = True,
         purpose: str = _DEFAULT_PURPOSE,
         repo_root: Optional[str] = None,
         api_key_env: Optional[str] = None,
@@ -163,7 +163,6 @@ class KinuSystem(ContinualLearningSystem):
         for flag, value in (
             ("auto_evolve", auto_evolve),
             ("persist_workspace", persist_workspace),
-            ("single_conversation", single_conversation),
         ):
             if not isinstance(value, bool):
                 raise ValueError(f"{flag} must be a bool, got {value!r}")
@@ -177,7 +176,6 @@ class KinuSystem(ContinualLearningSystem):
         self._timeout = timeout
         self._auto_evolve = auto_evolve
         self._persist_workspace = persist_workspace
-        self._single_conversation = single_conversation
         self._purpose = purpose
         self._bun = bun
         self._repo_root = _resolve_repo_root(repo_root)
@@ -272,7 +270,6 @@ class KinuSystem(ContinualLearningSystem):
         shutil.rmtree(self._home, ignore_errors=True)
         shutil.rmtree(self._cwd, ignore_errors=True)
         self._workspace_ready = False
-        self._session_id = None
 
     # ---- one benchmark turn ------------------------------------------------
 
@@ -290,8 +287,6 @@ class KinuSystem(ContinualLearningSystem):
         args = ["exec", "--workspace", _WORKSPACE_NAME, "--json"]
         if not self._auto_evolve:
             args.append("--no-auto-evolve")
-        if self._single_conversation and self._session_id:
-            args.extend(["--resume", self._session_id])
         # `--` so a prompt that opens with a dash is never read as a flag.
         args.extend(["--", prompt])
         return args
@@ -299,18 +294,13 @@ class KinuSystem(ContinualLearningSystem):
     def _run_turn(self, prompt: str) -> list[dict[str, Any]]:
         self._ensure_workspace()
         logger.info(
-            "kinu exec (interaction %d, prompt %d chars, resume=%s)",
+            "kinu exec (interaction %d, prompt %d chars)",
             self._interaction_count + 1,
             len(prompt),
-            self._session_id if self._single_conversation else None,
         )
         result = self._run_cli(self._exec_args(prompt), timeout=self._timeout)
         events = parse_events(result.stdout)
         self._event_log.extend(events)
-
-        resumed = session_id(events)
-        if resumed:
-            self._session_id = resumed
 
         # `kinu exec` exits 1 whenever any tool call in the turn failed, even
         # when the turn still produced its answer. Treat a stream that reached
@@ -407,8 +397,6 @@ class KinuSystem(ContinualLearningSystem):
                 "interaction_count": self._interaction_count,
                 "auto_evolve": self._auto_evolve,
                 "persist_workspace": self._persist_workspace,
-                "single_conversation": self._single_conversation,
-                "session_id": self._session_id,
                 "token_usage": spent,
                 "cumulative_tokens": dict(self._cumulative_usage),
                 "tool_calls": tool_calls(events),
@@ -435,7 +423,6 @@ class KinuSystem(ContinualLearningSystem):
 
     def _clear_interaction_state(self) -> None:
         self._interaction_count = 0
-        self._session_id: str | None = None
         self._pending_feedback: str | None = None
         self._event_log: list[dict[str, Any]] = []
         self._cumulative_usage: Usage = {}
@@ -467,9 +454,7 @@ class KinuSystem(ContinualLearningSystem):
             "provider": self._provider,
             "auto_evolve": self._auto_evolve,
             "persist_workspace": self._persist_workspace,
-            "single_conversation": self._single_conversation,
             "interaction_count": self._interaction_count,
-            "session_id": self._session_id,
             "cumulative_tokens": dict(self._cumulative_usage),
             "workspace_state": self._workspace_snapshot(),
             "events": self._event_log,
