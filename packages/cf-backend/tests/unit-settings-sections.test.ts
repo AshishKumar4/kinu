@@ -72,15 +72,17 @@ describe('the URL hash decides the section', () => {
     expect(settingsSection('')).toBe('account');
   });
 
-  test('a hash nobody recognises opens the first section', () => {
-    expect(settingsSection('#connections')).toBe('account');
-    expect(settingsSection('#__proto__')).toBe('account');
-  });
+  /** Each hash a deep link can carry, and the one section it opens. */
+  const HASH_CASES = [
+    { name: 'a hash nobody recognises opens the first section', hashes: ['#connections', '#__proto__'], opens: 'account' },
+    { name: 'a hash is read with or without its leading #', hashes: ['providers', '#providers'], opens: 'providers' },
+  ] as const;
 
-  test('a hash is read with or without its leading #', () => {
-    expect(settingsSection('providers')).toBe('providers');
-    expect(settingsSection('#providers')).toBe('providers');
-  });
+  for (const { name, hashes, opens } of HASH_CASES) {
+    test(name, () => {
+      for (const hash of hashes) expect(settingsSection(hash)).toBe(opens);
+    });
+  }
 });
 
 describe('the rail says which section is open', () => {

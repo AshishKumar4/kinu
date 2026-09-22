@@ -271,13 +271,14 @@ describe('what a running search says about itself', () => {
 });
 
 describe('a frontier value in its own unit', () => {
-  test('integers print whole — a cost of 10 is not 1000%', () => {
-    expect(formatEvidenceValue(10)).toBe('10');
-    expect(formatEvidenceValue(0)).toBe('0');
-  });
+  const valueCases = [
+    { name: 'integers print whole — a cost of 10 is not 1000%', values: [[10, '10'], [0, '0']] },
+    { name: 'fractions trim without trailing zeroes', values: [[0.9, '0.9'], [0.333333, '0.333']] },
+  ] as const;
 
-  test('fractions trim without trailing zeroes', () => {
-    expect(formatEvidenceValue(0.9)).toBe('0.9');
-    expect(formatEvidenceValue(0.333333)).toBe('0.333');
-  });
+  for (const { name, values } of valueCases) {
+    test(name, () => {
+      for (const [value, printed] of values) expect(formatEvidenceValue(value)).toBe(printed);
+    });
+  }
 });

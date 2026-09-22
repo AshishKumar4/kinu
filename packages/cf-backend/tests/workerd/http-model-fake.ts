@@ -154,7 +154,7 @@ const OutboundMessageSchema = v.object({
 });
 
 const OutboundBodySchema = v.object({
-  model: v.optional(v.string()),
+  model: v.string(),
   stream: v.optional(v.boolean()),
   messages: v.optional(v.array(OutboundMessageSchema)),
   tools: v.optional(v.array(v.object({ function: v.object({ name: v.string() }) }))),
@@ -212,7 +212,7 @@ function recordCall(url: URL, request: Request, body: OutboundBody): void {
     method: request.method,
     host: url.host,
     path: url.pathname,
-    model: body.model ?? '',
+    model: body.model,
     stream: body.stream === true,
     users: messages.filter((m) => m.role === 'user').map((m) => textOf(m.content)),
     conversation: messages.map((m) => ({ role: m.role ?? '', content: textOf(m.content) })),
@@ -516,24 +516,11 @@ async function errorBody(body: OutboundBody): Promise<Response> {
   const users = messages.filter((m) => m.role === 'user').map((m) => textOf(m.content));
   const text = users.filter((u) => !u.startsWith('<')).at(-1) ?? '';
 
-  const encoder = new TextEncoder();
-
-  const chunks = [
+  return sseResponse([
     sseChunk({ content: `echo:${text}` }),
     sseChunk({ role: 'assistant' }, 'stop'),
     sseDone(),
-  ];
-
-  return new Response(
-    new ReadableStream<Uint8Array>({
-      start(controller) {
-        for (const c of chunks) controller.enqueue(encoder.encode(c));
-
-        controller.close();
-      },
-    }),
-    { headers: { 'content-type': 'text/event-stream' } },
-  );
+  ]);
 }
 
 

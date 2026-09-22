@@ -217,6 +217,24 @@ function stalePreview(): Response {
   );
 }
 
+/** The OrchestratorAgent binding a Nimbus routing case hands its request to:
+ *  `record` receives what the workspace preview RPC was forwarded, and the
+ *  stub answers 204. */
+function recordingOrchestrator(record: (request: Request) => void) {
+  return {
+    idFromName(name: string) { return name; },
+    get() {
+      return {
+        async routeWorkspacePreview(_port: number, _handle: string, request: Request) {
+          record(request);
+
+          return new Response(null, { status: 204 });
+        },
+      };
+    },
+  };
+}
+
 describe('preview sandbox policy', () => {
   test('every preview keeps its isolated origin', () => {
     expect(PREVIEW_SANDBOX).toContain('allow-same-origin');
@@ -668,18 +686,7 @@ describe('serving a Nimbus preview host', () => {
 
     const env = testEnv({
       ...ENV,
-      OrchestratorAgent: {
-        idFromName(name: string) { return name; },
-        get() {
-          return {
-            async routeWorkspacePreview(_port: number, _handle: string, request: Request) {
-              forwarded = request;
-
-              return new Response(null, { status: 204 });
-            },
-          };
-        },
-      },
+      OrchestratorAgent: recordingOrchestrator((request) => { forwarded = request; }),
     });
 
     const response = await handleNimbusPreviewHostRequest(new Request(`${NIMBUS_URL}private`, {
@@ -697,18 +704,7 @@ describe('serving a Nimbus preview host', () => {
 
     const env = testEnv({
       ...ENV,
-      OrchestratorAgent: {
-        idFromName(name: string) { return name; },
-        get() {
-          return {
-            async routeWorkspacePreview(_port: number, _handle: string, request: Request) {
-              forwarded = request;
-
-              return new Response(null, { status: 204 });
-            },
-          };
-        },
-      },
+      OrchestratorAgent: recordingOrchestrator((request) => { forwarded = request; }),
     });
 
     // The other token kind the CLI authenticator routes; the POST case above
@@ -1037,13 +1033,33 @@ describe('CSRF on cookie-authenticated requests', () => {
 describe('worker wiring', () => {
   const server = source('src/server.ts');
 
-  test('the preview host serves previews and nothing else', () => {
-    expect(server).toContain('isPreviewHostRequest(url, env)');
-    expect(server).toContain('return servePreviewRequest(request, env)');
-    // Ahead of every other route, so nothing on that host can mint a session.
-    expect(server.indexOf('isPreviewHostRequest(url, env)'))
-      .toBeLessThan(server.indexOf('handlePcRequest(request, env)'));
-  });
+  /** Each gate the worker runs ahead of a route: the gate appears, the route it
+   *  fronts appears, and the gate is written first. */
+  const SOURCE_ORDER_GATES = [
+    {
+      name: 'the preview host serves previews and nothing else',
+      gate: 'isPreviewHostRequest(url, env)',
+      answers: 'return servePreviewRequest(request, env)',
+      // Ahead of every other route, so nothing on that host can mint a session.
+      before: 'handlePcRequest(request, env)',
+    },
+    {
+      name: 'the CSRF gate runs before any authenticated route',
+      gate: 'crossSiteRejection(request)',
+      // The account routes are composed under one `firstResponse`; the gate
+      // must still come first in source order, whatever the call shape.
+      answers: 'handleUserRequest(req, env, identity, ctx)',
+      before: 'handleUserRequest(req, env, identity, ctx)',
+    },
+  ] as const;
+
+  for (const { name, gate, answers, before } of SOURCE_ORDER_GATES) {
+    test(name, () => {
+      expect(server).toContain(gate);
+      expect(server).toContain(answers);
+      expect(server.indexOf(gate)).toBeLessThan(server.indexOf(before));
+    });
+  }
 
   test('no route on the app host serves previews', () => {
     // A path-style proxy there bypasses the auth gate by design; nothing may.
@@ -1057,15 +1073,6 @@ describe('worker wiring', () => {
     expect(server).not.toContain('await env.ASSETS.fetch(request), identity');
     expect(server).toContain('previewSuffixMetaName()');
     expect(server).toContain('new HTMLRewriter()');
-  });
-
-  test('the CSRF gate runs before any authenticated route', () => {
-    expect(server).toContain('crossSiteRejection(request)');
-    // The account routes are composed under one `firstResponse`; the gate
-    // must still come first in source order, whatever the call shape.
-    expect(server).toContain('handleUserRequest(req, env, identity, ctx)');
-    expect(server.indexOf('crossSiteRejection(request)'))
-      .toBeLessThan(server.indexOf('handleUserRequest(req, env, identity, ctx)'));
   });
 
   test('Nimbus previews route on the isolated host before app authentication', () => {

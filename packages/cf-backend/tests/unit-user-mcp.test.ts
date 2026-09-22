@@ -27,6 +27,13 @@ import {
 import { tool, jsonSchema, type ToolSet } from 'ai';
 import type { RecordedMcpTransport } from './helpers/agents-sdk';
 
+/** An accepted input read back through the spelling actually stored. The dev-host
+ *  exemption and the canonical rewrite are the same assertion over different URLs. */
+function expectStoredUrl(name: string, serverUrl: string, stored: string): void {
+  const out = validateMcpServerInput({ name, serverUrl });
+  expect(out.serverUrl).toBe(stored);
+}
+
 // ── 1. validateMcpServerInput ──────────────────────────────────────────────
 
 describe('validateMcpServerInput', () => {
@@ -42,8 +49,7 @@ describe('validateMcpServerInput', () => {
   });
 
   test('accepts http://localhost for dev', () => {
-    const out = validateMcpServerInput({ name: 'local', serverUrl: 'http://localhost:9999/mcp' });
-    expect(out.serverUrl).toBe('http://localhost:9999/mcp');
+    expectStoredUrl('local', 'http://localhost:9999/mcp', 'http://localhost:9999/mcp');
   });
 
   test('rejects http:// on a remote host', () => {
@@ -140,8 +146,7 @@ describe('canonical MCP endpoint identity', () => {
   });
 
   test('an accepted input is stored canonical', () => {
-    const out = validateMcpServerInput({ name: 'n', serverUrl: 'HTTPS://Mcp.Example.com:443/v1#x' });
-    expect(out.serverUrl).toBe('https://mcp.example.com/v1');
+    expectStoredUrl('n', 'HTTPS://Mcp.Example.com:443/v1#x', 'https://mcp.example.com/v1');
   });
 
   test.each([

@@ -57,25 +57,15 @@ const PtyResultSchema = v.object({
   }),
 });
 
-async function installScript(): Promise<string> {
+/** The text the origin serves at one of its two script paths. */
+async function servedScript(path: string): Promise<string> {
   const partialEnv: Partial<Env> = {};
-  // SAFETY: handleCliRequest returns from its /install.sh branch before reading env, and this request fixes that pathname.
+  // SAFETY: handleCliRequest returns from its /install.sh and /downloads/kinu
+  // branches before reading env, and every call here fixes one of those pathnames.
   const env = partialEnv as Env;
-  const response = await handleCliRequest(new Request(`${ORIGIN}/install.sh`), env);
+  const response = await handleCliRequest(new Request(`${ORIGIN}${path}`), env);
 
-  if (!response) throw new Error('/install.sh was not handled');
-  expect(response.status).toBe(200);
-
-  return response.text();
-}
-
-async function launcherScript(): Promise<string> {
-  const partialEnv: Partial<Env> = {};
-  // SAFETY: handleCliRequest returns from its /downloads/kinu branch before reading env, and this request fixes that pathname.
-  const env = partialEnv as Env;
-  const response = await handleCliRequest(new Request(`${ORIGIN}/downloads/kinu`), env);
-
-  if (!response) throw new Error('/downloads/kinu was not handled');
+  if (!response) throw new Error(`${path} was not handled`);
   expect(response.status).toBe(200);
 
   return response.text();
@@ -295,7 +285,7 @@ function runHeadlessInstall(
 
 describe('install.sh terminal handling', () => {
   test('headless curl|bash prints setup instructions and exits 0 — never opens /dev/tty', async () => {
-    const script = await installScript();
+    const script = await servedScript('/install.sh');
     const { home, stubBin } = await makeSandbox();
     const result = await runHeadlessInstall(script, home, stubBin);
 
@@ -315,7 +305,7 @@ describe('install.sh terminal handling', () => {
   // wide. The script owns that concern: it says the export line out loud, and
   // that line is what the user runs.
   test('the canonical install command is one pipeline, and the script says how to activate it', async () => {
-    const script = await installScript();
+    const script = await servedScript('/install.sh');
     const { home, stubBin } = await makeSandbox();
     writeFileSync(join(home, 'install.sh'), script);
     const install = buildCliInstallCommand({ origin: ORIGIN, setup: false });
@@ -356,7 +346,7 @@ describe('install.sh terminal handling', () => {
   });
 
   test('nothing in the served installer reads KINU_PARENT_ACTIVATES', async () => {
-    const script = await installScript();
+    const script = await servedScript('/install.sh');
     expect(script).not.toContain('KINU_PARENT_ACTIVATES');
     expect(script).not.toContain('PARENT_ACTIVATES');
     // The branch is gated on the script's OWN PATH check, not on anything the
@@ -367,7 +357,7 @@ describe('install.sh terminal handling', () => {
   // What the web UI hands a user registering a device. The connect flow runs
   // inside the installer, so one paste installs the CLI and pairs the machine.
   test('--connect pairs the machine from inside the installer, before the PATH hint', async () => {
-    const script = await installScript();
+    const script = await servedScript('/install.sh');
     const { home, stubBin } = await makeSandbox();
 
     const install = buildCliInstallCommand({
@@ -391,7 +381,7 @@ describe('install.sh terminal handling', () => {
   });
 
   test('interactive steps gate on actually opening /dev/tty and restore the terminal on failure', async () => {
-    const script = await installScript();
+    const script = await servedScript('/install.sh');
     // Permission probes ([ -r /dev/tty ]) pass without a controlling
     // terminal; only a real open proves the redirects below will work.
     expect(script).toContain('( exec </dev/tty >/dev/tty ) 2>/dev/null');
@@ -411,7 +401,7 @@ describe('install.sh terminal handling', () => {
     const python = Bun.which('python3');
 
     if (!python) return; // PTY harness needs python3
-    const script = await installScript();
+    const script = await servedScript('/install.sh');
     const { home, stubBin } = await makeSandbox();
     // Hostile stub: setup wrecks the terminal (raw, no echo) and fails.
     writeFileSync(join(home, 'launcher'), [
@@ -462,7 +452,7 @@ describe('install.sh terminal handling', () => {
  */
 describe('the CLI installs as a prebuilt artifact', () => {
   test('the launcher unpacks published builds and runs no package manager', async () => {
-    const launcher = await launcherScript();
+    const launcher = await servedScript('/downloads/kinu');
     expect(launcher).toContain('/downloads/kinu-cli-${KINU_OS}-${KINU_ARCH}.tar.gz');
     expect(launcher).toContain('RUNTIME_URL="${KINU_ORIGIN}/downloads/kinu-runtime-cpython.tar.gz"');
     expect(launcher).toContain(`KINU_ORIGIN="\${KINU_ORIGIN:-${ORIGIN}}"`);
@@ -487,7 +477,7 @@ describe('the CLI installs as a prebuilt artifact', () => {
   });
 
   test('every platform the launcher can name has a published artifact', async () => {
-    const launcher = await launcherScript();
+    const launcher = await servedScript('/downloads/kinu');
     // `uname` answers on the left, artifact names on the right. A pair the
     // launcher accepts but the deploy never publishes is a 404 body unpacked
     // as a tarball, so the two sets are held equal here.
@@ -517,7 +507,7 @@ describe('the CLI installs as a prebuilt artifact', () => {
   });
 
   test('every download is checksum-verified against the SIGNED release, with no way to skip it', async () => {
-    const launcher = await launcherScript();
+    const launcher = await servedScript('/downloads/kinu');
     // The manifest's signature is verified against the pinned key before any
     // artifact is fetched, and each artifact against the checksum it signed —
     // never against a .sha256 the origin chooses for itself (C1).
@@ -534,8 +524,8 @@ describe('the CLI installs as a prebuilt artifact', () => {
   });
 
   test('a release the pinned key did not sign is refused before any artifact lands (C1)', async () => {
-    const script = await installScript();
-    const launcher = await launcherScript();
+    const script = await servedScript('/install.sh');
+    const launcher = await servedScript('/downloads/kinu');
     const { home, stubBin } = await makeSandbox({ ambientBun: null, launcher });
     // The hostile deployment: the same artifacts and checksums, and a
     // manifest without Kinu's signature over them.
@@ -550,8 +540,8 @@ describe('the CLI installs as a prebuilt artifact', () => {
   });
 
   test('a fresh install downloads a build and never runs an installer on the machine', async () => {
-    const script = await installScript();
-    const launcher = await launcherScript();
+    const script = await servedScript('/install.sh');
+    const launcher = await servedScript('/downloads/kinu');
     const { home, stubBin } = await makeSandbox({ ambientBun: null, launcher });
     const result = await runHeadlessInstall(script, home, stubBin);
 
@@ -586,8 +576,8 @@ describe('Bun runtime resolution is one source of truth', () => {
 
   test('both served scripts carry the same resolution and neither probes Bun on its own', async () => {
     const shared = bunResolutionShell();
-    const install = await installScript();
-    const launcher = await launcherScript();
+    const install = await servedScript('/install.sh');
+    const launcher = await servedScript('/downloads/kinu');
 
     for (const script of [install, launcher]) {
       expect(script).toContain(shared);
@@ -628,13 +618,13 @@ describe('Bun runtime resolution is one source of truth', () => {
   test('the emitted resolution expands shell variables, and escapes none of them', async () => {
     const shared = bunResolutionShell();
     expect(shared).not.toContain('\\$');
-    expect(await launcherScript()).not.toContain('\\$');
+    expect(await servedScript('/downloads/kinu')).not.toContain('\\$');
     // install.sh has exactly one legitimate escaped dollar, and it is the
     // opposite case: the PROFILE line it appends must reach the user's rc file
     // carrying a literal `$PATH`, expanded when that shell starts rather than
     // when the installer runs. So every escape in install.sh must sit on a PATH
     // line, and a stray one anywhere else still fails here.
-    const escaped = (await installScript()).split('\n').filter((line) => line.includes('\\$'));
+    const escaped = (await servedScript('/install.sh')).split('\n').filter((line) => line.includes('\\$'));
     expect(escaped.length).toBeGreaterThan(0);
     expect(escaped.filter((line) => !line.includes('PATH'))).toEqual([]);
 
@@ -705,7 +695,7 @@ describe('Bun runtime resolution is one source of truth', () => {
   });
 
   test('an existing compatible Bun is used as it is, and nothing is downloaded', async () => {
-    const script = await installScript();
+    const script = await servedScript('/install.sh');
     const { home, stubBin, managedBun } = await makeSandbox({ ambientBun: '1.9.2' });
     const result = await runHeadlessInstall(script, home, stubBin);
 
@@ -717,7 +707,7 @@ describe('Bun runtime resolution is one source of truth', () => {
   });
 
   test('a Bun older than the approved one is not accepted, and the approved one is installed once', async () => {
-    const script = await installScript();
+    const script = await servedScript('/install.sh');
     const { home, stubBin, managedBun } = await makeSandbox({ ambientBun: '1.1.45' });
     const result = await runHeadlessInstall(script, home, stubBin);
 
@@ -731,7 +721,7 @@ describe('Bun runtime resolution is one source of truth', () => {
   });
 
   test('KINU_INSTALL_BUN=0 names the version it needs instead of installing one', async () => {
-    const script = await installScript();
+    const script = await servedScript('/install.sh');
     const { home, stubBin, managedBun } = await makeSandbox({ ambientBun: null });
     const result = await runHeadlessInstall(script, home, stubBin, { KINU_INSTALL_BUN: '0' });
 
@@ -741,8 +731,8 @@ describe('Bun runtime resolution is one source of truth', () => {
   });
 
   test('the launcher runs the Bun the installer verified, in a later shell with no bun on PATH', async () => {
-    const script = await installScript();
-    const launcher = await launcherScript();
+    const script = await servedScript('/install.sh');
+    const launcher = await servedScript('/downloads/kinu');
     // A machine with no Bun at all, and the real launcher installed — not a stub.
     const { home, stubBin, bunLog, managedBun } = await makeSandbox({ ambientBun: null, launcher });
     const install = await runHeadlessInstall(script, home, stubBin);

@@ -340,14 +340,30 @@ export interface ForkDeliveryRequest {
   corrupt?: ForkCorruption;
 }
 
-export class ForkSourceProbeDO extends DurableObject<Cloudflare.Env> {
-  private readonly sql: SqlExecutor = <Row,>(
+/** The storage both probe objects hold: one tagged-template executor over this
+ *  object's own SQLite, one file plane over it, and the workspace schema
+ *  installed on first use. */
+abstract class ForkProbeDO extends DurableObject<Cloudflare.Env> {
+  protected readonly sql: SqlExecutor = <Row,>(
     query: TemplateStringsArray, ...values: SqlValue[]
   ): Row[] => this.ctx.storage.sql.exec<Row & Record<string, SqlStorageValue>>(query.join('?'), ...values).toArray();
 
-  private readonly plane = new ProbeFilePlane(this.ctx);
+  protected readonly plane = new ProbeFilePlane(this.ctx);
   private schemaReady = false;
 
+  protected ensureSchema(): void {
+    if (this.schemaReady) return;
+    initWorkspaceSchema({
+      execRaw: (ddl: string) => { this.ctx.storage.sql.exec(ddl); },
+      sql: this.sql,
+      exec: this.ctx.storage.sql,
+    });
+    this.ctx.storage.sql.exec(ProbeFilePlane.DDL);
+    this.schemaReady = true;
+  }
+}
+
+export class ForkSourceProbeDO extends ForkProbeDO {
   /**
    * One workspace worth forking: identity, config, a crafted tool, memory
    * chunks, a three-entry canonical conversation and three files.
@@ -513,17 +529,6 @@ export class ForkSourceProbeDO extends DurableObject<Cloudflare.Env> {
 
     return report;
   }
-
-  private ensureSchema(): void {
-    if (this.schemaReady) return;
-    initWorkspaceSchema({
-      execRaw: (ddl: string) => { this.ctx.storage.sql.exec(ddl); },
-      sql: this.sql,
-      exec: this.ctx.storage.sql,
-    });
-    this.ctx.storage.sql.exec(ProbeFilePlane.DDL);
-    this.schemaReady = true;
-  }
 }
 
 /** One frame with a payload byte flipped: as a transport would deliver it, or
@@ -556,14 +561,7 @@ export interface ForkTargetState {
   files: { path: string; size: number; digest: string }[];
 }
 
-export class ForkTargetProbeDO extends DurableObject<Cloudflare.Env> {
-  private readonly sql: SqlExecutor = <Row,>(
-    query: TemplateStringsArray, ...values: SqlValue[]
-  ): Row[] => this.ctx.storage.sql.exec<Row & Record<string, SqlStorageValue>>(query.join('?'), ...values).toArray();
-
-  private readonly plane = new ProbeFilePlane(this.ctx);
-  private schemaReady = false;
-
+export class ForkTargetProbeDO extends ForkProbeDO {
   /**
    * One unpublished transfer's receiver, held for this ACTIVATION only —
    * `rawCopyFromFork` holds it the same way and for the same reason: a file that
@@ -651,16 +649,5 @@ export class ForkTargetProbeDO extends DurableObject<Cloudflare.Env> {
       memoryChunks: tally(this.sql<{ count: number }>`SELECT COUNT(*) AS count FROM memory_chunks`),
       files: await this.plane.digests(),
     };
-  }
-
-  private ensureSchema(): void {
-    if (this.schemaReady) return;
-    initWorkspaceSchema({
-      execRaw: (ddl: string) => { this.ctx.storage.sql.exec(ddl); },
-      sql: this.sql,
-      exec: this.ctx.storage.sql,
-    });
-    this.ctx.storage.sql.exec(ProbeFilePlane.DDL);
-    this.schemaReady = true;
   }
 }

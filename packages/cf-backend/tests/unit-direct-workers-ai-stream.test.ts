@@ -170,6 +170,18 @@ function eventStreamOf(text: string): Response {
   return eventStream(body);
 }
 
+/** The native shape the platform streams: two content frames, then a frame that
+ *  carries only usage, then [DONE]. A fresh body per call, since a Response body
+ *  reads once. */
+function textThenUsage(first: string, second: string, usage: JsonObject): () => Response {
+  return () => eventStreamOf([
+    sse({ response: first }),
+    sse({ response: second }),
+    sse({ response: '', usage }),
+    DONE,
+  ].join(''));
+}
+
 /** One emitted SSE frame at a time, so a test can read the head of a stream
  *  without draining it. */
 function frames(body: ReadableStream<Uint8Array> | null) {
@@ -476,12 +488,9 @@ describe('direct Workers AI binding — incremental streaming', () => {
 
 describe('direct Workers AI binding — usage and finish frames', () => {
   test('a native stream ends with exactly one finish reason, its usage, then [DONE]', async () => {
-    const { fetch: direct } = directFetch(() => eventStreamOf([
-      sse({ response: 'one' }),
-      sse({ response: ' two' }),
-      sse({ response: '', usage: { prompt_tokens: 9, completion_tokens: 4, total_tokens: 13 } }),
-      DONE,
-    ].join('')));
+    const { fetch: direct } = directFetch(textThenUsage('one', ' two', {
+      prompt_tokens: 9, completion_tokens: 4, total_tokens: 13,
+    }));
 
     const payloads = await frames((await direct(ENDPOINT, {
       method: 'POST',
@@ -908,12 +917,9 @@ describe('direct Workers AI binding — whole completions', () => {
 
 describe('direct Workers AI binding — the AI SDK consumes it', () => {
   test('streamText reads a native binding stream as OpenAI SSE', async () => {
-    const { fetch: direct } = directFetch(() => eventStreamOf([
-      sse({ response: 'streamed' }),
-      sse({ response: ' through' }),
-      sse({ response: '', usage: { prompt_tokens: 4, completion_tokens: 2, total_tokens: 6 } }),
-      DONE,
-    ].join('')));
+    const { fetch: direct } = directFetch(textThenUsage('streamed', ' through', {
+      prompt_tokens: 4, completion_tokens: 2, total_tokens: 6,
+    }));
 
     const model = createOpenAICompatible({
       name: 'workers-ai',

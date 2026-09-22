@@ -72,49 +72,53 @@ async function eventsVia(env: Env, query: string): Promise<{ status: number; cou
 }
 
 describe('the run-events route closes `limit` before it can reach SQL', () => {
-  test('a negative limit returns one event, not the whole run', async () => {
-    const { env } = runEventsEnv();
-    expect(await eventsVia(env, '?limit=-1')).toEqual({ status: 200, count: 1 });
-    expect(await eventsVia(env, '?limit=-999999')).toEqual({ status: 200, count: 1 });
-  });
+  /** Every `limit` and `since` the route is asked for, and the page each one
+   *  must answer with. The status is 200 throughout: a value the route cannot
+   *  read is a value that was not stated, never a failed query. */
+  const asked = [
+    {
+      name: 'a negative limit returns one event, not the whole run',
+      pages: [{ query: '?limit=-1', count: 1 }, { query: '?limit=-999999', count: 1 }],
+    },
+    {
+      name: 'a negative limit stays bounded with a type filter as well',
+      pages: [{ query: '?limit=-1&types=error', count: 1 }],
+    },
+    {
+      name: 'unparseable limit text means unstated and takes the default',
+      pages: [
+        { query: '?limit=abc', count: RUN_EVENT_LIMIT_DEFAULT },
+        { query: '?limit=NaN', count: RUN_EVENT_LIMIT_DEFAULT },
+        { query: '?limit=Infinity', count: RUN_EVENT_LIMIT_DEFAULT },
+      ],
+    },
+    {
+      name: 'a fractional limit truncates instead of failing the query',
+      pages: [{ query: '?limit=2.7', count: 2 }],
+    },
+    {
+      name: 'an oversized limit clamps to the ceiling',
+      pages: [{ query: '?limit=1000000000', count: RUN_EVENT_LIMIT_MAX }],
+    },
+    {
+      name: 'a legitimate limit is still honoured exactly',
+      pages: [{ query: '?limit=37', count: 37 }, { query: '', count: RUN_EVENT_LIMIT_DEFAULT }],
+    },
+    {
+      name: 'an unparseable or negative since reads from the start of the run',
+      pages: [{ query: '?since=abc&limit=3', count: 3 }, { query: '?since=-5&limit=3', count: 3 }],
+    },
+  ];
 
-  test('a negative limit stays bounded with a type filter as well', async () => {
-    const { env } = runEventsEnv();
-    expect(await eventsVia(env, '?limit=-1&types=error')).toEqual({ status: 200, count: 1 });
-  });
+  for (const { name, pages } of asked) {
+    test(name, async () => {
+      const { env } = runEventsEnv();
 
-  test('unparseable limit text means unstated and takes the default', async () => {
-    const { env } = runEventsEnv();
-    expect(await eventsVia(env, '?limit=abc'))
-      .toEqual({ status: 200, count: RUN_EVENT_LIMIT_DEFAULT });
-    expect(await eventsVia(env, '?limit=NaN'))
-      .toEqual({ status: 200, count: RUN_EVENT_LIMIT_DEFAULT });
-    expect(await eventsVia(env, '?limit=Infinity'))
-      .toEqual({ status: 200, count: RUN_EVENT_LIMIT_DEFAULT });
-  });
-
-  test('a fractional limit truncates instead of failing the query', async () => {
-    const { env } = runEventsEnv();
-    expect(await eventsVia(env, '?limit=2.7')).toEqual({ status: 200, count: 2 });
-  });
-
-  test('an oversized limit clamps to the ceiling', async () => {
-    const { env } = runEventsEnv();
-    expect(await eventsVia(env, '?limit=1000000000'))
-      .toEqual({ status: 200, count: RUN_EVENT_LIMIT_MAX });
-  });
-
-  test('a legitimate limit is still honoured exactly', async () => {
-    const { env } = runEventsEnv();
-    expect(await eventsVia(env, '?limit=37')).toEqual({ status: 200, count: 37 });
-    expect(await eventsVia(env, '')).toEqual({ status: 200, count: RUN_EVENT_LIMIT_DEFAULT });
-  });
-
-  test('an unparseable or negative since reads from the start of the run', async () => {
-    const { env } = runEventsEnv();
-    expect(await eventsVia(env, '?since=abc&limit=3')).toEqual({ status: 200, count: 3 });
-    expect(await eventsVia(env, '?since=-5&limit=3')).toEqual({ status: 200, count: 3 });
-  });
+      for (const { query, count } of pages) {
+        expect(await eventsVia(env, query)).toEqual({ status: 200, count });
+      }
+    });
+  }
 });
 
 describe('a direct RPC cannot ask for more than the route may', () => {

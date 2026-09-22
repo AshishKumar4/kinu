@@ -59,10 +59,7 @@ function owedReviews(harness: ActorHarness<HarnessOrchestratorAgent>): number {
 /** How many alternate-take sets exist. The oracle for the branch settlement key:
  *  the write is append-only, so a replayed comparison shows up as a second row. */
 function takeSets(harness: ActorHarness<HarnessOrchestratorAgent>): number {
-  return v.parse(
-    v.object({ n: v.number() }),
-    harness.db.query('SELECT COUNT(*) AS n FROM alternate_takes').get(),
-  ).n;
+  return rowCount(harness, 'alternate_takes');
 }
 
 /**
@@ -113,10 +110,7 @@ function tickMarkers(harness: ActorHarness<HarnessOrchestratorAgent>, scope: str
 }
 
 function windowedTurns(harness: ActorHarness<HarnessOrchestratorAgent>): number {
-  return v.parse(
-    v.object({ n: v.number() }),
-    harness.db.query('SELECT COUNT(*) AS n FROM completed_turns').get(),
-  ).n;
+  return rowCount(harness, 'completed_turns');
 }
 
 /**
@@ -1028,31 +1022,32 @@ describe('a turn releases its tool claims only when no response can still run', 
     });
   }
 
-  test('a settled response with nothing else running releases them', async () => {
-    const harness = orchestratorHarness();
-    turns(harness).open('u-done');
-    harness.agent.harnessClaimTool('u-done', 'call_send_1');
+  const released = [
+    { name: 'a settled response with nothing else running releases them', turn: 'u-done', answer: 'a-done' },
+    /**
+     * The response being closed owns a chat fiber row of its own, and the close
+     * can reach the release before Think's fiber returns and deletes it. Read as
+     * "somebody else may still run", every ordinary turn would keep its claims
+     * for good — so the settling response is excluded by request id.
+     */
+    {
+      name: 'the settling response is not mistaken for another one still running',
+      turn: 'u-self',
+      answer: 'a-self',
+    },
+  ] as const;
 
-    await settleResponse(harness, 'a-done');
+  for (const { name, turn, answer } of released) {
+    test(name, async () => {
+      const harness = orchestratorHarness();
+      turns(harness).open(turn);
+      harness.agent.harnessClaimTool(turn, 'call_send_1');
 
-    expect(harness.agent.harnessToolClaims('u-done')).toEqual([]);
-  });
+      await settleResponse(harness, answer);
 
-  /**
-   * The response being closed owns a chat fiber row of its own, and the close
-   * can reach the release before Think's fiber returns and deletes it. Read as
-   * "somebody else may still run", every ordinary turn would keep its claims
-   * for good — so the settling response is excluded by request id.
-   */
-  test('the settling response is not mistaken for another one still running', async () => {
-    const harness = orchestratorHarness();
-    turns(harness).open('u-self');
-    harness.agent.harnessClaimTool('u-self', 'call_send_1');
-
-    await settleResponse(harness, 'a-self');
-
-    expect(harness.agent.harnessToolClaims('u-self')).toEqual([]);
-  });
+      expect(harness.agent.harnessToolClaims(turn)).toEqual([]);
+    });
+  }
 
   /**
    * The defect. The isolate died while an auto-continuation was executing a

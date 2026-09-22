@@ -75,6 +75,12 @@ function site(broken: Partial<Record<string, () => Response>> = {}): ProbeDeps['
 /** The SPA fallback answering for a missing asset — the actual outage. */
 const spaFallback = () => new Response(SPA_SHELL, { headers: { 'content-type': 'text/html' } });
 
+/** A body the origin never finishes sending: the response head arrives, the
+ *  read errors. */
+const unreadable = () => new Response(new ReadableStream({
+  start(c) { c.error(new Error('connection reset')); },
+}));
+
 async function probe(broken: Partial<Record<string, () => Response>> = {}): Promise<ProbeOutcome[]> {
   return runSyntheticProbes({ origin: 'https://kinu.test', fetch: site(broken) });
 }
@@ -152,10 +158,6 @@ describe('synthetic probes', () => {
   });
 
   test('an artifact body that cannot be read is a failure, not an exception', async () => {
-    const unreadable = () => new Response(new ReadableStream({
-      start(c) { c.error(new Error('connection reset')); },
-    }));
-
     const outcomes = await probe({ [CLI_DIST_PATHS[0] ?? '']: unreadable });
     expect(outcome(outcomes, 'downloads').ok).toBe(false);
     expect(outcome(outcomes, 'downloads').detail).toContain('could not be read');
@@ -164,10 +166,6 @@ describe('synthetic probes', () => {
   });
 
   test('a sign-in page body that cannot be read is a failure, not an exception', async () => {
-    const unreadable = () => new Response(new ReadableStream({
-      start(c) { c.error(new Error('connection reset')); },
-    }));
-
     const outcomes = await probe({ '/login': unreadable });
     expect(outcome(outcomes, 'login').ok).toBe(false);
     expect(outcome(outcomes, 'login').detail).toContain('could not be read');

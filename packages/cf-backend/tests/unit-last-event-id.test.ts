@@ -10,6 +10,14 @@
 import { describe, test, expect } from 'bun:test';
 import { resumeIndexFromLastEventId } from '@kinu.run/core';
 
+/** The refusal, asked of every header that must not become a cursor: the answer
+ *  is the replay-from-start sentinel rather than a position. */
+function eachReplaysFromStart(headers: readonly string[]): void {
+  for (const header of headers) {
+    expect(resumeIndexFromLastEventId(header)).toBe(-1);
+  }
+}
+
 describe('Last-Event-ID resume index', () => {
   test('an absent header replays from the start', () => {
     expect(resumeIndexFromLastEventId(null)).toBe(-1);
@@ -30,21 +38,17 @@ describe('Last-Event-ID resume index', () => {
 
   test('a negative below the sentinel is not a position', () => {
     // -2 must not become a cursor: `readSince(-2)` is a seek to nothing.
-    expect(resumeIndexFromLastEventId('-2')).toBe(-1);
-    expect(resumeIndexFromLastEventId('-1000')).toBe(-1);
+    eachReplaysFromStart(['-2', '-1000']);
   });
 
   test('a fraction is not an event index', () => {
-    expect(resumeIndexFromLastEventId('3.14')).toBe(-1);
-    expect(resumeIndexFromLastEventId('0.5')).toBe(-1);
+    eachReplaysFromStart(['3.14', '0.5']);
   });
 
   test('unparseable and non-finite headers replay from the start', () => {
     // The reason the guard exists: a NaN cursor compares false against every
     // index, so the stream would re-deliver the whole run on each reconnect.
-    for (const header of ['NaN', 'abc', '', ' ', 'Infinity', '-Infinity', '1e400']) {
-      expect(resumeIndexFromLastEventId(header)).toBe(-1);
-    }
+    eachReplaysFromStart(['NaN', 'abc', '', ' ', 'Infinity', '-Infinity', '1e400']);
   });
 
   test('every accepted value is an integer at or above the sentinel', () => {

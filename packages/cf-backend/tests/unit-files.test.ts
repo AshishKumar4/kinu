@@ -452,15 +452,23 @@ describe("putFileBytes", () => {
       .rejects.toThrow("file exceeds the 25 MiB transfer limit");
   });
 
-  test("a refusal with no readable body still names the status", async () => {
-    answering(new Response("", { status: 502 }));
-    await expect(putFileBytes("/files", "x")).rejects.toThrow("502");
-  });
+  const refusals = [
+    {
+      name: "a refusal with no readable body still names the status",
+      body: "", status: 502, thrown: "502",
+    },
+    {
+      name: "a non-JSON refusal body is shown as it arrived",
+      body: "  gateway said no  ", status: 500, thrown: "gateway said no",
+    },
+  ] as const;
 
-  test("a non-JSON refusal body is shown as it arrived", async () => {
-    answering(new Response("  gateway said no  ", { status: 500 }));
-    await expect(putFileBytes("/files", "x")).rejects.toThrow("gateway said no");
-  });
+  for (const { name, body, status, thrown } of refusals) {
+    test(name, async () => {
+      answering(new Response(body, { status }));
+      await expect(putFileBytes("/files", "x")).rejects.toThrow(thrown);
+    });
+  }
 });
 
 /**
@@ -473,21 +481,29 @@ describe("putFileBytes", () => {
  * "shown inline here" and "sent inline by the route" cannot drift apart.
  */
 describe("the file viewer's dispatch", () => {
-  test("an image type opens in the image pane, whatever its extension case", () => {
-    expect(viewerKindOf("/home/user/shot.png")).toBe("image");
-    expect(viewerKindOf("/home/user/SHOT.PNG")).toBe("image");
-    expect(viewerKindOf("/home/user/diagram.svg")).toBe("image");
-  });
+  const viewerKinds = [
+    {
+      name: "an image type opens in the image pane, whatever its extension case",
+      kind: "image",
+      paths: ["/home/user/shot.png", "/home/user/SHOT.PNG", "/home/user/diagram.svg"],
+    },
+    {
+      name: "a PDF opens in the PDF pane",
+      kind: "pdf",
+      paths: ["/home/user/paper.pdf"],
+    },
+    {
+      name: "everything else is read as text — including a file with no extension",
+      kind: "text",
+      paths: ["/home/user/notes.md", "/home/user/Makefile", "/home/user/archive.tar.gz"],
+    },
+  ] as const;
 
-  test("a PDF opens in the PDF pane", () => {
-    expect(viewerKindOf("/home/user/paper.pdf")).toBe("pdf");
-  });
-
-  test("everything else is read as text — including a file with no extension", () => {
-    expect(viewerKindOf("/home/user/notes.md")).toBe("text");
-    expect(viewerKindOf("/home/user/Makefile")).toBe("text");
-    expect(viewerKindOf("/home/user/archive.tar.gz")).toBe("text");
-  });
+  for (const { name, kind, paths } of viewerKinds) {
+    test(name, () => {
+      for (const path of paths) expect(viewerKindOf(path)).toBe(kind);
+    });
+  }
 
   test("Markdown and HTML open rendered; every other text file opens as source", () => {
     expect(textRenderOf("/a/README.md")).toBe("markdown");
