@@ -1524,18 +1524,25 @@ interface AgentsActionCall {
   toolOptions: AgentsToolCallOptions | undefined;
 }
 
+/** The exploration substrate a `swarm` call runs on. `actionAdmission` refused
+ *  the call already when none is wired. Asked again here because that fact
+ *  lives in the enum rather than in the type, and `unsupported` is the same
+ *  answer either way. */
+function swarmSubstrate(deps: AgentsToolDeps): AgentsSwarmDeps {
+  const swarm = deps.swarm;
+
+  if (!swarm) throw new KinuError('unsupported', 'this actor wires no exploration substrate, so `swarm` has nothing to run');
+
+  return swarm;
+}
+
 interface SwarmActionCall extends AgentsActionCall {
   /** The mission ledger this search nests under, where one is wired. */
   budget?: MissionGovernor;
 }
 
 async function runSwarmAction({ deps, input, mode, toolOptions, budget }: SwarmActionCall): Promise<object> {
-  const swarm = deps.swarm;
-
-  // `actionAdmission` refused this call already when no exploration substrate is
-  // wired. Said again here because that fact lives in the enum rather than in
-  // the type, and `unsupported` is the same answer either way.
-  if (!swarm) throw new KinuError('unsupported', 'this actor wires no exploration substrate, so `swarm` has nothing to run');
+  const swarm = swarmSubstrate(deps);
 
   // THIS CALL IS A RE-DRIVE, or it is not — and the distinction decides where
   // the profile comes from BEFORE anything resolves: a re-drive replays a
