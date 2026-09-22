@@ -101,12 +101,32 @@ for (const { rule } of cases) {
  * and is strictly better than repeating the literal. Both are counted as named; only interpolation is
  * rejected.
  */
-const CALL = /\b(?:diagnostics|logger|log)\.(?:event|failure)\(\s*(?:'([^']+)'|"([^"]+)"|([A-Z][A-Z0-9_]*)|(`))?/gu;
+const CALL = /\b(?:diagnostics|logger|log)\.(?:event|failure)\(\s*(?:'([^']+)'|"([^"]+)"|([A-Z][A-Z0-9_]*)(\[[^\]]+\]|\.event)?|([a-z][A-Za-z0-9_]*\.event\b|event\b)|(`))?/gu;
 
 /** The literal a `SCREAMING_CASE` event-name constant is declared as, so a constant contributes its
  *  actual name to the distinctness and reuse counts instead of being trusted blind. */
 const NAME_CONSTANT = (identifier: string): RegExp =>
 	new RegExp(`\\b${identifier}\\s*(?::[^=]+)?=\\s*['"]([^'"]+)['"]`, "u");
+
+/**
+ * A `SCREAMING_CASE` TABLE of event names: `const X = { a: 'x.a', b: 'x.b' } as const` or
+ * `const X = { a: { event: 'x.a', doing: … } }`. A call that indexes it (`X[kind]`, `X.a.event`, or a
+ * row destructured as `failure.event`) names one of finitely many literals, every one greppable, so
+ * the table contributes each of them. What is refused is a name no query can be written against:
+ * an interpolation, or a constant nothing declares.
+ */
+const NAME_TABLE = (identifier: string): RegExp =>
+	new RegExp(`\\b${identifier}\\s*(?::[^=]+)?=\\s*\\{([^;]*?)\\}\\s*(?:as\\s+const)?\\s*;`, "su");
+/** Every `key: 'a.b'` member of the table body: a flat table's values, or each row's `event`. Other
+ *  string members (`doing`, `code`) are prose or codes, never dotted, so the shape alone selects. */
+const TABLE_NAME = /\b[A-Za-z0-9_]+\s*:\s*['"]([a-z][a-z0-9_]*(?:\.[a-z0-9_]+)+)['"]/gu;
+
+function tableNames(identifier: string, wholeTree: string): readonly string[] | null {
+	const body = NAME_TABLE(identifier).exec(wholeTree)?.[1];
+	if (body === undefined) return null;
+	const found = [...body.matchAll(TABLE_NAME)].map((match) => match[1] ?? "");
+	return found.length > 0 ? found : null;
+}
 
 interface SinkCensus {
 	readonly governedFiles: number;
@@ -120,8 +140,7 @@ interface SinkCensus {
 	readonly filesWithSinks: number;
 }
 
-function sinkCensus(): SinkCensus {
-	const sources = readSources();
+function sinkCensus(sources: ReadonlyMap<string, string> = readSources()): SinkCensus {
 	const governed = [...sources].filter(([file]) => isDiagnosticSource(file));
 	const wholeTree = [...sources.values()].join("\n");
 	const names: string[] = [];
@@ -135,14 +154,32 @@ function sinkCensus(): SinkCensus {
 			filesWithSinks.add(file);
 			const literal = match[1] ?? match[2];
 			const identifier = match[3];
+			const indexed = match[4] !== undefined;
+			const rowField = match[5];
 			if (literal !== undefined) {
 				names.push(literal);
-			} else if (identifier !== undefined) {
+			} else if (identifier !== undefined && !indexed) {
 				// Resolved against the whole tree, not just this file: a shared name constant may be
 				// declared where it is exported from. Unresolvable is a finding, not a pass.
 				const declared = NAME_CONSTANT(identifier).exec(wholeTree)?.[1];
 				if (declared === undefined) unqueryableNames.push(`${file}: ${identifier} (unresolved)`);
 				else { names.push(declared); viaConstant += 1; }
+			} else if (identifier !== undefined) {
+				const declared = tableNames(identifier, wholeTree);
+				if (declared === null) unqueryableNames.push(`${file}: ${identifier} (table unresolved)`);
+				else { names.push(...declared); viaConstant += 1; }
+			} else if (rowField !== undefined) {
+				// `failure.event`: the row of a table destructured or looked up above. The table is the
+				// SCREAMING_CASE constant the row was read from in this file.
+				// `row.event` reads the row a lookup bound; a bare `event` is that row destructured.
+				const row = rowField === "event" ? null : rowField.slice(0, -".event".length);
+				const table = row === null
+					? /\{[^}]*\bevent\b[^}]*\}\s*=\s*([A-Z][A-Z0-9_]*)\[/u.exec(source)
+					: new RegExp(`\\b${row}\\s*=\\s*([A-Z][A-Z0-9_]*)\\[`, "u").exec(source);
+				const tableIdentifier = table?.[1];
+				const declared = tableIdentifier === undefined ? null : tableNames(tableIdentifier, wholeTree);
+				if (declared === null) unqueryableNames.push(`${file}: ${rowField} (row's table unresolved)`);
+				else { names.push(...declared); viaConstant += 1; }
 			} else {
 				unqueryableNames.push(`${file}: interpolated name`);
 			}
@@ -195,6 +232,36 @@ function preservedUiCalls(): number {
 		rmSync(join(configPath, ".."), { recursive: true, force: true });
 	}
 }
+
+// The resolver proven in both directions on a synthetic source before it judges the tree: each
+// accepted spelling of a name yields its literals, and each refused one is a finding.
+const NAME_RESOLUTION_FIXTURE = `
+const FLAT = { a: 'fix.flat_a', b: 'fix.flat_b' } as const;
+const ROWS = { warn: { event: 'fix.row_warn', code: 'x' }, error: { event: 'fix.row_error', code: 'y' } } as const;
+const ONE = 'fix.one';
+function f(kind: keyof typeof FLAT, outcome: keyof typeof ROWS, cause: unknown) {
+  diagnostics.failure('fix.literal', cause);
+  diagnostics.failure(ONE, cause);
+  diagnostics.failure(FLAT[kind], cause);
+  const failure = ROWS[outcome];
+  diagnostics.failure(failure.event, cause);
+  const { event } = ROWS[outcome];
+  diagnostics.failure(event, cause);
+  diagnostics.failure(\`fix.\${kind}\`, cause);
+  diagnostics.failure(UNDECLARED, cause);
+}
+`;
+const resolved = sinkCensus(new Map([["packages/core/src/fixture.ts", NAME_RESOLUTION_FIXTURE]]));
+assert.deepEqual(
+	[...new Set(resolved.names)].sort(),
+	["fix.flat_a", "fix.flat_b", "fix.literal", "fix.one", "fix.row_error", "fix.row_warn"],
+	"the resolver must read a literal, a name constant, an indexed table, a row's .event and a destructured event",
+);
+assert.deepEqual(
+	resolved.unqueryableNames,
+	["packages/core/src/fixture.ts: interpolated name", "packages/core/src/fixture.ts: UNDECLARED (unresolved)"],
+	"the resolver must still refuse an interpolated name and a constant nothing declares",
+);
 
 const census = sinkCensus();
 const uiCalls = preservedUiCalls();
