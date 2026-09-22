@@ -38,14 +38,15 @@ if ! cmp -s "$TREE/bun.lock" "$MAIN/bun.lock"; then
 fi
 
 # Mirror one node_modules directory: every entry symlinked to the donor's, except
-# the workspace scope, which is rebuilt locally against THIS tree's packages.
-# The workspace scope is DERIVED from this tree's own packages, never
-# hardcoded: the product scope has been renamed before, and a hardcoded scope
-# leaves every fresh worktree after such a rename with an empty scope directory
-# that fails workspace resolution.
-SCOPES="$(bun -e 'const scopes = new Set(); for (const file of Bun.argv.slice(1)) { const name = JSON.parse(await Bun.file(file).text()).name; if (!name.startsWith("@")) continue; const slash = name.indexOf("/"); if (slash < 2) throw new Error("Invalid package name in " + file); scopes.add(name.slice(0, slash)); } process.stdout.write([...scopes].sort().join("\n"));' "$TREE"/packages/*/package.json)"
+# the workspace scopes, which are rebuilt locally against THIS tree's workspaces.
+# Both are DERIVED from the root manifest's `workspaces`, never hardcoded: the
+# product scope has been renamed before, and the vendored `@mossaic/sdk` lives
+# outside packages/. Read from packages/* alone, its scope stayed a link into the
+# main checkout, so this tree's cf-backend loaded the main checkout's SDK.
+WORKSPACES="$(bun -e 'const root = Bun.argv[1]; const dirs = new Set(); for (const pattern of JSON.parse(await Bun.file(`${root}/package.json`).text()).workspaces) for (const file of new Bun.Glob(`${pattern}/package.json`).scanSync({ cwd: root })) dirs.add(file.slice(0, -"/package.json".length)); process.stdout.write([...dirs].sort().join("\n"));' "$TREE")"
+SCOPES="$(bun -e 'const scopes = new Set(); for (const file of Bun.argv.slice(1)) { const name = JSON.parse(await Bun.file(file).text()).name; if (!name.startsWith("@")) continue; const slash = name.indexOf("/"); if (slash < 2) throw new Error("Invalid package name in " + file); scopes.add(name.slice(0, slash)); } process.stdout.write([...scopes].sort().join("\n"));' $(printf "$TREE/%s/package.json " $WORKSPACES))"
 if [ -z "$SCOPES" ]; then
-  echo "No workspace scope found in $TREE/packages/*/package.json - refusing to mirror blind." >&2
+  echo "No workspace scope found in the workspaces of $TREE/package.json - refusing to mirror blind." >&2
   exit 1
 fi
 
@@ -65,7 +66,7 @@ mirror() {
     ln -s "$entry" "$dst/$name"
   done
   # The workspace scope belongs to the TOP-LEVEL node_modules only: the
-  # ../../packages depth below is correct from nowhere else, and a nested
+  # ../../<workspace> depth below is correct from nowhere else, and a nested
   # per-package tree never carries a workspace scope. Whether the DONOR has the
   # scope is a different question and was the wrong test — a scope this tree's
   # packages declare but the donor has not installed yet is exactly the case
@@ -76,23 +77,27 @@ mirror() {
   for scope in $SCOPES; do
     rm -rf "${dst:?}/$scope"
     mkdir -p "$dst/$scope"
-    for pkg in "$TREE"/packages/*/; do
+    for dir in $WORKSPACES; do
+      pkg="$TREE/$dir"
       [ -f "$pkg/package.json" ] || continue
       name="$(bun -e 'const [scope, file] = Bun.argv.slice(1); const name = JSON.parse(await Bun.file(file).text()).name; if (name.startsWith(scope + "/")) process.stdout.write(name.slice(scope.length + 1));' "$scope" "$pkg/package.json")"
       [ -n "$name" ] || continue
-      ln -sfn "../../packages/$(basename "$pkg")" "$dst/$scope/$name"
+      ln -sfn "../../$dir" "$dst/$scope/$name"
     done
   done
 }
 
 mirror "$MAIN/node_modules" "$TREE/node_modules" top
-# Nested per-package trees carry pinned versions (cf-backend's own typescript).
-for nested in "$MAIN"/packages/*/node_modules; do
-  [ -d "$nested" ] || continue
-  mirror "$nested" "$TREE/packages/$(basename "$(dirname "$nested")")/node_modules"
+# Nested per-workspace trees carry pinned versions (cf-backend's and the SDK's own typescript).
+for dir in $WORKSPACES; do
+  [ -d "$MAIN/$dir/node_modules" ] || continue
+  mirror "$MAIN/$dir/node_modules" "$TREE/$dir/node_modules"
 done
 
 cd "$TREE"
+# The vendored SDK now resolves to this tree's copy, and its export map points at
+# `dist/`, which the root `prepare` hook builds and a linked worktree never runs.
+sdk_out="$(bun scripts/mossaic-sdk.ts 2>&1)" || { printf '%s\n' "$sdk_out"; exit 1; }
 # Quiet on success, loud on failure: the suite names the fix command, and a
 # plain redirect hid exactly that line.
 resolution_out="$(bun scripts/ladder.ts --run bun test --timeout=0 packages/*/tests/workspace-resolution.test.ts 2>&1)" \
