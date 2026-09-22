@@ -291,7 +291,6 @@ export function workspaceObject<Built extends Partial<CliAgentTarget>>(built: Bu
   return {
     claimOwner: refuse('claimOwner'),
     setInitialDisplayName: refuse('setInitialDisplayName'),
-    setAutoDisplayName: refuse('setAutoDisplayName'),
     setSoul: refuse('setSoul'),
     resetWorkspaceBaseline: refuse('resetWorkspaceBaseline'),
     setModel: refuse('setModel'),

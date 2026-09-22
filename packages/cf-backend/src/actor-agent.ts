@@ -5232,49 +5232,22 @@ export abstract class ActorAgent extends Agent<Env> {
   protected abstract ownMission(): string;
 
   /**
-   * Automatic titling — one path, shared by every root that can be talked to.
+   * Automatic titling — one path, shared by every root that can be talked to,
+   * with its failure left to travel: the durable caller completes only once
+   * the boundary has answered, so a failed model call or registry write keeps
+   * its row owed and the ledger retries it.
    *
    * The decision is core's (`planWorkspaceTitle`): a title the operator chose
-   * is never touched, an actor with nothing to be named from is left alone,
-   * and persisting an auto title marks `name_origin`, so this runs at most
-   * once. The slug is NOT part of it: fixed at creation and permanent.
-   *
-   * A failed generation is not swallowed into silence — the deterministic
-   * title has already landed by then, so the failure is reported and the
-   * title that landed stands.
-   */
-  protected async maybeAutoTitle(mission: string): Promise<void> {
-    try {
-      await this.applyAutoTitle(mission);
-    } catch (err) {
-      // `workspace`, not `agent`: the analytics sink publishes from a closed set
-      // of field NAMES, and `agent` is not one of them — so this actor's
-      // identity was being dropped on the way to the dataset while looking like
-      // it was reported. `title` is deliberately still not published; it is
-      // derived from the mission, which is the person's own sentence.
-      diagnostics.failure('agent.auto_title_failed', toKinuError({
-        doing: 'deriving a title from the mission',
-        cause: err,
-        otherwise: 'unavailable',
-      }), { workspace: this.name });
-    }
-  }
-
-  /**
-   * The same titling, with its failure left to travel.
-   *
-   * The absorbing wrapper above is right for a caller that is opportunistic — a
-   * wake-time heal, a soul read — and wrong for one that OWES the title: a
-   * transient registry failure there was recorded as a completed effect and
-   * pruned rather than retried. The durable caller uses this and completes only
-   * once the boundary has answered.
+   * is never touched, and a title that is not a placeholder is replaced only
+   * when `standIn` says this is a new workspace's naming — its genesis turn,
+   * whose recorded row carries the flag through every retry. Every other turn
+   * finds a name and asks no model. The slug is NOT part of it: fixed at
+   * creation and permanent.
    *
    * `persistAutoTitle` is the boundary either way: a title the owner claimed
-   * first refuses the write, and a model's answer stamps `name_origin` 'auto',
-   * after which the plan no longer matches. A DERIVED stand-in stamps
-   * 'provisional' instead and stays owed its upgrade.
+   * first refuses the write.
    */
-  protected async applyAutoTitle(mission: string): Promise<string | null> {
+  protected async applyAutoTitle(mission: string, standIn: boolean): Promise<string | null> {
     // Read stored naming state before a cold activation plans a title.
     await this.hydrateTitleInputs();
 
@@ -5282,8 +5255,9 @@ export abstract class ActorAgent extends Agent<Env> {
       slug: this.actorHandle().name,
       ...this.titleInputs(),
       mission,
+      standIn,
     }, {
-      persist: (name, origin) => this.persistAutoTitle(name, origin),
+      persist: (name) => this.persistAutoTitle(name),
       suggest: (text) => this.suggestTitle(text),
     });
 
@@ -5313,12 +5287,9 @@ export abstract class ActorAgent extends Agent<Env> {
   }
 
   /** Commit one auto title wherever this root's naming state is authoritative.
-   *  `origin` distinguishes the DERIVED stand-in from the model's answer: only
-   *  the second closes the titling sequence, and writing both as 'auto' is what
-   *  froze every workspace on the first line of its own prompt (#18).
    *  `false` means a manual rename claimed the title first, which is what
    *  makes the owner's choice win a race with the model call above. */
-  protected abstract persistAutoTitle(displayName: string, origin: NameOrigin): Promise<boolean>;
+  protected abstract persistAutoTitle(displayName: string): Promise<boolean>;
 
   /** The naming state the title policy decides against. The base reads the
    *  actor's own config — which IS the authority for a subordinate's

@@ -431,7 +431,7 @@ describe('a killed CLI process is recovered by the next start', () => {
   });
 
 
-  test('a death INSIDE the title body leaves a named workspace and the replay finishes the naming', async () => {
+  test('a death INSIDE the title body leaves a named workspace and pays for no second call', async () => {
     const dbPath = scratchPath('terminal-death-inside-title', 'agent.db');
     expect(await killAt(dbPath, 'inside-title')).toBe('KILLED inside-title');
 
@@ -447,14 +447,12 @@ describe('a killed CLI process is recovered by the next start', () => {
     const events: SessionEvent[] = [];
     const next = await restart({ rt, db, model, events });
 
-    // The row settles, and the replay FINISHES what the cut interrupted: the
-    // stand-in on disk is marked `provisional`, so the plan still matches and
-    // the naming call the cut prevented is the one this replay makes. Reading
-    // the stand-in as "already named" is what left every workspace showing the
-    // first line of its own prompt (#18); the stamp that makes this effect a
-    // no-op is the GENERATED title's, not the stand-in's.
-    expect(state.titleCalls).toBe(1);
-    expect(displayName(rt)).toBe('Parser Work');
+    // The row settles, and the replay pays for NOTHING: the stand-in on disk is
+    // no longer a placeholder, so the plan no longer matches and the lane is a
+    // no-op. That is the whole reason this effect is replayable — and the
+    // reason a failed persist has to reach the ledger instead of being logged.
+    expect(state.titleCalls).toBe(0);
+    expect(displayName(rt)).toBe('refactor the parser');
     expect(completedTurns(rt)).toBe(1);
     expect(stillOwed(rt)).toEqual([]);
     await next.end();
