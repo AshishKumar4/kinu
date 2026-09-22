@@ -10,7 +10,7 @@ import type { CliSessionOptions } from '../session';
 import { chatCommand } from './chat';
 import { ensureLocalDaemonRunning } from './daemon';
 import { resolvePromptAttachments } from '../attachments';
-import { watchHeadlessConsents, watchTerminalConsents } from '../consent-watch';
+import { watchHeadlessConsents, watchTerminalConsents, type ConsentWatcher } from '../consent-watch';
 import { ERR, formatFailure, printFailure, printToolCall, printToolResult } from '../display';
 import { normalizeWebhookAuthMode, numberField, stringField } from '../options';
 import { guideFailure } from '../provider-guidance';
@@ -193,13 +193,22 @@ async function runOneShot(
     render(event);
   });
 
-  const consentWatch = !client.consents
-    ? null
-    : surface.headless
-      ? watchHeadlessConsents(client.consents, client.agentName, { json: surface.json, onDenied: () => { failed = true; } })
-      : surface.json
-        ? null
-        : watchTerminalConsents(client.consents, client.agentName, askLineOnce);
+  /** Headless fails a consent closed; a JSON surface has nobody to ask. */
+  function startConsentWatch(): ConsentWatcher | null {
+    const consents = client.consents;
+
+    if (!consents) return null;
+
+    if (surface.headless) {
+      return watchHeadlessConsents(consents, client.agentName, { json: surface.json, onDenied: () => { failed = true; } });
+    }
+
+    if (surface.json) return null;
+
+    return watchTerminalConsents(consents, client.agentName, askLineOnce);
+  }
+
+  const consentWatch = startConsentWatch();
 
   try {
     await client.connect();
@@ -265,6 +274,21 @@ function askLineOnce(question: string, signal: AbortSignal): Promise<string | nu
   });
 }
 
+/** Answer one non-prompt RPC command with its result, or with its failure
+ *  rendered for the caller reading the stream. */
+async function respondToRpcCommand(
+  cmd: JsonObject,
+  output: (input: { value: unknown }) => void,
+  run: () => Promise<JsonValue>,
+): Promise<void> {
+  try {
+    const data = await run();
+    output({ value: { id: cmd.id, type: 'response', command: cmd.type, success: true, data } });
+  } catch (err) {
+    output({ value: { id: cmd.id, type: 'response', command: cmd.type, success: false, error: renderThrownChain({ cause: err }) } });
+  }
+}
+
 async function runRpc(
   target: AgentTarget,
   opts: AgentClientFlags & TranscriptFlags,
@@ -289,17 +313,11 @@ async function runRpc(
         if (cmd.value.type === 'exit' || cmd.value.type === 'shutdown') break;
 
         if (cmd.value.type !== 'prompt') {
-          try {
-            const data = await runCloudRpcCommand(auth.origin, auth.token, target.cloudName, cmd.value);
-            output({ value: { id: cmd.value.id, type: 'response', command: cmd.value.type, success: true, data } });
-          } catch (err) {
-            output({ value: { id: cmd.value.id, type: 'response', command: cmd.value.type, success: false, error: renderThrownChain({ cause: err }) } });
-          }
-
+          await respondToRpcCommand(cmd.value, output, () => runCloudRpcCommand(auth.origin, auth.token, target.cloudName, cmd.value));
           continue;
         }
 
-        const message = String(cmd.value.message ?? '').trim();
+        const message = stringField(cmd.value, 'message') ?? '';
 
         if (!message) {
           output({ value: { id: cmd.value.id, type: 'response', command: 'prompt', success: false, error: 'message required' } });
@@ -347,17 +365,11 @@ async function runRpc(
       if (cmd.value.type === 'exit' || cmd.value.type === 'shutdown') break;
 
       if (cmd.value.type !== 'prompt') {
-        try {
-          const data = await runLocalRpcCommand(target.localName, cmd.value, client);
-          output({ value: { id: cmd.value.id, type: 'response', command: cmd.value.type, success: true, data } });
-        } catch (err) {
-          output({ value: { id: cmd.value.id, type: 'response', command: cmd.value.type, success: false, error: renderThrownChain({ cause: err }) } });
-        }
-
+        await respondToRpcCommand(cmd.value, output, () => runLocalRpcCommand(target.localName, cmd.value, client));
         continue;
       }
 
-      const message = String(cmd.value.message ?? '').trim();
+      const message = stringField(cmd.value, 'message') ?? '';
 
       if (!message) {
         output({ value: { id: cmd.value.id, type: 'response', command: 'prompt', success: false, error: 'message required' } });
@@ -395,7 +407,7 @@ async function runCloudRpcCommand(origin: string, token: string, name: string, c
   const rpc = async (method: string, args: JsonValue[] = []): Promise<JsonValue> =>
     callAgentRpc(origin, token, name, method, JsonValueSchema, args);
 
-  const type = String(cmd.type);
+  const type = stringField(cmd, 'type') ?? '';
 
   switch (type) {
     case 'get_state':
@@ -494,7 +506,7 @@ async function runCloudRpcCommand(origin: string, token: string, name: string, c
 }
 
 async function runLocalRpcCommand(name: string, cmd: JsonObject, client: AgentClient): Promise<JsonValue> {
-  const type = String(cmd.type);
+  const type = stringField(cmd, 'type') ?? '';
 
   switch (type) {
     case 'get_state':

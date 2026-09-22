@@ -2,7 +2,7 @@ import {
   decodeJsonValue, formatScoreInterval, JsonArraySchema, JsonValueSchema,
   renderAlignmentConvergence, renderCalibrationReport, SPEND_SOURCE_LABEL, usageTotal,
   type AlignmentConvergence, type GepaOptimizationResult, type JsonObject, type JsonValue,
-  type SearchNode, type Usage, type WorkspaceSpend,
+  type MissionBudgetLimits, type SearchNode, type Usage, type WorkspaceSpend,
 } from '@kinu.run/core';
 import * as v from 'valibot';
 import { resolveAgentTarget } from '../agent-target';
@@ -14,7 +14,7 @@ import {
   type CloudWebhookTriggerInput,
 } from '../cloud-api';
 import { ACCENT, DIM, ERR, OK, plural, printJson, printSearchTree, WARN } from '../display';
-import { asRecord, normalizeWebhookAuthMode, parsePositiveInt, parseTime } from '../options';
+import { asRecord, normalizeWebhookAuthMode, parsePositiveInt, parseTime, stringField } from '../options';
 import {
   executeLocalExecutor,
   getLocalAgentState,
@@ -222,6 +222,16 @@ export async function spendCommand(name: string, opts: InspectOpts = {}): Promis
   printSpend(spend);
 }
 
+/** The ceiling shown beside a mission's spend, in the unit it was capped in.
+ *  An uncapped mission shows none. */
+function capSuffix(limits: MissionBudgetLimits): string {
+  if (limits.usd !== undefined) return ` / $${limits.usd.toFixed(2)}`;
+
+  if (limits.tokens !== undefined) return ` / ${limits.tokens.toLocaleString()} tokens`;
+
+  return '';
+}
+
 function printSpend(spend: WorkspaceSpend): void {
   const measured = usageTotal(spend.total.usage);
   console.log(`${ACCENT('Workspace spend')} ${DIM(`${plural(spend.coverage.calls, 'call')} · whole log`)}`);
@@ -246,9 +256,7 @@ function printSpend(spend: WorkspaceSpend): void {
     console.log(DIM('By mission (a call appears under every label above it)'));
 
     for (const m of spend.missions) {
-      const cap = m.limits.usd !== undefined ? ` / $${m.limits.usd.toFixed(2)}`
-        : m.limits.tokens !== undefined ? ` / ${m.limits.tokens.toLocaleString()} tokens` : '';
-
+      const cap = capSuffix(m.limits);
       const state = m.exhausted ? ` ${ERR('spent')}` : '';
       console.log(`  ${ACCENT(m.label.padEnd(18))} ${m.spent.tokens.toLocaleString()} tokens  `
         + `$${m.spent.usd.toFixed(4)}${cap}  ${DIM(`${plural(m.calls, 'call')} · ${m.pricing.source}`)}${state}`);
@@ -389,7 +397,7 @@ export async function headsCommand(name: string, opts: InspectOpts = {}): Promis
     local: () => decodeJsonValue({ value: listLocalHeads(target.localName, limit) }),
   });
 
-  printRows(data, opts, formatHeadRow);
+  printRows(data, opts, (item) => formatRunRow(item, HEAD_RUN_ROW));
 }
 
 export async function gepaCommand(name: string, runId: string | undefined, opts: GepaOpts = {}): Promise<void> {
@@ -418,7 +426,7 @@ export async function gepaCommand(name: string, runId: string | undefined, opts:
     local: () => decodeJsonValue({ value: listLocalGepaRuns(target.localName, limit) }),
   });
 
-  printRows(data, opts, formatGepaRow);
+  printRows(data, opts, (item) => formatRunRow(item, GEPA_RUN_ROW));
 }
 
 /** Drive one GEPA optimisation pass, on whichever backend holds the agent.
@@ -638,26 +646,34 @@ function printPretty(data: JsonValue): void {
 function formatEventRow(item: JsonValue): string {
   const row = asRecord({ value: item }, 'value');
 
-  return `${ACCENT(String(row.id ?? 'event'))} ${String(row.variant ?? '')} ${DIM(String(row.ingress ?? ''))} ${formatDate(row.received_at ?? row.receivedAt)}`;
+  return `${ACCENT(stringField(row, 'id') ?? 'event')} ${stringField(row, 'variant') ?? ''} ${DIM(stringField(row, 'ingress') ?? '')} ${formatDate(row.received_at ?? row.receivedAt)}`;
 }
 
 function formatTimelineRow(item: JsonValue): string {
   const row = asRecord({ value: item }, 'value');
-  const label = row.label ?? row.message ?? row.kind ?? row.id ?? 'entry';
+  const label = stringField(row, 'label') ?? stringField(row, 'message') ?? stringField(row, 'kind') ?? stringField(row, 'id') ?? 'entry';
 
-  return `${formatDate(row.ts ?? row.received_at ?? row.created_at)} ${ACCENT(String(row.kind ?? row.type ?? 'event'))} ${DIM(String(label).slice(0, 120))}`;
+  return `${formatDate(row.ts ?? row.received_at ?? row.created_at)} ${ACCENT(stringField(row, 'kind') ?? stringField(row, 'type') ?? 'event')} ${DIM(label.slice(0, 120))}`;
 }
 
-function formatHeadRow(item: JsonValue): string {
-  const row = asRecord({ value: item }, 'value');
-
-  return `${ACCENT(String(row.rootId ?? row.id ?? 'head'))} ${String(row.status ?? '')} ${DIM(String(row.task ?? row.rationale ?? '').slice(0, 100))}`;
+/** Which fields a run list carries its identity and its one-line purpose in.
+ *  Head runs and GEPA runs render the same row under different names. */
+interface RunRowFields {
+  readonly id: string;
+  readonly fallbackId: string;
+  readonly purpose: readonly [string, string];
 }
 
-function formatGepaRow(item: JsonValue): string {
-  const row = asRecord({ value: item }, 'value');
+const HEAD_RUN_ROW: RunRowFields = { id: 'rootId', fallbackId: 'head', purpose: ['task', 'rationale'] };
 
-  return `${ACCENT(String(row.runId ?? row.id ?? 'gepa'))} ${String(row.status ?? '')} ${DIM(String(row.target ?? row.stopReason ?? '').slice(0, 100))}`;
+const GEPA_RUN_ROW: RunRowFields = { id: 'runId', fallbackId: 'gepa', purpose: ['target', 'stopReason'] };
+
+function formatRunRow(item: JsonValue, fields: RunRowFields): string {
+  const row = asRecord({ value: item }, 'value');
+  const id = stringField(row, fields.id) ?? stringField(row, 'id') ?? fields.fallbackId;
+  const purpose = stringField(row, fields.purpose[0]) ?? stringField(row, fields.purpose[1]) ?? '';
+
+  return `${ACCENT(id)} ${stringField(row, 'status') ?? ''} ${DIM(purpose.slice(0, 100))}`;
 }
 
 function formatExecutorRow(item: JsonValue): string {
@@ -665,7 +681,7 @@ function formatExecutorRow(item: JsonValue): string {
   const capabilities = v.safeParse(v.array(v.string()), row.capabilities);
   const caps = capabilities.success ? capabilities.output.join(', ') : '';
 
-  return `${ACCENT(String(row.name ?? row.id ?? 'executor'))} ${DIM(String(row.kind ?? ''))} ${String(row.status ?? '')} ${DIM(caps)}`;
+  return `${ACCENT(stringField(row, 'name') ?? stringField(row, 'id') ?? 'executor')} ${DIM(stringField(row, 'kind') ?? '')} ${stringField(row, 'status') ?? ''} ${DIM(caps)}`;
 }
 
 
