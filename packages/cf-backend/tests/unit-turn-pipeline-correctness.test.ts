@@ -16,6 +16,7 @@ import {
   type ActorHarness, type HarnessOrchestratorAgent,
 } from './helpers/actor-harness';
 import { createHeadRuntime } from '../src/head-runtime';
+import { joinHarnessFibers } from './helpers/agents-sdk';
 import type { ExplorationHostSeams } from '../src/exploration-hosting';
 import type { ModelMessage, ToolSet, UIMessage } from 'ai';
 import { jsonSchema, streamText, tool } from 'ai';
@@ -927,6 +928,42 @@ describe('turn-pipeline correctness wiring', () => {
       ).get()).toMatchObject({ n: 0 });
     });
 
+    test('a reply that fails mid-dispatch stays owed with that failure, not as an open channel', async () => {
+      const harness = orchestratorHarness();
+      const actorId = harness.agent.observeRuntime().actor.actorId;
+      boundDelivery(harness, 'evt-mail');
+      // A mail on the same drain, with its thread still open: the answer owes it a reply.
+      harness.db.prepare(
+        `INSERT INTO agent_log
+           (actor_id, id, kind, turn_id, step_idx, parent_id, trace_id, ingress, variant,
+            trust, priority, payload_visibility, payload, received_at,
+            schema_version, dedupe_key, consumed_at)
+         VALUES (?, 'ev-mail', 'event', 'evt-mail', 0, NULL, 'tr-2', 'email_inbound', 'email',
+                 'authenticated', 'normal', 'full', ?, 1, 1, NULL, ?)`,
+      ).run(actorId, JSON.stringify({
+        from: 'owner@example.com', to: 'agent@example.com', subject: 'the build', body_text: 'did it pass?',
+        message_id: null, in_reply_to: null, references: null, attachments: [],
+      }), LEASE_TAKEN_AT);
+      harness.db.prepare(
+        `INSERT INTO reply_channels (actor_id, id, event_id, kind, holder_addr, ttl_expires_at, created_at, updated_at)
+         VALUES (?, 'ch-mail', 'ev-mail', 'email_thread', ?, ?, 1, 1)`,
+      ).run(actorId, JSON.stringify({
+        to: 'owner@example.com', from: 'agent@example.com', subject: 'the build', message_id: null, references: null,
+      }), LEASE_TAKEN_AT + 3_600_000);
+      // The one write this dispatch cannot land: its reply-attempt record.
+      harness.db.run(`CREATE TRIGGER refuse_reply_record BEFORE INSERT ON agent_log
+        WHEN NEW.kind = 'reply_attempt' BEGIN SELECT RAISE(ABORT, 'storage refused the reply record'); END`);
+      await spliceDrain(harness, 'evt-mail');
+
+      await chatSessionTurns(harness.agent).settle({ messageId: 'a-mail', text: 'the answer', requestId: 'req-mail' });
+      await harness.agent.harnessTerminalReported();
+      await joinHarnessFibers();
+
+      expect(harness.db.query(
+        "SELECT status, outcome FROM terminal_effects WHERE effect_key LIKE '%:event_reply:evt-mail'",
+      ).all()).toEqual([{ status: 'pending', outcome: expect.stringContaining('storage refused the reply record') }]);
+    });
+
     test('a turn with no durable answer leaves the delivery recoverable', async () => {
       const harness = orchestratorHarness();
       boundDelivery(harness, 'evt-nodurable');
@@ -975,20 +1012,6 @@ describe('turn-pipeline correctness wiring', () => {
     const rows = (await drained.agent.harnessTranscript.history());
     expect(rows.at(-2)).toMatchObject({ role: 'user', parts: [{ type: 'text', text: 'the drain text' }], metadata: expect.objectContaining({ drainTurnId: 'drain-1' }) });
     expect(rows.at(-1)).toMatchObject({ role: 'assistant', parts: expect.arrayContaining([expect.objectContaining({ type: 'text', text: 'the answer' })]) });
-  });
-
-  test('delivery leases close only after reply dispatch completes', () => {
-    const helper = source.slice(
-      source.indexOf('private async completeEventBatch'),
-      source.indexOf('private _engine: EvolutionEngine | null = null;'),
-    );
-
-    expect(helper.indexOf('await dispatchEmailRepliesForTurn')).toBeGreaterThan(-1);
-    expect(helper).toContain('if (replies.pending)');
-    expect(helper).toContain('return false');
-    expect(helper.indexOf('this.eventLog.markTurnCompleted')).toBeGreaterThan(
-      helper.indexOf('await dispatchEmailRepliesForTurn'),
-    );
   });
 
   test('standalone drain identity survives the turn\'s own continuation until reply settlement', () => {

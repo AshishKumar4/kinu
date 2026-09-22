@@ -203,6 +203,25 @@ describe('DeviceTunnel', () => {
       timers.advance(35);
       expect(sock.sent.length).toBe(after);
     });
+
+    test('a probe the socket refuses to send ends the calls it guards, carrying why', async () => {
+      const sock = fakeSocket();
+      const timers = handClock();
+      const t = new DeviceTunnel(sock, 1_000, 10, timers);
+      const p = t.rpc('exec', ['make'], { timeoutMs: 0 });
+      let settled = false;
+      void p.then(() => { settled = true; }, () => { settled = true; });
+
+      const refused = new Error('socket refused the frame');
+      sock.send = () => { throw refused; };
+
+      // One tick: the probe is the only frame that tick sends.
+      timers.advance(10);
+      await Promise.resolve();
+
+      expect(settled).toBe(true);
+      await expect(p).rejects.toMatchObject({ message: expect.stringContaining(TUNNEL_DISCONNECTED), cause: refused });
+    });
   });
 
   /**

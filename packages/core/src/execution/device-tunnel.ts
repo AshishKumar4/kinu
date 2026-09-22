@@ -579,18 +579,18 @@ export class DeviceTunnel {
     }
 
     this.probeSentAt = this.clock.now();
-    // Fire-and-forget: the answer is irrelevant, its ARRIVAL is the signal,
-    // and handleMessage records that for any frame. A rejection is not itself
-    // proof of death — an error frame rejects the call and PROVES life, already
-    // recorded above — so the socket is asked directly, the same readyState
-    // question `isConnected` already owns. A probe that outlives the connection
-    // now ends the calls it was guarding here rather than a tick later.
-    void this.rpc(LIVENESS_METHOD, []).catch(() => {
-      if (!this.isConnected()) this.failOpenEnded(TUNNEL_DISCONNECTED);
-    });
+
+    // The answer is irrelevant and its ARRIVAL is the signal: `handleMessage`
+    // records any frame, so the probe carries an id the device answers and
+    // nothing waits on — an error frame proves life as well as a result does.
+    try {
+      this.notify({ id: nextDeviceRequestId(), method: LIVENESS_METHOD, params: [] });
+    } catch (cause) {
+      this.failOpenEnded(TUNNEL_DISCONNECTED, { cause });
+    }
   }
 
-  private failOpenEnded(reason: string): void {
+  private failOpenEnded(reason: string, options?: ErrorOptions): void {
     for (const id of this.openEnded) {
       const p = this.pending.get(id);
 
@@ -598,7 +598,7 @@ export class DeviceTunnel {
 
       this.pending.delete(id);
       p.stop();
-      p.reject(new Error(`${reason}: the call was abandoned, and may still be running on the device`));
+      p.reject(new Error(`${reason}: the call was abandoned, and may still be running on the device`, options));
     }
 
     this.disarmIdleHeartbeat();

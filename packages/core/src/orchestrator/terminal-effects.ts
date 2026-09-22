@@ -423,12 +423,12 @@ export function branchesTerminalEffect(deps: {
         const [entry] = deps.pending.splice(live, 1);
 
         if (entry !== undefined) {
-          await settlePendingBranch(
+          const outcome = await settlePendingBranch(
             { sql: deps.sql, actor: deps.actor, sessionId: deps.sessionId, broadcast: deps.broadcast },
             { entry, turnId, liveText, settlementKey: id },
           );
 
-          return { status: 'completed' };
+          return { status: 'completed', detail: outcome.ok ? undefined : outcome.reason };
         }
       }
 

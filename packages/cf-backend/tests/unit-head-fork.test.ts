@@ -26,6 +26,8 @@ import { afterAll, describe, expect, test } from 'bun:test';
 import { CRAFT_NEUTRAL_PRIOR, agentHome, agentTmpRoot, headAgentName, parseActorKey, type AgentRuntime } from '@kinu.run/core';
 import { mockAgentsSdk } from './helpers/agents-sdk';
 import { installSandboxSdkMock, setSandboxSdk } from './helpers/sandbox-sdk';
+import type { RecordedUserPlaneCalls } from './helpers/actor-harness';
+import type { KinuEgressParams } from '../src/egress/outbound';
 import type { CFRuntime } from '../src/runtime';
 import * as v from 'valibot';
 
@@ -42,6 +44,9 @@ const lastRequestedSandboxId = (): string | null => requestedSandboxId;
 /** Restores performed through the handle the runtime built. A head rides a
  *  container it does not own, so this must stay at zero however it is touched. */
 let restoresPerformed = 0;
+
+/** Every configuration the container was given, in order. */
+const configuredEgress: KinuEgressParams[] = [];
 
 // The suite's double for the container a head rides: the shared stand-in owns
 // the module, this file only points it. Reset in `afterAll`, so a later file
@@ -79,16 +84,18 @@ setSandboxSdk({
       // rides the configuration its ROOT installed, so a head configuring the
       // container would be a defect of the same shape as a head deciding its
       // own restore.
-      configureEgress: async () => {},
+      configureEgress: async (params: KinuEgressParams) => { configuredEgress.push(params); },
     };
   },
 });
 
 afterAll(() => { setSandboxSdk(null); });
 
-// After the sandbox double above, and it has to be after: the harness imports
-// the orchestrator at module scope and that graph reaches the sandbox SDK.
+// After the sandbox double above, and it has to be after: both helpers import
+// product modules at module scope, and that graph reaches the sandbox SDK.
 const { hostedExplorationHarness, orchestratorHarness } = await import('./helpers/actor-harness');
+
+const { TEST_CREDENTIAL_ENCRYPTION_KEY } = await import('./helpers/user-do');
 
 /** This backend CONSTRUCTS every hosted runtime with `createCFRuntime` —
  *  `ActorHostDeps.runtimeFor` IS that function. Core's `AgentRuntime` narrows
@@ -109,9 +116,12 @@ function isCFRuntime(runtime: AgentRuntime): runtime is CFRuntime {
  * read it.
  */
 
-async function hostedHead(files: Record<string, string> = {}, id = 'head-1') {
-  const workspace = orchestratorHarness();
+async function hostedHead(files: Record<string, string> = {}, id = 'head-1', userPlane?: RecordedUserPlaneCalls) {
+  const workspace = orchestratorHarness(userPlane);
   workspace.agent.declareContainerBinding();
+  // A deployment that serves a claimed workspace holds the root secret the
+  // owner's capability derives from.
+  workspace.agent.harnessDeclareEnv({ CREDENTIAL_ENCRYPTION_KEY: TEST_CREDENTIAL_ENCRYPTION_KEY });
 
   for (const [path, content] of Object.entries(files)) {
     const written = await workspace.agent.writeWorkspaceFile({ kind: 'file', path, data: content });
@@ -216,6 +226,23 @@ describe('a head forks its parent workspace', () => {
     // state it found. An actor that cannot mark the container restored cannot
     // mark it falsely.
     expect(restoresPerformed).toBe(0);
+  });
+
+  test('an owner vault that cannot be read fails the operation, never configuring the container empty', async () => {
+    const unreadable = new Error('the owner object reset mid-call');
+    configuredEgress.length = 0;
+
+    const { rt } = await hostedHead({}, 'head-vault', {
+      warmConnections: [], failWarm: null, titles: [], failVault: unreadable,
+    });
+
+    const handle = rt.sandboxHandle;
+
+    if (!handle) throw new Error('a hosted head runtime rides the workspace container');
+    // An empty vault here would be memoized for the handle's life: every
+    // secret-bearing request refused until the object restarts.
+    await expect(handle.exec('true')).rejects.toBe(unreadable);
+    expect(configuredEgress).toEqual([]);
   });
 
   /**

@@ -20,6 +20,7 @@ import {
   settlePendingBranch, branchHeadId, branchOutcomeFromJournal,
   type BranchStatusEvent, type PendingBranch,
 } from '../src/steer-branch';
+import { branchesTerminalEffect } from '../src/orchestrator/terminal-effects';
 import { present } from '@kinu.run/test-utils';
 
 function setup() {
@@ -426,5 +427,21 @@ describe('settlePendingBranch — the keyed settle both backends run at turn end
     expect(events).toHaveLength(1);
     expect(events[0]?.status).toBe('error');
     expect(latestAlternateTakeSet(sql, actor)).toBeNull();
+  });
+
+  test('a branch whose head never started settles with its reason recorded, as a journal settle does', async () => {
+    const { sql, actor } = setup();
+    const events: BranchStatusEvent[] = [];
+
+    const effect = branchesTerminalEffect({
+      sql, actor, sessionId: 'default', broadcast: (e) => { events.push(e); },
+      pending: [{ id: 'b-1', task: 'try the other way', handle: Promise.reject(new Error('the head could not start')) }],
+      journal: new HeadJournal(sql, actor),
+    });
+
+    const outcome = await effect.run({ id: 'b-1', task: 'try the other way', turnId: 'turn-1', liveText: 'the live answer' }, 'scope');
+
+    expect(outcome).toEqual({ status: 'completed', detail: 'the head could not start' });
+    expect(events.map((e) => e.status)).toEqual(['error']);
   });
 });
