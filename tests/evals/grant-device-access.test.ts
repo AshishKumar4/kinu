@@ -51,7 +51,7 @@ describe('grantDeviceAccess names its machine', () => {
       new Response(JSON.stringify(value), { status: 200 });
 
     globalThis.fetch = asFetchFunction(async (input, init) => {
-      const body = v.parse(RpcCallSchema, JSON.parse(String(init?.body)));
+      const body = v.parse(RpcCallSchema, JSON.parse(v.parse(v.string(), init?.body)));
       seen.push({ method: body.method, args: body.args });
 
       if (body.method === 'executeInExecutor') {
@@ -85,7 +85,9 @@ describe('grantDeviceAccess names its machine', () => {
         return answer({ result: { ok: true } });
       }
 
-      throw new Error(`unexpected RPC method ${body.method} at ${String(input)}`);
+      const url = input instanceof Request ? input.url : String(input);
+
+      throw new Error(`unexpected RPC method ${body.method} at ${url}`);
     });
 
     await grantDeviceAccess(ACCOUNT, 'dev-beta', 'workspace-a', 'kinu-beta');

@@ -153,19 +153,32 @@ describe(SUITE, () => {
           // deployment accepted and never answered is a miss with its reason.
           const outcome = landed ? await turnSettled(session, spelling.marker) : null;
           const screen = `Screen as the run left it: ${JSON.stringify(run.screen)}`;
+
+          /** The screen step that never happened, the turn that answered, an
+           *  Enter that sent nothing, or a turn that ended with no reply. */
+          const detailOf = (): string => {
+            if (unmet !== undefined) {
+              return `the screen never ${unmet.until === 'gone' ? 'cleared' : 'showed'} ${JSON.stringify(unmet.text)} `
+                + `within ${String(READY_SECONDS)}s on a real pty, so the run stopped there`
+                + `${landed ? ' (the deployment holds the turn regardless)' : ' and no draft was sent'}. ${screen}`;
+            }
+
+            if (outcome === 'replied') {
+              return `${spelling.marker} is a user row in the deployed transcript and its turn answered`;
+            }
+
+            if (outcome === null) {
+              return `Enter did NOT send: ${spelling.marker} was typed into the composer and the `
+                + `deployment recorded no user turn carrying it. ${screen}`;
+            }
+
+            return `${spelling.marker} landed as a user row and its turn ended without a reply: ${outcome.ended}`;
+          };
+
           subgoals.push({
             what: spelling.what,
             reached: unmet === undefined && outcome === 'replied',
-            detail: unmet !== undefined
-              ? `the screen never ${unmet.until === 'gone' ? 'cleared' : 'showed'} ${JSON.stringify(unmet.text)} `
-                + `within ${String(READY_SECONDS)}s on a real pty, so the run stopped there`
-                + `${landed ? ' (the deployment holds the turn regardless)' : ' and no draft was sent'}. ${screen}`
-              : outcome === 'replied'
-                ? `${spelling.marker} is a user row in the deployed transcript and its turn answered`
-                : outcome === null
-                  ? `Enter did NOT send: ${spelling.marker} was typed into the composer and the `
-                    + `deployment recorded no user turn carrying it. ${screen}`
-                  : `${spelling.marker} landed as a user row and its turn ended without a reply: ${outcome.ended}`,
+            detail: detailOf(),
           });
         }
 

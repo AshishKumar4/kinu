@@ -311,6 +311,14 @@ class CloudEvalTarget implements AgentEvalTarget {
 
     const shellQuote = (path: string): string => `'${path.replaceAll("'", `'\\''`)}'`;
 
+    /** One path-taking shell command on the box, refused by the name the
+     *  caller knows it as rather than by the command it ran. */
+    const fileOp = (verb: string, argv: string) => async (path: string): Promise<void> => {
+      const run = await exec(`${argv} ${shellQuote(path)}`);
+
+      if (run.exitCode !== 0) throw new Error(`cloud ${verb} ${path}: ${run.stdout}`);
+    };
+
     return {
       exec,
       vfs: {
@@ -356,16 +364,8 @@ class CloudEvalTarget implements AgentEvalTarget {
             isDir: kind.join(' ') === 'directory',
           };
         },
-        unlink: async (path) => {
-          const run = await exec(`rm -f ${shellQuote(path)}`);
-
-          if (run.exitCode !== 0) throw new Error(`cloud unlink ${path}: ${run.stdout}`);
-        },
-        mkdir: async (path) => {
-          const run = await exec(`mkdir -p ${shellQuote(path)}`);
-
-          if (run.exitCode !== 0) throw new Error(`cloud mkdir ${path}: ${run.stdout}`);
-        },
+        unlink: fileOp('unlink', 'rm -f'),
+        mkdir: fileOp('mkdir', 'mkdir -p'),
         exists: async (path) => (await exec(`test -e ${shellQuote(path)}`)).exitCode === 0,
       },
     };
@@ -418,7 +418,7 @@ class CloudEvalTarget implements AgentEvalTarget {
    *  goes through it, so no call site can forget the classification. */
   private rpc<T>(method: string, schema: v.GenericSchema<T>, args: JsonValue[] = []): Promise<T> {
     return infraBoundary(`${method} on ${this.origin}/${this.workspace}`, () =>
-      callAgentRpc(this.origin, this.opts.token, this.workspace, method, schema, args));
+      callAgentRpc({ origin: this.origin, token: this.opts.token, name: this.workspace, method, schema, args }));
   }
 }
 

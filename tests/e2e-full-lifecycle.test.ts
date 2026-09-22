@@ -20,6 +20,7 @@ import {
   createFactsStore,
   openWorkspaceMainActor,
   readSoul,
+  type JsonObject,
   type LLMProviderConfig,
   type CompletedTurn,
 } from '../packages/core/src/index';
@@ -77,6 +78,14 @@ const MEMORY_FACT = 'the project uses bun:sqlite for its database layer';
  * arm's scorers, over a corpus, where one model's choice is a data point rather
  * than a gate.
  */
+/** A tool call's `action` argument as a name to print; `?` when the call
+ *  carried none, which is how a tool with no actions reads. */
+function actionName(args: JsonObject): string {
+  const action = v.safeParse(v.string(), args.action);
+
+  return action.success ? action.output : '?';
+}
+
 function storedMemoryFact(db: Database, memoryFile: string | null): string | null {
   if (memoryFile?.includes(MEMORY_FACT)) return 'memory/MEMORY.md';
   // The workspace is reopened from disk here, so the actor whose facts these
@@ -296,14 +305,14 @@ describe('E2E Full Lifecycle', () => {
       && (call.args.action === 'save' || call.args.action === 'remember'));
 
     expect(wrote, 'the model never wrote through the memory tool — it called '
-      + (turn.toolCalls.map((call) => `${call.name}.${String(call.args.action ?? '?')}`).join(', ')
+      + (turn.toolCalls.map((call) => `${call.name}.${actionName(call.args)}`).join(', ')
         || 'nothing'))
       .toBeDefined();
     const where = storedMemoryFact(db, await rt.memory.read('memory/MEMORY.md'));
     expect(where, 'the memory tool reported a write but neither memory/MEMORY.md nor agent_facts '
       + 'holds the fact, so nothing was persisted for step 6 to find')
       .not.toBeNull();
-    console.log(`  Stored via memory.${String(wrote?.args.action)} in ${String(where)}`);
+    console.log(`  Stored via memory.${wrote === undefined ? '?' : actionName(wrote.args)} in ${String(where)}`);
   }, 120_000);
 
   // ── Step 6: Close and reopen with openWorkspaceCLI ──────────────────

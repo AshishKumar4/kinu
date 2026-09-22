@@ -106,13 +106,18 @@ interface TurnResult {
   request: RequestSurfaceEvidence;
 }
 
-async function chatTurn(
-  model: LanguageModel,
-  rt: CLIRuntime,
-  surface: EvalAgentSurface,
-  userMessage: string,
-  sessionId: string,
-): Promise<TurnResult> {
+/** One turn, as the CLI drives it: the model, the runtime it acts on, the
+ *  production tool surface, and which session the turn belongs to. */
+interface ChatTurn {
+  readonly model: LanguageModel;
+  readonly rt: CLIRuntime;
+  readonly surface: EvalAgentSurface;
+  readonly userMessage: string;
+  readonly sessionId: string;
+}
+
+async function chatTurn(turn: ChatTurn): Promise<TurnResult> {
+  const { model, rt, sessionId, surface, userMessage } = turn;
   const start = Date.now();
   const memoryTail = await readMemoryTail(rt.memory);
   // The PRODUCTION projection, from the production tool surface. A hand-assembled
@@ -322,13 +327,8 @@ const LETTER_Z = 'Z'.charCodeAt(0);
 /** Atbash: A maps to Z, B to Y, and so on. Its own inverse, which is what the
  *  solver test checks it against. */
 function atbash(text: string): string {
-  return [...text.toUpperCase()].map(character => {
-    const code = character.charCodeAt(0);
-
-    if (code < LETTER_A || code > LETTER_Z) return character;
-
-    return String.fromCharCode(LETTER_Z - (code - LETTER_A));
-  }).join('');
+  return text.toUpperCase().replaceAll(/[A-Z]/gu, (letter) =>
+    String.fromCharCode(LETTER_Z - (letter.charCodeAt(0) - LETTER_A)));
 }
 
 // ── Prompts, rendered from the data above ────────────────────────
@@ -454,7 +454,7 @@ describe('Evolution Proof', () => {
     console.log(`    agents actions: ${surface.agentsActions.join(', ') || '(none)'}`);
     expect(Object.keys(surface.tools)).toContain('eval');
 
-    const result = await chatTurn(model, rt, surface, RSA_CHALLENGE_1, 'session-1');
+    const result = await chatTurn({ model, rt, surface, userMessage: RSA_CHALLENGE_1, sessionId: 'session-1' });
     // The request evidence, per turn, from the wire: what the provider was
     // offered and whether the delegation ladder was in the system message it
     // received. Printed on the FIRST turn because that is where a broken
@@ -495,7 +495,7 @@ describe('Evolution Proof', () => {
   }, 0);
 
   liveTest('session 1, turn 2: Dijkstra challenge (learn algorithm pattern)', async () => {
-    const result = await chatTurn(model, rt, surface, DIJKSTRA_CHALLENGE_1, 'session-1');
+    const result = await chatTurn({ model, rt, surface, userMessage: DIJKSTRA_CHALLENGE_1, sessionId: 'session-1' });
     session1Results.push(result);
 
     console.log(`    Response: ${result.text.slice(0, 200)}`);
@@ -520,7 +520,7 @@ describe('Evolution Proof', () => {
   }, 0);
 
   liveTest('session 1, turn 3: cipher challenge + session reflection', async () => {
-    const result = await chatTurn(model, rt, surface, CIPHER_CHALLENGE, 'session-1');
+    const result = await chatTurn({ model, rt, surface, userMessage: CIPHER_CHALLENGE, sessionId: 'session-1' });
     session1Results.push(result);
 
     console.log(`    Response: ${result.text.slice(0, 200)}`);
@@ -549,17 +549,17 @@ describe('Evolution Proof', () => {
     // End session 1 — triggers session reflection
     const challenges = [RSA_CHALLENGE_1, DIJKSTRA_CHALLENGE_1, CIPHER_CHALLENGE];
 
-    const turns: CompletedTurn[] = session1Results.map((result, index) => {
+    const turns: CompletedTurn[] = session1Results.map((answered, index) => {
       const userMessage = challenges[index];
 
       if (!userMessage) throw new Error(`missing challenge for session result ${index}`);
 
       return {
         userMessage,
-        assistantResponse: result.text,
-        toolCalls: result.toolCalls,
-        steps: result.steps,
-        durationMs: result.durationMs,
+        assistantResponse: answered.text,
+        toolCalls: answered.toolCalls,
+        steps: answered.steps,
+        durationMs: answered.durationMs,
         feedback: 'positive',
         hadError: false,
       };
@@ -759,7 +759,7 @@ return report;`,
     expect(exposure.reachedBody).toBe(inheritedToolNames.length);
     expect(exposure.probeReturned).toBe(true);
 
-    const result = await chatTurn(model, rt, surface, RSA_CHALLENGE_2, 'session-2');
+    const result = await chatTurn({ model, rt, surface, userMessage: RSA_CHALLENGE_2, sessionId: 'session-2' });
     session2Results.push(result);
 
     console.log(`    Response: ${result.text.slice(0, 200)}`);
@@ -777,7 +777,7 @@ return report;`,
   }, 0);
 
   liveTest('session 2, turn 2: similar graph challenge with inherited artifacts', async () => {
-    const result = await chatTurn(model, rt, surface, DIJKSTRA_CHALLENGE_2, 'session-2');
+    const result = await chatTurn({ model, rt, surface, userMessage: DIJKSTRA_CHALLENGE_2, sessionId: 'session-2' });
     session2Results.push(result);
 
     console.log(`    Response: ${result.text.slice(0, 200)}`);

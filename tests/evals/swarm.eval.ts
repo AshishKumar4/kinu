@@ -392,6 +392,22 @@ const CandidateSchema = v.object({
   score: v.nullable(v.number()),
 });
 
+/**
+ * What one candidate came back with, as the run log names it.
+ *
+ * THREE OUTCOMES, not two. A candidate with no measurement is either a node that
+ * never finished or an answer the instrument declined; printing both as
+ * "unmeasurable" is what sent the last reading of this arm to the verifier for a
+ * cause that was the ceiling above.
+ */
+function candidateOutcome(candidate: v.InferOutput<typeof CandidateSchema>): string {
+  if (candidate.incomplete !== null) return `did not finish — ${candidate.incomplete}`;
+
+  if (candidate.measured === null) return `unmeasurable — ${String(candidate.unmeasurable)}`;
+
+  return `${String(candidate.measured.value)} calls, score ${String(candidate.score)}`;
+}
+
 const SwarmResultSchema = v.object({
   preset: v.string(),
   label: v.nullable(v.string()),
@@ -696,13 +712,7 @@ describe('Swarm evals — a live measured search through the settled tool surfac
       // never finished or an answer the instrument declined; printing both as
       // "unmeasurable" is what sent the last reading of this arm to the verifier for a
       // cause that was the ceiling above.
-      const outcome = candidate.incomplete !== null
-        ? `did not finish — ${candidate.incomplete}`
-        : candidate.measured === null
-          ? `unmeasurable — ${String(candidate.unmeasurable)}`
-          : `${String(candidate.measured.value)} calls, score ${String(candidate.score)}`;
-
-      console.log(`      ${candidate.id}: ${outcome}`);
+      console.log(`      ${candidate.id}: ${candidateOutcome(candidate)}`);
     }
 
     console.log(`    fanIn ${JSON.stringify(report.fanIn)}`);

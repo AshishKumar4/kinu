@@ -754,7 +754,7 @@ function toolCallRows(db: Database): Extract<RunEvent, { type: 'tool_call_end' }
   for (;;) {
     const page = listRuns(recorder, cursor);
 
-    for (const run of page.items) events.push(...recorder.read(run.runId, { limit: 100_000 }));
+    for (const listed of page.items) events.push(...recorder.read(listed.runId, { limit: 100_000 }));
 
     if (page.status === 'end') break;
     cursor = page.next;

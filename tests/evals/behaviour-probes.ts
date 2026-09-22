@@ -160,6 +160,15 @@ const PROBE_BUDGET: EvalBudget = {
 
 const BLIND_SEED = 'The vault is SEALED shut.\n';
 
+/** What the read-before-edit gate did, or why it never fired. */
+function refusalDetail(refusals: number, readFirst: boolean): string {
+  if (refusals > 0) return `${String(refusals)} unread refusal(s) on src/blind.txt`;
+
+  if (readFirst) return 'no refusal — the model read before editing, so the gate never fired';
+
+  return 'no unread refusal and no prior read of src/blind.txt on the file tool';
+}
+
 /** Every probe, for the corpus-quality tests that hold the corpus and the registry in agreement. */
 export const PROBES: readonly BehaviourProbe[] = [
   {
@@ -195,11 +204,7 @@ export const PROBES: readonly BehaviourProbe[] = [
           // A miss here is a BEHAVIOURAL FINDING, not a pass: the model read
           // first (or shelled around the tool), so it never met the
           // read-before-edit gate. Correct trajectory, unmeasured refusal.
-          detail: refusals.length > 0
-            ? `${String(refusals.length)} unread refusal(s) on src/blind.txt`
-            : readFirst
-              ? 'no refusal — the model read before editing, so the gate never fired'
-              : 'no unread refusal and no prior read of src/blind.txt on the file tool',
+          detail: refusalDetail(refusals.length, readFirst),
         },
         {
           what: 'recovered-after-refusal',

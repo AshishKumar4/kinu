@@ -159,7 +159,7 @@ class LocalEvalTarget implements LocalAgentEvalTarget {
     readonly runtime: CLIRuntime,
     private readonly opts: LocalTargetOptions,
   ) {
-    this.stores = createAgentStores(() => this.runtime.storage.sql, () => this.runtime.actor, this.runtime.storage.transactionSync, async () => ({ vfs: this.runtime.storage.vfs, artifactDirectory: agentArtifactDirectory(agentHome(MAIN_AGENT)) }));
+    this.stores = createAgentStores(() => this.runtime.storage.sql, () => this.runtime.actor, <T>(write: () => T) => this.runtime.storage.transactionSync(write), async () => ({ vfs: this.runtime.storage.vfs, artifactDirectory: agentArtifactDirectory(agentHome(MAIN_AGENT)) }));
   }
 
   get describe(): string {

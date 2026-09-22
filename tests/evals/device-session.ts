@@ -441,7 +441,7 @@ export async function grantDeviceAccess(
   // finding is that no card was ever raised.
   const lateFailure = await Promise.race([
     raising,
-    new Promise<Error | null>((resolve) => { setTimeout(() => { resolve(null); }, 5_000); }),
+    new Promise<Error | null>((settle) => { setTimeout(() => { settle(null); }, 5_000); }),
   ]);
 
   // The raise's own words when it has any: a deployment that refused the very

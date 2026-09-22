@@ -110,10 +110,10 @@ test('executor RPC decoding preserves refusal provenance and successful refusal-
     refusal: { reason: 'io', error: 'remote error', execution: { exitCode: 7 } } };
 
   const server = Bun.serve({ port: 0, hostname: '127.0.0.1',
-    fetch(request, server) {
+    fetch(request, upgrading) {
       if (request.method === 'DELETE') return Response.json({ ok: true });
 
-      if (server.upgrade(request)) return;
+      if (upgrading.upgrade(request)) return;
 
       return new Response('not found', { status: 404 });
     },
@@ -135,6 +135,16 @@ test('executor RPC decoding preserves refusal provenance and successful refusal-
     expect(await session.execute('device', 'read')).toEqual(response);
   } finally { await session.teardown(); await server.stop(true); }
 });
+
+/** The run-event cursors a spliced send reads under each absorbing-run state:
+ *  a running run is read twice, a refused one once, the rest never. */
+function cursorsRead(state: string): string[] {
+  if (state === 'running') return ['0', '1'];
+
+  if (state === 'refused') return ['0'];
+
+  return [];
+}
 
 test.each(['running', 'closed', 'missing', 'refused'])('a spliced send follows its absorbing run: %s', async (state) => {
   let reads = 0;
@@ -202,7 +212,7 @@ test.each(['running', 'closed', 'missing', 'refused'])('a spliced send follows i
     if (state === 'refused') await expect(sent).rejects.toThrow('HTTP 503');
     else expect(await sent).toEqual({ landed: 'mid-turn', absorbedBy: state === 'missing' ? null : 'absorbing' });
     expect(reads).toBe(1);
-    expect(cursors).toEqual(state === 'running' ? ['0', '1'] : state === 'refused' ? ['0'] : []);
+    expect(cursors).toEqual(cursorsRead(state));
   } finally {
     await session.teardown();
     await server.stop(true);
@@ -980,7 +990,7 @@ describe('the genesis flag on a public session', () => {
     const wire: { method: string; args: readonly unknown[] }[] = [];
 
     const server = Bun.serve({ port: 0, hostname: '127.0.0.1',
-      async fetch(request, server) {
+      async fetch(request, upgrading) {
         const url = new URL(request.url);
 
         if (url.pathname === '/api/user/workspaces' && request.method === 'POST') {
@@ -997,7 +1007,7 @@ describe('the genesis flag on a public session', () => {
           return Response.json({ ok: true });
         }
 
-        if (server.upgrade(request)) return;
+        if (upgrading.upgrade(request)) return;
 
         return new Response('not found', { status: 404 });
       },

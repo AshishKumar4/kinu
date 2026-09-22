@@ -112,9 +112,15 @@ function describeFailure(call: ToolCallEnd): string {
 
 /** The FIRST answered call of one tool whose result carries `mark`, as a
  *  subgoal that names the call it found or every call it rejected. */
-function callCarrying(
-  what: string, calls: readonly ToolCallEnd[], name: string, mark: string, match: (text: string) => boolean,
-): EvalSubgoal {
+interface CarriedMark {
+  readonly what: string;
+  readonly calls: readonly ToolCallEnd[];
+  readonly name: string;
+  readonly mark: string;
+  readonly match: (text: string) => boolean;
+}
+
+function callCarrying({ what, calls, name, mark, match }: CarriedMark): EvalSubgoal {
   const own = calls.filter((call) => call.name === name);
   const hit = own.find((call) => answered(call) && match(textOf(call.result)));
 
@@ -127,6 +133,24 @@ function callCarrying(
     : own.map((call) => `${describeFailure(call)} result=${excerpt(textOf(call.result))}`).join('; ');
 
   return { what, reached: false, detail: `no answered ${name} call carries ${JSON.stringify(mark)}: ${seen}` };
+}
+
+/** Why no call of one tool answered: none was made, or what each one refused with. */
+function refusedDetail(name: string, own: readonly ToolCallEnd[]): string {
+  if (own.length === 0) return `no ${name} call in this turn`;
+
+  return own.map(describeFailure).join('; ');
+}
+
+/** Whether every call this turn closed answered, named either way. */
+function everyToolDetail(calls: readonly ToolCallEnd[], offenders: readonly ToolCallEnd[]): string {
+  if (calls.length === 0) return 'no tool call closed in this turn';
+
+  if (offenders.length === 0) {
+    return `all ${String(calls.length)} call(s) answered: ${[...new Set(calls.map((call) => call.name))].join(', ')}`;
+  }
+
+  return `${String(offenders.length)} of ${String(calls.length)} failed: ${offenders.map(describeFailure).join('; ')}`;
 }
 
 describe(SUITE, () => {
@@ -179,10 +203,14 @@ describe(SUITE, () => {
             ? `${PROBE_PATH} holds ${JSON.stringify(PROBE_BYTES)}`
             : `${PROBE_PATH} holds ${excerpt(written)} rather than ${JSON.stringify(PROBE_BYTES)}`,
         });
-        subgoals.push(callCarrying('shell-ran', calls, 'shell', RUN_MARK, (text) => text.includes(RUN_MARK)));
-        subgoals.push(callCarrying(
-          'codemode-tool-ran', calls, 'eval', CODEMODE_MARK, (text) => text.includes(CODEMODE_MARK),
-        ));
+        subgoals.push(callCarrying({
+          what: 'shell-ran', calls, name: 'shell', mark: RUN_MARK, match: (text) => text.includes(RUN_MARK),
+        }));
+
+        subgoals.push(callCarrying({
+          what: 'codemode-tool-ran', calls, name: 'eval', mark: CODEMODE_MARK,
+          match: (text) => text.includes(CODEMODE_MARK),
+        }));
 
         const memory = calls.filter((call) => call.name === 'memory');
 
@@ -227,11 +255,14 @@ describe(SUITE, () => {
 
         subgoals.push({
           what: 'tasks-written', reached: taskWritten !== undefined,
-          detail: taskWritten !== undefined
-            ? `tasks#${taskWritten.toolCallId} (${actionOf(taskWritten) || '?'}) answered with ${excerpt(textOf(taskWritten.result))}`
-            : tasks.length === 0 ? 'no tasks call in this turn' : tasks.map(describeFailure).join('; '),
+          detail: taskWritten === undefined
+            ? refusedDetail('tasks', tasks)
+            : `tasks#${taskWritten.toolCallId} (${actionOf(taskWritten) || '?'}) answered with ${excerpt(textOf(taskWritten.result))}`,
         });
-        subgoals.push(callCarrying('web-fetched', calls, 'web', '"ok":true', (text) => /"ok"\s*:\s*true/.test(text)));
+        subgoals.push(callCarrying({
+          what: 'web-fetched', calls, name: 'web', mark: '"ok":true',
+          match: (text) => /"ok"\s*:\s*true/.test(text),
+        }));
 
         const delegated = calls.filter((call) => call.name === 'agents');
 
@@ -246,11 +277,7 @@ describe(SUITE, () => {
 
         subgoals.push({
           what: 'every-tool-answered', reached: calls.length > 0 && offenders.length === 0,
-          detail: calls.length === 0
-            ? 'no tool call closed in this turn'
-            : offenders.length === 0
-              ? `all ${String(calls.length)} call(s) answered: ${[...new Set(calls.map((call) => call.name))].join(', ')}`
-              : `${String(offenders.length)} of ${String(calls.length)} failed: ${offenders.map(describeFailure).join('; ')}`,
+          detail: everyToolDetail(calls, offenders),
         });
 
         const reply = (await session.history()).filter((row) => row.role === 'assistant').at(-1)?.text ?? '';

@@ -163,8 +163,16 @@ const SUITE = 'Kinu Task Evals';
 
 const REPO_ROOT = join(import.meta.dirname, '../..');
 
-const TIER: EvalTier = process.env.KINU_EVAL_TIER === 'pro' ? 'pro'
-  : process.env.KINU_EVAL_TIER === 'product' ? 'product' : 'flash';
+/** The tier this run measures. An unset or unknown name is the flash tier. */
+function tierOf(named: string | undefined): EvalTier {
+  if (named === 'pro') return 'pro';
+
+  if (named === 'product') return 'product';
+
+  return 'flash';
+}
+
+const TIER: EvalTier = tierOf(process.env.KINU_EVAL_TIER);
 
 /**
  * The model this arm PINS on the workspace.
@@ -308,11 +316,18 @@ export interface KinuTaskCase {
  *  optionally to an action. The spec writes this `calls(events, tool, action?)`
  *  and leaves the prompt implicit ("rows for a prompt's run"); it is an
  *  argument here because a multi-turn case asks the question per turn. */
-function calls(
-  events: readonly RunEvent[], absorbedBy: ReadonlyMap<string, string>,
-  prompt: string | undefined, tool: string, action?: string,
-): ToolCallEnd[] {
-  return promptToolCalls(events, prompt, absorbedBy)
+interface CallQuery {
+  readonly events: readonly RunEvent[];
+  readonly absorbedBy: ReadonlyMap<string, string>;
+  readonly prompt: string | undefined;
+  readonly tool: string;
+  readonly action?: string;
+}
+
+function calls(query: CallQuery): ToolCallEnd[] {
+  const { action, tool } = query;
+
+  return promptToolCalls(query.events, query.prompt, query.absorbedBy)
     .filter((call) => call.name === tool && (action === undefined || actionOf(call) === action));
 }
 
@@ -487,7 +502,7 @@ const SLATE_LEDGER: KinuTaskCase = {
       io: KinuTaskIo, path: string, json?: Record<string, JsonValue>,
     ): Promise<{ status: number; text: string }> =>
       io.session.fetchPreview(preview, path, {
-        method: 'POST', json: json === undefined ? undefined : json,
+        method: 'POST', json,
       });
 
     /** Turn 1: the slate built, served and durable across a reconnect. */
@@ -639,7 +654,7 @@ const SLATE_LEDGER: KinuTaskCase = {
 
         if (!parsed.success) return null;
 
-        return parsed.output.tickets.map((row) => v.parse(QueueRowSchema, row));
+        return parsed.output.tickets.map((listed) => v.parse(QueueRowSchema, listed));
       };
 
       const all = await listOf('');
@@ -866,32 +881,32 @@ const SYSTEM_CARD_CEILING = 2;
  * having issued both. See the header for why this, and not a
  * `tool_call_start` ordering, is the reading available.
  */
-function issuedInOneStep(events: readonly RunEvent[], calls: readonly ToolCallEnd[]): boolean {
-  if (calls.length < 2) return false;
-  const runs = new Set(calls.map((call) => call.runId));
+function issuedInOneStep(events: readonly RunEvent[], issued: readonly ToolCallEnd[]): boolean {
+  if (issued.length < 2) return false;
+  const runs = new Set(issued.map((call) => call.runId));
 
   if (runs.size !== 1) return false;
-  const indices = calls.map((call) => call.eventIndex);
+  const indices = issued.map((call) => call.eventIndex);
   const from = Math.min(...indices);
   const to = Math.max(...indices);
 
   return !events.some((event) => event.type === 'step_finish'
-    && calls[0] !== undefined && event.runId === calls[0].runId
+    && issued[0] !== undefined && event.runId === issued[0].runId
     && event.eventIndex > from && event.eventIndex < to);
 }
 
 /** Which step boundary broke the pair, or that none did. */
-function oneStepDetail(events: readonly RunEvent[], calls: readonly ToolCallEnd[]): string {
-  const runs = [...new Set(calls.map((call) => call.runId))];
+function oneStepDetail(events: readonly RunEvent[], issued: readonly ToolCallEnd[]): string {
+  const runs = [...new Set(issued.map((call) => call.runId))];
 
-  const between = calls.length < 2 || runs.length !== 1
+  const between = issued.length < 2 || runs.length !== 1
     ? []
     : events.filter((event) => event.type === 'step_finish' && event.runId === runs[0]
-      && event.eventIndex > Math.min(...calls.map((call) => call.eventIndex))
-      && event.eventIndex < Math.max(...calls.map((call) => call.eventIndex)));
+      && event.eventIndex > Math.min(...issued.map((call) => call.eventIndex))
+      && event.eventIndex < Math.max(...issued.map((call) => call.eventIndex)));
 
-  return `${String(calls.length)} settled hire row(s) in run(s) ${JSON.stringify(runs)} at `
-    + `${JSON.stringify(calls.map((call) => call.eventIndex))}; `
+  return `${String(issued.length)} settled hire row(s) in run(s) ${JSON.stringify(runs)} at `
+    + `${JSON.stringify(issued.map((call) => call.eventIndex))}; `
     + `${String(between.length)} step_finish row(s) between them`
     + `${between.length === 0 ? ' — one model step issued both' : ` (steps ${JSON.stringify(between.map((event) => event.type === 'step_finish' ? event.stepIndex : -1))})`}`;
 }
@@ -949,7 +964,10 @@ const DELEGATE_AND_BUILD: KinuTaskCase = {
     return {
       async after(turn, io) {
         if (turn === 0) {
-          const hires = calls(io.events, io.absorbedBy, turns[0], 'agents', 'hire');
+          const hires = calls({
+            events: io.events, absorbedBy: io.absorbedBy, prompt: turns[0], tool: 'agents', action: 'hire',
+          });
+
           requireMeasuredToolOutcomes(hires);
           const settled = hires.filter(ok);
           const names = settled.map(hiredName).filter((name): name is string => name !== null);
@@ -1046,10 +1064,10 @@ const DELEGATE_AND_BUILD: KinuTaskCase = {
           // own rows: no run of its own means no window, so a task that was
           // already there cannot read as one this turn created.
           if (approved !== null) {
-            const settled = io.watchProgrammaticTurn();
+            const queuedTurn = io.watchProgrammaticTurn();
             const before = new Set(io.events.map((event) => event.runId));
             await io.session.decidePlan(approved.id, approved.revision, 'approve');
-            await settled;
+            await queuedTurn;
             implementWindow = runWindow(await io.session.runEvents(),
               (event) => !before.has(event.runId)) ?? { from: 0, to: 0 };
           }
@@ -1670,7 +1688,7 @@ describe('Kinu task evals — the product\'s own machinery over four episodes', 
     const ids = tickets.map((ticket) => ticket.id);
     expect(ids).not.toEqual([...ids].sort());
     expect(tickets.map((ticket) => ticket.priority))
-      .not.toEqual(tickets.map((ticket) => ticket.priority).sort());
+      .not.toEqual(tickets.map((ticket) => ticket.priority).sort((a, b) => a - b));
   });
 });
 

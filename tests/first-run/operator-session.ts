@@ -116,7 +116,9 @@ export class OperatorFirstRunSession implements FirstRunSession {
   rpcAt(workspace: string, method: string, args: JsonValue[] = []): Promise<JsonValue> {
     if (!this.owned.has(workspace)) throw new Error('Refusing RPC outside this case\'s created resources');
 
-    return callAgentRpc(this.auth.origin, this.auth.token, workspace, method, JsonValueSchema, args);
+    return callAgentRpc({
+      origin: this.auth.origin, token: this.auth.token, name: workspace, method, schema: JsonValueSchema, args,
+    });
   }
 
   async runEvents(): Promise<readonly RunEvent[]> {
