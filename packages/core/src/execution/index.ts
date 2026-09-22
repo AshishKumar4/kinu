@@ -32,6 +32,10 @@ export { createInlineExecutor, type InlineExecutorDeps } from './inline';
 export { withApprovalGatedShell, gateProviderExec } from './approval';
 
 export {
+  withSelfPreservingShell, selfTargetedCommand, type HostProcessIdentity,
+} from './self-preservation';
+
+export {
   createSandboxExecutor, type SandboxHandle, isSandboxTransientError,
   WORKSPACE_BACKUP_DIR,
 } from './sandbox';

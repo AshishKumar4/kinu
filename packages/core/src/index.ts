@@ -1214,6 +1214,7 @@ export {
   DefaultExecutionRouter,
   createInlineExecutor,
   withApprovalGatedShell, gateProviderExec,
+  withSelfPreservingShell, selfTargetedCommand, type HostProcessIdentity,
   createSandboxExecutor, type SandboxHandle, isSandboxTransientError,
   WORKSPACE_BACKUP_DIR,
   createDeviceTunnelExecutor, type DeviceTransport,
