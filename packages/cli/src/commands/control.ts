@@ -79,10 +79,8 @@ export async function modelCommand(name: string, spec: string | undefined, opts:
     }
   }
 
-  // One setting, one authority. Fresh turns resolve the profile envelope and
-  // override the actor's stored model hint, so writing `setModel` on one agent
-  // reported success while changing no turn. Every model command edits the
-  // default tier that unresolved roles actually read.
+  // Fresh turns resolve the profile envelope over the actor's model hint, so every model command edits the
+  // default tier that unresolved roles read.
   const envelope = resolvedSpec
     ? await updateDefaultTier({ model: resolvedSpec })
     : await loadActiveProfile();
@@ -91,7 +89,6 @@ export async function modelCommand(name: string, spec: string | undefined, opts:
   console.log(spec ? `${OK('set')} ${result.spec}` : `${DIM('model')} ${result.spec ?? '(default)'}`);
 }
 
-/** One effort reading: what a set/get round trip resolved to for an agent. */
 interface EffortResult {
   readonly effort: ReasoningEffort | null;
 }
@@ -136,9 +133,7 @@ export async function effortCommand(name: string, level: string | undefined): Pr
     : `${DIM('reasoning effort')} ${result.effort ?? 'medium (chat default)'}`);
 }
 
-/** The catalog for spec validation, or the reason it could not be read. Validation
- *  is advisory, so an unreachable catalog must say why instead of reading as an
- *  empty menu; a menu missing a failed provider's models is still a usable catalog. */
+/** Validation is advisory: an unreachable catalog must say why rather than read as an empty menu. */
 type ModelCatalog = { readonly models: readonly AgentModelEntry[] } | { readonly unreadable: string };
 
 async function loadModelCatalog(load: () => Promise<ModelMenu | CloudModelMenu>): Promise<ModelCatalog> {
@@ -273,8 +268,7 @@ export async function triggersCommand(
 
     if (normalized === 'cancel') {
       if (!value) throw new Error('trigger id required');
-      // `'owner'`: a CLI token is the account holder's own credential, so this
-      // surface may close an owner-created ingress. The model's
+      // `'owner'`: a CLI token is the account holder's, so it may close an owner-created ingress; the model's
       // `agent.cancelSchedule` reaches the same RPC as `'self'` and may not.
 
       const cancelled = await callAgentRpc({
@@ -329,8 +323,6 @@ export async function triggersCommand(
     }
   }
 
-  // Timer creation is the only action past this point, so both backends share
-  // the one scheduled line below.
   const created = target.mode === 'cloud'
     ? await createCloudTimerTrigger(target.cloudName, normalized, value)
     : await createLocalTimerTrigger(target.localName, timerInput(normalized, value));
@@ -342,8 +334,7 @@ async function createCloudTimerTrigger(cloudName: string, action: string, value:
   const auth = requireAuthConfig();
   const input = timerInput(action, value);
 
-  // trust:'owner' — an interactive session token IS the owner (the old
-  // per-route matcher stamped the same value server-side).
+  // trust:'owner': an interactive session token is the owner.
   return callAgentRpc({
     origin: auth.origin,
     token: auth.token,
@@ -354,7 +345,6 @@ async function createCloudTimerTrigger(cloudName: string, action: string, value:
   });
 }
 
-/** One `scheduled` line for both backends: creation answers the same shape. */
 function printScheduled(trigger: { id: string; kind: string; nextFireAt: number | null }): void {
   console.log(`${OK('scheduled')} ${trigger.id} ${DIM(trigger.kind)} ${formatTime(trigger.nextFireAt)}`);
 }
@@ -410,8 +400,7 @@ export async function jobsCommand(name: string, action: string | undefined, id: 
   present(listLocalJobs(target.localName), opts, printJobs);
 }
 
-/** Raw JSON under `--json`, the human rendering otherwise — the inspector
- *  contract every read/mutate command in this CLI shares. */
+/** Raw JSON under `--json`, human rendering otherwise; shared by every read/mutate command. */
 function present<T extends JsonValue | object>(data: T, opts: ControlOpts, human: (data: T) => void): void {
   if (opts.json) printJson(projectJsonValue({ value: data }));
   else human(data);
@@ -447,8 +436,7 @@ function printTools(tools: Array<{ name: string; description?: string; group: st
   }
 }
 
-/** `origin` is present for a cloud workspace and absent for a local one, which
- *  has no inbound transport and so no delivery URL to print. */
+/** A local workspace has no inbound transport, so no `origin` and no delivery URL. */
 function printTriggers(
   triggers: Array<{
     id: string; kind: string; state?: string; next_fire_at?: number | null;
@@ -485,8 +473,7 @@ function printCreatedWebhook(created: CloudWebhookTrigger, origin: string): void
   console.log(`${OK('created')} ${created.trigger_id}`);
   console.log(`${DIM('url')} ${ACCENT(`${origin}${created.url}`)}`);
 
-  // hmac/bearer webhooks always carry one — supplied with `--secret`, or minted
-  // by the server — and this is the only time it is shown.
+  // hmac/bearer webhooks always carry one, and this is the only time it is shown.
   if (created.secret) {
     console.log(`${DIM('secret')} ${created.secret}`);
     console.log(DIM('Store it now: the secret is shown once and cannot be read again'));

@@ -1,7 +1,3 @@
-// MemoryStore.indexFile must report the semantic-index delta so a vector store
-// can be kept in sync: chunks that were inserted or changed (upserted, with
-// text to embed) and chunk ids that no longer exist (deletedIds). allChunksAfter
-// pages the table for the one-time backfill.
 import { describe, test, expect } from "bun:test";
 import { MemoryStore } from "../src/memory/store";
 import { createTestDb, createMemoryVfs } from "./helpers";
@@ -17,7 +13,7 @@ function createStore() {
 
 const PATH = "memory/MEMORY.md";
 
-// Lines long enough that the content spans multiple chunks (target 1600 chars).
+// Long enough lines that the content spans multiple chunks.
 const line = (tag: string, n: number, fill = "x") => `${tag} line ${n} ${fill.repeat(40)}`;
 
 const doc = (count: number, fill = "x") =>
@@ -63,9 +59,7 @@ describe("MemoryStore.indexFile delta", () => {
 		const small = await store.indexFile(PATH, doc(3));
 		expect(small.deletedIds.length).toBeGreaterThan(0);
 
-		// Every deleted id was a chunk of the larger version…
 		for (const id of small.deletedIds) expect(bigIds.has(id)).toBe(true);
-		// …and no surviving chunk is both upserted and deleted.
 		const upsertedIds = new Set(small.upserted.map((c) => c.id));
 
 		for (const id of small.deletedIds) expect(upsertedIds.has(id)).toBe(false);
@@ -79,7 +73,7 @@ describe("MemoryStore.allChunksAfter (backfill pagination)", () => {
 		const all = store.allChunksAfter("", 1000);
 		expect(all.length).toBe(upserted.length);
 		const ids = all.map((c) => c.id);
-		expect([...ids].sort()).toEqual(ids); // already ordered by id
+		expect([...ids].sort()).toEqual(ids);
 		expect(all[0].text.length).toBeGreaterThan(0);
 	});
 
@@ -93,7 +87,6 @@ describe("MemoryStore.allChunksAfter (backfill pagination)", () => {
 		expect(firstPage[0].id).toBe(all[0].id);
 		const rest = store.allChunksAfter(firstPage[0].id, 1000);
 		expect(rest.map((c) => c.id)).toEqual(all.slice(1).map((c) => c.id));
-		// Cursor at the last id → no more rows (backfill terminates).
 		expect(store.allChunksAfter(all[all.length - 1].id, 1000)).toEqual([]);
 	});
 });

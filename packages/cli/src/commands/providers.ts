@@ -24,21 +24,18 @@ type ProviderName = v.InferOutput<typeof ProviderNameSchema>;
 interface ParsedProviderArgs {
   action: ProviderAction;
   provider?: ProviderName;
-  /** What the user typed, when it named nothing this CLI knows. */
   raw?: string;
 }
 
 interface LocalCredential {
   clear: (providers: NonNullable<KinuConfig['providers']>) => boolean;
   envVars: string[];
-  /** The account-side key the same provider is stored under, when it can be. */
   credKey?: string;
 }
 
 export async function providersCommand(actionOrProvider: string | undefined, providerArg: string | undefined, opts: {
   origin?: string;
   model?: string;
-  /** Keep the secret on this machine instead of the Kinu account. */
   local?: boolean;
 }): Promise<void> {
   const { action, provider, raw } = parseArgs(actionOrProvider, providerArg);
@@ -80,18 +77,14 @@ function parseArgs(actionOrProvider: string | undefined, providerArg: string | u
   }
 
   if (first === 'disconnect' || first === 'remove' || first === 'rm' || first === 'delete') {
-    // A name this CLI has no branch for may still be one of the models.dev
-    // providers connected in the web UI, which `provider list` now shows. It
-    // is resolved against the account rather than rejected here.
+    // May be a models.dev provider connected in the web UI; resolved against the account, not rejected here.
     return { action: 'disconnect', provider: providerArg ? maybeProvider(providerArg) : undefined, raw: providerArg };
   }
 
   return { action: 'connect', provider: normalizeProvider(actionOrProvider) };
 }
 
-/** The credential a provider stores in ~/.kinu/config.json, and the env
- *  vars that would keep supplying it after the file entry is gone. Providers
- *  absent from this map hold no Kinu-owned credential. */
+/** Env vars listed here keep supplying the credential after the file entry is gone. */
 const LOCAL_CREDENTIALS = new Map<ProviderName, LocalCredential>([
   ['codex', {
     clear: (p) => deleteKey(p, 'codex'),
@@ -129,9 +122,7 @@ function deleteKey(
   return true;
 }
 
-/** The model-spec prefixes a provider serves — a default model left pointing
- *  at a disconnected provider is exactly the "no connected provider" trap
- *  `kinu create` warns about, so the pointer goes with the credential. */
+/** A default model left pointing at a disconnected provider is the trap `kinu create` warns about. */
 const MODEL_SPEC_PREFIXES = new Map<ProviderName, readonly string[]>([
   ['codex', ['codex/']],
   ['openai', ['openai/']],
@@ -143,14 +134,7 @@ const MODEL_SPEC_PREFIXES = new Map<ProviderName, readonly string[]>([
   ['cloudflare', ['workers-ai/', 'my-gateway/', 'ai-gateway/', '@cf/']],
 ]);
 
-/**
- * The inverse of `provider connect`: remove the stored credential.
- *
- * Only the providers Kinu stores a credential FOR can be disconnected
- * here. The Kinu account is `kinu logout`, and the two subscription
- * bridges (claude, opencode) are other tools' logins — Kinu holds nothing
- * to delete, and saying so beats pretending the command did something.
- */
+/** Only credentials Kinu stores; the account is `kinu logout`, and claude/opencode own their logins. */
 async function disconnectProvider(provider: ProviderName): Promise<void> {
   console.log('');
 
@@ -168,9 +152,7 @@ async function disconnectProvider(provider: ProviderName): Promise<void> {
     console.log(`${WARN('!')} Kinu stores no ${tool} credential; it uses your ${tool} sign-in.`);
     console.log(DIM(`  Sign out of ${tool} itself: ${command}`));
     clearDefaultModelFor(provider);
-    // Kinu holds no credential for these two, but the user ran this command
-    // because they are signing out of that tool — and its login is exactly what
-    // a listing sweep re-probes, so a resident session must sweep again.
+    // Kinu holds nothing here, but a resident session must re-probe that tool's login.
     bumpProviderRevision();
 
     return;
@@ -187,9 +169,7 @@ async function disconnectProvider(provider: ProviderName): Promise<void> {
 
   if (removed) console.log(`${OK('✓')} Removed the ${ACCENT(provider)} credential from this machine.`);
 
-  // The account copy is the one most connections now use, so disconnecting
-  // has to reach it too — otherwise the provider keeps working and the command
-  // looks broken.
+  // Most connections use the account copy; otherwise the provider keeps working.
   const cloud = credential.credKey ? resolveCloudSession() : null;
 
   if (cloud && credential.credKey) {
@@ -205,9 +185,7 @@ async function disconnectProvider(provider: ProviderName): Promise<void> {
   if (!removed) console.log(`${WARN('!')} ${provider} was not connected. Nothing to remove.`);
 
   clearDefaultModelFor(provider);
-  // Published whether or not a row was found: the command's whole job is to
-  // change what a model resolution can reach, and a resident session that keeps
-  // offering a revoked provider is the defect this signal closes.
+  // Published even when no row was found, so a resident session stops offering a revoked provider.
   bumpProviderRevision();
 
   const live = credential.envVars.filter((name) => process.env[name]);
@@ -218,12 +196,7 @@ async function disconnectProvider(provider: ProviderName): Promise<void> {
   }
 }
 
-/**
- * Disconnect one of the models.dev providers connected in the web UI. This CLI
- * has no branch for those — they are catalog ids, not one of its eight named
- * providers — but `provider list` shows them, and a list you cannot act on is
- * a one-way door.
- */
+/** A models.dev provider connected in the web UI: a catalog id, not a named provider. */
 async function disconnectAccountProvider(name: string): Promise<void> {
   const cloud = resolveCloudSession();
   console.log('');
@@ -245,7 +218,6 @@ async function disconnectAccountProvider(name: string): Promise<void> {
   bumpProviderRevision();
 }
 
-/** Drop the default model spec when it names the provider being removed. */
 function clearDefaultModelFor(provider: ProviderName): void {
   clearDefaultModelPrefixes(MODEL_SPEC_PREFIXES.get(provider) ?? []);
 }
@@ -258,7 +230,6 @@ function clearDefaultModelPrefixes(prefixes: readonly string[]): void {
   console.log(DIM(`  Cleared the default model (${current}).`));
 }
 
-/** `normalizeProvider`, but undefined instead of throwing. */
 function maybeProvider(value: string): ProviderName | undefined {
   const parsed = v.safeParse(ProviderNameSchema, canonicalProviderName(value));
 
@@ -296,8 +267,6 @@ async function printProviders(): Promise<void> {
     }
   }
 
-  // Everything else the account holds — the models.dev tail connected in the
-  // web UI, which this machine can use without ever holding the key.
   for (const key of connections.accountExtras) {
     console.log(`  ${OK('\u2713')} ${ACCENT(key.replace(/\.bearer$/, ''))} ${DIM('your account')}`);
   }

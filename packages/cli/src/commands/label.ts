@@ -1,35 +1,7 @@
 /**
- * `kinu label` — the hand-labeling flow that measures the turn-outcome
- * classifier, and the bias-corrected numbers it buys.
- *
- * Three steps, in order: draw a file, fill it in, hand it back.
- *
- *   kinu label export <agent>          # writes a file of turns to judge
- *   $EDITOR <file>                        # one letter per turn
- *   kinu label ingest <agent> <file>   # validates and stores
- *   kinu label report <agent>          # what the labels established
- *
- * And then, once labels exist, the question of whether that has to be done by
- * hand every time:
- *
- *   kinu label ensemble <agent>        # two LLM judges re-do the same turns
- *
- * which scores a cross-family panel against those labels and says plainly
- * whether it may stand in for the owner next time. It refuses to run before
- * there is anything to score it against — an unmeasured stand-in would be the
- * same unmeasured judge the calibration flow exists to eliminate.
- *
- * And, off to one side, a free second opinion on the same raters:
- *
- *   kinu label mine                    # weak-label the owner's CC history
- *   kinu label score <agent>           # run both raters over it
- *
- * which mines the owner's own Claude Code transcripts for turns their BEHAVIOUR
- * already labeled — interrupts, refused tools, re-pasted requests — and scores
- * the same classifier and panel against those. It complements the flow above
- * and cannot replace it: those turns are off-distribution and selected rather
- * than sampled, so they license no corrected rate. See
- * evolution/behavior-labels.ts.
+ * `kinu label`: hand labels that measure the turn-outcome classifier (`export`, `ingest`, `report`),
+ * `ensemble` to score an LLM panel against them, and `mine`/`score` for weak labels from the owner's
+ * Claude Code history, which license no corrected rate (see evolution/behavior-labels.ts).
  */
 
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
@@ -159,8 +131,7 @@ export async function labelCommand(
   file: string | undefined,
   opts: LabelOpts = {},
 ): Promise<void> {
-  // `mine` reads the owner's own transcripts and no agent's ledger, so it is
-  // the one action that names no agent.
+  // `mine` reads transcripts, not a ledger, so it names no agent.
   if (action === 'mine') return mineCorpus(opts);
 
   if (!name) throw new Error(USAGE);
@@ -179,8 +150,6 @@ export async function labelCommand(
       );
   }
 }
-
-// ── export ───────────────────────────────────────────────────────
 
 async function exportLabels(target: AgentTarget, opts: LabelOpts): Promise<void> {
   const size = opts.size === undefined ? DEFAULT_LABEL_BUDGET : parsePositiveInt(opts.size, 'size');
@@ -217,17 +186,12 @@ async function exportLabels(target: AgentTarget, opts: LabelOpts): Promise<void>
   console.log(DIM('     could have done this for you next time.'));
 }
 
-// ── ingest ───────────────────────────────────────────────────────
-
 async function ingestLabels(target: AgentTarget, file: string | undefined, opts: LabelOpts): Promise<void> {
   if (!file) throw new Error('Usage: kinu label ingest <agent> <file>');
   const path = resolve(file);
   const parsed = parseLabelingFile(readFileSync(path, 'utf8'));
 
-  // Nothing is written while the file has a problem in it: a labeling pass is
-  // half an hour of a person's attention, and a partial write would make the
-  // rest of it ambiguous to re-do. Every problem is listed at once so the file
-  // is fixed in one pass.
+  // Nothing is written while any problem remains; every problem is listed at once.
   if (parsed.errors.length > 0) {
     throw new Error(
       `${plural(parsed.errors.length, 'problem')} in ${path}. Nothing was stored:\n` +
@@ -268,8 +232,6 @@ async function ingestLabels(target: AgentTarget, file: string | undefined, opts:
   console.log('');
   console.log(renderCalibrationReport(await fetchReport(target)));
 }
-
-// ── ensemble ─────────────────────────────────────────────────────
 
 async function ensembleLabels(target: AgentTarget, opts: LabelOpts): Promise<void> {
   const specs = (opts.models ?? '')
@@ -312,11 +274,7 @@ async function ensembleLabels(target: AgentTarget, opts: LabelOpts): Promise<voi
   console.log(renderEnsembleReport(await fetchEnsemble(target)));
 }
 
-// ── mine / score (the behavioural corpus) ────────────────────────
-
-/** Where mined reports land by default: outside every repository, because they
- *  describe the owner's private sessions. `.gitignore` also covers `.cc-corpus/`
- *  and `CC-CORPUS-*.md` for a run deliberately pointed at the repo. */
+/** Outside every repository: mined reports describe private sessions. */
 function defaultCorpusDir(): string {
   const cache = process.env.XDG_CACHE_HOME ?? join(homedir(), '.cache');
 
@@ -334,9 +292,7 @@ function writeReport(path: string, markdown: string): void {
   writeFileSync(path, markdown, 'utf8');
 }
 
-/** Mine and weak-label, with the options both actions share. Read-only over
- *  the transcripts, and the same deterministic order every run, so `score`
- *  measures the corpus `mine` reported. */
+/** Deterministic order, so `score` measures the corpus `mine` reported. */
 function mineAndLabel(opts: LabelOpts) {
   const mined = mineTranscripts({
     root: opts.root ? resolve(opts.root) : defaultTranscriptRoot(homedir()),
@@ -346,7 +302,6 @@ function mineAndLabel(opts: LabelOpts) {
   return { mined, labels: mined.turns.map(weakLabel) };
 }
 
-/** The report shape for a pass with no rater — the mining half on its own. */
 function miningOnly(mined: MineResult, labels: ReturnType<typeof weakLabel>[]): CorpusEvalReport {
   return {
     stats: corpusStats(mined.turns, labels),
@@ -385,10 +340,7 @@ async function mineCorpus(opts: LabelOpts): Promise<void> {
     `kinu label score <agent>  (${report.stats.labeled} labeled turns available)`));
 }
 
-/** Labeled turns scored per run when the owner does not say. Small on purpose:
- *  a pass is one classifier call plus one call per judge per turn, so the
- *  default is a few tens of cents at worst and the number is the ONLY thing
- *  standing between a typo and a large bill. */
+/** Small on purpose: the only guard between a typo and a large bill. */
 const DEFAULT_SCORE_LIMIT = 25;
 
 async function scoreCorpus(target: AgentTarget, opts: LabelOpts): Promise<void> {
@@ -403,9 +355,7 @@ async function scoreCorpus(target: AgentTarget, opts: LabelOpts): Promise<void> 
 
   const { mined, labels } = mineAndLabel(opts);
 
-  // Only labeled turns are put to a rater, so the budget is spent where an
-  // answer can be checked. Trimming the LABELS rather than the turns keeps the
-  // corpus composition in the report honest about what was mined.
+  // Trim labels, not turns, so the report's corpus composition stays accurate.
   const scored = new Set(labels.filter((label) => label.label !== null).slice(0, limit)
     .map((label) => label.turnId));
 
@@ -446,8 +396,6 @@ async function scoreCorpus(target: AgentTarget, opts: LabelOpts): Promise<void> 
   console.log(`${OK('wrote')} ${ACCENT(path)}`);
 }
 
-// ── report ───────────────────────────────────────────────────────
-
 async function reportLabels(target: AgentTarget, opts: LabelOpts): Promise<void> {
   const [calibration, ensemble] = await Promise.all([fetchReport(target), fetchEnsemble(target)]);
 
@@ -462,8 +410,7 @@ async function reportLabels(target: AgentTarget, opts: LabelOpts): Promise<void>
   console.log(renderEnsembleReport(ensemble));
 }
 
-/** The calibration report for either backend. Shared with `kinu alignment`,
- *  which renders the same block beneath K_align. */
+/** Shared with `kinu alignment`. */
 export async function fetchReport(target: AgentTarget): Promise<CalibrationReport> {
   return target.mode === 'cloud'
     ? cloudRpc(target, 'getOutcomeCalibration', CalibrationReportSchema)

@@ -47,8 +47,7 @@ export function history(exchanges: number, outputChars = 3_000): ModelMessage[] 
   return messages;
 }
 
-/** The port members are properties, not methods: a test reads `citablePath`
- *  off the store to prove it needs no receiver, and replaces `load` to gate it. */
+/** Properties, not methods: tests read `citablePath` unbound and replace `load`. */
 export interface MemoryTranscriptStore extends TranscriptStore {
   writes: Map<string, string>;
   citablePath: (sessionKey: string, rangeHash: string) => string;
@@ -74,7 +73,7 @@ export function memoryPorts(): MemoryPorts {
   return {
     transcripts: {
       writes,
-      // Closure-based (no `this`): the engine passes citablePath around unbound.
+      // No `this`: the engine passes citablePath around unbound.
       citablePath: (sessionKey, rangeHash) => `.kinu/compaction/${sessionKey}/${rangeHash}.md`,
       write: async (relativePath, content) => {
         writes.set(relativePath, content);

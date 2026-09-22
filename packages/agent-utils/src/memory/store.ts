@@ -18,9 +18,7 @@ export interface MemoryConfig {
 
 interface FtsRow { id: string; path: string; start_line: number; end_line: number; text: string; rank: number }
 
-/** A memory chunk with its verbatim text — the unit a semantic index embeds.
- *  Core's vector store re-exports it. The declaration lives here because core
- *  depends on agent-utils and not the reverse. */
+/** A memory chunk with its verbatim text. Declared here because core depends on agent-utils. */
 export interface IndexedChunk {
 	id: string;
 	path: string;
@@ -29,23 +27,13 @@ export interface IndexedChunk {
 	text: string;
 }
 
-/** The change set produced by (re)indexing a file — what a downstream vector
- *  index must upsert (new/changed chunks, with text to embed) and delete
- *  (chunk ids whose line range no longer exists). */
+/** Chunks a vector index must upsert and chunk ids it must delete after (re)indexing a file. */
 export interface MemoryIndexDelta {
 	upserted: IndexedChunk[];
 	deletedIds: string[];
 }
 
-/**
- * The `memory_chunks` FTS5 index tables.
- *
- * Standalone so a workspace's schema initializer can create them without
- * constructing a store (core's `initWorkspaceSchema` calls this). Every
- * composition root that builds a MemoryStore also gets them via
- * {@link MemoryStore.ensureSchema}, which delegates here — one DDL, one
- * source of truth.
- */
+/** The `memory_chunks` FTS5 tables; standalone so workspace schema init can create them without a store. */
 export function initMemoryChunkTables(sql: SqlExecutor): void {
 	void sql`
 		CREATE TABLE IF NOT EXISTS memory_chunks (
@@ -109,8 +97,7 @@ export class MemoryStore {
 		try {
 			existing = await readVfsText(this.vfs, path);
 		} catch (err) {
-			// Only a missing file starts fresh. Any other read failure must
-			// surface — silently overwriting here destroys the existing notes.
+			// Only a missing file starts fresh; overwriting on other errors destroys notes.
 			if (!isMissingFileError(err)) throw err;
 		}
 
@@ -128,8 +115,7 @@ export class MemoryStore {
 
 			return lines.slice(start, end).join("\n");
 		} catch (err) {
-			// Only a missing file is absence. Any other read failure must surface:
-			// null here is indistinguishable from a file that is legitimately empty.
+			// Only a missing file is absence; null would read as a legitimately empty file.
 			if (!isMissingFileError(err)) throw err;
 
 			return null;
@@ -140,10 +126,7 @@ export class MemoryStore {
 		return this.readFile(this.curatedFile);
 	}
 
-	/** (Re)index a file into FTS5 and report the semantic-index delta: chunks
-	 *  that were inserted or changed (need embedding) and chunk ids that were
-	 *  removed (need dropping from the vector index). FTS5 stays the source of
-	 *  truth; a vector store, if any, is synced by the caller from the delta. */
+	/** (Re)index a file into FTS5 (source of truth) and return the delta for the vector index. */
 	async indexFile(path: string, content: string): Promise<MemoryIndexDelta> {
 		const chunks = await chunkMarkdown(content);
 		const now = Date.now();
@@ -184,10 +167,7 @@ export class MemoryStore {
 		return { upserted, deletedIds };
 	}
 
-	/** A bounded, ordered page of indexed chunks — the one-time semantic-index
-	 *  backfill of chunks written before a vector store existed. Ordered by the
-	 *  `id` primary key (a total order) so `afterId` pages a large table across
-	 *  boots without re-embedding earlier chunks. */
+	/** Page of indexed chunks ordered by `id`, for resumable semantic-index backfill. */
 	allChunksAfter(afterId: string, limit: number): IndexedChunk[] {
 		const rows = this.sql<{ id: string; path: string; start_line: number; end_line: number; text: string }>`
 			SELECT id, path, start_line, end_line, text FROM memory_chunks
@@ -202,12 +182,7 @@ export class MemoryStore {
 		void this.sql`DELETE FROM memory_chunks WHERE path = ${path}`;
 	}
 
-	/**
-	 * Ranked chunk hits, best first: the strict all-term page, then ranked partial
-	 * matches until `limit` distinct chunks are held. Same fill policy as the
-	 * transcript recall surface in core, because it is the same question — see
-	 * {@link fillToCapacity} for why one partial page of `limit` rows suffices.
-	 */
+	/** Ranked hits: strict all-term page, then partial matches up to `limit` (see {@link fillToCapacity}). */
 	search(query: string, limit = 10): MemorySearchResult[] {
 		if (!query.trim()) return [];
 
@@ -219,10 +194,7 @@ export class MemoryStore {
 			? strict
 			: fillToCapacity(strict, this.runFtsQuery(relaxed, limit), limit, (row) => row.id);
 
-		// bm25() is negative, more negative = more relevant. The displayed score
-		// must be monotone WITH relevance: |rank|/(1+|rank|) maps the strongest
-		// match nearest 1. (The old 1/(1+|rank|) was inverted, and the 0.05
-		// floor built on it filtered out exactly the strongest matches.)
+		// bm25() is more negative for better matches; |rank|/(1+|rank|) keeps the score monotone with relevance.
 		return rows.map((r) => ({
 			path: r.path,
 			startLine: r.start_line,
@@ -261,8 +233,7 @@ export class MemoryStore {
 				.sort((a: string, b: string) => b.localeCompare(a))
 				.map((name: string) => `${this.logsDir}/${name}`);
 		} catch (err) {
-			// A logs directory that was never created is genuinely no logs. Any
-			// other readdir failure must not read as an empty history.
+			// A missing logs directory is no logs; other failures must not read as empty history.
 			if (!isMissingFileError(err)) throw err;
 
 			return [];

@@ -15,18 +15,12 @@ import * as v from 'valibot';
 import { AGENT_HOME } from './config';
 import type { AgentTranscriptMessage } from './agent-client';
 
-/**
- * Recorder controls for one CLI process. There is deliberately no way to
- * select, continue, or fork a recorded transcript: JSONL files are diagnostic
- * artifacts of terminal activity, never conversations to reopen.
- */
+/** JSONL files are diagnostic artifacts, never conversations to reopen. */
 export interface CliSessionOptions {
-  /** Write artifacts somewhere other than the default store. */
   transcriptDir?: string;
-  /** Record nothing for this process (in-memory sink). */
+  /** In-memory sink. */
   noTranscript?: boolean;
-  /** Durable conversation these entries belong to. Defaults to the
-   *  artifact's own id. */
+  /** Defaults to the artifact's own id. */
   conversationId?: string;
 }
 
@@ -102,7 +96,7 @@ interface ParsedSession {
 }
 
 
-/** The store keeps its historical on-disk name; only the vocabulary moved. */
+/** Keeps its original on-disk name. */
 function transcriptRoot(opts?: Pick<CliSessionOptions, 'transcriptDir'>): string {
   return opts?.transcriptDir ? resolve(opts.transcriptDir) : join(AGENT_HOME, 'sessions');
 }
@@ -146,8 +140,6 @@ export function listCliSessions(agent: string, opts: Pick<CliSessionOptions, 'tr
     .sort((a, b) => b.modifiedAt - a.modifiedAt);
 }
 
-/** Locate one recorded transcript by exact id or explicit file path — the
- *  diagnostic viewer's lookup. Null when nothing matches. */
 export function findTranscriptPath(
   agent: string,
   ref: string,
@@ -270,7 +262,6 @@ function readSessionRaw(path: string): ParsedSession {
   return { header, entries, entryCount, firstUserText };
 }
 
-/** Map recorded JSONL entries to renderable transcript messages. */
 export function transcriptMessages(entries: CliSessionEntry[], maxEntries = 40): AgentTranscriptMessage[] {
   return entries
     .filter(isRenderableEntry)

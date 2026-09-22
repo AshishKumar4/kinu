@@ -1,13 +1,4 @@
-/**
- * The outcome contract's own tests.
- *
- * Every case here is one of three shapes, the same three the scorer suite uses:
- * a verdict that scores, a verdict that is REFUSED, and the degenerate verdict a
- * lenient row would silently accept — a zero denominator, a ratio above 1, a
- * NaN. The refusals matter most — this row is the primary metric, so a verifier
- * bug has to surface as a red run rather than as a plausible number nobody can
- * re-derive.
- */
+/** Refusals matter most: a verifier bug must surface as a red run, not a plausible number. */
 import { describe, test, expect } from 'bun:test';
 import {
   BUDGET_ADHERENCE, OUTCOME_SCALE, OUTPUT_CAP, TASK_OUTCOME, budgetRow, isCovariateRow,
@@ -47,8 +38,7 @@ describe('ratioOutcome — a measured ratio as fixed point', () => {
   });
 
   test('REFUSED: a ratio above 1 throws instead of clamping to a perfect score', () => {
-    // Clamping here would report 1.000 for a normalization bug — the defect
-    // hiding behind the very number it corrupted.
+    // Clamping would report 1.000 for a normalization bug.
     expect(() => ratioOutcome(1.4, 'mis-normalized speedup')).toThrow(/normalized to \[0,1\]/);
   });
 
@@ -78,11 +68,8 @@ describe('outcomeRow — refusals, because ground truth is not quietly repaired'
 
 describe('the bar against promotion is mechanical', () => {
   /**
-   * Main's requirement: a future contributor must not be able to put a covariate
-   * in the headline. This is the assertion that stops it — if anyone renames a
-   * mechanism scorer to `task_outcome`, or adds the outcome to the mechanism
-   * panel, the primary metric silently becomes a mechanism rate and this goes
-   * red.
+   * Guards the headline: renaming a mechanism scorer to `task_outcome`, or adding the outcome
+   * to the mechanism panel, goes red.
    */
   test('no mechanism scorer is the primary metric, and none can become it by rename', () => {
     for (const scorer of BEHAVIOUR_SCORERS) {
@@ -129,8 +116,7 @@ describe('admissibility rests on the outcome, not on mechanism coverage', () => 
   });
 
   test('a measured outcome with every mechanism absent is still admissible', () => {
-    // An outcome was measured, so the run is evidence about task performance
-    // even though not one mechanism had a denominator.
+    // An outcome was measured, so the run is evidence even with no mechanism denominator.
     const obs: EvalObservation[] = [{
       taskId: 't', repetition: 0, outcome: 'scored',
       scores: [row(TASK_OUTCOME, 2, 1), ...BEHAVIOUR_SCORERS.map((s) => row(s.name, 0, 0))],
@@ -217,9 +203,7 @@ describe('outputCapRow — a cut answer is the request bounding the attempt', ()
   });
 
   test('no closed step is UNMEASURED, not uncapped — eligible zero, rate null', () => {
-    // The failure this asymmetry prevents: a `1` here would report a clean cap
-    // verdict over an episode that never produced a finish reason at all, which
-    // is the same unearned perfect score the tool-error-rate ceiling refuses.
+    // A `1` would report a clean cap verdict for an episode with no finish reason.
     const row = outputCapRow(null);
     expect(row.eligible).toBe(0);
     expect(row.passed).toBe(0);

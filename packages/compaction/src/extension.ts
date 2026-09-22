@@ -1,32 +1,7 @@
 /**
- * The compaction extension — Kinu's `transformContext` adapter over the
- * published better-compact ladder engine.
- *
- * Encode the durable history to IR turns, run the engine (cached-plan replay
- * when the prefix still holds, else build/persist/apply a fresh plan), decode
- * back to ModelMessages. Deterministic prune stages run synchronously;
- * assistant-run summaries and the last-resort prefix summary go through ONE
- * injected `summarize` callback:
- *
- *  - assistant runs use the core per-run prompt already embedded in each
- *    summary job by the ladder;
- *  - the first prefix summary uses Kinu's tuned handoff template
- *    (`buildCompactionSummaryPrompt` — Active Task verbatim → Remaining Work,
- *    recall-first, secret redaction, iterative updates), the single summary
- *    spec the old single-shot path used, wrapped in the [CONTEXT CHECKPOINT]
- *    preamble; published core rolls that checkpoint across later deltas.
- *
- * The checkpoint message the model actually reads carries one more thing: the
- * archive manifest (manifest.ts), appended deterministically to the ladder's
- * synthesized turn so the compacted mass is navigable at a glance rather than
- * only greppable. It is rendered from the durable archive index, never from a
- * model call, and never stored in the plan — so a rolled or degraded summary
- * cannot lose it.
- *
- * Everything is injected ports (transcripts/plans/logger/summarize/archive),
- * so the engine runs identically off-backend under test fakes; 2B binds the
- * real workspace-VFS transcript store, durable plan store, archive index and
- * LLM callback, and registers the extension as the default compaction path.
+ * `transformContext` adapter over the better-compact ladder: encode history, run the engine (replay
+ * or new plan), decode. The archive manifest is appended from the durable index, never stored in the
+ * plan, so a rolled or degraded summary cannot lose it.
  */
 
 import type { ModelMessage, TextPart } from 'ai';
@@ -67,62 +42,44 @@ import { renderThrownChain } from '@kinu.run/core/obs';
 
 export interface CompactionOutcomeEvent {
   sessionKey: string;
-  /** 'planned' = a NEW plan rewrote the history. 'invalidated' = a cached
-   *  plan was discarded after a history rewrite and nothing replaced it, so
-   *  the durable view flips back to the raw stream. Both invalidate frozen
-   *  positions derived from the previous stream (the DynamicContextLedger's
-   *  blocks) — reset on anything but 'replayed', the deterministic cache-warm
-   *  replay whose transformed prefix is byte-stable. */
+  /** Anything but 'replayed' changed the stream and invalidates frozen positions (e.g. ledger blocks). */
   outcome: 'planned' | 'replayed' | 'invalidated';
-  /** The freshly built plan, on 'planned'. */
   plan?: BoundaryContextPlan;
 }
 
-/** The ephemeral context plane, as the ladder's first rung reaches it — the
- *  core DynamicContextLedger, structurally, so this package never imports it.
- *  `dropSuperseded` drops every superseded `<dynamic_context>` block, keeps the
- *  newest (live state the model reads), and returns the tokens freed. */
+/** Structural view of core's DynamicContextLedger: drop superseded `<dynamic_context>` blocks, return tokens freed. */
 export interface EphemeralContextPlane {
   dropSuperseded(): number;
 }
 
 export interface CompactionExtensionDeps {
-  /** Engine ports: transcript store (citablePath must be a path the agent's
-   *  own file tool can read back), plan store, logger. */
+  /** `citablePath` must be readable by the agent's own file tool. */
   ports: EnginePorts;
-  /** Durable index of this session's archived ranges — the source the
-   *  checkpoint's navigation manifest renders from. */
   archive: ArchiveIndexStore;
-  /** One LLM call — prompt in, completion text out. Serves both summary
-   *  kinds; failures degrade to deterministic previews, never break a turn. */
+  /** Serves both summary kinds; failures degrade to deterministic previews. */
   summarize: (prompt: string, signal?: AbortSignal) => Promise<string>;
-  /** The ephemeral plane the ladder's first rung prunes. */
   ephemeral: EphemeralContextPlane;
-  /** Trigger/target/recent-tool profile. Defaults to the light preset. */
+  /** Defaults to the light preset. */
   profile?: CompactionProfile;
-  /** Fires whenever the model-visible stream changed shape — the ledger-reset
-   *  signal (reset on 'planned' and 'invalidated', keep on 'replayed'). */
+  /** Ledger-reset signal: reset on 'planned' and 'invalidated', keep on 'replayed'. */
   onOutcome?: (event: CompactionOutcomeEvent) => void;
 }
 
-/** What a forced rebuild starts from. */
 interface ForceRebuildInputs {
   readonly turns: Turn[];
   readonly ctx: TransformContext;
-  /** The monotonic floor: pruned tool results stay pruned, summaries are reused. */
+  /** Monotonic floor: pruned tool results stay pruned, summaries are reused. */
   readonly prior: PlanSnapshot | null;
   readonly reportedTokens: number;
   readonly summarize: (jobs: BoundarySummaryJob[]) => Promise<Record<string, string>>;
 }
 
-/** What the prefix-summary upgrade decides on, and rebuilds from. */
 interface PrefixUpgradeInputs {
   readonly turns: Turn[];
   readonly plan: BoundaryContextPlan;
   readonly prior: PlanSnapshot | null;
   readonly ctx: TransformContext;
   readonly reportedTokens: number;
-  /** Published core already spent this turn's rolling attempt. */
   readonly rollingSummaryAttempted: boolean;
 }
 
@@ -131,15 +88,12 @@ export function createCompactionExtension(deps: CompactionExtensionDeps): KinuEx
   const engine = createEngine(kinuSpec, deps.ports);
   const summaryScheduler = createSummaryScheduler(deps.ports.logger);
 
-  /** One summarizer per transformContext invocation: the signal is the turn's
-   *  own, never shared, so a cancelled turn cancels only its own calls and a
-   *  rethrown abort keeps "the caller left" from reading as a summary failure. */
+  /** Per-turn summarizer: a cancelled turn cancels only its own calls and its abort is not a summary failure. */
   const summarizerFor = (signal: AbortSignal | undefined): Summarizer => ({
     async complete(job) {
       try {
         return await deps.summarize(job.prompt, signal);
       } catch (err) {
-        // A cancelled turn is not a failed summary; the caller's abort propagates.
         if (signal?.aborted) throw err;
         deps.ports.logger.warn('Compaction summary call failed', {
           rangeStartMessageId: job.rangeStartMessageId,
@@ -175,30 +129,9 @@ export function createCompactionExtension(deps: CompactionExtensionDeps): KinuEx
   });
 
   /**
-   * The ladder's FIRST rung, above every better-compact stage: under measured
-   * pressure, drop the superseded `<dynamic_context>` blocks.
-   *
-   * They cannot be a ladder stage — they are woven per model STEP and never
-   * reach the durable history a stage operates on — but they are the first
-   * thing that should go: stale by definition, re-derivable from live state,
-   * and paid for on every request until something removes them. Relieving here
-   * means the stages below may not have to run at all, so the tokens freed are
-   * subtracted from the pressure the engine is told about.
-   *
-   * Dropping a frozen block breaks the woven prefix, so this is gated on the
-   * ladder's own trigger and nothing else. What that buys, in the two shapes
-   * pressure takes:
-   *
-   *   a plan gets built — the prefix was going to be rewritten anyway (and
-   *     `onOutcome` resets the whole ledger), so the rung costs nothing extra
-   *     and only gets the accounting right: what it frees is tool output the
-   *     stages below no longer have to stub.
-   *   a cached plan still replays — the durable history is fine and the excess
-   *     is ephemeral. This is the case the rung exists for: the engine's
-   *     regrowth guard prices the prefix with the overhead recorded when the
-   *     plan was BUILT (`snapshot.overheadTokens`), so blocks appended after
-   *     that are invisible to it, and nothing else in the system would ever
-   *     drop them. One prefix rebuild bounds a plane that otherwise only grows.
+   * First rung, above every ladder stage: under measured pressure, drop superseded `<dynamic_context>`
+   * blocks (woven per step, never in durable history). Gated on the ladder trigger since it breaks the
+   * woven prefix; needed because replay prices overhead as of plan build and never sees later blocks.
    */
   function relieveEphemeralPressure(ctx: TransformContext, turns: Turn[]): number {
     const measured = measuredTokens(ctx, turns, 0);
@@ -216,10 +149,7 @@ export function createCompactionExtension(deps: CompactionExtensionDeps): KinuEx
     return freed;
   }
 
-  /** Overflow recovery: the request cannot be replayed as-is, so a stale
-   *  plan's replay is not enough — rebuild with `force`, carrying the prior
-   *  plan as the monotonic floor (already-pruned tool results stay pruned,
-   *  paid-for summaries are reused). */
+  /** Overflow recovery: rebuild with `force`, using the prior plan as the monotonic floor. */
   async function forceRebuild(
     { turns, ctx, prior, reportedTokens, summarize }: ForceRebuildInputs,
   ): Promise<ProcessResult> {
@@ -247,20 +177,14 @@ export function createCompactionExtension(deps: CompactionExtensionDeps): KinuEx
     return { outcome: 'planned', turns: transformed, plan };
   }
 
-  /** When the ladder fell through to the last-resort prefix summary, replace
-   *  the deterministic preview with a proper LLM handoff summary built from
-   *  core's tuned template, then rebuild so the upgraded summary is what the
-   *  model sees this turn AND what future replays carry. Skipped when the
-   *  plan already carries an upgraded ([CONTEXT CHECKPOINT]-wrapped) summary
-   *  inherited from a prior plan, or when published core already accepted a
-   *  rolling summary for an expanded prefix. */
+  /** Replace a last-resort preview prefix summary with an LLM handoff summary and rebuild. Skipped when
+   *  already upgraded or when published core already accepted a rolling summary. */
   async function upgradePrefixSummary(
     { turns, plan, prior, ctx, reportedTokens, rollingSummaryAttempted }: PrefixUpgradeInputs,
   ): Promise<Extract<ProcessResult, { outcome: 'planned' }> | null> {
     if (!plan.requiresCustomCompaction) return null;
 
-    // Published core owns rolling attempts, including validation and its
-    // circuit breaker. Never bypass that policy with a second direct call.
+    // Published core owns rolling attempts and their circuit breaker; never add a second direct call.
     if (rollingSummaryAttempted) return null;
 
     if (plan.prefixSummary?.startsWith(CONTEXT_CHECKPOINT_PREFIX)) return null;
@@ -276,8 +200,7 @@ export function createCompactionExtension(deps: CompactionExtensionDeps): KinuEx
       transcript: plan.transcript.content || formatTranscript(prefixTurns, kinuCodec),
       latestUserAsk: latestUserAsk(ctx.messages),
       previousSummary: previous,
-      // The agents-SDK budget rule: 20% of the compacted content, floored at
-      // 100 tokens.
+      // Agents-SDK budget rule: 20% of the compacted content, floored at 100 tokens.
       budgetTokens: Math.max(100, Math.floor(kinuCodec.estimateTurns(prefixTurns) * 0.2)),
     });
 
@@ -286,7 +209,6 @@ export function createCompactionExtension(deps: CompactionExtensionDeps): KinuEx
     try {
       body = await deps.summarize(prompt, ctx.abortSignal);
     } catch (err) {
-      // A cancelled turn is not a failed summary; the caller's abort propagates.
       if (ctx.abortSignal?.aborted) throw err;
       deps.ports.logger.warn('Compaction prefix-summary call failed; keeping deterministic summary', {
         error: renderThrownChain({ cause: err }),
@@ -302,8 +224,6 @@ export function createCompactionExtension(deps: CompactionExtensionDeps): KinuEx
       {
         ...buildInputs(ctx, reportedTokens),
         force: true,
-        // The just-built plan is the floor; its snapshot already carries the
-        // assistant summaries and preserved tool ids forward.
         priorPlan: toPlanSnapshot(plan),
         prefixSummary: wrapCompactionSummary(body),
       },
@@ -311,19 +231,14 @@ export function createCompactionExtension(deps: CompactionExtensionDeps): KinuEx
     );
 
     if (!upgraded) return null;
-    // Same compacted range ⇒ same rangeHash ⇒ the transcript is already
-    // persisted at the same citable path; no second write needed.
+    // Same range ⇒ same rangeHash ⇒ transcript already persisted at the same path.
     const transformed = transformTurns(turns, upgraded.rawTailStartIndex, upgraded, kinuSpec);
     await deps.ports.plans.save(ctx.sessionKey, toPlanSnapshot(upgraded));
 
     return { outcome: 'planned', turns: transformed, plan: upgraded };
   }
 
-  /** Index the range this plan just archived. The compacted prefix always
-   *  starts at turn 0, so the index records what THIS compaction added and
-   *  cites the archive that holds it; a plan whose prefix no longer contains
-   *  the last indexed anchor describes a rewritten history, and the index
-   *  restarts from it. */
+  /** Index the range this plan archived; a prefix missing the last indexed anchor restarts the index. */
   function indexArchivedRange(ctx: TransformContext, turns: Turn[], plan: BoundaryContextPlan): void {
     const derived = deriveArchiveRange(
       compactedTurnsForPlan(turns, plan),
@@ -348,8 +263,7 @@ export function createCompactionExtension(deps: CompactionExtensionDeps): KinuEx
       const messages = [...ctx.messages];
       const turns = kinuCodec.encode(messages);
 
-      // Loaded before process (which may replace it) so the prefix-summary
-      // upgrade can thread the prior summary through as an iterative update.
+      // Loaded before process (which may replace it) so the upgrade can thread the prior summary.
       const cached = await deps.ports.plans.load(ctx.sessionKey);
       const prior = cached && cached.sessionId === ctx.sessionKey ? cached : null;
       let rollingSummaryAttempted = false;
@@ -359,15 +273,12 @@ export function createCompactionExtension(deps: CompactionExtensionDeps): KinuEx
       const summarize = async (jobs: BoundarySummaryJob[]): Promise<Record<string, string>> => {
         rollingSummaryAttempted ||= jobs.some((job) => job.key.startsWith('prefix-summary:'));
         const summaries = await runJobs(ctx.sessionKey, jobs, summarizer);
-        // The engine swallows a thrown summary call into its deterministic
-        // fallback; an abort that landed mid-batch surfaces here instead.
+        // The engine swallows thrown summary calls; an abort mid-batch surfaces here.
         ctx.abortSignal?.throwIfAborted();
 
         return summaries;
       };
 
-      // Rung one: the superseded ephemeral blocks, before any tool output is
-      // touched. What it frees is what the rest of the ladder no longer has to.
       const reportedTokens = measuredTokens(ctx, turns, relieveEphemeralPressure(ctx, turns));
 
       const processed =
@@ -417,9 +328,7 @@ export function createCompactionExtension(deps: CompactionExtensionDeps): KinuEx
         outcome: applied.outcome,
         plan: applied.outcome === 'planned' ? applied.plan : undefined,
       });
-      // The manifest is a pure function of the durable index, which only grows
-      // when a NEW range is archived — so a replayed plan re-renders it
-      // byte-identically and the provider's prefix cache survives.
+      // Pure function of the append-only index, so replays render byte-identically and keep the prefix cache.
       const manifest = renderArchiveManifest(deps.archive.list(ctx.sessionKey));
 
       return kinuCodec.decode(withArchiveManifest(applied.turns, manifest), messages);
@@ -427,35 +336,21 @@ export function createCompactionExtension(deps: CompactionExtensionDeps): KinuEx
   };
 }
 
-/** The swarm's inherited prefix never wove a dynamic-context block — those are woven per
- *  model STEP for the chat loop, and the prefix predates any child's loop — so the ladder's
- *  first rung has nothing to drop. The port still demands the plane; this is that absence,
- *  stated rather than faked with a ledger. */
+/** The swarm prefix never contains dynamic-context blocks, so the first rung has nothing to drop. */
 const NO_EPHEMERAL_PLANE: EphemeralContextPlane = { dropSuperseded: () => 0 };
 
 export interface SharedPrefixCompactorDeps {
-  /** Engine ports: transcript store (the archived verbatim range lands in the workspace
-   *  VFS, readable by the node's own file tools), plan store (content-keyed replay), logger. */
+  /** The archived range lands in the workspace VFS, readable by the node's own file tools. */
   ports: EnginePorts;
-  /** Durable archive index behind the checkpoint's navigation manifest. */
   archive: ArchiveIndexStore;
-  /** One LLM call — prompt in, completion text out. Same contract as the extension's. */
   summarize: (prompt: string) => Promise<string>;
-  /** Trigger/target/recent-tool profile. Defaults to the light preset. */
   profile?: CompactionProfile;
 }
 
 /**
- * The swarm half of the compaction seam (`SwarmRunDeps.compactShared`): the SAME
- * better-compact ladder the per-turn extension runs, entered once per branch point instead
- * of once per turn. The caller owns the POLICY — the ~85% threshold and the fire-once
- * memoisation are the engine's — so this entry always rewrites (`trigger: 'force'`), and
- * the session key is the branch point's durable id, so a re-entered search replays the
- * same plan byte-stably instead of paying for summaries twice.
- *
- * Byte-identical siblings is the property that makes this safe: the engine computes the
- * prefix ONCE per branch point and hands every child the same array, so a provider caches
- * it across the whole level.
+ * Swarm half of the compaction seam (`SwarmRunDeps.compactShared`): the same ladder, entered once per
+ * branch point. The caller owns the policy, so this always forces; keyed by the branch point's durable
+ * id so re-entry replays byte-stably and siblings share one cacheable prefix.
  */
 export function createSharedPrefixCompactor(
   deps: SharedPrefixCompactorDeps,
@@ -486,23 +381,12 @@ export function createSharedPrefixCompactor(
   };
 }
 
-/** The trigger's known-overhead floor: the assembled system prompt, priced on
- *  the engine's chars/4 scale. The transform sees only the durable history —
- *  the system prompt (and tool schemas it stands in for) rides every request
- *  unseen by the message estimate, which otherwise reads systematically low
- *  until the first provider-reported total lands (production-measured on
- *  workspace-1a4e20: an 8-14k-token gap between the history estimate and the
- *  real per-request prompt). */
+/** Known-overhead floor: the assembled system prompt at chars/4, unseen by the history estimate. */
 function systemOverheadFloor(ctx: TransformContext): number {
   return Math.round(ctx.system.length / 4);
 }
 
-/** The pressure the ladder budgets against: the provider's own last total when
- *  there is one, floored by what the history alone must cost.
- *
- *  `ephemeralRelief` is the tokens the first rung just freed. It comes off the
- *  provider total — which is the only term that ever counted the woven blocks —
- *  and the floor holds the result honest before the first report lands. */
+/** Budgeted pressure: the provider's last total minus `ephemeralRelief`, floored by the history estimate. */
 function measuredTokens(ctx: TransformContext, turns: Turn[], ephemeralRelief: number): number {
   return Math.max(
     Math.max(0, (ctx.providerReportedTokens ?? 0) - ephemeralRelief),
@@ -533,9 +417,7 @@ function compactedTurnsForPlan(turns: Turn[], plan: BoundaryContextPlan): Turn[]
   ];
 }
 
-/** The most recent real user request across the FULL history (including the
- *  protected tail) — handed to the summary prompt directly so "Active Task
- *  verbatim" is mechanical, not a retrieval the summarizer can fumble. */
+/** Latest real user request across the full history, so "Active Task verbatim" is mechanical. */
 function latestUserAsk(messages: readonly ModelMessage[]): string | undefined {
   for (let i = messages.length - 1; i >= 0; i--) {
     const message = messages[i];

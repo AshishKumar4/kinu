@@ -27,20 +27,9 @@ export function isAbortError<Failure>(err: Failure): err is Failure & Error {
 }
 
 /**
- * Run `work` but stop waiting when `signal` aborts, rejecting with an
- * AbortError.
- *
- * Two abort cases, and they are not the same claim. A signal that is ALREADY
- * aborted rejects with `message` without starting the work at all — nothing
- * ran, so there is nothing to stop. A signal that aborts while the work is
- * running rejects with whatever `terminate` resolves, which is where a caller
- * that can actually kill its work says what killing achieved; the wait ends
- * only once that answer is in. A caller with no `terminate` cancels only the
- * WAIT, and its `message` must say so.
- *
- * `terminate` is expected to resolve, including on failure: "the work is gone"
- * and "nobody could stop it" are both answers, and only a thrown rejection
- * would leave the caller with neither.
+ * Run `work` but stop waiting when `signal` aborts. An already-aborted signal rejects with `message`
+ * without starting work; a later abort rejects with what `terminate` resolves. Without `terminate`
+ * only the wait is cancelled, and `message` must say so. `terminate` must resolve, not throw.
  */
 export async function raceAbort<T>(
 	work: () => Promise<T>,
@@ -123,10 +112,6 @@ export function normalizePath(path: string): string {
 
 	return resolved.join("/");
 }
-
-// ---------------------------------------------------------------------------
-// VFS helpers
-// ---------------------------------------------------------------------------
 
 export async function readVfsText(vfs: ReadWriteVFS, path: string): Promise<string> {
 	const result = await vfs.readFile(path, { encoding: "utf8" });

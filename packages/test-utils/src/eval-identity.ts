@@ -1,110 +1,43 @@
 /**
- * WHO an eval run authenticates as, and WHERE it is allowed to point.
- *
- * THE DEFECT THIS EXISTS FOR, measured on the owner's own account on
- * 2026-08-20: `GET /api/cli/workspaces` on the production origin returned 28
- * rows, of which 23 were test debris — twenty-two `drill*` workspaces and one
- * `settle-probe`, minted across 2026-08-18/19 by harnesses driving the owner's
- * signed-in session against production. Nothing in the tree had refused either
- * half of that. `scripts/eval-credentials.ts` promoted `~/.kinu/config.json`
- * to a live target on purpose, and no surface asked whether the origin it was
- * pointed at served real users. So a test run was indistinguishable from the
- * owner working, on the account that holds his real workspaces.
- *
- * Two rules, and neither is a preference:
- *
- *   1. IDENTITY. An eval authenticates as {@link EVAL_SERVICE_ACCOUNT} using a
- *      credential named in the environment ({@link EVAL_IDENTITY_ENV.token}),
- *      never a session belonging to a person. There is no fallback to a stored
- *      session: a harness with no eval credential skips, which is a result, and
- *      the skip-ratchet holds it accountable.
- *   2. TARGET. An eval may reach the one deployment or a loopback dev server.
- *      Anything else is refused. There is no staging (2026-09-10: the owner
- *      collapsed the two environments; the product has no external users, so
- *      the deployed worker is the test target), and no override flag: with one
- *      origin an exception would only name a mistake.
- *
- * RULE 2 IS AN ALLOWLIST, and that is the whole of its value. A denylist
- * permits every origin nobody has thought of yet — a colleague's deployment, a
- * typo that resolves — which is the class of mistake that put those 23 rows on
- * the owner's account. What keeps the deployment clean is rule 1 plus the
- * workspace prefix: an eval never drives a person's session, and every row it
- * mints is attributable and torn down. This fails closed: an origin nobody has
- * declared is refused, and the refusal says which variable names the target.
- *
- * Pure over its environment, so the guard is testable without a credential and
- * without a network.
+ * Who an eval run authenticates as, and where it may point. Identity: {@link EVAL_SERVICE_ACCOUNT} via
+ * {@link EVAL_IDENTITY_ENV.token}, never a person's stored session; no credential means skip. Target: an
+ * allowlist of the one deployment plus loopback, failing closed. Pure over its environment.
  */
 import { USER_AI_PROXY_PATH } from '@kinu.run/core';
 import { classify, renderThrownChain } from '@kinu.run/core/obs';
 import { ambientByName, LIVE_MODEL_ENV } from './ambient-env';
 
-/** The three variables that decide identity and target. One object so a failure
- *  message, a shell script and the docs can name them without a second copy. */
 export const EVAL_IDENTITY_ENV = {
   token: 'KINU_EVAL_TOKEN',
   origin: 'KINU_EVAL_ORIGIN',
 } as const;
 
-/** The account every eval run acts as. Server-side this is the identity
- *  `env.DEV_USER_EMAIL` synthesizes on the deployment, so the browser half and
- *  the CLI-bearer half of a run agree on one user. */
+/** The account every eval acts as: the identity `env.DEV_USER_EMAIL` synthesizes on the deployment, so
+ *  browser and CLI-bearer halves of a run agree on one user. */
 export const EVAL_SERVICE_ACCOUNT = 'eval-service';
 
-/** The deployment's synthesized identity, and so the mailbox the eval-service
- *  account is keyed by. Pinned to wrangler.jsonc's DEV_USER_EMAIL by this
- *  module's tests. */
+/** The deployment's synthesized identity; pinned to wrangler.jsonc's DEV_USER_EMAIL by this module's tests. */
 export const EVAL_SERVICE_EMAIL = 'eval-service@kinu.run';
 
-/** The default eval target: the deployment, whose ONE origin this is. Pinned
- *  to wrangler.jsonc's CLI_PUBLIC_ORIGIN by this module's tests.
- *
- *  `workers_dev` is off, so there is no second host to allow: a `workers.dev`
- *  origin fronting a DEV_USER_EMAIL identity would be an auth bypass on a
- *  second name nobody watches. */
+/** The default eval target, pinned to wrangler.jsonc's CLI_PUBLIC_ORIGIN by tests. `workers_dev` is off,
+ *  so no second host is allowed: it would expose the DEV_USER_EMAIL identity on an unwatched name. */
 export const EVAL_DEPLOYMENT_ORIGIN = 'https://kinu.run';
 
-/** Hosts that can only be a developer's own machine. `[::1]` keeps its brackets
- *  because `URL.hostname` does — and the parser normalizes any longhand IPv6
- *  loopback to that one spelling, so this covers every way of writing it. */
+/** Hosts that can only be the developer's machine. `[::1]` keeps its brackets because `URL.hostname` does. */
 const LOOPBACK_HOSTS: readonly string[] = ['localhost', '127.0.0.1', '[::1]', '0.0.0.0'];
 
-/**
- * The prefix every workspace an eval creates carries.
- *
- * Load-bearing rather than cosmetic: it is what makes a stray row attributable
- * and what makes the cleanup in `scripts/eval-workspaces.ts` one glob rather
- * than a judgement call over a list of names. The debris this module was
- * written for was named `drill*` and `settle-probe`, and nobody could tell from
- * the account which harness had made either.
- */
+/** The prefix every eval-created workspace carries: makes stray rows attributable and `scripts/eval-workspaces.ts` cleanup one glob. */
 export const EVAL_WORKSPACE_PREFIX = 'eval-';
 
 type EnvSource = Record<string, string | undefined>;
 
-/**
- * A name reduced to what a workspace name and a directory name can both hold.
- *
- * Exported because the LOCAL target needs the same reduction for its scratch
- * directory and its workspace row, and two spellings of "make this safe" is how
- * a suite ends up with one name in the store and another on disk.
- */
+/** A name reduced to what a workspace name and a directory name can both hold; shared so store and disk agree. */
 export function evalNameSlug(name: string): string {
   return name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
 }
 
-/**
- * A workspace name an eval may create, prefixed and suffixed so it is both
- * attributable and unique.
- *
- * `subject` names the suite and the case: the point of the name is that a row
- * surviving teardown says what made it.
- */
 export function evalWorkspaceName(subject: string): string {
-  // The product refuses a name its preview grammar cannot carry (31 chars,
-  // lowercase alphanumerics and hyphens): a tier name that does not fit is a
-  // tier that cannot create its workspace. The random suffix keeps uniqueness;
-  // the subject keeps attributability for whatever fits.
+  // The preview grammar caps names at 31 lowercase alphanumerics/hyphens; the random suffix wins over the subject.
   const rand = Math.random().toString(36).slice(2, 8);
   const room = 31 - EVAL_WORKSPACE_PREFIX.length - 1 - 6;
   const slug = evalNameSlug(subject).slice(0, room).replace(/-+$/, '');
@@ -112,16 +45,12 @@ export function evalWorkspaceName(subject: string): string {
   return `${EVAL_WORKSPACE_PREFIX}${slug}-${rand}`;
 }
 
-/** Why an origin was allowed. Reported rather than inferred, because "this ran
- *  against the deployment" and "this ran against a dev server" are different
- *  facts about a measurement. */
 export type EvalTargetReason = 'deployment' | 'local';
 
 export type EvalTargetVerdict =
   | { readonly kind: 'allowed'; readonly origin: string; readonly why: EvalTargetReason }
   | { readonly kind: 'refused'; readonly origin: string; readonly reason: string };
 
-/** Whether an eval may point at `origin`: the deployment, or a loopback. */
 export function evalTargetVerdict(origin: string): EvalTargetVerdict {
   const normalized = origin.trim().replace(/\/+$/, '');
 
@@ -134,9 +63,7 @@ export function evalTargetVerdict(origin: string): EvalTargetVerdict {
     };
   }
 
-  // `hostname` rather than `host`, so a port and IPv6 brackets do not have to be
-  // matched around: `http://localhost:5173` and `http://[::1]:8787` are the two
-  // shapes a local dev server actually arrives as.
+  // `hostname`, not `host`, so ports and IPv6 brackets need no matching.
   let hostname: string;
 
   try {
@@ -167,36 +94,14 @@ export function evalTargetVerdict(origin: string): EvalTargetVerdict {
 }
 
 export type EvalModelEndpointVerdict =
-  /** An origin the allowlist ruled on, either way. */
   | { readonly kind: 'checked'; readonly target: EvalTargetVerdict }
-  /** Fronts a model and no Kinu deployment, so it creates nothing and there is
-   *  no target to rule on. */
+  /** Fronts a model and no Kinu deployment, so there is no target to rule on. */
   | { readonly kind: 'gateway' };
 
 /**
- * Whether an eval may send its credential to the model endpoint `baseUrl`.
- *
- * A model endpoint arrives as a base URL rather than an origin, and the two
- * variables that carry one hold either shape: `.env.example` documents an AI
- * Gateway, and `.github/workflows/eval.yml` held a repository secret that could
- * hold either. Measured on 2026-08-21, `resolveLLMConfig` turns
- * `https://kinu.run/api/user/ai/v1` plus a bearer into
- * `{ name: 'workers-ai', baseURL: <that>, Authorization: 'Bearer …' }` — the
- * shape that authenticates against a deployment, not a gateway's
- * `cf-aig-authorization` — so that pair reaches production's whole API.
- *
- * THE ORIGIN DECIDES FIRST, against the one allowlist. An allowed origin needs
- * no further reasoning, whatever path follows it. Only a refused origin raises
- * the second question, which is whether refusing it would break the gateway
- * path the tier legitimately uses — and there the deployment's own inference
- * route answers, because {@link USER_AI_PROXY_PATH} is the single declaration of
- * that route, shared by the URL builder, the server handler and the auth router.
- *
- * The order matters more than either test. Origin-first keeps production out of
- * this module: naming the deployments would turn the allowlist into a list of
- * hosts to distrust, and every origin nobody had thought of yet would then read
- * as a gateway and pass. This way an undeclared origin bearing the inference
- * route is refused, including one belonging to nobody here.
+ * Whether an eval may send its credential to the model endpoint `baseUrl`. The origin allowlist decides
+ * first; only a refused origin is checked for the {@link USER_AI_PROXY_PATH} route, so an undeclared
+ * origin bearing that route is refused rather than read as a gateway.
  */
 export function evalModelEndpointVerdict(baseUrl: string): EvalModelEndpointVerdict {
   let url: URL;
@@ -204,8 +109,7 @@ export function evalModelEndpointVerdict(baseUrl: string): EvalModelEndpointVerd
   try {
     url = new URL(baseUrl.trim());
   } catch (error) {
-    // Not a URL, so it names no deployment and reaches nothing. The provider
-    // stack refuses it on the first call.
+    // Not a URL: reaches nothing, and the provider stack refuses it on the first call.
     if (classify({ cause: error }) !== 'malformed-input') throw error;
 
     return { kind: 'gateway' };
@@ -220,19 +124,12 @@ export function evalModelEndpointVerdict(baseUrl: string): EvalModelEndpointVerd
   return { kind: 'gateway' };
 }
 
-/** A model endpoint an eval may not use, and the variable that carries it. */
 export interface RefusedEvalEndpoint {
   readonly variable: string;
   readonly reason: string;
 }
 
-/**
- * The first model endpoint in `env` aimed at a deployment an eval may not reach.
- *
- * Reported by VARIABLE, because a variable is what an operator changes. The
- * names come from {@link LIVE_MODEL_ENV} rather than a second list, so a
- * spelling added there is checked here.
- */
+/** The first model endpoint in `env` aimed at a disallowed deployment, reported by variable from {@link LIVE_MODEL_ENV}. */
 export function refusedEvalEndpoint(env: EnvSource = ambientByName(LIVE_MODEL_ENV.gatewayURL)): RefusedEvalEndpoint | null {
   for (const variable of LIVE_MODEL_ENV.gatewayURL) {
     const value = env[variable]?.trim();
@@ -248,36 +145,24 @@ export function refusedEvalEndpoint(env: EnvSource = ambientByName(LIVE_MODEL_EN
   return null;
 }
 
-/** The eval-service credential and the deployment it is good for. */
 export interface EvalIdentity {
   readonly origin: string;
   readonly token: string;
-  /** Always {@link EVAL_SERVICE_ACCOUNT}; carried so a caller reports the
-   *  identity it used rather than the one it assumes. */
+  /** Always {@link EVAL_SERVICE_ACCOUNT}; carried so a caller reports the identity it used. */
   readonly account: string;
   readonly why: EvalTargetReason;
-  /** The one line a run prints before it spends anything. */
   readonly describe: string;
 }
 
 export type EvalIdentityResolution =
   | { readonly kind: 'ready'; readonly identity: EvalIdentity }
-  /** No eval credential at all — the legitimate skip. */
   | { readonly kind: 'absent'; readonly reason: string }
-  /** A credential pointed somewhere it may not go. Never a skip: someone meant
-   *  this to run, and where it would have gone is the thing to say out loud. */
+  /** A credential pointed somewhere it may not go. Never a skip. */
   | { readonly kind: 'refused'; readonly reason: string };
 
-/**
- * The eval-service identity for this environment.
- *
- * `absent` is the reproduce-anywhere path and is deliberately not an error: a
- * tier that cannot run without a secret is a tier nobody can reproduce. What is
- * an error is a credential aimed at a deployment the allowlist does not cover.
- */
+/** The eval-service identity for this environment. `absent` is not an error; a disallowed target is. */
 export function resolveEvalIdentity(env: EnvSource = ambientByName(Object.values(EVAL_IDENTITY_ENV))): EvalIdentityResolution {
   const token = env[EVAL_IDENTITY_ENV.token]?.trim();
-  // `evalTargetVerdict` normalizes, so this only has to choose the default.
   const origin = env[EVAL_IDENTITY_ENV.origin]?.trim() ?? EVAL_DEPLOYMENT_ORIGIN;
 
   if (!token) {

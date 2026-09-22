@@ -73,14 +73,8 @@ describe('the shared scratch owner', () => {
     const preload = resolve(repoRoot, 'scripts/test-scratch-home.ts');
     const outside = scratchDir('scratch-release-outside');
 
-    // One root's rmSync is refused ONCE by name in the child's mock — the only
-    // mocked seam is the removal call itself. The preload mints its runner
-    // root through the same owner, so `release` exercises the real contract:
-    // the failed root, its sibling, the runner home and the child's TMPDIR
-    // all go through the one attempt-everything pass. The blocked root's
-    // parent is THIS test's owned directory — outside the child's runner
-    // root, so a refused rmSync is not swept by the parent's recursive
-    // delete, and owned here so nothing is written to the global /tmp.
+    // Only the removal call is mocked, refusing one root once. Its parent is owned here, outside
+    // the child's runner root, so the parent's recursive delete cannot sweep it.
     const child = Bun.spawnSync([process.execPath, '-e', `
       import { mock } from 'bun:test';
       import * as realFs from 'node:fs';
@@ -137,16 +131,13 @@ describe('the shared scratch owner', () => {
       secondRemoved: v.number(), blockedAfter: v.boolean(),
     }), JSON.parse(child.stdout.toString()));
 
-    // The failure is reported, not swallowed — as one aggregate naming the
-    // cause — while the sibling, the runner home and the child's TMPDIR were
-    // all released in the same pass.
+    // Reported as one aggregate naming the cause, after the other roots were released.
     expect(report.isAggregate).toBe(true);
     expect(report.message).toContain('scratch not released');
     expect(report.innerCount).toBe(1);
     expect(report.innerCauseCode).toBe('EACCES');
     expect(report.existsAfter).toEqual([true, false, false, false]);
-    // Ownership of the failed root survived the throw: an explicit later
-    // release attempts it again and completes it.
+    // Ownership survives the throw: a later release completes it.
     expect(report.secondRemoved).toBe(1);
     expect(report.blockedAfter).toBe(false);
   });

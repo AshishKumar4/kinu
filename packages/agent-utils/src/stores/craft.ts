@@ -2,10 +2,6 @@ import type { SqlExecutor, SqlRow } from "../types";
 import type { CraftedTool, CraftedToolProvider } from "../codemode/builder";
 import * as v from "valibot";
 
-// ---------------------------------------------------------------------------
-// SQLite row type
-// ---------------------------------------------------------------------------
-
 type CraftRow = SqlRow<{
 	name: string;
 	description: string;
@@ -44,15 +40,7 @@ function rowToTool(row: CraftRow): CraftedTool {
 	};
 }
 
-/**
- * The `crafted_tools` table, FTS5 index, and sync triggers.
- *
- * Standalone so a workspace's schema initializer can create them without
- * constructing a store (core's `initActorTables` calls this). Every
- * composition root that builds a CraftStore also gets them via
- * {@link CraftStore.ensureSchema}, which delegates here — one DDL, one
- * source of truth.
- */
+/** The `crafted_tools` table, FTS5 index and sync triggers; standalone so schema init needs no store. */
 export function initCraftedToolsTables(sql: SqlExecutor): void {
 	void sql`
 		CREATE TABLE IF NOT EXISTS crafted_tools (
@@ -74,7 +62,6 @@ export function initCraftedToolsTables(sql: SqlExecutor): void {
 			content=crafted_tools, content_rowid=rowid
 		)
 	`;
-	// Triggers to keep FTS in sync
 	void sql`
 		CREATE TRIGGER IF NOT EXISTS crafted_tools_ai AFTER INSERT ON crafted_tools BEGIN
 			INSERT INTO crafted_tools_fts(rowid, name, description) VALUES (new.rowid, new.name, new.description);
@@ -92,10 +79,6 @@ export function initCraftedToolsTables(sql: SqlExecutor): void {
 		END
 	`;
 }
-
-// ---------------------------------------------------------------------------
-// CraftStore — SQLite + FTS5 storage for agent-crafted tools
-// ---------------------------------------------------------------------------
 
 export class CraftStore implements CraftedToolProvider {
 	private readonly sql: SqlExecutor;

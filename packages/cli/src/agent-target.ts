@@ -13,26 +13,17 @@ export interface AgentTarget {
   mode: AgentMode;
   cloudName: string;
   localName: string;
-  /** Recorded project placement. Present only for a configured local ref —
-   *  an unplaced workspace gets one when `resolveLocalAgent` adopts it. */
+  /** Only a configured local ref has one; an unplaced workspace gets one when `resolveLocalAgent` adopts it. */
   cwd?: string;
   workspaceId?: string;
 }
 
 export interface ResolveAgentTargetOptions {
-  /** Which backend the caller means, for a name that could address either. */
   backend?: AgentMode;
 }
 
-/**
- * Which backend a name addresses. A configured ref decides that outright: the
- * mode was chosen when the workspace was created, so nothing probes the
- * filesystem for it and a same-named local database cannot overrule it.
- *
- * Only an unconfigured name falls back to evidence, and when the evidence names
- * both a local database and a known cloud workspace this refuses instead of
- * picking one.
- */
+/** A configured ref decides the backend outright. An unconfigured name falls back to evidence and refuses
+ * when both a local database and a cloud workspace match. */
 export function resolveAgentTarget(input: string, opts: ResolveAgentTargetOptions = {}): AgentTarget {
   const ref = resolveAgentRef(input);
 

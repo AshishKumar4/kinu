@@ -1,11 +1,4 @@
-// The durable admission contract, against the REAL runner: an actor turn's
-// claim, the exact context revision every step consumes, and the refusals that
-// keep a stale activation or a neighbouring actor out of a live claim.
-//
-// Every turn here runs through `ActorSession.execute` with the real store
-// bundle, so the claim rows are the ones production writes. The model is
-// scripted and the program is a real versioned scaffold source on the runtime's
-// own VFS — nothing here asserts against a mock of the thing under test.
+// Admission contract against the real runner: claim, per-step context revision, and stale/foreign refusals.
 import { expect, test } from 'bun:test';
 import { createHash } from 'node:crypto';
 import { jsonSchema, tool } from 'ai';
@@ -119,8 +112,6 @@ async function runTurn(bound: Bound, opts: {
     { runId: opts.runId ?? `run-${opts.turnId}`, turnId: opts.turnId }, mode, Date.now(),
   );
 
-  // The grant is enforced at execution: a tool the turn offers must be one the
-  // bound profile resolved, exactly as a backend resolves it from the surface.
   bound.actor.bindProfile(lease, resolveTurnProfile({
     ...profiles, roleId: 'task', workMode: mode, availableTools: Object.keys(opts.tools ?? {}), activeSkills: [],
   }), profiles);
@@ -132,10 +123,7 @@ async function runTurn(bound: Bound, opts: {
     extensions: [], dynamic: () => ({}),
   }, (event) => opts.onEvent?.(event));
 
-  // What the host does with a settled turn, in the order it does it: name the
-  // claim's outcome from what the run did, then release the lease. A lease
-  // released without a named outcome settles `indeterminate` instead, which is
-  // what the run-close path exists to avoid.
+  // Settle order: name the claim outcome, then release; a bare release settles `indeterminate`.
   bound.actor.settleTurnClaim(lease, result.failure === null ? 'completed' : 'error');
   bound.actor.finishTurn(lease);
 
@@ -155,17 +143,14 @@ test('the claim and its admitted context are durable before the first model call
   let claimAtFirstCall: StoredActorClaim | null = null;
 
   const model = scriptedTurnModel({ provider: 'fake', modelId: 'actor-model', doGenerate: () => {
-    // Read straight out of SQLite from inside the provider call: whatever this
-    // sees is what was durable BEFORE the first model effect existed.
+    // Read from SQLite inside the provider call: what was durable before the first model effect.
     claimAtFirstCall = left.stores.claims.read('turn-a');
 
     return { content: [{ type: 'text', text: 'answered' }],
       finishReason: { unified: 'stop', raw: undefined }, usage, warnings: [] };
   } });
 
-  // The BUILTIN loop, deliberately: a promoted program answers from its own
-  // source and may never call a model at all, so the builtin arm is the one
-  // whose first side effect IS the provider call this probe reads from.
+  // Builtin loop: a promoted program may never call a model, so only this arm's first effect is the provider call.
   const { result } = await runTurn(left, {
     turnId: 'turn-a', loopVersion: 0, model,
     input: { role: 'user', content: 'admitted input' },
@@ -176,10 +161,7 @@ test('the claim and its admitted context are durable before the first model call
     turnId: 'turn-a', runId: 'run-turn-a', epoch: 1, workMode: 'build', status: 'admitted',
     program: { kind: 'builtin', version: 0, digest: null, build: null },
   });
-  // The claim the execution returned is the row that was already durable.
   expect(result.claim).toMatchObject({ turnId: 'turn-a', runId: 'run-turn-a', epoch: 1 });
-  // Revision 0 exists in the same transaction as the claim, and it is the
-  // context the turn was admitted against — not a placeholder.
   const admitted = await left.stores.claims.admittedContext('turn-a');
   expect(admitted?.messages).toEqual([{ role: 'user', content: 'admitted input' }]);
 });
@@ -202,8 +184,6 @@ test('a source change after admission cannot alter the bytes the turn consumed',
 
   expect(result.failure).toBeNull();
   expect(result.text).toBe('v1 answer');
-  // The version's file is rewritten AFTER the turn consumed it, exactly as a
-  // promotion or a revert racing a live turn would.
   await files.writeFile(rt.identity.scaffold.path + '.v1', V2);
   const claim = left.stores.claims.read('turn-src');
   expect(claim?.program.digest).toBe(createHash('sha256').update(V1).digest('hex'));
@@ -217,8 +197,7 @@ test('a source change after admission cannot alter the bytes the turn consumed',
     () => left.stores.claims.consumedContext('turn-src'),
   );
 
-  // Recovery REFUSES to read the new bytes as the claimed ones, and says which
-  // digest it found rather than resuming on whatever is there now.
+  // Recovery refuses rewritten bytes and reports the digest it found.
   expect(recovery.kind).toBe('source_changed');
   expect(recovery.kind === 'source_changed' && recovery.found)
     .toBe(createHash('sha256').update(V2).digest('hex'));
@@ -237,15 +216,10 @@ test('a cold reader recovers the claimed program identity and the exact context 
     ] },
   });
 
-  // A SECOND store bundle over the same database, bound to the same issued
-  // actor: this is what an activation that did not run the turn can see.
   const cold = createAgentStores(() => left.runtime.storage.sql, () => left.handle, left.runtime.storage.transactionSync, async () => ({ vfs: left.runtime.storage.vfs, artifactDirectory: '/actors/' + left.handle.actorId }));
 
   const claim = cold.claims.read('turn-cold');
   expect(claim).toMatchObject({ turnId: 'turn-cold', epoch: 1, status: 'settled', outcome: 'completed' });
-  // A BUILTIN turn carries no source digest and — on this host — no build
-  // identity. Neither is invented: the descriptor that names the arm is not
-  // hashed into something that reads like retained code.
   expect(claim?.program).toEqual({ kind: 'builtin', version: 0, digest: null, build: null });
 
   if (claim === null) throw new Error('the turn must have left a claim to verify');
@@ -260,8 +234,6 @@ test('a cold reader recovers the claimed program identity and the exact context 
   expect(recovery.kind).toBe('build_unknown');
   const consumed = await cold.claims.consumedContext('turn-cold');
   expect(consumed?.stepIndex).toBe(0);
-  // The step's own input, byte-for-byte, with its typed attachment intact —
-  // not display prose, and not a JSON round trip of the bytes.
   const first = consumed?.messages[0];
   expect(first?.role).toBe('user');
   const parts = Array.isArray(first?.content) ? first?.content : [];
@@ -296,8 +268,7 @@ test('a rich tool exchange survives the revision round trip as native messages',
     turnId: 'turn-tools', loopVersion: 0, model, tools,
     input: { role: 'user', content: 'probe it' },
   });
-  // The SECOND step's revision is the one that carries the assistant tool call
-  // and its result: the pairing a provider rejects if either half is lost.
+  // Second step's revision carries the tool call and result; a provider rejects a lost half.
   const second = await left.stores.claims.consumedContext('turn-tools', 1);
   expect(second?.stepIndex).toBe(1);
   const roles = (second?.messages ?? []).map((message) => message.role);
@@ -321,8 +292,6 @@ test('a stale execution epoch cannot write to the claim a newer one owns', async
 
   expect(stale.epoch).toBe(1);
 
-  // The activation that replaces it re-admits the SAME turn and takes the next
-  // epoch — the case the single-row handoff could not represent.
   const live = await claims.admit({
     runId: 'run-new', turnId: 'turn-fence', workMode: 'build',
     program: { kind: 'builtin', version: 0, digest: null, build: null },
@@ -332,10 +301,8 @@ test('a stale execution epoch cannot write to the claim a newer one owns', async
   expect(live.epoch).toBe(2);
   await expect(claims.consume(stale, { index: 0, messages: [{ role: 'user', content: 'stale step' }] })).rejects.toThrow(KinuError);
   expect(() => claims.settle(stale, 'completed')).toThrow(KinuError);
-  // The live claim is untouched by the refusals.
   await claims.consume(live, { index: 0, messages: [{ role: 'user', content: 'live step' }] });
   expect(claims.read('turn-fence')).toMatchObject({ epoch: 2, runId: 'run-new', consumedRevision: 1 });
-  // A settled claim takes no further work either.
   claims.settle(live, 'completed');
   await expect(claims.consume(live, { index: 1, messages: [{ role: 'user', content: 'after settle' }] })).rejects.toThrow(KinuError);
 });
@@ -357,7 +324,6 @@ test('one actor cannot write another actor\'s claim, and their revisions never m
     context: await selectedInput(right, [{ role: 'user', content: 'right context' }]),
   });
 
-  // The same turn id on two issued actors is two claims, each at epoch 1.
   expect(leftClaim.epoch).toBe(1);
   expect(rightClaim.epoch).toBe(1);
   await expect(right.stores.claims.consume(leftClaim, {
@@ -374,9 +340,6 @@ test('a context edit written through the native file tool reaches the NEXT model
   const { bind } = await workspace();
   const left = bind('left');
 
-  // The actor's own file plane, with /context composed exactly as a backend
-  // composes it: the edit below goes through the same dispatcher, ledger and
-  // store a model's `file` call goes through.
   const vfs = withMountTable(left.runtime.storage.vfs, [contextMount({
     stores: () => ({ actorId: left.handle.actorId, claims: left.stores.claims, events: null }),
   })]);
@@ -385,17 +348,12 @@ test('a context edit written through the native file tool reaches the NEXT model
     vfs, ledger: new TurnFileLedger(), budget: new TurnContextBudget(),
   });
 
-  // The provider's OWN prompt, as JSON: this is the wire-facing message list,
-  // not our `ModelMessage` shape, and reading it back through a schema keeps
-  // that distinction honest instead of asserting one is the other.
   const requests: string[] = [];
   let step = 0;
   const edits: string[] = [];
   const fileErrors: string[] = [];
 
-  // THREE steps, because that is what the product actually requires of a model
-  // editing a file: read it, then edit against what the read returned, then
-  // answer. The read-before-write gate is real on this plane.
+  // Three steps: the read-before-write gate requires read, edit, answer.
   const model = scriptedTurnModel({ provider: 'fake', modelId: 'actor-model', doGenerate: (options) => {
     requests.push(JSON.stringify(options.prompt));
     const at = step++;
@@ -446,20 +404,12 @@ test('a context edit written through the native file tool reaches the NEXT model
   expect(edits).toHaveLength(1);
   expect(JSON.parse(edits[0] ?? 'null')).toMatchObject({ ok: true });
 
-  // The first two requests ran on the original premise: an in-flight request
-  // keeps the versions it started with, and the edit was not even authored
-  // until the second one's tool call executed.
   expect(requests[0]).toContain('the WRONG premise');
   expect(requests[1]).toContain('the WRONG premise');
-  // THE THIRD request — what the provider actually received after the edit —
-  // is built from the edited history, and still carries both tool exchanges
-  // that happened in between.
   const third = v.parse(v.array(v.object({ role: v.string() })), JSON.parse(requests[2] ?? '[]'));
   expect(third.map((row) => row.role)).toEqual(['system', 'user', 'assistant', 'tool', 'assistant', 'tool']);
 
-  // The premise the model is now reasoning from. Asserted on the USER message
-  // rather than the whole prompt, because the tool result of the read
-  // legitimately quotes the pre-edit bytes — that is what the model read.
+  // Asserted on the user message: the read's tool result legitimately quotes pre-edit bytes.
   const PromptText = v.array(v.object({
     role: v.string(),
     content: v.union([v.string(), v.array(v.object({ text: v.optional(v.string()) }))]),
@@ -478,11 +428,8 @@ test('a context edit written through the native file tool reaches the NEXT model
 
   const settled = await left.stores.history.materialize();
   expect(settled.messages[0]).toEqual({ role: 'user', content: 'reason from the RIGHT premise' });
-  // And the FIRST step's evidence is untouched — an edit does not rewrite what
-  // a past request was.
   expect(JSON.stringify((await left.stores.claims.consumedContext('turn-edit', 0))?.messages))
     .toContain('the WRONG premise');
-  // The next turn starts from the edited history, not from the pre-edit array.
   expect(left.actor.history[0]).toEqual({ role: 'user', content: 'reason from the RIGHT premise' });
 });
 
@@ -570,12 +517,9 @@ test('a mid-turn host edit stages a revision instead of rewriting a running turn
     turnId: 'turn-hydrate', loopVersion: 0, model,
     input: { role: 'user', content: 'original' },
   });
-  // The step that was already issued kept the context it was issued with.
   const first = await left.stores.claims.consumedContext('turn-hydrate', 0);
   expect(first?.messages).toEqual([{ role: 'user', content: 'original' }]);
 
-  // The NEXT turn is the next safe boundary: it admits the edited history with
-  // the newly delivered input preserved after it exactly once.
   await runTurn(left, {
     turnId: 'turn-after', loopVersion: 0, model: answerOnce('second answer'),
     input: { role: 'user', content: 'follow-up' },
@@ -584,7 +528,6 @@ test('a mid-turn host edit stages a revision instead of rewriting a running turn
   expect(admitted[0]).toEqual({ role: 'user', content: 'replaced by the host' });
   expect(admitted.filter((message) => message.content === 'follow-up')).toHaveLength(1);
 
-  // Outside a turn the same call hydrates rather than staging.
   await left.actor.restoreHistory([{ role: 'user', content: 'cold hydration' }]);
   expect(left.actor.history).toEqual([{ role: 'user', content: 'cold hydration' }]);
 });
@@ -664,8 +607,7 @@ test('a consumer failure after the turn finished does not replay a landed steer'
   const { result } = await runTurn(left, {
     turnId: 'emit-after-done', loopVersion: 0, model, tools,
     input: { role: 'user', content: 'go' },
-    // The done frame is emitted AFTER the turn completed: a consumer that throws
-    // on it must not undo the landed steer or the text already accepted.
+    // Done frame emits after completion: a throwing consumer must not undo the landed steer.
     onEvent: event => {
 
       if (event.type === 'done') throw thrown;

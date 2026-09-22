@@ -1,12 +1,6 @@
 /**
- * `kinu evolve` progress rendering, driven through the command with a stub
- * search engine. An evolution cycle spends minutes inside runMCTS, so every
- * search event has to reach the terminal — and a branch that died on a
- * provider error has to say so, since the engine scores it 0 and carries on.
- *
- * The stub emits the same event shapes the engine produces; the assertions
- * below pin the WORDS on the terminal, through the command's own onProgress
- * wiring rather than the formatter's former export.
+ * `kinu evolve` progress through the command with a stub engine: every search event must reach the
+ * terminal, and a branch killed by a provider error must say so (the engine scores it 0).
  */
 import { afterAll, afterEach, describe, expect, test } from 'bun:test';
 
@@ -20,8 +14,7 @@ import { createCliAgent } from '../src/agent-create';
 import { AGENT_HOME, agentDir, updateConfigFile } from '../src/config';
 import { evolveCommand } from '../src/commands/evolve';
 
-// Dummy provider config so requireLLMConfig succeeds offline — the stub
-// engine below never calls a model.
+// Dummy provider config so requireLLMConfig succeeds offline.
 const OFFLINE_PROVIDER = {
   baseUrl: 'http://localhost:0/v1',
   auth: 'Bearer evolve-progress',
@@ -41,11 +34,7 @@ if (resolve(AGENT_HOME) === resolve(join(homedir(), '.kinu'))
 
 const AGENT_NAME = `evolve-progress-${Date.now()}`;
 
-// The agent directory is this suite's own: every name the file creates is
-// removed when the test that created it ends — the same test-owned cleanup
-// project-refs already does — so a later file's roster reads exactly what IT
-// created. config.ts binds AGENT_HOME at module load, so in-process isolation
-// through KINU_HOME cannot carry the cleanup; rmSync on the agent dir does.
+// AGENT_HOME binds at module load, so each test rmSyncs the agent dirs it created.
 const created: string[] = [];
 
 afterEach(() => {
@@ -58,13 +47,8 @@ afterAll(() => {
   });
 });
 
-// The renderer colours for a terminal and these assertions read its WORDS, so
-// every capture below is stripped at the seam: the words stay true in a pipe,
-// in a PTY and under FORCE_COLOR alike. The deploy runs in a terminal and every
-// local run was a pipe, which is how a green suite hid a red deploy twice in
-// one day.
+// Captures are stripped at the seam so the words hold in a pipe, a PTY, or under FORCE_COLOR.
 
-/** A search engine that emits one of every progress shape, then converges. */
 async function stubEngine(
   _rt: AgentRuntime, _session: SessionWriter, _task: string, config: MCTSConfig,
 ): Promise<ConvergenceResult> {
@@ -95,13 +79,8 @@ describe('evolve progress rendering', () => {
     const originalWrite = process.stdout.write.bind(process.stdout);
     console.log = (...args: unknown[]) => { lines.push(args.map(String).join(' ')); };
 
-    // BOTH sinks, because the mode decides which one carries a status event: a
-    // pipe gets a plain `console.log` line, a terminal gets the live row
-    // written straight to stdout. `display.ts` reads `isTTY` once at module
-    // load, so a suite cannot choose the mode — it has to read both, or it
-    // reports the runner's terminal rather than the command's behaviour.
-    // `toString` is the member both chunk representations share, and the only
-    // producer here is `display.ts` writing template strings.
+    // Both sinks: a pipe gets `console.log`, a terminal gets the live row on stdout, and `display.ts`
+    // reads `isTTY` once at module load, so the suite cannot pick the mode.
     const capture: typeof process.stdout.write = (chunk) => {
       lines.push(chunk.toString());
 

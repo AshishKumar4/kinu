@@ -1,14 +1,4 @@
-/**
- * `kinu tokens` — manage long-lived, scoped CI access tokens (`pta_…`).
- * Minting requires an interactive session signed in within the step-up
- * window, so a stale terminal gets pointed back at `kinu auth`.
- *
- * {@link ACCESS_TOKEN_SCOPES} is the set the server accepts; the CLI does not
- * depend on the backend package, so it is restated here and nowhere else in this
- * package. All THREE are named, `ai.proxy` included — it is the scope the eval
- * runbook mints (`docs/TESTING.md`), so a hint that omits it hands the caller a
- * token that cannot pay for inference.
- */
+/** `kinu tokens`: scoped CI access tokens (`pta_…`). Minting requires a session signed in within the step-up window. */
 import {
   createCliAccessToken,
   listCliAccessTokens,
@@ -18,9 +8,7 @@ import { projectJsonValue } from '@kinu.run/core';
 import { requireAuthConfig } from '../config';
 import { ACCENT, DIM, formatWhen, OK, printJson, WARN } from '../display';
 
-/** The scopes the server's access-token store accepts, in its own order
- *  (`cf-backend/src/cli/access-token-store.ts`). `ai.proxy` means "spend the
- *  owner's inference credentials" and is what an eval or CI run needs. */
+/** The server's accepted scopes (`cf-backend/src/cli/access-token-store.ts`), restated since the CLI does not depend on the backend. */
 export const ACCESS_TOKEN_SCOPES = ['workspace.read', 'workspace.exec', 'ai.proxy'] as const;
 
 export interface TokensOpts {

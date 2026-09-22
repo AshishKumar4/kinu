@@ -124,9 +124,7 @@ const FileCheckpointListingSchema: v.GenericSchema<FileCheckpointListing> = v.ob
   entries: v.array(FileCheckpointEntrySchema),
 });
 
-/** The plan-review wire shapes. `PlanReviewSchema` is core's own — the same
- *  admission the store applies — so a forged annotation cannot arrive here by
- *  a route the workspace UI does not have. */
+/** Core's own `PlanReviewSchema`, so a forged annotation cannot arrive by a route the workspace UI lacks. */
 const CloudPlanReviewSchema = v.nullable(PlanReviewSchema);
 
 const CloudPlanReviewResultSchema: v.GenericSchema<unknown, PlanReviewResult> = v.variant('ok', [
@@ -141,9 +139,6 @@ const BranchTurnResultSchema = v.nullable(v.object({
   reason: v.optional(v.string()),
 }));
 
-
-/** Both additional-agent calls answer with the slug to address the agent by
- *  and its shown title, which is empty until something names it. */
 const AdditionalAgentSchema = v.object({ name: v.string(), displayName: v.string() });
 
 const AdditionalAgentEnvelopeSchema = v.object({
@@ -172,10 +167,7 @@ const ChangelogViewSchema = v.nullable(v.object({
   unseenCount: v.optional(v.number(), 0),
 }));
 
-/** The refinement surface as the wire carries it. Optional-with-default on
- *  every field for the same reason the changelog's schema is: an older
- *  workspace answering a newer client must degrade to an empty listing rather
- *  than to a parse failure the operator cannot act on. */
+/** Optional-with-default fields so an older workspace degrades to an empty listing, not a parse failure. */
 const RefinementRouteSchema = v.object({
   kind: v.picklist(REFINEMENT_EDIT_KINDS),
   owner: v.optional(v.string(), ''),
@@ -288,7 +280,6 @@ const SocketFrameSchema = v.objectWithRest({
   error: v.optional(JsonValueSchema),
   body: v.optional(v.string()),
   done: v.optional(v.boolean()),
-  /** Set by the DO on every frame of a stream it replays. */
   replay: v.optional(v.boolean()),
   landed: v.optional(v.picklist(['mid-turn', 'turn'])),
 }, JsonValueSchema);
@@ -312,32 +303,18 @@ const BranchStatusEventSchema = v.variant('status', [
 export interface CloudAgentClientOptions {
   origin: string;
   token: string;
-  /** Display/canonical agent name for UI surfaces. */
   agentName: string;
-  /** DO instance name on the orchestrator-agent namespace. */
   cloudName: string;
-  /** Which LOGICAL ACTOR beneath `cloudName` this client addresses, when it is
-   * an additional agent rather than the root workspace conversation. It names a
-   * hosted actor of that workspace, not a store of its own: the whole
-   * subordinate tree lives in the root's one workspace database. */
+  /** A hosted actor beneath `cloudName`, not a store of its own: the subordinate tree lives in the root's database. */
   subordinateName?: string;
-  /** Recorder controls for this process's diagnostic transcript. */
   transcript?: CliSessionOptions;
-  /** One task turn, then exit. Stamped on each chat request so the DO knows
-   *  this prompt is an independent task rather than a conversational
-   *  follow-up, and never grades the previous turn from it. */
+  /** Stamped on each chat request so the DO never grades the previous turn from this prompt. */
   oneShot?: boolean;
 }
 
 /**
- * AgentClient over the OrchestratorAgent DO: chat turns ride the real agent
- * websocket (ticket-authenticated), everything else calls agent methods by
- * name over the generic /api/cli/workspaces/:name/rpc transport (or the
- * socket's own {type:'rpc'} frames once it is open). The DO is the source
- * of truth for chat history and turn
- * execution: each send transmits only the new user message (the server
- * reconciles it into its canonical store and builds model context
- * server-side), so the client never mirrors history.
+ * AgentClient over the OrchestratorAgent DO. Chat rides the agent websocket; other calls use the RPC
+ * transport. The DO owns history and context: each send carries only the new user message.
  */
 export class CloudAgentClient implements AgentClient {
   readonly mode = 'cloud' as const;
@@ -360,19 +337,14 @@ export class CloudAgentClient implements AgentClient {
   private readonly recorder = new SessionRecorder('cloud');
   private ws: WebSocket | null = null;
   private connectPromise: Promise<void> | null = null;
-  /** Set by `close()`: the caller is done with this client, so a socket that
-   *  dies afterwards must not reconnect to rebind anything. */
+  /** A socket that dies after close() must not reconnect. */
   private closed = false;
   private readonly activeTurns = new Map<string, CloudTurnStream>();
-  /** In-flight @callable RPCs over the agent websocket ({type:'rpc'} frames). */
   private readonly pendingRpcs = new Map<string, { resolve: (value: JsonValue) => void; reject: (err: Error) => void }>();
-  /** Chat streams cancelled by Stop remain visible until the actor confirms its
-   * durable cancellation sweep has finished. */
+  /** Kept visible until the actor confirms its durable cancellation sweep. */
   private readonly stoppingTurnIds = new Set<string>();
   private stopPromise: Promise<void> | null = null;
-  /** Boolean-returning API actions stay client-owned until their submission or
-   * RPC acknowledgement reaches the event stream. IDs let independent actions
-   * run concurrently and make each task's cleanup identity-safe. */
+  /** Held until the submission or RPC ack reaches the event stream; ids keep cleanup identity-safe. */
   private readonly launchedTasks = new Map<string, Promise<void>>();
 
   constructor(opts: CloudAgentClientOptions) {
@@ -396,7 +368,6 @@ export class CloudAgentClient implements AgentClient {
         'resolveDeviceConsent', ResolveDeviceConsentSchema, [consentId, decision],
       ),
     };
-    // Checkpoints live on the user's device daemon; the DO forwards.
     this.checkpoints = {
       list: async (limit, turnId) => v.parse(
         FileCheckpointListingSchema,
@@ -407,8 +378,7 @@ export class CloudAgentClient implements AgentClient {
         FileRestoreResultSchema, await this.callRpc('restoreFileCheckpoint', [dir, id]),
       ),
     };
-    // The three sealed plan RPCs (`rpc-gate.ts`): one read and two owner
-    // decisions, over the same review stream the workspace UI shows.
+    // The sealed plan RPCs (`rpc-gate.ts`).
     this.plans = {
       active: async () => v.parse(CloudPlanReviewSchema, await this.callRpc('getActivePlanReview', [])),
       saveAnnotations: async (id, revision, annotations) => v.parse(
@@ -427,7 +397,6 @@ export class CloudAgentClient implements AgentClient {
   }
 
   async connect(): Promise<void> {
-    // The websocket is opened lazily on first send; nothing to bring up.
   }
 
   subscribe(listener: (event: AgentClientEvent) => void): () => void {
@@ -436,17 +405,11 @@ export class CloudAgentClient implements AgentClient {
     return () => this.listeners.delete(listener);
   }
 
-  /** The raw submit, whatever the workspace is doing: the server routes a
-   *  submit that arrives while a turn runs through its inbox under this
-   *  client's message id — attachments included — and answers the request
-   *  with where it landed; an idle workspace runs it as the SDK turn. */
+  /** A submit arriving mid-turn is routed through the server inbox and answered with where it landed. */
   async send(prompt: AgentPrompt, opts: AgentClientSendOptions = {}): Promise<AgentSendResult> {
     return this.submit(prompt, opts, this.activeTurns.size > 0);
   }
 
-  /** Steer-as-Branch: fire the branchTurn RPC — the DO spawns the head and
-   *  streams 'branch_status' broadcasts back over this websocket (forwarded
-   *  as broadcast events). A rejected branch surfaces as an error status. */
   branch(prompt: AgentPrompt, opts: AgentClientSendOptions = {}): boolean {
     if (this.activeTurns.size === 0) return false;
     const text = promptText(prompt).trim();
@@ -500,8 +463,7 @@ export class CloudAgentClient implements AgentClient {
     if (files.length > 0) sessionEntry.attachments = files.map((file) => file.filename);
     this.activeCliSession.append('user', sessionEntry);
 
-    // A message to a running turn starts no turn of its own: turn-start is
-    // announced only if the server answers with a stream after all.
+    // A message to a running turn starts no turn; turn-start is announced only if a stream comes back.
     if (!steered) this.emit({ type: 'turn-start', kind: 'user', text });
 
     const requestId = randomRequestId();
@@ -533,7 +495,6 @@ export class CloudAgentClient implements AgentClient {
 
         ws.send(JSON.stringify(request));
       } catch (err) {
-        // The turn-start already went out — keep the lifecycle paired.
         this.activeTurns.delete(requestId);
         this.emit({ type: 'error', message: renderThrownChain({ cause: err }) });
         turn.settle(true);
@@ -541,8 +502,6 @@ export class CloudAgentClient implements AgentClient {
     });
   }
 
-  /** Walk-back: the workspace continues from before the picked user message,
-   *  on the context it held there. Same client, same agent. */
   async fork(point: ForkPoint): Promise<AgentForkResult> {
     if (this.activeTurns.size > 0) throw new Error('Cannot fork while a turn is running.');
     const rows = await this.transcript();
@@ -554,10 +513,7 @@ export class CloudAgentClient implements AgentClient {
     return { client: this, label: `before ${pivotRow.id}` };
   }
 
-  /** Invoke a named agent method over the generic HTTP RPC transport —
-   *  for surfaces that must not force a websocket open (consents polling,
-   *  history, status). Live-session ops (branch, fork, takes, checkpoints)
-   *  ride callRpc on the already-open socket instead. */
+  /** For surfaces that must not force a websocket open; live-session ops use callRpc. */
   private callHttp<T>(method: string, schema: v.GenericSchema<T>, args: JsonValue[] = []): Promise<T> {
     if (this.subordinateName) {
       return this.callRpc(method, args).then((result) => v.parse(schema, result));
@@ -570,7 +526,6 @@ export class CloudAgentClient implements AgentClient {
     return callAgentRpc({ origin: this.origin, token: this.token, name: this.cloudName, method, schema, args });
   }
 
-  /** Invoke a @callable agent method over the websocket ({type:'rpc'}). */
   private async callRpc(method: string, args: JsonValue[]): Promise<JsonValue> {
     await this.ensureOpen();
     const ws = this.ws;
@@ -590,9 +545,7 @@ export class CloudAgentClient implements AgentClient {
     });
   }
 
-  /** Cancel in-flight turns through the SDK stream control and the actor's
-   * durable cancellation authority. The SDK frame aborts the active chat
-   * request; the actor RPC awaits every foreground device outcome. */
+  /** The SDK frame aborts the chat request; the actor RPC awaits every foreground device outcome. */
   stop(): string[] {
     const ws = this.ws;
 
@@ -618,7 +571,6 @@ export class CloudAgentClient implements AgentClient {
     return [];
   }
 
-  /** Wait for the durable cancellation sweep before ending locally stopped turns. */
   private async settleStoppedTurns(): Promise<void> {
     try {
       await this.callRpc('cancelCurrentWork', []);
@@ -656,15 +608,7 @@ export class CloudAgentClient implements AgentClient {
     }));
   }
 
-  /**
-   * The WHOLE durable transcript, oldest first.
-   *
-   * Walked page by page rather than asked for in one call. Both callers need
-   * completeness and neither can detect its absence: `history()` seeds the
-   * TUI's message list, and `fork()` searches the result for a pivot message
-   * and reports "could not locate that message" when it is not there — which
-   * is what a silent cap reads as for any conversation past the page size.
-   */
+  /** Paged, never capped: `fork()` would report a message past the cap as not found. */
   private async transcript(): Promise<ChatHistoryEntry[]> {
     const rows: ChatHistoryEntry[] = [];
     let cursor: SeekCursor | null = null;
@@ -722,8 +666,7 @@ export class CloudAgentClient implements AgentClient {
       unseenCount: result?.unseenCount ?? 0,
     };
 
-    // Viewing is the acknowledgement. A failed ack is reported through the client's own error
-    // channel: silently dropped, the same digest returns as unseen forever with no reason given.
+    // A silently dropped ack leaves the digest unseen forever; report it through the error channel.
     try {
       await this.callRpc('markChangelogSeen', []);
     } catch (error) {
@@ -753,8 +696,7 @@ export class CloudAgentClient implements AgentClient {
   async decideRefinement(input: RefinementDecisionInput): Promise<RefinementDecisionResult> {
     return v.parse(
       RefinementDecisionResultSchema,
-      // Spelled out field by field rather than forwarded: the RPC argument
-      // channel is JSON, and a readonly interface is not one.
+      // Spelled out: the RPC argument channel is JSON and a readonly interface is not.
       await this.callRpc('decideRefinement', [{
         requestId: input.requestId,
         routeIndex: input.routeIndex,
@@ -788,9 +730,7 @@ export class CloudAgentClient implements AgentClient {
     return v.parse(v.object({ role: v.string() }), await this.callRpc('setRole', [roleId]));
   }
 
-  /** Add an agent to this workspace with nothing said about it: it inherits
-   *  the workspace's mission and comes back with a BLANK `displayName`, which
-   *  its first owner message replaces. `name` is the slug to open it by. */
+  /** Inherits the workspace mission with a blank `displayName`; `name` is the slug to open it by. */
   async createAdditionalAgent(): Promise<{ name: string; displayName: string }> {
     const result = this.subordinateName
       ? await this.callParentHttp('createSubordinateAgent', AdditionalAgentSchema)
@@ -799,9 +739,7 @@ export class CloudAgentClient implements AgentClient {
     return result;
   }
 
-  /** Address an additional agent — a hosted actor of the same workspace —
-   * while retaining the parent workspace name for ticket scope and
-   * parent-owned actions. */
+  /** Keeps the parent workspace name for ticket scope and parent-owned actions. */
   openAdditionalAgent(name: string): CloudAgentClient {
     return new CloudAgentClient({
       origin: this.origin,
@@ -813,8 +751,6 @@ export class CloudAgentClient implements AgentClient {
     });
   }
 
-  /** Name one of this workspace's agents. The title becomes the owner's and is
-   *  never auto-replaced afterwards. */
   async renameAdditionalAgent(name: string, displayName: string): Promise<{ name: string; displayName: string }> {
     const result = await this.callParentHttp(
       'renameSubordinateAgent',
@@ -872,8 +808,7 @@ export class CloudAgentClient implements AgentClient {
   async listModels(): Promise<AgentModelMenu> {
     const menu = normalizeModelMenu({ payload: await listCloudAvailableModels(this.origin, this.token) });
 
-    // Only a menu with nothing in it AND nothing to explain is an error; a
-    // provider that failed is reported to the picker, not thrown at it.
+    // Only an empty menu with no failures is an error; provider failures are reported to the picker.
     if (menu.models.length === 0 && menu.failures.length === 0) {
       throw new Error('No cloud models are available.');
     }
@@ -919,11 +854,8 @@ export class CloudAgentClient implements AgentClient {
 
     if (this.closed) throw new Error('Cloud workspace client closed while creating its connect ticket.');
 
-    // One definition of a hosted actor's chat address, shared with the browser
-    // and with the edge that admits it: the actor segment under the
-    // workspace's room. The SDK's facet hop is refused by that transport —
-    // there is no child Durable Object to hop to — so a client that built one
-    // got 404 and no socket.
+    // The actor segment under the workspace room, shared with the browser and the edge. There is no child
+    // Durable Object, so the SDK's facet hop answers not-found.
     const room = `/agents/${ORCHESTRATOR_AGENT_SLUG}/${encodeURIComponent(this.cloudName)}`;
 
     const actorPath = this.subordinateName
@@ -937,9 +869,7 @@ export class CloudAgentClient implements AgentClient {
     const ws = new WebSocket(url.toString());
     this.ws = ws;
     ws.addEventListener('message', (event) => this.handleMessage(event));
-    // ONE drop per socket generation: a dying socket fires `error` and then
-    // `close`, and handling both would report the same drop twice — which, on
-    // the rebind path below, reads as a turn that failed to rebind twice.
+    // One drop per socket generation: `error` then `close` would report it twice.
     let dropped = false;
 
     const onDrop = async (): Promise<void> => {
@@ -1004,9 +934,6 @@ export class CloudAgentClient implements AgentClient {
       return;
     }
 
-    // Branch progress broadcasts (the DO fans them to every ws client) feed
-    // the TUI's branch segment + settle hint. Narrowed field-by-field like
-    // every other frame in this handler — no wholesale re-typing.
     if (payload.type === 'branch_status') {
       const branchStatus = parseBranchStatusEvent(payload);
 
@@ -1015,8 +942,7 @@ export class CloudAgentClient implements AgentClient {
       return;
     }
 
-    // Ack a resuming stream only when it is one of our own turns, so the DO
-    // replays its chunks after a reconnect; other clients' streams are ignored.
+    // Ack only our own turns, so the DO replays their chunks after a reconnect.
     if (payload.type === CHAT_MESSAGE_TYPES.STREAM_RESUMING && payload.id) {
       const resuming = this.activeTurns.get(payload.id);
 
@@ -1025,10 +951,7 @@ export class CloudAgentClient implements AgentClient {
       return;
     }
 
-    // The DO holds no stream for us. Every turn still waiting on the rebind is
-    // therefore already settled up there, so ack it: with no active stream the
-    // ack path replays a retained completed stream, replays a pending terminal,
-    // or answers a bare terminal frame — so the turn always ends.
+    // The DO holds no stream for us, so every turn awaiting rebind is settled there; acking replays its end.
     if (payload.type === CHAT_MESSAGE_TYPES.STREAM_RESUME_NONE) {
       for (const [id, turn] of this.activeTurns) {
         if (turn.awaitingRebind) this.ackResume(id, turn);
@@ -1037,18 +960,14 @@ export class CloudAgentClient implements AgentClient {
       return;
     }
 
-    // Accepted, not streaming yet. The DO guarantees a later STREAM_RESUMING or
-    // STREAM_RESUME_NONE, so continuing to wait IS the handling — there is
-    // nothing here for this client to time out against.
+    // The DO guarantees a later STREAM_RESUMING or STREAM_RESUME_NONE, so waiting is the handling.
     if (payload.type === CHAT_MESSAGE_TYPES.STREAM_PENDING) return;
 
     if (payload.type !== CHAT_MESSAGE_TYPES.USE_CHAT_RESPONSE || !payload.id) return;
     const active = this.activeTurns.get(payload.id);
 
     if (!active) return;
-    // A frame for this turn is its stream bound to the live socket again —
-    // read before it is cleared, because the terminal branch below needs to
-    // know whether ANYTHING rebound before the stream ended.
+    // Read before clearing: the terminal branch needs to know whether anything rebound.
     const unbound = active.awaitingRebind;
     active.awaitingRebind = false;
 
@@ -1063,10 +982,7 @@ export class CloudAgentClient implements AgentClient {
       return;
     }
 
-    // The server took the message into its running turn: the request is
-    // answered without a stream, and the words land at that turn's next step.
-    // Checked before apply — a landed frame's body is not stream content, and
-    // applying it would fire the deferred turn-start of a turn that never ends.
+    // Landed mid-turn: no stream. Checked before apply, which would fire a turn-start that never ends.
     if (payload.done && payload.landed === 'mid-turn') {
       this.activeTurns.delete(payload.id);
       active.landedMidTurn();
@@ -1080,10 +996,8 @@ export class CloudAgentClient implements AgentClient {
       if (this.stoppingTurnIds.has(payload.id)) return;
       this.activeTurns.delete(payload.id);
 
-      // A REPLAYED terminal that is the FIRST frame back is the DO saying it
-      // holds no stream under this id: nothing rebound, so whatever this
-      // process had is all there is. Settling it as a clean turn would present
-      // a truncated answer — or no answer — as a complete one.
+      // A replayed terminal as the first frame back means nothing rebound; settling it clean would present a
+      // truncated answer as complete.
       if (payload.replay === true && unbound) {
         this.emit({
           type: 'error',
@@ -1095,9 +1009,7 @@ export class CloudAgentClient implements AgentClient {
         active.settle();
       }
 
-      // This stream ending is the DO going idle behind it: re-probe so a turn
-      // still unbound after the drop gets answered instead of waiting behind
-      // the stream that was in front of it.
+      // The DO went idle: re-probe so a turn still unbound after the drop gets answered.
       for (const turn of this.activeTurns.values()) {
         if (!turn.awaitingRebind) continue;
         this.requestStreamResume();
@@ -1116,8 +1028,7 @@ export class CloudAgentClient implements AgentClient {
     this.failPendingRpcs(error);
   }
 
-  /** Reject what the dead socket was carrying that is NOT durable up there: an
-   *  RPC is request/reply, nothing replays it, so its caller has to hear. */
+  /** RPCs are request/reply and never replayed, so callers must hear the failure. */
   private failPendingRpcs(error: Error): void {
     const rpcs = [...this.pendingRpcs.values()];
     this.pendingRpcs.clear();
@@ -1126,24 +1037,12 @@ export class CloudAgentClient implements AgentClient {
   }
 
   /**
-   * A socket carrying acknowledged turns died — rebind them, never drop them.
-   *
-   * The DO persisted each turn as it accepted it and keeps its stream
-   * resumable, so the turn is still running: what died is this process's
-   * binding to it. Reconnecting and probing re-establishes that binding, and
-   * nothing is re-submitted — the handshake replays the stream the DO already
-   * has, so a rebind cannot produce a second turn.
-   *
-   * A turn that was ALREADY awaiting a rebind made no progress on the socket it
-   * just lost, so it is reported rather than chased: its answer is durable in
-   * the workspace transcript either way.
+   * Rebind, never resubmit: the DO persisted each turn and keeps its stream resumable, so a rebind cannot produce a
+   * second turn. A turn already awaiting rebind made no progress and is reported instead.
    */
   private async rebindInFlightTurns(): Promise<void> {
     if (this.closed || this.activeTurns.size === 0) return;
 
-    // Iterated live rather than over a snapshot: a Map iterator tolerates the
-    // deletion of the entry it is standing on, which is the only one deleted
-    // here, so the copy bought nothing.
     for (const [id, turn] of this.activeTurns) {
       if (!turn.awaitingRebind) continue;
       this.activeTurns.delete(id);
@@ -1166,9 +1065,7 @@ export class CloudAgentClient implements AgentClient {
     this.requestStreamResume();
   }
 
-  /** Answer one STREAM_RESUMING, or claim a settled turn's retained replay.
-   *  At most once per socket generation per turn: the DO replays the whole
-   *  buffer per ack, and the turn's replay accounting spans exactly one. */
+  /** At most once per socket generation per turn: the DO replays the whole buffer per ack. */
   private ackResume(requestId: string, turn: CloudTurnStream): void {
     if (turn.resumeAcked) return;
     turn.resumeAcked = true;
@@ -1176,17 +1073,12 @@ export class CloudAgentClient implements AgentClient {
     this.ws?.send(JSON.stringify({ type: CHAT_MESSAGE_TYPES.STREAM_RESUME_ACK, id: requestId }));
   }
 
-  /** Ask the DO what it still holds for us. It answers STREAM_RESUMING (a
-   *  stream to ack), STREAM_PENDING (accepted, not streaming yet — a RESUMING
-   *  or RESUME_NONE follows) or STREAM_RESUME_NONE, so the probe resolves on
-   *  the DO's own state rather than on a clock here. */
+  /** Resolves on the DO's own state (RESUMING, PENDING, or RESUME_NONE), not a local clock. */
   private requestStreamResume(): void {
     this.ws?.send(JSON.stringify({ type: CHAT_MESSAGE_TYPES.STREAM_RESUME_REQUEST }));
   }
 }
 
-/** Narrow a branch_status frame to the fields its consumers rely on
- *  (describeBranchStatus switches on status; the TUI keys on branchId). */
 function parseBranchStatusEvent(payload: SocketFrame): BranchStatusEvent | null {
   const result = v.safeParse(BranchStatusEventSchema, payload);
 
@@ -1198,7 +1090,6 @@ function parseBranchStatusEvent(payload: SocketFrame): BranchStatusEvent | null 
   return { ...event, message: event.message ?? 'branch failed' };
 }
 
-/** A websocket frame's text, whichever transport shape it arrived in. */
 function frameText(
   text: v.SafeParseResult<v.StringSchema<undefined>>,
   buffer: v.SafeParseResult<v.InstanceSchema<typeof ArrayBuffer, undefined>>,

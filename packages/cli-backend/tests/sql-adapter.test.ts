@@ -1,30 +1,12 @@
-// The local SQL adapters (`makeSql`, `makeSqlExec` in src/runtime.ts) stand in
-// for a Durable Object's `ctx.storage.sql`, which returns whatever rows a
-// statement produces. Deciding that by sniffing the leading keyword — anything
-// outside SELECT/WITH/PRAGMA through `stmt.run()`, answering `[]` — makes every
-// core statement that RETURNS rows from a write perform the write and report
-// nothing, on this backend only.
-//
-// Driven through the real stores rather than against the adapter alone: the
-// symptom is never a wrong row shape, it is a caller reading "nothing matched"
-// out of a write that had just succeeded.
+// `makeSql`/`makeSqlExec` stand in for a Durable Object's `ctx.storage.sql`, which returns whatever rows a statement
+// produces: a write with RETURNING must answer its rows, not `[]` from a leading-keyword sniff.
 import { describe, expect, test } from 'bun:test';
 import { Database } from 'bun:sqlite';
 import { DeferredApprovalStore, EventLog, initWorkspaceSchema, type ActorHandle } from '@kinu.run/core';
 import { createTestActors } from '@kinu.run/test-utils';
 import { makeSql, makeSqlExec, makeWorkspaceSchemaSql } from '../src/runtime';
 
-/**
- * One workspace's schema and its main actor, issued over the adapters under
- * test.
- *
- * Both stores below are actor-scoped — every statement they run carries an
- * `actor_id` — so the handle has to be one the production directory really
- * issued: `initWorkspaceSchema` creates the tables but writes no identity row,
- * and `openWorkspaceMainActor` on that database has no owner to open. Issuing
- * it through `makeSql` is deliberate too: the directory's own INSERT …
- * RETURNING is the first statement whose rows this adapter has to hand back.
- */
+/** One workspace's schema and main actor, issued through `makeSql`: the directory's INSERT … RETURNING is the first row it must hand back. */
 function mainActor(db: Database): ActorHandle {
   const schemaSql = makeWorkspaceSchemaSql(db);
   initWorkspaceSchema(schemaSql);
@@ -32,8 +14,7 @@ function mainActor(db: Database): ActorHandle {
   return createTestActors(schemaSql.sql, schemaSql.execRaw).main;
 }
 
-/** A grant the owner has approved and nobody has spent — the state a deferred
- *  shell approval sits in until the agent comes back for it. */
+/** An approved, unspent grant: where a deferred shell approval waits for the agent. */
 function approvedGrant(db: Database): DeferredApprovalStore {
   const store = new DeferredApprovalStore(makeSql(db), mainActor(db));
   store.create({
@@ -53,10 +34,7 @@ describe('the local SQL adapter returns the rows a write produces', () => {
     const db = new Database(':memory:');
     const store = approvedGrant(db);
 
-    // `spend` is `UPDATE … RETURNING`: the returned row IS the claim. Reading
-    // `[]` here took the grant out of reach and told the caller it got nothing
-    // — the approved command could then never run, and the owner's answer was
-    // gone.
+    // `spend` is `UPDATE … RETURNING`: the returned row is the claim.
     const claimed = store.spend('act-1');
     expect(claimed?.action).toMatchObject({
       id: 'act-1',
@@ -66,15 +44,12 @@ describe('the local SQL adapter returns the rows a write produces', () => {
     });
     expect(claimed?.spend).toEqual({ approvalId: 'act-1', spend: 1 });
 
-    // And exactly once: the grant is out, so a second claim has nothing to take.
     expect(store.spend('act-1')).toBeNull();
     expect(store.standing('rm -rf ./build', 'device', Date.now())).toBeNull();
 
     if (!claimed) throw new Error('the approved grant must be claimable');
 
-    // `settle` is the other keyword a leading-keyword sniff swallows:
-    // `DELETE … RETURNING`, whose row is how the caller knows THIS call is
-    // what closed the spend rather than a replay of one already closed.
+    // `settle` is `DELETE … RETURNING`; the row tells the caller this call closed the spend, not a replay.
     expect(store.settle(claimed.spend, 'spent')).toBe(true);
     expect(store.settle(claimed.spend, 'spent')).toBe(false);
     expect(store.get('act-1')).toBeNull();
@@ -98,9 +73,7 @@ describe('the local SQL adapter returns the rows a write produces', () => {
 
     log.markConsumed(id, 'evt-dead', 0, 5);
 
-    // `unbindStale` is `UPDATE … RETURNING id`. The re-pending always worked;
-    // the ids never came back, so the caller could not report — or count — the
-    // deliveries it had just recovered.
+    // `unbindStale` is `UPDATE … RETURNING id`: the caller counts recovered deliveries from those ids.
     expect(log.unbindStale(0, 10)).toEqual([id]);
     expect(log.pending().map((event) => event.id)).toEqual([id]);
     db.close();

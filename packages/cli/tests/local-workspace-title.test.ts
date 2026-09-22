@@ -1,7 +1,4 @@
-// An agent added without a name starts with no title. Its first owner message
-// names it: the deterministic title lands first, the model call upgrades it,
-// and the agent database holds the result while the config ref stays
-// placement-only. The decision itself is proven in @kinu.run/core.
+// An untitled agent is named by its first owner message; the title lives in the agent database, not the config ref.
 import { scratchDir } from '../../test-utils/src/scratch';
 
 import { join } from 'node:path';
@@ -10,15 +7,8 @@ import { Database } from 'bun:sqlite';
 import { initAgentConfigTable, type LLMProviderConfig } from '@kinu.run/core';
 import { createCLIRuntime } from '@kinu.run/cli-backend';
 
-// `AGENT_HOME` is resolved at MODULE LOAD (config.ts), so the only way this file
-// can name its own home is to assign the variable and then import — which is why
-// the two imports below are dynamic.
-//
-// And why the variable goes back afterwards. Bun runs every file of an
-// invocation in ONE process: left assigned, this named a directory that `afterAll`
-// then deleted, for every later file that reads `KINU_HOME` or spawns a child
-// from `process.env`. Once the imports have bound it, the variable has done its
-// work and the process is put back the way it was found.
+// `AGENT_HOME` is resolved at module load (config.ts), so the imports below are dynamic. Bun runs every file
+// in one process, so the variable is restored once the imports have bound it.
 const HOME = scratchDir('title-home');
 
 const inheritedHome = process.env.KINU_HOME;
@@ -51,17 +41,11 @@ function workspace(name: string, stored: { displayName?: string; nameOrigin?: 'u
   return { rt, config };
 }
 
-/** The naming model step, as an injected generator (the create path's seam). */
 const suggests = (title: string) => ({
   generate: async () => JSON.stringify({ title, slug: 'oauth-callback-audit' }),
 });
 
-/**
- * An agent the owner ADDED to a virtual workspace inherits that workspace's
- * mission, which every peer in it shares. Titling from that would name the
- * whole group the same thing, so it starts with no title and the first thing
- * the owner says to it is what names it.
- */
+/** An agent added to a virtual workspace starts untitled: titling from the shared mission would name every peer the same. */
 describe('local agent auto-titling on its first owner message', () => {
   test('an agent added without a name is titled by that first message, once', async () => {
     const { rt, config } = workspace('quiet-harbor-1a4e20', { displayName: '', nameOrigin: 'auto' });
@@ -73,13 +57,11 @@ describe('local agent auto-titling on its first owner message', () => {
       suggests('Callback Audit'),
     );
 
-    // The deterministic title lands synchronously; the model upgrades it after.
     expect(config.getDisplayName()).toBe('Audit the OAuth callback flow');
     await titleTask;
     expect(config.getDisplayName()).toBe('Callback Audit');
     expect(loadConfigFile().agents?.['quiet-harbor-1a4e20']?.displayName).toBe(refTitle);
 
-    // The next message is not a second naming pass.
     await autoTitleLocalWorkspace(
       'quiet-harbor-1a4e20', rt,
       { mission: 'Now check the refresh path' },

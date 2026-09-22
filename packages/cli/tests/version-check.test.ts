@@ -8,8 +8,7 @@ import { isSameBuild, type JsonObject, type JsonValue } from '@kinu.run/core';
 
 const repoRoot = resolve(__dirname, '../../..');
 
-// Fixed clock: a due config carries updateCheckedAt 0, a throttled one
-// carries NOW, so the 24h window is decided without reading a clock.
+// Fixed clock: due configs carry updateCheckedAt 0, throttled ones NOW.
 const NOW = 2_000_000_000_000;
 
 const signedIn = { origin: 'https://example.test', accessToken: 'ptc_test', updateCheckedAt: 0 };
@@ -21,9 +20,6 @@ function configHome(config: JsonObject): string {
   return home;
 }
 
-// Drive runStartupUpdateCheck in a child owning its home. The child reports
-// what the check returned and printed; the parent reads the throttle state
-// the check left behind.
 async function runStartup(home: string, opts: { isTTY: boolean; fetchExpr: string }): Promise<{
   lines: string[]; outcome: string | null; spawned: number;
 }> {
@@ -80,7 +76,6 @@ describe('build comparison', () => {
   test('semver build metadata is significant — same version, different build', () => {
     expect(isSameBuild('0.1.0+abc1234', '0.1.0+abc1234')).toBe(true);
     expect(isSameBuild('0.1.0+abc1234', '0.1.0+def5678')).toBe(false);
-    // An unstamped local build vs a stamped served one is NOT the same build.
     expect(isSameBuild('0.1.0', '0.1.0+abc1234')).toBe(false);
     expect(isSameBuild('0.1.0', '0.1.0')).toBe(true);
   });
@@ -102,8 +97,6 @@ describe('startup notice through runStartupUpdateCheck', () => {
     expect(outcome).toBeNull();
     expect(lines).toEqual([]);
     expect(spawned).toBe(0);
-    // The attempt is still recorded, so an up-to-date origin is not re-asked
-    // on every invocation.
     expect(homeConfig(home)).toMatchObject({ updateCheckedAt: NOW });
   });
 
@@ -187,9 +180,7 @@ describe('fetchServedVersion is fail-soft', () => {
 
     expect(await fetchServedVersion('https://x.test', stall, 10)).toBeNull();
 
-    // `kinu update` and `kinu doctor` ask for the real answer. Their probe
-    // carries no signal at all, so no clock here can turn a slow origin into
-    // "unreachable".
+    // `kinu update` and `kinu doctor` probe with no abort signal, so a slow origin is never "unreachable".
     let carried: AbortSignal | null | undefined = null;
 
     const record = async (_input: string | URL | Request, init?: RequestInit) => {

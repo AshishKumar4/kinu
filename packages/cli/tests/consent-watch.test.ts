@@ -1,9 +1,4 @@
-// Behavior tests for the shared device-consent watcher: present-once
-// semantics across poll ticks that race the server-side resolution, pruning
-// of departed ids, print-once non-interactive consents, and clean
-// cancellation (best-effort deny) when the turn settles mid-question.
-// Each case waits for the poll it needs, observed on the fake surface, so
-// nothing here sleeps for a number.
+// Shared device-consent watcher; each case awaits the poll it needs, so nothing sleeps for a number.
 import { describe, expect, test } from 'bun:test';
 import type {
   DeviceConsentDecision,
@@ -16,8 +11,7 @@ function consent(id: string): PendingDeviceConsent {
   return { consentId: id, deviceLabel: 'device', method: 'exec', command: 'ls' };
 }
 
-/** A pending list the test controls, plus a way to await the Nth poll and
- *  the Nth resolution instead of sleeping for them. */
+/** A pending list the test controls, with awaits for the Nth poll and resolution. */
 function makeSurface(initial: PendingDeviceConsent[] = []) {
   const resolved: Array<{ consentId: string; decision: DeviceConsentDecision }> = [];
   let pending = initial;
@@ -60,16 +54,13 @@ function makeSurface(initial: PendingDeviceConsent[] = []) {
   return {
     surface,
     resolved,
-    /** Resolves once listPending has been asked `count` times. */
     polled: awaiting(pollWaiters, () => polls),
-    /** Resolves once `count` decisions reached the surface. */
     settled: awaiting(resolveWaiters, () => resolved.length),
     setPending: (next: PendingDeviceConsent[]) => { pending = next; },
     setResolveOk: (ok: boolean) => { resolveOk = ok; },
   };
 }
 
-/** Collected notes, plus a way to await the Nth note instead of sleeping. */
 function collectNotes() {
   const notes: Array<{ kind: ConsentNoteKind; message: string }> = [];
   const waiters: Array<{ count: number; resolve: () => void }> = [];

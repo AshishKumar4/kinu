@@ -1,12 +1,4 @@
-/**
- * The normalizer a parity snapshot is taken through: every minted id and every
- * clock reading replaced by its order of appearance, so two runs of one
- * scripted conversation compare equal on everything the script decides and on
- * nothing the run minted.
- *
- * Shared by the local backend's parity test and the hosted backend's workerd
- * probe, so the two backends are held to one reading of "the same rows".
- */
+/** Replaces minted ids and clock readings by order of appearance; shared by local and hosted parity tests. */
 import * as v from 'valibot';
 import { JsonValueSchema, type JsonValue } from '@kinu.run/core';
 
@@ -21,7 +13,7 @@ export interface ParityNormalizer {
   text(value: string): string;
   /** A JSON value walked: strings normalized, clock-named numbers blanked. */
   json(value: JsonValue): JsonValue;
-  /** A whole-column id with no recognisable shape (an event-log id, a trace id). */
+  /** A whole-column id with no recognisable shape (event-log id, trace id). */
   opaque(value: string | null, kind: string): string | null;
 }
 

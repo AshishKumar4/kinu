@@ -1,14 +1,4 @@
-/**
- * The one hand clock: a `Clock` a test advances.
- *
- * Every timer a subject arms is a row here; `advance(ms)` moves the clock and
- * fires what came due, in due order, so a subject that re-arms inside a
- * firing (a repeating probe, a poll loop's next wait) is fired again on the
- * same advance when its next due time is inside it. `whenArmed(n)` resolves
- * once `n` timers have ever been armed: the way a test waits for a subject
- * to REACH its wait before stepping past it, instead of assuming the order
- * of two continuations.
- */
+/** A `Clock` a test advances; `whenArmed(n)` lets a test wait for a subject to reach its wait. */
 import type { Clock } from '@kinu.run/core';
 
 export interface HandClock extends Clock {
@@ -16,7 +6,6 @@ export interface HandClock extends Clock {
   advance(ms: number): void;
   /** Move to the earliest armed timer and fire it alone. */
   tick(): void;
-  /** Timers armed and not yet fired or disarmed. */
   armed(): number;
   /** Resolves once `count` timers have ever been armed. */
   whenArmed(count: number): Promise<void>;

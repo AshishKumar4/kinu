@@ -1,9 +1,4 @@
-// Mock fetch for provider contract tests.
-//
-// Lets a test:
-//   1. assert what URL / headers / body the provider sent
-//   2. control the response shape (200/401/etc.)
-//   3. simulate refresh-on-401 flows by switching handlers between calls
+// Mock fetch for provider contract tests: records requests, scripts responses per call.
 import { asFetchFunction, copyHeaders } from '@kinu.run/core';
 import * as v from 'valibot';
 
@@ -14,7 +9,6 @@ export interface RecordedRequest {
   body?: string;
 }
 
-/** What a handler answers with. Status 200 by default. */
 export interface MockResponse {
   status?: number;
   headers?: Record<string, string>;
@@ -23,25 +17,18 @@ export interface MockResponse {
 }
 
 export interface MockFetchHandler {
-  /** Pattern matched against the request URL — substring match. */
+  /** Substring matched against the request URL. */
   match: string | RegExp | ((req: RecordedRequest) => boolean);
-  /** Response to return. */
   respond: MockResponse | ((req: RecordedRequest, callIndex: number) => MockResponse);
 }
 
 export interface MockFetchHandle {
-  /** typeof globalThis.fetch — pass to createModel(...).deps.fetch */
   fetch: typeof globalThis.fetch;
-  /** All recorded requests in order. */
   readonly requests: ReadonlyArray<RecordedRequest>;
-  /** Find requests matching a substring or regex. */
   matching(pattern: string | RegExp): RecordedRequest[];
-  /** Reset request log + handler call counters. */
   reset(): void;
 }
 
-/** The bytes a stubbed response carries: a string verbatim, anything else as
- *  JSON, and an absent body as nothing at all. */
 function responseBody(resp: MockResponse): string {
   if (resp.body === undefined) return '';
   const text = v.safeParse(v.string(), resp.body);
@@ -119,15 +106,8 @@ export function createMockFetch(handlers: MockFetchHandler[]): MockFetchHandle {
   };
 }
 
-// ── Complete provider responses ────────────────────────────────────────────
-//
-// A provider contract test asserts what went OUT, but it still has to let the
-// call come back: a body the SDK cannot parse makes `generateText` reject, and
-// a test that absorbs that rejection makes a provider that broke on the way
-// back look identical to one that worked. These are the smallest bodies each
-// wire shape actually parses (measured against the installed SDK, not copied
-// from the API reference), so a contract test can await the call and let any
-// real failure through.
+// Smallest response bodies each wire shape parses (measured against the installed SDK),
+// so a contract test can await the call and let real failures through.
 
 /** OpenAI Responses API (`POST /v1/responses`) — the OpenAI and Codex surface. */
 export const OPENAI_RESPONSES_BODY = {

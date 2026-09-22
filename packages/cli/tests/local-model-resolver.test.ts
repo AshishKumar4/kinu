@@ -1,9 +1,5 @@
-// createConfiguredLocalModelResolver — the CLI's composition of config.ts +
-// the cli-backend registry. Signed in with zero BYO keys, a local agent must
-// list the worker's model menu and run inference through /api/user/ai/v1 with
-// the CLI bearer and the per-agent affinity pin (signed-in-equals-working).
-// Runs in a subprocess because config.ts binds KINU_HOME at import; the
-// fake worker lives in this process and records what reaches the wire.
+// Signed in with zero BYO keys, a local agent lists the worker's models and runs inference through
+// /api/user/ai/v1 with the CLI bearer and affinity pin. Subprocess: config.ts binds KINU_HOME at import.
 import { scratchDir } from '../../test-utils/src/scratch';
 import { writeFileSync } from "node:fs";
 

@@ -21,11 +21,7 @@ function rootRuntime(state: string, cwd?: string): LocalRoot {
   return { rt: createCLIRuntime(db, { dbPath, llm: null, cwd, agentName: 'parent' }), db, dbPath };
 }
 
-/**
- * A child over its ROOT's database — the same handle, the same file, its own
- * actor row. There is no second `Database` here and no path to hand it: the
- * child's identity is the row `registerLocalActor` wrote.
- */
+/** A child over its root's database: same handle, same file, its own actor row. */
 async function childRuntime(parent: CLIRuntime, root: LocalRoot, name: string): Promise<CLIRuntime> {
   const binding = registerLocalActor(parent.actor, { name, creationId: crypto.randomUUID(), kind: 'subordinate', lifetime: 'durable' });
   const facet = subordinateAgentName(binding.storageKey);
@@ -53,8 +49,6 @@ describe('local actor file-plane identity', () => {
     expect(alpha.actor.name).toBe(beta.actor.name);
     expect(alpha.actor.actorId).not.toBe(beta.actor.actorId);
     expect(home(alpha)).not.toBe(home(beta));
-    // ONE FILE for the whole tree: four actors, and the only database in the
-    // scratch directory is the root's.
     expect(readdirSync(state).filter((entry) => entry.endsWith('.db'))).toEqual(['agent.db']);
     await alpha.storage.vfs.writeFile(`${home(alpha)}/notes`, 'alpha');
     expect(await beta.storage.vfs.readFile(`${home(alpha)}/notes`, { encoding: 'utf8' })).toBe('alpha');

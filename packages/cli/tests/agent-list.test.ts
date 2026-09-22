@@ -39,10 +39,7 @@ describe('CLI cloud agent registry sync', () => {
       ],
     );
 
-    // A local row's label comes from its workspace database; this fixture
-    // seeds none, so the row says it is untitled. NOT the directory name: that
-    // is the address `kinu chat <name>` takes, and showing it as a title is
-    // what put `handwrought-walnut-4166c321` in front of the owner.
+    // A local row's label comes from its workspace database, never the directory name (the address).
     expect(reconciled.map(({ name, label, mode }) => ({ name, label, mode }))).toEqual([
       { name: 'localbot', label: 'Untitled workspace', mode: 'local' },
       { name: 'web-agent', label: 'Web Agent', mode: 'cloud' },
@@ -146,7 +143,6 @@ describe('CLI cloud agent registry sync', () => {
     expect(parsed.config.agents.localbot).toMatchObject({ mode: 'local', displayName: 'Local Bot' });
     expect(parsed.config.aliases).toEqual({ local: 'localbot' });
     expect(parsed.result.agents.map((agent) => `${agent.name}:${agent.mode}`)).toContain('web-agent:cloud');
-    // Distinct names, so nothing was contested.
     expect(parsed.result.collisions).toEqual([]);
   });
 
@@ -174,7 +170,6 @@ describe('CLI cloud agent registry sync', () => {
       aliases: { shop: 'shopbot' },
     }, null, 2));
 
-    // The server offers a workspace under the SAME name as the placed local one.
     const script = `
       globalThis.fetch = async () => Response.json([
         { name: 'shopbot', displayName: 'Cloud Shop', createdAt: 1790000000000, lastVisited: 1790000000000, archivedAt: null }
@@ -221,24 +216,20 @@ describe('CLI cloud agent registry sync', () => {
       placed: v.array(v.looseObject({ name: v.string(), workspaceId: v.string() })),
     }), JSON.parse(proc.stdout.toString()));
 
-    // The placement survives byte for byte: mode, directory and workspace.
     expect(parsed.config.agents.shopbot).toMatchObject({
       mode: 'local',
       displayName: 'Shop Bot',
       cwd: project,
       workspaceId: 'shop-floor',
     });
-    // So the scheduler's roster still holds it, which a mode flip would
-    // destroy: `placedRef` requires mode 'local'.
+    // `placedRef` requires mode 'local'; a mode flip would drop it from the scheduler roster.
     expect(parsed.placed.map((ref) => `${ref.name}@${ref.workspaceId}`)).toEqual(['shopbot@shop-floor']);
     expect(parsed.config.aliases).toEqual({ shop: 'shopbot' });
-    // And the clash is reported rather than resolved by overwriting.
     expect(parsed.result.collisions).toEqual([{
       name: 'shopbot',
       localName: 'shopbot',
       cloudDisplayName: 'Cloud Shop',
     }]);
-    // One row for that name, and it is the local one.
     expect(parsed.result.agents.filter((agent) => agent.name === 'shopbot').map((a) => a.mode)).toEqual(['local']);
   });
 });
@@ -296,9 +287,6 @@ describe('the sidebar roster for one directory', () => {
       writeFileSync(join(home, name, 'agent.db'), '');
     }
 
-    // oldbot's title lives in its own workspace database — the one label
-    // source for a local agent. The other fixtures carry no title row, so
-    // they list under their directory names.
     const oldbotDb = new Database(join(home, 'oldbot', 'agent.db'));
     createCLIRuntime(oldbotDb, { dbPath: oldbotDb.filename, llm: null, agentName: 'oldbot' }).actor.config.setDisplayName('Old Bot');
     oldbotDb.close();
@@ -354,11 +342,9 @@ describe('the sidebar roster for one directory', () => {
     }), JSON.parse(proc.stdout.toString()));
 
     expect(parsed.agents.map((agent) => `${agent.mode}:${agent.name}`)).toEqual([
-      // This project's placed agents, ordered by workspace then name…
+      // Placed agents by workspace then name, then unplaced workspaces, then the account's cloud workspaces.
       'local:writer', 'local:fixer', 'local:lead',
-      // …then unplaced workspaces (a cloud name collision stays separate)…
       'local:audit', 'local:oldbot', 'local:stray',
-      // …then the account's cloud workspaces. `faraway` belongs to another project.
       'cloud:audit', 'cloud:jarvis',
     ]);
     const oldbot = parsed.agents.find((agent) => agent.name === 'oldbot');
@@ -396,8 +382,7 @@ describe('the local roster is one function', () => {
       aliases: {},
     }));
 
-    // Both commands through their real entry points: the sets they print
-    // must match, because both now read listLocalAgentNames.
+    // Both commands must print the same set: both read listLocalAgentNames.
     const script = `
       const { listCommand } = await import('./packages/cli/src/commands/list.ts');
       const { transcriptsCommand } = await import('./packages/cli/src/commands/transcripts.ts');

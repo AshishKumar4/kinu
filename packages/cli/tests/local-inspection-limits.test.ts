@@ -1,14 +1,4 @@
-/**
- * The LOCAL peers of two bounded cloud reads, driven directly rather than
- * through a CLI spawn so the bound itself is what is observed.
- *
- * `--limit` on `kinu inspect timeline` and `kinu inspect memory` arrives via
- * `numberField`, so the value reaching these functions is whatever the operator
- * typed. `listLocalTimeline` bound it into three raw `LIMIT ?` statements plus a
- * tail slice, and `searchLocalMemory` into two. SQLite reads `LIMIT -1` as no
- * limit at all and rejects a fraction or `NaN` as a datatype mismatch, so the
- * same flag could either read whole tables or fail the command.
- */
+/** Local peers of two bounded cloud reads: SQLite reads `LIMIT -1` as unbounded and rejects a fraction or `NaN`. */
 
 import { mkdirSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
@@ -20,26 +10,15 @@ import { createTestActorsOver } from '@kinu.run/test-utils';
 import { agentDir } from '../src/config';
 import { listLocalTimeline, searchLocalMemory } from '../src/local-inspection';
 
-// The process scratch KINU_HOME (scripts/test-scratch-home.ts, set by the
-// preload before any module loads) IS this suite's home: `config.ts` resolves
-// AGENT_HOME once at import time, and under one bun process another test file
-// usually loads it first — a suite-private HOME set here would be ignored, and
-// the seeded agent would land where `agentDbPath` never looks.
+// The preload's scratch KINU_HOME is this suite's home: `config.ts` resolves AGENT_HOME once at import,
+// usually before this file loads, so a suite-private HOME would be ignored.
 const AGENT = 'probe';
 
 const AGENT_DIR = agentDir(AGENT);
 
 const DB_PATH = join(AGENT_DIR, 'agent.db');
 
-/** Rebuild the agent's database with `rows` rows in each timeline spine and in
- *  the memory index, so a bound is observable as a row count.
- *
- *  The schema is the SHIPPED one, and the rows belong to a REAL actor. Both
- *  halves are load-bearing: `evolution_events` is keyed `(actor_id, id)` and
- *  `listLocalTimeline` reads it `WHERE actor_id = ?` against the actor
- *  `openWorkspaceMainActor` resolves — so a hand-rolled table without the
- *  column, or rows written under no owner, contribute NOTHING to the fold and
- *  the bound under test silently reads one spine instead of two. */
+/** Shipped schema, rows under the real main actor: `listLocalTimeline` reads `evolution_events` by `actor_id`. */
 function seed(rows: number): void {
   rmSync(AGENT_DIR, { recursive: true, force: true });
   mkdirSync(AGENT_DIR, { recursive: true });
@@ -62,15 +41,12 @@ function seed(rows: number): void {
 describe('listLocalTimeline closes the operator flag before it reaches SQL', () => {
   test('a negative limit reads one span, not two whole tables', () => {
     seed(30);
-    // Two failures a raw -1 would cause at once: `LIMIT -1` on agent_log and
-    // evolution_events reads everything, and `slice(0, -1)` then drops the LAST
-    // row of whatever survived.
+    // `LIMIT -1` reads everything and `slice(0, -1)` then drops the last row.
     expect(listLocalTimeline(AGENT, -1).length).toBe(1);
   });
 
   test('an unparseable limit means unstated and takes this surface default of 100', () => {
-    // 80 agent_log + 80 evolution rows merge to 160 spans, so a default of 100
-    // is observable and distinguishes it from the cloud peer's 200.
+    // 80 + 80 rows merge to 160 spans, so a default of 100 is distinguishable from the cloud peer's 200.
     seed(80);
     expect(listLocalTimeline(AGENT, Number.NaN).length).toBe(100);
     expect(listLocalTimeline(AGENT).length).toBe(100);
@@ -106,8 +82,7 @@ describe('searchLocalMemory closes the operator flag too', () => {
   });
 
   test('a widened recall read is still allowed, since this surface has no ceiling', () => {
-    // Validity only here, deliberately: an operator who asks a local memory
-    // search to widen should get the wider read.
+    // Validity only, deliberately: a local memory search may widen.
     seed(40);
     expect(searchLocalMemory(AGENT, 'wrangler', 40).length).toBe(40);
   });

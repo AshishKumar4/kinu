@@ -1,23 +1,14 @@
-/**
- * ACP ContentBlock[] <-> the AgentPrompt the chat surfaces already build.
- *
- * ACP clients send a prompt as typed blocks; Kinu turns take text plus
- * data-URL PromptFiles (what @path mentions produce). Editors put the open
- * buffer in `resource` blocks and pasted screenshots in `image` blocks, so
- * both have to survive the crossing.
- */
+/** ACP ContentBlock[] -> AgentPrompt. Editor buffers (`resource`) and screenshots (`image`) must survive. */
 
 import type { ContentBlock } from '@agentclientprotocol/sdk';
 import type { PromptFile } from '@kinu.run/core';
 import type { AgentPrompt } from '../agent-client';
 
-/** Text of a single block, or null when it carries no readable text. */
 function blockText(block: ContentBlock): string | null {
   switch (block.type) {
     case 'text':
       return block.text;
-    // A link is context the model should see; the agent's own tools read the
-    // target if it needs the contents.
+    // A link is context; the agent's own tools read the target if needed.
     case 'resource_link':
       return `@${block.uri}`;
     case 'resource':
@@ -40,7 +31,6 @@ function blockFile(block: ContentBlock): PromptFile | null {
     };
   }
 
-  // A blob resource is binary the editor already read for us.
   if (block.type === 'resource' && 'blob' in block.resource) {
     const mediaType = block.resource.mimeType ?? 'application/octet-stream';
 
@@ -54,7 +44,6 @@ function blockFile(block: ContentBlock): PromptFile | null {
   return null;
 }
 
-/** Fold an ACP prompt into the one shape AgentClient.send() accepts. */
 export function toAgentPrompt(blocks: readonly ContentBlock[]): AgentPrompt {
   const text: string[] = [];
   const files: PromptFile[] = [];

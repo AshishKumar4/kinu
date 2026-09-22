@@ -1,12 +1,5 @@
-// Behavior tests for the device-connect module: the once-per-invocation
-// prompt latch with a cached device answer, the persisted don't-ask-again
-// config key, the session-daemon lifecycle (spawned tied to the CLI, killed
-// on exit, no-op next to a running daemon), connectDevice against a stub
-// cloud origin, and the desktop command staying a thin shell over the module.
-// The daemon installed here is the one inside this CLI. The stub origin still
-// answers the retired /pc/daemon.js route, with poison, so a connect that
-// fetches executable bytes shows up as poison on disk.
-// Env-dependent paths (KINU_HOME) run in subprocesses like config.test.ts.
+// The stub origin serves poison at the retired /pc/daemon.js route, so a connect that fetches
+// executable bytes shows up as poison on disk.
 import { scratchDir } from '../../test-utils/src/scratch';
 import { chmodSync, existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from 'node:fs';
 import { hostname } from 'node:os';
@@ -35,20 +28,16 @@ import { daemonArchive, releaseSigningEnv, startUpdateHub, until, type UpdateHub
 
 const repoRoot = resolve(__dirname, '../../..');
 
-/** Every module the daemon requires beside itself, keyed by the name it
- *  requires, with the bytes this CLI ships for it. Derived from the daemon's
- *  own require lines: a sibling the daemon requires and this table lacks is
- *  the defect this suite exists to catch — the pty module shipped nowhere
- *  for one release while the daemon required it, and every clean install
- *  died on its first require. */
+/**
+ * Modules the daemon requires beside itself, derived from its require lines; a sibling missing
+ * here kills every clean install on its first require.
+ */
 const DAEMON_SIBLINGS = { 'sandbox.js': SANDBOX_SOURCE, 'pty.js': PTY_SOURCE, 'update.js': UPDATE_SOURCE } as const;
 
-/** Mirrors the installer's private reader of the daemon's `require('./x')`
- *  lines; drift between the two fails these tests, which is the point. */
+/** Mirrors the installer's private reader of `require('./x')` lines; drift fails these tests. */
 const REQUIRED_SIBLINGS = [...DAEMON_SOURCE.matchAll(/require\('\.\/([^']+)'\)/g)]
   .map((m) => m[1] ?? '').filter((n) => n !== '');
 
-/** Fresh throwaway project directory per spawn: the CLI records its cwd as the agent file plane, so a spawn must never sit in the developer repo. */
 function newProjectDir(): string {
   const dir = scratchDir('test-project');
 
@@ -78,28 +67,18 @@ interface StubCloud {
 }
 
 interface StubCloudOptions {
-  /** What the stub serves as the device list. Typed as the wire, not as
-   *  `CloudDevice`, so a case can serve the row an older hub sends. */
+  /** Typed as the wire, not `CloudDevice`, so a case can serve an older hub's row. */
   devices?: () => unknown[];
-  /** Holds every registration until the test releases it. */
   registerGate?: { release: Promise<void>; onArrival?: () => void };
   registrationFailure?: { status: number; error: string };
-  /** The registration body, so a test can assert the NAME the CLI sent. */
   onRegister?: (body: { label?: string }) => void;
-  /** Answer the daemon's ticket exchanges with these statuses in order, the
-   *  last one repeating. 401 is the hub revoking the credential, and the
-   *  daemon exits on it; 404 it retries after a backoff. Unset: 404. */
+  /** Ticket-exchange statuses in order, last repeating; 401 makes the daemon exit, 404 retries. */
   ticketStatuses?: readonly number[];
 }
 
-/** The file the poisoned daemon writes if it ever runs. */
 const POISON_MARKER = 'poisoned-daemon-ran';
 
-/**
- * What a compromised origin serves at /pc/daemon.js. It parses and carries the
- * three strings the retired marker check looked for, so a CLI that downloads
- * its daemon installs this and runs it as the user.
- */
+/** A compromised origin's /pc/daemon.js: it parses and passes the retired marker check. */
 const POISON_DAEMON = [
   '// /pc/connect-ticket',
   "const cancel = 'execCancel';",
@@ -110,8 +89,6 @@ const POISON_DAEMON = [
   'setInterval(() => {}, 1000);',
 ].join('\n');
 
-/** Minimal cloud origin: device register/list, plus the retired daemon route
- *  serving poison so any fetch of it is visible in the installed bytes. */
 function startStubCloud(opts: StubCloudOptions = {}): StubCloud {
   const hits = { register: 0, list: 0, daemonScript: 0, ticket: 0 };
 
@@ -181,8 +158,7 @@ async function runScript(home: string, script: string, environment: Record<strin
   const proc = Bun.spawn({
     cmd: [process.execPath, '-e', script],
     cwd: repoRoot,
-    // The daemon started here is the real one: fence its in-flight root inside
-    // the test home so a run never reads or prunes the developer's own.
+    // Fence the real daemon's in-flight root inside the test home.
     env: { ...process.env, KINU_INFLIGHT_ROOT: join(home, 'inflight'), ...environment, KINU_HOME: home },
     stdout: 'pipe',
     stderr: 'pipe',
@@ -226,9 +202,6 @@ function connectedDevice(connected: boolean, overrides: Partial<CloudDevice> = {
   };
 }
 
-/** What connectDevice returns for the stub's default row: the device id, the
- *  row's own label (the name that prints), and the sandbox state it
- *  reported. */
 function connectedResult(label = connectedDevice(true).label) {
   return { kind: 'connected', deviceId: 'dev_1', label, sandbox: connectedDevice(true).sandbox };
 }
@@ -237,7 +210,6 @@ async function waitForPidExit(pid: number, timeoutMs = 3_000): Promise<boolean> 
   const deadline = Date.now() + timeoutMs;
 
   while (Date.now() < deadline) {
-    // ESRCH is kill(2)'s "no such process" — the exit this loop waits for.
     try { process.kill(pid, 0); } catch (error) {
       if (!(error instanceof Error && 'code' in error && error.code === 'ESRCH')) throw error;
 
@@ -250,7 +222,6 @@ async function waitForPidExit(pid: number, timeoutMs = 3_000): Promise<boolean> 
   return false;
 }
 
-/** The pid in the machine's daemon pidfile, which the daemon claims itself. */
 async function waitForDaemonPid(home: string, timeoutMs = 10_000): Promise<number> {
   const pidfile = join(home, 'pc-agent.pid');
   const deadline = Date.now() + timeoutMs;
@@ -269,15 +240,12 @@ async function waitForDaemonPid(home: string, timeoutMs = 10_000): Promise<numbe
 }
 
 interface ProcessOutput {
-  /** Settles when the child closed its stdout. */
   drained: Promise<void>;
   output: () => string;
   waitFor: (text: string, timeoutMs?: number) => Promise<void>;
 }
 
-/** A spawned child's stdout, buffered as it arrives. Another process writes
- *  these lines and there is no event to await, so `waitFor` polls the buffer
- *  this reader fills. */
+/** A child's stdout buffer; no event exists for another process's lines, so `waitFor` polls it. */
 function readProcessOutput(stdout: ReadableStream<Uint8Array>): ProcessOutput {
   let output = '';
 
@@ -299,7 +267,6 @@ function readProcessOutput(stdout: ReadableStream<Uint8Array>): ProcessOutput {
   };
 }
 
-/** Every live process running the installed daemon at `script`. */
 function liveDaemons(script: string): number[] {
   const found = Bun.spawnSync({ cmd: ['pgrep', '-f', script] });
 
@@ -307,18 +274,12 @@ function liveDaemons(script: string): number[] {
 }
 
 const DAEMON_PROBE_SCHEMA = v.object({
-  // Loose on the result: `connectDevice` reports the machine's sandbox state
-  // beside the id, and this probe is about the daemon's command line.
   result: v.looseObject({ kind: v.string(), deviceId: v.string() }),
   runtime: v.string(),
   command: v.string(),
 });
 
-/**
- * Connect, then report the live daemon's own command line. `ps` is addressed by
- * absolute path because these runs replace PATH to control which runtimes the
- * CLI can see.
- */
+/** Connect, then report the live daemon's command line. `ps` is absolute: these runs replace PATH. */
 function daemonRuntimeProbe(origin: string): string {
   const ps = Bun.which('ps') ?? '/bin/ps';
 
@@ -352,8 +313,6 @@ describe('device-connect prompt policy', () => {
   });
 
   test('THIS machine connected suppresses the offer without re-fetching', async () => {
-    // The hub stamps the device row's hostname from the daemon's HELLO, so a
-    // row carrying this machine's hostname IS this machine.
     const stub = startStubCloud({ devices: () => [connectedDevice(true, { hostname: hostname() })] });
     const home = makeHome({ origin: stub.origin, accessToken: 'ptc_test' });
 
@@ -367,10 +326,7 @@ describe('device-connect prompt policy', () => {
   });
 
   test("another machine's connected device still leaves this computer to offer", async () => {
-    // The card asks about THIS PC. A person whose other laptop is linked has
-    // as much to link here as one with nothing connected, and suppressing on
-    // any connected row is how the offer vanished for every session on a
-    // machine whose account already had a daemon somewhere else.
+    // The card asks about this PC; a daemon connected elsewhere on the account must not suppress it.
     const stub = startStubCloud({ devices: () => [connectedDevice(true, { hostname: 'some-other-box' })] });
     const home = makeHome({ origin: stub.origin, accessToken: 'ptc_test' });
 
@@ -439,23 +395,18 @@ describe('device-connect daemon lifecycle', () => {
 
     expect(result).toEqual(connectedResult());
     expect(status.sessionActive).toBe(true);
-    expect(status.daemonPid ?? 0).toBeGreaterThan(0); // the daemon holds the machine lock
+    expect(status.daemonPid ?? 0).toBeGreaterThan(0);
 
-    // The install came out of this CLI, and the origin was asked for nothing
-    // executable.
     expect(stub.hits.register).toBe(1);
     expect(stub.hits.daemonScript).toBe(0);
-    // `root` is the directory the connect ran in, which runScript sets to the
-    // repository root: the daemon carries it to the hub as the consented tree.
+    // runScript sets cwd to the repo root; the daemon reports it to the hub as the consented tree.
     const deviceConfig = parseJsonObject(readFileSync(join(home, 'device.json'), 'utf-8'));
     expect(deviceConfig).toEqual({ user: 'user_1', token: 'device-token', origin: stub.origin, root: repoRoot });
     expect(statSync(join(home, 'pc-agent.js')).mode & 0o777).toBe(0o700);
     expect(statSync(join(home, 'device.json')).mode & 0o777).toBe(0o600);
-    // The root the daemon reports to the hub, created by the connect flow.
     expect(statSync(join(home, 'agents')).mode & 0o777).toBe(0o700);
     expect(readdirSync(home).filter((entry) => entry.includes('.tmp-'))).toEqual([]);
 
-    // The CLI process exited — its exit hook must have killed the session daemon.
     expect(await waitForPidExit(status.daemonPid ?? 0)).toBe(true);
   }, 20_000);
 
@@ -463,7 +414,6 @@ describe('device-connect daemon lifecycle', () => {
     const stub = startStubCloud({ devices: () => [connectedDevice(false)] });
     const home = makeHome({ origin: stub.origin, accessToken: 'ptc_test' });
 
-    // A live daemon owner: a sleeper owned by the test, via the pidfile.
     const sleeper = Bun.spawn({ cmd: ['sleep', '30'] });
     sleepers.push(sleeper);
     writeFileSync(join(home, 'pc-agent.pid'), `${sleeper.pid}\n`, { mode: 0o600 });
@@ -479,7 +429,6 @@ describe('device-connect daemon lifecycle', () => {
     }), JSON.parse(out.trim()));
 
     expect(result).toEqual({ kind: 'already-running', connected: false });
-    // No takeover: nothing registered, installed, or killed.
     expect(stub.hits.register).toBe(0);
     expect(stub.hits.daemonScript).toBe(0);
     expect(sleeper.killed).toBe(false);
@@ -488,7 +437,6 @@ describe('device-connect daemon lifecycle', () => {
 });
 
 describe('the agent-home root the daemon reports', () => {
-  // Through the one public path that installs the daemon files: a connect.
   const connect = (stub: ReturnType<typeof startStubCloud>, home: string) => runScript(home, `
       import { connectDevice } from './packages/cli/src/device-connect.ts';
       await connectDevice({ origin: ${JSON.stringify(stub.origin)}, token: 'ptc_test' }, { session: true });
@@ -517,9 +465,7 @@ describe('the agent-home root the daemon reports', () => {
 });
 
 describe('the sandbox state the machine reported', () => {
-  /** One phrase out of each documented fix: the remedy, or the platform fact
-   *  that decides there is none. A fix that stops naming either fails here; a
-   *  reason with no row fails the key check below. */
+  /** One phrase from each documented fix; a reason with no row fails the key check below. */
   const REASON_FIX_MARKER = {
     no_bwrap: 'sudo apt install bubblewrap',
     no_userns: 'kernel.apparmor_restrict_unprivileged_userns=0',
@@ -537,7 +483,6 @@ describe('the sandbox state the machine reported', () => {
     expect(Object.keys(REASON_FIX_MARKER).sort()).toEqual([...DEVICE_SANDBOX_REASONS].sort());
 
     for (const reason of DEVICE_SANDBOX_REASONS) {
-      // A reason core carries no fix text for has no sentence to print.
       const fix = sandboxReasonFix(reason);
       expect(fix.length).toBeGreaterThan(20);
       expect(fix).toContain(REASON_FIX_MARKER[reason]);
@@ -561,8 +506,7 @@ describe('the sandbox state the machine reported', () => {
   });
 
   test('a probe that failed in the daemon\'s own words prints those words before the fix', () => {
-    // The fix for `probe_failed` tells the owner to act on what the daemon
-    // named, so the line the daemon sent is printed where the owner reads it.
+    // The `probe_failed` fix tells the owner to act on what the daemon named, so that line is printed.
     const detail = "sandbox probe failed: bwrap: Can't chdir to /tmp/kinu-first-run-probe-6B5G: No such file or directory";
     expect(describeDeviceSandbox({ tier: 'sandboxed', capability: 'files_only', reason: 'probe_failed', detail, gpu: [] }))
       .toEqual([
@@ -647,14 +591,8 @@ describe('device-connect install hardening', () => {
     `);
 
     expect(JSON.parse(out.trim())).toEqual(connectedResult());
-    // The origin serves poison at the retired route. Nothing asked for it, the
-    // bytes on disk are this CLI's own, and the poison never ran.
     expect(stub.hits.daemonScript).toBe(0);
     expect(readFileSync(join(home, 'pc-agent.js'), 'utf-8')).toBe(DAEMON_SOURCE);
-    // The daemon requires its siblings by relative path, so a release that
-    // ships the daemon without one of them is a daemon that dies on its first
-    // require. The shipped set IS the daemon's require lines, and every byte
-    // is this CLI's own.
     expect(REQUIRED_SIBLINGS.length).toBeGreaterThan(1);
     expect(Object.keys(DAEMON_SIBLINGS).sort()).toEqual([...REQUIRED_SIBLINGS].sort());
 
@@ -690,8 +628,7 @@ describe('device-connect install hardening', () => {
   test('publishes neither install file when the daemon cannot be replaced', async () => {
     const stub = startStubCloud({ devices: () => [connectedDevice(true)] });
     const home = makeHome({ origin: stub.origin, accessToken: 'ptc_test' });
-    // A directory where the daemon file belongs: the replacement cannot land,
-    // so the config that would activate it is never published either.
+    // A directory where the daemon file belongs: the replacement cannot land, so its config is never published.
     mkdirSync(join(home, 'pc-agent.js'));
 
     const failure = await scriptFailure(home, `
@@ -761,23 +698,17 @@ describe('device-connect install hardening', () => {
 
     const { result, runtime, command } = v.parse(DAEMON_PROBE_SCHEMA, JSON.parse(out.trim()));
     expect(result).toEqual(connectedResult());
-    // The live daemon process is the CLI's own Bun running the installed file.
     expect(command).toContain(runtime);
     expect(command).toContain(join(home, 'pc-agent.js'));
   }, 20_000);
 
   test('runs the daemon on the CLI Bun even when a WebSocket-less node sits on PATH', async () => {
-    // The Mac defect: a PATH node that answers --version but has no global
-    // WebSocket won daemonRuntime's probe and killed the daemon at startup.
-    // The daemon's runtime is the Bun running this CLI — a PATH node is never
-    // consulted, and this test's stub records every invocation to prove it.
+    // A PATH node lacking a global WebSocket must never be chosen; the daemon runs on this CLI's Bun.
     const stub = startStubCloud({ devices: () => [connectedDevice(true)] });
     const home = makeHome({ origin: stub.origin, accessToken: 'ptc_test' });
     const stubDir = scratchDir('stub-node');
     writeFileSync(join(stubDir, 'node'), [
       '#!/bin/sh',
-      // The stub records the probe, then acts healthy for --version and
-      // broken for anything else — the conda node's exact surface.
       'echo "probe $*" >> "$0.calls"',
       'if [ "$1" = "--version" ]; then echo "v18.0.0"; exit 0; fi',
       'echo "no WebSocket implementation is available" >&2; exit 1',
@@ -789,7 +720,6 @@ describe('device-connect install hardening', () => {
     const { result, runtime, command } = v.parse(DAEMON_PROBE_SCHEMA, JSON.parse(out.trim()));
     expect(result).toEqual(connectedResult());
 
-    // The stub node answered --version and was still never chosen.
     const calls = existsSync(`${join(stubDir, 'node')}.calls`)
       ? readFileSync(`${join(stubDir, 'node')}.calls`, 'utf-8')
       : '';
@@ -821,12 +751,9 @@ describe('device-connect install hardening', () => {
   });
 
   test('fails fast when the daemon exits at startup', async () => {
-    // A daemon that died never connected, so the hub's row for it stays
-    // disconnected; the exit is what ends the wait.
     const stub = startStubCloud({ devices: () => [connectedDevice(false)] });
     const home = makeHome({ origin: stub.origin, accessToken: 'ptc_test' });
-    // A file where the daemon's in-flight root belongs. The daemon cannot read
-    // its own request registry and dies before it reaches the connect loop.
+    // A file where the in-flight root belongs: the daemon dies before the connect loop.
     const inflight = join(home, 'inflight-is-a-file');
     writeFileSync(inflight, 'not a directory\n', { mode: 0o600 });
 
@@ -844,12 +771,7 @@ describe('device-connect install hardening', () => {
   }, 20_000);
 
   test('the connect wait ends on the daemon exiting, not on a clock', async () => {
-    // The hub's first ticket answer is a 404 the daemon retries a second
-    // later; the second is a 401, so the daemon logs the rejection and exits
-    // 4 about 1.2 s in. That exit is the definitive failure, and the wait
-    // ends on it. Waiting out the 20 s bound instead reports the bound as
-    // the daemon's failure (red 2026-09-05: `{"kind":"timeout"}` after
-    // 20429 ms, 20 list polls).
+    // 404 then 401: the daemon exits 4 about 1.2 s in, and the wait must end on that exit, not the 20 s bound.
     const stub = startStubCloud({ devices: () => [connectedDevice(false)], ticketStatuses: [404, 401] });
     const home = makeHome({ origin: stub.origin, accessToken: 'ptc_test' });
 
@@ -865,15 +787,11 @@ describe('device-connect install hardening', () => {
     `);
 
     expect(failure).toContain('exited before it could connect (exit code 4)');
-    // The daemon exits inside its first connect attempt; a wait that ran out
-    // a 20 s bound instead would have asked the hub about twenty times.
     expect(stub.hits.list).toBeLessThan(5);
   }, 30_000);
 
   test('a caller ends the wait through its signal and the result says so', async () => {
-    // The hub never reports the daemon connected (its ticket exchange keeps
-    // failing with 404, which the daemon retries). Only the caller's signal
-    // ends this wait.
+    // Tickets keep failing with 404, so only the caller's signal ends this wait.
     const stub = startStubCloud({ devices: () => [connectedDevice(false)] });
     const home = makeHome({ origin: stub.origin, accessToken: 'ptc_test' });
 
@@ -959,14 +877,10 @@ describe('device-connect install hardening', () => {
 });
 
 describe('device daemon single-instance lock', () => {
-  /** The installed machine state a daemon needs, without starting one. */
   function installedMachine(origin: string): string {
     const home = makeHome({ origin, accessToken: 'ptc_test' });
     writeFileSync(join(home, 'pc-agent.js'), DAEMON_SOURCE, { mode: 0o700 });
 
-    // Every sibling, because the daemon requires them by relative path: an
-    // installed machine missing one is a daemon that dies before it logs
-    // anything, which is what this fixture found — twice.
     for (const [name, source] of Object.entries(DAEMON_SIBLINGS)) {
       writeFileSync(join(home, name), source, { mode: 0o700 });
     }
@@ -980,7 +894,6 @@ describe('device daemon single-instance lock', () => {
     return home;
   }
 
-  /** The daemon as anything but the CLI starts it: the installed file, run. */
   let signing: Record<string, string> = {};
   beforeAll(async () => { signing = await releaseSigningEnv(); });
 
@@ -1004,7 +917,7 @@ describe('device daemon single-instance lock', () => {
     const home = installedMachine(stub.origin);
 
     const owner = startDaemon(home);
-    await owner.waitFor('Ticket exchange'); // the owner's connect loop is running
+    await owner.waitFor('Ticket exchange');
 
     const second = startDaemon(home);
 
@@ -1019,17 +932,12 @@ describe('device daemon single-instance lock', () => {
     expect(second.output()).toContain('already running');
     expect(second.output()).not.toContain('Ticket exchange');
     expect(exited).toBe(3);
-    // The owner keeps the machine, and the pidfile still names it.
     expect(Number(readFileSync(join(home, 'pc-agent.pid'), 'utf-8').trim())).toBe(owner.proc.pid);
     expect(owner.proc.killed).toBe(false);
   }, 30_000);
 
   test('a self-update hands the machine to exactly one successor; a third daemon still exits', async () => {
-    // A hub serving a newer build than the installed stamp: the daemon's own
-    // update lands the archive's files and starts its successor, which takes
-    // the pidfile over; the hub replaces the old socket and the old daemon
-    // exits. Two daemons run only for that handover, and only one of them
-    // ever holds the pidfile.
+    // Handover: the successor takes the pidfile over and the old daemon exits.
     const newDaemon = `${DAEMON_SOURCE}\n// build 2.0.0+new\n`;
     const hub = startUpdateHub({ served: '2.0.0+new', archive: daemonArchive({ ...DAEMON_SIBLINGS, 'pc-agent.js': newDaemon }, '2.0.0+new') });
     updateHubs.push(hub);
@@ -1046,11 +954,9 @@ describe('device daemon single-instance lock', () => {
     expect(successorPid).not.toBe(oldPid);
     deviceDaemonPids.push(successorPid);
     expect(await waitForPidExit(oldPid)).toBe(true);
-    // One live daemon on this home, and it is the one the pidfile names.
     expect(liveDaemons(join(home, 'pc-agent.js'))).toEqual([successorPid]);
     expect(readFileSync(join(home, 'pc-agent.js'), 'utf-8')).toBe(newDaemon);
 
-    // The lock holds for the successor exactly as it held for its predecessor.
     const third = startDaemon(home);
     expect(await Promise.race([third.proc.exited, Bun.sleep(5_000).then(() => 'still running' as const)])).toBe(3);
     await Promise.race([third.drained, Bun.sleep(100)]);
@@ -1077,7 +983,6 @@ describe('classic cloud chat connect prompt', () => {
     };
   }
 
-  /** Interactive PTY chat: answer prompts only after they appear. */
   function spawnChatInPty(home: string) {
     const cliBin = resolve(repoRoot, 'packages/cli/bin/cli.ts');
     const quote = (value: string) => `'${value.replace(/'/g, `'\\''`)}'`;
@@ -1113,7 +1018,6 @@ describe('classic cloud chat connect prompt', () => {
   }
 
   test('interactive open offers c/s/n/d and session connect goes end to end', async () => {
-    // Devices connect only after the daemon is registered and started.
     let registered = false;
 
     const stub = startStubCloud({
@@ -1128,7 +1032,6 @@ describe('classic cloud chat connect prompt', () => {
     await chat.waitFor("[c] connect and stay connected · [s] this session only · [n] not now · [d] don't ask again");
     await chat.send('s');
     await chat.waitFor('Connected for this session.');
-    // The daemon claims the machine's pidfile itself, whoever started it.
     const daemonPid = await waitForDaemonPid(home);
     await chat.send('/exit');
     await chat.proc.exited;
@@ -1138,7 +1041,6 @@ describe('classic cloud chat connect prompt', () => {
     expect(stub.hits.daemonScript).toBe(0);
     expect(readFileSync(join(home, 'pc-agent.js'), 'utf-8')).toBe(DAEMON_SOURCE);
 
-    // The CLI exited; its exit hook must have killed the session daemon.
     expect(await waitForPidExit(daemonPid)).toBe(true);
   }, 20_000);
 
@@ -1168,7 +1070,6 @@ describe('classic cloud chat connect prompt', () => {
 });
 
 describe('kinu connect waits on the daemon and says less', () => {
-  /** A command under a PTY, read through the wait the suite shares. */
   function spawnPtyCommand(command: string) {
     const proc = Bun.spawn({
       cmd: ['script', '-qefc', command, '/dev/null'],
@@ -1182,11 +1083,7 @@ describe('kinu connect waits on the daemon and says less', () => {
     let output = '';
     let eof = false;
 
-    // The waits bind what the terminal SHOWS, not what it carried: a colour-
-    // capable TERM (which `script` reports) makes chalk wrap the ✓ and the
-    // label in escape bytes, and those bytes land between the tokens an
-    // `includes` binds. Strip at the seam so the words stay true under any
-    // TERM, the same contract evolve-progress reads its captures under.
+    // Strip at the seam: a colour TERM makes chalk wrap tokens in escape bytes.
     const drained = (async () => {
       for await (const chunk of proc.stdout) output += Bun.stripANSI(new TextDecoder().decode(chunk));
       eof = true;
@@ -1196,13 +1093,8 @@ describe('kinu connect waits on the daemon and says less', () => {
       proc,
       output: () => output,
       drained,
-      // The wait resolves on the awaited text or rejects only when the child
-      // has exited AND the reader has drained the PTY to EOF — no further
-      // data can arrive. Exit alone is not the end: PTY output can land
-      // after exit, so a fast connect that prints its line and exits still
-      // resolves. There is no deadline: the product waits on the daemon and
-      // not on a clock, and a harness that fires before the text arrives
-      // would be asserting the clock the product refuses to carry.
+      // Resolves on the text; rejects only after exit and PTY EOF (output can land after exit). No deadline:
+      // the product waits on the daemon, not a clock.
       async waitFor(text: string): Promise<void> {
         while (true) {
           if (output.includes(text)) return;
@@ -1221,7 +1113,6 @@ describe('kinu connect waits on the daemon and says less', () => {
     };
   }
 
-  /** The real `kinu connect`, under a PTY so its /dev/tty prompts are reachable. */
   function spawnConnectInPty(home: string, label?: string) {
     const cliBin = resolve(repoRoot, 'packages/cli/bin/cli.ts');
     const quote = (value: string) => `'${value.replace(/'/g, `'\\''`)}'`;
@@ -1240,8 +1131,7 @@ describe('kinu connect waits on the daemon and says less', () => {
 
 
   test('the hub row reading connected ends the wait with the row label', async () => {
-    // The hub answers the row's own label, not the typed name: the stub
-    // reports them apart so a success that echoes the prompt input fails.
+    // The stub reports label and typed name apart, so a success echoing the prompt input fails.
     let registered = false;
 
     const devices = () => (registered ? [connectedDevice(true, { label: 'hub-names-it' })] : []);
@@ -1250,7 +1140,6 @@ describe('kinu connect waits on the daemon and says less', () => {
     const home = makeHome({ origin: stub.origin, accessToken: 'ptc_test' });
 
     const connect = spawnConnectInPty(home);
-    // The three-line disclosure comes BEFORE anything is installed.
     await connect.waitFor('Kinu installs a small daemon here');
     await connect.waitFor('Everything else stays invisible to it.');
     await connect.waitFor('The daemon only dials out.');
@@ -1260,11 +1149,10 @@ describe('kinu connect waits on the daemon and says less', () => {
 
     await connect.send('typed-name');
     await connect.waitFor('Link and start the daemon?');
-    expect(stub.hits.register).toBe(0); // still nothing, the question is unanswered
+    expect(stub.hits.register).toBe(0);
 
     await connect.send('y');
     await connect.waitFor('✓ Connected as hub-names-it');
-    // The machine's own report reaches the terminal.
     await connect.waitFor('Sandbox on. The agent sees its home plus the folders you picked');
     await connect.waitFor('Manage it under Account settings → Devices.');
     await connect.waitFor('Daemon log:');
@@ -1281,9 +1169,6 @@ describe('kinu connect waits on the daemon and says less', () => {
   }, 30_000);
 
   test('the stub daemon exiting ends the wait with its tail', async () => {
-    // The daemon the CLI ships answers 401 with the rejection it logs, then
-    // exits 4. That exit is the failure the wait reports, quoting the
-    // daemon's own last lines.
     const stub = startStubCloud({ devices: () => [connectedDevice(false)], ticketStatuses: [401] });
     const home = makeHome({ origin: stub.origin, accessToken: 'ptc_test' });
 
@@ -1299,10 +1184,6 @@ describe('kinu connect waits on the daemon and says less', () => {
   }, 30_000);
 
   test('a stub alive and never connecting leaves the command waiting', async () => {
-    // The hub keeps answering 404 to the daemon's tickets, so the daemon
-    // keeps dialling; the roster row never reads connected. After a short
-    // scripted advance the command is still on the wait — no deadline fires
-    // on its behalf, and the product code carries no clock for one to read.
     const stub = startStubCloud({ devices: () => [connectedDevice(false)], ticketStatuses: [404] });
     const home = makeHome({ origin: stub.origin, accessToken: 'ptc_test' });
 
@@ -1310,10 +1191,7 @@ describe('kinu connect waits on the daemon and says less', () => {
     await waiting.waitFor('Link and start the daemon?');
     await waiting.send('y');
     await waiting.waitFor('Waiting for the daemon to connect');
-    // Advance two list polls by watching the stub's own counter: the wait is
-    // alive, not finished — the process neither exited nor printed either
-    // ending. A sleep would name a duration the product never promises; this
-    // names the polls the wait actually makes.
+    // Advance by the stub's poll counter, not a sleep.
 
     const listsAtStart = stub.hits.list;
 
@@ -1340,7 +1218,7 @@ describe('kinu connect waits on the daemon and says less', () => {
 
     const connect = spawnConnectInPty(home);
     await connect.waitFor('Device name');
-    await connect.send(''); // take the suggested hostname
+    await connect.send('');
     await connect.waitFor('Link and start the daemon?');
     await connect.send('n');
     await connect.proc.exited;
@@ -1369,9 +1247,7 @@ describe('kinu connect waits on the daemon and says less', () => {
   });
 
   test('a stub that prints the awaited text and exits immediately resolves', async () => {
-    // The race the deploy red showed: the text lands in the buffer the SAME
-    // moment the child exits. The wait must read the buffer before it reads
-    // the EOF flag, or a fast exit loses what it printed on its way out.
+    // The text lands the same moment the child exits; the wait must read the buffer before the EOF flag.
 
     const quote = (value: string) => `'${value.replace(/'/g, `'\\''`)}'`;
     const print = `${quote(process.execPath)} -e ${quote('console.log("✓ Connected as hub-names-it")')}`;
@@ -1406,22 +1282,7 @@ describe('/connect slash command', () => {
 });
 
 describe('desktop command reuses device-connect', () => {
-  // This asserts BEHAVIOUR, never `desktop.ts`'s text. Substring assertions
-  // over source — `toContain('connectDevice')` plus a blocklist of
-  // `not.toContain('spawn' | 'writeFileSync' | 'registerCloudDevice' | ...)` —
-  // cannot fail on the defect they name: a duplicated installer spelled
-  // `Bun.write`, `child_process.fork`, or an inline `fetch` of the device
-  // route passes every one of those substrings, while a COMMENT containing
-  // the word "spawn" fails all of them. That is a ratchet on wording.
-  //
-  // The observable half of "thin shell" is that the desktop surface reports
-  // the paths the module owns. Both are derived from KINU_HOME at import, so
-  // a second copy in `desktop.ts` — the actual duplication — prints a
-  // different path than the module's own constant and fails here.
-  //
-  // NOT COVERED, stated rather than pretended: a byte-identical duplicate
-  // that never drifts is invisible to any runtime probe, because it behaves
-  // identically by definition. That claim is a review concern, not a test.
+  // Asserts behaviour, not `desktop.ts` source: a second copy of the module's paths prints a different path.
   test('desktop status and logs report the paths device-connect owns', async () => {
     const home = makeHome({ cloudOrigin: 'http://localhost:1', token: 'tok' });
 
@@ -1444,14 +1305,10 @@ describe('desktop command reuses device-connect', () => {
       JSON.parse(stdout.trim().split('\n').at(-1) ?? '{}'),
     );
 
-    // The module's paths are inside this test's home, so they are the real
-    // env-derived constants and not a repo-relative accident.
     expect(seen.DEVICE_CONFIG_PATH.startsWith(home)).toBe(true);
     expect(seen.DAEMON_LOG_PATH.startsWith(home)).toBe(true);
-    // ...and the desktop surface printed those exact strings.
     expect(seen.printed).toContain(seen.DEVICE_CONFIG_PATH);
     expect(seen.printed).toContain(seen.DAEMON_LOG_PATH);
-    // `logs` read the module's log file rather than a path of its own.
     expect(seen.printed).toContain('daemon line two');
   });
 

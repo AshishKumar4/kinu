@@ -17,8 +17,7 @@ import * as v from 'valibot';
 
 describe("CLI config safety", () => {
   test("validates local agent names", () => {
-    // agentDir is the exported seam that refuses a bad name: it joins the
-    // home directory, so a name that could escape it must fail here.
+    // agentDir joins the home directory, so a name that could escape it must fail here.
     const out = runNameChecks();
     expect(out.slice(0, 2).map((r) => r.ok)).toEqual([true, true]);
     expect(out.slice(2, 5).map((r) => r.error)).toEqual([
@@ -29,8 +28,7 @@ describe("CLI config safety", () => {
   });
 
   test("validates aliases as executable names", () => {
-    // upsertAgentConfig is the exported seam that refuses a bad alias,
-    // including a reserved one, before it reaches the config file.
+    // upsertAgentConfig refuses a bad or reserved alias before it reaches the config file.
     const out = runNameChecks();
     expect(out.slice(5, 7).map((r) => r.ok)).toEqual([true, true]);
     expect(out.slice(7, 9).map((r) => r.error)).toEqual([
@@ -90,18 +88,13 @@ describe("CLI config safety", () => {
     });
     expect(out.effortSet).toEqual({ kind: "effort-set", effort: "high" });
     expect(out.invalid).toMatchObject({ kind: "text", text: expect.stringContaining("Usage") });
-    // A config file with one invalid field is reported, not silently replaced by
-    // defaults: defaulting would discard the whole file and read as a first run.
+    // One invalid field is reported, not replaced by defaults that would read as a first run.
     expect(out.invalidRejection).toContain('is not a valid Kinu config');
   });
 
   test("a published workspace is readable once its WAL sidecars are gone", () => {
-    // The exact shape `kinu create` leaves behind: a WAL-mode database,
-    // checkpointed and closed, whose `-wal` and `-shm` were removed with the
-    // partial name they were written under. SQLite has to CREATE the `-shm`
-    // for such a file, so both readers below failed with "unable to open
-    // database file" while opening readonly — and `kinu create` exited 1 after
-    // publishing the workspace, having already renamed it into place.
+    // The shape `kinu create` leaves: a checkpointed WAL database without `-wal`/`-shm`. SQLite must
+    // create the `-shm`, so a readonly open fails with "unable to open database file".
     const dir = scratchDir("cli-wal-read");
     const dbPath = join(dir, "agent.db");
     const db = new Database(dbPath, { create: true });
@@ -155,11 +148,7 @@ describe("resolveLLMConfig — signed-in Cloudflare AI", () => {
     expect(out).toMatchObject({ name: "workers-ai", model: DEFAULT_WORKERS_AI_MODEL_ID });
   });
 
-  // Item 11.2: the owner runs on the native Workers AI model because it is the
-  // one he is not billed per-token for. Every BYO credential shape at once, and
-  // no chosen model, must still resolve to it — a key sitting on disk is not a
-  // selection. `openaiCompat` is the one to watch: a branch that matched
-  // unconditionally would answer for every one of them.
+  // Item 11.2: with every BYO credential and no chosen model, the native Workers AI model still wins.
   test("no chosen model lands on the native default however many BYO credentials are stored", () => {
     const out = runResolveLLM({
       origin: CLOUD_ORIGIN,
@@ -181,9 +170,8 @@ describe("resolveLLMConfig — signed-in Cloudflare AI", () => {
     });
   });
 
-  // An Ollama on this machine will happily accept `@cf/deepseek-ai/…` as a
-  // model name and serve something else, so the local endpoint must never
-  // answer for a spec the signed-in account owns.
+  // A local Ollama accepts `@cf/deepseek-ai/…` and serves something else, so the local endpoint
+  // must never answer for a spec the signed-in account owns.
   test("a local openai-compatible endpoint cannot answer for a native spec", () => {
     const compat = { default: { baseURL: "http://localhost:11434/v1", apiKey: "local" } };
 
@@ -199,7 +187,6 @@ describe("resolveLLMConfig — signed-in Cloudflare AI", () => {
       expect(out).toMatchObject({ name: "workers-ai", baseURL: `${CLOUD_ORIGIN}/api/user/ai/v1` });
     }
 
-    // …and it still answers for its own models.
     const local = runResolveLLM({
       origin: CLOUD_ORIGIN, accessToken: CLOUD_TOKEN,
       model: "openai-compat/gpt-oss:20b", providers: { openaiCompat: compat },
@@ -294,9 +281,7 @@ describe("resolveLLMConfig — registry-only providers", () => {
   });
 });
 
-/** Runs resolveLLMConfig in a clean subprocess (config.ts binds KINU_HOME at
- *  import) with the provider/cloud env scrubbed, returning the config or
- *  { error } as JSON. */
+/** resolveLLMConfig in a clean subprocess (config.ts binds KINU_HOME at import). */
 function runResolveLLM(config: JsonObject, extraEnv: Record<string, string> = {}): JsonValue {
   const kinuHome = scratchDir("cli-llm");
   writeFileSync(join(kinuHome, "config.json"), JSON.stringify(config), { mode: 0o600 });
@@ -363,10 +348,6 @@ interface NameCheck {
   error: string | null;
 }
 
-/** Name and alias validation through the exported seams that enforce it
- *  (agentDir, upsertAgentConfig), in a clean subprocess with a throwaway home
- *  so the config write lands nowhere real. Order: five agentDir cases, then
- *  five upsertAgentConfig alias cases. */
 function runNameChecks(): NameCheck[] {
   const kinuHome = scratchDir("cli-names");
 
@@ -454,11 +435,7 @@ function runPreferenceWrite(): PreferenceWriteResult {
   return v.parse(PreferenceWriteResultSchema, JSON.parse(proc.stdout.toString()));
 }
 
-// ── A logout whose revocation could not land ────────────────────────────────
-//
-// The raw CLI token is the ONLY copy — the server stores a hash — so deleting it
-// locally when the revoke call fails orphans a live 180-day bearer that nothing
-// can name. It stays until a retry confirms the revocation.
+// The raw CLI token is the only copy (the server stores a hash), so a failed revoke must keep it.
 describe("a logout the server could not be told about", () => {
   const TOKEN = `ptc_${"0".repeat(32)}_abcdefghijklmnopqrstuvwxyz`;
 
@@ -524,9 +501,7 @@ describe("a logout the server could not be told about", () => {
       expect(refused).toContain("Not signed out");
 
       const stranded = storedConfig(home);
-      // THE TOKEN SURVIVES. Deleting it here is what orphaned the bearer: the
-      // server holds only its hash, so this string was the only thing left that
-      // could revoke the session it stands for.
+      // The token survives: it is the only thing that can still revoke the session.
       expect(stranded.accessToken).toBe(TOKEN);
       expect(stranded.pendingRevocation).toMatchObject({ token: TOKEN, origin });
 
@@ -535,8 +510,6 @@ describe("a logout the server could not be told about", () => {
       expect(landed).toContain("Signed out");
 
       const after = storedConfig(home);
-      // Only a CONFIRMED revocation clears the local copy — and the pending
-      // marker goes with it, so a later logout does not retry a dead session.
       expect(after.accessToken).toBeUndefined();
       expect(after.pendingRevocation).toBeUndefined();
     } finally {

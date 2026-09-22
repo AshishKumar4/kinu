@@ -1,11 +1,5 @@
 /** @jsxImportSource @opentui/react */
-/**
- * What onboarding still has to ask for, and what an answer settles.
- *
- * Both halves run against the real stores: the theme step reads the same
- * preference file the product writes, and the provider flow runs in a child
- * process with its own KINU_HOME, because `config.ts` binds that at import.
- */
+/** Onboarding against real stores; the provider flow runs in a child because `config.ts` binds KINU_HOME at import. */
 import { readFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { createTestRenderer } from '@opentui/core/testing';
@@ -68,15 +62,12 @@ test('the theme step stands until a theme is stored, and closes once one is', as
         />
       </TuiProductProvider>,
     );
-    // The render loop must run for frame events to fire; the wait itself is
-    // condition-bound — it returns on the first captured frame that shows the
-    // step, so readiness settling at any pace still resolves deterministically.
+    // The render loop must run for frame events to fire; the wait returns on the first frame showing the step.
     renderer.start();
     await waitForFrame((frame) => frame.includes('Choose a theme'));
     expect(captureCharFrame()).toContain('Light');
     expect(captureCharFrame()).toContain('Dark');
     mockInput.pressEnter();
-    // The choice is what closes the step: the next scene is the following one.
     await waitForFrame((frame) => frame.includes('Choose a keymap'));
     expect(store.read().theme).toBeDefined();
     expect(captureCharFrame()).not.toContain('Choose a theme');
@@ -89,8 +80,6 @@ test('the theme step stands until a theme is stored, and closes once one is', as
 test('a provider connected through the port stores the key the connected check reads', () => {
   const home = scratchDir('onboarding-connect-home');
 
-  // The port stands in for the step: it answers the key and the model the
-  // flow asks for, and reports nowhere.
   const runner = `
     const { connectProvider, readProviderConnections } = await import('./packages/cli/src/commands/provider-connect.ts');
     const answers = ['sk-onboarding-key', 'gpt-4o-mini'];

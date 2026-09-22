@@ -1,9 +1,4 @@
-/**
- * The registered command surface. Single source of truth: the branded root help
- * (display.ts renderHelp) is derived from this tree, so a command can never be
- * registered without becoming discoverable. `.helpGroup()` carries the curated
- * grouping alongside each registration instead of in a parallel list.
- */
+/** Command registry; root help (display.ts renderHelp) derives from it. */
 
 import { Command, Option } from 'commander';
 import { MODEL_OPTION_FLAG } from './options';
@@ -47,8 +42,7 @@ import { ACCESS_TOKEN_SCOPES, tokensCommand } from './commands/tokens';
 import { workspaceDeleteCommand } from './commands/workspace';
 import { printFailure, setCommandExample, VERSION } from './display';
 
-/** Help groups, in the order the branded help renders them (first registration
- *  of a group fixes its position). */
+/** Render order; a group's first registration fixes its position. */
 const ACCOUNT = 'Account:';
 
 const WORKSPACES = 'Workspaces:';
@@ -71,13 +65,10 @@ export function buildProgram(): Command {
     .helpOption('-h, --help', 'Show help for this command')
     .addHelpCommand(false);
 
-  // Shared LLM options
   const llmOpts = (cmd: Command) => cmd
     .option(`${MODEL_OPTION_FLAG} <id>`, 'Model ID (env: KINU_MODEL)')
     .option('--base-url <url>', 'Base URL of your own model endpoint (env: KINU_BASE_URL)')
     .option('--auth <header>', 'Auth header value for that endpoint (env: KINU_AUTH)');
-
-  // ── Account ────────────────────────────────────────────────────
 
   program
     .command('setup')
@@ -139,8 +130,6 @@ export function buildProgram(): Command {
     .option('--scopes <scopes>', `Comma-separated scopes: ${ACCESS_TOKEN_SCOPES.join(', ')}`)
     .option('--json', 'Print raw JSON')
     .action(wrapAction(tokensCommand));
-
-  // ── Workspaces ─────────────────────────────────────────────────
 
   llmOpts(
     program
@@ -209,8 +198,6 @@ export function buildProgram(): Command {
     .option('-n, --name <name>', 'Workspace name (default: the name recorded in the archive)')
     .action(wrapAction(importCommand));
 
-  // ── Running ────────────────────────────────────────────────────
-
   llmOpts(
     program
       .command('run <name> [prompt...]')
@@ -275,8 +262,6 @@ export function buildProgram(): Command {
     .option('--json', 'Print raw JSON')
     .action(wrapAction(stopCommand));
 
-  // ── Configure ──────────────────────────────────────────────────
-
   llmOpts(
     program
       .command('model <name> [spec]')
@@ -319,8 +304,6 @@ export function buildProgram(): Command {
     .option('--rate-limit <n>', 'Webhook deliveries per minute')
     .option('--json', 'Print raw JSON')
     .action(wrapAction(webhookCommand));
-
-  // ── Inspect & evolve ───────────────────────────────────────────
 
   llmOpts(
     program
@@ -455,8 +438,6 @@ export function buildProgram(): Command {
     .option('--json', 'Print raw JSON')
     .action(wrapAction(releaseCommand));
 
-  // ── This computer ──────────────────────────────────────────────
-
   program
     .command('connect')
     .helpGroup(THIS_COMPUTER)
@@ -498,8 +479,7 @@ export function buildProgram(): Command {
     .description('Update the installed Kinu command')
     .option('--origin <url>', 'Kinu app origin')
     .option('--force', 'Reinstall even when already up to date')
-    // The startup check's detached child: refresh the CLI tree, print nothing,
-    // leave the launcher alone.
+    // Detached startup-check child: refresh silently, leave the launcher alone.
     .addOption(new Option('--background', 'Stage and swap the CLI tree silently').hideHelp())
     .action(wrapAction(updateCommand));
 
@@ -569,7 +549,6 @@ const COMMAND_EXAMPLES: ReadonlyArray<readonly [string, string]> = [
   ['uninstall', 'kinu uninstall'],
 ];
 
-/** The registered command at `path`; a stale path is a programming error. */
 function commandAt(program: Command, path: string): Command {
   let command = program;
 
@@ -583,13 +562,7 @@ function commandAt(program: Command, path: string): Command {
   return command;
 }
 
-/** Wrap async actions with consistent error handling. The argument tuple stays
- *  generic so each command keeps Commander's own arity and parameter checking;
- *  widening it to `any[]` silently accepted a handler with the wrong signature.
- *
- * Commander owns the returned action promise, so the error boundary stays in
- * the action itself rather than detaching a second promise from it.
- */
+/** The generic tuple keeps Commander's arity checks. */
 function wrapAction<Args extends readonly unknown[]>(fn: (...args: Args) => Promise<void>) {
   return async (...args: Args) => {
     try {

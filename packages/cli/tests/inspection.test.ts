@@ -12,7 +12,7 @@ import {
 import { createWorkspace } from "@kinu.run/core/identity";
 import { makeSql, makeWorkspaceSchemaSql } from "@kinu.run/cli-backend";
 
-/** Fresh throwaway project directory per spawn: the CLI records its cwd as the agent file plane, so a spawn must never sit in the developer repo. */
+/** The CLI records its cwd as the agent file plane, so a spawn must never sit in the developer repo. */
 const DUMMY_LLM: LLMProviderConfig = {
   name: "fake", baseURL: "http://localhost:0", headers: {}, model: "fake-model",
 };
@@ -41,9 +41,7 @@ function runCli(home: string, args: string[], extraEnv: Record<string, string> =
   });
 }
 
-/** Same spawn, not blocking the loop — a test that answers the CLI's own HTTP
- *  request cannot use `spawnSync`, because the server it must reply from lives
- *  on the loop `spawnSync` holds. */
+/** Async: the HTTP server the CLI calls lives on the loop `spawnSync` would hold. */
 async function runCliServed(home: string, args: string[], extraEnv: Record<string, string> = {}) {
   const proc = Bun.spawn({
     cmd: [process.execPath, cliBin, ...args],
@@ -62,9 +60,7 @@ async function runCliServed(home: string, args: string[], extraEnv: Record<strin
   return { stdout, stderr, exitCode };
 }
 
-/** A workspace the way `kinu create` makes one — the production schema, not a
- *  copy of it. A hand-written DDL here was green only while production
- *  reconciled the columns it lacked on open; now a shipped DDL is its genesis. */
+/** The production schema via `kinu create`, not a hand-written DDL copy. */
 async function createLocalAgent(home: string, name: string): Promise<void> {
   const dir = join(home, name);
   mkdirSync(dir, { recursive: true });
@@ -73,15 +69,9 @@ async function createLocalAgent(home: string, name: string): Promise<void> {
   try {
     await createWorkspace(db, { name, purpose: "Test purpose", llm: DUMMY_LLM });
     initWorkspaceSchema(makeWorkspaceSchemaSql(db));
-    // WHOSE rows. `search_nodes` and `agent_log` are actor-private now, and the
-    // read models resolve the owner with `openWorkspaceMainActor` — so the seed
-    // takes the actor `createWorkspace` already issued rather than minting a
-    // second main, which the directory refuses. A row under any other id is
-    // silently invisible to `kinu mcts` and `kinu events`, not an error.
+    // `search_nodes` and `agent_log` are actor-private: seed under the main actor `createWorkspace` issued;
+    // rows under any other id are silently invisible to `kinu mcts` and `kinu events`.
     const actorId = openWorkspaceMainActor(makeSql(db)).actorId;
-    // `kinu memory` reassembles the document from MemoryStore's index of it,
-    // which is a table this read-only path can open (see local-inspection.ts).
-    // Deliberately unscoped: memory chunks are one catalogue per workspace.
     db.run("INSERT INTO memory_chunks (id, path, start_line, end_line, hash, text, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
       ["c1", "memory/MEMORY.md", 0, 2, "h", "# Memory\n\nhello local memory\n", 2]);
     db.run("INSERT INTO search_nodes (actor_id, id, parent_id, root_id, task, action, observation, visits, value, depth, status, created_at) VALUES (?, ?, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?)", [
@@ -119,18 +109,14 @@ test("a genuinely unreadable workspace names its cause instead of hiding it", ()
   const home = scratchDir("cli-unreadable");
   const dir = join(home, "broken-ws");
   mkdirSync(dir, { recursive: true });
-  // Not a database at all — the one condition that legitimately reaches the
-  // handler. An unopenable file must still say why.
+  // Not a database: the one condition that legitimately reaches the handler.
   writeFileSync(join(dir, "agent.db"), "this is not sqlite\n");
 
   const list = runCli(home, ["list"]);
   expect(list.exitCode).toBe(0);
   expect(list.stdout.toString()).toContain("unreadable:");
 
-  // Parse the structured diagnostic and assert its contract fields: the stable
-  // dotted event name, classification, cause chain, and workspace.
-  // Rendered-line assertions can fail on formatting improvements that preserve
-  // those fields.
+  // Assert contract fields, not rendered lines, which may change formatting.
   const line = list.stderr.toString().trim().split('\n')
     .find((row) => row.includes('workspace.read_failed'));
 
@@ -143,7 +129,6 @@ test("a genuinely unreadable workspace names its cause instead of hiding it", ()
     fields: v.object({ workspace: v.literal('broken-ws') }),
   }), JSON.parse(line));
 
-  // The cause must name what the environment said, not just that something failed.
   expect(diagnostic.cause).toContain('not a database');
 });
 
@@ -170,8 +155,6 @@ describe("CLI inspection commands", () => {
 
     const executors = runCli(home, ["executors", "localtest"]);
     expect(executors.exitCode).toBe(0);
-    // The one executor: the machine is the workspace, and its row carries
-    // the toolchain probed on this machine.
     expect(executors.stdout.toString()).not.toContain("device");
     expect(executors.stdout.toString()).toContain("native_binary");
   });
@@ -181,8 +164,6 @@ describe("CLI inspection commands", () => {
     await createLocalAgent(home, "localtest");
     const llmEnv = { KINU_BASE_URL: "http://localhost:1/v1", KINU_AUTH: "Bearer x" };
 
-    // Bare model ids get the configured fallback provider, exactly like
-    // /model inside a live chat session (one normalizer, no drift).
     const bare = runCli(home, ["model", "localtest", "gpt-4o-mini"], llmEnv);
     expect(bare.exitCode).toBe(0);
     expect(bare.stdout.toString()).toContain("workers-ai/gpt-4o-mini");
@@ -193,8 +174,7 @@ describe("CLI inspection commands", () => {
 
     const stored = runCli(home, ["model", "localtest"], llmEnv);
     expect(stored.stdout.toString()).toContain("workers-ai/@cf/meta/llama-3.1-8b-instruct");
-    // Workspace-scoped on purpose: a workspace's model choice must never become
-    // every other command's default, so the global config gains no model here.
+    // Workspace-scoped: the global config must not gain a model here.
     const configPath = join(home, "config.json");
 
     const globalModel = existsSync(configPath)
@@ -279,8 +259,7 @@ describe("CLI inspection commands", () => {
     expect(unknownProvider.stdout.toString()).not.toContain("set unknown/model");
   });
 
-  // `jobs` and `triggers` branch on opts.json in their command bodies but were
-  // never given the flag, so commander rejected the documented invocation.
+  // `jobs` and `triggers` read opts.json, so commander must accept `--json`.
   test("jobs and triggers accept --json like every sibling inspector", async () => {
     const home = scratchDir("cli-json");
     await createLocalAgent(home, "localtest");
@@ -292,9 +271,7 @@ describe("CLI inspection commands", () => {
     }
   });
 
-  // The local one-shot registration wrote its fire time into the spec
-  // (`atMs`) where core keeps it in next_fire_at only. Both halves are
-  // pinned: the stored row and the printed line.
+  // The fire time lives in next_fire_at only, not the spec's `atMs`.
   test("a one-shot local trigger stores its fire time in next_fire_at, not the spec", async () => {
     const home = scratchDir("cli-timer");
     await createLocalAgent(home, "localtest");
@@ -319,47 +296,29 @@ describe("CLI inspection commands", () => {
     }
   });
 
-  /**
-   * `kinu spend` must say the dollar total is a floor when it is one.
-   *
-   * Two ways a priced total comes out short, and they are DIFFERENT facts: a
-   * call the catalog could not price at all, and a call it priced at a rate
-   * published for another cache-retention tier (`Usage.cacheWrite1h` \u2014 the tier
-   * `cache-breakpoints.ts` really does ask Anthropic for, priced at the one
-   * `cache_write` rate models.dev publishes, which is the 5m one). Before this,
-   * `kinu spend` printed `$0.0340` for both and `--json` was the only way to
-   * tell an estimate from a price, which is the whole gap.
-   */
+  /** `kinu spend` marks the total as a floor, naming unpriced calls and `cacheWrite1h` calls priced at the 5m rate. */
   test("kinu spend names BOTH reasons its dollar total is a floor", async () => {
     const home = scratchDir("cli-spend");
     await createLocalAgent(home, "localtest");
 
-    // Rows in the shape the producers write them: `buildModelCallEvent` sets
-    // `usdFloorTokens` from `priceCall`, and omits it when the price is exact.
     const db = new Database(join(home, "localtest", "agent.db"));
 
     try {
       const actorId = openWorkspaceMainActor(makeSql(db)).actorId;
 
-      /** The `model_call` payload fields this read model looks at, so the seed
-       *  carries a value contract rather than a bag of unknowns. */
       const rows: Array<{
         source: SpendSource;
         usage: Usage;
         usd?: number;
         usdFloorTokens?: number;
       }> = [
-        // Priced exactly: no marker at all.
         { source: "judge", usage: { input: 1_000, output: 100 }, usd: 0.0165 },
-        // Priced, and short: 512 of its written tokens used the 1h tier.
         {
           source: "judge",
           usage: { input: 2_048, output: 100, cacheWrite: 1_024, cacheWrite1h: 512 },
           usd: 0.0175,
           usdFloorTokens: 512,
         },
-        // Measured and unpriceable: the other floor reason, so the line has to
-        // carry both rather than whichever one it met first.
         { source: "fast", usage: { input: 500, output: 50 } },
       ];
 
@@ -380,17 +339,12 @@ describe("CLI inspection commands", () => {
       JSON.parse(json.stdout.toString()),
     );
 
-    // The read model saw exactly one of each, so the prose below has two
-    // reasons to state and neither is a formatting accident.
     expect(parsed.total).toEqual({ unpricedCalls: 1, floorPricedCalls: 1 });
 
     const printed = runCli(home, ["spend", "localtest"]);
     expect([printed.exitCode, printed.stderr.toString()]).toEqual([0, ""]);
     const out = printed.stdout.toString();
-    // The figure itself still prints \u2014 a qualifier that replaced the number
-    // would be a different defect.
     expect(out).toContain("$0.0340");
-    // …and it prints QUALIFIED, naming both reasons.
     expect(out).toContain("The dollar total is a floor");
     expect(out).toContain("1 measured call carried no models.dev rate");
     expect(out).toContain("1 priced call wrote cache at a retention tier the catalog does not rate");
@@ -398,29 +352,16 @@ describe("CLI inspection commands", () => {
 });
 
 /**
- * `kinu events` renders the same rows whichever backend holds the workspace.
- *
- * It did not: cf's `listRecentEvents` answered `{ events: [...] }` where every
- * sibling list read answered a bare array, the row formatter's array parse
- * failed, and the raw JSON was dumped instead — so a cloud workspace printed
- * JSON and a local one printed rows, exit 0 either way.
- *
- * The cloud half is served locally, so the shape below is a fixture. That the
- * real orchestrator produces exactly this shape is asserted against a real
- * actor in cf-backend's unit-inspect-row-shapes.test.ts; here it buys the half
- * a type could not — what the user actually sees.
+ * `kinu events` renders the same rows for either backend. The cloud shape here is a fixture; cf-backend's
+ * unit-inspect-row-shapes.test.ts asserts the real orchestrator produces it.
  */
 describe("kinu events rendering", () => {
-  /** The orchestrator's projection of the one event `createLocalAgent` seeds. */
   const CLOUD_ROW = {
     id: "event-1", trace_id: "trace-1", caused_by: null, ingress: "chat_ws",
     variant: "chat", trust: "owner", priority: "normal",
     payload_visibility: "full", payload: { text: "hello" }, received_at: 4,
   };
 
-  /** The two answers this read has ever given: a list of rows, and the envelope
-   *  that stopped it being formatted. Named, because the second one is served
-   *  deliberately below rather than being a shape the fixture might drift into. */
   type EventsAnswer = readonly (typeof CLOUD_ROW)[] | { readonly events: readonly (typeof CLOUD_ROW)[] };
 
   async function eventsAgainstCloud(home: string, result: EventsAnswer) {

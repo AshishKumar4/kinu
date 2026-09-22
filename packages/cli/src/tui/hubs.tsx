@@ -18,13 +18,11 @@ export interface TuiAgentHubEntry {
   readonly kind: 'main' | 'subordinate' | 'swarm-node';
   readonly status: 'idle' | 'running' | 'needs-you' | 'failed' | 'settled';
 
-  /** Role/tier are shown when known — the open agent's come from its live
-   *  status; a peer's own database is not opened just to label a row. */
+  /** A peer's database is not opened just to label a row. */
   readonly roleId?: string;
   readonly tierId?: string;
   readonly workspace: string;
   readonly task?: string;
-  /** The conversation this TUI session has open. */
   readonly current?: boolean;
 }
 
@@ -34,16 +32,10 @@ const AGENT_KIND_LABEL = {
   'swarm-node': 'swarm node',
 } as const satisfies Record<TuiAgentHubEntry['kind'], string>;
 
-/**
- * The Agent Hub's rows, projected live from the navigator roster: the current
- * VIRTUAL WORKSPACE's members — peers as equals, their subordinates nested —
- * with the open agent carrying its live role/tier. Cloud workspaces list the
- * open workspace only: the CLI holds no facet roster for one.
- */
+/** Cloud workspaces list the open workspace only: the CLI holds no facet roster. */
 export function buildAgentHubEntries(input: {
   items: readonly TuiAgentSummary[];
   current: { name: string; mode: 'local' | 'cloud' };
-  /** The open agent's own live row (role/tier from its status). */
   currentEntry: TuiAgentHubEntry;
   projectRoot: string;
 }): TuiAgentHubEntry[] {
@@ -67,8 +59,7 @@ export function buildAgentHubEntries(input: {
   return members.flatMap((member) => {
     const own = member.name === current.name && member.mode === current.mode;
 
-    // The roster's label is the display authority (an untitled agent carries
-    // ''); the live entry keeps only role/tier and the running status.
+    // The roster label is the display authority; the live entry adds only role/tier and status.
     const row: TuiAgentHubEntry = own
       ? { ...currentEntry, label: agentDisplayLabel(member), workspace, current: true }
       : {
@@ -88,8 +79,7 @@ export function buildAgentHubEntries(input: {
         workspace,
       } satisfies TuiAgentHubEntry;
 
-      // Role and tier render as one `role/tier` pair, so they are carried as
-      // one: a row that knows only half shows neither.
+      // Role and tier render as one pair: knowing only half shows neither.
       if (subordinate.roleId === undefined || subordinate.tierId === undefined) return base;
 
       return { ...base, roleId: subordinate.roleId, tierId: subordinate.tierId };
@@ -113,7 +103,6 @@ export interface TuiHubData {
 
 const HUB_TITLES = { agents: 'Agent Hub', roles: 'Role Hub', tiers: 'Tier Hub' } as const;
 
-/** A role row reads as live, offered, or out of reach. */
 function roleStateColor(colors: TuiThemeColors, active: boolean, available: boolean): string {
   if (active) return colors.intent.accent;
 
@@ -131,8 +120,7 @@ export function HubOverlay(props: {
   readonly data: TuiHubData;
   readonly width: number;
   readonly height: number;
-  /** The keybinding hint for one-click creation, shown on the agents view.
-   *  Absent when the host wired no creator (`onNewAgent`). */
+  /** Absent without `onNewAgent`. */
   readonly newAgentHint?: string;
 }) {
   const { colors } = useTuiTheme();

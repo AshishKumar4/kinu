@@ -1,13 +1,6 @@
 /**
- * The host filesystem as a file plane.
- *
- * Locally the agent IS on the machine, so the plane is node:fs directly — no
- * tunnel, no consent round-trip. `createCwdPlaneVFS` narrows it to the
- * directory a session was started in, which is the workspace plane of every
- * agent bound there.
- *
- * Writes snapshot into the same shadow-git checkpoints the bound shell uses,
- * so /undo covers file-plane mutations too.
+ * The host filesystem as a file plane, via node:fs. Writes snapshot into the
+ * bound shell's shadow-git checkpoints, so /undo covers them.
  */
 
 import * as fs from 'node:fs/promises';
@@ -26,9 +19,8 @@ function isVfsErrorCode(code: string): code is VfsErrorCode {
   return code in ERRNO;
 }
 
-/** node:fs errno → the core VfsError shape mounts are contracted to throw.
- *  Codes core does not model (EMFILE, ELOOP, …) pass through untranslated
- *  rather than being flattened into a lie about what went wrong. */
+/** node:fs errno → core VfsError. Codes core does not model (EMFILE, ELOOP, …)
+ *  pass through untranslated. */
 function nodeError(input: { error: unknown }): v.InferOutput<typeof nodeErrorSchema> | null {
   const parsed = v.safeParse(nodeErrorSchema, input.error);
 
@@ -95,28 +87,10 @@ function createHostMountVFS(checkpoints: FileCheckpoints | undefined): VFS {
 }
 
 /**
- * The physical working directory as the workspace file plane.
- *
- * A local agent's canonical files ARE the directory it was started in: every
- * peer agent bound to that directory reads the same bytes, and a `shell` command
- * and a `file` read address one tree instead of two. What the agent knows
- * about ITSELF — SOUL.md, its scaffold, its memory, its transcripts — stays in
- * the SQLite-backed plane behind `agentStateVfs`, so none of it is ever
- * written into the user's project.
- *
- * Three families of address name this one directory, and each has a live
- * producer, so the plane accepts all three rather than half of them:
- *
- *   relative       `src/x.ts`                the `file` tool, the shell's cwd
- *   plane root     `/workspace/skills/a.md`  core's SKILLS_DIR, release work roots
- *                  `/home/user/x`            workspacePath(), the prompt's root
- *                  `/`                       the mount table's root listing
- *   real absolute  `/home/me/proj/src/x.ts`  what the host shell itself prints
- *
- * Anything else absolute is refused with EACCES naming the path. That refusal
- * guards against path confusion; it is not a sandbox. The workspace shell
- * reaches the whole machine under the approval policy, and the check is
- * lexical, so a symlink inside the tree still points where it points.
+ * The working directory as the workspace file plane; agent state stays in
+ * `agentStateVfs`. Accepts relative paths, plane-root aliases (`/workspace`,
+ * `/home/user`, `/`) and real absolute paths inside the tree; anything else is
+ * EACCES. A lexical guard against path confusion, not a sandbox.
  */
 export function createCwdPlaneVFS(cwd: string, checkpoints: FileCheckpoints | undefined): VFS {
   const root = resolve(cwd);
@@ -125,9 +99,7 @@ export function createCwdPlaneVFS(cwd: string, checkpoints: FileCheckpoints | un
   const hostPath = (path: string): string => {
     const direct = isAbsolute(path) ? resolve(path) : resolve(root, path || '.');
 
-    // A real path inside the directory wins over every alias: the filesystem
-    // is the authority on its own names, and this is the address the host
-    // shell just printed.
+    // A real path inside the directory wins over every alias.
     if (withinRoot(root, direct)) return direct;
     const inner = isAbsolute(path) ? planeRootRelative(path) : null;
 
@@ -151,20 +123,14 @@ export function createCwdPlaneVFS(cwd: string, checkpoints: FileCheckpoints | un
   };
 }
 
-/**
- * Absolute prefixes that name the plane's own root. One table, so a fourth
- * spelling cannot end up honoured by half the operations.
- */
+/** One table, so a new spelling cannot be honoured by only some operations. */
 const PLANE_ROOTS: readonly string[] = ['/', WORKSPACE_ROOT, '/workspace'];
 
-/** The remainder of an absolute path under a plane root, or null when the path
- *  names something else entirely. */
 function planeRootRelative(path: string): string | null {
   for (const planeRoot of PLANE_ROOTS) {
     if (path === planeRoot) return '';
 
-    // `/` names the root and nothing beneath it: `/etc/passwd` is a real
-    // absolute path, never `<cwd>/etc/passwd`.
+    // `/` names the root only: `/etc/passwd` is never `<cwd>/etc/passwd`.
     if (planeRoot !== '/' && path.startsWith(`${planeRoot}/`)) return path.slice(planeRoot.length + 1);
   }
 

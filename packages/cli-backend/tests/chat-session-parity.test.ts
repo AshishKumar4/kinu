@@ -1,4 +1,3 @@
-/** Conversation and recovery contracts, independent of the physical storage layout. */
 import { describe, expect, test } from 'bun:test';
 import * as v from 'valibot';
 import { runParityScenario } from './chat-session-parity';
@@ -6,9 +5,6 @@ import { runParityScenario } from './chat-session-parity';
 describe('ChatSession steering and recovery', () => {
   test('steering preserves conversation ancestry and consumes pending sends across restart', async () => {
     const now = await runParityScenario();
-    // Each landing as the turn decided it: two read at its step, three handed
-    // back by the interrupt, four acknowledged by a process that then died,
-    // five a turn of its own.
     expect(now.landings).toEqual({ landingTwo: 'mid-turn', landingThree: 'cancelled', returned: ['three-steer'], landingFour: 'acknowledged', landingFive: 'turn' });
     const rows = v.parse(v.array(v.object({ id: v.string(), parentId: v.nullable(v.string()), role: v.string(), content: v.string() })), now.afterTwo.actorMessages);
     expect(rows.map(row => row.content)).toEqual(['one', 'answer one', 'two', 'two-steer', 'answer two']);
@@ -27,10 +23,7 @@ describe('ChatSession steering and recovery', () => {
   });
 
   test('AN INTERRUPTED TURN CONTINUES: the restart re-opens the dead turn where it stopped', async () => {
-    // The turn the dead process was inside — "four", cut at a tool call the
-    // model had issued and the tool had answered — is not run again from its
-    // words. The restarted process re-opens it under the same opening row and
-    // re-enters what it had produced, so:
+    // The dead process's turn is re-opened under the same row and re-enters its produced tool call rather than rerunning:
     const now = await runParityScenario();
     const rows = v.parse(v.array(v.object({ id: v.string(), parentId: v.nullable(v.string()), role: v.string(), content: v.string() })), now.end.actorMessages);
     const four = rows.filter((row) => row.role === 'user' && row.content === 'four');

@@ -1,23 +1,11 @@
-// Typed, expiring JSON records in KV — one home for the two rules every
-// KV caller here would otherwise restate.
-//
-// KV were written by some earlier deployment, so they are outside the type
-// system: every read is parsed against the schema its writer used, and a
-// record that does not parse is a real fault, not an absent key.
-//
-// KV refuses an `expirationTtl` below 60 seconds. Callers hold an absolute
-// expiry, not a TTL, so the conversion lives here and floors at 60: a record
-// with less than a minute left may outlive its own deadline by up to a minute,
-// which is harmless because the deadline is inside the record and every reader
-// checks it.
+// Typed, expiring JSON records in KV. A record that fails its schema is a fault, not an absent key.
+// KV refuses an `expirationTtl` below 60 seconds, so TTLs floor at 60; readers check the in-record deadline.
 
 import * as v from 'valibot';
 
 const MIN_TTL_SECONDS = 60;
 
-/** The KV surface this Worker's expiring state actually uses. A `KVNamespace`
- *  binding satisfies it structurally, and a test double can satisfy it without
- *  impersonating forty overloads of a bulk-read API nothing here calls. */
+/** The KV surface used here; a `KVNamespace` binding satisfies it structurally. */
 export interface KvStore {
   get(key: string): Promise<string | null>;
   put(key: string, value: string, options: { expirationTtl: number }): Promise<void>;
@@ -26,8 +14,7 @@ export interface KvStore {
 
 type KvJson = string | number | boolean | null | readonly KvJson[] | { readonly [key: string]: KvJson };
 
-/** What a writer stores: a record, never a bare scalar, because every reader
- *  parses it back with a schema and every schema here is over a record. */
+/** Always a record: every reader parses with a record schema. */
 type KvRecord = { readonly [key: string]: KvJson };
 
 export async function readKvJson<Schema extends v.GenericSchema>(

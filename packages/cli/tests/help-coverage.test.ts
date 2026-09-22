@@ -3,7 +3,6 @@ import type { Command } from 'commander';
 import { buildProgram } from '../src/program';
 import { printHelp } from '../src/display';
 
-/** Every runnable path in the registered tree, as the user would type it. */
 function registeredPaths(cmd: Command, prefix = ''): string[] {
   return cmd.commands.flatMap((sub) => {
     const path = `${prefix}${sub.name()}`;
@@ -18,7 +17,6 @@ function stripAnsi(text: string): string {
 
 describe('root help', () => {
   const program = buildProgram();
-  // printHelp is the seam bin/cli.ts serves --help from; capture what it prints.
   const logged: string[] = [];
   const originalLog = console.log;
   console.log = (message?: string) => { logged.push(message ?? ''); };

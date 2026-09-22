@@ -1,22 +1,6 @@
 /**
- * The durable progress store's own tests.
- *
- * The property this module exists for is that an eval tier which dies mid-corpus
- * loses nothing, repeats nothing, and still COUNTS what it did not do. So almost
- * every case here crosses a simulated process boundary: `openEvalProgress` on a
- * directory a previous store already wrote IS the next process reading what the
- * last one left behind, and a store that only holds together inside one process
- * solves none of the problem it was built for.
- *
- * The three shapes worth naming, because each one was a real defect:
- *
- *   - work that finished and was thrown away, because the process died before
- *     the observation reached the record;
- *   - work that was repeated, because a restart could not tell a finished
- *     episode from an unstarted one;
- *   - work that was never done and never noticed, because a case the run did
- *     not reach was an ABSENCE, and nothing counts an absence. That is the one
- *     the five-state census exists for.
+ * Most cases cross a simulated process boundary: `openEvalProgress` on a directory a previous
+ * store wrote is the next process reading what the last one left.
  */
 import { describe, expect, test } from 'bun:test';
 import { join } from 'node:path';
@@ -29,10 +13,7 @@ import {
 
 const root = scratchDir('eval-progress');
 
-/** One case run end to end, the way a suite runs it: in flight, then finished
- *  with its output and its verdict, then recorded downstream. Three call sites
- *  need this sequence identically — a census that read a phase written out of
- *  order would be measuring the helper rather than the store. */
+/** One case end to end, in the order a suite runs it: in flight, finished, recorded downstream. */
 function runToSettled(store: EvalProgressStore, taskId: string, outcome: CaseOutcome): void {
   const key = caseKey(taskId, 0);
   store.markStarted(key);
@@ -47,8 +28,7 @@ describe('durable eval case progress', () => {
     const cases = [{ taskId: 'case-a', repetition: 0 }];
 
     const first = openEvalProgress(dir, 'shape-a');
-    // Declared before any work: a run that dies here still knows what it owed,
-    // and the case reads as not-run rather than as nothing at all.
+    // Declared before any work, so an unreached case reads as not-run.
     first.markPlanned(cases);
     const declared = openEvalProgress(dir, 'shape-a');
     expect(declared.record(key)?.phase).toBe('planned');
@@ -70,8 +50,7 @@ describe('durable eval case progress', () => {
     first.markSettled(key);
     const afterSettle = openEvalProgress(dir, 'shape-a');
     expect(afterSettle.record(key)?.phase).toBe('settled');
-    // The verdict travels with the settle stamp. A settled case that forgot how
-    // it ended cannot be counted, and the census is total or it is nothing.
+    // The verdict travels with the settle stamp; the census cannot count a case without it.
     expect(afterSettle.record(key)?.outcome).toBe('scored');
     expect(afterSettle.plan(cases)).toEqual({ todo: [], adopt: [] });
     expect([...afterSettle.settledKeys()]).toEqual([key]);
@@ -87,9 +66,7 @@ describe('durable eval case progress', () => {
     first.markStarted(key);
     first.markProgress(key, { answer: 'expensive' }, 'scored');
 
-    // The next process declares the same corpus on the way in. Declaring is not
-    // a reset: a finished episode stays adoptable, or resuming would repeat the
-    // one thing resuming exists to avoid.
+    // Declaring is not a reset: a finished episode stays adoptable.
     const second = openEvalProgress(dir, 'shape-redeclare');
     second.markPlanned(cases);
     expect(second.record(key)?.phase).toBe('progress');
@@ -117,9 +94,7 @@ describe('durable eval case progress', () => {
       adopt: [{ input: completed, output: { answer: 2 } }],
     });
 
-    // Operator cancellation classifies the in-flight case alone. Completed
-    // progress stays adoptable, and a settled case never reappears in either
-    // list — completed work is not repeated.
+    // Cancellation classifies only the in-flight case; settled cases never reappear.
     expect(resumed.markInFlightIncomplete('cancelled by operator'))
       .toEqual([caseKey(unfinished.taskId, unfinished.repetition)]);
     const afterCancel = openEvalProgress(dir, 'shape-b');
@@ -160,8 +135,7 @@ describe('durable eval case progress', () => {
     completed.markProgress(key, { answer: 1 }, 'scored');
     completed.markSettled(key);
 
-    // Newest by name, but a different run shape — it is neither adopted nor
-    // allowed to hide the older resumable directory.
+    // Newest by name but a different run shape: not adopted, and must not hide the older resumable directory.
     openEvalProgress(join(dir, 'behaviour-flash-300'), 'other-shape').markStarted(key);
 
     expect(findResumableEvalDir(dir, 'behaviour-flash-', 'shape-d', expected))
@@ -182,9 +156,7 @@ describe('an episode makes its own events durable as they land', () => {
     const live = openEvalProgress(dir, 'shape-act');
     live.markPlanned(cases);
     live.markStarted(key);
-    // The episode's own event stream, one call per event as the recorder writes
-    // it. Nothing here waits for the episode to finish, which is the point: the
-    // episode is about to not finish.
+    // Written per event, before the episode finishes.
     live.markActivity(key, { modelSteps: 1 });
     live.markActivity(key, { toolCalls: 1 });
     live.markActivity(key, { modelSteps: 1 });
@@ -199,15 +171,12 @@ describe('an episode makes its own events durable as they land', () => {
     restarted.markInFlightIncomplete('cancelled by operator (SIGINT)');
     const classified = openEvalProgress(dir, 'shape-act').record(key);
     expect(classified?.phase).toBe('incomplete');
-    // The classification does not erase the evidence. An interrupted case that
-    // reported nothing is indistinguishable from one that never began, and the
-    // difference is exactly what that spend bought.
+    // Classification keeps the evidence: an interrupted case that reported nothing looks unstarted.
     expect(classified?.activity).toEqual({ turns: 1, toolCalls: 2, modelSteps: 2 });
     // Never an outcome: an interruption is not pass, fail or inert.
     expect(classified?.outcome).toBeUndefined();
 
-    // The retry starts the tally over, because the retry starts the episode
-    // over. Carrying the old counts forward would double-count the work.
+    // A retry restarts the tally; carrying counts forward would double-count.
     restarted.markStarted(key);
     expect(openEvalProgress(dir, 'shape-act').record(key)?.activity).toBeUndefined();
   });
@@ -223,8 +192,7 @@ describe('an episode makes its own events durable as they land', () => {
     store.markProgress(key, { answer: 'done' }, 'scored');
     store.markSettled(key);
 
-    // What the episode DID is a fact about the episode, not about the reporting
-    // that followed it, so it survives both later transitions.
+    // What the episode did survives both later transitions.
     expect(openEvalProgress(dir, 'shape-act2').record(key)?.activity)
       .toEqual({ turns: 1, toolCalls: 3, modelSteps: 0 });
   });
@@ -276,20 +244,14 @@ describe('the five states partition the declared corpus', () => {
     expect(printed).toContain('1 scored, 1 inert, 1 errored, 1 incomplete');
     expect(printed).toContain('1 not-run');
     expect(printed).toContain('INCOMPLETE RUN — this is not a green result.');
-    // Named, not counted: a reader who has to diff two lists to find the case
-    // that was dropped will not do it.
+    // Named, not counted.
     expect(printed).toContain('never settled:    interrupted#0');
     expect(printed).toContain('never attempted:  unreached#0');
   });
 
   /**
-   * Each partial state ALONE, because together they hide each other.
-   *
-   * A run in which everything that ran came back scored looks finished from
-   * every angle except the corpus it declared. That is the shape the census was
-   * built for and the shape a test with both states present cannot prove: with
-   * an interrupted case in the fixture too, a `complete` that had forgotten
-   * about `notRun` entirely would still report false.
+   * Each partial state alone: with an interrupted case present, a `complete` that ignored
+   * `notRun` would still report false.
    */
   test('either partial state alone is enough to keep a run from reading as green', () => {
     const declared: EvalProgressCase[] = [
@@ -327,9 +289,7 @@ describe('the five states partition the declared corpus', () => {
     store.markStarted(key);
     store.markProgress(key, { answer: 'expensive' }, 'scored');
 
-    // `progress`, never `settled`: the episode finished and the process died on
-    // the way to the record. The work is done, so the case is scored — counting
-    // it as incomplete would ask the next run to buy it a second time.
+    // `progress`, never `settled`: the work is done, so the case is scored rather than re-bought.
     const census = openEvalProgress(dir, 'shape-progress').census(declared);
     expect(census.states.scored).toEqual(declared);
     expect(census.complete).toBe(true);
@@ -348,10 +308,8 @@ describe('the five states partition the declared corpus', () => {
     runToSettled(store, 'did-nothing', 'inert');
     runToSettled(store, 'broke', 'errored');
 
-    // A run in which the agent did nothing and the harness broke is a bad run
-    // and a COMPLETE one. Only an interruption and an unreached case make a run
-    // partial; conflating a finding with an unfinished run is how a red result
-    // gets retried until it goes away.
+    // Agent inaction plus a broken harness is a bad but complete run; only interrupted and
+    // unreached cases make it partial.
     const census = store.census(declared);
     expect(census.complete).toBe(true);
     expect(formatCaseCensus(census)).not.toContain('INCOMPLETE RUN');
@@ -359,8 +317,7 @@ describe('the five states partition the declared corpus', () => {
 });
 
 describe('a run killed mid-corpus resumes, and cannot report as green', () => {
-  /** Six cases: two settled, one finished but unrecorded, one in flight, two
-   *  never reached. That is what a `kill -9` between cases actually leaves. */
+  /** What a `kill -9` between cases leaves: two settled, one unrecorded, one in flight, two unreached. */
   const cases: EvalProgressCase[] = [
     { taskId: 'alpha', repetition: 0 },
     { taskId: 'alpha', repetition: 1 },
@@ -394,13 +351,11 @@ describe('a run killed mid-corpus resumes, and cannot report as green', () => {
     const dir = join(root2, 'behaviour-flash-1000');
     killedMidCorpus(dir);
 
-    // The next invocation finds the unfinished run rather than starting a new
-    // one. A completed run would not be offered.
+    // Finds the unfinished run; a completed run is not offered.
     const expected = new Set(cases.map((c) => caseKey(c.taskId, c.repetition)));
     expect(findResumableEvalDir(root2, 'behaviour-flash-', signature, expected)).toBe(dir);
 
-    // What the suite does on the way in: classify what was in flight, declare
-    // the corpus, then plan.
+    // Classify what was in flight, declare the corpus, then plan.
     const rerun = openEvalProgress(dir, signature);
     expect(rerun.markInFlightIncomplete('previous process ended before the case settled'))
       .toEqual([caseKey('beta', 1)]);
@@ -411,14 +366,12 @@ describe('a run killed mid-corpus resumes, and cannot report as green', () => {
     expect(plan.adopt).toEqual([{ input: cases[2], output: { answer: 'paid for' } }]);
     // Exactly the remainder: the interrupted case and the two never reached.
     expect(plan.todo).toEqual([cases[3], cases[4], cases[5]]);
-    // The two settled cases are in neither list.
     expect([...plan.todo, ...plan.adopt.map((a) => a.input)])
       .not.toContainEqual(cases[0]);
     // The interrupted attempt's evidence survived into the rerun's own state.
     expect(rerun.record(caseKey('beta', 1))?.activity)
       .toEqual({ turns: 0, toolCalls: 2, modelSteps: 1 });
 
-    // Finish the remainder, and only the remainder.
     for (const input of plan.todo) {
       const key = caseKey(input.taskId, input.repetition);
       rerun.markStarted(key);
@@ -433,7 +386,6 @@ describe('a run killed mid-corpus resumes, and cannot report as green', () => {
     const finished = openEvalProgress(dir, signature).census(cases);
     expect(finished.states.scored).toEqual(cases);
     expect(finished.complete).toBe(true);
-    // And the completed directory is no longer offered for resumption.
     expect(findResumableEvalDir(root2, 'behaviour-flash-', signature, expected)).toBeNull();
   });
 
@@ -443,10 +395,7 @@ describe('a run killed mid-corpus resumes, and cannot report as green', () => {
     const store = openEvalProgress(dir, signature);
     store.markInFlightIncomplete('previous process ended before the case settled');
 
-    // This is the expression the behaviour suite's last test asserts on, so a
-    // false here IS a red run. Before the census existed the unreached cases
-    // were absent from the record and the shorter denominator read as a
-    // finished measurement.
+    // The behaviour suite's last test asserts this, so false here is a red run.
     const census = store.census(cases);
     expect(census.complete).toBe(false);
     expect(census.states.notRun).toEqual([cases[4], cases[5]]);

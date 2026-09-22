@@ -1,7 +1,4 @@
-/** What a walk actually asks of a filesystem: listing and stat, where a stat
- *  is a size, a timestamp and a bare `isDir` — the narrow shape the workspace
- *  plane and its mount table speak. One walk primitive serves every plane
- *  shaped that way. */
+/** The listing/stat shape a walk needs; `isDir` rather than a Node-style Stats. */
 export type WalkStat = { size: number; mtimeMs: number; isDir: boolean };
 
 export type WalkableVFS = {
@@ -16,22 +13,13 @@ export interface FileEntry {
 
 export interface WalkResult {
 	entries: FileEntry[];
-	/** True when the walk stopped at maxEntries — the caller MUST surface
-	 *  this, or a bounded listing is indistinguishable from a complete one. */
+	/** Hit maxEntries; callers must surface it, or a bounded listing reads as complete. */
 	truncated: boolean;
-	/** True when a subtree was skipped because it lay below maxDepth. Callers
-	 *  surface it when the depth was a default guard, not when the user asked
-	 *  for that depth (find -maxdepth). */
+	/** A subtree lay below maxDepth; surface it when the depth was a default guard, not user-chosen. */
 	depthPruned: boolean;
 }
 
-/**
- * Recursively walk a VFS directory tree, collecting file and directory
- * entries. The bounds are runaway guards for degenerate trees, and hitting
- * either is REPORTED so the consumer can say so — a silently bounded walk
- * turns "grep found nothing" into a falsehood on any tree larger than the
- * bound.
- */
+/** Recursively walk a VFS tree. Hitting either bound is reported so an empty result is not a false negative. */
 export async function walkRecursive(
 	vfs: WalkableVFS,
 	base: string,
@@ -56,14 +44,12 @@ export async function walkRecursive(
 			let caught: WalkStat | null;
 
 			try { caught = await vfs.stat(full); } catch (error) {
-				// ENOENT is an entry that vanished between readdir and stat.
-				// Anything else is a real walk failure.
+				// ENOENT: entry vanished between readdir and stat; anything else is a real failure.
 				if (!(error instanceof Error && 'code' in error && error.code === 'ENOENT')) throw error;
 				continue;
 			}
 
-			// A null stat is the same skip, for the same reason. The workspace
-			// plane stats a vanished entry as null instead of throwing ENOENT.
+			// The workspace plane stats a vanished entry as null instead of throwing ENOENT.
 			if (caught === null) continue;
 			entries.push({ path: full, stat: caught });
 

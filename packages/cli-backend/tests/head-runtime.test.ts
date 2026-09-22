@@ -1,9 +1,4 @@
-// createCLIHeadRuntime — local in-process branching heads. A head is a FORK of
-// the parent runtime: the parent's real host executor + files, a private durable
-// scratch. These tests drive a full HeadController split → run → merge cycle with
-// a prompt-aware fake model, assert the head's real tool surface, and prove the
-// runtime-level fork capability (real /parent files + real `run device` exec)
-// that the caffe fork lacked — all without a network LLM.
+// createCLIHeadRuntime: a head forks the parent's host executor and files, with a private durable scratch.
 import { describe, test, expect } from 'bun:test';
 import { Database } from 'bun:sqlite';
 import { writeFileSync, existsSync, readdirSync } from 'node:fs';
@@ -32,31 +27,18 @@ import { createHeadRuntime, headSeatFactory, localTestActorHost } from './actor-
 import { openLocalActor } from '../src/actor-identity';
 import { LocalAgentSession } from '../src/local-session';
 
-// A head owns NO store of its own: it is a logical actor of the
-// workspace it forks, so there is no KINU_HOME scratch boundary to point
-// anywhere and no per-head file for a test to sweep. What a head has instead is
-// its own actor-keyed rows in the parent's one database and its own home in the
-// one file plane — both asserted below.
+// A head owns no store: its rows are actor-keyed in the parent's one database.
 
-/** A never-called web provider — the surface tests only inspect tool NAMES. */
 const stubWeb: WebSearchProvider = {
   search: async () => ({ query: '', results: [], source: 'duckduckgo' }),
   fetch: async () => ({ url: '', title: '', markdown: '', retrievedAt: '' }),
 };
 
-/**
- * A parent CLI runtime — the real execution surface every head forks, and the
- * ONE database every head it spawns lives in.
- *
- * The handle rides along because a head is hosted OVER it: `localTestActorHost`
- * needs the same connection the parent holds, not a second one.
- */
+/** A parent CLI runtime; `db` rides along because `localTestActorHost` needs the parent's own connection. */
 type LocalParent = CLIRuntime & { readonly db: Database };
 
 type DoGenerateResult = Awaited<ReturnType<LanguageModelV2['doGenerate']>>;
 
-/** The doGenerate reply both probe models below answer with. Only the modelId
- *  naming the fixture differs, so it is the parameter. */
 function probeEnvelope(
   modelId: string,
 ): (content: DoGenerateResult['content'], finishReason: 'tool-calls' | 'stop') => DoGenerateResult {
@@ -69,7 +51,6 @@ function probeEnvelope(
   });
 }
 
-/** Every local runtime installs one, so its absence is a broken fixture. */
 function routerOf(rt: AgentRuntime): ExecutionRouter {
   return present(rt.executionRouter, 'the runtime execution router');
 }
@@ -77,12 +58,7 @@ function routerOf(rt: AgentRuntime): ExecutionRouter {
 function makeParent(cwd?: string): LocalParent {
   const dbPath = scratchPath('head-runtime-parent', 'parent.db');
   const db = new Database(dbPath);
-  // THE PRODUCTION INITIALIZER, before the runtime opens over it. Every head
-  // this parent spawns is acquired from a real host and takes CLAIMED turns on
-  // its own actor-keyed rows, so the workspace needs the tables a turn writes —
-  // the admission ledger, its raw working revisions, the world model, the
-  // journal. `createCLIRuntime` creates only the handful a bare runtime reads
-  // on its own first touch, because a branch worker legitimately has no more.
+  // Production initializer first: hosted heads take claimed turns, which need tables `createCLIRuntime` does not create.
   initWorkspaceSchema(makeWorkspaceSchemaSql(db));
 
   const config: Parameters<typeof createCLIRuntime>[1] = {
@@ -95,16 +71,12 @@ function makeParent(cwd?: string): LocalParent {
   return Object.assign(createCLIRuntime(db, config), { db });
 }
 
-/** A governor over its own scratch ledger. A local head charges through this
- *  directly — the cf backend's has to cross a facet boundary to reach one. */
 function makeGovernor(): MissionGovernor {
   const db = new Database(':memory:');
 
   return new MissionGovernor({ actor: createTestActorsOver(db).main, storage: { sql: makeSql(db), execRaw: makeExecRaw(db) } });
 }
 
-/** A journal over its own scratch storage. A local head writes its steps here
- *  directly — the cf backend's has to cross a facet boundary to reach one. */
 function makeJournal(): HeadJournal {
   const db = new Database(':memory:');
   initHeadsTables(makeExecRaw(db));
@@ -112,46 +84,26 @@ function makeJournal(): HeadJournal {
   return new HeadJournal(makeSql(db), createTestActorsOver(db).main);
 }
 
-/** What the merge asked its binder for — the route it actually took. Shared by
- *  every deps builder below, so any merge in this file is measurable. */
 interface RouteProbe {
   readonly asked: Array<{ spec: string; effort: ReasoningEffort }>;
 }
 
-/** Head-runtime deps around a fresh parent, with test overrides.
- *
- *  `profile` and `bindMergeModel` are the merge's whole local surface: core's
- *  `headMergeLLM` resolves the `judge` route off the profile and hands the
- *  resolution here, so this binder records the routed decision and answers with
- *  the merge model. It deliberately does NOT answer with `model`: a binder that
- *  ignored the route could not tell a merge on the routed judge tier from one
- *  on the session's chat model at a hardcoded `'low'` effort filing `judge`
- *  spend. */
+/** Head-runtime deps around a fresh parent. The binder answers with the merge model, not `model`, so a merge
+ *  that ignored the `judge` route is detectable. */
 function headDeps(
   model: LanguageModel,
-  // `parentRuntime` narrowed to `LocalParent`: the host below needs the SAME
-  // connection the parent holds, and every caller that overrides it passes a
-  // `makeParent()` runtime, which carries its `db` by construction.
   over?: Partial<Omit<CLIHeadRuntimeDeps, 'parentRuntime'>> & { readonly parentRuntime?: LocalParent },
   probe?: RouteProbe,
 ): CLIHeadRuntimeDeps {
   const governor = makeGovernor();
   const journal = makeJournal();
   const parent = over?.parentRuntime ?? makeParent();
-  // ONE slot, held by the caller and read by the host — the fixture's copy of
-  // `LocalAgentSession.actorWrites`. A head's file attribution is per RUN, so
-  // the run's own `HeadCapture.files` arrives at `hostHead` and is filled in
-  // here before `acquire`; the host reads it while it builds the runtime. The
-  // same map has to reach both halves or the observer is set where nobody
-  // looks.
+  // One slot shared by caller and host (the fixture's `LocalAgentSession.actorWrites`), filled per run before `acquire`.
   const writes = new Map<string, WriteObserver>();
 
   return {
     model: () => model, parentRuntime: parent,
-    // THE GENUINE HOST. Every head this runtime spawns is acquired from it, so
-    // its session, stores and claimed loop are the production ones. `parent.db`
-    // is the ONE connection a hosted head shares with its parent, carried by
-    // `LocalParent` itself — so there is nothing here to narrow.
+    // The genuine host: heads acquired from it run the production session, stores and claimed loop.
     hostHead: headSeatFactory(parent, localTestActorHost(parent, parent.db, [], writes), 'fixture-run', writes),
     profile: async () => mergePolicyProfile(),
     bindMergeModel: (route) => {
@@ -168,15 +120,11 @@ function headDeps(
   };
 }
 
-/**
- * The storage key the directory issued for one head id, read back from the
- * directory rather than derived — the key is the directory's to mint.
- */
+/** The storage key the directory issued for one head id: read back, never derived. */
 function headStorageKey(parent: CLIRuntime, id: string): string {
   return openLocalActor(parent.actor, explorationActorKey(id)).storageKey;
 }
 
-/** Records the tool names the SDK hands a head's generateText call. */
 function capturingHeadModel(
   answer: string,
   sink: (names: string[]) => void,
@@ -211,8 +159,6 @@ const aHeadInput = (over?: Partial<HeadInput>): HeadInput => ({
   mode: over?.mode ?? 'build', loop: over?.loop ?? defaultLoopOrigin('head'),
 });
 
-/** A v2 generateText model that answers differently for a head run vs the merge
- *  synthesis (the merge prompt says "merging the findings of N … heads"). */
 function fakeHeadsModel(capture?: (options: {
   maxOutputTokens?: number;
   providerOptions?: LanguageModelV2CallOptions['providerOptions'];
@@ -350,11 +296,7 @@ describe('createCLIHeadRuntime — full split → run → merge', () => {
     expect(result.headIds).toHaveLength(2);
   });
 
-  // The merge is the one model call in a split that the head journal does not
-  // carry: `summarizeCost` folds the HEADS' reports (core heads/controller.ts:
-  // 611-624), so an unreported merge is spend nothing counts. The heads must NOT
-  // report through here — their usage comes back in the journal, and two writers
-  // for one call is how a workspace total learns to double-count.
+  // The merge is the one split call the head journal does not carry; heads reporting here would double-count.
   test('the merge reports its own spend as judge, and the heads report none', async () => {
     const reports: ModelCallReport[] = [];
     const db = new Database(':memory:');
@@ -389,19 +331,7 @@ describe('createCLIHeadRuntime — full split → run → merge', () => {
     });
   });
 
-  /**
-   * THE DRIFT THIS CLOSES, measured on the local side.
-   *
-   * The merge ran `deps.model()` — the SESSION'S CHAT MODEL — at a hardcoded
-   * `reasoningEffortOptions('low', …)`, and filed the result as `judge` spend.
-   * The Cloudflare merge resolved the `judge` route off the turn profile and ran
-   * at the deep tier's own effort. So one split, one account, two models, both
-   * reported as deep-tier grading.
-   *
-   * The expectation is `MERGE_POLICY_BINDING` from the shared fixture — the same
-   * value `unit-head-runtime-operations.test.ts` asserts on the cloud side over
-   * the same catalog. Two suites, one equality.
-   */
+  /** The merge runs the routed `judge` tier at its own effort; `MERGE_POLICY_BINDING` is shared with `unit-head-runtime-operations.test.ts`. */
   test('the merge takes the judge route, not the session model at a constant effort', async () => {
     const probe: RouteProbe = { asked: [] };
     const { controller } = controllerWithCLIRuntime(fakeHeadsModel(), probe);
@@ -417,8 +347,6 @@ describe('createCLIHeadRuntime — full split → run → merge', () => {
     });
 
     expect(probe.asked).toEqual([MERGE_POLICY_BINDING]);
-    // Both halves of the tier, stated separately so a half-routed merge — the
-    // routed model at somebody's constant effort — fails on the axis it dropped.
     expect(probe.asked[0]?.spec).toBe(MERGE_POLICY_JUDGE_MODEL);
     expect(probe.asked[0]?.effort).not.toBe('low');
   });
@@ -445,8 +373,6 @@ describe('createCLIHeadRuntime — full split → run → merge', () => {
     });
 
     expect(mergeOptions?.maxOutputTokens).toBeUndefined();
-    // The DEEP tier's effort, derived from the routed decision by the binder —
-    // not a `'low'` this seam names for itself.
     expect(mergeOptions?.providerOptions).toEqual({
       openai: { reasoningEffort: MERGE_POLICY_BINDING.effort },
     });
@@ -508,9 +434,7 @@ describe('createCLIHeadRuntime — full split → run → merge', () => {
   });
 
   test('allowedTools maps the PARENT vocabulary onto real tools (never empties)', async () => {
-    // The old bug: a fork with allowedTools:["shell"] was filtered against a
-    // disjoint sandbox_* head surface and silently ran with ZERO tools. Now the
-    // head's vocabulary IS the parent's, so ["shell"] resolves to exactly run.
+    // A fork's allowedTools use the parent's vocabulary: ["shell"] resolves to run, not to zero tools.
     let captured: string[] = [];
     const runtime = createCLIHeadRuntime(headDeps(capturingHeadModel('done', (t) => { captured = t; })));
     await (await runtime.spawnHead(aHeadInput({ allowedTools: ['shell'] }))).run();
@@ -531,18 +455,7 @@ describe('createCLIHeadRuntime — full split → run → merge', () => {
     expect(phases).toEqual(['split', 'merge']);
   });
 
-  /**
-   * The trace has to REACH the journal, not merely exist as a shape.
-   *
-   * This is the one property the Exploration surface's live branch view rests
-   * on, and the whole path was declared and connected nowhere: `head_steps`
-   * existed, `HeadJournal.appendStep` had no callers, and
-   * `HeadInferenceDeps.reportStep` was an optional seam with no provider — so
-   * `await deps.reportStep?.(…)` no-opped on every step of every head and every
-   * branch read "no step trace captured" for its whole life. Nothing failed;
-   * the pane was simply always empty. Asserting through `readRun`, the exact
-   * projection the surface reads, is what makes cutting that wire visible.
-   */
+  /** The trace must reach the journal: asserted through `readRun`, the projection the Exploration surface reads. */
   test('every head step reaches the journal, so a branch trace is readable', async () => {
     const { controller, journal } = controllerWithCLIRuntime(fakeHeadsModel());
 
@@ -628,24 +541,16 @@ describe('a local head forks the parent runtime (the caffe-fork capability)', ()
     await parent.storage.vfs.writeFile('hello.txt', 'from the parent workspace');
     const rt = await createHeadRuntime(parent, 'h');
 
-    // The parent's workspace, through the parent EXECUTOR — the exact thing the
-    // old :memory:-backed fork could not see.
     const parentExec = present(routerOf(rt).getProvider('parent'), 'the parent executor');
     expect(await parentExec.tools.readFile.execute('hello.txt')).toBe('from the parent workspace');
-    // And its real shell, in one call rather than a per-file walk.
     expect(v.parse(v.string(), await parentExec.tools.exec.execute('cat hello.txt')))
       .toContain('from the parent workspace');
 
-    // No device runtime: the machine is the workspace, and an unbound parent
-    // offers no machine at all.
     expect(routerOf(rt).getProvider('device')).toBeUndefined();
 
-    // Its own filesystem is PRIVATE scratch — not the host, not the parent.
     await rt.storage.vfs.writeFile(`/home/head-${rt.actor.storageKey}/scratch.txt`, 'head-only');
     expect(existsSync(join(dir, 'scratch.txt'))).toBe(false);
     expect(await parent.storage.vfs.exists('scratch.txt')).toBe(false);
-    // ONE DATABASE: the head's rows are the parent's file's rows, and its own
-    // actor id is what separates them.
     expect(rt.storage.sql).toBe(parent.storage.sql);
     expect(rt.actor.actorId).not.toBe(parent.actor.actorId);
   });
@@ -667,22 +572,10 @@ describe('a local head forks the parent runtime (the caffe-fork capability)', ()
 
     const run = toolExecute<{ command: string; runtime?: string }, string>(tools.shell);
     expect(String(await run({ command: 'cat note.txt' }))).toContain('real file content');
-    // No second shell over the same tree: a machine name is refused, not routed.
     await expect(run({ command: 'cat note.txt', runtime: 'device' })).rejects.toMatchObject({ code: 'unavailable' });
   });
 
-  /**
-   * A head's `workspace.*` plane reads AND writes the crafted-tool EMA
-   * (`crafted_tools` quality columns) through the same inline executor the parent registers —
-   * `listTools` quotes the score, `createTool` seeds the neutral prior — but over
-   * the head's OWN scratch database, which `buildCLIHeadRuntime` provisions
-   * itself. The parent's copy comes from `initWorkspaceSchema`; the scratch got
-   * the VFS, the memory store and the craft store and nothing else, so every one
-   * of those calls raised `no such table: crafted_tools` inside a head. A live
-   * delegation run died there after the turn had already been paid for, and
-   * `createTool` was worse than the raised read: the tool WAS written, then the
-   * seed threw and the model was told its tool had failed.
-   */
+  /** A head's `workspace.*` crafted-tool EMA calls run over its own scratch database, which must carry `crafted_tools`. */
   test('its own workspace plane scores the tools it crafts', async () => {
     const rt = await createHeadRuntime(makeParent(), 'h3');
     const workspace = present(routerOf(rt).getProvider('workspace'), 'the workspace executor');
@@ -697,8 +590,6 @@ describe('a local head forks the parent runtime (the caffe-fork capability)', ()
   });
 });
 
-/** Releases every caller only once `n` of them have arrived, running `onRelease`
- *  first. Lets a test assert on a moment when every concurrent head is mid-run. */
 function barrier(n: number, onRelease: () => void): () => Promise<void> {
   let arrived = 0;
   let open!: () => void;
@@ -711,13 +602,7 @@ function barrier(n: number, onRelease: () => void): () => Promise<void> {
   };
 }
 
-/**
- * A head model that scripts three steps against the `file` tool: write its own
- * marker into /local, wait until every sibling has written, then read it back.
- * The barrier is what makes the isolation assertion deterministic — both heads
- * have written before either reads, so a SHARED scratch would hand one of them
- * the other's marker.
- */
+/** Scripts write, wait, read on /local; the barrier means a shared scratch would hand one head the other's marker. */
 function scratchProbeModel(arrive: () => Promise<void>, scratchPathFor: (name: string) => string): LanguageModel {
   const stepsByHead = new Map<string, number>();
 
@@ -726,8 +611,6 @@ function scratchProbeModel(arrive: () => Promise<void>, scratchPathFor: (name: s
   return new TestLanguageModelV2({
     provider: 'fake', modelId: 'fake-scratch',
     doGenerate: async (opts) => {
-      // Which head this is: its own system prompt names its task, and every
-      // later step re-sends it.
       const marker = /Your task: (\w+)/.exec(JSON.stringify(opts.prompt ?? ''))?.[1] ?? 'unknown';
       const step = (stepsByHead.get(marker) ?? 0) + 1;
       stepsByHead.set(marker, step);
@@ -750,13 +633,6 @@ function scratchProbeModel(arrive: () => Promise<void>, scratchPathFor: (name: s
   });
 }
 
-/**
- * What a head's `file` read returned, from its own step trace.
- *
- * Read out of the journal, which is where a head's steps live now — the report
- * carries the outcome, not the trace. Passing the journal in also means this
- * asserts the trace ARRIVED, which is the property the surface depends on.
- */
 function readBack(journal: HeadJournal, rootId: string, headId: string): string {
   const head = journal.readRun(rootId)?.heads.find((h) => h.id === headId);
 
@@ -771,12 +647,7 @@ describe("a local head's state is its own actor's rows in the parent's ONE datab
   test('two concurrent heads keep separate homes and separate rows, in one file', async () => {
     const parent = makeParent();
     const journal = makeJournal();
-    // READ WHILE THE HEAD IS LIVE, then remembered. A head's directory row is
-    // retired the moment its seat releases, and a released name resolves to
-    // nothing — so the key the directory ISSUED is captured on the way in, where
-    // the model already addresses each head's home by it, rather than
-    // re-resolved after the run when there is no row left to answer with. Still
-    // the directory's answer, never a derived one.
+    // Captured while the head is live: a released head's directory row resolves to nothing.
     const issued = new Map<string, string>();
 
     const key = (id: string): string => {
@@ -802,17 +673,12 @@ describe("a local head's state is its own actor's rows in the parent's ONE datab
     for (const input of inputs) journal.insertSpawn(input);
     await Promise.all(inputs.map(async (input) => (await runtime.spawnHead(input)).run()));
 
-    // Private: each head read back its OWN marker, and the sibling's is absent.
-    // Read through the journal, so this also proves the trace arrived there.
     const root = inputs[0].rootId;
     expect(readBack(journal, root, 'alpha')).toContain('scratch-of-alpha');
     expect(readBack(journal, root, 'alpha')).not.toContain('scratch-of-beta');
     expect(readBack(journal, root, 'beta')).toContain('scratch-of-beta');
     expect(readBack(journal, root, 'beta')).not.toContain('scratch-of-alpha');
 
-    // ONE FILE. Two heads ran concurrently and neither opened a database: the
-    // separation is the actor their rows are keyed to, and the home their
-    // writes land in.
     expect(key('alpha')).not.toBe(key('beta'));
     expect(readdirSync(dirname(parent.db.filename)).filter((f) => f.endsWith('.db')))
       .toEqual([basename(parent.db.filename)]);
@@ -829,20 +695,12 @@ describe("a local head's state is its own actor's rows in the parent's ONE datab
     const input = aHeadInput();
     const report = await (await createCLIHeadRuntime(headDeps(exploding, { parentRuntime: parent })).spawnHead(input)).run();
     expect(report.status).toBe('errored');
-    // The seat was released and the actor retired even though the run threw —
-    // which is the whole reason the release lives in a `finally`.
     expect(() => openLocalActor(parent.actor, explorationActorKey(input.id)))
       .toThrow(expect.objectContaining({ code: 'missing' }));
   });
 });
 
-/**
- * A head model that writes its own file into the SHARED /parent, waits until
- * every sibling has done the same, and then extends it. The barrier is the whole
- * point: at the moment either head extends its file, BOTH heads' files exist on
- * the shared plane, so a design that answered "what did this head change?" by
- * diffing the workspace would hand each head the other's work too.
- */
+/** Writes into shared /parent, waits for siblings, then extends: a workspace diff would misattribute sibling work. */
 function sharedWorkspaceProbeModel(arrive: () => Promise<void>): LanguageModel {
   const stepsByHead = new Map<string, number>();
 
@@ -855,8 +713,6 @@ function sharedWorkspaceProbeModel(arrive: () => Promise<void>): LanguageModel {
       const step = (stepsByHead.get(marker) ?? 0) + 1;
       stepsByHead.set(marker, step);
 
-      // Through the parent EXECUTOR: that is where a head's writes to its
-      // parent land, and where attribution is recorded.
       const write = (content: string) => envelope([{
         type: 'tool-call' as const, toolCallId: `${marker}-${step}`, toolName: 'eval',
         input: JSON.stringify({
@@ -888,9 +744,6 @@ describe('a head reports the files IT changed, with concurrent siblings on the s
       (await runtime.spawnHead(aHeadInput({ id: 'beta', task: 'beta' }))).run(),
     ]);
 
-    // Each head reports exactly its own file, at its NET line count (two writes
-    // to that path, one entry, three lines) — written while the other head was
-    // still running, which is the smear scenario rather than a sequential one.
     expect(alpha.fileChanges).toEqual([
       { path: 'alpha.ts', status: 'added', added: 3, removed: 0 },
     ]);
@@ -907,10 +760,7 @@ describe('a head reports the files IT changed, with concurrent siblings on the s
 });
 
 describe("a head's eval holds the namespaces the shared description promises", () => {
-  // The description every backend renders promises `state.set`/`state.get` to
-  // every program. Red on 2026-09-05: the CLI head bound web and llm only, so a
-  // fork program calling `state.set` answered a bare ReferenceError while the
-  // same program on a hosted head ran.
+  // Every backend's description promises `state.set`/`state.get` to every program, CLI heads included.
   test('state.set and state.get work inside a local head, over its own scratch', async () => {
     const journal = makeJournal();
     let step = 0;
@@ -956,13 +806,9 @@ describe("a head's eval holds the namespaces the shared description promises", (
 });
 
 describe('createCLIHeadRuntime — the mission ledger', () => {
-  // A local head runs in the same process as the ledger, so its port is the
-  // governor itself. The invariant is the same on both backends: labels or
-  // nothing. Head execution caps were removed entirely, so this is the only
-  // remaining bound on a head's spend — and it must not become a default one.
+  // Labels or nothing: this is the only bound on a head's spend and must not become a default one.
   test('a head with no labels never touches the ledger', async () => {
     const governor = makeGovernor();
-    // A cap that WOULD refuse everything, if anything ever asked about it.
     governor.declare('someone-elses-mission', { tokens: 1 }, {});
     governor.debit(10_000, { labels: ['someone-elses-mission'], calls: 1 });
 
@@ -976,7 +822,6 @@ describe('createCLIHeadRuntime — the mission ledger', () => {
 
     expect(report.status).toBe('completed');
     expect(report.summary).toBe('did the work');
-    // The exhausted label is untouched: nothing bound this head to it.
     expect(governor.snapshot('someone-elses-mission')[0].calls).toBe(1);
   });
 
@@ -1018,15 +863,8 @@ describe('createCLIHeadRuntime — the mission ledger', () => {
   });
 });
 
-/**
- * Per-search models — `agents swarm` advertises a per-search `model` and the cf
- * backend honours it (subordinate-agent.ts resolves `input.model` per head). The CLI
- * ran `deps.model` for every head, so the field was a silent no-op here: a panel
- * asked for three vendors got three copies of one, and any measurement of panel
- * diversity on this backend would have compared a mixed panel against itself.
- */
+/** A per-search `model` from `agents swarm` is honoured per head, as on the cf backend. */
 describe('createCLIHeadRuntime — a fork runs the model it was given', () => {
-  /** Answers like a head and reports which model id served the call. */
   function labelledModel(id: string, seen: string[]): LanguageModel {
     return new TestLanguageModelV2({
       provider: 'fake', modelId: id,
@@ -1078,7 +916,6 @@ describe('createCLIHeadRuntime — a fork runs the model it was given', () => {
       resolveModel: (spec: string) => { throw new Error(`no such provider for ${spec}`); },
     }));
 
-    // One fork's bad model must not take down a split the siblings are running.
     const report = await (await runtime.spawnHead(aHeadInput({ id: 'h-a', model: 'nope/nope' }))).run();
 
     expect(report.status).toBe('completed');
@@ -1087,8 +924,6 @@ describe('createCLIHeadRuntime — a fork runs the model it was given', () => {
 });
 
 describe("the merge synthesis' operation lifecycle", () => {
-  /** A model that answers ONLY the merge call, scripted per test. The usage is
-   *  what the provider said — the shape the operation's end row must carry. */
   function mergeModel(text: string): LanguageModel {
     return new TestLanguageModelV2({
       provider: 'fake', modelId: 'fake',
@@ -1127,7 +962,6 @@ describe("the merge synthesis' operation lifecycle", () => {
     expect(operations[1].outcome).toBe('ok');
     expect(operations[1].usage).toEqual({ input: 8, output: 12 });
     expect(operations[1].modelId).toBe('fake-merge');
-    // The cost report is unchanged by the lifecycle beside it.
     expect(reports).toEqual([{ source: 'judge', usage: { input: 8, output: 12 }, modelId: 'fake-merge' }]);
   });
 
@@ -1142,7 +976,6 @@ describe("the merge synthesis' operation lifecycle", () => {
     expect(operations.map((e) => e.phase)).toEqual(['start', 'end']);
     expect(operations[1].outcome).toBe('failed');
     expect(operations[1].error).toContain('socket hung up');
-    // No provider answer ⇒ no usage anywhere, and no cost report either.
     expect(operations[1].usage).toBeUndefined();
     expect(reports).toEqual([]);
   });
@@ -1152,8 +985,6 @@ describe("the merge synthesis' operation lifecycle", () => {
 
     await expect(runtime.mergeLLM('merging the findings of 2 heads', MergeOutputSchema)).rejects.toThrow();
 
-    // The OPERATION succeeded — the provider answered and was billed; whether
-    // the output parses is the controller's verdict, not this frame's.
     expect(operations.map((e) => e.phase)).toEqual(['start', 'end']);
     expect(operations[1].outcome).toBe('ok');
     expect(operations[1].usage).toEqual({ input: 8, output: 12 });

@@ -1,19 +1,6 @@
 /**
- * Interactive prompt input built on canonical-mode terminal reads.
- *
- * No readline and no raw mode, ever: readline (terminal mode) flips the TTY
- * into raw mode (ECHO and ISIG off) and then relies on the event loop to
- * deliver key bytes. On macOS, kqueue cannot poll the /dev/tty device, so
- * under the installer (`kinu setup </dev/tty`) Bun never delivered a
- * single key: frozen question, no echo, and a dead Ctrl+C. Instead, prompts
- * do a blocking read(2) on the terminal fd in the driver's canonical mode —
- * the kernel handles echo, line editing, and keeps ISIG so Ctrl+C always
- * interrupts. Secrets wrap the same canonical read in `stty -echo` inside a
- * `sh` child whose trap restores echo even when Ctrl+C kills the CLI.
- *
- * Prompts prefer /dev/tty (always a fresh blocking fd) and fall back to a
- * TTY stdin. When no terminal exists at all, prompting raises
- * NonInteractiveError so callers can print instructions instead of hanging.
+ * Prompt input via blocking canonical-mode reads on the terminal fd; never readline or raw mode: macOS kqueue cannot
+ * poll /dev/tty, so under `kinu setup </dev/tty` keys never arrive. No terminal raises NonInteractiveError.
  */
 import { spawnSync } from 'node:child_process';
 import { closeSync, openSync, readSync } from 'node:fs';
@@ -37,15 +24,13 @@ function openTerminal(): TerminalInput | null {
 
     return { fd, close: () => closeSync(fd) };
   } catch (error) {
-    // No terminal is the everyday absence: ENXIO is what open(2) raises without a
-    // controlling terminal, ENOENT when the node itself is missing. Anything else is real.
+    // ENXIO: no controlling terminal; ENOENT: node missing. Anything else is real.
     if (!(error instanceof Error && 'code' in error && (error.code === 'ENXIO' || error.code === 'ENOENT'))) throw error;
 
     return process.stdin.isTTY ? { fd: 0, close: () => {} } : null;
   }
 }
 
-/** True when a prompt can actually reach a terminal (/dev/tty or TTY stdin). */
 export function canPrompt(): boolean {
   const tty = openTerminal();
 
@@ -55,15 +40,13 @@ export function canPrompt(): boolean {
   return true;
 }
 
-/** The opentui TUI drives stdin/stdout directly and cannot reopen /dev/tty —
- *  refuse with instructions instead of rendering a frozen screen. */
+/** opentui cannot reopen /dev/tty; refuse instead of a frozen screen. */
 export function requireInteractiveTerminal(): void {
   if (process.stdin.isTTY && process.stdout.isTTY) return;
   throw new Error('The Kinu TUI needs an interactive terminal. Re-run from a terminal, or use kinu run/exec (or chat --classic).');
 }
 
-/** Blocking canonical-mode line read: each read(2) returns at most one line,
- *  so accumulate until newline or EOF (null when EOF arrives with no input). */
+/** Canonical read(2) returns at most one line; accumulate until newline or EOF. */
 function readLineFromTerminal(fd: number): string | null {
   const buf = Buffer.alloc(1024);
   const chunks: Buffer[] = [];
@@ -112,8 +95,7 @@ export async function confirm(label: string, fallback: boolean): Promise<boolean
   return fallback;
 }
 
-/** Canonical read with echo disabled by a `sh` child: its EXIT trap restores
- *  echo even when Ctrl+C (still live — ISIG stays on) kills the whole group. */
+/** A `sh` child's EXIT trap restores echo even when Ctrl+C kills the group. */
 const SECRET_READ = `stty -echo 2>/dev/null; trap 'stty echo 2>/dev/null' EXIT; IFS= read -r line; printf %s "$line"`;
 
 export async function askSecret(label: string, fallback = ''): Promise<string> {

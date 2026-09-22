@@ -1,13 +1,4 @@
-/**
- * THE STORED ANSWER IS THE TURN'S ANSWER — the row side of the one rule.
- *
- * `runChat` selects the answer (the final step's text, chat.ts
- * `answerFromSteps`); the durable assistant row must hold exactly that. The
- * defect measured 2026-09-16 on build cba44dcb9 was every consumer keeping its
- * the session accumulated every delta it saw and the row read
- * "narration + answer" concatenated. Driven through `LocalAgentSession`, read
- * back off the conversation.
- */
+/** The durable assistant row holds exactly the answer `runChat` selects (chat.ts `answerFromSteps`), not narration + answer. */
 import { describe, expect, test } from 'bun:test';
 import { Database } from 'bun:sqlite';
 import { readTranscriptRows, scratchPath } from '@kinu.run/test-utils';
@@ -23,7 +14,6 @@ const DUMMY_LLM: LLMProviderConfig = {
 
 const USAGE: LanguageModelV2Usage = { inputTokens: 5, outputTokens: 7, totalTokens: 12 };
 
-/** Narrates, calls a tool, then answers: two model calls, one turn. */
 function narratedModel(narration: string, answer: string): TestLanguageModelV2 {
   let calls = 0;
 
@@ -63,7 +53,6 @@ function narratedModel(narration: string, answer: string): TestLanguageModelV2 {
   });
 }
 
-/** Streams one delta and parks with the body open — the instant a death cuts. */
 function parkedModel(delta: string): TestLanguageModelV2 {
   return new TestLanguageModelV2({
     provider: 'fake',
@@ -99,7 +88,6 @@ async function rowsOf(session: OpenedSession, role: 'user' | 'assistant'): Promi
   return rows.filter((row) => row.role === role).map((row) => row.content);
 }
 
-/** Parks before any token until aborted. */
 function silentModel(): TestLanguageModelV2 {
   return new TestLanguageModelV2({
     provider: 'fake',
@@ -119,8 +107,7 @@ function silentModel(): TestLanguageModelV2 {
 
 describe('an interrupted turn', () => {
   test('cut before its first token leaves no assistant row; cut after one keeps the cut text', async () => {
-    // Pre-switch shape on both backends: a Stop before anything streamed is
-    // the operator's row alone, never an empty bubble on reload.
+    // A Stop before anything streamed leaves the operator's row alone, never an empty bubble on reload.
     const silent = openSession('silent');
     const opened = Promise.withResolvers<void>();
 
@@ -176,8 +163,7 @@ describe('the assistant row holds the answer', () => {
   });
 
   test('a continuation that went on to call tools stores the answer, not the cut narration in front of it', async () => {
-    // Process A dies inside a narration step; process B continues, calls a
-    // tool and answers. The cut text is that narration step's, not the answer's.
+    // The cut text is the dead process's narration step, not the answer.
     const opened = openSession('continued');
     const { db, rt } = opened;
     const streamedA = Promise.withResolvers<void>();

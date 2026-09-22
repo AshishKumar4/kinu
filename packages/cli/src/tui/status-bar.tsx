@@ -25,11 +25,6 @@ interface Props {
 
 const IDENTITY_PREFIX = `kinu ${TUI_MARKS.prompt} `;
 
-/**
- * The web's top bar: a strip on the chrome with one hairline under it
- * (`border-b p-border p-sidebar`). Brass brand mark, ink name, dim mode.
- */
-/** The widest label the remaining columns hold, or nothing when neither fits. */
 function widestThatFits(budget: number, full: string, bare: string): string {
   if (budget >= full.length) return full;
 
@@ -79,11 +74,8 @@ export function StatusBar({ name, mode, model, reasoningEffort, onModelSelect, c
   const modelBare = ` ${modelName}`;
   const modelIdeal = Math.min(34, modelFull.length);
 
-  // `id` is the segment's identity across renders. Segments must NOT remount
-  // when their text ticks (context usage changes every stream delta): opentui's
-  // TextNode child insert/remove is where the "Child not found in children"
-  // crash lives, so each segment below renders as its OWN <text> sibling —
-  // box-child reconciliation — and its key never encodes its value.
+  // Segments must not remount when their text ticks: opentui's TextNode insert/remove crashes ("Child not found in
+  // children"), so each renders as its own <text> sibling keyed by `id`, never by value.
   const optionalSegments: Array<{ readonly id: string; readonly text: string; readonly color: string }> = [
     ...(branchCount > 0
       ? [{

@@ -1,11 +1,4 @@
-/**
- * The CLI reference in `docs/CLI.md`, rendered from the command registry.
- *
- * Hand-written CLI docs drift the day someone adds a flag. This renders the
- * same walk `--help` renders (`commandEntries`), so a command or option that
- * exists is documented and one that does not cannot be. `bun run docs:cli`
- * writes the file; a test fails when the checked-in copy is stale.
- */
+/** Renders `docs/CLI.md` from the same walk as `--help`; `bun run docs:cli` writes it, a test fails when stale. */
 
 import type { Command, Option } from 'commander';
 import { commandEntries, GLOBAL_ENVIRONMENT, HELP_EXAMPLES } from './display';

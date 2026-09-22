@@ -1,8 +1,3 @@
-/** The real ports over shared storage primitives: the VFS transcript store's
- *  citable-path/write contract, the durable SQL compaction state (plan
- *  snapshot + prompt-token signal sharing one row without clobbering) and the
- *  archived-range index behind the navigation manifest. */
-
 import { describe, expect, test } from 'bun:test';
 import { Database, type SQLQueryBindings } from 'bun:sqlite';
 import {
@@ -22,8 +17,7 @@ import {
   type PlanSnapshot,
 } from '../src/index';
 
-/** The compaction tables come from core's one workspace-schema list; a store
- *  test needs exactly those two tables, so it runs the same entry point. */
+/** Uses core's workspace-schema entry point so the tables match production. */
 function initCompactionStateTable(db: Database): void {
   const exec: SqlExec = {
     exec(query, ...bindings) {
@@ -69,10 +63,7 @@ function sqliteBinding(value: SqlValue): SQLQueryBindings {
   return value instanceof ArrayBuffer ? new Uint8Array(value) : value;
 }
 
-/** The state store and the ONE actor whose rows it holds. `initWorkspaceSchema`
- *  above creates the actor tables but registers nobody, so the handle is issued
- *  over that same database through the production directory — a store bound to
- *  any other actor would read its own writes back as an empty set. */
+/** State store bound to an actor registered through the production directory; any other actor reads empty. */
 function stateRig() {
   const db = new Database(':memory:');
   initCompactionStateTable(db);
@@ -203,9 +194,8 @@ describe('createCompactionStateStore', () => {
     store.savePromptTokens('s1', 200_000, 120);
     expect(store.loadPromptTokens('s1', 121)).toBe(200_000); // grew — valid
     expect(store.loadPromptTokens('s1', 120)).toBe(200_000); // exact — valid
-    // Restart truncation / undo: the history this measured no longer exists.
+    // Shorter history: the measured one was rewritten (undo / restart truncation).
     expect(store.loadPromptTokens('s1', 41)).toBeNull();
-    // A fresh measurement over the shrunken stream re-arms the signal.
     store.savePromptTokens('s1', 3_000, 41);
     expect(store.loadPromptTokens('s1', 41)).toBe(3_000);
   });
@@ -221,9 +211,7 @@ describe('createCompactionStateStore', () => {
     expect(store.loadPromptTokens('missing', 10)).toBeNull();
   });
 
-  // A plan_json that is not JSON is corruption of our own persisted state, not
-  // an absent plan: returning null told the caller "no plan yet", so the row
-  // stayed corrupt and every load silently re-planned from scratch.
+  // A non-JSON plan_json is corruption, not an absent plan; null would silently re-plan forever.
   test('a corrupt plan_json row surfaces instead of reading as no plan', () => {
     const { db, actor, store } = stateRig();
     db.prepare(`INSERT INTO compaction_state (actor_id, session_key, plan_json) VALUES (?, 's1', 'not json')`)
@@ -237,7 +225,6 @@ describe('createCompactionStateStore', () => {
     store.armForceCompaction('s1');
     expect(store.takeForceCompaction('s1')).toBe(true);
     expect(store.takeForceCompaction('s1')).toBe(false);
-    // Sessions are isolated.
     store.armForceCompaction('s1');
     expect(store.takeForceCompaction('s2')).toBe(false);
     expect(store.takeForceCompaction('s1')).toBe(true);
@@ -274,7 +261,7 @@ describe('archive index', () => {
     const { store } = stateRig();
     expect(store.archive.list('s1')).toEqual([]);
     const second = range({ rangeHash: 'h2', startTurn: 13, endTurn: 18, userTurns: 3, assistantTurns: 3 });
-    // Appended out of order — the index reads back by span, not by insertion.
+    // Appended out of order: the index reads back by span.
     store.archive.append('s1', second);
     store.archive.append('s1', range());
     store.archive.append('s2', range({ firstUserAsk: 'another session' }));

@@ -1,8 +1,4 @@
-// Minimal AgentRuntime for unit tests.
-//
-// Stubs every field with the smallest possible implementation that satisfies
-// the contract. Override individual fields via the options bag — that's how
-// tests focus on the slice they're exercising.
+// Minimal AgentRuntime for unit tests; override fields via the options bag.
 import type {
   AgentRuntime, LLM, Memory, Executor, Schedule, Identity, ExecutionRouter,
   CraftStore, BranchHandle, FiberCtx, AgentStores,
@@ -13,15 +9,15 @@ import { createEchoLLM } from './llm';
 import { createMemoryVfs } from './vfs';
 
 export interface TestRuntimeOptions {
-  /** Override the LLM. Default: echo LLM. */
+  /** Default: echo LLM. */
   llm?: LLM;
-  /** Override the executor. Default: throwing-no-op. */
+  /** Default: throwing no-op. */
   executor?: Executor;
-  /** Override the memory. Default: empty in-memory store. */
+  /** Default: empty in-memory store. */
   memory?: Memory;
-  /** Override the craft store. Default: empty. */
+  /** Default: empty. */
   craftStore?: CraftStore;
-  /** Override the execution router. Default: empty router. */
+  /** Default: empty router. */
   executionRouter?: ExecutionRouter;
 }
 
@@ -105,8 +101,7 @@ function emptyBranchHandle(): BranchHandle {
   };
 }
 
-/** Build a minimal AgentRuntime suitable for unit tests. Each call gets a
- *  fresh in-memory database. Override any field via `opts`. */
+/** A minimal AgentRuntime with a fresh in-memory database. */
 export function createTestRuntime(opts: TestRuntimeOptions = {}): TestRuntime {
   const testSql = createTestSql();
   const llm = opts.llm ?? createEchoLLM();
@@ -149,29 +144,8 @@ export function createTestRuntime(opts: TestRuntimeOptions = {}): TestRuntime {
 }
 
 /**
- * Refuse to measure an agent that cannot execute anything.
- *
- * THE DEFECT THIS EXISTS FOR. Two full behavioural eval runs were taken against
- * the runtime `createWorkspace` returns — which `cli-backend/src/open.ts:49-50`
- * calls, in its own comment, a "degraded inline VFS/Memory/Executor". It
- * registers no `ExecutorProvider` at all, so `rt.executionRouter` had no
- * providers and the entire workspace/codemode surface was undefined: real tool
- * results included `workspace.createTool is not a function` and
- * `workspace.readFile is not a function`. A `tool_outcomes` rate of 0.817 was
- * computed over that surface and read as a fact about the model.
- *
- * Production calls `createWorkspace` exactly once, at workspace BIRTH; every
- * running surface opens through `openWorkspaceCLI` -> `createCLIRuntime`, which
- * registers the inline and device providers. So "zero providers" always means the
- * harness is pointed at the wrong runtime, never that the agent had a bad turn.
- *
- * It THROWS, and callers must call it before the first turn — upstream of every
- * write path, like the graded-turn precondition. A run on a crippled runtime must
- * be a red test AND no record, because a record is evidence and this is not.
- *
- * One implementation on purpose: every tier that drives a real runtime calls
- * this rather than retyping the check, so a tier added later cannot forget it in
- * its own idiom.
+ * Throws when the runtime has no `ExecutorProvider`: `createWorkspace` registers none, so a harness
+ * on it measures an undefined workspace surface. Call before the first turn, upstream of every write.
  */
 export function assertExecutableRuntime(rt: AgentRuntime, context: string): void {
   const router = rt.executionRouter;

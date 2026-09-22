@@ -17,10 +17,7 @@ const OLD = 'async function run() { await host.emit({ type: "text_delta", text: 
 
 const NEW = 'async function run() { await host.emit({ type: "text_delta", text: "version two" }); }';
 
-/** The two real phases a claim owner runs, as one call: pin the selected
- *  version's bytes, then start the turn on them. Production splits these at the
- *  durable claim write (ActorSession.execute); a test with no claim to write
- *  still has to run them in that order. */
+/** Pin the selected version's bytes, then start the turn: the order `ActorSession.execute` splits at the claim write. */
 async function admitActorTurn(input: Parameters<typeof startActorTurn>[0] extends infer _T
   ? Omit<Parameters<typeof startActorTurn>[0], 'program'> : never) {
   const program = await prepareActorProgram({
@@ -33,12 +30,7 @@ async function admitActorTurn(input: Parameters<typeof startActorTurn>[0] extend
 
 async function fixture() {
   const { rt } = createTestRuntime();
-  // The claim/working-history plane, from the one initializer that owns it:
-  // a seated head takes CLAIMED turns, and `ActorSession` reads and writes
-  // `actor_turn_claims` plus the raw working revisions a mid-turn edit
-  // rewrites. `createTestRuntime` bootstraps identity and the actor directory
-  // only, so a fixture that seats an actor has to add this ledger — by calling
-  // the production DDL rather than retyping a second copy of it.
+  // Claimed turns need the claim ledger, which `createTestRuntime` does not bootstrap; use the production DDL.
   initActorClaimTables(rt.storage.execRaw);
   rt.executor = createSandboxedExecutor();
   const files = rt.agentStateVfs ?? rt.storage.vfs;
@@ -258,7 +250,6 @@ test('the selected loop cancels its cooperative model request with the actor', a
   try {
     expect(providerStopped).toBe(true);
   } finally {
-    // A disconnected signal must fail without leaving a provider running.
     request.reject(new Error('release the test provider'));
     await done;
   }

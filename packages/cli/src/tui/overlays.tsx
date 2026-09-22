@@ -27,7 +27,6 @@ interface CommandHintProps {
   terminal: OverlayGeometry;
 }
 
-/** The full-width palette instruction. Narrow frames use the compact form. */
 const FILTER_HINT = 'Type to filter · Enter runs a completed command';
 
 const COMPACT_FILTER_HINT = 'Type to filter · Enter runs';
@@ -223,7 +222,6 @@ interface SettingsOverlayProps {
   onSelect: (setting: TuiSettingChoice) => void;
 }
 
-/** Settings writes stay on the existing slash-command/config paths. */
 export function SettingsOverlay({ settings, terminal, onSelect }: SettingsOverlayProps) {
   const { colors } = useTuiTheme();
   const [filter, setFilter] = useState('');
@@ -310,8 +308,7 @@ export function SettingsOverlay({ settings, terminal, onSelect }: SettingsOverla
 
 interface ModelPickerProps {
   models: readonly AgentModelEntry[];
-  /** Providers that could not be listed. Shown under the options: their
-   *  models are missing from the list, and saying so beats a silent gap. */
+  /** Shown under the options so missing models are not a silent gap. */
   failures?: readonly ProviderFailure[];
   currentSpec: string | null;
   terminal: OverlayGeometry;
@@ -440,14 +437,13 @@ export function ModelPickerOverlay({ models, failures, currentSpec, terminal, lo
 }
 
 interface WalkbackOverlayProps {
-  /** Recent user messages, newest first (forkCandidates order). */
+  /** Newest first (forkCandidates order). */
   candidates: readonly ForkPoint[];
   terminal: OverlayGeometry;
   onSelect: (point: ForkPoint) => void;
 }
 
-/** Esc-Esc walk-back picker: choose an earlier user message; the conversation
- *  forks just before it and the message returns to the input for editing. */
+/** Esc-Esc walk-back: the conversation forks before the picked message, which returns to the input. */
 export function WalkbackOverlay({ candidates, terminal, onSelect }: WalkbackOverlayProps) {
   const { colors } = useTuiTheme();
   const paletteWidth = boundedPaletteWidth(terminal, 0.56, 56, 90);
@@ -506,13 +502,10 @@ export function WalkbackOverlay({ candidates, terminal, onSelect }: WalkbackOver
 interface ChangelogOverlayProps {
   view: AgentChangelogView;
   terminal: OverlayGeometry;
-  /** Enter on an entry — surfaces revert revertables and explain the rest. */
   onSelect: (entry: ChangelogEntry) => void;
 }
 
-/** The Evolution Changelog digest (/changelog): every self-change with its
- *  evidence number; Enter reverts the selected line through the real
- *  rollback paths. Keeping is the default — closing the overlay keeps all. */
+/** Enter reverts the selected line through the real rollback paths; closing keeps all. */
 export function ChangelogOverlay({ view, terminal, onSelect }: ChangelogOverlayProps) {
   const { colors } = useTuiTheme();
   const paletteWidth = boundedPaletteWidth(terminal, 0.62, 60, 100);
@@ -578,13 +571,10 @@ export function ChangelogOverlay({ view, terminal, onSelect }: ChangelogOverlayP
 interface TakesOverlayProps {
   set: AlternateTakeSet;
   terminal: OverlayGeometry;
-  /** Enter on a take — the surface records the pick (ledger + repoint). */
   onSelect: (candidate: AlternateTakeCandidate) => void;
 }
 
-/** The Alternate Takes comparison (/takes): the near-tied approaches the last
- *  think-mcts convergence weighed, current answer starred. Enter picks one —
- *  the pick is a real preference signal, not just a view. */
+/** Enter records a pick, a real preference signal. */
 export function TakesOverlay({ set, terminal, onSelect }: TakesOverlayProps) {
   const { colors } = useTuiTheme();
   const paletteWidth = boundedPaletteWidth(terminal, 0.62, 60, 100);
@@ -713,8 +703,7 @@ function deviceConsentLayout(
 ): DeviceConsentLayout {
   const paletteWidth = boundedPaletteWidth(terminal, 0.52, 52, 86);
   const innerWidth = Math.max(1, paletteWidth - 4);
-  // Half-width is conservative for wide Unicode glyphs. An ASCII shell command
-  // gets spare rows; a wide command never gets approved from an unseen tail.
+  // Half-width budget, so a wide command is never approved from an unseen tail.
   const commandColumns = Math.max(1, Math.floor(innerWidth / 2));
   const commandText = `Command: ${consent.command || '(command)'}`;
 
@@ -902,7 +891,6 @@ export function DeviceConnectOverlay({ prompt, terminal }: DeviceConnectOverlayP
   );
 }
 
-/** Why the model list is empty: the filter, a failed provider, or none connected. */
 function emptyModelListText(modelCount: number, failureCount: number, compact: boolean, filter: string): string {
   if (modelCount > 0) return `No models match "${filter}".`;
 
@@ -915,7 +903,6 @@ function emptyModelListText(modelCount: number, failureCount: number, compact: b
 
 interface ThemePickerProps {
   terminal: OverlayGeometry;
-  /** The stored selection, so the row it names carries the current mark. */
   selection: ThemeSelection;
   onSelect: (selection: ThemeSelection) => void;
 }
@@ -932,15 +919,10 @@ const THEME_LIST_COLUMNS = 34;
 
 const THEME_PREVIEW_MIN_COLUMNS = 34;
 
-/** Rows the preview transcript needs: strip, bubble, prose, well, composer, caption. */
+/** Strip, bubble, prose, well, composer, caption. */
 const THEME_PREVIEW_ROWS = 21;
 
-/**
- * The theme picker: every registered theme, each row with its own bubble,
- * brass and well swatches, and the highlighted one drawn as a small
- * transcript beside the list so the choice is visual. Enter stores the
- * selection through the preference store; Esc keeps things.
- */
+/** Enter stores the selection through the preference store; Esc keeps things. */
 export function ThemePickerOverlay({ terminal, selection, onSelect }: ThemePickerProps) {
   const { colors, registry } = useTuiTheme();
   const keybindings = useKeybindingRegistry();
@@ -1061,12 +1043,7 @@ function ThemeChoiceRow({ choice, width, highlighted, current }: {
   );
 }
 
-/**
- * One transcript in the theme under the cursor: status strip, a guttered user
- * turn, a line of prose, a tool card on the well, the composer. A transparent
- * theme is shown on the web canvas of its appearance, the ground it was
- * designed for, and says so.
- */
+/** A transparent theme previews on its appearance's web canvas, and says so. */
 function ThemePreview({ theme, width }: { readonly theme: TuiThemeDefinition; readonly width: number }) {
   const { colors } = theme;
   const ground = colors.background.canvas ?? REFERENCE_TERMINAL_GROUNDS[theme.appearance][0];
@@ -1132,10 +1109,6 @@ function PaletteLine(props: { text: string; width: number; color: string; accent
 
 const SPINNER_FRAMES = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
 
-/**
- * Live work as the web's `ThinkingRow`: a gold pulse and the word in the dim
- * register, omp's `thinkingText: gray`.
- */
 export function PhaseLine({ label }: { label: string | null }) {
   const { colors } = useTuiTheme();
   const [frame, setFrame] = useState(0);
@@ -1169,11 +1142,7 @@ interface PaletteFrameProps {
   children: ReactNode;
 }
 
-/**
- * A dialog as the web draws one (`.p-overlay`): the overlay ground under a
- * strong rule, rounded. No scrim — the canvas is the terminal's own, and a
- * translucent layer has nothing known to blend into.
- */
+/** No scrim: the canvas is the terminal's own, so a translucent layer has nothing to blend into. */
 function PaletteFrame({ title, width, height, left, top, children }: PaletteFrameProps) {
   const { colors } = useTuiTheme();
 

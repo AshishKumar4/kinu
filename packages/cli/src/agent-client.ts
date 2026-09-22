@@ -1,10 +1,5 @@
-/**
- * AgentClient — the presentation contract every chat surface (TUI, classic
- * REPL, one-shot run, rpc) drives, with one adapter per backend:
- * LocalAgentClient over LocalAgentSession and CloudAgentClient over the
- * OrchestratorAgent DO websocket. UIs never branch on backend; anything only
- * one backend supports is exposed through the capability surfaces below.
- */
+/** Presentation contract every chat surface drives, one adapter per backend (local session, cloud DO
+ * websocket). UIs never branch on backend; backend-only features are capability surfaces. */
 
 import type {
   BroadcastEvent, ChangelogEntry, ChangelogRevertResult, PromptFile, ShellApprovalMode,
@@ -26,8 +21,6 @@ import * as v from 'valibot';
 
 export type AgentClientMode = 'local' | 'cloud';
 
-/** A user prompt: plain text, or text plus file attachments (data-URL
- *  PromptFiles, built from @path mentions by the chat surfaces). */
 export type AgentPrompt = string | { text: string; files: ReadonlyArray<PromptFile> };
 
 const AgentPromptObjectSchema = v.object({
@@ -60,9 +53,7 @@ export interface AgentTurnResult {
   steps: number;
   durationMs: number;
   hadError: boolean;
-  /** Provider-reported token usage for the turn, absent when the provider
-   *  reported nothing. Local backend only — the cloud websocket protocol does
-   *  not carry per-turn usage. */
+  /** Absent when the provider reported none. Local only: the cloud protocol carries no per-turn usage. */
   usage?: Usage;
 }
 
@@ -76,23 +67,15 @@ export type AgentClientEvent =
   | { type: 'evolution'; event: string; message: string }
   | { type: 'background'; event: string; message: string }
   | { type: 'broadcast'; event: BroadcastEvent }
-  /** One row of the durable run-event ledger, forwarded as it is written:
-   *  delegation nudges, the context budget, refused mission budgets, and the
-   *  run bracket around them. Instrumentation rather than conversation — the
-   *  human surfaces ignore it and `--json` emits it verbatim, which is what
-   *  makes the ledger readable from outside the agent's own database. Local
-   *  backend only: a cloud agent's ledger lives in the DO, which serves it
-   *  over /api/runs/<id>/stream and MCP `list_run_events`. */
+  /** Durable run-event ledger row. Human surfaces ignore it; `--json` emits it verbatim. Local only:
+   *  a cloud agent's ledger lives in the DO. */
   | { type: 'run-event'; event: RunEvent }
   | { type: 'error'; message: string };
 
 export interface AgentClientSendOptions {
   cwd?: string;
-  /** One-turn inference tier override. The backend snapshots it with the turn. */
   tier?: TierId;
-  /** The composer's work mode, a fact on the message. Plan runs a Plan turn,
-   *  which ends in a review the owner decides through {@link PlanReviewSurface}.
-   *  Build unless the caller says otherwise. */
+  /** Plan turns end in a review decided through {@link PlanReviewSurface}. Defaults to build. */
   mode?: WorkMode;
 }
 
@@ -109,7 +92,6 @@ export interface AgentClientStatus {
   memorySize?: number;
   dbSize?: number;
   toolCount?: number;
-  /** Local-only: whether turn/session auto-evolution is enabled. */
   autoEvolve?: boolean;
   roleId?: string;
   tierId?: string;
@@ -131,7 +113,6 @@ export interface AgentJobSummary {
   status: string;
 }
 
-/** The MCTS-tree projection both backends serve from their search_nodes table. */
 export interface AgentSearchNode {
   depth: number;
   status: string;
@@ -140,50 +121,38 @@ export interface AgentSearchNode {
   action: string | null;
 }
 
-/** A rendered transcript/history message. Structurally a subset of the TUI's
- *  DisplayMessage so surfaces can show it directly. */
 export interface AgentTranscriptMessage {
   id: string;
   role: 'user' | 'assistant' | 'system' | 'tool_call' | 'tool_result';
   content: string;
   metadata?: JsonObject;
   toolName?: string;
-  /** The call identity a tool row was recorded with; results carry the same
-   *  one, which is what pairs them in the transcript. */
+  /** Results carry the same id; that is what pairs them in the transcript. */
   toolCallId?: string;
   args?: string;
   success?: boolean;
-  /** User message delivered mid-turn through steer(). */
   steered?: boolean;
-  /** User redirect run as a parallel branch through branch(). */
   branched?: boolean;
 }
 
-/** Where `send` put the message: spliced into the running turn's next step,
- *  or run as a turn of its own — with that turn's result. */
 export type AgentSendResult =
   | { readonly landed: 'mid-turn' }
   | ({ readonly landed: 'turn' } & AgentTurnResult);
 
-/** A walk-back fork point: a user message identified by its verbatim text and
- *  its occurrence among same-text user messages counted from the newest (1 =
- *  most recent). Robust across surfaces whose message ids don't align with the
- *  backend's canonical store. */
+/** Identified by verbatim text plus occurrence among same-text user messages, newest first (1 = most
+ *  recent), because surface message ids do not align with the backend store. */
 export interface ForkPoint {
   text: string;
   occurrenceFromEnd: number;
 }
 
 export interface AgentForkResult {
-  /** The client to continue on. Callers switch and close the old client when
-   *  a different instance is returned. */
+  /** Callers switch and close the old client when a different instance is returned. */
   client: AgentClient;
-  /** Human-readable description of what was forked (session id / agent name). */
   label: string;
 }
 
-/** Index of the fork-point user message in a canonical row list, or -1 when
- *  the point cannot be located (the surfaces' view drifted from the store). */
+/** -1 when the point cannot be located (the surface's view drifted from the store). */
 export function findForkPivot(
   rows: ReadonlyArray<{ role: string; content: string }>,
   point: ForkPoint,
@@ -203,8 +172,6 @@ export function findForkPivot(
   return -1;
 }
 
-/** Pick the walk-back candidates from a rendered message list: the most recent
- *  user messages (newest first), each with the occurrence index fork() needs. */
 export function forkCandidates(
   messages: ReadonlyArray<{ role: string; content: string }>,
   limit = 10,
@@ -227,22 +194,13 @@ export function forkCandidates(
   return candidates;
 }
 
-/** The Evolution Changelog digest as surfaces consume it. `unseenCount` is
- *  the pre-view value (what the badge showed); fetching marks the digest
- *  seen — viewing IS the acknowledgement. */
+/** `unseenCount` is the pre-view value; fetching marks the digest seen. */
 export interface AgentChangelogView {
   entries: ChangelogEntry[];
   unseenCount: number;
 }
 
-/**
- * Continual refinements as surfaces consume them: what has been refined, and
- * the evolution debt that would open the next one.
- *
- * Both halves in one shape because they answer one question — `/refine` with no
- * argument has to say what is owed as well as what happened, and a surface that
- * had to make two calls could render a debt count against a stale list.
- */
+/** Refinements and evolution debt in one shape, so a debt count never renders against a stale list. */
 export interface AgentRefinementView {
   requests: RefinementRequestView[];
   debt: EvolutionDebt;
@@ -257,71 +215,48 @@ export interface PendingDeviceConsent {
 
 export type DeviceConsentDecision = 'once' | 'always' | 'deny';
 
-/** Capability surface: device-tunnel consent requests (cloud agents). */
 export interface DeviceConsentSurface {
   listPending(): Promise<PendingDeviceConsent[]>;
   resolve(consentId: string, decision: DeviceConsentDecision): Promise<{ ok: boolean }>;
 }
 
-/** Capability surface: shadow-git file checkpoints (/undo). Local agents hit
- *  the host engine directly; cloud agents go through orchestrator RPCs that
- *  forward to the connected device daemon.
- *
- *  `list` carries reachability with the entries so a caller cannot read an empty
- *  list as a statement about the turn — see {@link FileCheckpointListing}. */
+/** `list` carries reachability so an empty list is not read as a statement about the turn. */
 export interface FileCheckpointSurface {
-  /** `turnId` narrows in the STORE, which is the only way to read one turn
-   *  completely: `limit` is global across working directories while retention is
-   *  per directory, so a window can hold part of a turn. See
-   *  FileCheckpoints.list in @kinu.run/core. */
+  /** `turnId` narrows in the store: `limit` is global while retention is per directory, so a window can
+   *  hold part of a turn. */
   list(limit?: number, turnId?: string): Promise<FileCheckpointListing>;
   plan(dir: string, id: string): Promise<FileRestorePlan>;
   restore(dir: string, id: string): Promise<FileRestoreResult>;
 }
 
-/** Capability surface: knobs that only exist on an in-process local session. */
 export interface LocalSessionControls {
   getAlwaysActiveSkills(): string[];
   setAlwaysActiveSkills(names: string[]): void;
   getShellApprovalMode(): ShellApprovalMode;
   setShellApprovalMode(mode: ShellApprovalMode): ShellApprovalMode;
-  /** Install the interactive approval channel for gated shell commands (ACP's
-   *  session/request_permission). Returns a disposer. Local only: a cloud turn
-   *  runs in the DO, which has no synchronous path back to this process. */
+  /** ACP session/request_permission. Local only: a cloud turn has no synchronous path back here. */
   setShellApprovalHandler(handler: ShellApprovalHandler | null): () => void;
   listDeferredApprovals(): Promise<DeferredApproval[]>;
   decideDeferredApprovals(ids: string[], decision: DeferredApprovalAnswer): Promise<{ decided: string[] }>;
   listModelProviders(): Promise<Array<{ id: string; available: boolean; unavailableReason?: string }>>;
-  /** Instruction-file trust for the working directory (KINU-N028). Local only
-   *  for the same reason the shell channel is: signed out there is no cloud
-   *  owner, and the honest authority is whoever is at this terminal. */
+  /** Instruction-file trust (KINU-N028). Local only: signed out there is no cloud owner. */
   listInstructionApprovals(request?: PageRequest): Promise<Page<InstructionSourceRow>>;
-  /** One row, opened: reads THAT file's bytes and nothing else. */
   readInstructionApproval(path: string): Promise<InstructionSourceView | null>;
   approveInstruction(path: string, digest: string): Promise<AdmittedInstructionDecision>;
   revokeInstruction(path: string): Promise<AdmittedInstructionDecision>;
 }
 
-/**
- * Capability surface: the owner's half of Plan mode.
- *
- * A Plan turn ends in `submit_plan`, and nothing moves until the owner says
- * so. Both backends hold the same review stream (core's `PlanReviewStore`) and
- * expose the same three actions over it, so one command drives either.
- */
+/** The owner's half of Plan mode; both backends serve core's `PlanReviewStore`. */
 export interface PlanReviewSurface {
-  /** The revision awaiting a verdict, or the approved one still being worked. */
   active(): Promise<PlanReview | null>;
   saveAnnotations(id: string, revision: number, annotations: PlanReviewAnnotation[]): Promise<PlanReviewResult>;
-  /** Approve or send it back. Approving queues the implementation turn, which
-   *  streams through `subscribe` like any other. */
+  /** Approving queues the implementation turn, which streams through `subscribe`. */
   decide(id: string, revision: number, decision: PlanReviewDecision, feedback?: string): Promise<PlanReviewResult>;
 }
 
 export interface AgentClient {
   readonly mode: AgentClientMode;
   readonly agentName: string;
-  /** The JSONL terminal log this client records to (never cloud chat state). */
   readonly cliSession: CliSession;
   readonly consents: DeviceConsentSurface | null;
   readonly localControls: LocalSessionControls | null;
@@ -330,103 +265,49 @@ export interface AgentClient {
   /** Rename this conversation's agent when the backend exposes a complete
    * owner-authoritative path. Root cloud workspaces keep the web sidebar path. */
   readonly rename?: (displayName: string) => Promise<{ name: string; displayName: string }>;
-  /** Per-message aggregate cap on raw bytes this backend will accept inlined
-   *  as data-URL file parts. A storage row limit on the cloud, a provider
-   *  request budget locally — the two numbers differ by 8×, so the chat
-   *  surfaces ask rather than assume. */
+  /** Per-message cap on inlined raw bytes. Cloud and local limits differ by 8x, so surfaces ask. */
   readonly inlineAttachmentLimitBytes: number;
 
-  /** Bring up client-owned startup resources (local MCP servers). The daemon
-   *  owns orphaned-job recovery, so reconnecting a client cannot redrive work. */
+  /** Starts client-owned resources (local MCP servers). The daemon owns orphaned-job recovery. */
   connect(): Promise<void>;
-  /** Observe the full event stream: user turns, programmatic/reactor turns,
-   *  evolution markers, and errors. */
   subscribe(listener: (event: AgentClientEvent) => void): () => void;
-  /** Send the user's message — the one entry, whatever the agent is doing.
-   *  Nothing running: it runs as a user turn, events stream through
-   *  subscribe(), and the answer is that turn's result once it ends. A turn
-   *  running: it reaches that turn's next step boundary (attachments included)
-   *  and the answer says so at once. The JSONL log is appended internally. */
+  /** Idle: runs as a user turn. Mid-turn: reaches the running turn's next step boundary. */
   send(prompt: AgentPrompt, opts?: AgentClientSendOptions): Promise<AgentSendResult>;
-  /** Steer-as-Branch: run the prompt as a parallel budgeted head against the
-   *  live turn's input snapshot WITHOUT interrupting it. When both finish the
-   *  pair settles into Alternate Takes (progress + settle stream as
-   *  'branch_status' broadcast events). Returns false when no turn is active —
-   *  use send() instead. */
+  /** Runs the prompt as a parallel head without interrupting the live turn; false when no turn is active. */
   branch(prompt: AgentPrompt, opts?: AgentClientSendOptions): boolean;
-  /** Walk-back: continue the conversation from strictly BEFORE the given user
-   *  message, on the context the agent held there. Both backends revert the
-   *  workspace in place and hand this client back. */
+  /** Continue from strictly before the given user message; both backends revert the workspace in place. */
   fork(point: ForkPoint): Promise<AgentForkResult>;
-  /** Interrupt the in-flight turn (Esc / Ctrl+C / /stop). Returns steer texts
-   *  that were accepted mid-turn but never delivered to the model — surfaces
-   *  already rendered them as sent, so they must be handed back to the user,
-   *  not dropped silently. Empty when nothing was pending (cloud steers
-   *  persist server-side immediately, so the cloud client always returns []). */
+  /** Returns steer texts accepted but never delivered, so surfaces hand them back. Cloud always returns []. */
   stop(): string[];
-  /** Drain in-flight background work (detached jobs + the wake turns they
-   *  trigger) to completion. A one-shot surface calls this after its turn and
-   *  before it stops listening/closes, so a turn that backgrounded work streams
-   *  its second half instead of being cut off at process exit. Local only —
-   *  cloud jobs settle server-side in the DO, which outlives the CLI. */
+  /** One-shot surfaces call this before exit so backgrounded work is not cut off. Local only. */
   settleBackgroundWork?(): Promise<void>;
   close(): Promise<void>;
 
-  /** Rendered history for hydrating a chat surface: the DO chat projection
-   *  for cloud, this process's recorded transcript for local. The local
-   *  durable conversation lives in the workspace database and seeds the model
-   *  without hydration. */
+  /** Display only: the local durable conversation seeds the model without hydration. */
   history(): Promise<AgentTranscriptMessage[]>;
 
   status(): Promise<AgentClientStatus>;
   describeTools(): Promise<AgentToolSurface>;
-  /** The Evolution Changelog digest; fetching marks it seen. */
   changelog(limit?: number): Promise<AgentChangelogView>;
-  /** Revert one changelog entry by id through the real rollback paths. */
   revertChangelogEntry(id: string): Promise<ChangelogRevertResult>;
-  /** Continual refinements newest first, plus the debt that opens the next. */
   refinements(limit?: number): Promise<AgentRefinementView>;
-  /**
-   * Open one refinement over a graded trajectory.
-   *
-   * Returns the DURABLE request. Nothing about the agent's behaviour has moved
-   * by the time this resolves: an explicit user preference may have reached the
-   * memory authority, and everything else is a proposal pending the evaluated
-   * lane that owns it.
-   */
+  /** Resolves with the durable request; the agent's behaviour has not moved yet. */
   requestRefinement(opts?: { turnIds?: readonly string[] }): Promise<RefinementRequestView>;
-  /**
-   * Decide one staged edit as the owner.
-   *
-   * The only path by which a proposed skill becomes trusted instructions, and
-   * deliberately on the OWNER's client rather than on any tool surface.
-   */
+  /** The only path by which a proposed skill becomes trusted instructions; owner client only. */
   decideRefinement(input: RefinementDecisionInput): Promise<RefinementDecisionResult>;
-  /** The WHOLE staged file for one proposed edit, plus the digest a decision
-   *  must quote back. Never truncated: this is what an owner decides on. */
+  /** Never truncated: this is what an owner decides on. */
   showRefinement(requestId: string, routeIndex: number): Promise<StagedSkillResult>;
   readMemory(): Promise<string>;
   searchNodes(): Promise<AgentSearchNode[]>;
   listJobs(limit?: number): Promise<AgentJobSummary[]>;
-  /** The newest Alternate Takes set — near-tied MCTS candidates from the
-   *  last think-mcts convergence, or the live/branch pair from a settled
-   *  /branch redirect (AlternateTakeSource) — or null when none exist yet. */
   latestTakes(): Promise<AlternateTakeSet | null>;
-  /** Pick one take: records the explicit preference into the outcome ledger,
-   *  re-points the convergence record on a sibling pick, and (when the pick
-   *  changes the answer) queues the continuation turn. */
   pickTake(takeId: string, nodeId: string): Promise<TakePickOutcome>;
-  /** Durably select one owner-configured role for the next turn. */
   setRole(roleId: string): Promise<{ role: string }>;
   getModelSpec(): Promise<string | null>;
-  /** Set the agent's model. Local: the session/actor_config spec; cloud: the
-   *  durable agent model (same semantics as the web UI). */
   setModel(spec: string): Promise<{ spec: string }>;
   getReasoningEffort(): Promise<ReasoningEffort | null>;
   setReasoningEffort(effort: ReasoningEffort): Promise<{ effort: ReasoningEffort }>;
-  /** The self-evolution knobs, including the advisor gate (`/advisor`). */
   getEvolutionConfig(): Promise<EvolutionConfigView>;
-  /** Set any subset of them; answers with the effective config. */
   setEvolutionConfig(view: Partial<EvolutionConfigView>): Promise<EvolutionConfigView>;
   listModels(): Promise<AgentModelMenu>;
 }
@@ -435,8 +316,7 @@ export interface AgentUiMessage {
   id: string;
   role: 'system' | 'user' | 'assistant';
   parts: AgentUiMessagePart[];
-  /** The mode this message was typed under — the same fact the web composer
-   *  puts on its own messages, which is what makes the turn a Plan turn. */
+  /** The same fact the web composer sets; it is what makes the turn a Plan turn. */
   metadata?: { kinuMode: WorkMode };
 }
 

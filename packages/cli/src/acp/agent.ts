@@ -1,13 +1,5 @@
-/**
- * The Agent Client Protocol adapter — Kinu spoken to Zed, JetBrains,
- * neovim, Marimo and anything else that drives an ACP agent.
- *
- * This is a translation layer and nothing more. An ACP session IS an
- * AgentClient (the same one `kinu chat` drives), so delegation, crafted
- * tools, checkpoints and evolution all ride the normal turn pipeline; the only
- * thing here is the mapping between ACP's shapes and the client's event
- * stream. There is deliberately no second agent loop.
- */
+/** ACP adapter: an ACP session is an AgentClient, so this only maps ACP shapes to the client's event
+ * stream. There is deliberately no second agent loop. */
 
 import {
   agent,
@@ -29,27 +21,16 @@ import type { AgentClient, AgentClientEvent } from '../agent-client';
 import { toAgentPrompt } from './prompt';
 import * as v from 'valibot';
 
-/** Opens the AgentClient backing one ACP session. The command supplies the
- *  real factory; tests supply a stub. */
 export type AcpClientFactory = (opts: { cwd: string }) => Promise<AgentClient>;
 
 export interface AcpAgentDeps {
   openClient: AcpClientFactory;
-  /** Agent name reported in `initialize`. */
   name: string;
   version: string;
 }
 
-/** Kinu's builtin tools, mapped to the kind ACP clients use to pick an icon
- *  and a presentation. Crafted and MCP tools fall through to 'other'.
- *
- *  `skills`, `release` and `experience` are absent on purpose: none of the
- *  three is a tool name a live turn produces. Skills are workspace.* file
- *  calls and release is a release.* codemode call — both surface as
- *  `eval`, already mapped below — and experience is an owner-only
- *  RPC, off the tool surface entirely. Entries for them would be dead code
- *  with no "old transcript" justification, since ACP maps calls as they
- *  happen rather than rendering stored history. */
+/** Crafted and MCP tools fall through to 'other'. `skills`, `release` and `experience` are never live
+ *  tool names (they surface as `eval` or are owner-only RPC). */
 const TOOL_KINDS = new Map<string, ToolKind>([
   ['shell', 'execute'],
   ['eval', 'execute'],
@@ -70,8 +51,6 @@ function toolKind(name: string, args: JsonObject): ToolKind {
   return TOOL_KINDS.get(name) ?? 'other';
 }
 
-/** A one-line summary of what a call is doing — the tool call's ACP title.
- *  `shell` gets its command because that is the thing a user is deciding about. */
 function toolTitle(name: string, args: JsonObject): string {
   const command = args.command;
   const parsedCommand = v.safeParse(v.string(), command);
@@ -85,18 +64,8 @@ function toolTitle(name: string, args: JsonObject): string {
   return name;
 }
 
-/** The permission choices offered for a gated command, in the order clients
- *  display them.
- *
- *  "Don't ask again" names the rules and the machine it covers, because that
- *  is exactly what it buys: a standing grant for those rules on that executor
- *  (cli-backend's `wrapShellApprovalHandler` grants exactly the asked rules on
- *  the asked executor), and nothing else. Granting whole-agent `allow_all`
- *  instead would disable the gate everywhere, beyond the command the user
- *  approved — one click that turns the gate off everywhere.
- *  There is deliberately no persistent REJECT: a standing refusal
- *  is a different store nobody has asked for, and `deny_all` in settings
- *  already spells "stop running these" without pretending to be per-command. */
+/** "Don't ask again" grants exactly the asked rules on the asked executor (`wrapShellApprovalHandler`),
+ *  never whole-agent `allow_all`. There is deliberately no persistent reject. */
 function permissionOptions(req: ShellApprovalRequest): PermissionOption[] {
   const rules = req.review.hits.filter((h) => h.decision === 'gate').map((h) => h.rule).join(', ');
 
@@ -111,22 +80,17 @@ function permissionOptions(req: ShellApprovalRequest): PermissionOption[] {
   ];
 }
 
-/** Untrusted input from the client: an optionId we did not offer must not
- *  resolve to anything, which is what `.get()` says and an index signature
- *  does not. */
+/** Untrusted client input: an optionId not offered must resolve to nothing. */
 const OUTCOME_BY_OPTION = new Map<string, ShellApprovalOutcome>([
   ['allow', 'allow'],
   ['allow_always', 'allow_always'],
   ['deny', 'deny'],
 ]);
 
-/** One live ACP session: the Kinu client plus the per-turn state the
- *  translation needs. */
 class AcpSession {
   readonly id: SessionId;
   readonly client: AgentClient;
   readonly cwd: string;
-  /** Set while a session/prompt is in flight; cleared when it settles. */
   private cancelled = false;
   private detachApproval: (() => void) | null = null;
 
@@ -140,9 +104,7 @@ class AcpSession {
   beginTurn(): void { this.cancelled = false; }
   get wasCancelled(): boolean { return this.cancelled; }
 
-  /** Route gated shell commands to the editor's permission UI for as long as
-   *  this session is connected. Local sessions only — a cloud turn runs in the
-   *  DO, which has no synchronous path back to this process. */
+  /** Local sessions only: a cloud turn runs in the DO, with no synchronous path back to this process. */
   installApprovalChannel(ask: (req: ShellApprovalRequest) => Promise<ShellApprovalOutcome | null>): void {
     this.detachApproval = this.client.localControls?.setShellApprovalHandler(ask) ?? null;
   }
@@ -154,8 +116,6 @@ class AcpSession {
   }
 }
 
-/** Build the ACP agent app. Connect it to a stream (stdio) or, in tests,
- *  directly to a ClientApp. */
 export function createAcpAgent(deps: AcpAgentDeps): AgentApp {
   const sessions = new Map<string, AcpSession>();
 
@@ -175,9 +135,7 @@ export function createAcpAgent(deps: AcpAgentDeps): AgentApp {
     try {
       await client.notify(CLIENT_METHODS.session_update, { sessionId, update });
     } catch (cause) {
-      // An undelivered update must not take down the request/turn that owns it.
-      // Report on stderr because stdout carries the protocol — otherwise the
-      // editor silently loses part of the turn.
+      // An undelivered update must not fail its turn; report on stderr because stdout carries the protocol.
       diagnostics.failure(
         'acp.session_update_undelivered',
         toKinuError({ doing: 'delivering an acp session/update notification', cause, otherwise: 'io' }),
@@ -186,8 +144,6 @@ export function createAcpAgent(deps: AcpAgentDeps): AgentApp {
     }
   };
 
-  /** Translate one AgentClient event into its ACP session/update, or null when
-   *  it has no ACP counterpart (step boundaries, broadcasts). */
   const toUpdate = (event: AgentClientEvent): SessionNotification['update'] | null => {
     switch (event.type) {
       case 'text-delta':
@@ -235,7 +191,6 @@ export function createAcpAgent(deps: AcpAgentDeps): AgentApp {
         // History lives in the workspace db, so a session can be replayed.
         loadSession: true,
         promptCapabilities: { image: true, embeddedContext: true },
-        // Closing releases the workspace db handle and the MCP servers.
         sessionCapabilities: { close: {} },
       },
       // Kinu authenticates through `kinu auth`, not through the editor.
@@ -277,8 +232,6 @@ export function createAcpAgent(deps: AcpAgentDeps): AgentApp {
     .onRequest(AGENT_METHODS.session_load, async (ctx) => {
       const session = requireSession(ctx.params.sessionId);
 
-      // The client asked to see the conversation: replay it as the same chunk
-      // updates a live turn would have produced.
       for (const message of await session.client.history()) {
         if (message.role === 'user') {
           await notify(ctx.client, session.id, {
@@ -318,8 +271,7 @@ export function createAcpAgent(deps: AcpAgentDeps): AgentApp {
         await Promise.all(pendingNotifications);
       }
 
-      // stop() resolves the turn early, so a cancelled turn still lands here —
-      // the flag is what distinguishes it from a natural finish.
+      // stop() resolves the turn early; the flag distinguishes a cancel from a natural finish.
       return { stopReason: (session.wasCancelled ? 'cancelled' : 'end_turn') satisfies StopReason };
     })
 

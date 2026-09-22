@@ -6,19 +6,13 @@ import { agentDbPath, loadConfigFile, resolveCloudSession } from '../config';
 import { printAgentList } from '../display';
 import { getLocalAgentInfo } from '../local-inspection';
 
-/** The workspace database's size, or undefined when there is no file there.
- *  Asked rather than caught: `throwIfNoEntry: false` makes absence a value, so
- *  a listing does not need a handler that cannot tell a missing file from an
- *  unreadable one. Anything else — a permission error, a broken mount — still
- *  throws, because a row reporting "size unknown" for that would be a listing
- *  that lies quietly. */
+/** Undefined when no file exists; any other stat error throws rather than report "size unknown". */
 function databaseSize(name: string): number | undefined {
   return statSync(agentDbPath(name), { throwIfNoEntry: false })?.size;
 }
 
 export async function listCommand(): Promise<void> {
-  // This project's agents, then the ones no project claims yet, so listing
-  // stays machine-wide while grouping stays honest about placement.
+  // This project's agents, then the ones no project claims.
   const localAgents = listLocalAgentNames();
   const configuredAgents = Object.values(loadConfigFile().agents ?? {});
   const cloudSession = resolveCloudSession();
@@ -53,9 +47,7 @@ export async function listCommand(): Promise<void> {
     }
 
     try {
-      // getLocalAgentInfo degrades field by field (a workspace predating a
-      // table still reports everything else), so only an unopenable database
-      // reaches the catch.
+      // getLocalAgentInfo degrades per field, so only an unopenable database reaches the catch.
       const info = getLocalAgentInfo(name);
 
       return {
@@ -66,10 +58,7 @@ export async function listCommand(): Promise<void> {
         dbSize: databaseSize(name),
       };
     } catch (caught) {
-      // Handled, and said so: one unopenable workspace must not hide the other
-      // nine, but a bare `catch {}` here is how three of the owner's real
-      // workspaces read `(error reading)` for months while the actual cause was
-      // `no such column: mission`. The reason travels with the row.
+      // One unopenable workspace must not hide the rest; the reason travels with the row.
       const reason = renderThrownChain({ cause: caught });
       diagnostics.failure(
         'workspace.read_failed',

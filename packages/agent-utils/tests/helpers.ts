@@ -7,8 +7,7 @@ export interface TestDb {
 	execRaw: (ddl: string) => void;
 }
 
-/** bun:sqlite-backed SqlExecutor matching the backends' wrappers
- *  (ArrayBuffer → Uint8Array coercion included). */
+/** bun:sqlite-backed SqlExecutor with the backends' ArrayBuffer → Uint8Array coercion. */
 export function createTestDb(): TestDb {
 	const db = new Database(":memory:");
 
@@ -33,14 +32,7 @@ export function createTestDb(): TestDb {
 	return { db, sql, execRaw: (ddl: string) => db.exec(ddl) };
 }
 
-/**
- * The three methods a store here consumes, over a Map.
- *
- * A fixture rather than the real filesystem because that lives in
- * `@kinu.run/core`, one layer up, and this package cannot import it — and
- * because `ReadWriteVFS` is exactly three methods, so a stand-in for it is
- * honest rather than a stub of something larger.
- */
+/** Map-backed `ReadWriteVFS`; the real filesystem lives in `@kinu.run/core`, a layer up. */
 export function createMemoryVfs(seed: Record<string, string> = {}) {
 	const files = new Map<string, string>(Object.entries(seed));
 

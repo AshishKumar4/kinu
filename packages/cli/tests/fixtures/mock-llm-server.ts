@@ -1,13 +1,6 @@
 /**
- * OpenAI-compatible /chat/completions stub that runs in its own process: the
- * packaged-CLI tests drive the TUI synchronously over a PTY, which freezes the
- * test's event loop, so the model endpoint cannot live in-process.
- *
- * The same child also serves the fixture's network guard: a loopback TCP
- * proxy that rejects everything, so a child pointed at it through the proxy
- * environment cannot reach the outside, and a `/network-check` surface that
- * reports whether anything tried. Prints `READY {"model":N,"proxy":N}` once
- * listening.
+ * Out-of-process /chat/completions stub: PTY tests block the test's event loop. Also serves a
+ * deny-all proxy and `/network-check`; prints `READY {"model":N,"proxy":N}` once listening.
  */
 import * as v from 'valibot';
 
@@ -27,9 +20,7 @@ interface CompletionChunk {
   }[];
 }
 
-// The guard's whole function is saying no. A child that honours the proxy
-// environment talks here instead of to the internet; one that bypasses it
-// still fails the test, on `attempted` never going true.
+// A child that bypasses the proxy still fails the test via `attempted`.
 let networkAttempted = false;
 
 const proxy = Bun.listen({

@@ -1,9 +1,4 @@
-/**
- * Slash-command core shared by the TUI chat app and the classic REPL. Commands
- * execute against the AgentClient contract and return a presentation-neutral
- * outcome; each surface maps outcomes to its own rendering (system message vs
- * stdout, picker overlay vs printed list).
- */
+/** Slash commands shared by the TUI and classic REPL; outcomes are presentation-neutral. */
 
 import { ADVISOR_SEVERITIES, DEFAULT_ROLE_ID, REASONING_EFFORTS, REFINEMENT_DECISIONS, offeredReasoningEfforts, formatPlanWithLineNumbers, planTitle, type PlanReview, type StagedSkillView, type RefinementRequestView, type RefinementRoute, isAdvisorSeverity, isReasoningEffort, summarizeRestorePlan, takeEvidence, type AlternateTakeSet, type BranchStatusEvent, type EvolutionConfigView, type FileCheckpointEntry, type ReasoningEffort, type TakePickOutcome } from '@kinu.run/core';
 import type { AgentChangelogView, AgentClient, AgentClientStatus, AgentRefinementView } from './agent-client';
@@ -20,19 +15,16 @@ export interface SlashCommandInfo {
   requires?: 'localControls' | 'consents' | 'checkpoints' | 'rename' | 'plans';
 }
 
-/** What one command runs against: the client, and the words typed after the
- *  command itself. */
 export interface SlashContext {
   readonly client: AgentClient;
-  /** The command as typed, lowercased — what an unknown outcome names. */
+  /** Lowercased; what an unknown outcome names. */
   readonly command: string;
-  /** The words after the command, joined and trimmed. */
+  /** Joined and trimmed. */
   readonly arg: string;
-  /** The words after the command, as typed. */
+  /** As typed. */
   readonly rest: readonly string[];
 }
 
-/** One command: the row the palette reads, and the handler dispatch calls. */
 interface SlashCommand extends SlashCommandInfo {
   readonly run: (context: SlashContext) => Promise<SlashOutcome> | SlashOutcome;
   /** Names that reach this handler without a palette row of their own. */
@@ -99,8 +91,7 @@ function commandHelp(
   return lines.join('\n');
 }
 
-/** How the owner's standing answer for one instruction file reads in the
- *  listing. A path discovery declined to follow says so instead. */
+/** A path discovery declined says so. */
 function instructionState(row: InstructionSourceRow): string {
   if (row.reason !== undefined) return `not readable: ${row.reason}`;
 
@@ -112,8 +103,7 @@ function instructionState(row: InstructionSourceRow): string {
   }
 }
 
-/** How well one command answers the typed query. Lower sorts first; null
- *  drops the command from the list. */
+/** Lower sorts first; null drops the command. */
 function matchRank(query: string, name: string, description: string): number | null {
   if (query === '') return 3;
 
@@ -157,7 +147,6 @@ function fuzzySubsequence(query: string, target: string): boolean {
   return query.length === 0;
 }
 
-/** Complete an unambiguous command prefix (e.g. `/sta` → `/status`). */
 export function resolveCommandDraft(commands: readonly SlashCommandInfo[], draft: string): string {
   const trimmed = draft.trim();
 
@@ -173,29 +162,23 @@ export function resolveCommandDraft(commands: readonly SlashCommandInfo[], draft
 export type SlashOutcome =
   | { kind: 'text'; text: string }
   | { kind: 'status'; status: AgentClientStatus }
-  /** The Evolution Changelog digest — TUI renders an overlay, classic prints. */
   | { kind: 'changelog'; view: AgentChangelogView }
-  /** Alternate Takes comparison — TUI renders an overlay, classic prints. */
   | { kind: 'takes'; set: AlternateTakeSet }
   | { kind: 'exit' }
   | { kind: 'model-picker' }
   | { kind: 'settings' }
-  /** The theme picker — TUI renders an overlay, classic says where themes live. */
   | { kind: 'theme' }
   | { kind: 'model-set'; spec: string }
   | { kind: 'effort-set'; effort: ReasoningEffort }
   | { kind: 'role-set'; role: string }
   | { kind: 'device-connect' }
-  /** Queue text to send after the active turn (surface-owned queue). */
+  /** Surface-owned queue. */
   | { kind: 'queue'; text?: string }
-  /** Steer-as-Branch: run the text as a parallel branch of the running turn
-   *  (surface-owned — falls back to a normal send when idle). */
+  /** Parallel branch of the running turn; a normal send when idle. */
   | { kind: 'branch'; text?: string }
-  /** `/plan <text>` — run the message as a Plan turn (surface-owned send, the
-   *  same shape as `branch`). Plan mode ends in a review this command decides. */
+  /** Plan turn ending in a review this command decides. */
   | { kind: 'plan'; text?: string }
-  /** Walk-back fork; ref is the picker number when given. Surfaces own the
-   *  candidate list (their rendered user messages) and the fork() call. */
+  /** Surfaces own the candidate list and the fork() call. */
   | { kind: 'fork'; ref?: string }
   /** /undo [n] — surfaces run performUndo() and then offer the walk-back. */
   | { kind: 'undo'; ref?: string }
@@ -208,8 +191,6 @@ const REFINE_USAGE =
   'Usage: /refine | /refine now | /refine show <n> <edit>\n'
   + `       /refine <${REFINEMENT_DECISIONS.join('|')}> <n> <edit> <digest>\n`
   + '  n and edit are the indexes /refine prints; digest is what /refine show prints.';
-
-/* ── The handlers, in table order ──────────────────────────────────────── */
 
 function helpCommand({ client }: SlashContext): SlashOutcome {
   return { kind: 'text', text: commandHelp(client) };
@@ -317,8 +298,7 @@ async function changelogCommand({ client, rest }: SlashContext): Promise<SlashOu
       return { kind: 'text', text: 'Usage: /changelog revert <n>. Take n from the /changelog listing.' };
     }
 
-    // Re-fetch so the index resolves against the same ordering the
-    // listing showed; the revert itself is id-addressed.
+    // Re-fetch so the index resolves against the ordering the listing showed.
     const view = await client.changelog();
     const entry = view.entries[n - 1];
 
@@ -525,10 +505,7 @@ async function instructionsCommand({ client, command, rest }: SlashContext): Pro
   const pageCursor = (token: string | undefined): { after: string } | null | 'invalid' => {
     if (token === undefined || token === 'root') return null;
 
-    // Page anchors contain a NUL separator, so they cannot travel verbatim
-    // through a shell-style command. Base64url is terminal-safe; the
-    // alphabet check is the complete malformed-input policy and means no
-    // decoder exception has to be caught or silently dropped.
+    // Page anchors contain NUL, so they travel as base64url; the alphabet check is the whole malformed-input policy.
     if (!/^[A-Za-z0-9_-]+$/.test(token)) return 'invalid';
     const after = Buffer.from(token, 'base64url').toString('utf8');
 
@@ -699,7 +676,6 @@ function cancelCommand(): SlashOutcome {
   return { kind: 'cancel' };
 }
 
-/** Every dispatchable name, aliases included, on the entry that runs it. */
 const DISPATCH = new Map<string, SlashCommand>(
   SLASH_COMMANDS.flatMap((command): [string, SlashCommand][] =>
     [command.name, ...command.aliases ?? []].map((name) => [name, command])),
@@ -715,16 +691,7 @@ export async function executeSlashCommand(client: AgentClient, input: string): P
   return entry.run({ client, command, arg: rest.join(' ').trim(), rest });
 }
 
-/**
- * `/model` and `/effort` edit the DEFAULT TIER of whichever store is
- * canonical right now: the account's catalog when signed in, the local
- * authority when not. Every unresolved tier aliases that one.
- *
- * The client is not asked to do anything. The session resolves its authority
- * per turn, so writing the envelope is what makes the next turn run under the
- * new tier — a second write through the client would be a duplicate of the
- * same setting in a second place.
- */
+/** Writes the canonical store; the session re-resolves authority per turn, so the client is not called. */
 export async function setModelPreference(
   _client: Pick<AgentClient, 'setModel'>,
   spec: string,
@@ -747,9 +714,7 @@ async function effortCommand({ client, arg }: SlashContext): Promise<SlashOutcom
   if (!arg) {
     const tier = (await loadActiveProfile()).catalog.tiers.default;
     const current = tier.reasoningEffort ?? 'medium';
-    // The levels are the MODEL's (#9): read off its catalog entry, never a
-    // fixed three. A catalog that cannot be read falls back to the whole
-    // vocabulary, saying so.
+    // Levels come from the model's catalog entry (#9); unreadable falls back to the whole vocabulary.
     let levels: string;
 
     try {
@@ -777,15 +742,12 @@ async function effortCommand({ client, arg }: SlashContext): Promise<SlashOutcom
 }
 
 export interface UndoResult {
-  /** Presentation-neutral report: the restore plan and what was applied. */
   text: string;
-  /** True when files were actually restored — the surface should then offer
-   *  the conversation walk-back through its existing fork mechanics. */
+  /** The surface then offers the conversation walk-back. */
   restored: boolean;
 }
 
-/** Group checkpoints by turn, newest first — /undo n addresses the nth most
- *  recent turn that has a file checkpoint (a turn may snapshot several dirs). */
+/** Newest first; a turn may snapshot several dirs. */
 function groupCheckpointsByTurn(entries: ReadonlyArray<FileCheckpointEntry>): FileCheckpointEntry[][] {
   const groups: FileCheckpointEntry[][] = [];
   const byTurn = new Map<string, FileCheckpointEntry[]>();
@@ -808,12 +770,7 @@ function groupCheckpointsByTurn(entries: ReadonlyArray<FileCheckpointEntry>): Fi
 
 const RESTORE_GLYPH = { modify: '~', create: '+', delete: '-' } as const;
 
-/**
- * The /undo flow shared by the TUI and the classic REPL: pick the checkpoint
- * taken before the nth-most-recent turn (default: last), show what restoring
- * changes (paths + counts), apply it, and tell the surface to offer the
- * conversation walk-back (the existing fork plumbing). Zero prompts.
- */
+/** Restore the checkpoint before the nth-most-recent turn (default last), then offer walk-back. */
 export async function performUndo(client: Pick<AgentClient, 'checkpoints'>, ref?: string): Promise<UndoResult> {
   const surface = client.checkpoints;
 
@@ -847,13 +804,8 @@ export async function performUndo(client: Pick<AgentClient, 'checkpoints'>, ref?
     return { text: lines.join('\n'), restored: false };
   }
 
-  // THE WINDOW CHOOSES; THE STORE ACTS. `list(200)` above is a browse — it ranks
-  // turns so `n` can address one. Acting on that window directly would restore
-  // PART of a turn and report it as whole: a turn snapshots one checkpoint per
-  // directory it touched, retention is per directory, and the limit is global, so
-  // a turn with dirs A, B, C can arrive with only A and B inside the window.
-  // `/undo 1` then restored two of three and printed "✓ N file(s) restored".
-  // Re-reading the chosen turn keyed by its id is the only way to hold all of it.
+  // The window chooses; the store acts. `list(200)` may hold only some of a turn's per-directory checkpoints,
+  // so re-read the chosen turn by id to restore all of it.
   const chosen = turns[n - 1];
   const chosenTurnId = chosen[0].turnId;
 
@@ -895,7 +847,6 @@ export async function performUndo(client: Pick<AgentClient, 'checkpoints'>, ref?
   return { text: lines.join('\n'), restored };
 }
 
-/** The classic-REPL takes listing (`/takes` without a pick). */
 export function renderTakesText(set: AlternateTakeSet): string {
   const lines = [`Alternate takes for: ${set.task.replace(/\s+/g, ' ').slice(0, 100)}`];
 
@@ -910,13 +861,7 @@ export function renderTakesText(set: AlternateTakeSet): string {
   return lines.join('\n');
 }
 
-/**
- * The staged file, whole, with the digest a decision has to quote back.
- *
- * Deliberately unbounded where every other renderer here clamps: this is the
- * approval surface, and a truncated one asks for a decision about bytes the
- * decider could not see.
- */
+/** Unbounded on purpose: this is the approval surface. */
 function renderStagedSkill(view: StagedSkillView, requestRef: string, editRef: string): string {
   return [
     `Staged skill for ${view.target}`,
@@ -933,20 +878,12 @@ function renderStagedSkill(view: StagedSkillView, requestRef: string, editRef: s
   ].filter((line, index) => line !== '' || index > 2).join('\n');
 }
 
-/** A `/refine <verb> <n> <m>` reference resolved against the live listing. */
 type LocatedRefinementEdit =
   | { readonly ok: true; readonly id: string; readonly index: number;
       readonly requestRef: string; readonly editRef: string }
   | { readonly ok: false; readonly error: string };
 
-/**
- * Resolve `/refine approve 1 2` against the listing the operator just read.
- *
- * By INDEX, because that is what the listing prints and what a person can type;
- * the ids are nanoids nobody retypes. Re-fetched before resolving, so the index
- * always resolves against the same ordering the decision is made from — the same
- * discipline `/changelog revert <n>` follows.
- */
+/** By listing index, against a re-fetched listing. */
 function resolveRefinementEdit(
   view: AgentRefinementView,
   requestRef: string | undefined,
@@ -978,12 +915,10 @@ function resolveRefinementEdit(
   };
 }
 
-/** One route line: which authority took the edit, and what state it is in. */
 function renderRefinementRoute(route: RefinementRoute, index: number): string {
   const where = route.owner === '' ? 'no owning authority' : route.owner;
 
-  // Offered only where a decision is still the owner's to make. A decided row
-  // that still advertised the action would invite a click that is refused.
+  // Offered only while the decision is still the owner's.
   const decide = route.disposition === 'pending_owner_approval'
     ? '  ← /refine show to read it, then approve|reject'
     : '';
@@ -993,7 +928,6 @@ function renderRefinementRoute(route: RefinementRoute, index: number): string {
     + (route.reason === undefined ? '' : `\n         ${route.reason}`);
 }
 
-/** What one request became, for the surface that just opened it. */
 function renderRefinementRequest(request: RefinementRequestView): string {
   const lines = [
     `Refinement ${request.id}: ${request.stage} (${request.scope} scope, ${request.trigger})`,
@@ -1010,7 +944,6 @@ function renderRefinementRequest(request: RefinementRequestView): string {
   return lines.join('\n');
 }
 
-/** The `/refine` listing: what is owed, then what has been refined. */
 function renderRefinementsText(view: AgentRefinementView): string {
   const lines = [view.debt.summary];
 
@@ -1037,14 +970,11 @@ function renderRefinementsText(view: AgentRefinementView): string {
   return lines.join('\n');
 }
 
-/** Narrow a BroadcastEvent to the Steer-as-Branch progress event. */
 export function isBranchStatusEvent(event: { type: string }): event is BranchStatusEvent {
   return event.type === 'branch_status';
 }
 
-/** The plan as the terminal shows it — the numbered body the agent edits
- *  against, plus what the owner can do about it. Shared by both surfaces, so
- *  a `plan_updated` broadcast and `/plan show` read identically. */
+/** Shared so a `plan_updated` broadcast and `/plan show` read identically. */
 export function renderPlanReview(plan: PlanReview | null): string {
   if (!plan) return 'No plan yet. /plan <what to plan> drafts one for review.';
 
@@ -1062,8 +992,6 @@ export function renderPlanReview(plan: PlanReview | null): string {
   ].join('\n');
 }
 
-/** One presentation-neutral line per branch_status broadcast — shared by the
- *  TUI and the classic REPL. */
 export function describeBranchStatus(event: BranchStatusEvent): string {
   const task = event.task.replace(/\s+/g, ' ').slice(0, 80);
 
@@ -1077,7 +1005,6 @@ export function describeBranchStatus(event: BranchStatusEvent): string {
   }
 }
 
-/** What a pick did, for the surfaces' confirmation line. */
 export function describeTakePick(result: TakePickOutcome, n: number): string {
   if (!result.changedAnswer) {
     return `Take ${n} confirmed. The answered approach stays as an explicit preference.`;
@@ -1087,10 +1014,7 @@ export function describeTakePick(result: TakePickOutcome, n: number): string {
     (result.continuationQueued ? ', and the agent will continue with this approach.' : '.');
 }
 
-/** The classic-REPL takes listing (`/takes` without a pick). */
-
-/** How the status line reports the evolution cadence. Absent stays absent:
- *  a workspace that did not report it shows no row. */
+/** Absent shows no row. */
 function autoEvolveText(autoEvolve: boolean | undefined): string | undefined {
   if (autoEvolve === undefined) return undefined;
 

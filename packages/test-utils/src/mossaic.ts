@@ -1,14 +1,6 @@
-/**
- * An in-memory Mossaic: tenants kept apart by id, the SDK's error codes on the
- * SDK's `code` field, symlinks and folders as the real tenant lists them. It
- * stands in for `createVFS(env, { tenant })` under `bun test` and behind the
- * component gallery's Drive frame in a browser, so it reaches nothing but the
- * core types. The real client is driven under workerd by
- * packages/cf-backend/tests/workerd/shared-drive.test.ts.
- */
+/** In-memory Mossaic stand-in for `createVFS(env, { tenant })`; the real client runs in packages/cf-backend/tests/workerd/shared-drive.test.ts. */
 import type { MossaicClient, MossaicChild, MossaicStat } from '@kinu.run/core';
 
-/** What a stat's type is called in a listing: Mossaic names a directory a folder. */
 const CHILD_KIND: Record<MossaicStat['type'], MossaicChild['kind']> = {
   dir: 'folder',
   file: 'file',
@@ -27,8 +19,7 @@ export interface FakeMossaic {
   stores: Map<string, Map<string, Uint8Array>>;
 }
 
-/** One tenant's files, keyed by tenant id. The fake never consults a path to
- *  decide visibility — only the tenant it was created for. */
+/** One tenant's files; visibility depends only on the tenant, never on path. */
 export function fakeMossaic(): FakeMossaic {
   const stores = new Map<string, Map<string, Uint8Array>>();
   const links = new Map<string, Map<string, string>>();
@@ -57,8 +48,7 @@ export function fakeMossaic(): FakeMossaic {
     const statOf = (p: string): MossaicStat => {
       const bytes = files.get(p);
 
-      // Unstamped is unknown (0), the same absence the product renders as no
-      // age; a stand-in epoch would read as decades old in every listing.
+      // Unstamped is 0 (unknown age); a stand-in epoch would read as decades old.
       const mtimeMs = touched.get(`${id}:${p}`) ?? 0;
 
       if (bytes !== undefined) return { type: 'file', size: bytes.byteLength, mtimeMs };

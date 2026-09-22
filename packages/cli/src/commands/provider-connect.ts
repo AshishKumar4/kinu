@@ -1,14 +1,4 @@
-/**
- * Connecting a provider, without a console.
- *
- * Two surfaces acquire the same credentials: `kinu setup` / `kinu provider
- * connect`, which own a terminal and a readline, and the TUI's onboarding
- * step, which owns neither. So the flows here take a PORT — a line to report
- * progress on, and one question-asker — and answer with an outcome the
- * surface renders in its own registers. Nothing below writes to stdout or
- * reads stdin, which is the whole point: the CLI supplies a console port and
- * the TUI supplies its step.
- */
+/** Provider connect flows behind a port, shared by the CLI console and the TUI onboarding step; nothing here touches stdout/stdin. */
 import { checkClaudeAvailability, checkOpenCodeAvailability, createOpenCodeProvider } from '@kinu.run/cli-backend';
 import {
   createCodexOAuthClient,
@@ -39,33 +29,27 @@ export type ProviderConnectId =
   | 'openai-compatible'
   | 'opencode';
 
-/** What Enter on a provider row does, which is what a surface has to be ready
- *  for: hand the person a URL and a code, take a secret, or probe a binary. */
 export type ProviderCredentialKind = 'browser' | 'device-code' | 'api-key' | 'binary';
 
 export interface ProviderAsk {
   readonly label: string;
-  /** Taken when the answer is empty. */
   readonly fallback?: string;
-  /** Never echoed: an API key or a token. */
+  /** Never echoed. */
   readonly secret?: boolean;
 }
 
 export interface ProviderConnectPort {
-  /** One line of progress, in the surface's own dim register. */
   report(line: string): void;
   ask(request: ProviderAsk): Promise<string>;
 }
 
 export type ProviderConnectOutcome =
   | { readonly kind: 'connected'; readonly summary: string; readonly detail?: string }
-  /** Nothing was stored, and this is the next step that would change that. */
   | { readonly kind: 'blocked'; readonly reason: string; readonly hint: string };
 
 export interface ProviderDescriptor {
   readonly id: ProviderConnectId;
   readonly label: string;
-  /** One line under the label, on both surfaces. */
   readonly blurb: string;
   readonly credential: ProviderCredentialKind;
 }
@@ -73,19 +57,16 @@ export interface ProviderDescriptor {
 export interface ProviderConnectionState {
   readonly descriptor: ProviderDescriptor;
   readonly connected: boolean;
-  /** The model or the store the connection resolves through, when connected;
-   *  the command that would connect it, when not. */
+  /** The resolved model or store when connected; the connect command when not. */
   readonly detail: string;
 }
 
 export interface ProviderConnections {
   readonly states: readonly ProviderConnectionState[];
   readonly signedInEmail?: string;
-  /** Account credentials no provider row above claims — the models.dev tail
-   *  connected in the web UI, usable here without ever holding the key. */
+  /** Account credentials no row claims (the models.dev tail connected in the web UI). */
   readonly accountExtras: readonly string[];
-  /** Why the account could not be asked. An unreachable account is not
-   *  evidence of an empty one. */
+  /** An unreachable account is not evidence of an empty one. */
   readonly accountUnreachable?: string;
 }
 
@@ -135,7 +116,6 @@ export const PROVIDER_CONNECTORS: readonly ProviderDescriptor[] = Object.freeze(
   },
 ] satisfies readonly ProviderDescriptor[]).map((descriptor) => Object.freeze(descriptor)));
 
-/** The account keys the rows above already speak for. */
 const NAMED_ACCOUNT_KEYS: Readonly<Record<string, true>> = Object.freeze({
   'openai.bearer': true,
   'openrouter.bearer': true,
@@ -146,8 +126,7 @@ const NAMED_ACCOUNT_KEYS: Readonly<Record<string, true>> = Object.freeze({
   'codex.oauth': true,
 });
 
-/** The account key each API-key provider is stored under. A local key WINS at
- *  resolution time, so both stores are read before a row says "connected". */
+/** A local key wins at resolution, so both stores are read before a row says "connected". */
 const ACCOUNT_CREDENTIAL_KEYS: Readonly<Record<string, string>> = Object.freeze({
   openai: 'openai.bearer',
   openrouter: 'openrouter.bearer',
@@ -155,11 +134,6 @@ const ACCOUNT_CREDENTIAL_KEYS: Readonly<Record<string, string>> = Object.freeze(
   'openai-compatible': 'openai-compat.default',
 });
 
-/**
- * What every provider row says right now, for the listing and for the
- * onboarding step. One reader: a row that reads "connected" in `kinu provider
- * list` and "not connected" in the TUI would be two answers to one question.
- */
 export async function readProviderConnections(): Promise<ProviderConnections> {
   const config = loadConfigFile();
   const account = await accountCredentials();
@@ -259,14 +233,7 @@ function currentModel(model: string | undefined, prefix: string): string | undef
   return model.slice(prefix.length + 1);
 }
 
-/**
- * Acquire and store one provider's credential, reporting through the port.
- *
- * Every branch either stores something and answers `connected`, or stores
- * nothing and answers `blocked` with the step that would unblock it. A
- * failure the person cannot act on — the account refusing a key — throws, and
- * the surface renders the chain.
- */
+/** Stores and answers `connected`, or stores nothing and answers `blocked`; failures the person cannot act on throw. */
 export async function connectProvider(
   id: ProviderConnectId,
   port: ProviderConnectPort,
@@ -339,16 +306,12 @@ async function connectCloudflare(port: ProviderConnectPort, origin: string | und
   return { kind: 'connected', summary: `Signed in as ${email}` };
 }
 
-/** The Claude subscription stores no credential here — the `claude` binary
- *  owns its own login — so "connect" is a probe, and the outcome is what the
- *  probe found. LOCAL ONLY: cloud agents need an Anthropic API key. */
+/** A probe only: the `claude` binary owns its login. Local only; cloud agents need an Anthropic API key. */
 async function connectClaude(port: ProviderConnectPort): Promise<ProviderConnectOutcome> {
   const { binary, loggedIn } = await checkClaudeAvailability();
 
   if (binary && loggedIn) {
-    // Nothing was written here, but this command is how the person says they
-    // have just connected it, and its availability is what a listing sweep
-    // probes. A resident session has no other way to learn that.
+    // Nothing is written, but a resident session learns of the connection only through this bump.
     bumpProviderRevision();
 
     return { kind: 'connected', summary: CLAUDE_READY, detail: 'Cloud workspaces cannot use this subscription. Connect an Anthropic API key for them.' };
@@ -389,11 +352,7 @@ async function runCodexDeviceFlow(port: ProviderConnectPort) {
   port.report(`Code: ${flow.userCode}`);
   openBrowser(flow.portalURL);
 
-  // No clock on this wait. The device code's lifetime belongs to the
-  // provider: its expiry arrives as the provider's own expired answer and
-  // ends the wait below, as denial does. A Date.now() bound here would end
-  // the wait on an invented number while the approval may still be on its
-  // way.
+  // No clock: the provider's own expired answer ends the wait.
   const probe = async () => {
     const poll = await client.pollDeviceFlow(flow.deviceAuthId, flow.userCode);
 
@@ -476,9 +435,7 @@ async function connectOpenAiCompatible(port: ProviderConnectPort, requestedModel
     })),
     clearLocally: () => updateConfigFile((config) => { delete config.providers?.openaiCompat?.default; }),
     model: spec,
-    // The usual openai-compat endpoint is Ollama or vLLM on this machine. The
-    // proxy sends to https only and could not reach a loopback address from a
-    // Worker anyway, so that key belongs here.
+    // Usually Ollama or vLLM on this machine; the proxy is https-only and a Worker cannot reach loopback.
     endpoint: baseURL,
   });
 
@@ -501,7 +458,6 @@ async function connectOpenCode(port: ProviderConnectPort, requestedModel: string
   let model = requestedModel ?? '';
 
   if (model === '') {
-    // The provider reads auth and models from the filesystem, not from deps.
     const provider = createOpenCodeProvider();
 
     let models;
@@ -534,34 +490,16 @@ async function connectOpenCode(port: ProviderConnectPort, requestedModel: string
   };
 }
 
-/**
- * Where a provider secret is written.
- *
- * Signed in, the answer is the Kinu account: sealed at rest there, reachable
- * from every machine through the provider proxy, and no second copy of the same
- * secret sitting in a config file on this disk. A local key remains an explicit
- * choice (`--local`) for working offline or against an endpoint only this
- * machine can see, and is still what happens when there is no account to
- * store it in.
- *
- * Returns where it landed so the caller can say so.
- */
+/** Signed in: the account (sealed, reachable via the provider proxy). Otherwise, or with `--local`, this machine. */
 async function storeProviderSecret(opts: {
   local: boolean;
   credKey: string;
   credential: unknown;
-  /** Applied when the secret stays on this machine. */
   storeLocally: () => void;
-  /** Removes this provider's local entry — run after a successful account
-   *  write, because a local key WINS at resolution time and an older one left
-   *  behind would quietly be the key that gets spent. */
+  /** Runs after an account write: a local key wins at resolution and would shadow it. */
   clearLocally: () => void;
-  /** Set as the default model either way — a pointer, not a secret. */
   model: string;
-  /** The endpoint the key is for, when the provider has one. An endpoint the
-   *  proxy could never reach (loopback, a private range, plain http) forces
-   *  the local answer whatever the account could hold. Otherwise the key would
-   *  be stored somewhere it can never be used from. */
+  /** An endpoint the proxy cannot reach (loopback, private range, plain http) forces local storage. */
   endpoint?: string;
 }): Promise<'account' | 'local'> {
   const reachable = opts.endpoint === undefined || reachableFromTheInternet(opts.endpoint);
@@ -576,10 +514,7 @@ async function storeProviderSecret(opts: {
   try {
     await setCloudCredential(cloud.origin, cloud.token, opts.credKey, decodeJsonValue({ value: opts.credential }));
   } catch (err) {
-    // Deliberately not falling back to disk: the user asked for account
-    // storage, and writing the secret somewhere they did not choose is the
-    // surprise this refusal prevents. Say what happened and what to do about
-    // it, and leave nothing behind.
+    // No fallback to disk: the user asked for account storage.
     throw new Error(
       `Your Kinu account did not accept the key (${renderThrownChain({ cause: err })}). `
       + 'Nothing was saved. Try again, or re-run with --local to keep the key on this machine.',
@@ -589,15 +524,12 @@ async function storeProviderSecret(opts: {
 
   opts.clearLocally();
   setDefaultModel(opts.model);
-  // The account now holds a credential it did not hold a moment ago, and the
-  // local copy is gone. Both change what a resident session can resolve.
   bumpProviderRevision();
 
   return 'account';
 }
 
-/** Whether the Kinu Worker could reach this endpoint at all: https, and not
- *  a loopback, private, link-local, IPv6 ULA or CGNAT host. */
+/** https, and not a loopback, private, link-local, IPv6 ULA or CGNAT host. */
 function reachableFromTheInternet(baseURL: string): boolean {
   const url = tolerate(() => new URL(baseURL), 'malformed-input');
 
@@ -612,7 +544,7 @@ function reachableFromTheInternet(baseURL: string): boolean {
   return !/^(localhost|127\.|0\.0\.0\.0|\[?::1\]?|10\.|192\.168\.|169\.254\.|172\.(1[6-9]|2\d|3[01])\.)/.test(hostname);
 }
 
-/** IPv6 unique-local addresses (fc00::/7): routable nowhere the proxy runs. */
+/** fc00::/7 */
 function isIPv6Ula(host: string): boolean {
   if (!host.includes(':')) return false;
   const first = Number.parseInt(host.split(':')[0] ?? '', 16);
@@ -623,7 +555,7 @@ function isIPv6Ula(host: string): boolean {
   return top === 0xfc || top === 0xfd;
 }
 
-/** Carrier-grade NAT (100.64.0.0/10): one provider's customers, not the internet. */
+/** 100.64.0.0/10 */
 function isCgnat(host: string): boolean {
   const octets = host.split('.');
 
@@ -633,15 +565,7 @@ function isCgnat(host: string): boolean {
   return first === 100 && (second ?? 0) >= 64 && (second ?? 0) <= 127;
 }
 
-/**
- * The one shape every LOCAL provider write takes: this machine's credential
- * set plus the model spec that points at it.
- *
- * The provider revision advances here rather than at each call site, because
- * every caller of this function is by definition changing what a model
- * resolution can reach — that is what the function is for — and a new provider
- * branch added below would otherwise silently skip the signal.
- */
+/** Every local provider write goes through here, so the provider revision bump cannot be skipped. */
 function withProvider(config: KinuConfig, patch: Pick<KinuConfig, 'model' | 'providers'>): KinuConfig {
   return {
     ...config,

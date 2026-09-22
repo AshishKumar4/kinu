@@ -1,10 +1,4 @@
-/**
- * `kinu acp` — serve one workspace over the Agent Client Protocol on stdio,
- * so editors (Zed, JetBrains, neovim, Marimo) can drive it as their agent.
- *
- * The process is a transport, not a second brain: every ACP session opens the
- * same AgentClient `kinu chat` uses.
- */
+/** `kinu acp`: serve one workspace over ACP on stdio; each session opens the same AgentClient `kinu chat` uses. */
 
 import { Writable } from 'node:stream';
 import { ndJsonStream } from '@agentclientprotocol/sdk';
@@ -23,8 +17,7 @@ export interface AcpCommandOptions {
 }
 
 export async function acpCommand(name: string, opts: AcpCommandOptions): Promise<void> {
-  // printError writes to stderr: stdout is the protocol channel and diagnostics
-  // must never touch it.
+  // stdout is the protocol channel; diagnostics must never touch it.
   const target = requireAgentTarget(name);
 
   if (target.mode === 'local') ensureLocalDaemonRunning();
@@ -32,7 +25,6 @@ export async function acpCommand(name: string, opts: AcpCommandOptions): Promise
   const app = createAcpAgent({
     name: 'kinu',
     version: VERSION,
-    // Each ACP session is its own recorded conversation on this workspace.
     openClient: async () => await createAgentClient(target, {
       model: opts.model,
       baseUrl: opts.baseUrl,
@@ -42,9 +34,7 @@ export async function acpCommand(name: string, opts: AcpCommandOptions): Promise
     }),
   });
 
-  // node:stream's toWeb returns its own structurally-identical stream types,
-  // which do not unify with the lib.dom ones the SDK is typed against. The
-  // conversion is real at this one boundary; the byte streams are the same.
+  // node:stream's web types do not unify with the lib.dom ones the SDK expects; the byte streams are the same.
   const connection = app.connect(ndJsonStream(
     Writable.toWeb(process.stdout),
     stdinBytes(),

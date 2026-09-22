@@ -1,14 +1,6 @@
 /**
- * The CLI's own tree, replaced without a moment where it is missing.
- *
- * Under `$KINU_HOME/cli`: `current` is what the launcher runs; `prev` is the
- * tree `current` replaced, kept for one launch so the launcher can restore it
- * when `current` fails its `--version` smoke; `next-<stamp>` is a tree being
- * staged. A staged tree is verified where it stands — every download against
- * its published checksum, then its own `cli.js --version` against the served
- * stamp — and only then swapped in with two renames. Nothing here touches the
- * launcher script: background code rewriting the shell that is interpreting it
- * is how half-swapped launchers happen, so `bin/kinu` stays `kinu update`'s.
+ * Atomic replacement of `$KINU_HOME/cli`: `current` runs, `prev` is kept one launch for rollback, `next-<stamp>` is
+ * staged and verified before two renames swap it in. Never touches `bin/kinu`, which belongs to `kinu update`.
  */
 import { createHash } from 'node:crypto';
 import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
@@ -30,10 +22,7 @@ const CLI_PREV = join(CLI_ROOT, 'prev');
 
 const STAGED_PREFIX = 'next-';
 
-/** The one lock every writer of `cli/` takes — this refresh, another child
- *  the same probe window started, and the launcher's own refresh — as a
- *  directory, which `mkdir` creates atomically or refuses. The holder's pid
- *  sits inside so a lock a dead process left is taken over, not waited on. */
+/** `mkdir`-atomic lock holding the pid, so a dead holder's lock is taken over. */
 const CLI_LOCK = join(CLI_ROOT, '.lock');
 
 type FetchLike = (input: string | URL | Request, init?: RequestInit) => Promise<Response>;
@@ -47,11 +36,7 @@ function stagedDirFor(served: string): string {
   return join(CLI_ROOT, `${STAGED_PREFIX}${served.replace(/[^A-Za-z0-9.-]/g, '-')}`);
 }
 
-/**
- * The published artifact for the running machine, or a refusal for a platform
- * no artifact is built for. Same words the daemon's HELLO uses, so the hub and
- * the CLI name a platform identically.
- */
+/** Same platform words as the daemon's HELLO. */
 function platformArtifactPath(): string {
   const artifact = cliArtifactPath(process.platform, process.arch);
 
@@ -60,18 +45,8 @@ function platformArtifactPath(): string {
   return artifact;
 }
 
-/**
- * Download one published artifact and prove it whole against the checksum
- * published beside it. The checksum is the integrity anchor exactly as it is
- * for the launcher: an incomplete deploy answers a download path with the SPA
- * shell, and unpacking an HTML page as a tarball fails without saying why.
- */
-/**
- * The served build's signed manifest, verified against the pinned key: the
- * one authority for which bytes are Kinu's. Refused — nothing downloaded —
- * when the manifest carries no signature, one that does not verify, or one
- * that does not cover the artifact asked for (SECURITY-devices C1).
- */
+/** An incomplete deploy serves the SPA shell at download paths. */
+/** Refused unless signed, valid, and covering the artifact (SECURITY-devices C1). */
 async function signedRelease(origin: string, served: string, fetchImpl: FetchLike): Promise<SignedRelease> {
   const res = await fetchImpl(`${origin}${CLI_VERSION_PATH}`, { cache: 'no-store' });
 
@@ -88,9 +63,7 @@ async function signedRelease(origin: string, served: string, fetchImpl: FetchLik
   return parsed.output;
 }
 
-/** Download one published artifact and prove it whole against the SIGNED
- *  checksum — the manifest's, never the origin's own `.sha256` file, which
- *  the origin chooses. */
+/** Verified against the signed manifest's checksum, never the origin's `.sha256`. */
 interface VerifiedDownload {
   readonly origin: string;
   readonly pathname: string;
@@ -113,8 +86,6 @@ async function fetchVerified({ origin, pathname, into, release, fetchImpl }: Ver
   writeFileSync(into, bytes);
 }
 
-/** One child process, run to completion: its stdout, or the failure with the
- *  child's own stderr in the message. */
 function runToCompletion(doing: string, command: string, args: string[], cwd?: string): Promise<string> {
   const { promise, resolve, reject } = Promise.withResolvers<string>();
   execFile(command, args, { cwd }, (cause, stdout, stderr) => {
@@ -129,18 +100,11 @@ function extractTarball(archive: string, into: string): Promise<string> {
   return runToCompletion(`unpacking ${archive}`, 'tar', ['-xzf', archive, '-C', into]);
 }
 
-/** The staged tree's own answer to `--version`, run from that tree. */
 function stagedVersion(tree: string): Promise<string> {
   return runToCompletion('launching the staged Kinu build', process.execPath, [join(tree, 'cli.js'), '--version'], tree);
 }
 
-/**
- * Stage the served build into `cli/next-<stamp>` and prove it: the release
- * manifest's signature verified against the pinned key, both archives
- * verified against the checksums it signed, unpacked over one tree, and that tree's
- * `cli.js --version` equal to the stamp the origin published. A failed stage
- * leaves nothing behind but `current`, byte for byte as it was.
- */
+/** Failure leaves `current` untouched. */
 async function stageServedBuild(origin: string, served: string, seams: RefreshSeams): Promise<string> {
   const fetchImpl = seams.fetchImpl ?? fetch;
   const next = stagedDirFor(served);
@@ -150,8 +114,7 @@ async function stageServedBuild(origin: string, served: string, seams: RefreshSe
   mkdirSync(work, { recursive: true });
 
   try {
-    // The signed manifest first, before any download: a refused signature
-    // costs one small read and lands nothing.
+    // Verify the signed manifest before any download.
     const release = await signedRelease(origin, served, fetchImpl);
     await fetchVerified({ origin, pathname: platformArtifactPath(), into: join(work, 'cli.tar.gz'), release, fetchImpl });
     await fetchVerified({ origin, pathname: CLI_RUNTIME_PATH, into: join(work, 'runtime.tar.gz'), release, fetchImpl });
@@ -177,14 +140,8 @@ async function stageServedBuild(origin: string, served: string, seams: RefreshSe
 }
 
 /**
- * Make a staged tree the current one. The last-known-good `prev` is kept
- * until the new tree is in place: `prev → prev.old`, `current → prev`,
- * `next → current`, then `prev.old` goes. A crash between any two lines
- * leaves a runnable tree for the launcher to find — a proven `next-*` when
- * `current` is missing, else `prev` — which is what its launch check
- * recovers from without a download. `prev` is kept for one launch; the
- * launcher removes it after `current` answers `--version`, or restores it
- * when it does not.
+ * Swap a staged tree in: `prev → prev.old`, `current → prev`, `next → current`, drop `prev.old`. A crash between
+ * any two steps leaves a runnable tree; the launcher drops `prev` once `current` passes `--version`.
  */
 function adoptStagedBuild(next: string): void {
   const retired = `${CLI_PREV}.old`;
@@ -199,9 +156,7 @@ function adoptStagedBuild(next: string): void {
   rmSync(retired, { recursive: true, force: true });
 }
 
-/** The build `cli/current` answers for, or null when there is none or it
- *  does not launch — the re-check every refresh makes under the lock, so a
- *  second child of one probe window adopts nothing over the first's work. */
+/** Re-checked under the lock so a second child adopts nothing over the first. */
 async function installedBuild(): Promise<string | null> {
   if (!existsSync(join(CLI_CURRENT, 'cli.js'))) return null;
 
@@ -213,7 +168,6 @@ async function installedBuild(): Promise<string | null> {
   }
 }
 
-/** Take the `cli/` lock, or answer null when another live process holds it. */
 function takeCliLock(): (() => void) | null {
   for (let attempt = 0; attempt < 2; attempt += 1) {
     const taken = tolerate(() => {
@@ -228,8 +182,7 @@ function takeCliLock(): (() => void) | null {
       return () => { rmSync(CLI_LOCK, { recursive: true, force: true }); };
     }
 
-    // The directory is there: a live holder keeps it; a holder that died
-    // between its mkdir and its exit left it, and the lock is taken over.
+    // A dead holder's lock is taken over.
     const holder = readLockHolder();
 
     if (holder !== null && processAlive(holder)) return null;
@@ -239,8 +192,6 @@ function takeCliLock(): (() => void) | null {
   return null;
 }
 
-/** The pid inside the lock, or null when no pid file is there — a holder
- *  that died between the mkdir and the write, or a lock nobody wrote into. */
 function readLockHolder(): number | null {
   const text = tolerate(() => readFileSync(join(CLI_LOCK, 'pid'), 'utf-8'), 'enoent');
 
@@ -251,8 +202,7 @@ function readLockHolder(): number | null {
 }
 
 function processAlive(pid: number): boolean {
-  // `kill 0` answers ESRCH for a pid nobody holds. Any other refusal is a
-  // process this user cannot signal in this user's own home, and propagates.
+  // ESRCH: no such pid. Any other refusal propagates.
   return tolerate(() => {
     process.kill(pid, 0);
 
@@ -260,11 +210,6 @@ function processAlive(pid: number): boolean {
   }, 'esrch') === true;
 }
 
-/**
- * A tree staged for `served` earlier that still answers `--version` with it —
- * what `kinu update` adopts without downloading again. Null when there is
- * none, or when the one there is does not answer for the served stamp.
- */
 async function verifiedStagedBuild(served: string): Promise<string | null> {
   const next = stagedDirFor(served);
 
@@ -273,8 +218,6 @@ async function verifiedStagedBuild(served: string): Promise<string | null> {
   try {
     if (isSameBuild(await stagedVersion(next), served)) return next;
   } catch (cause) {
-    // A staged tree that cannot launch is not a build; it is removed below,
-    // and the caller downloads a fresh one.
     if (!(cause instanceof KinuError)) throw cause;
   }
 
@@ -283,7 +226,6 @@ async function verifiedStagedBuild(served: string): Promise<string | null> {
   return null;
 }
 
-/** Staged trees left by an interrupted refresh, removed before a new stage. */
 function sweepStagedBuilds(keep: string | null): void {
   if (!existsSync(CLI_ROOT)) return;
 
@@ -294,19 +236,12 @@ function sweepStagedBuilds(keep: string | null): void {
   }
 }
 
-/**
- * Install the served build as `cli/current`: adopt a verified staged tree, or
- * stage one and adopt it. Resolves once the swap is on disk; the running
- * process keeps its own bundle, and the next launch runs the new one.
- */
+/** The running process keeps its bundle; the next launch runs the new one. */
 export async function refreshCliTree(origin: string, served: string, seams: RefreshSeams = {}): Promise<void> {
   mkdirSync(CLI_ROOT, { recursive: true });
   const release = takeCliLock();
 
-  // Another live refresh holds `cli/`: it lands the same served build, or a
-  // newer probe's. This one has nothing to add and exits without a word — the
-  // startup throttle is read-then-fetch-then-write, so two commands inside
-  // one probe window both spawn a child.
+  // Another live refresh holds `cli/` and lands the same or a newer build.
   if (release === null) return;
 
   try {
@@ -321,12 +256,7 @@ export async function refreshCliTree(origin: string, served: string, seams: Refr
   }
 }
 
-/**
- * The refresh as the startup check runs it: a detached child of this CLI that
- * stages and swaps on its own, so a command that has already printed its
- * answer exits without waiting for a download. The child is `kinu update
- * --background` on this very entry file — the one bundle known to run here.
- */
+/** Detached, so a command exits without waiting for a download. */
 export function spawnBackgroundRefresh(): void {
   const entry = process.argv[1];
 

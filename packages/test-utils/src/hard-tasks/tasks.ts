@@ -1,72 +1,20 @@
 /**
- * The hard-task corpus itself: seven algorithmic-optimization instances, each
- * scored on a measured oracle count against a measured reference.
- *
- * WHY THIS FAMILY AND NOT MATHEMATICS OR CTFs. The requirement was tasks where
- * progress is QUANTIFIABLE and ground truth needs no persuading. Three families
- * were considered and two rejected:
- *
- *   - Competition mathematics. A final numeric answer is checkable, but it is
- *     BINARY, and a binary reward is exactly what makes a search degenerate
- *     toward best-of-n because there is no partial credit to climb. Partial credit
- *     on a derivation needs a reader, and a reader is a judge.
- *   - CTFs. Ground truth is a flag string, so it is verifiable — but it is again
- *     one bit, and every interesting category (pwn, crypto with real tooling,
- *     forensics) needs binaries, `python3`, or the network. Those are exactly what
- *     the workspace cannot reach until runtime provisioning lands.
- *   - Algorithmic optimization, kept. The score is a MEASURED COST RATIO, so it is
- *     continuous by construction rather than by interpretation; the ground truth is
- *     a number the verifier computes itself; and it needs nothing but `node`,
- *     which the workspace already has.
- *
- * WHAT EVERY TASK HAS IN COMMON. The agent is handed a correct but wasteful
- * reference and asked to beat it on the one metered resource. There is no
- * mechanism to exercise and no tool it is asked to use: `edit`, `shell` and
- * `codemode` are means, and measuring them would say how the agent WORKED rather
- * than whether it SOLVED anything. Those still land in the run record as
- * covariates, where `isCovariateRow` keeps them out of any headline.
- *
- * WHY THE FLOORS ARE WHAT THEY ARE. `lowerBoundOps` is a PER-INSTANCE CERTIFICATE
- * bound: the fewest oracle calls any correct algorithm must make on THIS input to
- * be able to justify its answer. That is deliberately weaker than the textbook
- * worst-case bound, and the distinction is load-bearing. Finding both extremes
- * costs ceil(3n/2)-2 comparisons in the worst case, but certifying that x is the
- * minimum only needs each of the other n-1 elements to have lost one comparison,
- * and each comparison supplies one loss and one win — so n-1 comparisons can
- * certify both extremes on a fortunate input. An adversary bound used as a floor
- * would score a lucky run as a cheat. The worst-case optimum is therefore the
- * TARGET, where beating it saturates, and the certificate bound is the FLOOR,
- * below which the answer cannot have come through the oracle at all.
- *
- * WHY THE INSTANCES ARE SIZED THE WAY THEY ARE. Large enough that the reference's
- * cost separates from the target by more than a factor of a few — a narrow span
- * makes the log score twitchy — and small enough that the reference itself
- * finishes far inside the harness deadline. Both ends are asserted by
- * `hard-tasks.test.ts` against MEASURED counts, not argued here.
+ * Hard-task corpus: algorithmic-optimization instances scored by measured oracle count vs a measured reference
+ * (continuous, judge-free, `node`-only). Each `lowerBoundOps` is a per-instance certificate bound, not the
+ * worst-case adversary bound, so a lucky honest run is never scored as a cheat; the worst-case optimum is the target.
  */
 import { ratioTask, type HardTask } from './cost-model';
 
-/**
- * The comparison oracle, as harness source.
- *
- * Returns a sign rather than a difference so no magnitude leaks: `compare` is a
- * three-valued channel, which is what makes the cost of a task a statement about
- * the substrate rather than about the particular numbers hidden in it.
- */
+/** The comparison oracle as harness source; returns a sign so no magnitude leaks. */
 const COMPARE_ORACLE = `const oracle = { compare: meter((a, b) => {
   const x = valueOf(a); const y = valueOf(b);
   return x < y ? -1 : x > y ? 1 : 0;
 }) };`;
 
-/** The equality oracle. Strictly weaker than {@link COMPARE_ORACLE}: it cannot
- *  order anything, which is what forces the majority and partition tasks to be
- *  solved by counting rather than by sorting. */
+/** The equality oracle; cannot order, so majority/partition tasks must count rather than sort. */
 const EQUALS_ORACLE = 'const oracle = { equals: meter((a, b) => valueOf(a) === valueOf(b)) };';
 
-/** `n` distinct hidden values 0..n-1 in shuffled token order, so the k-th
- *  smallest value IS k and the ground truth needs no second sort to establish.
- *  Leaves `vals` in ascending order for the tasks whose answer is the whole
- *  sequence. */
+/** `n` distinct hidden values 0..n-1 in shuffled token order, so the k-th smallest is k; leaves `vals` ascending. */
 const DISTINCT_TOKENS = `const vals = new Array(P.n);
 for (let i = 0; i < P.n; i += 1) vals[i] = i;
 const tokens = shuffle(vals.map(tok));`;
@@ -109,15 +57,9 @@ const SELECT_KTH = ratioTask({
       'const decode = (out) => valueOf(out);',
       'emitTrials([trial(input, oracle, decode, P.k)]);',
     ].join('\n'),
-    // MEASURED, not derived: the cost of the best implementation this corpus ships
-    // (`BEST['hard-select-kth']` in `hard-tasks.test.ts`, a sampling selection that
-    // brackets the target rank from a sub-linear sample and partitions against both
-    // ends of the bracket) on this exact instance. 1.0 therefore means "matched the
-    // best algorithm we know" and is reachable by construction. The obvious
-    // pivot-at-a-time selection costs about 3.4n here and lands mid-scale.
+    // Measured: `BEST['hard-select-kth']` (sampling selection) on this instance; pivot-at-a-time costs ~3.4n.
     targetOps: 76_737,
-    // An element never compared could be the k-th smallest, so no correct answer
-    // can be certified without touching every element at least once.
+    // Every element must be compared at least once.
     lowerBoundOps: SELECT.n - 1,
   },
 });
@@ -183,26 +125,9 @@ function instance(hasMajority) {
       '  trial(instance(false), oracle, decode, null),',
       ']);',
     ].join('\n'),
-    // MEASURED, not derived: the same-size cancellation tournament in the test file's
-    // BEST spends 1488 calls on the first instance and 1504 on the second. It pairs
-    // tokens up, cancels equal-sized groups of unequal values two-for-one, and then
-    // verifies the survivor by reusing every unequal pair it produced — so no token is
-    // ever compared to the candidate twice. Plain Boyer-Moore costs 4696 for the pair
-    // and scores 0.93 against this, which is the headroom this task exists to have.
+    // Measured: the cancellation tournament in BEST spends 1488 + 1504; Boyer-Moore costs 4696 and scores 0.93.
     targetOps: 2992,
-    // Per instance, every token must appear in at least one call: one never passed to
-    // `equals` could hold the majority value, and in the second instance flipping a
-    // single untouched token to 0 would CREATE a majority. A call touches TWO tokens,
-    // so covering n of them needs ceil(n/2) calls — n for the pair of instances.
-    //
-    // This was 2*(n-1), and that was WRONG IN THE DANGEROUS DIRECTION. It counted one
-    // token per call, which is twice the true requirement, so it claimed a floor no
-    // correct algorithm may go below while a correct algorithm certainly can: the real
-    // per-instance certificate is nearer n/2 still (600 equalities prove 601 mutually
-    // equal tokens; a perfect matching of unequal pairs proves no majority exists). A
-    // floor above what an honest algorithm spends does not catch a cheat, it
-    // MANUFACTURES one, which is the single worst thing a ground-truth check can do.
-    // Nothing tripped it — BEST spends 2992 — but a floor is a proof or it is nothing.
+    // Every token must appear in some `equals` call; a call touches two tokens, so ceil(n/2) per instance.
     lowerBoundOps: MAJORITY.n,
   },
 });
@@ -210,19 +135,8 @@ function instance(hasMajority) {
 const BOUNDARY = { seed: 106, m: 150, n: 4000 };
 
 /**
- * WHY THIS TASK'S RUNS ARE CORRELATED, and why it was rebuilt rather than retargeted.
- *
- * As `hard-boundary-batch` this was m INDEPENDENT monotone searches, and a live flash
- * model returned 1796 calls — exactly m*ceil(log2 n) — for a score of 1.0000. That was
- * not a calibration miss: m independent searches over n positions carry m*log2(n) bits
- * of answer, so binary search per run IS the information bound and NO target can create
- * headroom above it. The problem had to change.
- *
- * Sorting the thresholds ascending is what buys the headroom. The answer vector is now a
- * staircase, its entropy is log2 C(n-2, m) = 918 bits rather than m*log2(n) = 1795, and
- * the gap between the two IS the score range: the obvious algorithm still pays 1796 while
- * an algorithm that starts each run at its predecessor's answer and steps by the typical
- * gap pays 951, within 4% of that entropy.
+ * Sorted thresholds make runs correlated: entropy log2 C(n-2, m) = 918 bits vs m*log2(n) = 1795, so
+ * per-run binary search (1796 calls) leaves headroom that independent searches would not.
  */
 const BOUNDARY_STAIRCASE = ratioTask({
   id: 'hard-boundary-staircase',
@@ -258,13 +172,7 @@ const BOUNDARY_STAIRCASE = ratioTask({
   signature: 'export function solve(input, oracle)',
   problem: {
     params: BOUNDARY,
-    // A block scan, NOT a linear scan, and the choice is load-bearing. Scoring is
-    // logarithmic between the reference and the target, so an absurd baseline flattens the
-    // whole scale: a per-run linear scan — what this task shipped as its reference until now
-    // — costs 285_515 calls on this instance, which stretches the span to 5.7 nats and would
-    // score the obvious binary search 0.884, inside the band by 0.066 and saying almost
-    // nothing. The block scan measures 9662, a span of 2.3 nats, on which the same 1.9x
-    // improvement is worth 0.27 of the scale.
+    // A block scan, not a linear scan: a linear-scan reference (285_515 calls) stretches the log span and flattens the score.
     reference: [
       'export function solve(input, oracle) {',
       '  const out = [];',
@@ -321,24 +229,9 @@ const oracle = { holds: meter((t) => valueOf(t) >= thresholdOf.get(t)) };`,
 };`,
       'emitTrials([trial(input, oracle, decode, expected)]);',
     ].join('\n'),
-    // MEASURED: what the staircase search in `hard-tasks.test.ts` actually spends on this
-    // instance. It walks the runs in order and probes each one first at the MEDIAN of where
-    // its threshold can still be — a gap ahead of the previous answer, not the midpoint of
-    // the range — then binary-searches the bracket that probe closes. 951 calls against an
-    // entropy of log2 C(3998, 150) = 918 bits, so this is not a generous multiple of a
-    // named algorithm: it is within 4% of what any algorithm can do on this instance.
+    // Measured: the staircase search in `hard-tasks.test.ts`, 951 calls vs entropy log2 C(3998, 150) = 918 bits.
     targetOps: 951,
-    // Two calls per run, and with the answers now CORRELATED that needs re-deriving rather
-    // than assuming. Under the brief's promise — non-decreasing, ties permitted — pinning
-    // run r's answer t needs a true call at index t and a false call at t-1, and BOTH must
-    // be calls on run r itself: for r' > r the promise gives t_r' >= t_r, so index t is
-    // false there whenever t_r' > t_r; for r'' < r index t-1 is true there whenever
-    // t_r'' < t_r. Only an EQUAL neighbour could donate a bound, and this instance's m
-    // positions are distinct, so no run has one. Hence 2m, and it is a per-instance
-    // certificate rather than an adversary bound: it is what the cheapest correct algorithm
-    // must spend here, not what a worst case would force. (Had the generator allowed ties,
-    // a block of k equal answers would share ONE such pair and the floor would have to drop
-    // to twice the number of distinct answers.)
+    // 2m: pinning each run needs a true and a false call on that run; positions are distinct, so no neighbour donates a bound.
     lowerBoundOps: 2 * BOUNDARY.m,
   },
 });
@@ -409,18 +302,9 @@ ${COMPARE_ORACLE}`,
 };`,
       'emitTrials([trial(input, oracle, decode, expected)]);',
     ].join('\n'),
-    // MEASURED: what the Hwang-Lin binary merge in `hard-tasks.test.ts` actually
-    // spends on this instance. Not derived from p*log2(q/p)+p, which only says the
-    // right order of magnitude.
+    // Measured: the Hwang-Lin binary merge in `hard-tasks.test.ts` on this instance.
     targetOps: 1610,
-    // The intra-run orderings are GIVEN, so a certificate does not have to
-    // re-establish them: all that is missing is the cross-run relations. Each of the
-    // p short elements must take part in at least one comparison — one never
-    // compared to anything in the long run could be moved past a long element
-    // without contradicting a single answer — and one comparison can certify at most
-    // one short element's side of the split. So p, not p+q-1: nearly all of the
-    // pairwise order is free from the given sortedness, and a floor above what a
-    // correct algorithm honestly spends would score an honest run as a cheat.
+    // Intra-run order is given; each of the p short elements needs at least one comparison, so p.
     lowerBoundOps: MERGE.p,
   },
 });
@@ -500,22 +384,9 @@ const input = { instances };`,
 };`,
       'emitTrials([trial(input, oracle, decode, expected)]);',
     ].join('\n'),
-    // MEASURED, not derived: the cost of discarding floor((k+1)/2) elements per
-    // comparison from whichever run holds the smaller of the two candidates, which is
-    // one comparison per halving and so about log2(k) per instance.
+    // Measured: discard floor((k+1)/2) per comparison, about log2(k) per instance.
     targetOps: 609,
-    // Per instance: because both runs are DECLARED ascending, the k-th smallest x
-    // sitting at index t of one run is certified by the boundary pair alone — the
-    // other run's element immediately below x and the one immediately above it —
-    // since sortedness then pins x's rank at t + (k - t). Two comparisons per
-    // instance, and nothing about one instance can be learned from a comparison
-    // inside another, so the bound composes over the batch.
-    //
-    // This floor is deliberately WEAK: the best algorithm the corpus ships spends an
-    // order of magnitude more. That is the point. Its job is not tightness but being
-    // unfalsifiable — a count below it proves the answer did not arrive through the
-    // oracle, and a token carries no other channel — whereas a floor set above some
-    // lucky-but-honest run would score that run as a cheat.
+    // Two comparisons per instance certify the boundary pair; deliberately weak, it guards against oracle bypass.
     lowerBoundOps: 2 * KTH_RUNS.instances,
   },
 });
@@ -561,18 +432,9 @@ const SECOND_SMALLEST = ratioTask({
       'const decode = (out) => valueOf(out);',
       'emitTrials([trial(input, oracle, decode, 1)]);',
     ].join('\n'),
-    // Kislitsyn's optimum: a knockout tournament finds the smallest in n-1
-    // comparisons, and the second smallest is the smallest of the at most
-    // ceil(log2(n)) elements the winner beat on its way up, for ceil(log2(n))-1
-    // more. Measured at exactly this on this instance — the winner here played all
-    // 16 rounds, so the closed form and the measurement coincide.
+    // Kislitsyn's optimum: n-1 for the knockout plus ceil(log2(n))-1; measured exactly on this instance.
     targetOps: SECOND.n + Math.ceil(Math.log2(SECOND.n)) - 2,
-    // Certificate bound. To certify x as second smallest, each of the n-2 elements
-    // other than x and the minimum must have lost at least once, and x must itself
-    // have lost to the minimum: n-1 distinct losses, and one comparison supplies
-    // one loss. The worst-case optimum n+ceil(log2(n))-2 is an ADVERSARY bound and
-    // would be wrong here — a lucky schedule can certify with fewer, and a floor
-    // that a correct run can fall below scores that run as a cheat.
+    // Certificate bound n-1: every element but the minimum must lose once; the adversary bound would be wrong here.
     lowerBoundOps: SECOND.n - 1,
   },
 });
@@ -650,55 +512,16 @@ const oracle = { below: meter((t) => valueOf(t) < THRESHOLD) };`,
 };`,
       'emitTrials([trial(input, oracle, decode, expected)]);',
     ].join('\n'),
-    // MEASURED, not derived: the cost of the saddleback walk on this instance. It
-    // starts at the bottom-left corner and every probe either moves one column right
-    // (the cell is below, so its whole column above it is too) or one row up (it is
-    // not, so the rest of that row is not either), which traces the entire staircase
-    // in at most rows + cols probes and usually fewer, because the walk stops the
-    // moment a row turns out to be wholly below the threshold.
+    // Measured: the saddleback walk from the bottom-left corner, at most rows + cols probes.
     targetOps: 316,
-    // A certificate bound, and DELIBERATELY a very weak one. With both monotonicities
-    // a single probe settles a whole quadrant — a true `below` at (r, c) settles
-    // everything up and to the left, a false one everything down and to the right —
-    // so on a degenerate instance a correct algorithm certifies the count with almost
-    // nothing: if the threshold sits under every value, two probes at opposite corners
-    // pin the answer at zero. Anything derived from `rows` is therefore an ADVERSARY
-    // bound, not a certificate, and would score a lucky-but-honest run as a cheat.
-    //
-    // Two is what survives that objection: no count is pinned without at least one
-    // probe that answers true and one that answers false, or the boundary could sit
-    // anywhere. Its job is anti-bypass rather than tightness — a token carries no
-    // channel besides the oracle, so a weak floor gives a cheat nothing to exploit
-    // while a tight one risks calling an honest run fraudulent.
+    // Two: one true and one false probe pin any count; a single probe can settle a quadrant, so anything larger is an adversary bound.
     lowerBoundOps: 2,
   },
 });
 
 /**
- * The corpus.
- *
- * Frozen rather than a mutable export, because the run record's `declaredTasks` is
- * derived from it and a corpus that can be appended to at runtime is a corpus
- * whose measured set can drift from its governed set.
- *
- * FOUR TASKS WERE REMOVED after the first live pilot, and the reason is a
- * property of the problems rather than of their calibration. `hard-topk-smallest`,
- * `hard-minmax-pair` and `hard-classes-partition` are SATURABLE BY CONSTRUCTION:
- * for each, the obvious algorithm IS the proven optimum — any streaming top-k
- * costs n + o(n) against a floor of n-1; ceil(3n/2)-2 is the bound for both
- * extremes and the agent returned exactly 59998; a representative list is the only
- * thing equality-only partitioning can do. `hard-sort-total` went for the same
- * reason on stronger evidence — an inequality rather than an argument. Against its
- * insertion-sort reference at 572357 comparisons, a top-down merge sort costs
- * 14011 and scores 0.9938 even with the target set to a MEASURED Ford-Johnson
- * merge-insertion sort at 13691; a hypothetical best sitting exactly on the
- * information bound ceil(log2(1500!)) = 13669 would still score merge 0.9934. No
- * target can create headroom there, because a quadratic reference is separated
- * from EVERY n-log-n sort by a factor of forty and the good sorts are separated
- * from each other by 2.5%, so the first idea holds 99% of the span. Retargeting
- * cannot fix a task whose ceiling is the first idea anyone has: it can never
- * produce a DIFFERING pair, so it buys no statistical power while costing about
- * 22k neurons per run.
+ * The corpus, frozen so `declaredTasks` cannot drift. Tasks whose obvious algorithm is optimal are excluded:
+ * e.g. merge sort scores 0.9938 against a Ford-Johnson target of 13691 (information bound ceil(log2(1500!)) = 13669).
  */
 export const HARD_TASKS: readonly HardTask[] = Object.freeze([
   SELECT_KTH,

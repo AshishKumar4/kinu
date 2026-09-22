@@ -44,8 +44,6 @@ function sessions() {
     const runtime: AgentRuntime = { ...rt, actor: handle, identity: { ...rt.identity, id: handle.actorId, name: handle.name } };
     const broadcasts: BroadcastEvent[] = [];
     const enqueued: ProgrammaticTurn[] = [];
-    // The REAL store bundle, so a turn's claim is written through the same
-    // memoized ledger production uses rather than a fixture beside it.
     const stores = createAgentStores(() => runtime.storage.sql, () => handle, runtime.storage.transactionSync, async () => ({ vfs: runtime.storage.vfs, artifactDirectory: '/actors/' + handle.actorId }));
 
     const actor: ActorSession = new ActorSession({ history: stores.history, runtime, claims: stores.claims, installedBuild: null, orchestration: {
@@ -53,8 +51,6 @@ function sessions() {
       host: {
         broadcast: event => { broadcasts.push(event); },
     
-        // Captured rather than thrown: what the seam hands a steer back as —
-        // the user-origin rerun turn — is the assertion.
         enqueueTurn: async (turn) => {
           enqueued.push(turn);
     
@@ -159,9 +155,6 @@ test('logical actors in one store keep live context, mode and structured tool da
     expect(leftRequests).not.toContain('right-only steer');
     expect(rightRequests).not.toContain('left private input');
     expect(rightRequests).not.toContain('left dynamic context');
-    // The steer that never saw a step boundary reruns as a user-origin turn —
-    // what the seam hands the host when the turn settles, observed here the
-    // way the session's own pump would.
     right.actor.orchestrator.inbox.settle({ completed: true });
     await Promise.resolve();
     expect(right.enqueued).toEqual([expect.objectContaining({
@@ -203,8 +196,6 @@ test('a released lease cannot mutate or execute a newer turn of the same actor',
     await actor.openTurnInput(current, { item: {}, message: { role: 'user', content: 'new input' }, birthContext: async () => [] });
     expect(await actor.execute(current, input, event => { events.push(event); })).toMatchObject({ text: 'new answer', failure: null });
     expect(actor.inFlight).toBe(false);
-    // A refused steer — no turn in flight — is never queued into the seam, so
-    // settling reruns nothing.
     actor.orchestrator.inbox.settle({ completed: true });
     await Promise.resolve();
     expect(enqueued).toEqual([]);
@@ -282,10 +273,7 @@ test.each(['dispatch', 'published'])('interrupting one actor at %s preserves its
 });
 
 test('bound steer persistence reserves on accept and lands rows at the drain', async () => {
-  // The seam's two halves, observed in order: a send reaching a busy actor
-  // calls onAccept BEFORE its 'queued' broadcast (the row precedes the
-  // acknowledgement), and the step boundary calls onDrain with the described
-  // rows — the two moments a durable backend keys its reservation table on.
+  // onAccept fires before the 'queued' broadcast and onDrain at the step boundary: the two moments a durable backend keys reservations on.
   const { left: { actor }, db } = sessions();
   const accepted: string[] = [];
   const drained: string[][] = [];
@@ -294,9 +282,7 @@ test('bound steer persistence reserves on accept and lands rows at the drain', a
     prepareDrain: async rows => () => { drained.push(rows.map(row => row.id)); },
   });
 
-  // Gating the tool's execution holds the turn open past the tool call's own
-  // step boundary: the send lands while the step is in flight, and the drain
-  // (the onDrain call) is what the second model request's prompt proves.
+  // Holding the tool keeps the turn open past the step boundary so the send lands mid-step.
   const toolGate = Promise.withResolvers<void>();
   const firstCall = Promise.withResolvers<void>();
   const secondCall = Promise.withResolvers<void>();
@@ -331,15 +317,12 @@ test('bound steer persistence reserves on accept and lands rows at the drain', a
   }, () => {});
 
   try {
-    // The tool call is issued; the tool is held. The send buffers now.
     await firstCall.promise;
     const sent = actor.send({ id: 'steer-1', text: 'reserved before acknowledged' });
     expect(accepted).toEqual(['steer-1']);
     expect(await sent).toBe('mid-turn');
     expect(drained).toEqual([]);
 
-    // Releasing the tool crosses the step boundary: the drain writes its rows
-    // and the next model request already carries the landed message.
     toolGate.resolve();
     await secondCall.promise;
     expect(drained).toEqual([['steer-1']]);

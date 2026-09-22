@@ -1,23 +1,7 @@
 /**
- * Node-side `eval` builder — the CLI's answer to the CF backend's
- * codemode-backed tool. Handed to `buildActorTools` as `codemode`, it
- * gives the CLI a working `eval` without a workerd loader.
- *
- * The returned tool's execute compiles the LLM's code via `new Function()`
- * and runs it in-process with the execution router's provider namespaces
- * (`workspace.*` from the always-registered inline executor, plus any
- * extras) and the ONE callable namespace core declares
- * (tools/sandbox-contract.ts): `tools.<name>` for every native tool of the
- * finished surface and for every crafted tool. The declaration the model
- * reads lists natives; the live ledger describes the same crafted resolver.
- *
- * The crafted set is resolved per execute (surface.craftedTools()), so a
- * tool crafted mid-turn is callable and declared at the next step rather
- * than at the next toolset rebuild.
- *
- * Node/Bun only — V8 codegen is permitted there. This module is NEVER
- * imported by the CF backend, keeping `new Function` outside the
- * Durable Object isolate.
+ * Node-side `eval` builder: the CLI's counterpart to the CF codemode tool, run
+ * in-process via `new Function`. Never imported by the CF backend, keeping
+ * codegen outside the Durable Object isolate.
  */
 
 import { requireBuild } from '@kinu.run/core';
@@ -45,12 +29,9 @@ export interface NodeExecuteToolFactoryDeps {
   extraProviders?: CodemodeProvider[];
 }
 
-/** The sandbox parameters this factory always binds, in order: the workspace
- *  namespace, the tool record under its one callable name, the capturing
- *  console, and the machine's own `require`. A provider may not take any of
- *  them. `require` is bound explicitly because a `new Function` body sees no
- *  module scope and Bun defines no `require` global, while the shared
- *  description promises it (SANDBOX_FACTS.local in core's registry). */
+/** Always-bound sandbox parameters; a provider may not take them. `require` is
+ *  bound explicitly: a `new Function` body sees no module scope and Bun has no
+ *  `require` global, yet SANDBOX_FACTS.local promises it. */
 const FIXED_NAMESPACES: readonly string[] = [
   'workspace', CRAFTED_TOOL_NAMESPACE, 'console', 'require',
 ];
@@ -68,10 +49,7 @@ interface ExecuteSuccess {
   logs?: string[];
 }
 
-/**
- * Build the CLI's `eval` builder. Pass as `codemode` to
- * `buildActorTools`, or call it with a finished confined surface (heads).
- */
+/** Pass as `codemode` to `buildActorTools`, or call with a finished confined surface (heads). */
 export function createNodeCodemodeToolFactory(deps: NodeExecuteToolFactoryDeps = {}): CodemodeBuilder {
   return (surface) => {
     const providers: CodemodeProvider[] = [
@@ -79,22 +57,14 @@ export function createNodeCodemodeToolFactory(deps: NodeExecuteToolFactoryDeps =
       ...(deps.extraProviders ?? []),
     ];
 
-    // Native tools dispatch to the finished surface; the crafted set is read
-    // per call below, and a crafted name shadows a native one the way the CF
-    // prelude's own definitions do.
+    // A crafted name shadows a native one, as in the CF prelude.
     const nativeBindings = nativeToolFunctions(surface.native);
 
     const toolsDeclaration = renderToolsDeclaration(surface.native, []);
 
     return withCraftedToolDeclarations(tool({
-      // The one description, composed in core (registry.
-      // renderCodemodeDescription) so this builder really is the CF
-      // codemode tool on a different runtime rather than a different tool. The
-      // namespace declarations are the point: each provider carries its own
-      // `types` and every one of them is read into this description.
-      // Collecting them and reading none tells the model nothing about
-      // `memory.*`, `tasks.*`, `agents.*`, `web.*` or `llm.*` while handing it
-      // all of them as callables.
+      // Every provider's `types` must be read into the description, or the model
+      // gets callables it was never told about.
       description: renderCodemodeDescription(
         [
           toolsDeclaration,
@@ -105,13 +75,8 @@ export function createNodeCodemodeToolFactory(deps: NodeExecuteToolFactoryDeps =
       inputSchema: codemodeInputSchema(),
       execute: (args, options) => withCodemodeProgram(async () => {
         requireBuild('Native JavaScript execution without a constrained runtime');
-        // `console` is shadowed by a capturing stand-in: this builder runs the
-        // model's code in-process, so a real console.* would write straight to
-        // the CLI's stdout — which, under `kinu exec --json`, IS the event
-        // stream. Capture the output and return it as `logs` (the CF codemode
-        // sandbox's contract), so the model gets what it printed and the stream
-        // stays clean. Declared out here so the catch below can return partial
-        // output produced before a throw.
+        // Capture console: under `kinu exec --json` stdout is the event stream.
+        // Returned as `logs`, the CF codemode sandbox contract.
         const logs: string[] = [];
 
         const capture: Console['log'] = (...values) => {
@@ -129,8 +94,7 @@ export function createNodeCodemodeToolFactory(deps: NodeExecuteToolFactoryDeps =
             toolBindings[name] = codemodeFunction(CRAFTED_TOOL_NAMESPACE, name, entry.execute);
           }
 
-          // Resolved here, not at construction: the CraftStore is read for
-          // THIS call, so a tool the model crafted a step ago is callable now.
+          // Read per call so a tool crafted a step ago is callable now.
           for (const [name, entry] of Object.entries(surface.craftedTools())) {
             toolBindings[name] = codemodeFunction(CRAFTED_TOOL_NAMESPACE, name, async (...toolArgs) => entry.execute(decodeJsonValue({ value: toolArgs[0] ?? {} })));
           }
@@ -147,14 +111,9 @@ export function createNodeCodemodeToolFactory(deps: NodeExecuteToolFactoryDeps =
             providerBindings[p.name] = nsp;
           }
 
-          // The `workspace` namespace comes from the execution router's inline
-          // executor, always registered by createCLIRuntime.
           const workspace = providerBindings['workspace'] ?? {};
 
-          // Build the arg names / values for the sandboxed function so every
-          // registered provider namespace is accessible by name. The fixed
-          // names are excluded from the provider list so a namespace can never
-          // duplicate one of them (a `new Function` duplicate-parameter crash).
+          // Fixed names excluded: a duplicate `new Function` parameter crashes.
           const extraNamespaces = Object.keys(providerBindings).filter(n => !FIXED_NAMESPACES.includes(n));
           const argNames = [...FIXED_NAMESPACES, ...extraNamespaces];
 
@@ -163,7 +122,6 @@ export function createNodeCodemodeToolFactory(deps: NodeExecuteToolFactoryDeps =
             ...extraNamespaces.map(n => providerBindings[n]),
           ];
 
-          // Invoke codemode's normalized callable once with this local surface.
           const fn = new Function(
             ...argNames,
             `return (\n${normalizeCode(args.code)}\n)()`,
@@ -181,10 +139,7 @@ export function createNodeCodemodeToolFactory(deps: NodeExecuteToolFactoryDeps =
 
           return payload;
         } catch (error) {
-          // A bare `run(...)` etc. inside the model's code throws a plain V8
-          // ReferenceError here (no dispatcher involved — `shell` was simply
-          // never one of the bound argNames above); rewrite that one shape
-          // into an actionable correction, same as the CF codemode sandbox.
+          // A bare native-tool call throws a plain ReferenceError; rewrite it into a correction.
           const message = explainNativeToolReferenceError(renderThrownChain({ cause: error }));
           throw new Error(logs.length > 0 ? message + '\nConsole output:\n' + logs.join('\n') : message, { cause: error });
         }
@@ -217,9 +172,7 @@ function adaptExecutorProvider(
   };
 }
 
-/** One console argument → its captured-log string, matching how console
- *  renders it: strings verbatim, everything else JSON (so the model reads the
- *  object it printed, not "[object Object]"). */
+/** Strings verbatim, everything else JSON, so the model never reads "[object Object]". */
 function formatLogArg(input: { value: unknown }): string {
   const text = v.safeParse(v.string(), input.value);
 
@@ -227,7 +180,6 @@ function formatLogArg(input: { value: unknown }): string {
 
   try { return JSON.stringify(input.value) ?? String(input.value); }
   catch (error) {
-    // Clamp precedent: String() on a cyclic value is "[object Object]" — nothing carried — so the reason takes its place.
     return `unserializable tool input: ${renderThrownChain({ cause: error })}`;
   }
 }

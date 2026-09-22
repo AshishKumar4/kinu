@@ -16,9 +16,7 @@ export async function createCommand(name: string | undefined, opts: {
 }): Promise<void> {
   ensureAgentHome();
 
-  // Joining takes nothing: the agent inherits the mission of a peer already
-  // here, and its first message names it. Asking for a name and a purpose is
-  // exactly what this path exists to stop asking for.
+  // Joining takes nothing: the agent inherits a peer's mission and its first message names it.
   if (opts.join) {
     await joinWorkspace(opts);
 
@@ -81,9 +79,6 @@ export async function createCommand(name: string | undefined, opts: {
   }
 }
 
-/** `kinu create --join`: one more agent in the workspace already here. It has
- *  no name to print because it does not have one yet — the slug is how it is
- *  addressed, and its first message titles it. */
 async function joinWorkspace(opts: { model?: string; baseUrl?: string; auth?: string }): Promise<void> {
   const spinner = createSpinner('Adding an agent to this workspace…');
   spinner.start();
@@ -104,8 +99,7 @@ async function joinWorkspace(opts: { model?: string; baseUrl?: string; auth?: st
   }
 }
 
-/** The workspace exists either way — this is the difference between learning
- *  the model is unusable now and learning it when the first turn dies. */
+/** Warn now rather than when the first turn dies; the workspace exists either way. */
 async function warnUnusableModel(opts: ModelWarningInput): Promise<void> {
   const unusable = await findUnusableModel(opts);
 

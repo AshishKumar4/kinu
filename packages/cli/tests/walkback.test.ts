@@ -1,6 +1,4 @@
-// Walk-back fork-point resolution: candidates from a rendered message list and
-// pivot lookup in a canonical store, robust to duplicate texts and extra rows
-// (programmatic turns) that surfaces don't render as user messages.
+// Robust to duplicate texts and extra programmatic rows the surfaces never render as user messages.
 import { describe, expect, test } from 'bun:test';
 import { findForkPivot, forkCandidates } from '../src/agent-client';
 
@@ -35,12 +33,12 @@ describe('forkCandidates', () => {
 
 describe('findForkPivot', () => {
   const rows = [
-    { role: 'user', content: 'continue' },        // 0
-    { role: 'assistant', content: 'a' },           // 1
-    { role: 'user', content: 'reactor wake' },     // 2 (programmatic row the TUI never rendered)
-    { role: 'assistant', content: 'b' },           // 3
-    { role: 'user', content: 'continue' },         // 4
-    { role: 'assistant', content: 'c' },           // 5
+    { role: 'user', content: 'continue' },
+    { role: 'assistant', content: 'a' },
+    { role: 'user', content: 'reactor wake' },     // programmatic row the TUI never rendered
+    { role: 'assistant', content: 'b' },
+    { role: 'user', content: 'continue' },
+    { role: 'assistant', content: 'c' },
   ];
 
   test('resolves duplicates by occurrence from the end, ignoring unrendered rows', () => {

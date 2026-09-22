@@ -1,7 +1,3 @@
-/**
- * One parser per option shape, shared by every command. A command that
- * parses its own numbers is the one that forgets to validate them.
- */
 import type { CloudWebhookTriggerInput } from './cloud-api';
 import type { JsonObject, JsonValue } from '@kinu.run/core';
 import { JsonObjectSchema, nonEmptyString } from '@kinu.run/core';
@@ -41,11 +37,7 @@ export function normalizeWebhookAuthMode(value: string | undefined): CloudWebhoo
   throw new Error('--auth-mode must be hmac, bearer, or mtls');
 }
 
-/**
- * Coerce a JSON value to an object. Objects pass through untouched. Anything
- * else is kept under `key` so the payload survives. The key names the context
- * that kept it: bundle rows use `value`, tool-call args use `input`.
- */
+/** Non-objects are kept under `key` so the payload survives. */
 export function asRecord(input: { value: JsonValue }, key: string): JsonObject {
   const parsed = v.safeParse(JsonObjectSchema, input.value);
 
@@ -54,18 +46,12 @@ export function asRecord(input: { value: JsonValue }, key: string): JsonObject {
   return { [key]: input.value };
 }
 
-/**
- * Read a trimmed, non-empty string field. Blank strings read as absent, so a
- * record that wrote an empty display name renders its fallback, not a gap.
- */
+/** Blank reads as absent. */
 export function stringField(record: JsonObject, key: string): string | undefined {
   return nonEmptyString({ value: record[key] });
 }
 
-/**
- * Read a finite number field. Numeric strings read as their number, so a
- * command payload carrying `"limit": "20"` behaves like the number it names.
- */
+/** Numeric strings read as numbers. */
 export function numberField(record: JsonObject, key: string): number | undefined {
   const value = record[key];
   const number = v.safeParse(v.pipe(v.number(), v.finite()), value);

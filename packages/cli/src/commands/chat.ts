@@ -38,13 +38,11 @@ export async function chatCommand(
   name: string | undefined,
   opts: ChatCommandOptions,
 ): Promise<void> {
-  // No name: let user pick from existing agents
   let chosen = name;
 
   if (chosen === undefined || chosen === '') {
     if (!opts.classic && process.stdin.isTTY && process.stdout.isTTY) {
-      // Lazy: opentui captures the terminal — it must never load on
-      // non-TUI command paths (e.g. the installer's setup prompts).
+      // Lazy: opentui captures the terminal and must never load on non-TUI paths.
       const { runHomeTui } = await import('../tui/home-app');
       const action = await runHomeTui(opts);
 
@@ -85,9 +83,7 @@ export async function chatCommand(
   if (target.mode === 'local') ensureLocalDaemonRunning();
   installTurnDiagnostics();
   const client = await createAgentClient(target, opts);
-  // A cloud workspace keeps its conversation server-side, so opening one
-  // replays it. A local workspace's durable conversation lives in the agent
-  // database and seeds the model directly; the terminal starts blank.
+  // Only cloud replays history; a local conversation seeds the model from the database.
   const hydrateHistory = target.mode === 'cloud';
 
   if (opts.classic || !process.stdin.isTTY || !process.stdout.isTTY) {
@@ -112,8 +108,7 @@ export async function chatCommand(
       },
       onNewAgent: async (current) => {
         if (current.mode === 'cloud') {
-          // The class IS the capability: only the cloud client can create an
-          // additional agent on the workspace it is connected to.
+          // Only the cloud client can create an additional agent on its workspace.
           if (!(current instanceof CloudAgentClient)) {
             throw new Error('This cloud session cannot create additional agents.');
           }

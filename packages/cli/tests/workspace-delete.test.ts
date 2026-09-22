@@ -14,7 +14,7 @@ const repoRoot = resolve(__dirname, '../../..');
 
 const cliBin = join(repoRoot, 'packages/cli/bin/cli.ts');
 
-/** Fresh throwaway project directory per spawn: the CLI records its cwd as the agent file plane, so a spawn must never sit in the developer repo. */
+/** The CLI records its cwd as the agent file plane, so a spawn must never sit in the developer repo. */
 function newProjectDir(): string {
   const dir = scratchDir('test-project');
 
@@ -95,7 +95,6 @@ describe('kinu workspace delete', () => {
     expect(exitCode).toBe(1);
     expect(stderr).toContain('--yes');
     const stored = v.parse(WorkspaceConfigSchema, JSON.parse(readFileSync(join(home, 'config.json'), 'utf8')));
-    // The refusal deleted nothing: the cloud entry stands exactly as seeded.
     expect(stored.agents['web-agent']).toEqual({
       name: 'web-agent',
       mode: 'cloud',

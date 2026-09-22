@@ -70,8 +70,6 @@ describe('menu entry normalization + contextWindowForSpec', () => {
   });
 
   test('maps local resolver rows (provider + id) to picker entries with metadata', () => {
-    // The exact shape LocalAgentClient.listModels feeds /model: the signed-in
-    // resolver lists ModelInfo rows under their provider id.
     const rows = normalizeModelMenu({ payload: { models: [
       {
         provider: 'workers-ai', id: '@cf/zai-org/glm-5.3', label: 'GLM 5.3',

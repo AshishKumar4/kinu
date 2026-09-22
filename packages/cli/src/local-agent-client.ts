@@ -78,18 +78,12 @@ export interface LocalAgentClientOptions {
   noAutoEvolve?: boolean;
   /** One task turn, then exit — see LocalAgentClientDeps.oneShot. */
   oneShot?: boolean;
-  /** Recorder controls for this process's diagnostic transcript. */
   transcript?: CliSessionOptions;
-  /** Which invocation surface drives background policy. Default:
-   *  'interactive'. */
   surface?: InvocationSurface;
-  /** Canonical directory the workspace file and shell tools bind to — the
-   *  placement recorded on the agent's ref, shared by its peers. Absent leaves
-   *  the runtime on its own in-database plane. */
+  /** The ref's recorded placement, shared by peers. Absent leaves the runtime on its in-database plane. */
   cwd?: string;
 }
 
-/** Open a local agent database and wrap its LocalAgentSession as an AgentClient. */
 export async function openLocalAgentClient(name: string, opts: LocalAgentClientOptions = {}): Promise<LocalAgentClient> {
   const dbPath = agentDbPath(name);
 
@@ -128,19 +122,12 @@ export async function openLocalAgentClient(name: string, opts: LocalAgentClientO
   return client;
 }
 
-/**
- * Run one GEPA optimisation pass over a local workspace's scaffold.
- *
- * The pass itself is core's evolution control plane — the same one the cloud
- * backend drives, which is what makes it reachable from a local workspace at
- * all instead of only through a Durable Object.
- */
+/** Core's evolution control plane, the same one the cloud backend drives. */
 export async function runLocalGepa(
   name: string,
   opts?: { maxIterations?: number; evalSize?: number; maxMetricCalls?: number },
 ): Promise<GepaOptimizationResult> {
-  // One-shot surface: the pass is the whole job, and auto-evolution must not
-  // race the candidate it is measuring.
+  // Auto-evolution must not race the candidate being measured.
   const client = await openLocalAgentClient(name, { surface: 'one-shot', noAutoEvolve: true });
 
   try {
@@ -150,19 +137,8 @@ export async function runLocalGepa(
   }
 }
 
-/**
- * Automatic titling for a local agent from its first owner message
- * (`applyWorkspaceTitle`).
- *
- * It runs when the owner speaks to an agent that has no title at all — one
- * they added to a virtual workspace without naming it. Its mission is the
- * workspace's, shared with every peer, so naming it from that would give the
- * whole group one name; what distinguishes it is what the owner brings to it.
- *
- * The persistent client owns the operation and settles it before closing the
- * workspace database. A failure stays visible to that owner; this operation
- * deliberately does not detach or reinterpret it.
- */
+/** Titles an untitled agent from its first owner message: its mission is shared with every peer, so the
+ * owner's words are what distinguish it. The client settles the operation before closing the database. */
 export async function autoTitleLocalWorkspace(
   name: string,
   rt: AgentRuntime,
@@ -184,40 +160,29 @@ export async function autoTitleLocalWorkspace(
 
 export interface LocalAgentClientDeps {
   agentName: string;
-  /** `CLIRuntime`, not `AgentRuntime`: the session installs itself as this
-   *  runtime's model-call ledger, and typing the field down to `AgentRuntime`
-   *  would hide the channel the non-turn spend rows travel on. */
+  /** The session installs itself as this runtime's model-call ledger; `AgentRuntime` would hide that channel. */
   rt: CLIRuntime;
   db: Database;
   dbPath: string;
   info: WorkspaceInfo;
   refreshInfo: () => Promise<WorkspaceInfo>;
-  /** The static-model fallback for sessions built without a resolver — the
-   *  interactive client always wires a resolver, so this stays undefined. */
+  /** Unset for the interactive client, which always wires a resolver. */
   model?: LanguageModel;
   modelResolver: LocalModelResolver;
-  /** Override only at composition/test boundaries. Production reads the one
-   *  profile authority through createProfileAuthorityReader(). */
+  /** Override only at composition/test boundaries. */
   profileAuthority?: LocalAgentSessionOpts['profileAuthority'];
   mcpServers: Record<string, McpServerConfig>;
   noAutoEvolve: boolean;
   transcript: CliSessionOptions;
-  /** How to reach the naming model, for the first-message title of an agent
-   *  that was added without one. */
   naming: SuggestAgentIdentityOptions;
-  /** Which surface this process is. 'one-shot' (`kinu exec`/`shell`) both
-   *  selects the background detach/grace policy AND decides turn continuity
-   *  for the outcome ledger, keeping the cadence-heavy evolution pass off the
-   *  exit path. One fact, one field. */
+  /** 'one-shot' selects the background detach policy and marks turn continuity for the outcome ledger. */
   surface: InvocationSurface;
 }
 
-/** One send awaiting its landing, under the id it went to the session by. */
 interface PendingLocalTurn {
-  /** The message's row for the CLI transcript, appended when the turn that
-   *  runs it opens — or, marked steered, when the running turn read it. */
+  /** Appended when the running turn opens, or marked steered when the running turn read it. */
   readonly entry: JsonObject;
-  /** Null until the turn's own `turn-end` arrives — see `unfinishedTurn`. */
+  /** Null until the turn's own `turn-end` arrives; see `unfinishedTurn`. */
   result: AgentTurnResult | null;
 }
 
@@ -226,21 +191,8 @@ interface AutoTitleOperation {
   promise: Promise<void> | null;
 }
 
-/**
- * What a turn that never reported an end is worth.
- *
- * `send()` resolves when the pump lets go of the queued item, which it also
- * does when the turn died in a way that produced no `turn-end` at all. Seeding
- * the pending turn with a zeroed SUCCESS made that indistinguishable from a
- * clean empty answer, and `kinu exec` exited 0 on a turn that never ran —
- * the one thing a CI consumer cannot recover from.
- *
- * The turn lifecycle itself is now total (LocalAgentSession.processTurn), so
- * nothing in this process can reach this state; it is kept because the exit
- * code has to stay honest for causes that are NOT in this process, and because
- * "no completion" must never again be spelled the same way as "completed with
- * nothing to say".
- */
+/** A turn that never reported an end must not read as a clean empty success, or `kinu exec` exits 0 on a turn
+ * that never ran. */
 function unfinishedTurn(): AgentTurnResult {
   return { text: '', toolCalls: [], steps: 0, durationMs: 0, hadError: true };
 }
@@ -256,45 +208,25 @@ export class LocalAgentClient implements AgentClient {
   readonly inlineAttachmentLimitBytes = LOCAL_MAX_INLINE_ATTACHMENT_BYTES;
   readonly rename = async (displayName: string) => renameLocalAgent(this.agentName, displayName);
 
-  /** Workspace-level actor_config, read straight off the same database the
-   *  session uses. Config outlives the session, so a walk-back fork's session
-   *  swap does not invalidate this. */
+  /** Outlives the session, so a walk-back fork does not invalidate it. */
   private readonly config: AgentConfigStore;
-  /** Product state: the one durable conversation this workspace keeps.
-   *  JSONL transcripts are diagnostics/export artifacts and carry this id so
-   *  an export can be tied back to the conversation it recorded. */
+  /** JSONL transcripts carry this id so an export ties back to its conversation. */
   private readonly canonicalConversation: string;
   private readonly listeners = new Set<(event: AgentClientEvent) => void>();
   private session: LocalAgentSession;
   private activeCliSession: CliSession;
-  /** The sends whose landing is awaited, by the id each went under. The turn
-   *  that opens under that id answers the send: the turn an idle send starts,
-   *  or the rerun of words a running turn ended before reading. A send the
-   *  running turn read leaves here at that landing. */
+  /** The turn opening under a send's id answers it; a send the running turn read leaves at that landing. */
   private readonly awaiting = new Map<string, PendingLocalTurn>();
-  /** The awaited sends whose turn is open now — one, or every leftover a
-   *  rerun carried — each filled at its `turn-end`. */
   private live: readonly PendingLocalTurn[] = [];
   private closed = false;
-  /** The one title operation may outlive opening or a turn, but never the
-   * workspace database. Its owning client joins it during close. */
+  /** May outlive opening or a turn, never the workspace database; close() joins it. */
   private autoTitleTask: AutoTitleOperation | null = null;
   private readonly recorder = new SessionRecorder('local');
   /**
-   * This process's claim on the one durable conversation in that database.
-   *
-   * Held for the CLIENT's lifetime rather than per turn, and that is the point:
-   * `kinu chat`, `shell` and the TUI all auto-start the resident scheduler daemon,
-   * so the daemon and this process are BOTH live over one SQLite file. They
-   * drive the same durable work — the pending event drain, the trigger
-   * registry, the queued-turn pump — and `EventLog.markConsumed` has no
-   * compare-and-set predicate, so two drivers bind the same rows and one
-   * external event becomes two turns.
-   *
-   * `interactive`, so it takes the conversation from a live daemon: a person
-   * waiting at a prompt outranks background maintenance. It survives a
-   * walk-back fork, which replaces the session but not the database.
-   */
+     * Held for the client's lifetime: the auto-started daemon drives the same durable work over one SQLite file and
+     * `EventLog.markConsumed` has no compare-and-set, so two drivers turn one event into two turns. Interactive, so
+     * it takes the conversation from the daemon. Survives walk-back forks.
+     */
   private readonly driverLease: DriverLeaseHold;
 
   constructor(deps: LocalAgentClientDeps) {
@@ -303,14 +235,11 @@ export class LocalAgentClient implements AgentClient {
     initAgentConfigTable(deps.rt.storage.execRaw);
     this.config = deps.rt.actor.config;
     this.canonicalConversation = canonicalConversationId(this.config);
-    // Every artifact records which durable conversation it observed, so a
-    // diagnostic export stays interpretable outside the workspace database.
     this.activeCliSession = createCliSession(deps.agentName, {
       ...deps.transcript,
       conversationId: deps.transcript.conversationId ?? this.canonicalConversation,
     });
-    // Built BEFORE the session, because createAgentSession installs it as the
-    // session's driver gate.
+    // Before the session: createAgentSession installs it as the driver gate.
     this.driverLease = new DriverLeaseHold(
       { sql: makeSql(deps.db), execRaw: makeExecRaw(deps.db), proc: OS_LEASE_PROCESS },
       'interactive',
@@ -340,7 +269,6 @@ export class LocalAgentClient implements AgentClient {
       plan: (dir, id) => this.session.planFileRestore(dir, id),
       restore: (dir, id) => this.session.restoreFileCheckpoint(dir, id),
     };
-    // Same closure rule, and the same three actions the cloud RPCs expose.
     this.plans = {
       active: () => this.session.getActivePlanReview(),
       saveAnnotations: (id, revision, annotations) => this.session.savePlanReviewAnnotations(id, revision, annotations),
@@ -348,7 +276,6 @@ export class LocalAgentClient implements AgentClient {
     };
   }
 
-  /** Start one title operation and retain its settlement on this client. */
   startAutoTitle(source: { mission: string }): void {
     if (this.closed || this.autoTitleTask !== null) return;
 
@@ -359,9 +286,8 @@ export class LocalAgentClient implements AgentClient {
 
     this.autoTitleTask = owner;
     owner.promise = (async () => {
-      // The rejection leaves the handler as a value rather than being judged
-      // inside it: what a failure here MEANS is a fact about this client — only
-      // `close()` aborts this controller — and not a fact about the error.
+      // Only `close()` aborts this controller, so a failure after the abort is the requested cancellation, not a
+      // `title_save_failed` io fault.
       let failure: { readonly cause: unknown } | undefined;
 
       try {
@@ -375,10 +301,6 @@ export class LocalAgentClient implements AgentClient {
         if (this.autoTitleTask === owner) this.autoTitleTask = null;
       }
 
-      // `close()` aborts this controller and the abort reason travels as the
-      // rejection, so a failure standing here after it is the cancellation the
-      // caller asked for. Filed as `title_save_failed` it would report the
-      // owner's own exit as an io fault against a save never allowed to finish.
       if (failure !== undefined && !owner.controller.signal.aborted) {
         diagnostics.failure(
           'workspace.title_save_failed',
@@ -395,15 +317,7 @@ export class LocalAgentClient implements AgentClient {
     return this.activeCliSession;
   }
 
-  /**
-   * Become this conversation's driver, then bring up MCP.
-   *
-   * The lease comes first because it has to be held before ANY pump: every
-   * driving surface calls this before its first `send`, and a client that drove
-   * without it would interleave with the daemon it just auto-started. Refusing
-   * here rather than at the first message is the honest order — the person
-   * learns the conversation is taken before they type into it.
-   */
+  /** The lease is taken before any pump, so the person learns the conversation is taken before typing. */
   async connect(): Promise<void> {
     const refusal = this.driverLease.acquire();
 
@@ -439,10 +353,7 @@ export class LocalAgentClient implements AgentClient {
 
     if (files.length > 0) sessionEntry.attachments = files.map((file) => file.filename);
 
-    // The session decides where the words go — the running turn's next step,
-    // or a turn of their own, at once or as the rerun of what that turn ended
-    // before reading — and answers once it is decided. The id minted here is
-    // the id that turn opens under, which is how its result is this send's.
+    // The session decides where the words land; the minted id is the id that turn opens under.
     const id = crypto.randomUUID();
     const pending: PendingLocalTurn = { entry: sessionEntry, result: null };
     const first = this.awaiting.size === 0;
@@ -457,10 +368,7 @@ export class LocalAgentClient implements AgentClient {
         return { landed };
       }
 
-      // An agent the owner added without naming has no title yet. What the
-      // owner brings to it is the only thing that distinguishes it from the
-      // peers it shares a mission with, so that is what names it — once, since
-      // persisting marks `name_origin` and the shared policy stops matching.
+      // Names the agent once: persisting marks `name_origin` and the shared policy stops matching.
       if (first) this.startAutoTitle({ mission: text });
 
       return { landed, ...(pending.result ?? unfinishedTurn()) };
@@ -470,9 +378,7 @@ export class LocalAgentClient implements AgentClient {
     }
   }
 
-  /** Steer-as-Branch: the in-process session runs the redirect as one
-   *  budgeted head against the live turn's input history (text-only — the
-   *  head task is a string). */
+  /** Text-only: the head task is a string. */
   branch(prompt: AgentPrompt, opts: AgentClientSendOptions = {}): boolean {
     const text = promptText(prompt);
 
@@ -487,9 +393,7 @@ export class LocalAgentClient implements AgentClient {
     return true;
   }
 
-  /** Walk-back: the conversation continues from before the picked user
-   *  message, on the context the actor held there. A fresh transcript
-   *  artifact takes the entries recorded after the walk-back. */
+  /** A fresh transcript artifact takes the entries recorded after the walk-back. */
   async fork(point: ForkPoint): Promise<AgentForkResult> {
     if (this.awaiting.size > 0) throw new Error('Cannot fork while a turn is running.');
     const transcript = this.deps.rt.stores.history.transcript(this.canonicalConversation);
@@ -521,17 +425,12 @@ export class LocalAgentClient implements AgentClient {
     return this.session.interrupt();
   }
 
-  /** Run everything the task turn left queued — detached jobs' wake turns, the
-   *  one-shot completion gate's confirming turn — to completion, streaming
-   *  through the live subscription, before the caller closes. No-op once
-   *  closed. */
+  /** Runs queued wake turns and the one-shot completion gate before the caller closes. */
   async settleBackgroundWork(): Promise<void> {
     if (this.closed) return;
     await this.session.settleBackgroundWork();
   }
 
-  /** One GEPA optimisation pass over this workspace's scaffold (core's
-   *  evolution control plane, over this session's local surface). */
   runScaffoldGepaOptimization(
     opts?: { maxIterations?: number; evalSize?: number; maxMetricCalls?: number },
   ): Promise<GepaOptimizationResult> {
@@ -548,11 +447,7 @@ export class LocalAgentClient implements AgentClient {
       if (autoTitleTask?.promise) await autoTitleTask.promise;
       await this.session.end();
     } finally {
-      // Released BEFORE the handle closes, and even when settling threw: an
-      // interactive lease is held for the whole session, so this is the moment
-      // the daemon becomes able to drive this conversation again. Skipping it
-      // would leave the row naming a process that has exited, recoverable only
-      // by the next driver's liveness check — slower, and less obvious.
+      // Released before the handle closes, even when settling threw, so the daemon can drive again at once.
       this.driverLease.release();
       // The handle goes back even when settling failed, or the next open finds the file locked.
       this.deps.db.close();
@@ -697,21 +592,14 @@ export class LocalAgentClient implements AgentClient {
       backgroundPolicy: BACKGROUND_POLICY[this.deps.surface],
       oneShot: this.deps.surface === 'one-shot',
       onEvent: (event) => this.handleSessionEvent(event),
-      // The same reader the daemon hands its hosted agents, so one agent
-      // resolves one catalog whichever process drives it. Read per turn, not
-      // captured: `/model` and `/effort` write the authority, and the turn
-      // after one runs under what it wrote.
+      // The daemon's reader, read per turn: `/model` and `/effort` write the authority.
       profileAuthority: this.deps.profileAuthority ?? createProfileAuthorityReader(),
-      // Same reason, other file: a chat session that stays open for hours must
-      // see a provider connected in another process on its next turn.
+      // A long-open session must see a provider connected in another process.
       providerRevision: readProviderRevision,
     };
 
     const session = new LocalAgentSession(options);
-    // The lease RE-CHECKED at every turn boundary, not trusted from connect():
-    // preemption means a lease can be lost between turns, and a session that
-    // kept driving after losing it is the interleaving this exists to prevent.
-    // Installed on every session, including the one a walk-back fork builds.
+    // Re-checked every turn boundary: preemption can take the lease between turns. Installed on forked sessions too.
     session.setDriverGate(() => this.driverLease.acquire()?.refused ?? null);
 
     return session;
@@ -723,10 +611,7 @@ export class LocalAgentClient implements AgentClient {
     if (!mapped) return;
 
     if (event.type === 'turn-start') {
-      // The turn under an awaited send's id is that send's turn, and so is
-      // one it carried: each row goes into the CLI transcript ahead of the
-      // turn's events, and its end is each send's result. Any other turn — a
-      // wake, a delegation — is nobody's.
+      // Turns under an awaited send's id (or carried by it) belong to that send; wakes and delegations to nobody.
       this.live = [event.turnId, ...event.carried].flatMap((id) => this.awaiting.get(id) ?? []);
 
       for (const pending of this.live) this.activeCliSession.append('user', pending.entry);
@@ -769,9 +654,7 @@ function mapSessionEvent(event: SessionEvent): AgentClientEvent | null {
         })),
       };
 
-      // An all-absent report is an object, and a truthy one — gate on the
-      // contract's own predicate so a turn nobody metered does not travel
-      // looking like a measurement.
+      // An all-absent report is truthy; gate on `usageReported` so an unmetered turn does not look measured.
       if (event.turn.usage && usageReported(event.turn.usage)) turn.usage = event.turn.usage;
 
       return {
@@ -788,10 +671,7 @@ function mapSessionEvent(event: SessionEvent): AgentClientEvent | null {
       return { type: 'run-event', event: event.event };
     case 'error':
       return { type: 'error', message: event.message };
-    // The walk-back's redraw is for a surface that keeps the conversation on
-    // screen. This client rebuilds the session around the reverted head
-    // ({@link fork}) and prints the transcript from the store after it, so
-    // there is nothing here to redraw.
+    // This client rebuilds the session on fork and reprints from the store; nothing to redraw.
     case 'history-reverted':
       return null;
   }

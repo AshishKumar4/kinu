@@ -9,21 +9,8 @@ import {
 } from '../src/config-lock';
 
 /**
- * The lock's OWNERSHIP rules, driven in-process. The cross-process proofs live in
- * packages/cli/tests/config-lock.test.ts and
- * packages/cli-backend/tests/codex-refresh-processes.test.ts. What is exact in
- * one process is whose lock a release removes, and which locks may be broken at
- * all.
- *
- * Breakability is process identity, never duration: pid plus the process start
- * time the kernel reports in `/proc/<pid>/stat`. So every scenario below forges a
- * record with a KNOWN identity — this process (alive), a reaped child (gone), or
- * this pid with the wrong start time (reused) — instead of moving a clock.
- *
- * No test waits on the clock. Two properties of the implementation stand in for
- * it: an acquisition's FIRST attempt is synchronous, so a refusal is observable
- * the instant the call returns, and a contender's acquisition resolves as a
- * promise, so waiting for one is awaiting a signal rather than guessing.
+ * Lock ownership rules in-process; cross-process proofs live in packages/cli/tests/config-lock.test.ts and
+ * codex-refresh-processes.test.ts. Breakability is process identity (pid + /proc start time), never duration.
  */
 describe('the config lock is held by a process, not by a path', () => {
   function scratchConfig() {
@@ -32,14 +19,12 @@ describe('the config lock is held by a process, not by a path', () => {
     return { configPath, lockPath: `${configPath}.lock` };
   }
 
-  /** A held lock is a symlink to its owner record, not a file, so `existsSync` —
-   *  which follows the link — answers false for a lock that is very much there. */
+  /** A held lock is a symlink, so `existsSync` (which follows it) answers false. */
   function lockHeld(lockPath: string): boolean {
     return tolerate(() => lstatSync(lockPath), 'enoent') !== undefined;
   }
 
-  /** A versioned owner record is the symlink target, which is how a real
-   *  acquisition writes one. Linux records name field 22 of procfs. */
+  /** The versioned owner record is the symlink target; Linux records name procfs field 22. */
   function forgeLock(lockPath: string, pid: number, startTicks: string): void {
     symlinkSync(encodeLockOwner({
       version: 'v1',
@@ -58,23 +43,19 @@ describe('the config lock is held by a process, not by a path', () => {
     return ticks;
   }
 
-  /** A pid that Linux has finished with. `spawnSync` has already reaped it, so
-   *  `/proc/<pid>` is gone and the kernel's answer is unambiguous. */
+  /** A pid `spawnSync` has already reaped, so `/proc/<pid>` is gone. */
   function reapedPid(): number {
     return Bun.spawnSync({ cmd: ['/bin/true'] }).pid;
   }
 
   test('an async callback smuggled through a void signature is refused', () => {
     const { configPath, lockPath } = scratchConfig();
-    // No cast anywhere: TypeScript assigns `() => Promise<void>` to
-    // `() => void`, which is exactly how the Codex refresh reached the
-    // synchronous helper and had its lock released at the first await.
+    // No cast: TypeScript assigns `() => Promise<void>` to `() => void`, which is how an async refresh lost its lock.
     const declaredVoid: () => void = async () => { await Promise.resolve(); };
 
     expect(() => withConfigLock(configPath, declaredVoid)).toThrow(
       'withConfigLock ran a callback that returned pending work, which the lock does not cover. Use withConfigLockAsync.',
     );
-    // And the refusal is not a wedge: the lock is gone and the next caller runs.
     expect(lockHeld(lockPath)).toBe(false);
     expect(withConfigLock(configPath, () => 'after')).toBe('after');
   });
@@ -94,9 +75,7 @@ describe('the config lock is held by a process, not by a path', () => {
 
     await entry.promise;
 
-    // The contender's first attempt runs synchronously inside this call, so the
-    // assertion below observes a real refusal and not a race that happened to
-    // resolve this way.
+    // The contender's first attempt is synchronous, so this observes a real refusal, not a race.
     const second = withConfigLockAsync(configPath, async () => {
       order.push('second enters');
       await Promise.resolve();
@@ -115,8 +94,7 @@ describe('the config lock is held by a process, not by a path', () => {
 
     await withConfigLockAsync(configPath, async () => {
       await Promise.resolve();
-      // Somebody else owns the path now. Releasing by path would hand a third
-      // caller a lock two processes believe they hold.
+      // Someone else owns the path; releasing by path would hand a third caller a doubly held lock.
       unlinkSync(lockPath);
       forgeLock(lockPath, process.pid, selfStartTicks());
     });
@@ -133,8 +111,6 @@ describe('the config lock is held by a process, not by a path', () => {
       ownerInside = readlinkSync(lockPath);
     });
 
-    // Taken over on the FIRST attempt — a crashed holder costs the next caller
-    // nothing, where waiting out a staleness window cost it that window.
     expect(decodeLockOwner(ownerInside)).toMatchObject({
       platform: 'linux',
       pid: process.pid,
@@ -145,9 +121,7 @@ describe('the config lock is held by a process, not by a path', () => {
 
   test('a lock whose pid was reused by another process is broken', () => {
     const { configPath, lockPath } = scratchConfig();
-    // This pid is alive — it is ours — but the recorded process started at a
-    // different time, so the record names a process that is gone and whose
-    // number has since been handed to us. Age would have said "fresh".
+    // Our pid, but a different recorded start time: the owner is gone and its pid reused.
     forgeLock(lockPath, process.pid, '1');
 
     withConfigLock(configPath, () => undefined);
@@ -156,8 +130,6 @@ describe('the config lock is held by a process, not by a path', () => {
 
   test('a lock held by a live process is never broken, however long it holds', async () => {
     const { configPath, lockPath } = scratchConfig();
-    // The identity of a process that is definitely running: this one. There is
-    // no age to advance, which is the point — duration is not a reason.
     forgeLock(lockPath, process.pid, selfStartTicks());
 
     let ran = false;
@@ -167,7 +139,6 @@ describe('the config lock is held by a process, not by a path', () => {
       ran = true;
     });
 
-    // The first attempt has already happened, synchronously, and refused.
     expect(decodeLockOwner(readlinkSync(lockPath))).toMatchObject({
       platform: 'linux',
       pid: process.pid,
@@ -182,13 +153,11 @@ describe('the config lock is held by a process, not by a path', () => {
 
   test('a nested take of a lock this call already holds refuses, sync and async', async () => {
     const { configPath, lockPath } = scratchConfig();
-    // The holder's `finally` runs when this call returns, so the call waiting
-    // is the call that would release. Nothing ends that wait, on either path.
+    // The holder's `finally` runs when this call returns, so waiting here would never end.
     expect(() => withConfigLock(configPath, () => withConfigLock(configPath, () => undefined)))
       .toThrow('this call already holds it');
     await expect(withConfigLockAsync(configPath, async () => withConfigLockAsync(configPath, async () => 'inner')))
       .rejects.toThrow('this call already holds it');
-    // A refusal never removes a lock; both outer holds released on the way out.
     expect(lockHeld(lockPath)).toBe(false);
   });
 
@@ -204,9 +173,7 @@ describe('the config lock is held by a process, not by a path', () => {
     });
 
     await Promise.resolve();
-    // Started outside the holder's async context: same pid, different call, so
-    // the holder WILL release and this one has to wait rather than refuse. Its
-    // first attempt is synchronous, so it has already been refused once here.
+    // Outside the holder's async context: same pid, different call, so this waits rather than refuses.
     const second = withConfigLockAsync(configPath, async () => { order.push('second in'); });
     expect(order).toEqual(['first in']);
     gate.resolve();
@@ -216,9 +183,7 @@ describe('the config lock is held by a process, not by a path', () => {
 
   test('a lock this program did not write is waited out, never stolen', async () => {
     const { configPath, lockPath } = scratchConfig();
-    // A regular file at the lock path carries no owner record, so no process can
-    // be proven to hold it or to have abandoned it. Breaking it is how two
-    // processes both proceed; acquisition waits for it to go away instead.
+    // A regular file carries no owner record, so acquisition waits instead of breaking it.
     writeFileSync(lockPath, 'not a record\n');
 
     let ran = false;
@@ -238,8 +203,7 @@ describe('the config lock is held by a process, not by a path', () => {
 
   test('a record missing its process identity is unreadable, not abandoned', async () => {
     const { configPath, lockPath } = scratchConfig();
-    // Half a record proves nothing either way. Fail closed: an unreadable owner
-    // is the one case where the caller waits rather than deciding for itself.
+    // Fail closed: an unreadable owner makes the caller wait.
     symlinkSync('token-only', lockPath);
 
     let ran = false;
@@ -258,17 +222,12 @@ describe('the config lock is held by a process, not by a path', () => {
   });
 
   test('the start time is read past the executable name, parentheses and all', () => {
-    // Field 22 of a real /proc line, against the kernel's own answer.
     const stat = readFileSync(`/proc/${String(process.pid)}/stat`, 'utf8');
     expect(procStartTicks(stat)).toBe(stat.split(' ')[21]);
     expect(procStartTicks(stat)).toMatch(/^\d+$/u);
-    // The whole reason for reading past the LAST `)`: field 2 is the executable
-    // name, and a program may be called anything at all. A space-split parser
-    // hands this process's identity another field's value, and an identity that
-    // reads the wrong number never matches its own process.
+    // Parse past the last `)`: field 2 is the executable name, which may contain spaces.
     const nasty = `4242 (my prog (v2)) S ${Array.from({ length: 18 }, (_, i) => String(i)).join(' ')} 999 rest`;
     expect(procStartTicks(nasty)).toBe('999');
-    // And nothing that is not a start time is accepted as one.
     expect(procStartTicks('4242 (prog) S 1 2 3')).toBeNull();
     expect(procStartTicks('no parenthesis here')).toBeNull();
   });
@@ -297,8 +256,7 @@ describe('the config lock is held by a process, not by a path', () => {
       return { state: 'unreadable' };
     });
 
-    // Darwin identity can take, write under and release a config lock rather
-    // than refusing because Linux procfs is absent.
+    // Darwin identity must work without Linux procfs.
     const { configPath, lockPath } = scratchConfig();
     expect(createConfigLock(boundary).withSync(configPath, () => {
       writeFileSync(configPath, 'darwin config write\n');
@@ -336,8 +294,7 @@ describe('the config lock is held by a process, not by a path', () => {
 
     if (linuxRecord === null) throw new Error('fixture lost Linux versioned record');
     expect(createProcessIdentityBoundary('darwin', () => ({ state: 'read', identity })).liveness(linuxRecord)).toBe('unknown');
-    // Old records and records with an unexpected version, platform, extra field
-    // or noncanonical token never become another platform's owner by accident.
+    // Unknown or noncanonical records never become another platform's owner.
     expect(decodeLockOwner('00000000-0000-4000-8000-000000000003 42 start')).toBeNull();
     expect(decodeLockOwner('v2 darwin 00000000-0000-4000-8000-000000000003 42 start')).toBeNull();
     expect(decodeLockOwner('v1 freebsd 00000000-0000-4000-8000-000000000003 42 start')).toBeNull();

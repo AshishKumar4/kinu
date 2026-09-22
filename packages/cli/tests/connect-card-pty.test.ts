@@ -1,15 +1,6 @@
 /**
- * The connect card hands the keys to the composer, on a real terminal.
- *
- * This is the first-run `enter-sends` path over a local fixture: the shipped
- * `ChatApp` in cloud mode raises the connect card after the client connects,
- * every keystroke goes to the card until it is answered, and the card LEAVING
- * the screen is the render that gives the composer its focus back. Measured
- * 2026-09-05 on this fixture, three runs each: a draft typed straight after the
- * card's own key was lost whole, and a draft typed after the card had left the
- * screen was echoed, sent, and answered. So the steps here are in the order a
- * person does them, each after the screen fact a person waits for, and the
- * running-turn placeholder is the product's own word that Enter sent.
+ * Connect card on a real terminal: keys typed before the card leaves the screen are lost, so each
+ * step waits for the screen fact a person waits for.
  */
 import { describe, expect, test } from 'bun:test';
 import { resolve } from 'node:path';

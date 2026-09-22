@@ -1,13 +1,4 @@
-/**
- * `kinu export` / `kinu import` — the user-facing half of workspace
- * backup, for BOTH kinds of workspace.
- *
- * One format (see core `identity/archive.ts`): a local workspace and a cloud
- * one produce the same archive, and `import` restores either into a local
- * workspace. A cloud export walks the orchestrator's paged export RPC and
- * appends each page to the file, so neither side ever holds a
- * workspace-sized string.
- */
+/** `kinu export` / `kinu import`: one archive format (core `identity/archive.ts`) for local and cloud workspaces. */
 
 import {
   appendFileSync, closeSync, copyFileSync, existsSync, mkdirSync, openSync,
@@ -81,7 +72,6 @@ export async function exportCommand(name: string, opts: { output?: string }): Pr
   );
 }
 
-/** What a directory entry is, in the words the export manifest uses. */
 function entryType(entry: { isDirectory: () => boolean; isFile: () => boolean; isSymbolicLink: () => boolean }): string {
   if (entry.isDirectory()) return 'directory';
 
@@ -108,17 +98,14 @@ export async function importCommand(file: string, opts: { name?: string }): Prom
 
   mkdirSync(agentDir(name), { recursive: true });
 
-  // Restore into a partial file and rename on success, so a damaged archive
-  // never leaves a half-populated workspace behind under a real name.
+  // Restore to a partial file and rename on success, so a damaged archive leaves no half-populated workspace.
   const partial = `${dbPath}.partial`;
   rmSync(partial, { force: true });
   let restored: RestoredArchiveCounts;
 
   try {
     if (bareDatabase) {
-      // A bare SQLite workspace database, not an archive: copying the file IS
-      // the restore. `kinu export` writes archives, so this shape only ever
-      // arrives as a backup somebody already holds.
+      // A bare SQLite database, not an archive: copying the file is the restore.
       copyFileSync(file, partial);
       restored = countRestored(partial);
     } else {
@@ -147,10 +134,7 @@ export async function importCommand(file: string, opts: { name?: string }): Prom
     + ` ${DIM(`(${restored.tables} tables, ${restored.rows} records)`)}`,
   );
 
-  // A restored workspace belongs to the project it was restored into, exactly as
-  // a created one does. One config key holds one ref, so a name a cloud
-  // workspace already answers to cannot also name this copy: say what that
-  // costs rather than overwriting the ref that is already there.
+  // One config key holds one ref: a name a cloud workspace already answers to cannot also name this copy.
   const claimed = resolveAgentRef(name);
 
   if (claimed && claimed.mode !== 'local') {
@@ -216,10 +200,7 @@ async function* localArchivePages(name: string, output: string): AsyncGenerator<
   }
 }
 
-/** Line-at-a-time read, so restoring a large archive never materializes it.
- *  The decoder streams: a multi-byte character straddling a chunk boundary is
- *  held until its remaining bytes arrive, never decoded into replacement
- *  characters halfway through a transcript. */
+/** Streams line by line; the decoder holds a multi-byte character split across chunks. */
 function* readLines(path: string): Generator<string> {
   const fd = openSync(path, 'r');
 
@@ -255,8 +236,7 @@ function* readLines(path: string): Generator<string> {
   }
 }
 
-/** Every SQLite database starts with this 16-byte magic — how a backup made by
- *  the pre-archive `kinu export` is recognized. */
+/** SQLite's 16-byte magic; recognizes backups from the pre-archive `kinu export`. */
 function isSqliteDatabaseFile(path: string): boolean {
   const fd = openSync(path, 'r');
 
@@ -270,9 +250,7 @@ function isSqliteDatabaseFile(path: string): boolean {
   }
 }
 
-/** The workspace an archive came from — a better default name than the file's.
- *  Null when the first line is not one of our headers: not every file handed to
- *  `import` is an archive, and that is a domain answer, not a failure. */
+/** Null when the first line is not an archive header: a domain answer, not a failure. */
 function archiveWorkspaceName(path: string): string | null {
   for (const line of readLines(path)) {
     const value: unknown = tolerate(() => JSON.parse(line), 'malformed-input');

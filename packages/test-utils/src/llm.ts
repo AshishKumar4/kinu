@@ -1,14 +1,11 @@
-// LLM fixtures — scripted responses without hitting an actual model.
 import type { JsonValue, LLM } from '@kinu.run/core';
 import type { ToolExecutionOptions } from 'ai';
 import * as v from 'valibot';
 
-/** A scripted LLM that returns the next answer in `responses` on each call.
- *  Tracks all prompts seen so tests can assert what was asked. */
+/** A scripted LLM returning the next of `responses` per call; records prompts. */
 export interface ScriptedLLM extends LLM {
   /** The prompts the LLM has received, in order. */
   readonly prompts: ReadonlyArray<string>;
-  /** Index of the next response that will be returned (for diagnostics). */
   readonly callCount: number;
 }
 
@@ -42,8 +39,7 @@ export function createScriptedLLM(responses: string[]): ScriptedLLM {
   };
 }
 
-/** An LLM that echoes back whatever was prompted — useful when the test
- *  doesn't care about content but does care that the LLM was invoked. */
+/** An LLM that echoes the prompt. */
 export function createEchoLLM(): LLM {
   return {
     async *stream() { yield ''; },
@@ -51,8 +47,7 @@ export function createEchoLLM(): LLM {
   };
 }
 
-/** An LLM that returns canned JSON, with retries on schema mismatch. Pair
- *  with structured-output tests (auto-judge, curriculum, sleep-time, eval). */
+/** An LLM that returns canned JSON. */
 export function createJSONLLM(payload: JsonValue): LLM {
   const stringPayload = v.safeParse(v.string(), payload);
   const json = stringPayload.success ? stringPayload.output : JSON.stringify(payload);
@@ -63,15 +58,7 @@ export function createJSONLLM(payload: JsonValue): LLM {
   };
 }
 
-/**
- * The `execute` of a built tool, typed for a direct call.
- *
- * A `ToolSet` entry widens to a union TypeScript will not narrow to a callable
- * signature, so every suite that drives a tool without a model reached for its
- * own structural cast. This is the one place that does it, and it checks at
- * runtime that the thing really is callable rather than failing later inside
- * the call.
- */
+/** The `execute` of a built tool, typed for a direct call; throws if not callable. */
 interface ExecutableTool<Args, Result> {
   execute?: (args: Args, options: ToolExecutionOptions) => PromiseLike<Result> | Result;
 }

@@ -1,16 +1,6 @@
 /**
- * Branch isolation via child processes for Linux CLI.
- *
- * A branch is a LOGICAL actor of kind `branch` on the workspace's ONE database
- * — a `workspace_actors` row like every other actor — that happens to run its
- * rollouts in a separate OS process. What a branch needs isolated is the
- * PROCESS (an unbounded LLM loop that must not share this event loop), never
- * the store: an `<agent>/branches/<key>.db` of its own would give one logical
- * actor two state stores and leave the parent unable to read what its own
- * branch had written.
- *
- * On CF: a hosted logical actor of kind `branch` over the workspace's one
- * SQLite (`exploration-hosting.ts`).
+ * Branch isolation via child processes. A branch is a logical actor on the workspace's one database;
+ * only the process is isolated, never the store.
  */
 
 import { explorationActorKey, type ActorHandle, type BranchExploration, type BranchHandle, type JsonValue, type SpawnBranch, type AbortBranch, type LLMProviderConfig } from '@kinu.run/core';
@@ -26,29 +16,9 @@ import {
 import type { LocalProviderCredentials } from './model-resolver';
 import { registerLocalActor, localActorProcessBootstrap, retireLocalActor } from './actor-identity';
 
-
 /**
- * A branch RPC carries NO wall clock.
- *
- * By owner ruling (2026-08-21): no wall clock over a turn, only one LLM call's
- * silence window plus its retries, which lives inside every branch worker's own
- * loop and fails the explore from there. An `explore` IS a whole agent turn, so
- * a per-turn envelope around this RPC would be a clock over exactly that.
- *
- * What makes a clock unnecessary is wiring, not patience: the two ways a promise
- * here could hang are both handled at their cause. A child that DIES has its
- * pending RPCs rejected by the exit hook in `call` below — that rejection is the
- * hook's job, never a clock's. A child that LIVES but stops answering is bounded
- * from inside its own turns, and its failure arrives as an error message over
- * this same pipe. The residue — a live worker wedged outside every instrumented
- * await — is the same residue every unbounded surface carries under the ruling,
- * disclosed rather than papered over with a number nobody measured.
- *
- * Startup carries no clock either. The wait ends on the worker's ready reply,
- * on its error, or on its exit. A non-zero exit rejects with the code. A zero
- * exit before ready rejects too, because a worker that left without answering
- * never will. The residue — a live child that never sends ready — is the same
- * residue as above.
+ * No wall clock on branch RPCs or startup (owner ruling 2026-08-21): a dead child rejects pending
+ * calls via the exit hook, and a live one bounds its own LLM calls and reports errors over the pipe.
  */
 
 interface PendingCall {
@@ -59,9 +29,7 @@ interface PendingCall {
 
 export interface BranchSpawnerConfig {
   readonly parent: ActorHandle;
-  /** The parent's default endpoint for bare ids — null when nothing derives
-   *  one. The child then resolves explicit specs through its own registry and
-   *  has no default, exactly like the parent. */
+  /** The parent's default endpoint for bare ids, or null. */
   llm: LLMProviderConfig | null;
   providerCredentials?: LocalProviderCredentials;
   codexConfigPath?: string;
@@ -72,12 +40,7 @@ export interface BranchSpawner {
   abort: AbortBranch;
 }
 
-/**
- * `rootDbPath` is the workspace's ONE database — the file a branch's own
- * process opens to bind its actor row and write its rollout traces. NULL when
- * this runtime has no such file: an in-memory agent database is a SQLite
- * sentinel rather than a path, and no second process can reach it.
- */
+/** The workspace database the branch process opens; null for an in-memory database no other process can reach. */
 export function createBranchSpawner(
   rootDbPath: string | null,
   config: BranchSpawnerConfig,
@@ -95,7 +58,6 @@ export function createBranchSpawner(
 
     const binding = registerLocalActor(config.parent, { name: explorationActorKey(branchId), creationId: branchId, kind: 'branch', lifetime: 'task' });
 
-    // Locate the worker script relative to this file
     const workerPath = join(dirname(fileURLToPath(import.meta.url)), 'branch-worker.ts');
 
     const env: NodeJS.ProcessEnv = {
@@ -114,9 +76,8 @@ export function createBranchSpawner(
 
     const child = fork(workerPath, [], {
       stdio: 'pipe',
-      // Pass LLM credentials through env vars so the child can initialize its LLM
       env,
-      // No execArgv needed — when running under bun, fork() inherits bun's runtime
+      // No execArgv: under bun, fork() inherits bun's runtime.
     });
 
     activeBranches.set(branchId, child);
@@ -130,9 +91,6 @@ export function createBranchSpawner(
       pending.clear();
     };
 
-    // The one listener on this child. Every inbound message parses against
-    // the shared reply schema. Ready settles startup; a call reply settles
-    // exactly the wait with its id.
     const onMessage = (raw: JsonValue): void => {
       const parsed = v.safeParse(BranchReplySchema, raw);
 
@@ -167,18 +125,12 @@ export function createBranchSpawner(
     };
 
     child.on('message', onMessage);
-    // `error` fires for a spawn that failed and for a send the closed channel
-    // refused; either way nothing pending can be answered. Settling an
-    // already-settled startup is a no-op, so one listener covers the child's
-    // whole life.
+    // `error` covers both a failed spawn and a send the closed channel refused.
     child.on('error', (error) => {
       startup.reject(error);
       failEveryCall(error);
     });
-    // A DEAD CHILD ENDS ITS PENDING RPCS. Without this a worker that exits
-    // mid-call leaves its caller's promise pending forever — the removed wall
-    // clock was silently doing this job, and this is the job: liveness at the
-    // cause, not timekeeping.
+    // A dead child ends its pending RPCs; without this a mid-call exit hangs the caller forever.
     child.once('exit', (code) => {
       child.off('message', onMessage);
 
@@ -208,10 +160,7 @@ export function createBranchSpawner(
       return promise;
     };
 
-    // The ONLY thing a branch owns outside the workspace's database: its own
-    // OS process. Retiring the actor row and ending the process that holds it
-    // are one act, so both arms below present the same teardown — and it is
-    // idempotent, because a child that already exited leaves `exited` settled.
+    // Retiring the actor row and ending the process are one idempotent teardown.
     const teardown = async () => {
       if (child.exitCode === null && child.signalCode === null) child.kill('SIGTERM');
       await exited.promise;
@@ -226,9 +175,7 @@ export function createBranchSpawner(
 
     return {
       release: () => retireLocalActor(config.parent, binding.name, binding.reference, teardown),
-      // The handle retains the parent-defined tools contract. Crafted tools
-      // never reach the wire: the worker reads them from the workspace's own
-      // database, which is now the database it is already bound to.
+      // Crafted tools never cross the wire; the worker reads them from the shared database.
       explore: (request) =>
         call(BRANCH_EXPLORE, {
           history: request.priorHistory,
@@ -255,13 +202,7 @@ export function createBranchSpawner(
   return { spawn, abort };
 }
 
-
-/**
- * What a call reply carries for the method that was called. Presence, not
- * truthiness, decides failure: an error whose message is empty is still a
- * failure, and treating it as success surfaces far away as a TypeError inside
- * the search loop.
- */
+/** Presence, not truthiness, decides failure: an empty error message is still a failure. */
 function resultOf(reply: BranchCallReply, method: BranchMethod): BranchExploration {
   if ('error' in reply) throw new Error(reply.error || `Branch worker failed ${method} without a message`);
 

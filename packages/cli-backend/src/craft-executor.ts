@@ -1,32 +1,7 @@
 /**
- * Node/Bun crafted-tool executor.
- *
- * Node's VM permits runtime code generation, so this adapter compiles
- * stored crafted-tool code directly in-process. The code convention is an
- * expression that evaluates to an async function (arrow or function
- * expression) — the same convention the CF LOADER path uses, and the one the
- * craft admission gate (core craft/conflict.ts) enforces at the write.
- *
- * The factory is idempotent: each call to craftedToolExecute(tool) returns a
- * fresh closure. The crafted set is resolved once per `eval` call, so
- * this runs once per tool per call; the returned function caches the compiled
- * fn via a closure variable, so a tool called repeatedly inside one block
- * compiles once.
- *
- * Failure attribution is NOT applied here, and that is deliberate. Core's
- * `buildCraftedTools` (tools/builtins.ts) already wraps every crafted execute it
- * hands out with `craftInvocationError(name, …)`, on BOTH backends and on both
- * the native and sandbox surfaces — so the audit finding that local crafted
- * failures reach the fitness signal unmarked is refuted by that wrapper.
- * Stamping again here produced a doubly-marked message
- * (`[crafted:x] [crafted:x] nope: nope: …`), which is worse than the drift it
- * was meant to fix: `craftFailureBlame` matches the marker, so one failure read
- * as several. Core's `attributeCraftedFailure` exists for a substrate whose
- * compile step sits OUTSIDE that builder; this one does not.
- *
- * Errors are re-thrown — codemode's ToolDispatcher wraps them into a
- * JSON-serializable error the sandbox converts into a thrown Error in
- * user code. That is the same path the CF LOADER executor produces.
+ * Node/Bun crafted-tool executor. Failure attribution is deliberately absent:
+ * core's `buildCraftedTools` already wraps every crafted execute with
+ * `craftInvocationError`, and stamping twice makes `craftFailureBlame` count one failure as several.
  */
 
 import { decodeJsonValue, requireBuild } from '@kinu.run/core';
@@ -41,11 +16,7 @@ export function createNodeCraftedExecute(): CraftedToolExecute {
 
     const ensure = () => {
       if (compiled && compiledFor === tool.code) return compiled;
-      // `tool.code` is expected to be an expression form like
-      //   async (x) => x * 2
-      //   async function(x) { return x * 2 }
-      // upsertCraftedTool runs this exact compilation before storing, so a tool
-      // that reaches here has already produced a callable once.
+      // An expression evaluating to an async function; upsertCraftedTool compiled it once already.
       const fn = v.parse(v.function_(), runInThisContext('(' + tool.code + ')'));
       compiled = async (arg) => {
         const result = await fn(arg);

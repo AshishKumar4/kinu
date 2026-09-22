@@ -12,12 +12,6 @@ import {
   type ProviderConnectPort,
 } from './provider-connect';
 
-/**
- * The console side of a provider connect: progress in the dim register, one
- * question at a time through the CLI's own prompt. The flows themselves live
- * in `provider-connect.ts`, where the TUI reaches the same code with a port
- * of its own.
- */
 function consoleProviderPort(): ProviderConnectPort {
   return {
     report: (line) => console.log(DIM(line)),
@@ -27,8 +21,6 @@ function consoleProviderPort(): ProviderConnectPort {
   };
 }
 
-/** The flags a connect flow reads, with the absent ones left absent rather
- *  than handed over as undefined. */
 export function connectOptions(opts: {
   readonly origin?: string;
   readonly model?: string;
@@ -40,7 +32,6 @@ export function connectOptions(opts: {
   return opts.model === undefined ? withOrigin : { ...withOrigin, model: opts.model };
 }
 
-/** Run one provider's flow with the console port, and say how it ended. */
 export async function connectProviderOnConsole(
   id: ProviderConnectId,
   opts: { readonly origin?: string; readonly model?: string; readonly local?: boolean } = {},
@@ -65,8 +56,6 @@ export async function connectProviderOnConsole(
   return outcome;
 }
 
-/** Everything the setup preflight reads: the command flags and whether the
- *  account is signed in. */
 interface SetupPreflightContext {
   readonly opts: {
     readonly origin?: string;
@@ -81,8 +70,6 @@ interface SetupPreflightContext {
   readonly cloudReady: boolean;
 }
 
-/** Account-only and non-interactive early exits. Answers 'handled' when setup
- *  ends here and 'continue' when provider setup runs next. */
 async function runSetupPreflight(ctx: SetupPreflightContext): Promise<'handled' | 'continue'> {
   if (ctx.opts.accountOnly) {
     if (ctx.cloudReady) {
@@ -122,7 +109,6 @@ export async function setupCommand(opts: {
   skipCloud?: boolean;
   localModel?: boolean;
   accountOnly?: boolean;
-  /** Keep the provider secret on this machine instead of the account. */
   local?: boolean;
 }): Promise<void> {
   console.log('');
@@ -139,9 +125,7 @@ export async function setupCommand(opts: {
   }
 
   if (!opts.skipCloud && !config.accessToken) {
-    // Without a terminal there is nothing to ask — fall through to the
-    // honest instruction paths below instead of letting readline hang on
-    // a pipe (the `curl | bash` installer freeze).
+    // Without a terminal, readline would hang on a pipe (the `curl | bash` installer).
     const shouldLogin = opts.yes === true || (canPrompt() && await confirm('Sign in now and grant Workers AI permissions?', true));
 
     if (shouldLogin) {
@@ -180,9 +164,7 @@ export async function setupCommand(opts: {
       return;
     }
 
-    // Storing nothing is deliberate: the platform default is one constant in
-    // @kinu.run/core, and an unset model reads it at resolve time instead of
-    // pinning a copy that would go stale.
+    // Unset on purpose: the platform default lives in @kinu.run/core and is read at resolve time.
     updateConfigFile((stored) => { delete stored.model; });
     console.log(`${OK('✓')} Using Cloudflare Workers AI`);
     console.log(DIM(`Default model: ${DEFAULT_WORKERS_AI_MODEL_SPEC}`));
@@ -207,9 +189,7 @@ async function chooseProvider(cloudReady: boolean): Promise<string> {
 
   if (!cloudReady) console.log(DIM('  Option 1 needs a signed-in account. Run kinu auth first.'));
 
-  // No-friction discovery: the Claude Code subscription stores no credential
-  // here (the binary owns its own login), so mention it inline rather than as a
-  // step — only when it is actually usable on this machine.
+  // The Claude Code subscription stores no credential here; mention it only when usable on this machine.
   if ((await checkClaudeAvailability()).loggedIn) {
     console.log(DIM('  Claude Code is signed in here. To use your Claude subscription, pass --model claude/claude-opus-4-x.'));
   }
@@ -219,14 +199,7 @@ async function chooseProvider(cloudReady: boolean): Promise<string> {
   return value;
 }
 
-/**
- * The aliases users type on either surface, folded onto one canonical name.
- * Both `kinu setup --provider` and `kinu provider connect` resolve through
- * this map, so an alias learned on one surface works on the other. Menu
- * positions ('1'-'8') are not aliases: the interactive prompt owns those, so
- * they never reach this map. Unknown tokens pass through for the caller to
- * reject with its own usage text.
- */
+/** Aliases shared by `kinu setup --provider` and `kinu provider connect`. Menu positions are not aliases; unknown tokens pass through. */
 export function canonicalProviderName(value: string): string {
   const token = value.trim().toLowerCase();
 
@@ -255,9 +228,7 @@ export function canonicalProviderName(value: string): string {
 function normalizeProvider(value: string): 'workers-ai' | 'claude' | 'codex' | 'openai' | 'openrouter' | 'anthropic' | 'openai-compatible' | 'opencode' | 'skip' {
   const v = value.trim().toLowerCase();
 
-  // Menu positions on the --provider flag. The prompt resolves these same
-  // answers interactively; the flag keeps accepting them, pinned by
-  // setup-default-provider.test.ts which cannot drive the prompt headlessly.
+  // Menu positions on the --provider flag, pinned by setup-default-provider.test.ts.
   if (v === '1') return 'workers-ai';
 
   if (v === '2') return 'codex';
@@ -274,9 +245,7 @@ function normalizeProvider(value: string): 'workers-ai' | 'claude' | 'codex' | '
 
   if (v === '8' || v === 'skip' || v === 'none') return 'skip';
 
-  // Anything else is a name, resolved through the one alias map. `cloudflare`
-  // is this command's `workers-ai` branch; bare `claude` is the subscription,
-  // not the Anthropic API key one position down the menu.
+  // `cloudflare` is `workers-ai`; bare `claude` is the subscription, not the Anthropic API key.
   switch (canonicalProviderName(value)) {
     case 'cloudflare': return 'workers-ai';
     case 'claude': return 'claude';
