@@ -57,9 +57,10 @@ function tarFile(name: string, data: string): Uint8Array[] {
 // package.json FIRST in the archive, as npm ships it. The streaming writer
 // holds the manifest back and lands it last, so a tree without one is a tree
 // the next install re-extracts rather than trusts.
-const REGISTRY_PACKAGES: Record<string, { manifest: string; tarball: Uint8Array }> =
+const REGISTRY_PACKAGES: Record<string, { manifest: string; tarball: Uint8Array<ArrayBuffer> }> =
   Object.fromEntries(REGISTRY_FANOUT_PKGS.map((name) => {
     const manifest = `{"name":"${name}","version":"${REGISTRY_VERSION}","main":"lib/index.js"}`;
+
     const parts = [
       ...tarFile('package/package.json', manifest),
       ...tarFile('package/lib/index.js', REGISTRY_ENTRY),

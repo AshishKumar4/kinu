@@ -411,11 +411,13 @@ export default function DrivePage({ library }: { library?: SharedLibraryProps } 
   // The fixture, never the props object: a caller that builds its props inline
   // hands a new object every render, and this is an effect key.
   const fixture = library?.fixture;
+
   // The sections are the root's, so a folder deeper in costs no read of them.
   const loadSections = useCallback(
     async (): Promise<SharedLibrary | null> => isRoot ? fixture ?? await getSharedLibrary() : null,
     [isRoot, fixture],
   );
+
   const sections = useAsyncResource(loadSections, undefined, path);
   const [dialog, setDialog] = useState<Dialog | null>(null);
   const [notice, setNotice] = useState<string | null>(null);

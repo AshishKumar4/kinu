@@ -57,9 +57,11 @@ const REPO = (() => {
   treeBody.set(entry);
   treeBody.set(Uint8Array.from(Buffer.from(blob.oid, 'hex')), entry.length);
   const tree = object('tree', treeBody);
+
   // A fixed instant, so the commit id is the same on every run and a cached
   // packfile can never be the reason a clone differs.
   const stamp = '1758412800 +0000';
+
   const commit = object('commit', encoder.encode([
     `tree ${tree.oid}`,
     `author Fixture <fixture@nimbus.invalid> ${stamp}`,
@@ -74,8 +76,7 @@ const REPO = (() => {
 export const GIT_COMMIT_OID = REPO.commit.oid;
 
 /** A pkt-line: its own four-hex-digit length, then the payload. */
-function pkt(payload: string | Uint8Array): Uint8Array {
-  const bytes = typeof payload === 'string' ? encoder.encode(payload) : payload;
+function pkt(bytes: Uint8Array): Uint8Array {
   const length = encoder.encode((bytes.length + 4).toString(16).padStart(4, '0'));
   const out = new Uint8Array(length.length + bytes.length);
 
@@ -87,7 +88,7 @@ function pkt(payload: string | Uint8Array): Uint8Array {
 
 const FLUSH = encoder.encode('0000');
 
-function concat(parts: readonly Uint8Array[]): Uint8Array {
+function concat(parts: readonly Uint8Array[]): Uint8Array<ArrayBuffer> {
   const out = new Uint8Array(parts.reduce((sum, part) => sum + part.length, 0));
   let offset = 0;
 
@@ -135,7 +136,7 @@ const PACKFILE = (() => {
 /** The upload-pack response: no ack of anything the client has, then the pack
  *  in side-band channel 1, in frames the pkt-line length can carry. */
 const UPLOAD_PACK = (() => {
-  const frames: Uint8Array[] = [pkt('NAK\n')];
+  const frames: Uint8Array[] = [pkt(encoder.encode('NAK\n'))];
   const band = 65_515;
 
   for (let offset = 0; offset < PACKFILE.length; offset += band) {
@@ -153,10 +154,10 @@ const UPLOAD_PACK = (() => {
 })();
 
 const ADVERTISEMENT = concat([
-  pkt('# service=git-upload-pack\n'),
+  pkt(encoder.encode('# service=git-upload-pack\n')),
   FLUSH,
-  pkt(`${GIT_COMMIT_OID} HEAD\0side-band-64k shallow symref=HEAD:refs/heads/${GIT_BRANCH} agent=nimbus-fixture\n`),
-  pkt(`${GIT_COMMIT_OID} refs/heads/${GIT_BRANCH}\n`),
+  pkt(encoder.encode(`${GIT_COMMIT_OID} HEAD\0side-band-64k shallow symref=HEAD:refs/heads/${GIT_BRANCH} agent=nimbus-fixture\n`)),
+  pkt(encoder.encode(`${GIT_COMMIT_OID} refs/heads/${GIT_BRANCH}\n`)),
   FLUSH,
 ]);
 

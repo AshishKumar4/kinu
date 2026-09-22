@@ -932,8 +932,8 @@ export class ChatSession {
   /**
    * Continue the conversation from before `entryId` — the operator's walk-back,
    * and the ONE refusal that governs it: this loop's queue and the turn running
-   * on it are what "a turn is in flight" means, and both backends asked the
-   * same question of the same loop before this lived here.
+   * on it are what "a turn is in flight" means, so the loop answers it for
+   * both backends.
    *
    * The event is emitted after the store has moved and the working history has
    * been re-read, and its delivery is awaited: a surface redraws from the
