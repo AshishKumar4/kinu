@@ -143,7 +143,17 @@ async function readHealth(applicationId: string, deployedAt: number): Promise<He
   }
 }
 
-async function drive(origin: string, token: string, box: string, mode: string, deployedAt: number): Promise<DriveReading> {
+/** One start the probe asks the deployed Worker for: which box, in which
+ *  mode, measured from the deploy this cell is timing. */
+interface DriveRequest {
+  readonly origin: string;
+  readonly token: string;
+  readonly box: string;
+  readonly mode: string;
+  readonly deployedAt: number;
+}
+
+async function drive({ origin, token, box, mode, deployedAt }: DriveRequest): Promise<DriveReading> {
   const at = Date.now();
 
   try {
@@ -157,7 +167,7 @@ async function drive(origin: string, token: string, box: string, mode: string, d
 
     return {
       at, sinceDeployMs: at - deployedAt, ms: Date.now() - at, admitted,
-      detail: stamp?.startError ?? parsed.error ?? (admitted ? `onStart entered ${String((stamp?.onstartEntered ?? 0) - stamp!.startEntered)} ms after start` : 'no stamp'),
+      detail: stamp?.startError ?? parsed.error ?? (admitted ? `onStart entered ${String((stamp?.onstartEntered ?? 0) - stamp.startEntered)} ms after start` : 'no stamp'),
     };
   } catch (cause) {
     return { at, sinceDeployMs: at - deployedAt, ms: Date.now() - at, admitted: false, detail: describeThrown({ cause }) };
@@ -263,7 +273,7 @@ async function runCell(cell: 'passive' | 'churn', runId: string, token: string, 
       while (row.healthyAt === null && Date.now() - deployedAt <= ROLLOUT_CEILING_MS) await delay(500);
 
       if (row.healthyAt !== null) {
-        const reading = await drive(origin, token, box, 'ports', deployedAt);
+        const reading = await drive({ origin, token, box, mode: 'ports', deployedAt });
         row.drives.push(reading);
 
         if (reading.admitted) { row.firstAdmissionAt = reading.at + reading.ms; row.firstAdmissionAfterDeployMs = row.firstAdmissionAt - deployedAt; }
@@ -272,7 +282,7 @@ async function runCell(cell: 'passive' | 'churn', runId: string, token: string, 
       }
     } else {
       while (Date.now() - deployedAt <= ROLLOUT_CEILING_MS) {
-        const reading = await drive(origin, token, box, 'bench', deployedAt);
+        const reading = await drive({ origin, token, box, mode: 'bench', deployedAt });
         row.drives.push(reading);
         log(`${cell}: drive ${String(row.drives.length)} ${reading.admitted ? 'admitted' : 'refused'} in ${String(reading.ms)} ms (${reading.detail})`);
         save(row);

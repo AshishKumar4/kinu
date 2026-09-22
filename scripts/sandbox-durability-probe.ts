@@ -312,13 +312,16 @@ function sleep(ms: number): Promise<void> {
   return promise;
 }
 
-async function request<T>(
-  origin: string,
-  token: string,
-  op: string,
-  body: JsonObject,
-  schema: v.GenericSchema<T>,
-): Promise<T> {
+/** One probe route, with the reply the caller expects back from it. */
+interface ProbeCall<T> {
+  readonly origin: string;
+  readonly token: string;
+  readonly op: string;
+  readonly body: JsonObject;
+  readonly schema: v.GenericSchema<T>;
+}
+
+async function request<T>({ origin, token, op, body, schema }: ProbeCall<T>): Promise<T> {
   let last = "";
 
   for (let attempt = 0; attempt < 6; attempt++) {
@@ -354,17 +357,7 @@ async function call(
   op: string,
   body: JsonObject = {},
 ): Promise<ProbeResponse> {
-  return await request(origin, token, op, body, ProbeResponseSchema);
-}
-
-async function callParsed<T>(
-  origin: string,
-  token: string,
-  op: string,
-  body: JsonObject,
-  schema: v.GenericSchema<T>,
-): Promise<T> {
-  return await request(origin, token, op, body, schema);
+  return await request({ origin, token, op, body, schema: ProbeResponseSchema });
 }
 
 /** The account every wrangler call runs against. Two accounts are reachable
@@ -578,8 +571,8 @@ async function awaitOrigin(origin: string, token: string): Promise<void> {
 
 /** P0: the deployed product names the decided strategy, with a store behind it. */
 async function probeStrategyDecision(origin: string, token: string): Promise<NonNullable<ProbeEvidence['P0']>> {
-  const picked = await callParsed(origin, token, "/state", {}, StrategyStateSchema);
-  const decision = await callParsed(origin, token, "/strategyDecision", {}, StrategyDecisionSchema);
+  const picked = await request({ origin, token, op: "/state", body: {}, schema: StrategyStateSchema });
+  const decision = await request({ origin, token, op: "/strategyDecision", body: {}, schema: StrategyDecisionSchema });
 
   if (picked.strategy !== decision.decided) {
     throw new Error(`P0: the product reports strategy ${picked.strategy}; the package's decision is ${decision.decided}`);
@@ -631,9 +624,9 @@ export async function run(): Promise<DurabilityProbeArtifact> {
       { path: "/workspace/doomed-marker.txt", content: Buffer.from("delete me").toString("base64") });
     await call(origin, token, "/tick");
 
-    const baseCheckpoint = await callParsed(
-      origin, token, "/finalCheckpoint", {}, CheckpointResponseSchema,
-    );
+    const baseCheckpoint = await request({
+      origin, token, op: "/finalCheckpoint", body: {}, schema: CheckpointResponseSchema,
+    });
 
     evidence.P1 = { bigFile: bigId, baseMib: BASE_MIB, checkpoint: baseCheckpoint };
     console.log("P1 base layer ok");
@@ -670,9 +663,9 @@ export async function run(): Promise<DurabilityProbeArtifact> {
     // FORCED, not a tick: the base is a minute old and the five-minute interval
     // gate correctly declines an ordinary tick — measured, first run of this
     // phase against a real container.
-    const checkpoint = await callParsed(
-      origin, token, "/finalCheckpoint", {}, CheckpointResponseSchema,
-    );
+    const checkpoint = await request({
+      origin, token, op: "/finalCheckpoint", body: {}, schema: CheckpointResponseSchema,
+    });
 
     const upperBefore = await call(origin, token, "/exec", {
       command: "ls -la /workspace; echo ---; grep workspace /proc/mounts; echo ---; ls -la /var/tmp/kinu/upper",
@@ -709,15 +702,19 @@ export async function run(): Promise<DurabilityProbeArtifact> {
     // ready; it must stay attached so the caller can repair it.
     const FAILED_PORT = 18_081;
 
-    const failed = await callParsed(origin, token, "/startProcess", {
-      command: 'node -e "process.exit(1)"', cwd: "/workspace",
-    }, ProcessStartResponseSchema);
+    const failed = await request({
+      origin, token, op: "/startProcess",
+      body: { command: 'node -e "process.exit(1)"', cwd: "/workspace" },
+      schema: ProcessStartResponseSchema,
+    });
 
-    await callParsed(origin, token, "/notePortExposed", {
-      port: FAILED_PORT, name: "failed-lifecycle-probe",
-    }, PortTokenResponseSchema);
+    await request({
+      origin, token, op: "/notePortExposed",
+      body: { port: FAILED_PORT, name: "failed-lifecycle-probe" },
+      schema: PortTokenResponseSchema,
+    });
     await restartVerified(origin, token);
-    const lifecycle = await callParsed(origin, token, "/state", {}, LifecycleStateSchema);
+    const lifecycle = await request({ origin, token, op: "/state", body: {}, schema: LifecycleStateSchema });
 
     const failedListener = await call(origin, token, "/exec", {
       command: `curl -sS -o /dev/null -m 2 -w '%{http_code}|%{exitcode}' --connect-timeout 1 http://127.0.0.1:${FAILED_PORT}/ 2>&1 || true`,
@@ -749,7 +746,7 @@ export async function run(): Promise<DurabilityProbeArtifact> {
     // P5 must not classify a marker absent by construction as a replacement.
     // Arm AND VERIFY it before idle, then corroborate its fate with Devbox's
     // durable boot identity. Either signal alone is weaker.
-    const beforeIdle = await callParsed(origin, token, "/state", {}, IdleTickSchema);
+    const beforeIdle = await request({ origin, token, op: "/state", body: {}, schema: IdleTickSchema });
 
     if (beforeIdle.bootId === undefined || beforeIdle.bootId === null) {
       throw new Error("P5 began without a durable boot identity");
@@ -774,9 +771,9 @@ export async function run(): Promise<DurabilityProbeArtifact> {
     // kinu-dur-probe-c0a7850e: ticks ok through the whole window, /tmp fresh),
     // everything durable comes back. Replacement is a MEASUREMENT, not a
     // failure; a dead tick chain or lost workspace state is the failure.
-    const schedules = await callParsed(
-      origin, token, "/heartbeatSchedules", {}, ScheduleRowsSchema,
-    );
+    const schedules = await request({
+      origin, token, op: "/heartbeatSchedules", body: {}, schema: ScheduleRowsSchema,
+    });
 
     if (schedules.length === 0) throw new Error("heartbeat not armed");
     const idleStartedAt = Date.now();
@@ -784,11 +781,11 @@ export async function run(): Promise<DurabilityProbeArtifact> {
     await sleep(IDLE_MINUTES * 60_000);
     // Read the durable tick trail BEFORE the exec below wakes the box:
     // /state never touches the container, so this is the post-idle truth.
-    const idleState = await callParsed(origin, token, "/state", {}, IdleTickSchema);
+    const idleState = await request({ origin, token, op: "/state", body: {}, schema: IdleTickSchema });
 
-    const idleSchedules = await callParsed(
-      origin, token, "/heartbeatSchedules", {}, ScheduleRowsSchema,
-    );
+    const idleSchedules = await request({
+      origin, token, op: "/heartbeatSchedules", body: {}, schema: ScheduleRowsSchema,
+    });
 
     const tick = idleState.lastTick ?? undefined;
     const lastTick = JSON.stringify(tick ?? null);
@@ -834,7 +831,7 @@ export async function run(): Promise<DurabilityProbeArtifact> {
     console.log(`P5 hold ok (chain alive; instance ${replaced ? "REPLACED by platform and healed" : "survived"})`);
 
     // P6 — the exact quiesce sequence, then one more wake.
-    await callParsed(origin, token, "/finalCheckpoint", {}, CheckpointResponseSchema);
+    await request({ origin, token, op: "/finalCheckpoint", body: {}, schema: CheckpointResponseSchema });
     await call(origin, token, "/setKeepAlive", { keepAlive: false });
     await call(origin, token, "/stop");
     await wake(origin, token);
@@ -847,24 +844,26 @@ export async function run(): Promise<DurabilityProbeArtifact> {
     // P4 — supervision across a stop+wake. It is deliberately LAST: P2 already
     // proved a real restart with an ephemeral marker; this phase proves the
     // distinct durable fact, that a recorded process comes back under its same id.
-    const proc = await callParsed(origin, token, "/startProcess", {
-      command: 'node -e "setInterval(() => {}, 1000)"', cwd: "/workspace",
-    }, ProcessStartResponseSchema);
+    const proc = await request({
+      origin, token, op: "/startProcess",
+      body: { command: 'node -e "setInterval(() => {}, 1000)"', cwd: "/workspace" },
+      schema: ProcessStartResponseSchema,
+    });
 
-    const portBeforeRestart = await callParsed(
-      origin, token, "/notePortExposed", { port: PORT, name: "probe" }, PortTokenResponseSchema,
-    );
+    const portBeforeRestart = await request({
+      origin, token, op: "/notePortExposed", body: { port: PORT, name: "probe" }, schema: PortTokenResponseSchema,
+    });
 
     await call(origin, token, "/stop");
     await wake(origin, token);
 
-    const procs = await callParsed(
-      origin, token, "/listProcesses", {}, SupervisedProcessResponsesSchema,
-    );
+    const procs = await request({
+      origin, token, op: "/listProcesses", body: {}, schema: SupervisedProcessResponsesSchema,
+    });
 
-    const portAfterRestart = await callParsed(
-      origin, token, "/notePortExposed", { port: PORT, name: "probe" }, PortTokenResponseSchema,
-    );
+    const portAfterRestart = await request({
+      origin, token, op: "/notePortExposed", body: { port: PORT, name: "probe" }, schema: PortTokenResponseSchema,
+    });
 
     if (portBeforeRestart.urlToken !== portAfterRestart.urlToken) {
       throw new Error(`preview token changed across restart: ${portBeforeRestart.urlToken}/${portAfterRestart.urlToken}`);
@@ -916,8 +915,10 @@ export async function run(): Promise<DurabilityProbeArtifact> {
     };
 
     if (failure !== undefined) {
-      const message = failure instanceof Error ? failure.message : String(failure);
-      record = { ...record, failure: message };
+      // A thrown non-Error is rendered, not stringified: `[object Object]` in
+      // the artifact would name nothing about why the run ended.
+      const message = failure instanceof Error ? failure.message : JSON.stringify(failure);
+      record = { ...record, failure: message ?? "the probe threw a value that does not serialize" };
     }
 
     if (cleanupFailure !== undefined) record = { ...record, cleanupFailure };

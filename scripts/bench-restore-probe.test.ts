@@ -30,7 +30,7 @@ function stubFetch(answer: (url: string) => Response | Promise<Response>): () =>
   const stub = async (
     input: Parameters<typeof globalThis.fetch>[0],
     _init?: Parameters<typeof globalThis.fetch>[1],
-  ): Promise<Response> => answer(String(input));
+  ): Promise<Response> => answer(input instanceof Request ? input.url : String(input));
 
   globalThis.fetch = Object.assign(stub, { preconnect: real.preconnect });
 

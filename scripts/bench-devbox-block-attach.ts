@@ -196,6 +196,18 @@ interface RunInvocation {
   largeOnly: boolean;
 }
 
+/** What the artifact says this run measured. A selector run admits no
+ *  strategy, and the artifact has to say so where it is read. */
+function measuredScope(selection: Pick<RunInvocation, 'lifecycleOnly' | 'c3Only' | 'largeOnly'>): string {
+  if (selection.lifecycleOnly) return 'empty attach then first exec; lifecycle attribution only';
+
+  if (selection.c3Only) return 'one C3 storage cell; not full strategy admission';
+
+  if (selection.largeOnly) return 'one 2GiB storage cell; not full strategy admission';
+
+  return 'two storage cells; not full strategy admission';
+}
+
 function runInvocation(): RunInvocation {
   const accessKeyId = process.env.R2_ACCESS_KEY_ID;
   const secretAccessKey = process.env.R2_SECRET_ACCESS_KEY;
@@ -222,8 +234,17 @@ interface RunObservations {
   lifecycle: LifecycleCycle[];
 }
 
+/** What one cell body measures on, and where it records what it saw. */
+interface CellRun {
+  readonly fixture: Fixture;
+  readonly box: string;
+  readonly observed: RunObservations;
+  readonly save: () => void;
+  readonly errors: string[];
+}
+
 /** The `--lifecycle` body: ten destroy/create cycles on the one box. */
-async function runLifecycle(fixture: Fixture, box: string, observed: RunObservations, save: () => void, errors: string[]): Promise<void> {
+async function runLifecycle({ fixture, box, observed, save, errors }: CellRun): Promise<void> {
   for (let attempt = 0; attempt < 10; attempt += 1) {
     const observations: StartupObservation[] = [];
     const cycle: LifecycleCycle = { initial: null, exec: null, observations, refusal: null, lastState: null, incidents: null };
@@ -258,12 +279,18 @@ async function runLifecycle(fixture: Fixture, box: string, observed: RunObservat
   }
 }
 
+/** The storage cells' run: the C3 box, the large-file box it hands over to,
+ *  and which of the two the selector admits. */
+interface StorageCellRun extends CellRun {
+  readonly largeBox: string;
+  readonly runId: string;
+  readonly selection: Pick<RunInvocation, 'c3Only' | 'largeOnly'>;
+}
+
 /** The single-cell body: the C3 cell unless `--large-only`, then the large
  *  cell unless `--c3-only`. */
 async function runCells(
-  fixture: Fixture, box: string, largeBox: string, runId: string,
-  selection: Pick<RunInvocation, 'c3Only' | 'largeOnly'>,
-  observed: RunObservations, save: () => void, errors: string[],
+  { fixture, box, largeBox, runId, selection, observed, save, errors }: StorageCellRun,
 ): Promise<void> {
   const { c3Only, largeOnly } = selection;
 
@@ -319,11 +346,11 @@ async function run(): Promise<number> {
   let tail: ReturnType<typeof Bun.spawn> | undefined;
   let capture: Promise<void> | undefined;
 
+  const scope = measuredScope({ lifecycleOnly, c3Only, largeOnly });
+
   const save = (): void => writeFileSync(join(artifacts, 'observations.json'), JSON.stringify({ runId, date: new Date().toISOString(),
     source: revision, image: SANDBOX_IMAGE, worker: names.worker, bucket: names.bucket, workerVersion: live?.workerVersion,
-    scope: lifecycleOnly ? 'empty attach then first exec; lifecycle attribution only'
-      : c3Only ? 'one C3 storage cell; not full strategy admission' : largeOnly ? 'one 2GiB storage cell; not full strategy admission'
-        : 'two storage cells; not full strategy admission', c3: observed.c3, large: observed.large, lifecycle: observed.lifecycle, cleanup, errors }, null, 2));
+    scope, c3: observed.c3, large: observed.large, lifecycle: observed.lifecycle, cleanup, errors }, null, 2));
 
   const log = (message: string): void => { process.stderr.write(`[block-attach] ${message}\n`); };
 
@@ -415,8 +442,8 @@ async function run(): Promise<number> {
     })();
     await delay(2500);
 
-    if (lifecycleOnly) await runLifecycle(fixture, box, observed, save, errors);
-    else await runCells(fixture, box, largeBox, runId, { c3Only, largeOnly }, observed, save, errors);
+    if (lifecycleOnly) await runLifecycle({ fixture, box, observed, save, errors });
+    else await runCells({ fixture, box, largeBox, runId, selection: { c3Only, largeOnly }, observed, save, errors });
   } catch (cause) {
     errors.push(cause instanceof Error ? cause.message : String(cause));
   } finally {

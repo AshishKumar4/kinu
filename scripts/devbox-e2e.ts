@@ -260,11 +260,21 @@ export function platformOpaque(detail: string): boolean {
     .test(detail);
 }
 
+/** What a failed step knows about itself: which arm, which operation, the bound
+ *  it was given and what it actually did. */
+export interface StepFailure {
+  readonly strategy: string;
+  readonly op: LifecycleOp;
+  readonly ceilingMs: number;
+  readonly elapsedMs: number;
+  readonly detail: string;
+}
+
 /** The one sentence a failing step reports, in the one shape every reader of
  *  this suite learns once: which arm, which operation, what bound, what it
  *  actually did. */
 export function ceilingRefusal(
-  strategy: string, op: LifecycleOp, ceilingMs: number, elapsedMs: number, detail: string,
+  { strategy, op, ceilingMs, elapsedMs, detail }: StepFailure,
 ): string {
   return `${strategy}: ${op} did not settle inside its ${String(ceilingMs)} ms ceiling `
     + `(${String(elapsedMs)} ms elapsed): ${detail}`;
@@ -287,6 +297,19 @@ export function platformConsumed(
 ): string {
   return `${strategy}: ${op} was consumed by the platform after ${String(elapsedMs)} ms, so `
     + `this sample proves nothing about the arm: ${detail}`;
+}
+
+/** Which of the three sentences a failed step gets: the platform ended the
+ *  sample, the ceiling ended it, or the arm answered inside the ceiling and
+ *  answered wrongly. */
+function stepFailureText(failure: StepFailure, consumed: boolean): string {
+  const { strategy, op, ceilingMs, elapsedMs, detail } = failure;
+
+  if (consumed) return platformConsumed(strategy, op, elapsedMs, detail);
+
+  if (elapsedMs >= ceilingMs) return ceilingRefusal(failure);
+
+  return wrongAnswer(strategy, op, elapsedMs, detail);
 }
 
 // ── the deployed operations, behind one seam ────────────────────────────────
@@ -582,11 +605,9 @@ export async function runLifecycle(
       // them rather than inferred from the wording of a SandboxError.
       const consumed = platformOpaque(detail);
 
-      const text = consumed
-        ? platformConsumed(strategy, op, elapsed, detail)
-        : elapsed >= ceiling.ms
-          ? ceilingRefusal(strategy, op, ceiling.ms, elapsed, detail)
-          : wrongAnswer(strategy, op, elapsed, detail);
+      const text = stepFailureText(
+        { strategy, op, ceilingMs: ceiling.ms, elapsedMs: elapsed, detail }, consumed,
+      );
 
       const record: StepRecord = consumed
         ? { op, ms: elapsed, ceilingMs: ceiling.ms, ok: false, detail, platformOpaque: true }
@@ -637,6 +658,27 @@ export async function runLifecycle(
 
   const digest = async (what: string): Promise<TreeDigest> =>
     decodeReply(TreeDigestSchema, what, await workload(`digest --root ${WORK_ROOT}`, what));
+
+  /** One commit of the tree. `which` names the commit in both the operation's
+   *  own label and its refusal, so a failure says which of the two it was. */
+  const commit = async (op: LifecycleOp, which: string): Promise<void> => {
+    await step(op, async (deadlineMs) => {
+      const settled = await seam.checkpoint(`${strategy} ${which} checkpoint`, deadlineMs);
+      require(settled.ok, `the ${which} checkpoint did not commit: ${settled.detail}`);
+
+      return settled;
+    });
+  };
+
+  /** One recycle of the container, named the same way. */
+  const recycle = async (op: LifecycleOp, what: string): Promise<void> => {
+    await step(op, async (deadlineMs) => {
+      const settled = await seam.stop(`${strategy} ${what}`, deadlineMs);
+      require(settled.ok, `the ${what} did not confirm: ${settled.detail}`);
+
+      return settled;
+    });
+  };
 
   const marker = `devbox-e2e-${crypto.randomUUID()}`;
   const markerPath = `${WORK_ROOT}/marker.txt`;
@@ -690,18 +732,8 @@ export async function runLifecycle(
     });
 
     // ── commit, recycle, and restore ──────────────────────────────────────
-    await step('checkpoint-small', async (deadlineMs) => {
-      const settled = await seam.checkpoint(`${strategy} first checkpoint`, deadlineMs);
-      require(settled.ok, `the first checkpoint did not commit: ${settled.detail}`);
-
-      return settled;
-    });
-    await step('stop-small', async (deadlineMs) => {
-      const settled = await seam.stop(`${strategy} stop`, deadlineMs);
-      require(settled.ok, `the stop did not confirm: ${settled.detail}`);
-
-      return settled;
-    });
+    await commit('checkpoint-small', 'first');
+    await recycle('stop-small', 'stop');
 
     // ── the wake ──────────────────────────────────────────────────────────
     //
@@ -777,18 +809,8 @@ export async function runLifecycle(
 
       return taken.digest;
     });
-    await step('checkpoint-mid', async (deadlineMs) => {
-      const settled = await seam.checkpoint(`${strategy} second checkpoint`, deadlineMs);
-      require(settled.ok, `the second checkpoint did not commit: ${settled.detail}`);
-
-      return settled;
-    });
-    await step('stop-mid', async (deadlineMs) => {
-      const settled = await seam.stop(`${strategy} release`, deadlineMs);
-      require(settled.ok, `the release did not confirm: ${settled.detail}`);
-
-      return settled;
-    });
+    await commit('checkpoint-mid', 'second');
+    await recycle('stop-mid', 'release');
 
     // ── a fresh container, holding nothing, attaching the whole tree ───────
     const reattached = await step('cold-reattach', async (deadlineMs) =>
@@ -1184,7 +1206,7 @@ async function main(): Promise<number> {
 
       const statuses = lane.stop?.() ?? [];
 
-      for (const status of statuses.filter((status) => /failed/i.test(status))) {
+      for (const status of statuses.filter((reported) => /failed/i.test(reported))) {
         teardownErrors.push(`${lane.fixture.strategy}: ${status}`);
       }
 
