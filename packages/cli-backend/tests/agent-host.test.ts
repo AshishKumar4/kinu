@@ -9,7 +9,7 @@ import { existsSync, mkdirSync, readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { Database } from 'bun:sqlite';
 import type { LanguageModel } from 'ai';
-import type { LanguageModelV2CallOptions } from '@ai-sdk/provider';
+import type { LanguageModelV2CallOptions, LanguageModelV2StreamPart, LanguageModelV2Usage } from '@ai-sdk/provider';
 import * as v from 'valibot';
 import {
   BackgroundJobStore,
@@ -41,7 +41,7 @@ import {
   type LocalHostedAgent,
 } from '../src/agent-host';
 import { makeExecRaw, makeSql, makeSqlExec, makeWorkspaceSchemaSql, type CLIRuntime } from '../src/runtime';
-import { createMemoryVfs, readTranscriptRows } from '@kinu.run/test-utils';
+import { createMemoryVfs, present, readTranscriptRows } from '@kinu.run/test-utils';
 import { openWorkspaceCLI } from '../src/open';
 import { LocalAgentSession, type SessionEvent } from '../src/local-session';
 import { TestLanguageModelV2 } from './test-language-model';
@@ -54,32 +54,37 @@ const DUMMY_LLM: LLMProviderConfig = {
   model: 'fake-model',
 };
 
+/** One answer as the stream parts a turn reads, in the order the SDK emits them. */
+function textStream(answer: string, usage: LanguageModelV2Usage): ReadableStream<LanguageModelV2StreamPart> {
+  return new ReadableStream({
+    start(controller) {
+      controller.enqueue({ type: 'stream-start', warnings: [] });
+      controller.enqueue({ type: 'text-start', id: '0' });
+      controller.enqueue({ type: 'text-delta', id: '0', delta: answer });
+      controller.enqueue({ type: 'text-end', id: '0' });
+      controller.enqueue({ type: 'finish', finishReason: 'stop', usage });
+      controller.close();
+    },
+  });
+}
+
+/** The same answer for the non-streaming call the detached review pass makes. */
+function textAnswer(answer: string, usage: LanguageModelV2Usage) {
+  return { content: [{ type: 'text' as const, text: answer }], finishReason: 'stop' as const, usage, warnings: [] };
+}
+
 function streamingModel(answer: string, onCall?: (options: LanguageModelV2CallOptions) => void): TestLanguageModelV2 {
   const usage = { inputTokens: 5, outputTokens: 7, totalTokens: 12 };
 
   return new TestLanguageModelV2({
     provider: 'fake',
     modelId: 'fake-model',
-    doGenerate: async () => ({
-      content: [{ type: 'text', text: answer }],
-      finishReason: 'stop' as const,
-      usage,
-      warnings: [],
-    }),
+    doGenerate: async () => textAnswer(answer, usage),
     doStream: async (options) => {
       onCall?.(options);
 
       return {
-        stream: new ReadableStream({
-          start(controller) {
-            controller.enqueue({ type: 'stream-start', warnings: [] });
-            controller.enqueue({ type: 'text-start', id: '0' });
-            controller.enqueue({ type: 'text-delta', id: '0', delta: answer });
-            controller.enqueue({ type: 'text-end', id: '0' });
-            controller.enqueue({ type: 'finish', finishReason: 'stop', usage });
-            controller.close();
-          },
-        }),
+        stream: textStream(answer, usage),
         response: { headers: {} },
       };
     },
@@ -123,16 +128,7 @@ function gatedFirstModel(): GatedModel {
       const answer = call === 1 ? 'child report' : 'parent acknowledged';
 
       return {
-        stream: new ReadableStream({
-          start(controller) {
-            controller.enqueue({ type: 'stream-start', warnings: [] });
-            controller.enqueue({ type: 'text-start', id: '0' });
-            controller.enqueue({ type: 'text-delta', id: '0', delta: answer });
-            controller.enqueue({ type: 'text-end', id: '0' });
-            controller.enqueue({ type: 'finish', finishReason: 'stop', usage });
-            controller.close();
-          },
-        }),
+        stream: textStream(answer, usage),
         response: { headers: {} },
       };
     },
@@ -379,13 +375,23 @@ function makeHost(
   return { host: new LocalAgentHost(options), runtimes };
 }
 
-function peerEventCount(dbPath: string): number {
+/**
+ * Event rows in the agent log. `peer` counts what another agent sent; `pending`
+ * counts rows nothing has bound to a turn yet — the exact condition
+ * `EventLog.pending()` selects on, and deliberately NOT `consumed_at IS NULL`:
+ * that column is the recovery LEASE, and a turn that answers a delivery closes
+ * its lease while keeping the binding, so reading it here would count an
+ * answered event as pending again.
+ */
+function eventCount(dbPath: string, kind: 'peer' | 'pending'): number {
   const db = new Database(dbPath, { readonly: true });
 
   try {
-    return db.query<{ n: number }, []>(
-      `SELECT COUNT(*) AS n FROM agent_log WHERE kind = 'event' AND variant = 'peer_agent'`,
-    ).get()?.n ?? 0;
+    const rows = kind === 'peer'
+      ? db.query<{ n: number }, []>(`SELECT COUNT(*) AS n FROM agent_log WHERE kind = 'event' AND variant = 'peer_agent'`)
+      : db.query<{ n: number }, []>(`SELECT COUNT(*) AS n FROM agent_log WHERE kind = 'event' AND turn_id IS NULL`);
+
+    return rows.get()?.n ?? 0;
   } finally {
     db.close();
   }
@@ -450,12 +456,7 @@ function replyingModel(answer: string) {
     // The detached turn-review pass calls this one; without it every peer turn
     // reports `orchestrator.detached_work_failed` for a reason that is the
     // fixture's, not the product's.
-    doGenerate: async () => ({
-      content: [{ type: 'text', text: answer }],
-      finishReason: 'stop' as const,
-      usage,
-      warnings: [],
-    }),
+    doGenerate: async () => textAnswer(answer, usage),
     doStream: async (options) => {
       const eventId = askedEventId(options.prompt);
       const replyTo = eventId !== null && !answered.has(eventId) ? eventId : null;
@@ -854,16 +855,7 @@ describe('LocalAgentHost', () => {
         const usage = { inputTokens: 5, outputTokens: 7, totalTokens: 12 };
 
         return {
-          stream: new ReadableStream({
-            start(controller) {
-              controller.enqueue({ type: 'stream-start', warnings: [] });
-              controller.enqueue({ type: 'text-start', id: '0' });
-              controller.enqueue({ type: 'text-delta', id: '0', delta: answer });
-              controller.enqueue({ type: 'text-end', id: '0' });
-              controller.enqueue({ type: 'finish', finishReason: 'stop', usage });
-              controller.close();
-            },
-          }),
+          stream: textStream(answer, usage),
           response: { headers: {} },
         };
       },
@@ -958,12 +950,11 @@ describe('LocalAgentHost', () => {
     ]);
 
     const team = await host.team('root');
-    const port = team.temporary;
     // The port is wired wherever a local agent holds a roster — the rung is
     // structural, not a per-session option.
-    expect(port).toBeDefined();
+    const port = present(team.temporary, 'the temporary hire port');
 
-    const outcome = await port!.run({
+    const outcome = await port.run({
       role: 'researcher',
       roleLabel: 'researcher',
       task: 'Find the root cause and report it.',
@@ -1091,8 +1082,9 @@ describe('LocalAgentHost', () => {
       ]);
 
       const team = await host.team('root');
+      const temporary = present(team.temporary, 'the temporary hire port');
 
-      const outcome = await team.temporary!.run({
+      const outcome = await temporary.run({
         role: 'researcher',
         roleLabel: 'researcher',
         task: 'Find the root cause.',
@@ -1186,8 +1178,9 @@ describe('LocalAgentHost', () => {
     ]);
 
     const askTeam = await asking.host.team('root');
+    const temporary = present(askTeam.temporary, 'the temporary hire port');
 
-    const outcome = await askTeam.temporary!.run({
+    const outcome = await temporary.run({
       role: 'researcher', roleLabel: 'researcher', task: 'Find the root cause.', mode: 'build',
     });
 
@@ -1280,8 +1273,9 @@ describe('LocalAgentHost', () => {
       ]);
 
       const team = await host.team('root');
+      const temporary = present(team.temporary, 'the temporary hire port');
 
-      const outcome = await team.temporary!.run({
+      const outcome = await temporary.run({
         role: 'researcher',
         roleLabel: 'researcher',
         task: 'Audit the ledger.',
@@ -1440,8 +1434,9 @@ describe('LocalAgentHost', () => {
     ]);
 
     const team = await host.team('root');
+    const temporary = present(team.temporary, 'the temporary hire port');
 
-    const outcome = await team.temporary!.run({
+    const outcome = await temporary.run({
       role: 'researcher',
       roleLabel: 'researcher',
       task: 'Find the root cause.',
@@ -1622,15 +1617,13 @@ describe('LocalAgentHost — peers in one virtual workspace', () => {
     const { host } = makeHost(state, streamingModel('ack'), refs);
 
     try {
-      const alpha = await host.peers('alpha');
-      const beta = await host.peers('beta');
-      expect(alpha).not.toBeNull();
-      expect(beta).not.toBeNull();
+      const alpha = present(await host.peers('alpha'), 'the alpha peer surface');
+      const beta = present(await host.peers('beta'), 'the beta peer surface');
 
       // Symmetry IS equality here: each sees exactly the other, so there is no
       // root that owns the workspace and no root that hangs off another.
-      expect(await alpha!.deps.listPeers()).toEqual([{ name: 'beta', displayName: 'Beta' }]);
-      expect(await beta!.deps.listPeers()).toEqual([{ name: 'alpha', displayName: 'Alpha' }]);
+      expect(await alpha.deps.listPeers()).toEqual([{ name: 'beta', displayName: 'Beta' }]);
+      expect(await beta.deps.listPeers()).toEqual([{ name: 'alpha', displayName: 'Alpha' }]);
 
       // And each is a root in its own right: both hold the subordinate surface
       // at depth 0, which is what "equal root" means to the delegation budget.
@@ -1655,18 +1648,18 @@ describe('LocalAgentHost — peers in one virtual workspace', () => {
     const { host } = makeHost(state, answering.model, refs);
 
     try {
-      const alpha = await host.peers('alpha');
+      const alpha = present(await host.peers('alpha'), 'the alpha peer surface');
       // Two turns on beta: the note it is woken by, and the ask it answers.
       const betaSettled = awaitTurns(host, 'beta', 2);
 
-      const sent = await alpha!.deps.send({
+      const sent = await alpha.deps.send({
         agent: 'beta', topic: 'note', message: 'starting on the parser', mode: 'build',
       });
 
       expect(sent).toMatchObject({ status: 'delivered' });
-      expect(peerEventCount(betaDb)).toBe(1);
+      expect(eventCount(betaDb, 'peer')).toBe(1);
 
-      const asked = await alpha!.deps.ask({
+      const asked = await alpha.deps.ask({
         agent: 'beta', topic: 'research', message: 'what did you find?', mode: 'build',
       });
 
@@ -1724,15 +1717,16 @@ describe('LocalAgentHost — peers in one virtual workspace', () => {
 
       // A root cannot address the other workspace either: gamma shares the
       // directory and is still not a peer.
-      const alpha = await host.peers('alpha');
-      expect(await alpha!.deps.listPeers()).toEqual([{ name: 'beta' }]);
-      await expect(alpha!.deps.send({
+      const alpha = present(await host.peers('alpha'), 'the alpha peer surface');
+
+      expect(await alpha.deps.listPeers()).toEqual([{ name: 'beta' }]);
+      await expect(alpha.deps.send({
         agent: 'gamma', topic: 'note', message: 'hello', mode: 'build',
       })).rejects.toThrow('unknown peer "gamma" in workspace "proj"');
 
       // And the receiving side refuses it too, so a message that somehow
       // reached the hop is still not admitted. This is the enforcement half.
-      const refused = await alpha!.receive({
+      const refused = await alpha.receive({
         sender_event_id: 'forged-1',
         sender_agent_name: 'gamma',
         // A foreign group, spelled the way the transport puts it on the wire
@@ -1746,7 +1740,7 @@ describe('LocalAgentHost — peers in one virtual workspace', () => {
       });
 
       expect(refused.admitted).toBe(false);
-      expect(peerEventCount(alphaDb)).toBe(0);
+      expect(eventCount(alphaDb, 'peer')).toBe(0);
     } finally {
       await host.close();
     }
@@ -1765,9 +1759,9 @@ describe('LocalAgentHost — peers in one virtual workspace', () => {
 
     const armed: number[] = [];
     const { host: first } = makeHost(state, streamingModel('ack'), refs, { wakeAt: (at) => armed.push(at) });
-    const alpha = await first.peers('alpha');
+    const alpha = present(await first.peers('alpha'), 'the alpha peer surface');
 
-    const queued = await alpha!.deps.send({
+    const queued = await alpha.deps.send({
       agent: 'beta', topic: 'note', message: 'survive this', mode: 'build',
     });
 
@@ -1796,7 +1790,7 @@ describe('LocalAgentHost — peers in one virtual workspace', () => {
       // Past the 5s first backoff — the same fold the daemon's delay uses.
       await second.tick('alpha', Date.now() + 10_000);
       expect(pendingOutboxRows(alphaDb).map((row) => row.state)).toEqual(['sent']);
-      expect(peerEventCount(betaDb)).toBe(1);
+      expect(eventCount(betaDb, 'peer')).toBe(1);
       await betaWoken;
     } finally {
       await second.close();
@@ -1825,8 +1819,8 @@ describe('LocalAgentHost — peers in one virtual workspace', () => {
       });
       // Both peers opened, so both runtimes exist to compare.
       await host.acquire('beta');
-      const alphaRt = runtimes.get('alpha')!;
-      const betaRt = runtimes.get('beta')!;
+      const alphaRt = present(runtimes.get('alpha'), 'the alpha runtime');
+      const betaRt = present(runtimes.get('beta'), 'the beta runtime');
 
       // The bytes: one directory, written by one peer and read by the other,
       // and really on disk where the developer's own tools would see it.
@@ -2101,23 +2095,6 @@ describe('LocalAgentHost — the driver lease', () => {
     }
   }
 
-  /** Pending means: an event row nothing has bound to a turn yet — the exact
-   *  condition `EventLog.pending()` selects on. Deliberately NOT
-   *  `consumed_at IS NULL`: that column is the recovery LEASE, and a turn that
-   *  answers a delivery closes its lease while keeping the binding, so reading
-   *  it here would count an answered event as pending again. */
-  function pendingEventCount(dbPath: string): number {
-    const db = new Database(dbPath, { readonly: true });
-
-    try {
-      return db.query<{ n: number }, []>(
-        `SELECT COUNT(*) AS n FROM agent_log WHERE kind = 'event' AND turn_id IS NULL`,
-      ).get()?.n ?? 0;
-    } finally {
-      db.close();
-    }
-  }
-
   test('a failed first open releases and forgets its lease before a retry', async () => {
     const { state, project } = makeRoots();
     const dbPath = await seedAgent(state, 'root');
@@ -2126,15 +2103,17 @@ describe('LocalAgentHost — the driver lease', () => {
       { name: 'root', cwd: project, workspaceId: 'proj' },
     ]);
 
-    const flush = LocalAgentSession.prototype.flushPendingDrains;
-    let refuseFirst = true;
-    LocalAgentSession.prototype.flushPendingDrains = async function flushOnce() {
-      if (refuseFirst) {
-        refuseFirst = false;
-        throw new Error('injected first-open drain failure');
-      }
+    // The injected drain uninstalls itself as it refuses, so the retry below
+    // runs the real one.
+    const realFlush = present(
+      Object.getOwnPropertyDescriptor(LocalAgentSession.prototype, 'flushPendingDrains'),
+      'the LocalAgentSession pending-drain flush',
+    );
 
-      return flush.call(this);
+    LocalAgentSession.prototype.flushPendingDrains = async function refuseOnce() {
+      Object.defineProperty(LocalAgentSession.prototype, 'flushPendingDrains', realFlush);
+
+      throw new Error('injected first-open drain failure');
     };
 
     try {
@@ -2149,7 +2128,7 @@ describe('LocalAgentHost — the driver lease', () => {
       expect(await host.acquire('root')).toBeInstanceOf(LocalAgentSession);
       expect(holderAt(dbPath)?.kind).toBe('interactive');
     } finally {
-      LocalAgentSession.prototype.flushPendingDrains = flush;
+      Object.defineProperty(LocalAgentSession.prototype, 'flushPendingDrains', realFlush);
       await host.close();
     }
   });
@@ -2291,7 +2270,7 @@ describe('LocalAgentHost — the driver lease', () => {
       db.close();
     }
 
-    expect(pendingEventCount(dbPath)).toBe(0);
+    expect(eventCount(dbPath, 'pending')).toBe(0);
 
     const after = makeHost(state, streamingModel('handled after recovery'), refs, { driverKind: 'daemon' });
     let turns = 0;
@@ -2305,7 +2284,7 @@ describe('LocalAgentHost — the driver lease', () => {
       // and drains in the same bracket.
       await after.host.acquire('root');
       expect(turns).toBe(1);
-      expect(pendingEventCount(dbPath)).toBe(0);
+      expect(eventCount(dbPath, 'pending')).toBe(0);
       expect((await userMessages(dbPath)).join('\n')).toContain('a build finished');
     } finally {
       unsubscribe();
@@ -2331,7 +2310,7 @@ describe('LocalAgentHost — the driver lease', () => {
 
       if (event.type !== 'broadcast' || event.event.type !== 'signal_card') return;
 
-      if (stolenBy === null) stolenBy = rivalHolds(dbPath, 'interactive');
+      stolenBy ??= rivalHolds(dbPath, 'interactive');
     });
 
     try {
@@ -2339,7 +2318,7 @@ describe('LocalAgentHost — the driver lease', () => {
       const fireAt = Date.now() + 60_000;
       await scheduleTimer(dbPath, 'a build finished', fireAt);
       expect((await (await host.acquire('root')).fireDueTriggers(fireAt)).fired).toBe(1);
-      expect(pendingEventCount(dbPath)).toBe(1);
+      expect(eventCount(dbPath, 'pending')).toBe(1);
 
       await host.tick('root');
 
@@ -2349,7 +2328,7 @@ describe('LocalAgentHost — the driver lease', () => {
       // `pending()`, so this assertion is the one that fails when a refused turn
       // is settled as a queued one: the row stays consumed and nothing ever
       // delivers it.
-      expect(pendingEventCount(dbPath)).toBe(1);
+      expect(eventCount(dbPath, 'pending')).toBe(1);
       expect(turns).toBe(0);
 
       // The rival goes away. Nothing expired — the pid simply stopped existing.
@@ -2359,7 +2338,7 @@ describe('LocalAgentHost — the driver lease', () => {
       expect(ran.ran).toBe(true);
       // Delivered exactly once: one turn, and the row is now bound to it.
       expect(turns).toBe(1);
-      expect(pendingEventCount(dbPath)).toBe(0);
+      expect(eventCount(dbPath, 'pending')).toBe(0);
     } finally {
       unsubscribe();
       await host.close();
