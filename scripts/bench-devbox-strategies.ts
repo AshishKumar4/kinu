@@ -5963,26 +5963,23 @@ export interface ArmArtifact<Row = ArmResult> {
   readonly row: Row;
 }
 
-/** The row's own identity. The row carries far more than this, but a file whose
- *  row names no strategy, no box and no notes is not an arm's however
- *  well-formed its envelope is. */
-const ArmRowIdentitySchema = v.looseObject({
-  strategy: v.picklist(STRATEGIES),
-  box: v.string(),
-  notes: v.array(v.string()),
-});
+/** A row, as this file's own writers hand one over. Two drivers write two row
+ *  shapes through one writer — a whole arm and a probe-only row — so the shared
+ *  contract is an object, and the envelope above is what tells a reader which
+ *  run and which arm wrote it. */
+const ArmRowSchema = v.looseObject({});
 
 /** The file's contract, parsed at the boundary like every wire reply here. The
  *  ROW is recognized rather than restated: two drivers write two row shapes
- *  through this one writer, and the envelope — schema, arm, run — plus the
- *  row's own identity is what a reader has to trust before it reads either. */
+ *  through this one writer, and the envelope — schema, arm, run — is what a
+ *  reader has to be able to trust before it reads either. */
 const ArmArtifactSchema: v.GenericSchema<ArmArtifact> = v.looseObject({
   schema: v.literal('devbox-arm-artifact/1'),
   arm: v.picklist(STRATEGIES),
   runId: v.string(),
   settledAt: v.string(),
   logTail: v.array(v.string()),
-  row: v.custom<ArmResult>((value) => v.safeParse(ArmRowIdentitySchema, value).success),
+  row: v.custom<ArmResult>((value) => v.safeParse(ArmRowSchema, value).success),
 });
 
 /**
