@@ -1,25 +1,6 @@
 /**
- * WHAT a settled response owes, in order — the declaration half of the terminal
- * lifecycle.
- *
- * The {@link TerminalEffectLedger} owns each effect's disposition and
- * {@link TerminalTransitions} owns the once-only boundary around them. What
- * lives here is the third thing, in ONE copy: the ROSTER. Which effects a
- * settled response owes, in which order, on which lane, keyed on what, and
- * gated by which facts about the turn.
- *
- * Every one of those is a rule, and a per-backend copy of them lets the
- * workspace root, the subordinate facet and the CLI hold different answers to
- * questions like "does an aborted turn close an event lease?" and "does a Plan
- * turn feed the improvement lanes?". They are the same questions, so a backend
- * that answers one of them differently is a bug nobody could see by reading
- * either copy.
- *
- * Every field is a VALUE the caller reads, never a decision it makes. That split
- * is the whole design: only the caller can read its own accumulator, its pending
- * branches or its scaffold candidate, and only this module decides what those
- * readings mean. An effect a backend does not have is simply an absent part —
- * a subordinate owes no alternate takes, so it passes none, and no row exists.
+ * What a settled response owes, in order: the one roster for every backend, so the same questions get
+ * the same answers. Callers supply values, never decisions; an effect a backend lacks is an absent part.
  */
 import type { JsonValue } from '../utils/json';
 import type { WorkMode } from '../types/turn';
@@ -29,17 +10,9 @@ import type { OwedEffect } from './terminal-effects';
 import type { SubordinateReportStatus } from '../events/hub/types';
 import { isPlaceholderMission } from '../identity/soul';
 
-/**
- * What every settled response knows about itself.
- *
- * `completed` is the DRIVER's verdict, and `durablyAnswered` below narrows it
- * further: a stream can report completion while the assistant row was never
- * written, and a later activation reads that turn back as never having happened.
- * Everything keyed to that row is gated on the narrower fact.
- */
+/** `completed` is the driver's verdict; rows keyed to the answer gate on the narrower `durablyAnswered`. */
 export interface TerminalTurnFacts {
-  /** The assistant message this response settled on. Empty when its row was
-   *  never written — an identity no effect may key on. */
+  /** Empty when the row was never written: no effect may key on it. */
   readonly messageId: string;
   readonly status: RunEndReason;
   readonly workMode: WorkMode;
@@ -48,130 +21,65 @@ export interface TerminalTurnFacts {
   readonly completed: boolean;
   readonly userText: string;
   readonly assistantText: string;
-  /** The completed turn, ALREADY SCOPED to the missions it ran under. Scoped by
-   *  the caller because the governor scope is live state a replay does not have. */
+  /** Already scoped by the caller: governor scope is live state a replay does not have. */
   readonly scopedTurn: JsonValue;
-  /** WHEN the turn ended. A replay stamped with the recovery clock would order an
-   *  old turn after a newer one. */
+  /** A replay stamped with the recovery clock would misorder turns. */
   readonly recordedAt: number;
-  /**
-   * Whether THIS session recorded evolution state at all.
-   *
-   * Recorded for the same reason the continuity and the mode are: the recording
-   * body must not read the ambient gate. A turn produced under `--no-auto-evolve`
-   * and recovered by an ordinary session would be written into the window it
-   * never earned, and the inverse would silently drop one it did.
-   */
+  /** Recorded so the recording body never reads the ambient gate (`--no-auto-evolve`). */
   readonly evolutionEnabled: boolean;
 }
 
-/** The optional halves, each supplied only by a backend that has one. */
 export interface TerminalTurnParts {
-  /** Alternate takes captured mid-turn. `credited` null means the captures
-   *  cannot be attributed and must be purged rather than claimed. */
+  /** `credited` null: captures cannot be attributed and must be purged. */
   readonly takes?: {
     readonly credited: string | null;
     readonly startedAt: number;
     readonly takeIds: readonly string[];
   };
-  /** Crafted tools this turn actually called, for async thumbs to re-score. */
   readonly craftedToolsUsed?: readonly string[];
-  /** Every delivery this turn answered, whichever way it reached the turn, with
-   *  the request id the reply is dispatched under. Together, because the id is
-   *  meaningless to a backend that answers no deliveries. */
+  /** Each with the request id its reply is dispatched under. */
   readonly eventReplies?: {
     readonly answered: ReadonlySet<string>;
     readonly requestId: string;
   };
-  /** Steer-as-Branch redirects launched during this turn. */
   readonly branches?: readonly { readonly id: string; readonly task: string }[];
-  /** The extension turn-end, for a backend that owes it as a RECORDED effect,
-   *  carrying the RAW assistant message the response ended on. Raw rather than
-   *  converted, because converting is an await and the claim has to exist before
-   *  any await that follows a persisted answer — so the conversion happens in the
-   *  effect body, on the first attempt and on a replay alike. A backend whose
-   *  turn stream already fired the turn-end inside the turn owes nothing here,
-   *  and a row would either double-fire or block the close forever. */
+  /** Raw, not converted: the claim must exist before any await after a persisted answer. A backend that fired turn-end in the turn owes nothing here. */
   readonly turnEndExtensions?: boolean;
-  /** The completion gate's subject, for a backend that runs one. Its armed state
-   *  is RAM-only, so the row is the only record that the confirming turn it
-   *  enqueues was already enqueued. */
+  /** Its armed state is RAM-only, so the row alone records the enqueue. */
   readonly completionGate?: { readonly text: string };
-  /** A context-overflow retry this turn earned. Delivery is a claimed effect
-   *  because enqueueing it is asynchronous and must survive a process cut. */
+  /** Claimed because enqueueing is asynchronous and must survive a process cut. */
   readonly overflowRetry?: boolean;
-  /**
-   * The ONE continuation a turn cut at the provider's output limit earned
-   * (core `owesOutputLimitContinuation`), for a backend whose loop cannot
-   * continue inside the turn.
-   *
-   * Claimed for the same reason the retry beside it is: the answer is already
-   * durable and truncated, so a continuation lost to an eviction leaves exactly
-   * the state it exists to prevent — a turn published as finished whose work
-   * stopped mid-sentence. `runChat` passes nothing here; it continues inside the
-   * turn and has no follow-up to owe.
-   */
+  /** The one output-limit continuation (core `owesOutputLimitContinuation`), for a backend whose loop cannot continue in the turn; `runChat` passes nothing. */
   readonly outputContinuation?: boolean;
-  /** The reminder this turn owes for settling with open tasks — the
-   *  already-rendered signal text, decided by the caller because only the
-   *  caller can read the list AND the turn's outcome together. */
+  /** Decided by the caller, the only one that reads the list and the outcome together. */
   readonly taskReminder?: { readonly text: string };
-  /** The advisor's recovery snapshot, as the improvement lanes replay it. */
   readonly advisor?: JsonValue;
-  /** The sampling plan, when this turn is sampled against a candidate. */
   readonly shadowTrial?: {
     readonly pendingVersion: number;
-    /** ALREADY BOUNDED by the caller: a recorded input is a SQLite row, and one
-     *  built from a million-token turn fails its insert partway through a
-     *  claimed sequence. */
+    /** Already bounded by the caller: an oversized recorded input fails its insert mid-sequence. */
     readonly trialContext: JsonValue;
   };
-  /** Whether this actor runs the memory-compression lane at all. The lane
-   *  reads its evidence from the transcript, so the row carries no input. */
+  /** The lane reads the transcript, so the row carries no input. */
   readonly sleepTime?: boolean;
-  /** The actor's recorded mission, which the roster turns into the subject an
-   *  unnamed actor names itself from. `standIn` says the title it shows is one
-   *  a NEW workspace was created with, which this turn's naming replaces with a
-   *  model's name (identity/naming.ts). */
+  /** `standIn`: the shown title is a new workspace's, replaced by this turn's naming (identity/naming.ts). */
   readonly autoTitle?: { readonly mission: string | null; readonly standIn?: boolean };
-  /** Whether this actor runs the cadence optimisation lanes at all. */
   readonly autoGepa?: boolean;
-  /**
-   * The report this facet owes its parent, when it owes one.
-   *
-   * The PRESENCE is the decision and it belongs to the caller, because only the
-   * caller knows its own lifetime: a `task` child owes its caller a terminal
-   * answer on every ending — answered, errored, interrupted alike — while a
-   * durable child relays only a completed turn worth relaying. Gating this on
-   * completion here would have silenced exactly the endings an `agents.ask` is
-   * blocked on.
-   */
+  /** Presence is the caller's decision: a `task` child owes a terminal answer on every ending, a durable child only on completion. */
   readonly parentReport?: {
     readonly text: string;
-    /** What KIND of ending this reports. A task child's terminal answer and a
-     *  durable child's progress note are different words for the parent. */
+    /** A task child's terminal answer and a durable child's progress note differ for the parent. */
     readonly status: SubordinateReportStatus;
-    /** The report's durable identity, which the parent's ingress dedupes on. */
+    /** The parent's ingress dedupes on it. */
     readonly sequenceId: string;
   };
 }
 
-/**
- * The roster, in the order it must run.
- *
- * Order is load-bearing twice over. The settle spine runs turn-end, then the
- * recording, then the drain, because the extension's effects are part of the
- * turn the review then reads. And the inline effects precede the detached ones
- * so a queue waiting on an inline effect cannot be overtaken.
- */
+/** Order is load-bearing: turn-end, recording, drain; inline effects before detached ones. */
 export function declareTerminalRoster(
   facts: TerminalTurnFacts, parts: TerminalTurnParts = {},
 ): OwedEffect[] {
   const { messageId, assistantText, completed } = facts;
-  // ONE gate, meaning "this turn has a durable answer". A completed stream whose
-  // assistant row is absent is a turn a later activation reads back as never
-  // having happened, so closing a delivery's lease on the stream alone would mark
-  // an unanswered event answered.
+  // One gate, "durable answer": the stream alone must not mark an unanswered event answered.
   const durablyAnswered = completed && messageId !== '';
   const owed: OwedEffect[] = [];
 
@@ -181,9 +89,7 @@ export function declareTerminalRoster(
       input: {
         credited: parts.takes.credited,
         startedAt: parts.takes.startedAt,
-        // Read by the caller HERE, at declaration. A retry that re-selected
-        // "whatever is unclaimed now" would claim — or purge — a later turn's
-        // captures.
+        // Read here at declaration: a retry re-selecting would claim or purge a later turn's captures.
         takeIds: [...parts.takes.takeIds],
       },
     });
@@ -198,8 +104,7 @@ export function declareTerminalRoster(
     });
   }
 
-  // One effect per delivery, because each closes its own recovery lease: a batch
-  // whose replies are still pending must stay owed on its own.
+  // One effect per delivery: each closes its own recovery lease.
   if (durablyAnswered && parts.eventReplies) {
     for (const answered of parts.eventReplies.answered) {
       owed.push({
@@ -212,9 +117,7 @@ export function declareTerminalRoster(
     }
   }
 
-  // ONE ROW PER BRANCH, keyed on the branch id — which IS the settlement key, so
-  // nothing downstream has to invent one. An aborted turn passes no answer, which
-  // aborts a branch instead of settling it against a partial one.
+  // One row per branch, keyed on the branch id (the settlement key). An aborted turn aborts the branch.
   for (const branch of parts.branches ?? []) {
     owed.push({
       name: 'branches', scope: branch.id, lane: 'detached',
@@ -227,8 +130,7 @@ export function declareTerminalRoster(
     });
   }
 
-  // Before the spine, because the gate reads the answer as it stands and the
-  // spine's extension emit may add to it.
+  // Before the spine: the spine's extension emit may add to the answer.
   if (parts.completionGate) {
     owed.push({
       name: 'completion_gate', scope: messageId, lane: 'inline',
@@ -236,9 +138,7 @@ export function declareTerminalRoster(
     });
   }
 
-  // The settle spine, as FOUR separately claimed boundaries. Each records the
-  // whole input it needs, because each is genuinely replayed. The extension
-  // announcement's subject is the answer row, so a turn with none owes none.
+  // Four separately claimed, replayed boundaries. No answer row, no extension announcement.
   if (parts.turnEndExtensions && messageId !== '') {
     owed.push({
       name: 'turn_end_extensions', scope: messageId, lane: 'inline',
@@ -252,18 +152,14 @@ export function declareTerminalRoster(
     });
   }
 
-  // Beside the retry, and never with it: one answers a turn that failed, the
-  // other a turn that finished with more to say, and `completed` decides which.
+  // Mutually exclusive with the retry; `completed` decides which.
   if (parts.outputContinuation) {
     owed.push({
       name: 'output_continuation', scope: messageId, lane: 'inline', input: {},
     });
   }
 
-  // Beside the continuation, for the same reason and on the same lane: the
-  // signal is one queued turn this response owes, and claiming it inside the
-  // commit is what lets a killed process re-drive the delivery. A turn whose
-  // list had nothing open declares no part, so an idle list owes no row.
+  // Claimed inside the commit so a killed process re-drives delivery. No open tasks, no row.
   if (parts.taskReminder) {
     owed.push({
       name: 'task_reminder', scope: messageId, lane: 'inline',
@@ -277,9 +173,7 @@ export function declareTerminalRoster(
       messageId,
       status: facts.status,
       turn: facts.scopedTurn,
-      // RECORDED, not re-read. A fresh actor defaults to `conversation` and to
-      // build, so a replay would park an independent task awaiting a follow-up
-      // that cannot come, and would record a PLAN turn into evolution.
+      // Recorded, not re-read: a fresh actor defaults to `conversation` and build.
       continuity: facts.continuity,
       workMode: facts.workMode,
       recordedAt: facts.recordedAt,
@@ -304,8 +198,7 @@ export function declareTerminalRoster(
         text: parts.parentReport.text,
         status: parts.parentReport.status,
         sequenceId: parts.parentReport.sequenceId,
-        // The mode TRAVELS. A cold replay must not re-derive it from turn
-        // metadata that has moved on and turn a Plan report into a Build one.
+        // The mode travels: a replay must not turn a Plan report into a Build one.
         mode: facts.workMode,
       },
     });
@@ -313,12 +206,7 @@ export function declareTerminalRoster(
 
   const naming = autoTitleEffect(facts, parts);
 
-  // Everything below is completed-Build only, and the gate is here rather than at
-  // each caller because it is one rule: a turn the improvement lanes are closed
-  // for earned none of the work these lanes do, and a candidate scored against an
-  // aborted or Plan turn is evidence about nothing. A new workspace's naming is
-  // the exception: it is owed however its first turn ended, because no later
-  // turn replaces the stand-in the workspace was created with.
+  // Below is completed-Build only, except a new workspace's naming, which is owed however its first turn ended.
   if (!completed || facts.workMode === 'plan') {
     if (naming?.standIn === true) owed.push(naming.effect);
 
@@ -330,7 +218,6 @@ export function declareTerminalRoster(
   return owed;
 }
 
-/** The rows only a completed Build turn earns, in order. */
 function completedBuildEffects(
   facts: TerminalTurnFacts, parts: TerminalTurnParts, naming: OwedEffect | null,
 ): OwedEffect[] {
@@ -348,10 +235,7 @@ function completedBuildEffects(
     });
   }
 
-  // The between-turn lanes. Each is durably gated at its own boundary — a
-  // transcript-derived cadence, a title that is no longer a placeholder, a
-  // turn-count cadence — which is what makes each replayable from its recorded
-  // input.
+  // Each lane is durably gated at its own boundary, so each replays from its recorded input.
   if (parts.sleepTime) {
     owed.push({ name: 'sleep_time', scope: messageId, lane: 'detached', input: {} });
   }
@@ -365,8 +249,6 @@ function completedBuildEffects(
   return owed;
 }
 
-/** The naming row this turn owes, and whether it replaces a new workspace's
- *  stand-in title. */
 function autoTitleEffect(
   facts: TerminalTurnFacts, parts: TerminalTurnParts,
 ): { readonly effect: OwedEffect; readonly standIn: boolean } | null {
@@ -376,20 +258,12 @@ function autoTitleEffect(
   return { effect: { name: 'auto_title', scope: facts.messageId, lane: 'detached', input }, standIn: 'standIn' in input };
 }
 
-/**
- * Whether a turn owes its candidate scaffold a shadow trial: a completed Build
- * turn of a session whose evolution lanes are on. The roster's own gate, asked
- * by a host before it reads the sampling plan at all.
- */
+/** Asked by a host before it reads the sampling plan at all. */
 export function owesShadowTrial(facts: Pick<TerminalTurnFacts, 'completed' | 'workMode' | 'evolutionEnabled'>): boolean {
   return facts.completed && facts.workMode !== 'plan' && facts.evolutionEnabled;
 }
 
-/**
- * What an unnamed actor names itself from: its mission, unless that is still a
- * placeholder that names nothing yet, and then the owner's own words. Only a
- * real mission replaces the stand-in title a new workspace was created with.
- */
+/** The mission unless it is still a placeholder, then the owner's own words. */
 function autoTitleInput(
   title: NonNullable<TerminalTurnParts['autoTitle']>, userText: string,
 ): { subject: string } | { subject: string; standIn: true } {

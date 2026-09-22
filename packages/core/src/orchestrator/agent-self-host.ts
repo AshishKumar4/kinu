@@ -1,10 +1,4 @@
-/**
- * The one {@link AgentSelfHost} both backends register behind `agent.*`.
- *
- * The provider is a tool (tools/agent-self.ts); what it reaches is the
- * harness's own curriculum, scaffold, replay, trigger and job planes, so the
- * host that joins the two lives here.
- */
+/** The one {@link AgentSelfHost} both backends register behind `agent.*` (provider: tools/agent-self.ts). */
 
 import type { AgentSelfHost } from '../tools/agent-self';
 import type { MissionGovernor } from '../mission-budget';
@@ -18,13 +12,7 @@ import { jobResult, listBackgroundJobs } from '../read-models/background-jobs';
 import { listScaffoldVersions, proposeScaffold, type ScaffoldControl } from '../evolution/control';
 import { listReplayEvals } from '../evolution/replay';
 
-/**
- * What a backend hands the `agent.*` tools: its runtime and stores, read when a
- * tool runs, and the three answers that are its platform's. A trigger is
- * revoked with its webhook secret on a Durable Object and re-arms the local
- * alarm on the CLI; a forced compaction is armed under the backend's own
- * session key; the budget governor is the one the backend built.
- */
+/** Stores are read when a tool runs; trigger revocation, forced compaction and the budget governor are backend-specific. */
 export interface AgentSelfPorts {
   readonly rt: AgentRuntime;
   readonly scaffoldControl: () => ScaffoldControl;
