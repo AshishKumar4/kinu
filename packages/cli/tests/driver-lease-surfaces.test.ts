@@ -20,6 +20,7 @@ import { scratchDir } from '../../test-utils/src/scratch';
 import { resolve } from 'node:path';
 import { describe, expect, test } from 'bun:test';
 import { parseJsonObject, type JsonObject } from '@kinu.run/core';
+import * as v from 'valibot';
 
 const repoRoot = resolve(__dirname, '../../..');
 
@@ -38,6 +39,13 @@ function freshDir(prefix: string): string {
  * gives it the lease. Killing it is left to process exit, which is the honest
  * end for a driver that went away without releasing.
  */
+/** One field the scenario printed, as the text the assertion reads. */
+function printed(result: JsonObject, key: string): string {
+  const value = v.parse(v.union([v.string(), v.number(), v.boolean()]), result[key]);
+
+  return String(value);
+}
+
 function scenario(body: string): JsonObject {
   const home = freshDir('kinu-lease-home-');
   const project = freshDir('kinu-lease-project-');
@@ -175,8 +183,8 @@ describe('the interactive client and the driver lease', () => {
     // Two people driving one conversation is the interleaving this prevents, so
     // the second one is told before it can type into it.
     expect(result.opened).toBe(false);
-    expect(String(result.failure)).toContain(String(result.otherPid));
-    expect(String(result.failure)).toContain('interactive');
+    expect(printed(result, 'failure')).toContain(printed(result, 'otherPid'));
+    expect(printed(result, 'failure')).toContain('interactive');
     // The refusal changed nothing, and closing did not evict the live holder.
     expect(result.heldKind).toBe('interactive');
     expect(result.heldPid).toBe(result.otherPid);
@@ -198,10 +206,10 @@ describe('the interactive client and the driver lease', () => {
 
     // The command never prints a tick it did not perform: it names the holder,
     // which is also the answer to "why did nothing happen?".
-    expect(String(result.printed)).toContain('deferred');
-    expect(String(result.printed)).toContain('leasebot');
-    expect(String(result.printed)).toContain(String(result.ownerPid));
-    expect(String(result.printed)).not.toContain('ticked');
+    expect(printed(result, 'printed')).toContain('deferred');
+    expect(printed(result, 'printed')).toContain('leasebot');
+    expect(printed(result, 'printed')).toContain(printed(result, 'ownerPid'));
+    expect(printed(result, 'printed')).not.toContain('ticked');
     // A daemon never takes the conversation from a live person.
     expect(result.heldPid).toBe(result.ownerPid);
   });

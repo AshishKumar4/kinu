@@ -93,7 +93,7 @@ afterEach(async () => {
     await waitForPidExit(pid);
   }
 
-  await Promise.all(hubs.splice(0).map((hub) => hub.close()));
+  await Promise.all(hubs.splice(0).map((started) => started.close()));
 });
 
 function hub(opts: Parameters<typeof startUpdateHub>[0]): UpdateHub {

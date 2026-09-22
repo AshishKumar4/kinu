@@ -121,6 +121,11 @@ function runScenario(body: string, opts: {
   return v.parse(v.record(v.string(), StepOutcomeSchema), JSON.parse(proc.stdout.toString()));
 }
 
+/** The step's value as the text the assertion reads. */
+function expectText(step: StepOutcome | undefined): string {
+  return v.parse(v.string(), expectOk(step));
+}
+
 function expectOk(step: StepOutcome | undefined): JsonValue {
   expect(step?.ok, step?.error ?? 'scenario returned no step result').toBe(true);
 
@@ -222,7 +227,7 @@ describe('local profile authority', () => {
     expect(v.parse(ParsedEnvelope, expectOk(steps.reload))).toEqual(seeded);
     // The envelope lives in config.json under the local slot, and nowhere
     // does the file claim account authority.
-    const onDisk = String(expectOk(steps.configOnDisk));
+    const onDisk = expectText(steps.configOnDisk);
     expect(onDisk).toContain('"localProfile"');
     expect(onDisk).not.toContain('"account"');
   });
@@ -266,7 +271,7 @@ describe('local profile authority', () => {
     expect(reloaded.digest)
       .toBe(profileCatalogDigest(validateProfileCatalog(seededCatalog('other-model'))));
     // Superseded, not merged: the model the first edit wrote leaves no trace.
-    expect(String(expectOk(steps.configOnDisk))).not.toContain('deepseek');
+    expect(expectText(steps.configOnDisk)).not.toContain('deepseek');
   });
 });
 
@@ -315,8 +320,8 @@ describe('account cache isolation', () => {
     expect(Object.keys(b.catalog.roles)).toEqual(['auditor']);
     expect(expectOk(steps.readUnknown)).toBeNull();
     // KinuConfig holds neither account's data — the cache file does.
-    expect(String(expectOk(steps.configText))).not.toContain('acc-a');
-    const cacheText = String(expectOk(steps.cacheText));
+    expect(expectText(steps.configText)).not.toContain('acc-a');
+    const cacheText = expectText(steps.cacheText);
     expect(cacheText).toContain('acc-a');
     expect(cacheText).toContain('acc-b');
   });
@@ -384,14 +389,14 @@ describe('account cache isolation', () => {
 
     expect(expectOk(steps.signedOutSource)).toEqual({ kind: 'local' });
 
-    const signedIn = v.parse(v.object({
+    const afterSignIn = v.parse(v.object({
       source: ParsedAuthoritySource,
       localStillNull: v.null(),
     }), expectOk(steps.signInA));
 
-    expect(signedIn.source).toEqual({ kind: 'account', accountId: 'acc-a' });
+    expect(afterSignIn.source).toEqual({ kind: 'account', accountId: 'acc-a' });
     // Signing in promotes nothing into the local slot.
-    expect(signedIn.localStillNull).toBeNull();
+    expect(afterSignIn.localStillNull).toBeNull();
 
     const switched = v.parse(v.object({
       source: ParsedAuthoritySource,

@@ -93,7 +93,7 @@ describe('CLI TUI layout', () => {
       expect(frame).not.toContain('…');
 
       for (const line of frame.split('\n')) {
-        expect([...line].length).toBeLessThanOrEqual(52);
+        expect(line.length).toBeLessThanOrEqual(52);
       }
     } finally {
       flushSync(() => { root.unmount(); });
@@ -130,7 +130,7 @@ describe('CLI TUI layout', () => {
       expect(frame).toContain('●');
 
       for (const line of frame.split('\n')) {
-        expect([...line].length).toBeLessThanOrEqual(20);
+        expect(line.length).toBeLessThanOrEqual(20);
       }
     } finally {
       flushSync(() => { root.unmount(); });
@@ -500,7 +500,7 @@ describe('CLI TUI layout', () => {
       const frame = captureCharFrame();
 
       for (const line of frame.split('\n')) {
-        expect([...line].length).toBeLessThanOrEqual(58);
+        expect(line.length).toBeLessThanOrEqual(58);
       }
 
       const hintLine = lineContaining(frame, 'Type to filter');
@@ -1175,7 +1175,7 @@ async function renderOverlayFrame(showOverlay: boolean) {
 async function renderSettled(renderOnce: () => Promise<void>) {
   for (let i = 0; i < 10; i++) {
     await renderOnce();
-    await new Promise<void>((resolve) => setImmediate(resolve));
+    await new Promise<void>((settle) => setImmediate(settle));
   }
 }
 

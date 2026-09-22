@@ -363,11 +363,11 @@ describe("CLI inspection commands", () => {
         { source: "fast", usage: { input: 500, output: 50 } },
       ];
 
-      rows.forEach((payload, i) => {
+      for (const [i, payload] of rows.entries()) {
         db.run("INSERT INTO run_events (actor_id, run_id, event_index, type, payload, ts) VALUES (?, ?, ?, 'model_call', ?, ?)", [
           actorId, "workspace", i, JSON.stringify({ ...payload, eventIndex: i, runId: "workspace", timestamp: new Date(i * 1_000).toISOString() }), new Date(i * 1_000).toISOString(),
         ]);
-      });
+      }
     } finally {
       db.close();
     }
