@@ -314,7 +314,7 @@ describe('tool effect claims', () => {
             expect(rows[0].n).toBe(1);
             dispatched += 1;
 
-            return `charged-${String(args.amount)}`;
+            return `charged-${Number(args.amount)}`;
           },
           effectClaims: { sql, actor, turnId: () => 'turn-1' },
           clamp: { vfs: createMemoryVfs().vfs, budget: new TurnContextBudget(), producer: 'external_tool' },

@@ -1,6 +1,6 @@
 import { expect, test } from 'bun:test';
 import * as v from 'valibot';
-import { createTestRuntime } from '@kinu.run/test-utils';
+import { createTestRuntime, present } from '@kinu.run/test-utils';
 import { initSessionContextTables } from '../src/session/schema';
 import { SessionMessages, type MessageReference } from '../src/session/messages';
 import { SessionPayloads } from '../src/session/payload';
@@ -79,7 +79,7 @@ test('a sealed message is projected once at its seal and read as one row after',
     let selected = s.context.initialize();
     selected = s.context.commit(selected, 'output', 'turn', () => [{ ...s.messages.insert(prepared, 'output'), entryId: 'answer', position: 0 }], () => s.rt.actor.assertCurrent());
     const opened = s.context.entries(selected)[0];
-    const projections = () => s.testSql.db.query<{ n: number }, []>('SELECT count(*) AS n FROM message_projections').get()!.n;
+    const projections = () => present(s.testSql.db.query<{ n: number }, []>('SELECT count(*) AS n FROM message_projections').get(), 'the projection row').n;
 
     // Open: read from its rows, projected by nobody.
     expect(await s.messages.materialize(opened)).toEqual({ role: 'assistant', content: [{ type: 'text', text: 'a' }] });

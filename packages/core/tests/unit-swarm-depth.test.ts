@@ -53,7 +53,8 @@ import type { AgentRuntime } from '../src/types/agent-runtime';
 import type { SearchNode } from '../src/types/mcts';
 import type { LLM, SqlExecutor } from '../src/types/primitives';
 import type { ActorHandle } from '../src/identity/actor-handle';
-import { createTestActors } from '@kinu.run/test-utils';
+import { createTestActors, present } from '@kinu.run/test-utils';
+import * as v from 'valibot';
 import { refuseHostNode } from './helpers-actor-host';
 
 /**
@@ -1719,7 +1720,7 @@ describe("advance:'archive' bins a wave into cells, and the next run starts from
 
     // TWO CELLS, and each holds the answer whose measurement put it there.
     const rows = recordsFor(rt.storage.sql, rt.actor, { identity: identityOf(), floor: SUITE_FLOOR });
-    expect(rows.map((row) => row.descriptor).sort()).toEqual([OPTIMAL_CELL, THOROUGH_CELL]);
+    expect(rows.map((row) => present(row.descriptor, 'the record descriptor')).sort((a, b) => a.localeCompare(b))).toEqual([OPTIMAL_CELL, THOROUGH_CELL]);
     expect(bestInCell(rt.storage.sql, rt.actor, {
       identity: identityOf(), floor: SUITE_FLOOR, descriptor: OPTIMAL_CELL,
     })?.value).toBe(N - 1);
@@ -1730,7 +1731,7 @@ describe("advance:'archive' bins a wave into cells, and the next run starts from
     // And the trail says which cell each row landed in, so the coverage on the report and
     // the descriptors in the store cannot disagree.
     const written = logger.emitted.filter((line) => line.event === 'swarm.record_written');
-    expect(written.map((line) => line.fields.cell).sort()).toEqual([OPTIMAL_CELL, THOROUGH_CELL]);
+    expect(written.map((line) => v.parse(v.string(), line.fields.cell)).sort((a, b) => a.localeCompare(b))).toEqual([OPTIMAL_CELL, THOROUGH_CELL]);
   });
 
   test('A SECOND RUN READS THE OCCUPANTS, and reports the COVERAGE it started from', async () => {

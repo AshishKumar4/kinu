@@ -32,6 +32,7 @@ import {
 } from '../src/strategy/verifier-registry';
 import { preflightRatioHarness } from '../src/strategy/exec-ratio';
 import type { MeasurementContext } from '../src/strategy/objective';
+import { present } from '@kinu.run/test-utils';
 
 /** A measurement context over a real workspace VFS and a real shell. */
 function liveContext(): MeasurementContext {
@@ -74,16 +75,16 @@ describe('a workspace that CAN run the instrument passes its preflight', () => {
 
 describe('a workspace that CANNOT run the instrument says so, in the executor\'s words', () => {
   test('the fault names the command, the exit code and the real cause', async () => {
-    const fault = await preflightRatioHarness(brokenShellContext());
+    const fault = present(await preflightRatioHarness(brokenShellContext()), 'the preflight fault');
     expect(fault).not.toBeNull();
     // The command that was tried, so a reader knows what was measured.
-    expect(fault!).toContain('node _measure_probe');
-    expect(fault!).toContain('printed no RESULT line');
-    expect(fault!).toContain('exit 1');
+    expect(fault).toContain('node _measure_probe');
+    expect(fault).toContain('printed no RESULT line');
+    expect(fault).toContain('exit 1');
     // THE PRODUCTION STRING. Not paraphrased into "the instrument is unavailable":
     // the executor's own words are the only thing that names the real defect, which
     // lives in the workspace runtime rather than in this repository.
-    expect(fault!).toContain('The "wasmModule" option only works in the browser');
+    expect(fault).toContain('The "wasmModule" option only works in the browser');
   });
 
   test('a shell that throws is a fault, never an exception out of the preflight', async () => {

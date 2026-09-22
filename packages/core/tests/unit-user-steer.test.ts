@@ -103,9 +103,9 @@ function setup(opts: {
   const drained: Array<{ steers: UserSteer[]; atStep: number }> = [];
 
   const host: BackendHost = {
-    broadcast: (event: BroadcastEvent) => {
-      raw.push(event);
-      broadcasts.push(v.parse(BroadcastSchema, event));
+    broadcast: (broadcast: BroadcastEvent) => {
+      raw.push(broadcast);
+      broadcasts.push(v.parse(BroadcastSchema, broadcast));
     },
     enqueueTurn: async (turn) => {
       queued.push(turn);
@@ -123,7 +123,7 @@ function setup(opts: {
   const accepted: string[] = [];
 
   const inbox = new Inbox(host, undefined, {
-    onAccept: (steer) => { accepted.push(steer.id); },
+    onAccept: (acceptedSteer) => { accepted.push(acceptedSteer.id); },
     onDrain: (steers, atStep) => {
       drained.push({ steers: [...steers], atStep });
 
@@ -635,7 +635,9 @@ describe('Inbox — the user kind beside the event kind', () => {
     // The host's enqueue is held open — the window between a turn's
     // admission and its opening. The first message starts the turn; the other
     // two are buffered for its first step, never queued as turns behind it.
-    let open: (() => void) | null = null;
+    let open = (): void => {};
+
+    const heldEnqueue = new Promise<void>((resolve) => { open = resolve; });
     const queued: ProgrammaticTurn[] = [];
     let inFlight = false;
 
@@ -643,7 +645,7 @@ describe('Inbox — the user kind beside the event kind', () => {
       broadcast: () => {},
       enqueueTurn: async (turn) => {
         queued.push(turn);
-        await new Promise<void>((resolve) => { open = resolve; });
+        await heldEnqueue;
 
         return { status: 'queued' };
       },
@@ -665,7 +667,7 @@ describe('Inbox — the user kind beside the event kind', () => {
       { role: 'user', content: 'first' },
       { role: 'user', content: 'second\n\nthird' },
     ]);
-    open!();
+    open();
     expect(await first).toBe('queued');
     expect(queued).toHaveLength(1);
   });

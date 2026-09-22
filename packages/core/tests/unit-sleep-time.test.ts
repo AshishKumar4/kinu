@@ -5,7 +5,7 @@ import {
   sleepTimeDue, sleepTimeWakeAt, sleepTimeWindow,
   type ConversationProjection,
 } from '../src/index';
-import { createTestFactsStore, createJSONLLM, createScriptedLLM } from '@kinu.run/test-utils';
+import { createTestFactsStore, createJSONLLM, createScriptedLLM, present } from '@kinu.run/test-utils';
 
 const ONE_TURN = [{ task: 't', output: 'o', toolCalls: [] }];
 
@@ -123,14 +123,14 @@ describe('Sleep-time compute', () => {
       decay: ['stale.fact'],
     });
 
-    const update = await runSleepTimeCompute(judge, {
+    const update = present(await runSleepTimeCompute(judge, {
       turns: [{ task: 'configure deploy', output: '...', toolCalls: ['workspace.exec'] }],
       currentFacts: [],
-    });
+    }), 'the sleep-time update');
 
     expect(update).not.toBeNull();
-    expect(update!.upserts.length).toBe(1);
-    expect(update!.decay).toEqual(['stale.fact']);
+    expect(update.upserts.length).toBe(1);
+    expect(update.decay).toEqual(['stale.fact']);
   });
 
   test('the prompt carries every turn of the window, oldest first, with its tools', async () => {
@@ -187,7 +187,7 @@ describe('Sleep-time compute', () => {
     expect(summary.upserted).toBe(1);
     expect(summary.decayed).toBe(1);
     expect(summary.skipped).toBe(0);
-    expect(facts.recall('decay.this')!.confidence).toBeLessThan(1.0);
+    expect(present(facts.recall('decay.this'), 'the decayed fact').confidence).toBeLessThan(1.0);
   });
 
   test('rejects an update with a missing fact value before any write', async () => {

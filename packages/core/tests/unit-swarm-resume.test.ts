@@ -287,7 +287,7 @@ describe('harvesting a capped swarm', () => {
     void sql`INSERT INTO search_nodes (actor_id, id, root_id, task, observation)
       VALUES (${actor.actorId}, 'harvest-root', 'harvest-root', ${TASK}, 'root')`;
 
-    return { sql, ledger, actor, sibling: actors.sibling };
+    return { sql, ledger, actor, sibling: actors.sibling.bind(actors) };
   }
 
   test('an all-incomplete search has no candidate to report as completed', () => {

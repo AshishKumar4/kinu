@@ -22,6 +22,7 @@ import type { ScaffoldArchiveEntry } from '../src/scaffold/archive';
 import { RunEventRecorder } from '../src/events/recorder';
 import type { ToolCallRecord } from '../src/evolution/types';
 import { jsonObjectOnlyInstruction } from '../src/prompts/structured';
+import { present } from '@kinu.run/test-utils';
 
 /** The PRODUCTION schema, not this module's own tables alone: the eval split
  *  reconstructs process evidence from the message and run-event ledgers, and a
@@ -560,8 +561,9 @@ describe('buildOutcomeEvalSplit — GEPA train/val discipline (disjoint)', () =>
     expect(split.train).toHaveLength(1);
     expect(split.heldOutNegatives).toBe(0);
     expect(split.val.every((i) => i.expected?.outcome === 'accepted')).toBe(true);
-    expect(split.degeneracy).toBe('no_held_out_negatives');
-    expect(describeSplitDegeneracy(split.degeneracy!)).toContain('not evidence');
+    const degeneracy = present(split.degeneracy, 'the split degeneracy');
+    expect(degeneracy).toBe('no_held_out_negatives');
+    expect(describeSplitDegeneracy(degeneracy)).toContain('not evidence');
   });
 
   test('no negatives yet → empty train set, flagged (never the accepted set)', async () => {

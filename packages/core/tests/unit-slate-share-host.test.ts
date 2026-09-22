@@ -1,6 +1,7 @@
 import { expect, test } from 'bun:test';
 import { buildSlateShareHost, parseSlateShareLabel } from '../src/preview/slate-share-host';
 import { buildWorkspacePreviewHost, parseWorkspacePreviewLabel } from '../src/preview/nimbus-preview-host';
+import { present } from '@kinu.run/test-utils';
 
 const HANDLE = '0123abcdef';
 
@@ -34,11 +35,8 @@ test('each parser refuses the other address grammar', () => {
   const shareHost = buildSlateShareHost({ handle: HANDLE, token: TOKEN, workspace: 'my-ws', suffix: 'kinu.run' });
   const previewHost = buildWorkspacePreviewHost({ port: 3_000, workspace: 'my-ws', handle: 'fedcba9876', token: TOKEN, suffix: 'kinu.run' });
 
-  expect(shareHost).not.toBeNull();
-  expect(previewHost).not.toBeNull();
-
-  const shareLabel = shareHost!.split('.')[0];
-  const previewLabel = previewHost!.split('.')[0];
+  const shareLabel = present(shareHost, 'the slate share host').split('.')[0];
+  const previewLabel = present(previewHost, 'the workspace preview host').split('.')[0];
 
   // A share label's first field is ten hex digits — a port the preview grammar
   // refuses — and a preview label's port makes the share's handle field a '-'.

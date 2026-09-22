@@ -1326,7 +1326,7 @@ describe('the parent ingress, in the order it runs', () => {
     // The VFS write is async and the transaction body is not: observing the
     // file already on the plane when the transaction opens is what proves the
     // ordering, not the shape of the source.
-    const transaction = scene.deps.transaction;
+    const transaction = scene.deps.transaction.bind(scene.deps);
     scene.deps.transaction = <T,>(body: () => T): T => {
       expect(scene.files.has(spilled)).toBe(true);
 

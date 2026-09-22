@@ -33,7 +33,7 @@ import { ConversationSearchStore } from '../src/memory/conversation-search';
 import { openWorkspaceMainActor } from '../src/identity/workspace-actors';
 import type { WorkspaceVFS } from '../src/vfs/nimbus-workspace';
 import type { RawSqlExec, SqlExec, SqlExecutor } from '../src/types/primitives';
-import { testActorHandle } from '@kinu.run/test-utils';
+import { testActorHandle, present } from '@kinu.run/test-utils';
 
 /** One in-memory database with every handle this suite drives it through. */
 interface Workspace {
@@ -264,7 +264,7 @@ describe('workspace archive', () => {
           { path: 'project/data.bin', type: 'file' as const },
         ];
       },
-      async readFile(path: string) { return bodies.get(path)!.slice(); },
+      async readFile(path: string) { return present(bodies.get(path), `the archived body of ${path}`).slice(); },
     };
 
     const whole = await writeWorkspaceArchive(source.archive, {
