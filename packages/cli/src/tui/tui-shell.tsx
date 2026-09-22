@@ -383,7 +383,7 @@ function rowLineCount(row: TuiSidebarRow): number {
 function rowLineOffset(rows: readonly TuiSidebarRow[], index: number): number {
   let offset = 0;
 
-  for (let i = 0; i < index; i += 1) offset += rowLineCount(rows[i]!);
+  for (let i = 0; i < index; i += 1) offset += rowLineCount(rows[i]);
 
   return offset;
 }
@@ -450,7 +450,7 @@ export function TuiShell(props: TuiShellProps) {
 
     const index = found >= 0 ? found : Math.min(lastSelectedIndex.current, rowsNow.length - 1);
 
-    return { row: rowsNow[index]!, index };
+    return { row: rowsNow[index], index };
   }, []);
 
   // First selection lands on the first openable agent, not a group header; a
@@ -460,8 +460,8 @@ export function TuiShell(props: TuiShellProps) {
     if (rows.length === 0 || selectedIndex >= 0) return;
 
     const fallback = selectedKey === null
-      ? rows.find((row) => row.kind === 'agent') ?? rows[0]!
-      : rows[Math.min(lastSelectedIndex.current, rows.length - 1)]!;
+      ? rows.find((row) => row.kind === 'agent') ?? rows[0]
+      : rows[Math.min(lastSelectedIndex.current, rows.length - 1)];
 
     applySelection(fallback.key);
   }, [applySelection, rows, selectedIndex, selectedKey]);
@@ -500,7 +500,7 @@ export function TuiShell(props: TuiShellProps) {
 
     if (scroll === null || selectedIndex < 0) return;
     const top = rowLineOffset(rows, selectedIndex);
-    const lines = rowLineCount(rows[selectedIndex]!);
+    const lines = rowLineCount(rows[selectedIndex]);
     const viewport = scroll.viewport.height;
 
     if (top < scroll.scrollTop) scroll.scrollTo(top);
@@ -543,7 +543,7 @@ export function TuiShell(props: TuiShellProps) {
     if (selected === null) return;
     const rowsNow = rowsRef.current;
     const next = Math.max(0, Math.min(rowsNow.length - 1, selected.index + delta));
-    applySelection(rowsNow[next]!.key);
+    applySelection(rowsNow[next].key);
   }, [applySelection, selectedRowNow]);
 
   /** Page by the navigator's own viewport, in rows measured through row heights. */

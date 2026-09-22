@@ -407,7 +407,7 @@ describe("kinu exec (headless)", () => {
 
       const secondHeader = v.parse(
         SessionEventSchema,
-        parseJsonObject(toText(second.stdout).trim().split("\n")[0]!),
+        parseJsonObject(toText(second.stdout).trim().split("\n")[0]),
       );
 
       expect(secondHeader.id).not.toBe(v.parse(SessionEventSchema, events[0]).id);

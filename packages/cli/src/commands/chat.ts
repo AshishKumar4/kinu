@@ -59,7 +59,7 @@ export async function chatCommand(
     }
 
     if (agents.length === 1) {
-      name = agents[0]!.name;
+      name = agents[0].name;
     } else {
       console.log(`\n${DIM('Select a workspace:')}`);
       agents.forEach((a, i) => console.log(`  ${ACCENT(String(i + 1))} ${a.label}`));
@@ -72,7 +72,7 @@ export async function chatCommand(
         process.exit(1);
       }
 
-      name = agents[idx]!.name;
+      name = agents[idx].name;
     }
   }
 

@@ -171,7 +171,7 @@ function surfaceTitleFor(surface: ActiveSurface, walkbackOpen: boolean): string 
     case 'settings': return 'Settings ›';
     case 'theme': return 'Theme ›';
     case 'commands': return 'Commands ›';
-    case 'hub': return `${surface.view[0]!.toUpperCase()}${surface.view.slice(1)} ›`;
+    case 'hub': return `${surface.view[0].toUpperCase()}${surface.view.slice(1)} ›`;
     case 'model': return 'Model picker ›';
     case 'changelog': return 'Changelog ›';
     case 'takes': return 'Takes ›';

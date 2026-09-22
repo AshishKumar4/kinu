@@ -84,7 +84,7 @@ interface DerivedOnboardingState {
 
 function deriveOnboardingState(readiness: OnboardingReadiness): DerivedOnboardingState {
   for (let index = 0; index < ONBOARDING_STEP_IDS.length; index += 1) {
-    const step = ONBOARDING_STEP_IDS[index]!;
+    const step = ONBOARDING_STEP_IDS[index];
 
     if (readiness.skippedSteps.includes(step) || onboardingStepReady(step, readiness)) continue;
 

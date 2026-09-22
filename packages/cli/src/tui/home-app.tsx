@@ -858,7 +858,7 @@ function nextFocus(current: HomeFocus, sidebarFocusable: boolean): HomeFocus {
 
   const index = order.indexOf(current);
 
-  return order[(index + 1) % order.length] ?? order[0]!;
+  return order[(index + 1) % order.length] ?? order[0];
 }
 
 /**

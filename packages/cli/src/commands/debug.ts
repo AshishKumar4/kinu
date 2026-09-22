@@ -731,7 +731,7 @@ export async function debugCommand(name: string, opts: DebugOpts = {}): Promise<
         events.push(...page);
 
         if (page.length < DEFAULT_EVENT_PAGE) break;
-        since = page[page.length - 1]!.eventIndex + 1;
+        since = page[page.length - 1].eventIndex + 1;
       }
 
       const stats = summarizeRun(run.runId, events);
@@ -933,7 +933,7 @@ function printHumanSummary(name: string, mode: string, summary: DebugSummary, ou
 
     if (summary.mctsSearches.length > 1) {
       const [latest, previous] = summary.mctsSearches;
-      console.log(DIM(`  latest vs previous: ${latest!.nodeCount} vs ${previous!.nodeCount} nodes, depth ${latest!.maxDepth} vs ${previous!.maxDepth}`));
+      console.log(DIM(`  latest vs previous: ${latest.nodeCount} vs ${previous.nodeCount} nodes, depth ${latest.maxDepth} vs ${previous.maxDepth}`));
     }
   }
 

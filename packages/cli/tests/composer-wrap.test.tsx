@@ -24,14 +24,14 @@ function composerBoxRows(frame: string): string[] {
   let bottom = -1;
 
   for (let index = lines.length - 1; index >= 0; index -= 1) {
-    if (lines[index]!.startsWith('╰')) { bottom = index; break; }
+    if (lines[index].startsWith('╰')) { bottom = index; break; }
   }
 
   if (bottom < 0) throw new Error(`no closed box in frame:\n${frame}`);
   let top = -1;
 
   for (let index = bottom - 1; index >= 0; index -= 1) {
-    if (lines[index]!.startsWith('╭')) { top = index; break; }
+    if (lines[index].startsWith('╭')) { top = index; break; }
   }
 
   if (top < 0) throw new Error(`composer box never opens in frame:\n${frame}`);

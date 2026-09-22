@@ -187,7 +187,7 @@ export function findForkPivot(
   const target = point.text.trim();
 
   for (let i = rows.length - 1; i >= 0; i--) {
-    const row = rows[i]!;
+    const row = rows[i];
 
     if (row.role !== 'user' || row.content.trim() !== target) continue;
     remaining -= 1;
@@ -208,7 +208,7 @@ export function forkCandidates(
   const candidates: ForkPoint[] = [];
 
   for (let i = messages.length - 1; i >= 0 && candidates.length < limit; i--) {
-    const message = messages[i]!;
+    const message = messages[i];
 
     if (message.role !== 'user') continue;
     const text = message.content.trim();

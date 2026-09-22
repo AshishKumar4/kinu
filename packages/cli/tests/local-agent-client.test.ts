@@ -187,8 +187,8 @@ describe('LocalAgentClient', () => {
     // Recording is owned by the client: user + assistant entries land in JSONL.
     const history = await client.history();
     expect(history.map((message) => message.role)).toEqual(['user', 'assistant']);
-    expect(history[0]!.content).toBe('hi');
-    expect(history[1]!.content).toBe('hello there');
+    expect(history[0].content).toBe('hi');
+    expect(history[1].content).toBe('hello there');
     await client.close();
   });
 

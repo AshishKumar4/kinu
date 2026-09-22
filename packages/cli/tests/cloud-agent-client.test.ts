@@ -53,7 +53,7 @@ function startMockAgentServer(options: {
 
       if (ticketMatch && req.method === 'POST') {
         ticketRequests.push({
-          name: decodeURIComponent(ticketMatch[1]!),
+          name: decodeURIComponent(ticketMatch[1]),
           auth: req.headers.get('authorization'),
         });
 
@@ -89,7 +89,7 @@ function startMockAgentServer(options: {
           return Response.json({
             result: start === 0
               ? { status: 'end', items: chatMessages.slice(start, end) }
-              : { status: 'more', items: chatMessages.slice(start, end), next: { after: chatMessages[start]!.id } },
+              : { status: 'more', items: chatMessages.slice(start, end), next: { after: chatMessages[start].id } },
           });
         }
 
@@ -338,12 +338,12 @@ describe('CloudAgentClient protocol', () => {
     expect(request.body.cwd).toBe('/work/dir');
     const messages = v.parse(ChatMessagesSchema, request.body.messages);
     expect(messages).toHaveLength(1);
-    expect(messages[0]!.role).toBe('user');
-    expect(messages[0]!.parts).toEqual([{ type: 'text', text: 'hello agent' }]);
+    expect(messages[0].role).toBe('user');
+    expect(messages[0].parts).toEqual([{ type: 'text', text: 'hello agent' }]);
 
     // Auth: bearer token mints a ticket; the ticket (not the token) rides the ws URL.
     expect(mock.ticketRequests).toEqual([{ name: 'helios', auth: 'Bearer ptc_token' }]);
-    expect(mock.connectUrls[0]!.searchParams.get('ticket')).toBe('pat_test');
+    expect(mock.connectUrls[0].searchParams.get('ticket')).toBe('pat_test');
 
     mock.reply(responseChunk(request.id, { type: 'text-delta', delta: 'Hi ' }));
     mock.reply(responseChunk(request.id, { type: 'tool-input-available', toolCallId: 't1', toolName: 'memory', input: { q: 'x' } }));
@@ -382,8 +382,8 @@ describe('CloudAgentClient protocol', () => {
 
     const messages = v.parse(ChatMessagesSchema, request.body.messages);
     expect(messages).toHaveLength(1);
-    expect(messages[0]!.role).toBe('user');
-    expect(messages[0]!.parts).toEqual([
+    expect(messages[0].role).toBe('user');
+    expect(messages[0].parts).toEqual([
       { type: 'file', mediaType: 'image/png', filename: 'shot.png', url: 'data:image/png;base64,iVBORw0KGgo=' },
       { type: 'file', mediaType: 'application/pdf', filename: 'spec.pdf', url: 'data:application/pdf;base64,JVBERg==' },
       { type: 'text', text: 'describe these' },
@@ -548,7 +548,7 @@ describe('CloudAgentClient protocol', () => {
     // takes it into that turn under this client's message id and answers the
     // request with where it landed — no stream, no turn of its own.
     const messages = v.parse(ChatMessagesSchema, second.body.messages);
-    expect(messages[0]!.parts).toEqual([{ type: 'text', text: 'use the staging cluster instead' }]);
+    expect(messages[0].parts).toEqual([{ type: 'text', text: 'use the staging cluster instead' }]);
     expect(second.id).not.toBe(first.id);
     mock.reply({ ...responseChunk(second.id, {}, true), landed: 'mid-turn' });
     await expect(steered).resolves.toEqual({ landed: 'mid-turn' });

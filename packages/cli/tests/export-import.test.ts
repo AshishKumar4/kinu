@@ -218,7 +218,7 @@ describe('kinu export / import', () => {
         // enough that the CLI has to walk more than one page.
         const page = await readWorkspaceArchivePage(source, {
           workspace: 'skywriter', source: 'cloud',
-          cursor: calls[calls.length - 1]!.cursor, maxBytes: 2048,
+          cursor: calls[calls.length - 1].cursor, maxBytes: 2048,
         });
 
         return Response.json({ result: page });
@@ -248,7 +248,7 @@ describe('kinu export / import', () => {
       expect(exported.stdout).toContain('Exported skywriter (cloud)');
       expect(calls.length).toBeGreaterThan(1);
       expect(calls.every((c) => c.method === 'exportWorkspaceArchive')).toBe(true);
-      expect(calls[0]!.cursor).toBeNull();
+      expect(calls[0].cursor).toBeNull();
 
       // No --name: the archive says which workspace it is.
       const imported = await result(runCli(home, ['import', archive]));

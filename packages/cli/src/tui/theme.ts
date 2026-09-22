@@ -867,7 +867,7 @@ function contrastRatio(foreground: string, background: string): number {
       channel <= 0.03928 ? channel / 12.92 : ((channel + 0.055) / 1.055) ** 2.4
     ));
 
-    return 0.2126 * red! + 0.7152 * green! + 0.0722 * blue!;
+    return 0.2126 * red + 0.7152 * green + 0.0722 * blue;
   };
 
   const foregroundLuminance = luminance(foreground);
@@ -934,12 +934,12 @@ function mapColors(colors: TuiThemeColors, map: (color: string) => string): TuiT
 
 function closestColor(color: string, palette: readonly string[]): string {
   const rgb = [1, 3, 5].map((offset) => Number.parseInt(color.slice(offset, offset + 2), 16));
-  let best = palette[0]!;
+  let best = palette[0];
   let bestDistance = Number.POSITIVE_INFINITY;
 
   for (const candidate of palette) {
     const candidateRgb = [1, 3, 5].map((offset) => Number.parseInt(candidate.slice(offset, offset + 2), 16));
-    const distance = rgb.reduce((sum, channel, index) => sum + (channel - candidateRgb[index]!) ** 2, 0);
+    const distance = rgb.reduce((sum, channel, index) => sum + (channel - candidateRgb[index]) ** 2, 0);
 
     if (distance >= bestDistance) continue;
     best = candidate;

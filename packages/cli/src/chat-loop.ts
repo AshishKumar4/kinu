@@ -131,7 +131,7 @@ export async function runChatLoop(opts: ChatLoopOpts): Promise<void> {
   // Mid-turn input: a plain line steers the running turn; /queue holds it for
   // after; /stop interrupts. Lines answering a consent question are excluded.
   const onMidTurnLine = async (input: string) => {
-    const command = input.split(/\s+/, 1)[0]!.toLowerCase();
+    const command = input.split(/\s+/, 1)[0].toLowerCase();
 
     if (command === '/stop') {
       client.stop();

@@ -948,7 +948,7 @@ export function ThemePickerOverlay({ terminal, selection, onSelect }: ThemePicke
 
   const currentIndex = choices.findIndex((choice) => choice.selection.themeId === selection.themeId);
   const [highlighted, setHighlighted] = useState(Math.max(0, currentIndex));
-  const choice = choices[Math.min(highlighted, choices.length - 1)]!;
+  const choice = choices[Math.min(highlighted, choices.length - 1)];
 
   useKeyboard((event) => {
     const result = dispatcher.feed(event, ['modal']);
@@ -1060,7 +1060,7 @@ function ThemeChoiceRow({ choice, width, highlighted, current }: {
  */
 function ThemePreview({ theme, width }: { readonly theme: TuiThemeDefinition; readonly width: number }) {
   const { colors } = theme;
-  const ground = colors.background.canvas ?? REFERENCE_TERMINAL_GROUNDS[theme.appearance][0]!;
+  const ground = colors.background.canvas ?? REFERENCE_TERMINAL_GROUNDS[theme.appearance][0];
   const inner = Math.max(1, width - 2);
   const rule = '┄'.repeat(Math.max(1, inner - 4));
 

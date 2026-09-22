@@ -121,7 +121,7 @@ export function resolveCommandDraft(commands: readonly SlashCommandInfo[], draft
   if (exact) return trimmed;
   const matches = filterCommands(commands, trimmed);
 
-  return matches.length === 1 ? matches[0]!.name : trimmed;
+  return matches.length === 1 ? matches[0].name : trimmed;
 }
 
 export type SlashOutcome =
@@ -162,7 +162,7 @@ const REFINE_USAGE =
 
 export async function executeSlashCommand(client: AgentClient, input: string): Promise<SlashOutcome> {
   const [rawCmd, ...rest] = input.split(/\s+/);
-  const cmd = rawCmd!.toLowerCase();
+  const cmd = rawCmd.toLowerCase();
   const arg = rest.join(' ').trim();
 
   switch (cmd) {
@@ -738,7 +738,7 @@ export async function performUndo(client: Pick<AgentClient, 'checkpoints'>, ref?
   if (!Number.isInteger(n) || n < 1 || n > turns.length) {
     const lines = [`Usage: /undo [n], where n is turns back (1–${turns.length} available):`];
     turns.slice(0, 10).forEach((group, i) => {
-      const at = new Date(group[0]!.at).toLocaleString();
+      const at = new Date(group[0].at).toLocaleString();
       lines.push(`  ${i + 1}. ${at}  ${group.map((e) => e.dir).join(', ')}`);
     });
 
@@ -752,8 +752,8 @@ export async function performUndo(client: Pick<AgentClient, 'checkpoints'>, ref?
   // a turn with dirs A, B, C can arrive with only A and B inside the window.
   // `/undo 1` then restored two of three and printed "✓ N file(s) restored".
   // Re-reading the chosen turn keyed by its id is the only way to hold all of it.
-  const chosen = turns[n - 1]!;
-  const chosenTurnId = chosen[0]!.turnId;
+  const chosen = turns[n - 1];
+  const chosenTurnId = chosen[0].turnId;
 
   const group = chosenTurnId === null || chosenTurnId === undefined
     ? chosen

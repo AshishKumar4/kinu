@@ -89,11 +89,11 @@ describe('TUI product registries', () => {
   test('every keymap preset binds the same semantic actions and pi-omp is the default', () => {
     expect(KEYMAP_PRESET_IDS).toEqual(['pi-omp', 'kinu', 'opencode']);
     const registries = KEYMAP_PRESET_IDS.map((presetId) => createKeybindingRegistry({ presetId }));
-    expect(registries[0]!.presetId).toBe('pi-omp');
+    expect(registries[0].presetId).toBe('pi-omp');
     expect(registries.map((registry) => [...registry.actionIds].sort())).toEqual([
-      [...registries[0]!.actionIds].sort(),
-      [...registries[0]!.actionIds].sort(),
-      [...registries[0]!.actionIds].sort(),
+      [...registries[0].actionIds].sort(),
+      [...registries[0].actionIds].sort(),
+      [...registries[0].actionIds].sort(),
     ]);
   });
 

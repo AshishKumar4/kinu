@@ -286,7 +286,7 @@ function keyEventAction(
   const active = new Set(activeScopes);
 
   return registry.bindings
-    .filter((binding) => binding.sequence.length === 1 && active.has(binding.scope) && sameStroke(binding.sequence[0]!, stroke))
+    .filter((binding) => binding.sequence.length === 1 && active.has(binding.scope) && sameStroke(binding.sequence[0], stroke))
     .sort((left, right) => SCOPE_PRIORITY[right.scope] - SCOPE_PRIORITY[left.scope])[0]?.actionId ?? null;
 }
 
@@ -355,7 +355,7 @@ export function openTuiKeyBindings(
   return registry.bindings
     .filter((binding) => binding.actionId === actionId && binding.sequence.length === 1)
     .map((binding) => {
-      const stroke = binding.sequence[0]!;
+      const stroke = binding.sequence[0];
 
       const result: OpenTuiKeyBinding = {
         name: stroke.name,
@@ -451,7 +451,7 @@ function sameStroke(left: KeyStroke, right: KeyStroke): boolean {
 }
 
 function sequenceStartsWith(sequence: readonly KeyStroke[], prefix: readonly KeyStroke[]): boolean {
-  return prefix.length <= sequence.length && prefix.every((stroke, index) => sameStroke(stroke, sequence[index]!));
+  return prefix.length <= sequence.length && prefix.every((stroke, index) => sameStroke(stroke, sequence[index]));
 }
 
 function sameSequence(left: readonly KeyStroke[], right: readonly KeyStroke[]): boolean {
@@ -478,15 +478,15 @@ function displayKeyName(name: string): string {
 
   if (name === 'pagedown') return 'PgDn';
 
-  return name.length === 1 ? name.toUpperCase() : name[0]!.toUpperCase() + name.slice(1);
+  return name.length === 1 ? name.toUpperCase() : name[0].toUpperCase() + name.slice(1);
 }
 
 function rejectConflicts(bindings: readonly ActionBinding[]): void {
   for (let leftIndex = 0; leftIndex < bindings.length; leftIndex += 1) {
-    const left = bindings[leftIndex]!;
+    const left = bindings[leftIndex];
 
     for (let rightIndex = leftIndex + 1; rightIndex < bindings.length; rightIndex += 1) {
-      const right = bindings[rightIndex]!;
+      const right = bindings[rightIndex];
 
       if (left.actionId === right.actionId) continue;
 

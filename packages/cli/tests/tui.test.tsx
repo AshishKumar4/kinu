@@ -34,7 +34,7 @@ import { ChatApp } from '../src/tui/chat-app';
 import { fakeClient } from './helpers/chat-app-fixture';
 import { VERSION } from '../src/display';
 
-const TEST_TUI_BACKGROUND = BUILTIN_TUI_THEMES[0]!.colors.background.canvas;
+const TEST_TUI_BACKGROUND = BUILTIN_TUI_THEMES[0].colors.background.canvas;
 
 const repoRoot = resolve(__dirname, '../../..');
 
@@ -358,7 +358,7 @@ describe('CLI TUI layout', () => {
         <box style={{ width: '100%', height: '100%' }}>
           <ModelPickerOverlay
             models={MODELS}
-            currentSpec={MODELS[0]!.spec}
+            currentSpec={MODELS[0].spec}
             terminal={{ width: 80, height: 24 }}
             onSelect={(model) => { selected.push(model); }}
           />
@@ -372,7 +372,7 @@ describe('CLI TUI layout', () => {
 
       mockInput.pressEnter();
       await renderSettled(renderOnce);
-      expect(selected[0]?.spec).toBe(MODELS[1]!.spec);
+      expect(selected[0]?.spec).toBe(MODELS[1].spec);
     } finally {
       flushSync(() => { root.unmount(); });
       renderer.destroy();
@@ -631,8 +631,8 @@ describe('CLI TUI layout', () => {
       root.render(
         <box style={{ width: '100%', height: '100%' }}>
           <ModelPickerOverlay
-            models={[MODELS[0]!]}
-            currentSpec={MODELS[0]!.spec}
+            models={[MODELS[0]]}
+            currentSpec={MODELS[0].spec}
             failures={[{ provider: 'broken', reason: 'offline' }]}
             terminal={{ width: 40, height: 8 }}
             onSelect={() => {}}
@@ -640,7 +640,7 @@ describe('CLI TUI layout', () => {
         </box>,
       );
       await renderSettled(renderOnce);
-      expect(captureCharFrame()).toContain(MODELS[0]!.label);
+      expect(captureCharFrame()).toContain(MODELS[0].label);
       expect(captureCharFrame()).toContain('1 unavailable');
 
       root.render(
@@ -958,7 +958,7 @@ describe('CLI TUI layout', () => {
     // as a first turn, and chat opens whatever `name` says.
     expect(observed.opened).toEqual({ type: 'open-agent', name: created[0] });
 
-    const db = new Database(resolve(run.home, created[0]!, 'agent.db'), { readonly: true });
+    const db = new Database(resolve(run.home, created[0], 'agent.db'), { readonly: true });
 
     try {
       expect(db.query('SELECT COUNT(*) AS messages FROM conversation_entries').get()).toEqual({ messages: 0 });
@@ -1156,7 +1156,7 @@ async function renderOverlayFrame(showOverlay: boolean) {
         {showOverlay && (
           <ModelPickerOverlay
             models={MODELS}
-            currentSpec={MODELS[0]!.spec}
+            currentSpec={MODELS[0].spec}
             terminal={{ width: 80, height: 24 }}
             onSelect={() => {}}
           />

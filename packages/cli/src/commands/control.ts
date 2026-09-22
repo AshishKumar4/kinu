@@ -199,7 +199,7 @@ function catalogSpec(catalog: ModelCatalog, spec: string): string {
   if (!('models' in catalog) || normalized.includes('/')) return normalized;
   const suffixMatches = catalog.models.filter((model) => model.spec.endsWith(`/${normalized}`));
 
-  return suffixMatches.length === 1 ? suffixMatches[0]!.spec : normalized;
+  return suffixMatches.length === 1 ? suffixMatches[0].spec : normalized;
 }
 
 export async function toolsCommand(name: string, _opts: ControlOpts): Promise<void> {
