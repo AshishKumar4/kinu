@@ -69,7 +69,7 @@ const RECOVERY_CLASSIFIER = 'classifyRecoveredFiber';
  * subject. Each name either performs a provider round trip or is a lane whose
  * whole purpose is to make one:
  *
- *   • `suggestTitle`, `maybeAutoTitle`, `applyAutoTitle` — the titling chain
+ *   • `suggestTitle`, `applyAutoTitle` — the titling chain
  *     that shipped inside `OrchestratorAgent.onStart`, ending in `generateText`.
  *   • `generateText`, `streamText`, `generateJson` — the provider entry points
  *     this repo calls, so a hook that skips the lanes and reaches the SDK
@@ -88,7 +88,7 @@ const RECOVERY_CLASSIFIER = 'classifyRecoveredFiber';
  * passes.
  */
 export const MODEL_SINKS: readonly string[] = [
-  'suggestTitle', 'maybeAutoTitle', 'applyAutoTitle',
+  'suggestTitle', 'applyAutoTitle',
   'generateText', 'streamText', 'generateJson',
   'runDueSessionEvolution', 'reviewCompletedTurn',
   'resumeAll', 'replayOwedAndRearm', 'owedDeliveryWork',

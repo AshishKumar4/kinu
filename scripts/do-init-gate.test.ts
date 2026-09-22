@@ -372,15 +372,17 @@ describe('DO init-gate purity — the SDK-awaited recovery hook', () => {
 // The three rules above all ask what the GATE WAITS ON. `OrchestratorAgent.onStart`
 // satisfied every one of them — not async, annotated `: void`, no own-scope await,
 // no nested gate — while spawning a fire-and-forget task whose chain ran
-// `hydrateTitle` → `readSoul` → `maybeAutoTitle` → `suggestTitle` → `generateText`.
+// `hydrateTitle` → `readSoul` → `applyAutoTitle` → `suggestTitle` → `generateText`.
 // An LLM call on the init path of every cold start of every claimed workspace,
 // against an activation whose gate is still open, cancelled on eviction with its
 // rejection swallowed. Detaching work takes it out of the wait, not off the path.
 describe('DO init-gate purity — model work spawned from the init gate', () => {
   /**
    * The shipped defect, recovered from the diff and not invented. This is the
-   * last block of `OrchestratorAgent.onStart` exactly as it stood, before the
-   * work moved to the workspace-open `@callable` (`getWorkspaceSnapshot`).
+   * last block of `OrchestratorAgent.onStart` as it stood, before the work
+   * moved to the workspace-open `@callable` (`getWorkspaceSnapshot`), with one
+   * rename: the `maybeAutoTitle` wrapper it called is gone, so it calls the
+   * `applyAutoTitle` that wrapper ran.
    */
   const SPAWNED = `export class OrchestratorAgent extends ActorAgent {
     onStart(): void {
@@ -393,7 +395,7 @@ describe('DO init-gate purity — model work spawned from the init gate', () => 
             await this.hydrateTitle();
             if (!isPlaceholderWorkspaceTitle(this.getDisplayName(), this.name)) return;
             const soul = await readSoul(this.rt.storage.vfs);
-            await this.maybeAutoTitle(summarizeSoul(soul ?? ''));
+            await this.applyAutoTitle(summarizeSoul(soul ?? ''));
           } finally {
             this._backgroundTasks.delete(autoTitleTask);
           }
@@ -406,7 +408,7 @@ describe('DO init-gate purity — model work spawned from the init gate', () => 
     const found = reasons(SPAWNED);
     // ONE finding, from the one rule that descends into what the hook spawns.
     // Every wait-shaped check passes on this method, which is why it shipped.
-    expect(found).toEqual([expect.stringContaining('reaches `maybeAutoTitle`')]);
+    expect(found).toEqual([expect.stringContaining('reaches `applyAutoTitle`')]);
     expect(found[0]).toContain('Detaching it does not move it off that path');
     expect(found.some((reason) => reason.includes('async')
       || reason.includes('awaits in its own scope')
@@ -696,7 +698,7 @@ ${hold.body}
       this.detachOwned(async () => {
         await this.hydrateTitle();
         const soul = await readSoul(this.rt.storage.vfs);
-        await this.maybeAutoTitle(summarizeSoul(soul ?? ''));
+        await this.applyAutoTitle(summarizeSoul(soul ?? ''));
       });
     }
 `);
@@ -704,6 +706,6 @@ ${hold.body}
     expect(respawned).not.toBe(real);
     const { violations } = auditFile(file, respawned);
     expect(violations.map((v) => `${v.owner}.${v.member}`)).toEqual(['OrchestratorAgent.onStart']);
-    expect(violations[0].reason).toContain('reaches `maybeAutoTitle`');
+    expect(violations[0].reason).toContain('reaches `applyAutoTitle`');
   });
 });
