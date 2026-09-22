@@ -6894,7 +6894,7 @@ export class OrchestratorAgent extends ActorAgent {
    *  owner-created ingress. A default here would decide that for whichever
    *  caller forgot to say. */
   async cancelTrigger(trigger_id: string, caller: TrustLevel) {
-    return cancelTrigger(this.triggerRegistry, trigger_id, Date.now(), caller, this.webhookSecrets);
+    return cancelTrigger({ registry: this.triggerRegistry, trigger_id, now: Date.now(), caller, secrets: this.webhookSecrets });
   }
 
   /** Register a timer trigger — the `agent.schedule` tool's and the auto-GEPA

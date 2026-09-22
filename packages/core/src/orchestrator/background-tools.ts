@@ -55,6 +55,18 @@ export const BACKGROUNDABLE_TOOLS = {
   agents: { completion: 'spawn', detachable: isResumableSpawn },
 } as const satisfies Readonly<Record<string, BackgroundableTool>>;
 
+/** One re-drive of an interrupted background job. */
+export interface BackgroundResumeRequest {
+  /** A thunk, so a non-resumable kind never pays for tool construction. */
+  readonly rawTools: (mode: WorkMode) => ToolSet;
+  /** The durable row's tool kind, whatever build wrote it. */
+  readonly kind: string;
+  /** The stored input, replayed verbatim. */
+  readonly input: JsonValue;
+  readonly mode: WorkMode;
+  readonly signal: AbortSignal;
+}
+
 /**
  * Re-drive a background job interrupted by a DO eviction / CLI process exit
  * (B6). Only a SEARCH is resumable, and re-running the RAW agents tool (no 30s
@@ -81,13 +93,8 @@ export const BACKGROUNDABLE_TOOLS = {
  * pays for (or fails on) tool construction — the CLI resolves its model-bound
  * surface inside it.
  */
-export async function resumeBackgroundJob(
-  rawTools: (mode: WorkMode) => ToolSet,
-  kind: string,
-  input: JsonValue,
-  mode: WorkMode,
-  signal: AbortSignal,
-): Promise<JsonValue | undefined> {
+export async function resumeBackgroundJob(drive: BackgroundResumeRequest): Promise<JsonValue | undefined> {
+  const { rawTools, kind, input, mode, signal } = drive;
   const resumed = resumableAgentsInput(kind, input);
 
   if (!resumed) throw new JobNotResumable(kind);

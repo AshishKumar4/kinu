@@ -125,6 +125,16 @@ export interface CancelTriggerResult {
   readonly error?: string;
 }
 
+export interface CancelTriggerRequest {
+  readonly registry: TriggerRegistry;
+  readonly trigger_id: string;
+  readonly now: number;
+  /** The principal asking, which is the authorization. */
+  readonly caller: TrustLevel;
+  /** Present when the caller holds one: the plaintext goes with the revocation. */
+  readonly secrets?: Pick<WebhookSecretStore, 'deleteByTrigger'>;
+}
+
 /** Cancel a trigger (revoke). Idempotent.
  *
  * `caller` is WHO asked, and it is the authorization: a trigger the OWNER
@@ -145,11 +155,8 @@ export interface CancelTriggerResult {
  * the single-threaded SQLite both backends run, so a revoked webhook never
  * leaves its credential behind. The trigger row itself is kept, byte-free:
  * revocation history is audit, not state to erase. */
-export function cancelTrigger(
-  registry: TriggerRegistry, trigger_id: string, now: number,
-  caller: TrustLevel,
-  secrets?: Pick<WebhookSecretStore, 'deleteByTrigger'>,
-): CancelTriggerResult {
+export function cancelTrigger(request: CancelTriggerRequest): CancelTriggerResult {
+  const { registry, trigger_id, now, caller, secrets } = request;
   const trigger = registry.get(trigger_id);
 
   if (trigger && trigger.creator_trust === 'owner' && caller !== 'owner') {

@@ -82,14 +82,22 @@ export function missingSubordinateHistory(path: string[]): SubordinateInspection
   return { ...refusalOf(new KinuError('missing', 'The requested subordinate or retained history is unavailable.')), view: 'missing', path };
 }
 
+/** Where one inspected actor's rows are read from. */
+export interface SubordinateInspectionSource {
+  /** The ONE workspace database every actor's rows live in. */
+  readonly sql: SqlExecutor;
+  readonly raw: SqlExec;
+  /** The actor the views are read for: the resolved target of the walk, not the caller. */
+  readonly actor: ActorHandle;
+  readonly transcriptFor: (actor: ActorHandle) => SessionTranscriptReader;
+}
+
 /** Reads existing actor tables. No schema initialization or live actor state. */
 export async function readSubordinateInspection(
-  sql: SqlExecutor,
-  actor: ActorHandle,
-  raw: SqlExec,
+  source: SubordinateInspectionSource,
   request: SubordinateInspectionRequest,
-  transcriptFor: (actor: ActorHandle) => SessionTranscriptReader,
 ): Promise<SubordinateInspectionResult> {
+  const { sql, actor, raw, transcriptFor } = source;
   const path = request.path;
 
   switch (request.view) {

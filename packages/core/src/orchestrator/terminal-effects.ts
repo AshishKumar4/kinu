@@ -425,7 +425,7 @@ export function branchesTerminalEffect(deps: {
         if (entry !== undefined) {
           await settlePendingBranch(
             { sql: deps.sql, actor: deps.actor, sessionId: deps.sessionId, broadcast: deps.broadcast },
-            entry, turnId, liveText, id,
+            { entry, turnId, liveText, settlementKey: id },
           );
 
           return { status: 'completed' };

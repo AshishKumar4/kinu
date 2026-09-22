@@ -6960,12 +6960,9 @@ export abstract class ActorAgent extends Agent<Env> {
     mode: WorkMode,
     signal: AbortSignal,
   ): Promise<JsonValue | undefined> {
-    return resumeBackgroundJob(
-      (resumeMode) => this.getRawToolsForWorkMode(resumeMode),
-      kind,
-      input,
-      mode,
-      signal,
-    );
+    return resumeBackgroundJob({
+      rawTools: (resumeMode) => this.getRawToolsForWorkMode(resumeMode),
+      kind, input, mode, signal,
+    });
   }
 }
