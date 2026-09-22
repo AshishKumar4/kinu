@@ -1,16 +1,6 @@
 /**
- * Forged slate-share hostnames, driven through the Worker entry.
- *
- * The share rail is step 1 of the route table, ahead of authentication, and
- * production routes `*.<PREVIEW_HOST_SUFFIX>` here beside the workspace
- * previews. The one oracle that proves a guessed hostname stopped is the
- * `OrchestratorAgent` namespace: a refusal that resolved no id created no
- * object, the same proof `unit-preview-forgery.test.ts` makes for previews.
- *
- * The namespace double here records `idFromName` (the creation act) and a
- * stub whose `routeSlateShare` and `fetch` record what the rail handed them.
- * Nothing fakes the signer: `slateShareUrl` mints through the same HKDF the
- * rail verifies, so a change to either half is a red test.
+ * Forged slate-share hostnames through the Worker entry. The rail precedes authentication, so the oracle is the
+ * `OrchestratorAgent` namespace: a refusal resolved no id and created no object. The signer is real, not faked.
  */
 import { describe, expect, test } from 'bun:test';
 import { labelSigner } from '@kinu.run/core';
@@ -19,23 +9,18 @@ import { workerContext } from './helpers/bindings';
 import { TEST_CREDENTIAL_ENCRYPTION_KEY } from './helpers/user-do';
 import type { ShareViewerClaim } from '@kinu.run/core';
 
-// Dynamic for the reason every cf-backend route suite loads the entry this
-// way: the entry's module graph reaches `cloudflare:email` and
-// `cloudflare:workers` through `agents`, and bun's preload shims have to be in
-// place first.
+// Dynamic: the entry's graph reaches `cloudflare:email` and `cloudflare:workers` through `agents`, so bun's preload shims must load first.
 const { default: worker } = await import('../src/server');
 
 const APP = 'https://app.example';
 
 const SUFFIX = 'previews.example';
 
-/** The workspace and share the forged labels aim at. */
 const WORKSPACE = 'hello';
 
 const HANDLE = '0123456789';
 
-/** The share signer's own derivation — the same HKDF `slateShareUrl` uses,
- *  reached here so the test mints a real token rather than copying one. */
+/** The same HKDF `slateShareUrl` uses, so the test mints a real token. */
 const shareSigner = labelSigner('kinu.slate-share.salt', 'kinu.slate-share.v1');
 
 async function mintedLabel(handle = HANDLE, workspace = WORKSPACE): Promise<string> {
@@ -49,12 +34,9 @@ function shareUrl(label: string): string {
 }
 
 interface ShareProbe {
-  /** Workspace names a request resolved a stub for. */
   readonly resolved: string[];
-  /** `(handle, claim, pathname)` triples the rail handed the object, with the
-   *  sanitized headers the request was reoriginated under. */
+  /** `(handle, claim, pathname)` triples the rail handed the object, with the reoriginated headers. */
   readonly routed: { handle: string; claim: ShareViewerClaim; pathname: string; headers: Headers }[];
-  /** Requests a socket upgrade forwarded through `fetch`. */
   readonly forwarded: Request[];
   readonly env: Env;
   readonly ctx: ExecutionContext;
@@ -108,8 +90,6 @@ function probe(): ShareProbe {
 describe('a share hostname nobody minted', () => {
   test('a handle outside the share shape resolves no object', async () => {
     const p = probe();
-    // `parseSlateShareLabel` refuses it, the preview parser refuses it next,
-    // and the rail answers the definitive refusal without touching a stub.
     const res = await worker.fetch(new Request(shareUrl('not-a-share-label')), p.env, p.ctx);
 
     expect(p.resolved).toEqual([]);
@@ -120,7 +100,6 @@ describe('a share hostname nobody minted', () => {
   test('a signed token for another share is the same refusal as a guessed one', async () => {
     const p = probe();
     const other = await mintedLabel('abcdef0123');
-    // Re-point the correctly signed label at this workspace's handle.
     const label = `${HANDLE}-${other.split('-')[1]}-${WORKSPACE}`;
     const res = await worker.fetch(new Request(shareUrl(label)), p.env, p.ctx);
 
@@ -171,7 +150,6 @@ describe('a share this deployment minted', () => {
     const viewerSigner = labelSigner('kinu.slate-viewer.salt', 'kinu.slate-viewer.v1');
     const userId = 'a'.repeat(32);
     const expiresAt = Date.now() + 12 * 60 * 60 * 1000;
-    // Signed for a different handle: real cookie, wrong share.
     const sig = await viewerSigner.token(TEST_CREDENTIAL_ENCRYPTION_KEY, `kinu:viewer-cookie:v1:${WORKSPACE}:abcdef0123:${userId}:${expiresAt}`);
 
     const res = await worker.fetch(new Request(shareUrl(await mintedLabel()), {

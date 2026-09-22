@@ -22,10 +22,7 @@ const ErrorResponseSchema = v.object({ error: v.string() });
 
 const RpcResponseSchema = v.object({ result: JsonValueSchema });
 
-/** The plane's env around one pair of namespaces. Device-code sign-in and the
- *  published downloads are other suites' surfaces; no case here reaches
- *  either, and the webhook route secret is present because the CLI webhook
- *  route refuses without it (events/webhook-route.ts). */
+/** The webhook route secret is present because the CLI webhook route refuses without it (events/webhook-route.ts). */
 function testEnv(
   UserDO: ObjectNamespace<string, CliRoutesAuthority>,
   OrchestratorAgent: ObjectNamespace<string, CliAgentTarget>,
@@ -198,8 +195,6 @@ function setupEnv(opts: { tokenMintedAt?: number } = {}) {
   return { env, calls };
 }
 
-/** A user object that accepts THIS suite's token and owns every workspace asked
- *  about, so a case below can put its whole subject in the agent namespace. */
 function tokenHolderUserDO(): ObjectNamespace<string, CliRoutesAuthority> {
   const account = cliAccount({
     async verifyCliToken(_caller: UserCaller, token: string) {
@@ -254,9 +249,7 @@ describe('CLI control routes', () => {
 
     const ticket = await handleCliRequest(cliRequest('/api/cli/workspaces/jarvis/connect-ticket', { method: 'POST' }), env);
     expect(ticket?.status).toBe(200);
-    // A ticket is a bearer credential in a JSON body, and it carries the
-    // account-wide policy because `json()` applies it to every authenticated
-    // answer rather than this route remembering to say `no-store`.
+    // A ticket is a bearer credential; `json()` applies the account-wide no-store policy.
     expect(handled(ticket).headers.get('cache-control')).toBe(PRIVATE_NO_STORE);
     expect(v.parse(TicketResponseSchema, await handled(ticket).json()))
       .toEqual({ ticket: `pat_${USER_ID}_ticket`, expiresAt: 1234 });
@@ -319,7 +312,6 @@ describe('CLI control routes', () => {
       expect((await errorBody(res)).error).toContain('No such agent RPC method');
     }
 
-    // Nothing was invoked on the DO — not even the ownership claim.
     expect(calls).toEqual([]);
   });
 
@@ -367,8 +359,7 @@ describe('shared ownership claim status mapping', () => {
     return testEnv(tokenHolderUserDO(), { idFromName: (n) => n, get: () => workspace });
   }
 
-  // A collision is the caller's and a schema fault is ours; the claim throws
-  // either way, so only the status separates them.
+  // A collision is the caller's and a schema fault is ours; only the status separates them.
   const claimFailures = [
     {
       name: 'cross-user collision → 403',

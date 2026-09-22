@@ -7,8 +7,7 @@ it('runs an authored class: the prototype is the surface and the reserved storag
   await subject.start();
 
   try {
-    // `__storage` is the reserved handle, never part of the guest's env map:
-    // only the declared PEER binding is visible to the slate.
+    // `__storage` is the reserved handle, never in the guest's env map.
     expect(await subject.call('envKeys', [])).toEqual({ ok: true, value: '["PEER"]' });
     expect(await subject.call('greet', ['kinu'])).toEqual({ ok: true, value: 'hello kinu #1 [probe]' });
     expect(await subject.call('greet', ['kinu'])).toEqual({ ok: true, value: 'hello kinu #2 [probe]' });
@@ -41,8 +40,7 @@ it('the durable application keeps this.sql and this.storage across a process res
   try {
     expect(await subject.call('bump', [])).toEqual({ ok: true, value: '{"rows":1,"stored":1}' });
     await subject.stop();
-    // The durable application re-attaches to its pinned facet's SQLite, so the
-    // probe table survives the release exactly as this.storage does.
+    // The durable application re-attaches to its pinned facet's SQLite.
     await subject.start({ source });
     expect(await subject.call('bump', [])).toEqual({ ok: true, value: '{"rows":2,"stored":2}' });
   } finally {
@@ -51,10 +49,8 @@ it('the durable application keeps this.sql and this.storage across a process res
 });
 
 it('a slate edited and rebooted leaves no image of the source it no longer runs', async () => {
-  // Every boot writes its module texts as content-addressed images in the
-  // kernel VFS; `application.js` changes with every source edit and Nimbus
-  // sweeps only images it persisted itself, so a workspace iterating on a
-  // slate grew one image per edit for the life of its SQLite.
+  // Every boot writes module texts as content-addressed images and Nimbus sweeps only its own, so an edited
+  // `application.js` would grow one image per edit for the life of the SQLite.
   const subject = env.SLATE_PROCESS_PROBE.get(env.SLATE_PROCESS_PROBE.idFromName('image-sweep'));
 
   const version = (n: number) => [
@@ -72,8 +68,6 @@ it('a slate edited and rebooted leaves no image of the source it no longer runs'
     await subject.start({ source: version(2) });
     const second = await subject.facetImages();
     expect(await subject.call('which', [])).toEqual({ ok: true, value: '2' });
-    // The same count of images as one boot: the edited application's old
-    // image went with the process that ran it; the stable ones stay.
     expect(second.length).toBe(first.length);
     expect(second).not.toEqual(first);
   } finally {
@@ -98,8 +92,7 @@ it('a private process gets an ephemeral facet: this.storage survives, this.sql d
     '}',
   ].join('\n');
 
-  // The defaults spelled out: a private process is the durable application's
-  // call surface minus the port and the pinned facet — `app: null`.
+  // A private process is the durable application's surface minus the port and pinned facet.
   await subject.start({ source, app: null });
 
   try {
@@ -114,9 +107,7 @@ it('a private process gets an ephemeral facet: this.storage survives, this.sql d
 
 it('a slate declaring a browser surface serves the shell, the client bundle, and the kinu:slate module', async () => {
   const subject = env.SLATE_PROCESS_PROBE.get(env.SLATE_PROCESS_PROBE.idFromName('browser-surface'));
-  // Single file: main and browser are the same module, so the generated
-  // entries do the splitting — the server bundle keeps the class and the
-  // client bundle keeps the component.
+  // Single file: the generated entries split it, server keeps the class, client keeps the component.
   await subject.start({
     source: [
       'import { useState } from "react";',
@@ -139,8 +130,6 @@ it('a slate declaring a browser surface serves the shell, the client bundle, and
     expect(shell.status).toBe(200);
     expect(shell.body).toContain('<title>Notes</title>');
     expect(shell.body).toContain('/__kinu/client.js');
-    // The shell's import map is the module surface the client bundle resolves
-    // against — exact JSON, and every path it names must answer.
     const importMap = shell.body.match(/<script type="importmap">\s*(\{[^<]*?)\s*<\/script>/)?.[1];
 
     if (importMap === undefined) throw new Error('the shell carries no import map');
@@ -168,14 +157,8 @@ it('a slate declaring a browser surface serves the shell, the client bundle, and
     expect(slateModule.body).toContain('newWebSocketRpcSession');
     expect(await subject.call('ping', [])).toEqual({ ok: true, value: 'server-only-marker-1c9e' });
 
-
-    // The generated entries are kernel tooling under the runtime dir, never
-    // authored files inside the slate's own tree.
     expect(await subject.paths()).toEqual({ kinuInSlateRoot: false, entries: ['client.js', 'server.js'] });
 
-    // Single-file mode: the marker strings prove which half survived each
-    // bundle — the server bundle keeps the class's method bodies and drops
-    // the component's, the client bundle the reverse.
     const artifacts = await subject.artifacts();
 
     expect(artifacts.application).not.toContain('client-only-marker-7f3a');
@@ -226,8 +209,7 @@ it('a class that is not the slate contract fails to boot, and the authored fetch
 
 it('boots the class whether main exports it as Slate or as default, and the refusal names what it found', async () => {
   const subject = env.SLATE_PROCESS_PROBE.get(env.SLATE_PROCESS_PROBE.idFromName('export-shapes'));
-  // The exact source the first-run eval model wrote after reading the skill:
-  // SlateObject imported from kinu:slate, the class as the DEFAULT export.
+  // The exact source a first-run eval model wrote: SlateObject from kinu:slate, class as default export.
   await subject.start({
     source: [
       'import { SlateObject } from "kinu:slate";',
@@ -257,7 +239,6 @@ it('boots the class whether main exports it as Slate or as default, and the refu
     await subject.stop();
   }
 
-  // The named-export shape the skill documents must keep booting.
   await subject.start({
     source: [
       'import { SlateObject } from "kinu:slate";',
@@ -273,23 +254,20 @@ it('boots the class whether main exports it as Slate or as default, and the refu
     await subject.stop();
   }
 
-  // The plain fetch-object the model tried first: the refusal must say it
-  // found a default export that is not the class, not just repeat the contract.
+  // The refusal must say it found a non-class default export, not just repeat the contract.
   const plainObject = await subject.compileProbe('export default { async fetch() { return new Response("ok"); } };');
 
   expect(plainObject.code).toBe('bad_input');
   expect(plainObject.detail).toContain('must export class Slate extends SlateObject');
   expect(plainObject.detail).toContain('default');
 
-  // A class named Slate that does not extend SlateObject says so.
   const notExtended = await subject.compileProbe('export class Slate {}');
 
   expect(notExtended.code).toBe('bad_input');
   expect(notExtended.detail).toContain('Slate');
   expect(notExtended.detail).toContain('SlateObject');
 
-  // The class without the import fails at evaluation: the refusal reports the
-  // module threw, with the real error, instead of a bare io fault.
+  // The refusal reports the module threw with the real error, not a bare io fault.
   const noImport = await subject.compileProbe('export default class Slate extends SlateObject { async fetch() { return new Response("x"); } }');
 
   expect(noImport.code).toBe('bad_input');
@@ -298,10 +276,8 @@ it('boots the class whether main exports it as Slate or as default, and the refu
 
 it('binding calls never run outside a slate method invocation', async () => {
   const subject = env.SLATE_PROCESS_PROBE.get(env.SLATE_PROCESS_PROBE.idFromName('invocation-scope'));
-  // The constructor runs under startProcess, which no invocation wraps: the
-  // call queued there must still be refused when a later method drains it.
-  // (A timer INSIDE a method keeps its lineage on purpose — async context
-  // propagation attributes the call to the invocation it runs under.)
+  // The constructor runs under startProcess, which no invocation wraps: its queued call must still be refused.
+  // A timer inside a method keeps its lineage on purpose.
   await subject.start({
     source: [
       'import { SlateObject } from "kinu:slate";',

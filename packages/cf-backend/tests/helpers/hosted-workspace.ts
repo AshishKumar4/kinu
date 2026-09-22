@@ -1,18 +1,4 @@
-/**
- * ONE database, five actors — the fixture that makes open-38 checkable.
- *
- * Deliberately small: it opens exactly ONE `bun:sqlite` database, builds
- * exactly ONE `ActorHost` over it, and acquires every actor from that host.
- * There is no second `Database` in the file, so "one physical workspace SQLite
- * for every logical actor" is not asserted, it is the only shape the fixture
- * can express — and `databasesOpened()` is the witness that stays true only
- * while that holds.
- *
- * Every actor is acquired from the same production `ActorHost` over one
- * `bun:sqlite` database. Simulating per-actor databases would make storage
- * locality a fixture assumption rather than a property this fixture can
- * establish.
- */
+/** One `bun:sqlite` database, one production `ActorHost`, every actor acquired from it (open-38); `databasesOpened()` is the witness. */
 
 import { Database } from 'bun:sqlite';
 import {
@@ -29,10 +15,7 @@ import { makeCtx, makeEnv } from './actor-harness';
 import { createWorkspaceActorHost, type WorkspaceHostSeams } from '../../src/actor-hosting';
 import { createHostedWorkspace } from '../../src/workspace-host';
 
-/** Every `Database` this module has opened, in order. The test asserts its
- *  LENGTH, which is what turns "one database" from a claim into a measurement:
- *  a helper that quietly opened a second one for a child would fail here before
- *  any per-actor assertion had a chance to pass over it. */
+/** Every `Database` opened, in order; its length turns "one database" into a measurement. */
 const opened: Database[] = [];
 
 export function databasesOpened(): readonly Database[] {
@@ -48,27 +31,16 @@ export function resetDatabases(): void {
 export interface HostedWorkspaceFixture {
   readonly db: Database;
   readonly sql: SqlExecutor;
-  /** The raw positional executor the archive reader takes — a different shape
-   *  from the tagged-template one, because it composes the statements it runs. */
+  /** Positional executor for the archive reader, which composes its own statements. */
   readonly exec: SqlExec;
   readonly host: ActorHost;
   readonly directory: WorkspaceActorDirectory;
   readonly main: ActorReference;
-  /** Register one child of `parent` and acquire it from the host. */
   hire(parent: ActorReference, name: string, kind: WorkspaceActor['kind'], loop?: LoopOrigin): Promise<HostedActor>;
-  /** Every table name in the one database, for the `sqlite_master` witness. */
   tables(): readonly string[];
 }
 
-/**
- * THE authority inputs every hosted turn in this fixture resolves against: the
- * builtin catalog, digested by the same function the authority validates the
- * envelope with, and a one-model provider listing.
- *
- * Fixed rather than varying, because what these tests measure is which PROGRAM
- * ran and which claim recorded it, and a profile that changed per call would
- * make a digest assertion depend on a model choice nothing here is about.
- */
+/** Fixed authority inputs, so digest assertions never depend on a model choice. */
 const FIXTURE_AUTHORITY: ProfileAuthorityInputs = {
   envelope: {
     authority: { kind: 'local' },
@@ -79,18 +51,7 @@ const FIXTURE_AUTHORITY: ProfileAuthorityInputs = {
   provider: { revision: 'hosted-workspace-fixture', availableModels: [DEFAULT_WORKERS_AI_MODEL_SPEC] },
 };
 
-/**
- * The profile every hosted turn in this fixture resolves under, RESOLVED by the
- * production authority rather than described.
- *
- * A claim recorded against a profile the authority never produced cannot
- * witness anything about which profile a turn ran under, so the authority
- * produces this one. An object literal asserted into `ResolvedTurnProfile`
- * instead buys nothing and hides its own field errors, because the assertion is
- * there to stop the compiler from looking: a `role` carrying a `tools` member
- * the type has no room for, a `tier` missing `source`, a `providerRevision`
- * number where the contract declares a string.
- */
+/** Resolved by the production authority: a claim against a profile it never produced witnesses nothing. */
 export function fixtureProfile() {
   return {
     profile: resolveTurnProfile({
@@ -104,16 +65,7 @@ export function fixtureProfile() {
   };
 }
 
-/**
- * Open the one database, initialise the workspace schema on it, and build the
- * one host.
- *
- * `seams` members that reach real infrastructure — the Nimbus box, the home
- * registry, the provider registry — are supplied by the caller, because a test
- * that needs a file plane needs a real one and a test that does not must not
- * pay for it. Everything actor-shaped is genuine: the directory, the host, the
- * per-actor stores and every claim they write.
- */
+/** Seams reaching real infrastructure come from the caller; everything actor-shaped is genuine. */
 export async function hostedWorkspace(
   overrides: Partial<WorkspaceHostSeams> = {},
 ): Promise<HostedWorkspaceFixture> {
@@ -125,43 +77,18 @@ export async function hostedWorkspace(
   initWorkspaceSchema({ execRaw: makeExecRaw(db), sql, exec });
   db.exec(`INSERT INTO workspace_identity (id, name, created_at, owner_user_id)
     VALUES ('${workspaceId}', 'harness', ${String(Date.now())}, 'harness-owner')`);
-  /** Loop origins a caller NAMED for a child, read back by the host at first
-   *  acquire. Declared before the seams that close over it. */
+  /** Loop origins a caller named for a child, read by the host at first acquire. */
   const chosen = new Map<string, LoopOrigin>();
   const directory = new WorkspaceActorDirectory(sql, { workspaceId, ownerUserId: 'harness-owner' });
   const mainHandle = directory.createMain({ name: 'harness' });
   const main = actorReferenceOf(mainHandle);
 
-  // The REAL workspace host, over the SAME one database. Not a fake box: a
-  // fixture that stubbed the file plane could not witness a hosted actor's
-  // writes landing under its own uid on the shared tree, which is half of what
-  // this fixture exists to hold.
-  //
-  // `ctx` is the one platform surface bun cannot provide — a Durable Object
-  // state — and it comes from `actor-harness.ts` rather than being narrowed
-  // again here. A second literal was a second answer to "which platform members
-  // does a constructed actor reach", and it was already the thinner one: it
-  // carried `sql` and `transactionSync` and nothing else, so the key-value
-  // storage the SDK records lineage in, the alarm slots and
-  // `blockConcurrencyWhile` were all absent, and any host path that reached one
-  // would have failed as a missing member rather than as the behaviour under
-  // test. Named for the registered workspace, which is what `ctx.id.toString()`
-  // answers to everything that files a row under an agent id.
+  // Real workspace host; `ctx` comes from `actor-harness.ts` so there is one answer to which platform members an actor reaches.
   const ctx = makeCtx(db, workspaceId);
-  // THE env builder, shared with `actor-harness.ts` rather than re-declared
-  // here. A second copy is a second source of truth about which bindings a
-  // constructed actor may reach, and the two would drift the moment one of them
-  // needed a binding the other did not have — the same reason a test helper must
-  // not declare a table a production initializer owns.
+  // Shared with `actor-harness.ts`: one source of truth for which bindings an actor may reach.
   const env = makeEnv();
 
-  // Both optional deps are ANSWERED, not cast past: `previewUrl` answers a
-  // PROMISE of a preview verdict and `ensureSlate` the promise of `null` that
-  // says the slate is already up — nothing here boots one for a preview to
-  // re-drive. An `as never` over them hides a signature mismatch nothing here
-  // would surface, because nothing here exposes a port. A workspace with no
-  // signing key genuinely has no preview URL, and `unavailable` is how the
-  // contract says so.
+  // Both optional deps are answered, not cast: a workspace with no signing key has no preview URL.
   const workspace = createHostedWorkspace({
     ctx, env,
     previewUrl: (port) => Promise.resolve({ unavailable: `port ${String(port)} has no preview host in this fixture` }),
@@ -169,12 +96,7 @@ export async function hostedWorkspace(
     ensureSlate: () => Promise.resolve(null),
   });
 
-  // Main is acquired up front, and its runtime is what `rootRuntime` answers:
-  // inheritance consumes the parent's DURABLE state (its handle, its store,
-  // its files), and the workspace root always has all three without being
-  // "hosted" through an acquire of its own — production answers the same seam
-  // with the root object's own runtime. A child released test below proves an
-  // unhosted main still seeds, by releasing this handle again first.
+  // Main is acquired up front; its runtime answers `rootRuntime`, as production answers with the root's own runtime.
   let rootRuntime: AgentRuntime | null = null;
 
   const seams: WorkspaceHostSeams = {
@@ -182,17 +104,12 @@ export async function hostedWorkspace(
     ctx,
     agent: {
       name: 'harness',
-      // The SDK's own `Agent.sql` signature, over this one handle: a tagged
-      // template bound positionally, which is the protocol the Durable Object
-      // SQL API implements.
+      // The SDK's `Agent.sql` protocol: a tagged template bound positionally, as the DO SQL API implements.
       sql: <Row = Record<string, string | number | boolean | null>>(
         strings: TemplateStringsArray,
         ...values: (string | number | boolean | null)[]
       ): Row[] => db.prepare<Row, (string | number | boolean | null)[]>(strings.join('?')).all(...values),
-      // A fiber that runs inline. The row bookkeeping the SDK does around one is
-      // `agents-sdk.ts`'s business and no host path here reads it back; what the
-      // body IS handed is a real context, so a lane that stashed a checkpoint
-      // gets a callable `stash` rather than a member access on undefined.
+      // Runs inline, handing the body a real context so `stash` is callable.
       runFiber: (name, body) => body({
         id: `fiber:${name}`,
         signal: new AbortController().signal,
@@ -206,10 +123,7 @@ export async function hostedWorkspace(
     sql,
     exec,
     directory,
-    // The REGISTERED workspace name — the `workspace_identity` row above —
-    // never a child's own: a self-named child derives a second empty
-    // filesystem, so defaulting this would hide exactly the bug the fork
-    // suite pins.
+    // The registered workspace name, never a child's: a self-named child derives a second empty filesystem.
     workspaceName: 'harness',
     rootRuntime: () => {
       if (rootRuntime === null) throw new Error('the harness root runtime is not ready');
@@ -230,16 +144,10 @@ export async function hostedWorkspace(
     reconcileDurableWake: () => undefined,
     headRuntimeFor: () => undefined,
     logActivity: () => undefined,
-    // A refusal in the shape every slate caller already reads — `ok: false`
-    // with a classified reason — rather than an absence they would have to
-    // special-case.
     slate: () => Promise.resolve({ ok: false, reason: 'unavailable', error: 'no slate host in this fixture' }),
     deferrals: () => undefined,
     refinementLane: () => () => Promise.resolve(),
     chosenLoopOrigin: (record) => chosen.get(record.actorId) ?? null,
-    // No run in this fixture names a watcher, so no actor's file view is
-    // wrapped. A suite that wants one overrides this member — it is the same
-    // slot `hostHead` fills for the run that owns the capture.
     chosenWriteObserver: () => null,
     ...overrides,
   };

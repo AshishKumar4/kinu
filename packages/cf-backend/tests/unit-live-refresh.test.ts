@@ -444,25 +444,20 @@ describe('workspace live refresh failures', () => {
   });
 });
 
-/** The reason a dropped cross-object call surfaces as, verbatim. */
 const CONNECTION_LOST = 'Network connection lost.';
 
-/** The surfaces `loadAllData` re-seeds, as the hook passes them. */
 const SEEDED: readonly LiveRefreshSource[] = ['memoryContent', 'tools', 'executors', 'presence', 'plan'];
 
 describe('the workspace banner', () => {
   test('one dropped connection is one reason, printed once', () => {
-    // The line an owner reported, verbatim:
-    //   Workspace snapshot failed: Network connection lost. Couldn't refresh
-    //   live data for memory content. Showing last known data. Network
-    //   connection lost.
+    // Owner-reported: "Workspace snapshot failed: Network connection lost. Couldn't refresh live
+    // data for memory content. Showing last known data. Network connection lost."
     const notice = formatWorkspaceError(
       { snapshot: CONNECTION_LOST, memoryContent: CONNECTION_LOST },
       true,
     );
 
-    // The snapshot re-reads memory content itself, so one dropped round trip
-    // is one surface with one reason — not the workspace plus each thing in it.
+    // The snapshot re-reads memory content itself, so one dropped round trip is one reason.
     expect(notice).toEqual({
       severity: 'blocking',
       title: "Could not refresh this workspace.",
@@ -581,9 +576,7 @@ describe('loading the workspace snapshot', () => {
   });
 
   test('a snapshot that lands clears every surface it re-read', async () => {
-    // What a reconnect settles: the socket dropped, the 5s poll failed on the
-    // way down, then the reload succeeded. The banner must not keep reporting
-    // stale memory content the same round trip just refreshed.
+    // After a reconnect's reload succeeds, the banner must not report what that reload refreshed.
     const errors = reporter({
       snapshot: CONNECTION_LOST,
       memoryContent: CONNECTION_LOST,

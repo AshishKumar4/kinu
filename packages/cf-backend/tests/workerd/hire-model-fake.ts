@@ -1,75 +1,42 @@
 /**
- * Two lanes, because a hire has two speakers. Both speak over HTTP: the
- * workspace model is pinned to `openai-compat/hire-root`, whose credential
- * baseURL is this fixture's host, and the CHILD speaks on that same pin — a
- * hosted actor's turn resolves the workspace's pinned model like every other
- * turn of the workspace (`hostedActorProfile`). So the lanes are keyed on WHO
- * is speaking rather than on a model id: a delegated turn is the one carrying
- * the `report` tool. The AI service binding (`hire-probe.ts:HireAI`) answers
- * only the auxiliary lanes a workspace always emits: title, sleep-time.
-
- * NO CLOCKS. Every wait in this fixture is a gate a request resolves, never a
- * deadline: `scripts/test-clocks.ts` locks the clock corpus shrink-only, and a
- * new file with a `setTimeout` or a `Date.now()` comparison would raise that
- * lock. So a suite that needs "the root has seen its tool result" awaits a
- * promise this handler resolves when that request actually arrives. A product
- * that never gets there hangs, and the hang is the finding.
+ * Lanes are keyed on who is speaking, not the model id: root and child share the workspace pin
+ * (`hostedActorProfile`); a delegated turn carries the `report` tool. `hire-probe.ts:HireAI` answers
+ * only the auxiliary lanes. No clocks: `scripts/test-clocks.ts` locks the clock corpus shrink-only,
+ * so every wait is a gate a request resolves.
  */
 
 import * as v from 'valibot';
 import { CHILD_ANSWER, HIRE_CHILD_MODEL, HIRE_DURABLE_MODEL, HIRE_MISSION, HIRE_ROOT_MODEL } from './hire-shapes';
 
-/** One captured request, in arrival order. */
 export interface HireCall {
   readonly model: string;
   readonly stream: boolean;
-  /** The tool names offered on this request, so a suite can prove `agents` was
-   *  actually on the turn rather than assumed. */
   readonly tools: readonly string[];
-  /** Every tool-result body carried INTO this request — the resolved value of
-   *  the caller's own `agents` call, which is what case 1 asserts on. */
+  /** Tool-result bodies carried into this request: the caller's resolved `agents` value. */
   readonly toolResults: readonly string[];
-  /** The last user-authored line, for keying a lane on what was asked. */
   readonly lastUser: string;
 }
 
 const log: HireCall[] = [];
 
-/** Resolved when a root request arrives carrying a tool result. One waiter per
- *  arm, so a suite that arms twice observes two distinct arrivals. */
+/** Resolved when a root request arrives carrying a tool result; one waiter per arm. */
 let rootSaw = Promise.withResolvers<void>();
 
-/** Resolved when the child's brief reached the model wire at all. */
 let childSpoke = Promise.withResolvers<void>();
 
-/** Resolved when the durable lane's `msg` call was authored — the point a
- *  suite may read the child's log with the message admitted but its turn
- *  still owed. */
+/** Resolved when the durable lane's `msg` call was authored. */
 let durableMsgSent = Promise.withResolvers<void>();
 
-/** Resolved when the CHILD's model has been asked for BOTH of the durable
- *  lane's turns — the birth brief and the message.
- *
- *  The durable lane waits for this before it answers, and the wait is what
- *  makes the case reading it deterministic rather than a race. A delegated turn
- *  is on the child's run ledger from its `run_start`, which `runHostedTask`
- *  writes BEFORE it calls the model, so a second request arriving on this wire
- *  IS both of the child's runs being open. Without it the caller's own answer
- *  races the delegation sweep in the alarm frame and a count of the child's
- *  turns reads whatever had landed by then. */
+/** Resolved when the child's model has been asked for both durable turns. `runHostedTask` writes
+ *  `run_start` before calling the model, so the second request means both runs are open. */
 let childAskedTwice = Promise.withResolvers<void>();
 
-/** Requests the child's model has taken, for the gate above. */
 let childCalls = 0;
 
-/** What the child's model does on its turn, armed over the control host. */
 let childScript: 'answer' | 'throw' | 'park' = 'answer';
 
-/** A parked child: how a mid-turn interruption is staged without a timer. */
 let childPark = Promise.withResolvers<void>();
 
-/** One member of a content array, parsed for the string fields the wire
- *  dialects carry (`text`, `output`, `result`, `content`). */
 const ContentPartSchema = v.looseObject({
   text: v.optional(v.unknown()),
   output: v.optional(v.unknown()),
@@ -77,8 +44,6 @@ const ContentPartSchema = v.looseObject({
   content: v.optional(v.unknown()),
 });
 
-/** The message content shapes the OpenAI wire sends: a bare string, an array
- *  of parts, or a bare object a tool result serialises into. */
 const MessageContentSchema = v.union([v.string(), v.array(v.unknown()), v.looseObject({}), v.null()]);
 
 type MessageContent = v.InferOutput<typeof MessageContentSchema>;
@@ -98,7 +63,6 @@ const OutboundBodySchema = v.looseObject({
 
 type OutboundBody = v.InferOutput<typeof OutboundBodySchema>;
 
-/** The text of one message's content, whichever shape the SDK sent. */
 function contentText(content: MessageContent): string {
   if (v.is(v.string(), content)) return content;
 
@@ -143,7 +107,6 @@ function lastUser(body: OutboundBody): string {
   return contentText(users.at(-1)?.content ?? '');
 }
 
-/** The arguments this fixture authors on an `agents` tool call. */
 interface AgentsToolArgs {
   readonly action: 'hire' | 'msg';
   readonly lifetime?: 'task' | 'durable';
@@ -153,8 +116,6 @@ interface AgentsToolArgs {
   readonly message?: string;
 }
 
-/** One `chat.completion.chunk` frame, wide enough for the text and
- *  tool-call deltas below. */
 interface SseChunk {
   readonly id: string;
   readonly object: 'chat.completion.chunk';
@@ -175,11 +136,9 @@ interface SseChunk {
   }];
 }
 
-/** An SSE frame in the OpenAI streaming dialect. */
 function sse(payload: SseChunk): string {
   return `data: ${JSON.stringify(payload)}\n\n`;
 }
-
 
 function streamResponse(frames: readonly string[]): Response {
   return new Response(`${frames.join('')}data: [DONE]\n\n`, {
@@ -187,7 +146,6 @@ function streamResponse(frames: readonly string[]): Response {
   });
 }
 
-/** A plain assistant answer. */
 function textBody(model: string, text: string): Response {
   return streamResponse([
     sse({
@@ -201,7 +159,6 @@ function textBody(model: string, text: string): Response {
   ]);
 }
 
-/** One tool call, streamed the way the SDK expects to read it. */
 function toolCallBody(model: string, callId: string, name: string, args: AgentsToolArgs): Response {
   return streamResponse([
     sse({
@@ -225,9 +182,7 @@ function toolCallBody(model: string, callId: string, name: string, args: AgentsT
   ]);
 }
 
-/** The name the durable hire minted, read back out of its own tool result, so
- *  the `msg` lane can address the child the product actually created rather
- *  than a name this fixture invented. */
+/** The name the durable hire minted, read from its own tool result. */
 function mintedName(results: readonly string[]): string | null {
   for (const result of results) {
     const match = /"name"\s*:\s*"([a-z0-9-]+)"/i.exec(result);
@@ -238,14 +193,8 @@ function mintedName(results: readonly string[]): string | null {
   return null;
 }
 
-/**
- * The root's hire lane: author the `agents` hire on the first request, and
- * answer with the child's words once the tool result comes back.
- *
- * Keyed on the conversation rather than a call counter, because an interrupted
- * turn re-enters this lane with the SAME history and a counter would then
- * author a second hire where the product resumed one.
- */
+/** Keyed on the conversation, not a counter: an interrupted turn re-enters with the same history,
+ *  and a counter would author a second hire where the product resumed one. */
 function rootLane(body: OutboundBody, results: readonly string[]): Response {
   const model = body.model ?? HIRE_ROOT_MODEL;
 
@@ -263,12 +212,7 @@ function rootLane(body: OutboundBody, results: readonly string[]): Response {
   });
 }
 
-/**
- * The durable lane for the `msg` case: hire a durable child, then send it one
- * message, wait for the child to be working on both, then stop. Each request is
- * keyed on what the history already carries — never on a counter, for the
- * reason `rootLane` states.
- */
+/** Hire a durable child, message it once, wait until it works on both; keyed on history like `rootLane`. */
 async function durableLane(body: OutboundBody, results: readonly string[]): Promise<Response> {
   const model = body.model ?? HIRE_DURABLE_MODEL;
   const name = mintedName(results);
@@ -282,19 +226,11 @@ async function durableLane(body: OutboundBody, results: readonly string[]): Prom
     });
   }
 
-  // THE DELIVERY RECEIPT, which is what a `msg` call actually returns:
-  // `{"status":"delivered","agent":…,"event_id":…,"delivery":…}`. Keyed on the
-  // message BODY until 2026-09-17, which no result on this wire has ever
-  // carried — so the guard could not become true and this lane authored the
-  // same `msg` on every step for as long as the turn lasted: 329 steps in the
-  // 30 s the probe sampled, the caller's turn never ending and the case that
-  // waits on it hanging with the loop, not the product, as its cause.
+  // Keyed on the delivery receipt a `msg` call returns: `{"status":"delivered",...}`.
   const sent = results.some((result) => result.includes('"status":"delivered"'));
 
   if (!sent) {
-    // Resolve BEFORE the call is authored: the suite reads the child's log
-    // while the tool call is in flight, which is exactly the interval whose
-    // admissions the case counts.
+    // Resolve before authoring: the suite reads the child's log while the call is in flight.
     durableMsgSent.resolve();
 
     return toolCallBody(model, 'call_durable_2', 'agents', {
@@ -304,30 +240,21 @@ async function durableLane(body: OutboundBody, results: readonly string[]): Prom
     });
   }
 
-  // Both admissions are the child's work now; this caller has asked for
-  // everything it was going to ask for and waits for its colleague to be on
-  // both before it closes the turn.
   await childAskedTwice.promise;
   rootSaw.resolve();
 
   return textBody(model, `ROOT-SAW-DURABLE ${name}`);
 }
 
-/**
- * The child's lane: its brief arrives as the last user line, and it answers
- * with closing prose. That prose IS the report a task-lifetime child relays,
- * so the caller's resolved value is built from these words.
- */
+/** The child's closing prose is the report a task-lifetime child relays. */
 async function childLane(body: OutboundBody): Promise<Response> {
   childCalls += 1;
   childSpoke.resolve();
 
   if (childCalls >= 2) childAskedTwice.resolve();
 
-  // 'park' is consumed by the call that parks: an interruption is staged as
-  // one model request that never answers, and the turn a recovery re-runs
-  // calls the model AGAIN — which a real model answers. Re-parking every
-  // later call would make a hang the fake's own doing.
+  // 'park' is consumed by the call that parks; the recovery re-run must be answered,
+  // or the hang is the fake's own doing.
   if (childScript === 'park') {
     childScript = 'answer';
 
@@ -341,15 +268,8 @@ async function childLane(body: OutboundBody): Promise<Response> {
   return textBody(body.model ?? HIRE_CHILD_MODEL, CHILD_ANSWER);
 }
 
-/**
- * The auxiliary lanes a settled turn owes: auto-title and sleep-time fact
- * compression. Both are non-streamed completions that read a JSON answer —
- * the child's lane answers them with a STREAMED chat body, which the judge's
- * own parse then reports as `fact_compression_failed`, a harness artifact on
- * a case that was measuring delegation. Lane by ROLE, the same key the
- * two-turn fake's binding-side lanes use: the title lane leads with a system
- * message, the sleep judge is user-only.
- */
+/** Auto-title and sleep-time judge want non-streamed JSON; keyed by role: title leads with a system
+ *  message, the judge is user-only. */
 function auxLane(body: OutboundBody): Response {
   const model = body.model ?? HIRE_CHILD_MODEL;
   const title = (body.messages ?? [])[0]?.role === 'system';
@@ -364,8 +284,6 @@ function auxLane(body: OutboundBody): Response {
   });
 }
 
-
-/** The catalog the openai-compat provider lists to decide a spec is real. */
 function modelsBody(): Response {
   return Response.json({
     object: 'list',
@@ -373,7 +291,6 @@ function modelsBody(): Response {
   });
 }
 
-/** The control host: gates and reads, no clocks. */
 async function hireControl(url: URL, request: Request): Promise<Response> {
   if (url.pathname === '/hire/reset' && request.method === 'POST') {
     const raw = await request.text();
@@ -401,9 +318,7 @@ async function hireControl(url: URL, request: Request): Promise<Response> {
     return Response.json({ ok: true });
   }
 
-  // Settles when a caller's own `agents` call has resolved INTO its next model
-  // request. That is the caller observing its answer, which is the thing every
-  // settle case is about — not a timer, and not this fixture's opinion.
+  // Settles when a caller's `agents` call resolved into its next model request.
   if (url.pathname === '/hire/root-saw' && request.method === 'GET') {
     await rootSaw.promise;
 
@@ -416,8 +331,6 @@ async function hireControl(url: URL, request: Request): Promise<Response> {
     return Response.json({ ok: true });
   }
 
-  /** Settles when the durable lane's `msg` call was authored — the interval
-   *  whose admissions case 6 counts before it waits on settlement. */
   if (url.pathname === '/hire/msg-sent' && request.method === 'GET') {
     await durableMsgSent.promise;
 
@@ -431,15 +344,10 @@ async function hireControl(url: URL, request: Request): Promise<Response> {
   throw new Error(`hire-control: unhandled ${request.method} ${url.pathname}`);
 }
 
-/**
- * The worker's outbound handler: the control host, the provider catalog, and
- * the root's chat lane.
- */
 export async function hireOutbound(request: Request): Promise<Response> {
   const url = new URL(request.url);
 
   if (url.hostname === 'hire-control.invalid') return hireControl(url, request);
-
 
   if (url.hostname === 'models.dev') return Response.json({});
 
@@ -464,19 +372,10 @@ export async function hireOutbound(request: Request): Promise<Response> {
     lastUser: lastUser(body),
   });
 
-  // A non-streamed request is an auxiliary completion — auto-title or the
-  // sleep-time judge — whichever model it names: no actor's TURN arrives
-  // unstreamed on this wire.
+  // No actor turn arrives unstreamed on this wire, so non-streamed is auxiliary.
   if (body.stream !== true) return auxLane(body);
 
-
-  // THE CHILD'S LANE, keyed on the `report` tool rather than on a model id.
-  // `report` is deps-gated (core's `DEPS_GATED_TOOLS`): only an actor that was
-  // hired has its deps wired, so the lane that carries it is a delegated turn
-  // and no root turn can be mistaken for one. The model id cannot key it —
-  // every turn of a pinned workspace, hosted included, runs on the workspace's
-  // pin (`hostedActorProfile`), so the child and its hirer name one spec on
-  // the wire.
+  // The child's lane: `report` is deps-gated (core's `DEPS_GATED_TOOLS`), so only a hired actor carries it.
   if (toolNames(body).includes('report')) return await childLane(body);
 
   if (body.model === HIRE_DURABLE_MODEL) return await durableLane(body, results);

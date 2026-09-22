@@ -24,8 +24,7 @@ export class PreviewPortProbeDO extends DurableObject<Cloudflare.Env> {
     return this._workspace;
   }
 
-  /** A virtual server the host registers with no compilation: the port the
-   *  loopback check must answer with these bytes. */
+  /** A virtual server registered without compilation; the loopback check must return these bytes. */
   async serveLoopback(port: number, body: string): Promise<{ registered: boolean }> {
     const workspace = await this.workspace();
     workspace.kernel.portRegistry.set(port, (_req, res) => {
@@ -44,8 +43,7 @@ export class PreviewPortProbeDO extends DurableObject<Cloudflare.Env> {
     return { removed: !workspace.kernel.portRegistry.has(port) };
   }
 
-  /** A user-invoked program that outlives the 30 s wall-clock lifetime
-   *  Nimbus once imposed: its exit code is the program's own. */
+  /** A user-invoked long-lived program; its exit code is the program's own. */
   async outlast(seconds: number): Promise<ShellProbeReport> {
     const workspace = await this.workspace();
     const result = await workspace.shell.execute(`sleep ${String(seconds)} && echo outlasted`, { cwd: '/home/user' });

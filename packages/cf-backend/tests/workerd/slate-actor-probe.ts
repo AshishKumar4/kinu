@@ -1,17 +1,6 @@
 /**
- * The hosted Plan/eval probe: the crafted-tool binding an authored slate calls
- * through, and the work-mode narrowing a hosted `eval` runs under.
- *
- * `craftedSlate` drives the production `SlateHost` binding call for a crafted
- * tool whose code and description change between calls, so the declarations
- * the model would see are re-read rather than cached, and `plan` mode is
- * refused at the same seam `build` is admitted at.
- *
- * `code` is hosted Plan analysis: it reads files and keeps research state,
- * with no writes and no raw network. `rt.actor` is why the probe binds a
- * fixture handle over its own SQL — `createCodemodeToolFactory` builds the
- * `state` provider over the actor's program state. Only the final read model
- * is fixture data, so no model call or external service is needed.
+ * Hosted Plan/eval probe: crafted-tool declarations are re-read, not cached,
+ * and `plan` mode is refused at the seam `build` is admitted at.
  */
 import { Agent } from 'agents';
 import { OrchestratorAgent as ProductionOrchestrator } from '../../src/orchestrator';
@@ -27,7 +16,6 @@ import { SlateHost } from '../../src/slates/host';
 import { ROOT_SLATE_CALLER } from '../../src/slates/bindings';
 import { SessionProcessSupervisor } from '@nimbus-sh/core/runtime/session-process-supervisor.js';
 
-/** The external network boundary is deterministic; real WorkerLoader egress still selects it. */
 export class CodemodeEgress extends ProductionEgress {
   override async fetch(): Promise<Response> { return new Response('network allowed'); }
 }

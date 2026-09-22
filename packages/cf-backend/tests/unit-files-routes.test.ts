@@ -1,20 +1,15 @@
-// The files HTTP route's transfer contract: byte-exact chunked upload and
-// download across the Worker↔actor boundary, the total-size 413 answered
-// before any large allocation, counted (not announced) request bytes, and a
-// streamed response body.
+// Files route transfer contract: byte-exact chunking, the 413 before any large allocation,
+// counted (not announced) request bytes, and a streamed response.
 import { describe, expect, test } from "bun:test";
 import * as v from "valibot";
-import type { FilesRouteAgent } from "../src/files-routes"; // type-only: erased, never loaded
+import type { FilesRouteAgent } from "../src/files-routes";
 import type {
   ExecutorFileDownload as ExecutorFileDownloadInstance,
   ExecutorFileUpload as ExecutorFileUploadInstance,
   VFS, VfsRevision,
 } from "@kinu.run/core";
-// The route module statically imports the agents SDK, whose dist imports
-// workerd-only `cloudflare:*` modules that crash bun's loader on evaluation.
-// The shared harness stubs them, so — per its own contract ("call it before
-// importing the module under test") — the import below is deliberately
-// dynamic. Same shape as unit-actor-facet-substrate.test.ts.
+// The route imports the agents SDK, whose `cloudflare:*` imports crash bun's loader: mock, then
+// import dynamically.
 import { mockAgentsSdk } from "./helpers/agents-sdk";
 import { present } from "@kinu.run/test-utils";
 
@@ -36,8 +31,6 @@ const ConditionalOkReplySchema = v.object({ ok: v.literal(true), revision: VfsRe
 
 const ConflictReplySchema = v.object({ error: v.string(), revision: VfsRevisionSchema });
 
-/** What a route test drives: the fake actor plus the recorders its assertions
- *  read. */
 interface Harness {
   agent: FilesRouteAgent;
   seed(path: string, bytes: Uint8Array, revision?: VfsRevision): Promise<void>;
@@ -46,9 +39,7 @@ interface Harness {
   aborted: string[];
 }
 
-/** A fake actor wired exactly like OrchestratorAgent's own chunk methods —
- *  the same core seam classes over a recording VFS — so the route is driven
- *  end to end without instantiating the DO. */
+/** Wired like OrchestratorAgent's own chunk methods, over a recording VFS. */
 function makeAgent({ supportsConditionalWrites = true }: { supportsConditionalWrites?: boolean } = {}): Harness {
   const files = new Map<string, Uint8Array>();
   const revisions = new Map<string, VfsRevision>();
@@ -180,7 +171,6 @@ function makeAgent({ supportsConditionalWrites = true }: { supportsConditionalWr
   };
 }
 
-/** The route with the agent seam injected — no namespace, no DO. */
 async function route(request: Request, harness: Harness): Promise<Response> {
   const response = await handleFilesRequest(request, null, "ws", async () => harness.agent);
 
@@ -244,8 +234,7 @@ describe("files route — PUT", () => {
 
   test("one byte past the total limit is a 413 that writes nothing and aborts", async () => {
     const harness = makeAgent();
-    // Streamed without a content-length, so the count off the stream is the
-    // only bound in play.
+    // No content-length: the stream count is the only bound.
     const whole = patternBytes(FILE_TRANSFER_MAX_BYTES + 1);
     const response = await route(put(whole), harness);
     expect(response.status).toBe(413);
@@ -267,9 +256,7 @@ describe("files route — PUT", () => {
     }, { highWaterMark: 0 });
 
     const request = put(body, { "content-length": String(FILE_TRANSFER_MAX_BYTES + 1024) });
-    // A zero watermark makes every pull a real consumer read. The assertions
-    // below are that the refusal is the route's own 413 and that it consumed
-    // nothing: an honest oversized sender costs one header parse.
+    // Zero watermark: every pull is a real read, so an honest oversized sender costs one header parse.
     const response = await route(request, harness);
     expect(response.status).toBe(413);
     expect(v.parse(ErrorReplySchema, await response.json()).error)
@@ -280,9 +267,7 @@ describe("files route — PUT", () => {
 
   test("an undeclared body over the limit is CANCELLED at the first byte past it, not drained", async () => {
     const harness = makeAgent();
-    // No content-length, so the count off the stream is the only bound — and a
-    // sender that keeps writing must not be read to EOF before the refusal.
-    // Twice the limit is available; the route must stop asking at the limit.
+    // A sender that keeps writing must not be read to EOF before the refusal.
     const CHUNK = FILE_CHUNK_BYTES;
     const available = Math.ceil((2 * FILE_TRANSFER_MAX_BYTES) / CHUNK);
     let pulls = 0;
@@ -305,8 +290,7 @@ describe("files route — PUT", () => {
     const response = await route(put(body), harness);
     expect(response.status).toBe(413);
     expect(cancelled).toBe("the request body is over its limit");
-    // One chunk past the limit is what the count needs to see; everything after
-    // it stays unread.
+    // One chunk past the limit is all the count needs; the rest stays unread.
     expect(pulls).toBe(Math.floor(FILE_TRANSFER_MAX_BYTES / CHUNK) + 1);
     expect(harness.files.has("/home/user/blob.bin")).toBe(false);
     expect(harness.aborted).toEqual(["/home/user/blob.bin"]);
@@ -475,7 +459,6 @@ describe("files route — GET", () => {
     await harness.seed("/home/user/blob.bin", patternBytes(FILE_TRANSFER_MAX_BYTES + 1));
     const response = await route(new Request(URL_), harness);
     expect(response.status).toBe(413);
-    // The stat preflight refused it; the plane was never asked for bytes.
     expect(harness.reads.count).toBe(0);
   });
 

@@ -1,28 +1,13 @@
 /**
- * The durable device-command ledger across a REAL activation reset.
- *
- * Three claims, each of which a green bun suite cannot make (see
- * ./device-inflight-probe.ts for why):
- *
- *   1. A claim an activation died holding does not strand the request. The
- *      claim is activation-scoped, and the next activation is what expires it.
- *   2. The first stored answer survives the reset. A confirmed stop is still
- *      confirmed afterwards, and a second authority reports THAT answer instead
- *      of killing a command that is already dead.
- *   3. The acknowledgement is ordered against the row it acknowledges. An
- *      eviction between reading the row and deleting it leaves the record
- *      intact, so the daemon's retained result stays replayable rather than
- *      being dropped by a delete that outlived its read.
- *
- * Every statement here is the production ledger's. This file asserts what real
- * Durable Object storage and a real reset do to it.
+ * The production device-command ledger across a real Durable Object activation reset (bun cannot; see
+ * ./device-inflight-probe.ts). Defends: a dead activation's claim strands the request, a stored answer is
+ * lost or overwritten, or an interrupted acknowledgement deletes a still-replayable row.
  */
 import { env } from 'cloudflare:workers';
 import { abortAllDurableObjects } from 'cloudflare:test';
 import { describe, expect, it } from 'vitest';
 
-/** A stub held across a reset is itself broken by the reset; the id survives.
- *  Re-acquiring is what a real caller does on its next request. */
+/** A stub held across a reset is broken by it; re-acquire from the id, as a real caller does. */
 const probe = (name: string) => env.DEVICE_LEDGER_PROBE.get(env.DEVICE_LEDGER_PROBE.idFromName(name));
 
 const TURN = 'turn-1';
@@ -32,25 +17,20 @@ describe('a cancellation claim the activation died holding', () => {
     const request = 'rpc-workerdprobe-1';
     await probe('abandoned-claim').admit(request, TURN);
 
-    // A sweep claims the row and is interrupted before it can store an answer:
-    // exactly where an eviction hurts, because the claim is what hides the row
-    // from every other authority.
+    // A sweep claims the row and is interrupted before storing an answer; the claim hides the row.
     const claimed = await probe('abandoned-claim').claimTurn(TURN);
     expect(claimed).toMatchObject([{ requestId: request, settled: null }]);
     expect(claimed[0].claim).not.toBe('');
-    // A second sweep in the SAME activation sees nothing: the claim is
-    // exclusive, which is the negative control for the reset below.
+    // Negative control: the claim is exclusive within one activation.
     expect(await probe('abandoned-claim').claimTurn(TURN)).toEqual([]);
 
     await abortAllDurableObjects();
 
-    // The row survived with its answer still absent, and the fresh activation
-    // released the dead claim rather than leaving a request nothing can reach.
+    // The fresh activation released the dead claim.
     const reclaimed = await probe('abandoned-claim').claimTurn(TURN);
     expect(reclaimed).toMatchObject([{ requestId: request, settled: null }]);
     expect(reclaimed[0].claim).not.toBe(claimed[0].claim);
 
-    // And the claim the dead activation held speaks for nothing now.
     expect(await probe('abandoned-claim').held(request, claimed[0].claim)).toBeNull();
     expect(await probe('abandoned-claim').settle(request, claimed[0].claim, 'terminated')).toBeNull();
   });
@@ -62,25 +42,20 @@ describe('the first stored answer', () => {
     await probe('first-writer').admit(request, TURN);
     const claimed = await probe('first-writer').claimTurn(TURN);
 
-    // The kill was confirmed. The answer is stored BEFORE the acknowledgement,
-    // because the acknowledgement is the step that can fail.
+    // The answer is stored before the acknowledgement, which is the step that can fail.
     expect(await probe('first-writer').settle(request, claimed[0].claim, 'terminated')).toBe('terminated');
-    // The acknowledgement fails, so the row stays with its answer.
     expect(await probe('first-writer').rows())
       .toEqual([{ requestId: request, claim: claimed[0].claim, settled: 'terminated' }]);
 
     await abortAllDurableObjects();
 
-    // A later sweep finds the row settled: nothing runs under this request, so
-    // it owes only its cleanup and must never be cancelled a second time.
+    // Settled: owes only cleanup and must never be cancelled a second time.
     const later = await probe('first-writer').claimTurn(TURN);
     expect(later).toMatchObject([{ requestId: request, settled: 'terminated' }]);
     expect(await probe('first-writer').held(request, later[0].claim))
       .toEqual({ settled: 'terminated' });
-    // A settled row is not work, so it cannot change hands either.
     expect(await probe('first-writer').transfer(request, 'job-1')).toEqual({ transferred: false });
 
-    // Cleanup, once the daemon can be reached again, is the only step left.
     await probe('first-writer').deleteHeld(request, later[0].claim);
     expect(await probe('first-writer').rows()).toEqual([]);
   });
@@ -93,15 +68,10 @@ describe('an answer that lands while the sweep is still waiting on the device', 
     const claimed = await probe('answer-race').claimTurn(TURN);
     expect(claimed).toMatchObject([{ requestId: request, settled: null }]);
 
-    // The sweep read the row before sending its frame and saw no answer, so it
-    // is now awaiting the device. While it waits, the tool aborting its own exec
-    // stores the confirmed kill through the unclaimed path.
+    // While the sweep awaits the device, the tool's own abort stores the confirmed kill unclaimed.
     await probe('answer-race').settleUnclaimed(request, 'terminated');
 
-    // The sweep's own answer arrives late and is only a guess: the daemon holds
-    // no control entry for a command that is already dead. The confirmed kill
-    // must stand, and the sweep must report THAT — telling the owner a dead
-    // command merely 'may have' stopped is the defect this pins.
+    // The sweep's late `unknown` is a guess; reporting a dead command as 'may have' stopped is the defect pinned.
     expect(await probe('answer-race').settle(request, claimed[0].claim, 'unknown'))
       .toBe('terminated');
     expect(await probe('answer-race').rows())
@@ -109,7 +79,6 @@ describe('an answer that lands while the sweep is still waiting on the device', 
 
     await abortAllDurableObjects();
 
-    // The reset does not launder the guess back in.
     expect(await probe('answer-race').claimTurn(TURN))
       .toMatchObject([{ requestId: request, settled: 'terminated' }]);
   });
@@ -120,20 +89,16 @@ describe('an acknowledgement interrupted between its read and its delete', () =>
     const request = 'rpc-workerdprobe-3';
     await probe('ack-ordering').admit(request, TURN);
 
-    // The cloud read the row and acknowledged the daemon; the delete had not
-    // happened yet when the activation ended.
+    // Acknowledged the daemon; the activation ended before the delete.
     const held = await probe('ack-ordering').acknowledgeable(request);
     expect(held).toEqual({ deviceId: 'dev-probe' });
 
     await abortAllDurableObjects();
 
-    // The row is still there: an activation reset between the two steps loses
-    // nothing, and reconciliation still has a request to work from.
     expect(await probe('ack-ordering').rows())
       .toEqual([{ requestId: request, claim: '', settled: null }]);
 
-    // The retry's delete is compare-guarded against the row it read, so it
-    // removes exactly that record.
+    // The retry's delete is compare-guarded against the row it read.
     await probe('ack-ordering').deleteAcknowledged(request, 'dev-probe');
     expect(await probe('ack-ordering').rows()).toEqual([]);
   });
@@ -143,8 +108,7 @@ describe('an acknowledgement interrupted between its read and its delete', () =>
     await probe('ack-replacement').admit(request, TURN);
     expect(await probe('ack-replacement').acknowledgeable(request)).toEqual({ deviceId: 'dev-probe' });
 
-    // The row a cancellation now holds is not the row that was read, and the
-    // acknowledgement's delete may not touch it.
+    // The acknowledgement's delete may not touch a row a cancellation now holds.
     const claimed = await probe('ack-replacement').claimTurn(TURN);
     await probe('ack-replacement').deleteAcknowledged(request, 'dev-probe');
     expect(await probe('ack-replacement').rows())

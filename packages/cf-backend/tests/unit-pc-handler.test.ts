@@ -1,7 +1,5 @@
-// The device tunnel's public ingress rails: /pc/connect-ticket and the
-// /pc/connect WebSocket upgrade. Both choose a UserDO by name, so both must
-// refuse malformed identifiers and over-budget sources BEFORE any idFromName —
-// a random user id must never wake a Durable Object.
+// Both rails pick a UserDO by name: refuse malformed ids and over-budget sources before any
+// idFromName, so a random user id never wakes a Durable Object.
 import { describe, expect, test } from "bun:test";
 import {
   handlePcRequest,
@@ -135,7 +133,6 @@ describe("/pc/connect-ticket", () => {
     const userDO = makeUserDO();
     const env = makeEnv(userDO);
 
-    // Each admitted knock wakes exactly one DO even though every token is wrong.
     for (let knock = 0; knock < KNOCKS_PER_WINDOW; knock++) {
       const user = knock.toString(16).padStart(32, "0");
       const response = await handlePcRequest(ticketPost(JSON.stringify({ user, token: WRONG_TOKEN })), env);
@@ -144,7 +141,6 @@ describe("/pc/connect-ticket", () => {
 
     expect(userDO.idNames.length).toBe(KNOCKS_PER_WINDOW);
 
-    // Knock 31 and beyond — random users included — never reach the namespace.
     for (let knock = 0; knock < 5; knock++) {
       const user = (1000 + knock).toString(16).padStart(32, "f");
       const response = await handlePcRequest(ticketPost(JSON.stringify({ user, token: WRONG_TOKEN })), env);
@@ -201,8 +197,7 @@ describe("/pc/connect upgrade", () => {
 });
 
 describe("the removed daemon-download rails", () => {
-  // F7: the daemon travels inside the CLI release, so no route here serves
-  // executable bytes and no client can be steered by what this Worker returns.
+  // F7: the daemon ships inside the CLI release; no route here serves executable bytes.
   test("/pc/daemon.js and /pc/install are 404, and neither wakes a Durable Object", async () => {
     for (const url of ["https://kinu.test/pc/daemon.js", "https://kinu.test/pc/install"]) {
       const userDO = makeUserDO();

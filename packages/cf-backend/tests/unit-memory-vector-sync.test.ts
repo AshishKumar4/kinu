@@ -1,8 +1,5 @@
-// The cf memory-index path must keep the semantic (vector) index in sync with
-// FTS5: writing/indexing a memory embeds its chunks, changed line ranges drop
-// their stale vectors, and the one-time backfill embeds pre-existing chunks
-// exactly once. Drives the real adaptMemory / backfillMemoryVectors against a
-// real MemoryStore (bun:sqlite) and a fake VectorStore that records calls.
+// The cf memory index keeps the vector index in sync with FTS5: embeds on write, drops stale
+// ranges, and backfills pre-existing chunks exactly once.
 import { describe, test, expect, setSystemTime } from 'bun:test';
 import { Database } from 'bun:sqlite';
 import { createWorkspaceBundle, createTestActor, makeExecRaw, makeSql } from '../../core/tests/helpers';
@@ -24,7 +21,6 @@ function createStore() {
   return { sql, store, files, config };
 }
 
-/** A VectorStore that records upserts/deletes for assertions. */
 function fakeVectorStore(available = true) {
   const upserted: IndexedChunk[] = [];
   const deleted: string[] = [];
@@ -81,7 +77,6 @@ describe('adaptMemory — semantic index sync on write', () => {
 
     for (const id of vs.deleted) expect(embeddedIds.has(id)).toBe(true);
 
-    // The surviving chunk's vector is still live; the deleted ones are gone.
     for (const id of vs.deleted) expect(vs.live.has(id)).toBe(false);
   });
 
@@ -96,21 +91,18 @@ describe('adaptMemory — semantic index sync on write', () => {
       async search() { return []; },
     };
 
-    // A completed backfill: without invalidation the marker would keep claiming
-    // a complete semantic index over chunks that never reached the vector store.
+    // Without invalidation the backfill marker would claim chunks that never reached the vector store.
     config.set('memory_vector_backfill_done', 'true');
     config.set('memory_vector_backfill_cursor', 'memory/MEMORY.md:9999-9999');
 
     const memory = adaptMemory(store, files, throwing, config);
     await memory.write(PATH, doc(60));
     await expect(memory.index(PATH)).resolves.toBeUndefined();
-    // FTS5 still indexed the content.
     expect((await memory.search('note', 5)).length).toBeGreaterThan(0);
 
     expect(config.get('memory_vector_backfill_done')).toBe('false');
     expect(config.get('memory_vector_backfill_cursor')).toBe('');
 
-    // …and the next boot's backfill actually re-embeds them.
     const vs = fakeVectorStore();
     await backfillMemoryVectors(store, config, vs.store);
     expect(vs.upserted.length).toBe(store.allChunksAfter('', 10000).length);
@@ -141,7 +133,7 @@ describe('adaptMemory — semantic index sync on write', () => {
 describe('backfillMemoryVectors — one-time embed of pre-existing chunks', () => {
   test('embeds every existing chunk once, sets the marker, 2nd run no-ops', async () => {
     const { store, config } = createStore();
-    // Seed FTS5 directly (no vector store) — the pre-Vectorize state.
+    // Seed FTS5 directly: the pre-Vectorize state.
     await store.indexFile(PATH, doc(60));
     const total = store.allChunksAfter('', 10000).length;
     expect(total).toBeGreaterThan(1);
@@ -151,7 +143,6 @@ describe('backfillMemoryVectors — one-time embed of pre-existing chunks', () =
     expect(vs.upserted.length).toBe(total);
     expect(config.get('memory_vector_backfill_done')).toBe('true');
 
-    // Second run: marker set → no re-embedding.
     await backfillMemoryVectors(store, config, vs.store);
     expect(vs.upserted.length).toBe(total);
   });
@@ -163,12 +154,11 @@ describe('backfillMemoryVectors — one-time embed of pre-existing chunks', () =
     expect(all.length).toBeGreaterThanOrEqual(3);
 
     const vs = fakeVectorStore();
-    // Cap of 1 → one chunk per boot; marker stays unset until the last page.
+    // Marker stays unset until the last page.
     await backfillMemoryVectors(store, config, vs.store, 1);
     expect(vs.upserted.length).toBe(1);
     expect(config.get('memory_vector_backfill_done')).toBeNull();
 
-    // Keep booting until done; ids must be embedded exactly once, in order.
     let guard = 0;
 
     while (config.get('memory_vector_backfill_done') !== 'true' && guard++ < 100) {
@@ -185,8 +175,7 @@ describe('backfillMemoryVectors — one-time embed of pre-existing chunks', () =
     const all = store.allChunksAfter('', 10000);
     expect(all.length).toBeGreaterThanOrEqual(3);
 
-    // The real store over a Vectorize index that is down — it must not advance
-    // the cursor or set the marker over chunks it never embedded.
+    // A down Vectorize index must not advance the cursor or set the marker.
     let down = true;
 
     const index: VectorizeIndex = {
@@ -218,15 +207,11 @@ describe('backfillMemoryVectors — one-time embed of pre-existing chunks', () =
     setSystemTime(new Date(start));
 
     try {
-      // Rejects rather than resolving: a caller that cannot tell a failed page
-      // from a finished one cannot record it.
+      // Rejects: a caller that cannot tell a failed page from a finished one cannot record it.
       await expect(backfillMemoryVectors(store, config, vectorStore, 1)).rejects.toThrow('vectorize down');
       expect(config.get('memory_vector_backfill_done')).toBeNull();
       expect(config.get('memory_vector_backfill_cursor')).toBeNull();
 
-      // The backend recovers and the failure cooldown lapses; the same page is
-      // retried from the held cursor and the run completes over every chunk,
-      // in order, exactly once.
       down = false;
       embedded.length = 0;
       setSystemTime(new Date(start + VECTOR_BACKEND_COOLDOWN_MS));

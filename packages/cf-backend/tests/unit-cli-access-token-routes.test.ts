@@ -1,6 +1,5 @@
-// Route-level behavior for scoped `pta_…` CI access tokens: exec/read scopes
-// gate exactly the surfaces they name, everything sensitive stays
-// interactive-session-only, and minting is step-up gated.
+// Scoped `pta_…` CI tokens: exec/read scopes gate exactly their surfaces, sensitive routes stay session-only,
+// minting is step-up gated.
 import { TEST_CREDENTIAL_ENCRYPTION_KEY } from './helpers/user-do';
 import { describe, expect, test } from 'bun:test';
 import { handleCliRequest, type CliRoutesEnv } from '../src/cli/routes';
@@ -196,8 +195,6 @@ function setupEnv(opts: { sessionMintedAt?: number } = {}) {
     UserDO: { idFromName: (n) => n, get: () => userDO },
     OrchestratorAgent: { idFromName: (n) => n, get: () => agent },
     CREDENTIAL_ENCRYPTION_KEY: TEST_CREDENTIAL_ENCRYPTION_KEY,
-    // Device-code sign-in and the published downloads are other suites'
-    // surfaces; a scoped token never reaches either.
     AUTH_KV: unreachableKv('AUTH_KV'),
     ASSETS: unreachableAssets(),
   };
@@ -328,9 +325,7 @@ describe('access token management routes (session tokens only)', () => {
     );
 
     expect(minted?.status).toBe(201);
-    // The minted token is the one time the secret is in a body, and the
-    // account-wide policy reaches it from `json()` rather than from this route
-    // remembering to say `no-store`.
+    // The mint is the one time the secret is in a body; `no-store` comes from `json()`'s account-wide policy.
     expect(handled(minted).headers.get('cache-control')).toBe(PRIVATE_NO_STORE);
     expect(v.parse(MintedTokenSchema, await handled(minted).json())).toMatchObject({
       token: expect.stringMatching(/^pta_/),

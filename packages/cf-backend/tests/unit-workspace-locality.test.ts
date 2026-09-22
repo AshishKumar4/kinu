@@ -1,24 +1,6 @@
 /**
- * WHERE THE HOSTED WORKSPACE'S BYTES LIVE.
- *
- * This is the executable form of the requirement the 2026-08-12 ask made, and
- * the only form of it CI can check: Nimbus is a LIBRARY in the Durable Object
- * that owns the workspace, over that object's own `ctx.storage.sql`, and there
- * is no second object per workspace.
- *
- * Prose cannot hold that requirement. A commit message and a module header get
- * rewritten by the very commit that breaks them, and a harness can satisfy the
- * only runtime check (`if (!env.NIMBUS_SESSION) throw`) with an in-isolate fake
- * — which leaves every suite green while hosted workspaces create no filesystem
- * tables at all. So these tests assert the two things prose cannot:
- *
- *   1. A runtime built through `createCFRuntime` — the production factory, not a
- *      shim — creates the workspace filesystem's tables in the ACTOR's SQLite,
- *      and the memory index that reads those files is in the same database.
- *   2. The hosted composition never reads a workspace binding out of `env`. The
- *      env handed to the runtime here is a Proxy that throws on any property the
- *      test did not name, so a reintroduced `env.NIMBUS_SESSION` is a failure
- *      with that word in it rather than a silent second object.
+ * Nimbus is a library in the Durable Object that owns the workspace, over its own `ctx.storage.sql`; no second
+ * object per workspace. Built via `createCFRuntime`; env is a Proxy that throws on any unnamed binding.
  */
 import { afterEach, describe, expect, test } from 'bun:test';
 import { Database } from 'bun:sqlite';
@@ -44,22 +26,13 @@ interface ActorObject {
   readonly database: Database;
   readonly ctx: DurableObjectState;
   tables(): string[];
-  /** Every promise the object was asked to hold open, in order — a wake's
-   *  background work, so a test can await what production only retains. */
+  /** Promises the object was asked to hold open, so a test can await what production only retains. */
   readonly held: Promise<unknown>[];
 }
 
 /**
- * One Durable Object's storage, as the platform gives it: a real SQLite database
- * with a real `transactionSync`, and the key-value half over a map of its own —
- * the facet manager's launch journal is listed on every composition, so a bare
- * `get` is not enough. Every other member of the platform's `ctx` refuses by
- * name (`actorObjectState`), which is what keeps the list below a claim about
- * what a hosted workspace reads.
- *
- * `transactionSync` is real and not a callback passthrough for the reason the
- * workspace's own options state — every atomic write in the filesystem rests on
- * it, and a fake turns each one into a torn write that reports success.
+ * Real SQLite with a real `transactionSync`: every atomic filesystem write rests on it, and a fake turns each
+ * into a torn write that reports success. Other `ctx` members refuse by name (`actorObjectState`).
  */
 function actorObject(): ActorObject {
   const database = new Database(':memory:');
@@ -75,8 +48,6 @@ function actorObject(): ActorObject {
     }),
     waitUntil: (promise: Promise<unknown>) => { held.push(promise); },
     getWebSockets: () => [],
-    // The bag workerd hangs on `ctx`, reduced to the composed supervisor
-    // entrypoint the hosted runtime requires before it composes.
     exports: { SupervisorRPC },
   });
 
@@ -91,20 +62,13 @@ function actorObject(): ActorObject {
   };
 }
 
-/**
- * EVERY binding a hosted workspace reads, and nothing else: the port names the
- * four, so a session binding is not merely absent here — it is unnameable.
- * The R2 runtime catalogue and the assets are unbound on this deployment,
- * which is a state both readers handle; the loader and the host namespace are
- * bound and refuse, because a suite that spawns nothing must reach neither.
- */
+/** Every binding a hosted workspace reads; the loader and host namespace refuse, since this suite spawns nothing. */
 function workspaceBindings(): HostedWorkspaceEnv<string> {
   const spawned = (): never => { throw new Error('the hosted workspace loaded a dynamic worker'); };
 
   const dispatched = (): never => { throw new Error('a facet dispatched through the host namespace'); };
 
-  // `load` is the member the facet manager checks for beside `get`, which the
-  // platform's own `WorkerLoader` declaration omits; the binding carries both.
+  // `load` is checked beside `get`; the platform's `WorkerLoader` declaration omits it.
   const LOADER = Object.assign({ get: spawned }, { load: spawned });
 
   return {
@@ -115,18 +79,8 @@ function workspaceBindings(): HostedWorkspaceEnv<string> {
   };
 }
 
-/** Where the listeners below run and what they are called: the identity the
- *  manager derives for a pid nothing journalled, from the process table. */
 const SLATE_CWD = '/home/user/slates/a';
 
-/**
- * A resident listening on `port`, the way the manager registers one: the pid
- * comes from the workspace's own process table, its facet stub is bound in
- * the registry, and the manager's `registerPort` decides against the port's
- * reservation whether the stored capability is re-adopted or retired. The
- * derived owner of `argv` under SLATE_CWD is the identity the reservation
- * must name for the capability to survive.
- */
 async function listen(workspace: HostedWorkspace, port: number, argv: string[], target: RouteableFacetTarget): Promise<number> {
   const session = await workspace.bundle.session();
   const pid = session.processes.spawn('slate', argv, SLATE_CWD, { longRunning: true }).pid;
@@ -136,12 +90,6 @@ async function listen(workspace: HostedWorkspace, port: number, argv: string[], 
   return pid;
 }
 
-/**
- * The owner the manager derives for `argv` under SLATE_CWD, read off the
- * manager itself: a probe process is spawned exactly as `listen` spawns a
- * listener, its identity is asked for, and it is ended. The reservation a
- * test seeds must name this identity for the capability to survive.
- */
 async function derivedOwner(workspace: HostedWorkspace, argv: string[]): Promise<string> {
   const session = await workspace.bundle.session();
   const probe = session.processes.spawn('slate', argv, SLATE_CWD, { longRunning: true });
@@ -163,18 +111,14 @@ describe('the hosted workspace lives in the actor Durable Object', () => {
       previewUrl: async () => ({ unavailable: 'no preview host in this test' }),
     });
 
-    // Nothing has been asked of the workspace yet, so nothing but the generation
-    // counter exists: the bundle opens on its first operation, which is what
-    // keeps an activation that never touches a file from paying for one.
+    // The bundle opens on its first operation, so an activation that touches no file pays for none.
     expect(actor.tables()).toEqual(['kinu_workspace_generation']);
 
     await workspace.bundle.vfs.writeFile('memory/MEMORY.md', 'the bytes are here\n');
 
     const tables = actor.tables();
 
-    // The exact namespace the library commits to owning inside a host's
-    // database — the set `NimbusWorkspace.destroy()` drops, and the set the
-    // conformance manifest declares for this root.
+    // The namespace `NimbusWorkspace.destroy()` drops and the conformance manifest declares for this root.
     for (const table of [
       'inodes', 'file_chunks', 'content_lifecycle', 'vfs_schema_migrations',
       'kinu_workspace_generation',
@@ -198,8 +142,6 @@ describe('the hosted workspace lives in the actor Durable Object', () => {
     await workspace.bundle.vfs.mkdir('proof', { recursive: true });
     await workspace.bundle.vfs.writeFile('proof/from-vfs.txt', 'same bytes');
 
-    // The box's exec is the programmatic session over the SAME workspace, in a
-    // named durable shell — the production seam, not `bundle.shell`.
     const box = workspace.box('agent:main');
     expect(await box.exec('cat proof/from-vfs.txt')).toMatchObject({
       stdout: 'same bytes',
@@ -210,8 +152,6 @@ describe('the hosted workspace lives in the actor Durable Object', () => {
     expect(await workspace.bundle.vfs.readFile('proof/from-shell.txt', { encoding: 'utf8' }))
       .toBe('from the shell');
 
-    // And the box's own file surface reads the same rows, in the session's
-    // absolute paths — this is what `nimbusSessionFiles` binds.
     expect(await box.files.read('/home/user/proof/from-shell.txt')).toBe('from the shell');
     expect(await box.files.exists('/home/user/proof/from-vfs.txt')).toBe(true);
   });
@@ -246,8 +186,7 @@ describe('the hosted workspace lives in the actor Durable Object', () => {
 
     const workspace = createHostedWorkspace({
       ctx: actor.ctx,
-      // Only the runtime catalogue bucket is legitimately read, and this
-      // deployment binds none — so EVERY property access throws by name.
+      // Only the runtime catalogue bucket may be read, and none is bound here.
       env: workspaceBindings(),
       previewUrl: async () => ({ unavailable: 'no preview host in this test' }),
     });
@@ -257,15 +196,7 @@ describe('the hosted workspace lives in the actor Durable Object', () => {
       .toMatchObject({ stdout: 'no binding was read', exitCode: 0 });
   });
 
-  /**
-   * The split this closes, as an assertion.
-   *
-   * MemoryStore keeps its FTS5 index in the ACTOR's SQLite, in the same database
-   * as the markdown it indexes. Holding the bytes in a second Durable Object
-   * lets a partial failure diverge the index from them, and neither object can
-   * be snapshotted consistently with the other. One database means one
-   * transaction boundary.
-   */
+  /** One database, one transaction boundary: the FTS5 index lives beside the markdown it indexes. */
   test('the memory index and the bytes it indexes are in one database', async () => {
     const actor = actorObject();
 
@@ -277,16 +208,12 @@ describe('the hosted workspace lives in the actor Durable Object', () => {
 
     const store = new MemoryStore(workspace.bundle.vfs, sqlOver(actor.database));
     store.ensureSchema();
-    // The store's own write: the bytes go to the workspace filesystem and the
-    // chunks to the index, which is the pairing under test.
     await store.writeFile('memory/MEMORY.md', '# Notes\n\nthe indexed bytes\n');
     await store.indexFile('memory/MEMORY.md', '# Notes\n\nthe indexed bytes\n');
 
     const tables = actor.tables();
-    // The bytes...
     expect(tables).toContain('inodes');
     expect(tables).toContain('file_chunks');
-    // ...and the index over them, in the same SQLite.
     expect(tables).toContain('memory_chunks');
     expect(store.search('indexed bytes', 5)).not.toHaveLength(0);
     expect(await workspace.bundle.vfs.readFile('memory/MEMORY.md', { encoding: 'utf8' }))
@@ -315,10 +242,7 @@ describe('the hosted workspace lives in the actor Durable Object', () => {
 
   test('one transient boot failure does not poison the isolate', async () => {
     const actor = actorObject();
-    // One armed failure at the storage seam, then a healthy database: the
-    // shape a transient DO storage error leaves. The pre-fix caches held the
-    // rejection at three layers, so every retry re-awaited the same corpse
-    // while resetting the eviction timer that was the only recovery path.
+    // One armed failure at the storage seam, then a healthy database: a cached rejection must not be re-awaited.
     const realExec = actor.ctx.storage.sql.exec.bind(actor.ctx.storage.sql);
     let failures = 0;
     Object.assign(actor.ctx.storage.sql, {
@@ -338,12 +262,9 @@ describe('the hosted workspace lives in the actor Durable Object', () => {
       previewUrl: async () => ({ unavailable: 'no preview host in this test' }),
     });
 
-    // Armed AFTER construction: the boot is lazy, so the first operation is
-    // what meets the failure.
+    // Armed after construction: the boot is lazy.
     failures = 1;
     await expect(workspace.bundle.vfs.exists('SOUL.md')).rejects.toThrow(/transient storage failure/);
-    // The SAME workspace object, retried: the boot re-attempts instead of
-    // re-awaiting the cached rejection.
     await workspace.bundle.vfs.writeFile('recovered.txt', 'alive');
     expect(await workspace.bundle.vfs.readFile('recovered.txt', { encoding: 'utf8' })).toBe('alive');
   });
@@ -370,8 +291,6 @@ describe('the hosted workspace lives in the actor Durable Object', () => {
     const capability = 'abcdef0123456789abcdef01';
     kv.set('nimbus_preview_capability:3000', { capability, owner: 'slate-a' });
 
-    // An owned URL names its slate: the owner is re-driven before the route,
-    // and with nothing listening after that, Nimbus's own answer is the 404.
     const routed = await workspace.routePreview(
       3000, capability.slice(0, 10), new Request('https://preview.test/'), '/',
     );
@@ -385,8 +304,7 @@ describe('the hosted workspace lives in the actor Durable Object', () => {
 
     expect(unknown.status).toBe(404);
 
-    // And a handle that does not match the persisted capability is a plain
-    // 404 too — a forged link never re-drives anything.
+    // A forged handle never re-drives anything.
     const forged = await workspace.routePreview(
       3000, 'ffffffffff', new Request('https://preview.test/'), '/',
     );
@@ -394,8 +312,7 @@ describe('the hosted workspace lives in the actor Durable Object', () => {
     expect(forged.status).toBe(404);
     expect(redriven).toEqual(['slate-a']);
 
-    // An owner whose tree is gone refuses `missing`, which is the 404 the URL
-    // answers; every other refusal is a retryable 503 carrying it verbatim.
+    // `missing` is the 404; every other refusal is a retryable 503 carrying it verbatim.
     refusal = { reason: 'missing', error: 'gone' };
     expect((await workspace.routePreview(
       3000, capability.slice(0, 10), new Request('https://preview.test/'), '/',
@@ -466,8 +383,6 @@ describe('the hosted workspace lives in the actor Durable Object', () => {
       handleHttpRequest: async (request) => Response.json({ invocation: request.headers.get('x-slate-call') }),
     });
 
-    // The visitor's forged value is dropped and the host's own name replaces it,
-    // so bindings kept from this request stop resolving the moment it settles.
     const response = await workspace.routePreview(3000, capability.slice(0, 10), new Request('https://preview.test/', {
       headers: { 'x-slate-call': 'forged-invocation' },
     }), '/');
@@ -488,9 +403,6 @@ describe('the hosted workspace lives in the actor Durable Object', () => {
       previewUrl: async (_port, capability) => ({ url: 'https://preview.test/' + capability }),
     });
 
-    // The reservation is the slate host's act: an owner declares its port and
-    // is handed the capability its URL carries, before any process binds it.
-    // The owner is the identity the manager derives for the listener below.
     const first = activate();
     const ownerA = await derivedOwner(first, ['A']);
     const app = await first.apps.ensure({ owner: ownerA, preferredPort: 20000 });
@@ -498,39 +410,25 @@ describe('the hosted workspace lives in the actor Durable Object', () => {
     const handle = app.capability.slice(0, 10);
     await listen(first, 20000, ['A'], { handleHttpRequest: async () => new Response('caller A') });
     expect(await (await first.routePreview(20000, handle, new Request('https://preview.test/'), '/')).text()).toBe('caller A');
-    // A new activation rebuilds the same owner at the same port: the
-    // reservation names that owner, so its registration re-adopts the stored
-    // capability and the URL answers again.
     const sameOwner = activate();
     await listen(sameOwner, 20000, ['A'], { handleHttpRequest: async () => new Response('caller A rebuilt') });
     expect(await (await sameOwner.routePreview(20000, handle, new Request('https://preview.test/'), '/')).text()).toBe('caller A rebuilt');
-    // Another identity binding the port registers ephemeral: the stored
-    // capability is retired, so the URL answers nothing of B's.
     const differentOwner = activate();
     await listen(differentOwner, 20000, ['B'], { handleHttpRequest: async () => new Response('caller B private data') });
     const refused = await differentOwner.routePreview(20000, handle, new Request('https://preview.test/'), '/');
     expect(refused.status).toBe(404);
     expect(await refused.text()).not.toContain('caller B private data');
-    // A third identity is refused it the same way: the reservation still
-    // names A, and the URL answers nothing until A binds again.
     const ordinary = activate();
     await listen(ordinary, 20000, ['Z'], { handleHttpRequest: async () => new Response('ordinary port') });
     expect((await ordinary.routePreview(20000, handle, new Request('https://preview.test/'), '/')).status).toBe(404);
   });
 
   test('a launch a hibernation interrupted is re-driven through the slate host on the next wake', async () => {
-    // VENDOR-FORMAT COUPLING: the journal row seeded below copies worker 0.7's
-    // own `resident-launch:<n>` recipe shape. A worker that changes the row
-    // shape makes the manager ignore the row and this test fail — the right
-    // direction, and the one place to update when the vendor moves.
+    // Vendor-format coupling: the seeded journal row copies worker 0.7's `resident-launch:<n>` recipe shape;
+    // update here when the vendor changes it.
     const actor = actorObject();
     const kv = new Map<string, JsonValue>();
     Object.assign(actor.ctx.storage, durableStorage(kv));
-    // The row the previous incarnation's manager journalled for a slate's
-    // durable application, exactly as `spawnWorker` writes it: a pid of a
-    // generation below this wake's floor, the recipe with no interpreter
-    // resident — an embedder's own worker launch, which re-drives through the
-    // embedder — and the launch still in flight when the object went away.
     kv.set('resident-launch:41', {
       pid: 41, command: 'slate keeper', attempt: 0, phase: 'starting', owner: 'keeper', restart: 'never', port: 20000,
       recipe: {
@@ -550,15 +448,11 @@ describe('the hosted workspace lives in the actor Durable Object', () => {
       },
     });
 
-    // The wake: composing the manager is what drains the journal's recovery,
-    // and every background turn it started is held by the object.
     await workspace.facetManager();
 
     while (actor.held.length > 0) await Promise.all(actor.held.splice(0));
 
     expect(redriven).toEqual(['keeper']);
-    // The row this re-drive was owed on is released: the slate host's own boot
-    // journals the launch it made under a fresh pid.
     expect(kv.has('resident-launch:41')).toBe(false);
   });
 });

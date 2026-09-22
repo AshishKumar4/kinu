@@ -1,5 +1,3 @@
-// Connectable-provider catalog + models.dev catalog wiring through the
-// per-agent registry composition.
 import { describe, test, expect } from 'bun:test';
 import { asFetchFunction } from '@kinu.run/core';
 import { userCredentialSource } from './helpers/user-credentials';
@@ -89,7 +87,6 @@ describe('listProviderCatalog', () => {
     },
   };
 
-  /** The catalog over a stubbed models.dev and the given stored keys. */
   async function listCatalog(storedKeys: string[] = []) {
     const list = storedKeys.map((key) => ({
       key, kind: 'bearer' as const, createdAt: 0, updatedAt: 0,

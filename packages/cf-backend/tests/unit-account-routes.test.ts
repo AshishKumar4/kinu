@@ -1,7 +1,5 @@
-// DELETE /api/user/account at the HTTP boundary: the typed phrase gates the
-// call, the recipients of the account's shares are forgotten BEFORE the
-// object is destroyed, and the SDK's own abort sentinel reads as success while
-// any other failure still reaches the caller.
+// DELETE /api/user/account: share recipients are forgotten before the object is destroyed, and the
+// SDK's abort sentinel reads as success while any other failure reaches the caller.
 import { describe, expect, test } from 'bun:test';
 import * as v from 'valibot';
 import { handleAccountRequest, type AccountRoutesEnv } from '../src/user/account-routes';
@@ -19,9 +17,7 @@ const DeletedSchema = v.object({ deleted: v.literal(true) });
 
 const ErrorSchema = v.object({ error: v.string() });
 
-/** The two UserDO calls the delete route makes, recorded in order, plus the
- *  roster read `forgetSharesGiven` walks — empty here, because the recipients
- *  half is a walk over workspace objects this test does not build. */
+/** Roster empty: the recipients half walks workspace objects this test does not build. */
 function setup(deleteOutcome: 'ok' | 'destroyed' | 'io') {
   const calls: string[] = [];
 
@@ -31,10 +27,8 @@ function setup(deleteOutcome: 'ok' | 'destroyed' | 'io') {
 
   const userDO: AccountRoutesEnv<string>['UserDO'] extends ObjectNamespace<string, infer Stub>
     ? Stub : never = {
-    // The account routes the delete path does not take.
     completeOnboarding: refuse('completeOnboarding'),
     setDisplayName: refuse('setDisplayName'),
-    // The ownership gate's two, reached only for a workspace the roster names.
     hasWorkspace: refuse('hasWorkspace'),
     ensureWorkspaceCapability: refuse('ensureWorkspaceCapability'),
     sharesReceived_forget: refuse('sharesReceived_forget'),
@@ -62,8 +56,6 @@ function setup(deleteOutcome: 'ok' | 'destroyed' | 'io') {
   const env: AccountRoutesEnv<string> = {
     UserDO: { idFromName: (name) => name, get: () => userDO },
     CREDENTIAL_ENCRYPTION_KEY: TEST_CREDENTIAL_ENCRYPTION_KEY,
-    // The share sweep addresses a workspace object only for a roster row, and
-    // the roster is empty in every case here.
     OrchestratorAgent: unreachableNamespace('OrchestratorAgent'),
   };
 

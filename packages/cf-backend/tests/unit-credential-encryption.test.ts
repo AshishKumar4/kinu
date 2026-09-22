@@ -1,13 +1,5 @@
-// Behavior tests for encryption at rest in the credential store.
-//
-// Contract under test:
-//   - what lands in SQLite is a sealed envelope, never the secret
-//   - the round trip is transparent to every credential consumer
-//   - a row sealed for one credential cannot be replayed as another
-//   - rows written before encryption existed keep working, and stop being
-//     plaintext on first access
-//   - a key rotation re-seals the store; the retired key stays readable
-//   - no key configured is a refusal, not a silent plaintext fallback
+// Credential store encryption at rest: sealed envelopes bound to their credential, legacy plaintext re-sealed on
+// access, rotation keeps the retired key readable, and no key is a refusal, never a plaintext fallback.
 import { testOwner } from './helpers/user-do';
 import { describe, expect, test } from 'bun:test';
 import * as v from 'valibot';
@@ -20,7 +12,6 @@ import { renderThrownChain } from '@kinu.run/core/obs';
 import { present } from '@kinu.run/test-utils';
 import { handleUserProviderProxyRequest } from '../src/user/provider-proxy';
 
-/** The owner capability of a deployment whose key has been rotated. */
 const rotatedOwner = () => ownerCaller({ CREDENTIAL_ENCRYPTION_KEY: NEXT_KEY });
 
 const NEXT_KEY = 'a-different-credential-encryption-key-9876';
@@ -85,7 +76,6 @@ describe('the credential store is sealed at rest', () => {
 
   test('a row that opens and does not decode rejects without quoting what it holds', async () => {
     const harness = createTestUserDO();
-    // Any gated call brings the schema up before the rows are written.
     await harness.userDO.listCredentials(await testOwner());
     const cipher = await createCredentialCipher({ CREDENTIAL_ENCRYPTION_KEY: TEST_CREDENTIAL_ENCRYPTION_KEY });
 
@@ -141,7 +131,6 @@ describe('the credential store is sealed at rest', () => {
 describe('migration and rotation', () => {
   test('a plaintext row written before encryption keeps working and stops being plaintext', async () => {
     const harness = createTestUserDO();
-    // A plaintext row: the JSON credential stored verbatim, unsealed.
     sqlExec(harness.db).exec(`
       CREATE TABLE IF NOT EXISTS user_credentials (
         key TEXT PRIMARY KEY, kind TEXT NOT NULL, value TEXT NOT NULL,
@@ -211,9 +200,7 @@ describe('migration and rotation', () => {
 
 describe('the key is not optional', () => {
   test('no key configured refuses the call instead of storing plaintext', async () => {
-    // The same missing secret also denies the owner capability, so the refusal
-    // lands at the gate rather than at the cipher — either way, nothing is
-    // written and the message names the key.
+    // The missing secret also denies the owner capability, so the refusal lands at the gate.
     const harness = createTestUserDO({ credentialEncryptionKey: '' });
     await expect(harness.userDO.setCredential(await testOwner(), 'openai.bearer', { kind: 'bearer', token: 'sk-x' }))
       .rejects.toThrow('CREDENTIAL_ENCRYPTION_KEY');
@@ -227,12 +214,8 @@ describe('the key is not optional', () => {
 });
 
 describe('MCP server headers are sealed too', () => {
-  /** A registered server, written the way userMcp_add writes one. Going
-   *  through userMcp_add itself is not possible here: it rolls its row back
-   *  when the live transport cannot be registered, and this harness has no MCP
-   *  SDK behind it. `userMcp_update` is the same seal on the same column. */
+  /** Written like userMcp_add, which would roll back here: this harness has no MCP SDK. */
   async function seedServer(harness: ReturnType<typeof createTestUserDO>, id: string): Promise<void> {
-    // Any gated call brings the real schema up before the row is written.
     await harness.userDO.userMcp_list(await testOwner());
     sqlExec(harness.db).exec(
       `INSERT INTO user_mcp_servers (id, name, server_url, transport, headers, allowed_tools, created_at, updated_at)
@@ -294,7 +277,6 @@ describe('a sealed value is bound to the store it was written in', () => {
     const sealed = present(storedValue(mine, 'openai.bearer'), 'the sealed openai.bearer row');
     mine.close();
 
-    // Same deployment, same encryption key, different UserDO.
     const theirs = createTestUserDO({ durableObjectId: 'user-b' });
     sqlExec(theirs.db).exec(`
       CREATE TABLE IF NOT EXISTS user_credentials (

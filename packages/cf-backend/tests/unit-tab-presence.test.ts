@@ -1,13 +1,6 @@
 /**
- * The gated right-pane tabs — Releases and Swarms earn their place only
- * when they have content (`surfaceHasContent`, the predicate the tab strip
- * filters through), and a reader left on one whose content just emptied must
- * not be stranded on a tab that no longer renders (`resolveGatedSurface`
- * falls back to the default surface).
- *
- * These are the two seams the component consumes; the rendered strip itself
- * is proved in the browser against the gallery's fresh-workspace and
- * with-content frames.
+ * Gated right-pane tabs appear only with content (`surfaceHasContent`), and a reader on one that just
+ * emptied falls back to the default surface (`resolveGatedSurface`). The rendered strip is proved in the browser.
  */
 import './helpers/ui-module-globals';
 import { describe, expect, test } from 'bun:test';
@@ -133,7 +126,6 @@ describe('Slate tab presence', () => {
 
 describe('an active tab whose content vanishes falls back', () => {
   test('the fallback lands on the first surface that still has content', () => {
-    // Work empty → Files; Work live → Work.
     expect(resolveGatedSurface('Releases', { tabPresence: FRESH, mctsTrees: EMPTY_TREES, slates: [] })).toBe('Files');
     expect(resolveGatedSurface('Releases', { tabPresence: { ...FRESH, work: true }, mctsTrees: EMPTY_TREES, slates: [] })).toBe('Work');
     expect(resolveGatedSurface('Swarms', { tabPresence: FRESH, mctsTrees: EMPTY_TREES, slates: [] })).toBe('Files');
@@ -144,8 +136,7 @@ describe('an active tab whose content vanishes falls back', () => {
   });
 
   test('ungated surfaces are never moved', () => {
-    // Diffs is not ungated — it renders only while a mounted diff tree
-    // exists (`hasDiffs`), the one gate the lane counts cannot carry.
+    // Diffs renders only while a mounted diff tree exists (`hasDiffs`), a gate lane counts cannot carry.
     for (const surface of ['Files', 'Agent', 'Environment'] as const) {
       expect(resolveGatedSurface(surface, { tabPresence: FRESH, mctsTrees: EMPTY_TREES, slates: [] })).toBe(surface);
     }
@@ -163,10 +154,7 @@ describe('an active tab whose content vanishes falls back', () => {
 });
 
 describe('the presence read over real ledgers', () => {
-  // `getWorkspaceTabPresence` is the server half of the strip's gate: the
-  // component's `work` flag is its answer, so each case below writes the row a
-  // real surface would leave and reads the RPC itself — not the predicate's
-  // fixtures, which cannot see a wiring miss between the ledgers and the call.
+  // Reads the RPC itself, not predicate fixtures, which cannot see a wiring miss between the ledgers and the call.
 
   test('a fresh workspace has no work to show', async () => {
     const { agent } = orchestratorHarness();

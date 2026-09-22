@@ -1,10 +1,5 @@
-// Behaviour of POST /api/feedback: how much of a body it will read, what it
-// refuses, what it stores, and what it cleans up when the store and the row
-// disagree.
-//
-// The policy is driven through its injected effects rather than through a
-// Worker, so every arm — including "R2 took the bytes and the row write then
-// failed", which no live deployment will reproduce on demand — is reachable.
+// POST /api/feedback, driven through its injected effects so every arm is reachable, including
+// "R2 took the bytes and the row write then failed", which no live deployment reproduces on demand.
 import { describe, test, expect, afterEach } from 'bun:test';
 import * as v from 'valibot';
 import { deflateSync } from 'node:zlib';
@@ -30,7 +25,6 @@ const ME: AuthIdentity = { userId: 'user-7', email: 'me@example.com', sub: 'sub-
 
 const URL_ = `https://kinu.run${FEEDBACK_ENDPOINT}`;
 
-// ── a real PNG, built rather than pasted ───────────────────────────────────
 function crc32(bytes: Uint8Array): number {
   let c = 0xffffffff;
 
@@ -53,7 +47,7 @@ function chunk(type: string, data: readonly number[]): number[] {
   return [...be32(data.length), ...typed, ...data, ...be32(crc32(new Uint8Array([...typed, ...data])))];
 }
 
-/** A decodable 2x2 image, optionally carrying metadata chunks to be stripped. */
+/** Optionally carries metadata chunks to be stripped. */
 function realPng(extra: number[][] = []): Uint8Array<ArrayBuffer> {
   const raw: number[] = [];
 
@@ -72,15 +66,13 @@ function realPng(extra: number[][] = []): Uint8Array<ArrayBuffer> {
   ]);
 }
 
-// ── the injected effects ───────────────────────────────────────────────────
 interface Recorder {
   deps: FeedbackDeps;
   objects: Map<string, Uint8Array>;
   deleted: string[];
   rows: FeedbackRecord[];
   marks: FeedbackMarker[];
-  /** Every question put to the ownership authority, in order. Empty is a claim
-   *  in itself: a report that names no workspace must ask nothing. */
+  /** Empty is a claim: a report naming no workspace must ask nothing. */
   asked: { userId: string; workspace: string }[];
 }
 
@@ -89,11 +81,8 @@ function recorder(options: {
   rowError?: string;
   deleteThrows?: boolean;
   putThrows?: boolean;
-  /** The workspaces this reporter owns. Absent means every name they send is
-   *  theirs, so a test that is not about attribution reads as it did before the
-   *  gate existed; a test that IS about it names the registry it wants. */
+  /** Absent: every name sent is theirs, so tests not about attribution need no registry. */
   owns?: readonly string[];
-  /** The authority could not answer at all. */
   authorityDown?: string;
 } = {}): Recorder {
   const objects = new Map<string, Uint8Array>();
@@ -148,7 +137,6 @@ function recorder(options: {
   return { deps, objects, deleted, rows, marks, asked };
 }
 
-/** What `POST /api/feedback` answers with, parsed rather than asserted. */
 const ReplySchema = v.object({ id: v.optional(v.string()), error: v.optional(v.string()) });
 
 function submit(fields: {
@@ -157,14 +145,10 @@ function submit(fields: {
   workspace?: string;
   annotated?: string;
   screenshot?: Blob;
-  /** A STRING sent under the screenshot field's name — a caller putting
-   *  something other than a file where the file goes. Separate from
-   *  `screenshot` so neither case has to be told apart at runtime. */
+  /** A string sent under the screenshot field's name, where a file belongs. */
   screenshotText?: string;
-  /** The part's filename. Load-bearing, not decoration: the multipart parser
-   *  derives `File.type` from this extension rather than from the part's own
-   *  Content-Type header (measured 2026-08-24), which is exactly why the
-   *  byte-level check and not the declared type is the gate. */
+  /** Load-bearing: the multipart parser derives `File.type` from this extension, not the part's
+   *  Content-Type (measured 2026-08-24), which is why the byte-level check is the gate. */
   filename?: string;
   headers?: Record<string, string>;
 }): Request {
@@ -197,12 +181,7 @@ function pngPart(bytes: Uint8Array<ArrayBuffer>): Blob {
 }
 
 /**
- * One multipart body as BYTES, padded to exactly `total`.
- *
- * Assembled by hand rather than through `FormData`, because these tests are
- * about the SIZE of a body and a body assembled for you is one whose length you
- * can only measure afterwards. Every byte here is ASCII, so the encoded length
- * is the string length and `total` means what it says.
+ * Built by hand rather than via `FormData` because these tests are about body size; all ASCII, so `total` is exact.
  */
 function rawMultipart(total: number) {
   const boundary = '----kinuFeedbackBound';
@@ -218,9 +197,7 @@ function rawMultipart(total: number) {
   };
 }
 
-/** What the producer of a chunked body saw. `reachedEnd` is the load-bearing
- *  one: a bound that answers only after EOF has measured an upload rather than
- *  refused it. */
+/** `reachedEnd`: a bound that answers only after EOF has measured an upload rather than refused it. */
 interface BodySource {
   pulls: number;
   delivered: number;
@@ -229,13 +206,8 @@ interface BodySource {
 }
 
 /**
- * A body that ARRIVES in `sliceSize`-sized pieces, with the producer's own pulls and
- * cancellation observable. A request built over this declares no length, which
- * is the shape a chunked or HTTP/2 upload actually has.
- *
- * `highWaterMark: 0` so `pulls` counts what the CONSUMER asked for. The default
- * strategy pre-fills one chunk the moment the stream is constructed, which reads
- * as the handler having touched a body it never opened.
+ * Arrives in `sliceSize` pieces with no declared length (the shape of a chunked or HTTP/2 upload).
+ * `highWaterMark: 0` so `pulls` counts only consumer reads; the default pre-fills a chunk on construction.
  */
 function chunked(bytes: Uint8Array, sliceSize: number) {
   const source: BodySource = { pulls: 0, delivered: 0, reachedEnd: false, cancelled: false };
@@ -307,15 +279,9 @@ describe('what the endpoint refuses', () => {
 
   test('a declared length too big for one screenshot is refused BEFORE the body is read', async () => {
     const rec = recorder();
-    // The body is a VALID submission that would be accepted on its own, and the
-    // only thing wrong with the request is the stated length. So a 201 here
-    // would mean the handler parsed the body first, and the 413 is the proof it
-    // did not: a header refusal is the difference between rejecting an 8 MiB
-    // upload and buffering it.
+    // The body is valid on its own, so 413 proves the header was refused before parsing.
     const honest = submit({ note: 'this would be accepted' });
-    // Read the header BEFORE consuming the body: the multipart content type is
-    // derived from the FormData, and it does not survive being read inside the
-    // same object literal that consumes it.
+    // Read the header before consuming the body: the content type does not survive being read in the literal that consumes it.
     const contentType = honest.headers.get('content-type') ?? '';
     const bytes = await honest.arrayBuffer();
 
@@ -344,10 +310,7 @@ describe('what the endpoint refuses', () => {
   test('a part NAMED as something other than a PNG is a 415 before its bytes are read', async () => {
     const rec = recorder();
 
-    // Genuine PNG bytes under the filename `screenshot.jpg`. The parser derives
-    // `File.type` from that extension, so this is the reachable form of the
-    // declared-type refusal — and the courtesy it buys is a clear message
-    // instead of "those bytes are corrupt".
+    // PNG bytes named `.jpg`: the parser derives `File.type` from the extension, the reachable form of the declared-type refusal.
     const response = await routeFeedback(
       submit({ note: 'x', screenshot: pngPart(realPng()), filename: 'screenshot.jpg' }), ME, rec.deps);
 
@@ -357,11 +320,7 @@ describe('what the endpoint refuses', () => {
   });
 
   test('the declared type is NOT what protects us — a .png name over JPEG bytes still fails', async () => {
-    // The measured fact this endpoint is built around: a part sent with
-    // `Content-Type: image/jpeg` and the filename `shot.png` comes back from the
-    // multipart parser reporting `image/png`. The declaration is therefore
-    // caller-controlled, and the only thing standing between a forged upload and
-    // storage is the byte-level walk.
+    // The multipart parser reports `image/png` for a part declared `image/jpeg` named `shot.png`: only the byte walk stops a forged upload.
     const rec = recorder();
     const jpegBytes = new Uint8Array([0xff, 0xd8, 0xff, 0xe0, 0x00, 0x10, ...Array.from({ length: 200 }, () => 0x37)]);
     const request = submit({ note: 'x', screenshot: new Blob([jpegBytes], { type: 'image/jpeg' }), filename: 'shot.png' });
@@ -426,8 +385,7 @@ describe('how much of a body it will read', () => {
     const rec = recorder();
     const { contentType, bytes } = rawMultipart(FEEDBACK_MAX_REQUEST_BYTES);
     const request = new Request(URL_, { method: 'POST', headers: { 'content-type': contentType }, body: bytes });
-    // The boundary only means something if the header path is not what let it
-    // through: a byte body carries no `content-length` for a handler to read.
+    // A byte body carries no `content-length`, so the header path is not what let it through.
     expect(request.headers.get('content-length')).toBeNull();
 
     const response = await routeFeedback(request, ME, rec.deps);
@@ -459,15 +417,11 @@ describe('how much of a body it will read', () => {
       new Request(URL_, { method: 'POST', headers: { 'content-type': contentType }, body }), ME, rec.deps);
 
     expect(response?.status).toBe(413);
-    // The whole point. The upload was STOPPED, not measured: EOF never arrived,
-    // the producer was cancelled, and the bytes it never sent are the difference
-    // between refusing an 8 MiB upload and buffering one.
+    // Stopped, not measured: EOF never arrived and the producer was cancelled.
     expect(source.cancelled).toBe(true);
     expect(source.reachedEnd).toBe(false);
     expect(source.delivered).toBeLessThan(bytes.length);
-    // At most the chunk carrying the first excess byte, and no more.
     expect(source.delivered).toBeLessThanOrEqual(FEEDBACK_MAX_REQUEST_BYTES + sliceSize);
-    // And nothing downstream ran: no object, no row, exactly one marker.
     expect(rec.objects.size).toBe(0);
     expect(rec.rows).toEqual([]);
     expect(rec.marks).toHaveLength(1);
@@ -499,7 +453,6 @@ describe('how much of a body it will read', () => {
     }), ME, rec.deps);
 
     expect(response?.status).toBe(413);
-    // Not one pull: a refusal that reads nothing is why the header is checked at all.
     expect(source.pulls).toBe(0);
   });
 
@@ -519,10 +472,7 @@ describe('how much of a body it will read', () => {
     expect(rec.marks).toHaveLength(1);
     expect(rec.marks[0]?.rejectReason).toBe('malformed');
 
-    // The parse failure is RECORDED, and recorded as the caller's. Returned as
-    // `null` it read exactly like an absent form, and it was filed under
-    // `unavailable` — a class that says the platform broke, which would put a
-    // malformed upload into every query for our own outages.
+    // Recorded as the caller's failure: filing it under `unavailable` would put malformed uploads into our outage queries.
     const line = recording.emitted.find((emitted) => emitted.event === 'feedback.body_unparseable');
     expect(line).toBeDefined();
     expect(line?.code).toBe('bad_input');
@@ -581,8 +531,7 @@ describe('what the endpoint stores', () => {
     const rec = recorder();
     const secret = [...new TextEncoder().encode('lat 51.5 lon -0.1')];
     const withExif = realPng([chunk('eXIf', secret), chunk('tEXt', secret)]);
-    // Present going in, so the assertion below is about the strip and not about
-    // a fixture that never carried anything.
+    // Present going in, so the assertion is about the strip.
     expect(Buffer.from(withExif).includes(Buffer.from(secret))).toBe(true);
 
     await routeFeedback(submit({ note: 'x', screenshot: pngPart(withExif) }), ME, rec.deps);
@@ -643,8 +592,7 @@ describe('when the row write fails, the object does not survive it', () => {
     const retained = logs.find((line) => line.event === 'feedback.orphan_retained');
     expect(retained).toBeDefined();
     expect(retained?.fields).toMatchObject({ objectKey: 'feedback/user-7/id-1.png' });
-    // The delete failure must not become the reported cause: the reporter is
-    // told the report was not saved, which is the fact that matters to them.
+    // The delete failure must not become the reported cause: the reporter only needs to know it was not saved.
     expect(rec.marks.at(-1)?.rejectReason).toBe('row_write_failed');
   });
 });
@@ -658,13 +606,11 @@ describe('when the object store refuses the write', () => {
     const response = await routeFeedback(
       submit({ note: 'x', screenshot: pngPart(realPng()) }), ME, rec.deps);
 
-    // NOT a throw. Uncaught, this was a platform 500 with no marker and no row —
-    // a lost report invisible to the rate that exists to count lost reports.
+    // Not a throw: an uncaught one is a 500 with no marker and no row, invisible to the lost-report rate.
     expect(response?.status).toBe(503);
     expect((await replyOf(present(response, 'the feedback response'))).error).toContain('note');
     expect(rec.rows).toEqual([]);
     expect(rec.objects.size).toBe(0);
-    // Nothing to orphan: the object was never written, so nothing is deleted.
     expect(rec.deleted).toEqual([]);
     expect(rec.marks).toHaveLength(1);
     expect(rec.marks[0]).toMatchObject({
@@ -673,8 +619,7 @@ describe('when the object store refuses the write', () => {
       hasScreenshot: true,
     });
     expect(rec.marks[0]?.screenshotBytes).toBeGreaterThan(0);
-    // The key is recorded, because a failed write is the one thing an operator
-    // needs to be able to look for.
+    // The key is recorded: a failed write is what an operator needs to look for.
     const failed = recording.emitted.find((line) => line.event === 'feedback.screenshot_store_failed');
     expect(failed?.fields).toMatchObject({ objectKey: 'feedback/user-7/id-1.png' });
   });
@@ -700,8 +645,7 @@ describe('the analytics marker', () => {
       noteLength: 12,
       annotated: true,
     });
-    // The workspace slug is user-authored text. It must not be anywhere in the
-    // datapoint, under any field.
+    // The workspace slug is user-authored and must appear in no datapoint field.
     expect(JSON.stringify(mark)).not.toContain('secret-project-name');
     expect(JSON.stringify(mark)).not.toContain('twelve chars');
     expect(JSON.stringify(mark)).not.toContain(ME.email);
@@ -709,8 +653,6 @@ describe('the analytics marker', () => {
 
   test('each route becomes its family and nothing finer', async () => {
     const seen: string[] = [];
-    // A distinctive slug, so the last assertion is about the slug and not about
-    // a letter that happens to occur in a family name.
     const slug = 'zzslugzz';
 
     for (const route of ['/', `/workspace/${slug}`, `/mcts/${slug}`, `/settings/${slug}`, '/user/settings', `/triggers/${slug}`]) {
@@ -719,11 +661,8 @@ describe('the analytics marker', () => {
       seen.push(present(rec.marks.at(-1), 'the last analytics mark').routeFamily);
     }
 
-    // Families, never slugs: `/settings/:agent` and `/user/settings` are both
-    // the settings surface, and `/triggers/:agent` has its own family rather
-    // than falling into the bucket that means "we do not know".
+    // Families, never slugs: `/triggers/:agent` has its own family rather than the unknown bucket.
     expect(seen).toEqual(['home', 'workspace', 'explore', 'settings', 'settings', 'triggers']);
-    // The one that matters: no agent name reached the datapoint.
     expect(seen.join(' ')).not.toContain(slug);
   });
 
@@ -740,18 +679,13 @@ describe('the analytics marker', () => {
   });
 
   test('a screenshot-refusal marker says a screenshot was carried, and how big the part was', async () => {
-    // Every arm that refuses a submission WHICH HAD a screenshot. The flag is
-    // not derived from a byte count set only on the accept path: derived that
-    // way, every one of these arms reports `hasScreenshot: false` and zero
-    // bytes, and the screenshot dimensions under-count exactly the population
-    // they describe.
+    // Every refusing arm whose submission had a screenshot: deriving the flag from the accept-path byte count
+    // would report `hasScreenshot: false` and under-count exactly this population.
     const png = realPng();
     const forged = new Uint8Array([0xff, 0xd8, 0xff, 0xe0, ...Array.from({ length: 128 }, () => 0x41)]);
 
     const arms: { request: Request; reason: FeedbackMarker['rejectReason']; bytes: number }[] = [
-      // Named as something else.
       { request: submit({ note: 'x', screenshot: pngPart(png), filename: 'shot.jpg' }), reason: 'bad_content_type', bytes: png.length },
-      // Declared PNG, bytes are not.
       { request: submit({ note: 'x', screenshot: pngPart(forged) }), reason: 'malformed', bytes: forged.length },
     ];
 
@@ -764,7 +698,7 @@ describe('the analytics marker', () => {
       });
     }
 
-    // And the arm that is the deployment's fault rather than the reporter's.
+    // The arm that is the deployment's fault rather than the reporter's.
     const noBucket = recorder({ bucket: false });
     await routeFeedback(submit({ note: 'x', screenshot: pngPart(png) }), ME, noBucket.deps);
     expect(noBucket.marks[0]).toMatchObject({
@@ -788,17 +722,8 @@ describe('the analytics marker', () => {
 });
 
 /**
- * Who a report is ABOUT.
- *
- * The workspace field is a name the browser read off a URL, so it is a caller's
- * string like any other. A report filed against somebody else's workspace is not
- * an access breach — it grants nothing — it is a false row in the one record
- * triage reads to decide whose problem this is, and an audit trail that says an
- * account filed something it never filed.
- *
- * Every arm below asserts the two things that must be true of a refusal: nothing
- * was STORED, and nothing was DISPATCHED — no object, no row, and a marker that
- * says refused rather than accepted.
+ * The workspace field is a caller's string: a report filed against someone else's workspace grants nothing but is a false triage/audit row.
+ * Every refusal must store nothing and dispatch nothing: no object, no row, a refused marker.
  */
 describe('the workspace a report claims to be about', () => {
   test('a workspace the reporter owns is accepted, and the row carries the authority’s answer', async () => {
@@ -829,15 +754,13 @@ describe('the workspace a report claims to be about', () => {
     expect(response?.status).toBe(403);
     expect((await replyOf(present(response, 'the feedback response'))).error).toMatch(/not one of yours/u);
     expect(rec.rows).toEqual([]);
-    // The gate runs BEFORE the bytes are stored, so a refused report never pays
-    // for an object that would then have to be cleaned up.
+    // The gate runs before the bytes are stored, so a refused report leaves no object to clean up.
     expect(rec.objects.size).toBe(0);
     expect(rec.deleted).toEqual([]);
     expect(rec.marks).toHaveLength(1);
     expect(rec.marks[0]).toMatchObject({
       outcome: 'rejected',
       rejectReason: 'unowned_workspace',
-      // The refusal still says a screenshot was carried, and how big it was.
       hasScreenshot: true,
     });
   });
@@ -845,9 +768,7 @@ describe('the workspace a report claims to be about', () => {
   test('a refused attribution is answered before the screenshot is even read', async () => {
     const rec = recorder({ owns: [], putThrows: true });
 
-    // The store would THROW if it were reached. It is not: the gate runs before
-    // the bytes, so this arm's answer is the attribution refusal rather than the
-    // 503 an unreachable bucket produces.
+    // The store would throw if reached; the gate runs first, so this is the attribution refusal, not a 503.
     const response = await routeFeedback(submit({
       note: 'x', route: '/workspace/theirs', workspace: 'theirs', screenshot: pngPart(realPng()),
     }), ME, rec.deps);
@@ -865,15 +786,13 @@ describe('the workspace a report claims to be about', () => {
       note: 'x', route: '/workspace/checkout-fixes', workspace: 'checkout-fixes',
     }), ME, rec.deps);
 
-    // 503 and not 403: the reporter did nothing wrong, and the report is worth
-    // sending again in a moment.
+    // 503 not 403: the reporter did nothing wrong and can retry.
     expect(response?.status).toBe(503);
     expect((await replyOf(present(response, 'the feedback response'))).error).toMatch(/could not be confirmed/u);
     expect(rec.rows).toEqual([]);
     expect(rec.objects.size).toBe(0);
     expect(rec.marks[0]).toMatchObject({ outcome: 'rejected', rejectReason: 'workspace_unverified' });
-    // Recorded with the cause, because an outage nobody can see is an outage
-    // that reads as reporters getting their attribution wrong.
+    // Recorded with the cause, so an outage does not read as reporters getting attribution wrong.
     const failure = recording.emitted.find((line) => line.event === 'feedback.workspace_unverified');
     expect(failure?.cause).toContain('the registry did not answer');
   });
@@ -883,8 +802,7 @@ describe('the workspace a report claims to be about', () => {
     const response = await routeFeedback(submit({ note: 'the sign-in page is broken', route: '/' }), ME, rec.deps);
 
     expect(response?.status).toBe(201);
-    // The authority is not asked at all: general feedback is not a claim about
-    // anything, and a reporter with no workspaces can still file it.
+    // Not asked: general feedback claims nothing, and a reporter with no workspaces can still file it.
     expect(rec.asked).toEqual([]);
     expect(rec.rows[0]?.workspace).toBeNull();
     expect(rec.marks[0]).toMatchObject({ outcome: 'accepted', rejectReason: '' });
@@ -900,14 +818,8 @@ describe('the workspace a report claims to be about', () => {
 });
 
 /**
- * The seam itself: the adapter in `feedback/routes.ts` that turns the policy's
- * question into a read of the reporter's own registry.
- *
- * Driven through `handleFeedbackRequest` rather than by exporting the adapter,
- * because the thing worth holding is that a REQUEST reaches the registry and
- * that a refusal never gets past it. The deployment here has no control plane,
- * so an accepted attribution ends at the row write — which is exactly how this
- * suite tells "got past the gate" from "was refused by it".
+ * The `feedback/routes.ts` adapter, driven through `handleFeedbackRequest`. With no control plane here,
+ * an accepted attribution ends at the row write: that is how "got past the gate" is told from "refused".
  */
 function registryEnv(options: { owns?: readonly string[]; throws?: string; secret?: boolean }) {
   const asked: { caller: UserCaller; workspace: string }[] = [];
@@ -924,9 +836,7 @@ function registryEnv(options: { owns?: readonly string[]; throws?: string; secre
     },
   };
 
-  // No bucket, no analytics dataset and no control plane: a note-only
-  // deployment, which is what makes `hasControlPlane` refuse the row write the
-  // assertions below read as "got past the gate".
+  // Note-only deployment: `hasControlPlane` refuses the row write, which the assertions read as "got past the gate".
   const env: FeedbackEnv<string> = {
     UserDO: {
       idFromName(name: string) {
@@ -938,8 +848,7 @@ function registryEnv(options: { owns?: readonly string[]; throws?: string; secre
     },
   };
 
-  // A deployment without the root secret is a real state, and the one that
-  // proves an unanswerable question is answered as an outage.
+  // A deployment without the root secret is real, and proves an unanswerable question is answered as an outage.
   if (options.secret !== false) env.CREDENTIAL_ENCRYPTION_KEY = 'test-root-secret';
 
   return { env, asked, ids };
@@ -960,23 +869,17 @@ describe('asking the reporter’s own registry', () => {
     const response = await fileAgainst(env, 'checkout-fixes');
 
     expect(asked.map((one) => one.workspace)).toEqual(['checkout-fixes']);
-    // The reporter's OWN registry: the namespace is addressed by their user id,
-    // so a name a stranger sends can only ever reach their own rows.
+    // Addressed by the reporter's user id, so a stranger's name can only reach their own rows.
     expect(ids).toEqual([ME.userId]);
-    // The OWNER capability and not a workspace token: `UserCaller` is one or the
-    // other, and which one it is decides what the registry will answer at all.
+    // The owner capability, not a workspace token: it decides what the registry answers at all.
     expect(Object.keys(asked[0]?.caller ?? {})).toEqual(['ownerToken']);
-    // Past the gate and into the commit point, which this deployment has no
-    // control plane for. Not a 403 and not a 503 is the claim.
     expect(response.status).toBe(500);
   });
 
   test('a name the registry does not hold is refused, whoever else holds it', async () => {
     const { env, asked } = registryEnv({ owns: ['checkout-fixes'] });
     const absent = await fileAgainst(env, 'no-such-workspace');
-    // The read is scoped to the reporter's own registry, so "somebody else's"
-    // and "nobody's" are not two answers here — they are the same missing row,
-    // and the endpoint therefore enumerates nothing for a caller sending names.
+    // Scoped to the reporter's registry: "somebody else's" and "nobody's" are the same missing row, so nothing is enumerated.
     const theirs = await fileAgainst(env, 'owned-by-another');
     expect([absent.status, theirs.status]).toEqual([403, 403]);
     expect(await replyOf(absent)).toEqual(await replyOf(theirs));
@@ -986,9 +889,7 @@ describe('asking the reporter’s own registry', () => {
   test('a name the registry could never hold is refused without asking it', async () => {
     const { env, asked } = registryEnv({ owns: ['checkout-fixes'] });
 
-    // Path traversal, spaces, and a name past the 64-character bound: none of
-    // these is a workspace name, and `hasWorkspace` THROWS on each. Asking would
-    // turn a caller's typo into something no caller can tell from an outage.
+    // None is a workspace name and `hasWorkspace` throws on each; asking would make a typo indistinguishable from an outage.
     for (const name of ['../secrets', 'has spaces', 'w'.repeat(65), 'semi;colon']) {
       expect((await fileAgainst(env, name)).status).toBe(403);
     }
@@ -1006,8 +907,7 @@ describe('asking the reporter’s own registry', () => {
   test('a deployment with no owner capability cannot ask, and says so', async () => {
     const { env, asked } = registryEnv({ owns: ['checkout-fixes'], secret: false });
     const response = await fileAgainst(env, 'checkout-fixes');
-    // The registry is never reached: there is no capability to ask with. That is
-    // our configuration, so it is a 503 and not the reporter's 403.
+    // No capability to ask with: our configuration, so 503, not the reporter's 403.
     expect(response.status).toBe(503);
     expect(asked).toEqual([]);
   });
@@ -1018,7 +918,6 @@ describe('asking the reporter’s own registry', () => {
     const response = await handleFeedbackRequest(
       submit({ note: 'the sign-in page is broken', route: '/' }), env, ME);
 
-    // Past the gate, into the same absent control plane.
     expect(response?.status).toBe(500);
     expect(asked).toEqual([]);
     expect(ids).toEqual([]);

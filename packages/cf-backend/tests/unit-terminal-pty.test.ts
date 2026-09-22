@@ -1,17 +1,6 @@
 /**
- * The terminal's lifecycle at the seam a user actually reaches: attach, write,
- * resize, keepalive, close — and what a sleeping container does to each.
- *
- * The PTY itself belongs to the sandbox SDK (a `Bun.Terminal` in the container,
- * binary frames over one WebSocket, `{type:'resize'}` control frames). What is
- * OURS, and what these tests govern, is everything around it: which
- * environments may have a terminal at all and what each one that may not is
- * missing, that a shell is never opened onto a container whose /workspace has
- * not attached, that the geometry a query string carries is bounded before it
- * reaches the terminal, and that an attached terminal moves the DURABLE lease
- * the container's heartbeat reads — because the SDK's own activity clock is
- * renewed by proxied frames and that clock is not the one that decides whether
- * the container may stop.
+ * Terminal lifecycle at the route seam: which environments get a terminal, no shell before /workspace attaches,
+ * bounded geometry, and an attached terminal moving the durable lease (the SDK's activity clock does not decide stop).
  */
 
 import { describe, expect, test } from 'bun:test';
@@ -25,51 +14,34 @@ import { mockAgentsSdk } from './helpers/agents-sdk';
 import { jsrpcStub } from './helpers/jsrpc-stub';
 import { installSandboxSdkMock } from './helpers/sandbox-sdk';
 
-// The route's module graph reaches the Sandbox SDK at import. No case here
-// resolves a container through it any more — the route is handed its
-// resolutions — so the shared stand-in is installed for the import alone and
-// no suite-local double is pointed at it.
+// The route's module graph reaches the Sandbox SDK at import; the stand-in is for the import alone.
 await installSandboxSdkMock();
 
-// The route imports `getAgentByName` from `agents`, whose module graph reaches
-// `cloudflare:email`. One shared mock, then the dynamic import — the ordering
-// every cf-backend route test uses.
+// `agents` reaches `cloudflare:email`: mock first, then the dynamic import.
 mockAgentsSdk();
 
 const { handleTerminalRequest } = await import('../src/terminal-route');
 
 import type { TerminalRouteDeps, TerminalWorkspace } from '../src/terminal-route';
 
-/** The vocabulary a person is never shown: our primitives, our transports, our
- *  missing methods. Read by the label case and by the route's refusal body. */
+/** Vocabulary a person is never shown: our primitives, transports, missing methods. */
 const FORBIDDEN_IN_COPY = /pty|pseudo-terminal|JSON-RPC|daemon|Nimbus|startProcess|stdin|resize|socket/i;
 
 interface PtySize { cols?: number; rows?: number; shell?: string }
 
 interface TerminalDouble {
   noteTerminalActivity(): Promise<void>;
-  /** The container's shell restart. No case here drives it: the reset verb
-   *  this suite exercises is the workspace lane's guard, which answers before
-   *  a container is reached. */
   deleteSession(sessionId: string): Promise<{ success: boolean }>;
   getSession(sessionId: string): Promise<{ terminal(request: Request, options?: PtySize): Promise<Response> }>;
 }
 
-/** What the container and the workspace were asked to do, in order. The order
- *  is the contract: a PTY opened before the workspace attached is a shell onto
- *  the wrong disk, and one opened before egress is installed is a shell with no
- *  network. */
+/** Order is the contract: a PTY before the workspace attached is a shell onto the wrong disk, before egress one with no network. */
 interface Trace {
   readonly calls: string[];
-  /** The `PtyOptions` the SDK was handed on the last attach, if any. */
   options: PtySize | undefined;
-  /** The upgrade request the SDK was handed, if any. */
   request: Request | undefined;
-  /** The upgrade the workspace object was handed for its own shell, if any. */
   forwarded: Request | undefined;
-  /** The session the PTY was opened in. A user's terminal must not land in the
-   *  agent's own exec session, where one long agent command would swallow the
-   *  user's keystrokes. */
+  /** Must not be the agent's exec session, where one long agent command would swallow keystrokes. */
   session: string | undefined;
 }
 
@@ -78,13 +50,7 @@ interface Harness {
   readonly trace: Trace;
 }
 
-/**
- * A workspace whose container answers, unless a failure is asked for.
- *
- * The container double is a `jsrpcStub`: a real binding hands back an object
- * whose methods are not own enumerable properties, and an object literal is the
- * shape that let four production TypeErrors pass their tests.
- */
+/** The container double is a `jsrpcStub`: real binding methods are not own enumerable properties. */
 function harness(opts: {
   prepare?: () => Promise<{ ok: true } | { error: string }>;
   lease?: () => Promise<void>;
@@ -112,18 +78,13 @@ function harness(opts: {
 
           return opts.attach
             ? await opts.attach()
-            // A 101 cannot be constructed without a real WebSocketPair, so the
-            // double answers with a body that proves the SDK's response is the
-            // one the route returns unchanged.
+            // A 101 needs a real WebSocketPair; this body proves the SDK response is returned unchanged.
             : new Response('pty-socket', { status: 200 });
         },
       };
     },
   });
 
-  // `getAgentByName` resolves through the namespace binding, so the workspace
-  // double is reached exactly the way production reaches it — through a stub
-  // whose methods are not own enumerable properties.
   const agent = jsrpcStub<TerminalWorkspace>({
     prepareTerminal: async (executorId: string) => {
       trace.calls.push(`prepareTerminal:${executorId}`);
@@ -136,23 +97,13 @@ function harness(opts: {
 
       return new Response('workspace-socket', { status: 200 });
     },
-    /** The machine's own shell. The device lane is not driven by this suite,
-     *  and a container case that reached it would be addressing the wrong
-     *  executor. */
     openDeviceTerminal: () => { throw new Error('openDeviceTerminal: the device lane is not driven by this suite'); },
   });
 
-  // The doubles are deliberately NOT the bindings they stand in for: a fake
-  // `idFromName` returning the name can never satisfy `DurableObjectId`, and
-  // `jsrpcStub`'s prototype-bound methods can never satisfy
-  // `DurableObjectStub`. The route asks for the two RESOLUTIONS instead, which
-  // is what a test can answer — the SDK calls behind them are the entry's
-  // (`terminalRouteDeps`) and are not this suite's to restate.
+  // Fakes cannot satisfy `DurableObjectId`/`DurableObjectStub`, so the route takes the two resolutions instead.
   return {
     deps: {
       resolveWorkspace: async () => agent,
-      // The `sandboxBound: false` arm omits the container deliberately and
-      // pins the 503 that omission produces.
       resolveSandbox: () => opts.sandboxBound === false ? null : container,
       UserDO: {
         idFromName: () => { throw new Error('UserDO.idFromName: the device lane is not driven by this suite'); },
@@ -165,8 +116,7 @@ function harness(opts: {
 
 const WORKSPACE = 'kinu-main';
 
-/** Ordinary route calls do not leave background work; the abandonment case below
- * supplies its own recorder so it can prove cleanup survives the response. */
+/** The abandonment case supplies its own recorder to prove cleanup survives the response. */
 function executionContext(): Pick<ExecutionContext, 'waitUntil'> {
   return { waitUntil: () => {} };
 }
@@ -194,10 +144,6 @@ async function body(response: Response | null | undefined) {
   return v.parse(payloadSchema, await response.json());
 }
 
-/** What `run` answered AND what the diagnostic sink was told while it ran.
- *  Both from one seam: a case asserts the client's answer as well as the fleet
- *  row, and returning the value is what keeps the response properly typed
- *  instead of assigned out through a widened binding. */
 async function recorded<T>(run: () => Promise<T>): Promise<{
   readonly value: T;
   readonly logs: readonly RecordedLog[];
@@ -222,18 +168,8 @@ describe('which environments can have a terminal', () => {
     expect(terminalLane('workspace')).toEqual({ mode: 'shell' });
   });
 
-  // THE CONTRACT CHANGED HERE, and this case is what enforces the new one.
-  // Until 2026-09-02 a line lane carried a `missing` sentence and the pane
-  // printed it, so the bar read "the device daemon's JSON-RPC surface has no
-  // pty method …" next to the mode. The owner's product rule forbids that: a
-  // label states what a person is in, never our missing methods. So the lane
-  // carries a mode and nothing else, and there is no field a sentence can
-  // reach the screen through.
-  //
-  // `device` left this list on 2026-09-03, when the machine's own agent grew a
-  // real terminal, and `workspace` on 2026-09-21, when the hosted runtime's
-  // shell was wired through. The lane table states what an ENVIRONMENT can
-  // give; whether one is reachable right now is the route's preflight.
+  // Product rule: a lane label states what a person is in, never our missing methods, so a lane carries a mode only.
+  // The lane table states what an environment can give; reachability is the route's preflight.
   test.each(['parent', 'something-invented'])(
     '%s is line mode, and its lane carries no sentence to render',
     (executor) => {
@@ -263,9 +199,7 @@ describe('attaching a terminal', () => {
     const response = await terminalRequest(attachRequest('executor=sandbox&cols=120&rows=40'), deps);
     expect(response?.status).toBe(200);
     expect(await response?.text()).toBe('pty-socket');
-    // prepareTerminal is the sandbox lane's own preflight (egress installed
-    // with this workspace's grants, /workspace attached). It has to be settled
-    // before the PTY exists, and the lease has to be stamped before the socket
+    // Preflight (egress, /workspace) settles before the PTY exists, and the lease is stamped before the socket
     // is handed over, or the first heartbeat can stop the container under it.
     expect(trace.calls).toEqual(['prepareTerminal:sandbox', 'noteTerminalActivity', 'getSession', 'terminal']);
   });
@@ -273,11 +207,8 @@ describe('attaching a terminal', () => {
   test('the shell is the user\'s own session, not the one the agent execs in', async () => {
     const { deps, trace } = harness();
     await terminalRequest(attachRequest('executor=sandbox'), deps);
-    // A named session, and a STABLE one: a reload has to land on the shell that
-    // is already running so the container replays its buffer into it. The SDK's
-    // default session (`sandbox-<id>`) is the agent's exec lane and must not be
-    // it — one session holds one PTY and one foreground process, so sharing it
-    // sends the user's keystrokes into whatever the agent is running.
+    // A stable named session so a reload lands on the running shell; the SDK default session is the agent's
+    // exec lane, and one session holds one PTY and one foreground process.
     expect(trace.session).toBe('kinu-terminal');
     expect(trace.session).not.toContain('sandbox-');
   });
@@ -299,9 +230,7 @@ describe('attaching a terminal', () => {
   test('a shell is never named: the container picks it, and TERM with it', async () => {
     const { deps, trace } = harness();
     await terminalRequest(attachRequest('executor=sandbox'), deps);
-    // No `shell` key at all. `PtyOptions.shell` is spawned as one argv token,
-    // so `bash -l` would be an ENOENT rather than a login shell; the container's
-    // own default is bash and it sets TERM=xterm-256color regardless.
+    // No `shell` key: `PtyOptions.shell` is spawned as one argv token, so `bash -l` would ENOENT.
     expect(trace.options).toEqual({});
     expect(trace.options).not.toHaveProperty('shell');
   });
@@ -327,10 +256,7 @@ describe('attaching a terminal', () => {
         connection: 'Upgrade',
         'sec-websocket-version': '13',
         'sec-websocket-protocol': 'pty',
-        // What a browser and server.ts put on this request in production: the
-        // session cookie the SPA authenticates with, and the identity header the
-        // worker appends for the DO hop. A container runs agent-chosen code, so
-        // neither may reach it.
+        // A container runs agent-chosen code, so neither the session cookie nor the identity header may reach it.
         cookie: '__Host-kinu_session=s3cr3t; other=v',
         authorization: 'Bearer pta_notyours',
         'x-kinu-user-id': 'u_1',
@@ -348,10 +274,7 @@ describe('attaching a terminal', () => {
     ]);
   });
 
-  // One contract in three places, so it is stated once: a GET where the verb
-  // wants something else is refused before anything is touched. An attach
-  // wants an upgrade (400) and a beat wants a POST (405); neither may start a
-  // container on its way to saying so, whichever lane the executor names.
+  // A wrong-verb GET is refused before anything is touched; it must not start a container on its way to saying so.
   test.each([
     { path: 'terminal?executor=sandbox', status: 400 },
     { path: 'terminal?executor=workspace', status: 400 },
@@ -400,7 +323,6 @@ describe('attaching a terminal', () => {
     const response = await terminalRequest(attachRequest('executor=sandbox'), deps);
     expect(response?.status).toBe(503);
     expect(String((await body(response)).error)).toContain('attach overran');
-    // The whole point: no PTY onto a container whose /workspace is not there.
     expect(trace.calls).toEqual(['prepareTerminal:sandbox']);
   });
 
@@ -412,21 +334,8 @@ describe('attaching a terminal', () => {
   });
 });
 
-/**
- * Which failures on this route can be traced back to a workspace.
- *
- * The attach's own failures carried the workspace and the executor; the
- * PREFLIGHT's did not, and the preflight is how a terminal most often fails to
- * open. A readiness refusal was rendered to the pane and recorded nowhere, and a
- * workspace object that could not be reached escaped the handler with no cause
- * chain either. Every case below asserts the pair of tags, because a fleet row
- * for "a terminal did not open" that cannot say WHOSE is a row nobody can act
- * on. The control flow is asserted alongside each one: the diagnostic is an
- * addition to this route, never a change to what it answers or to the order in
- * which the container is touched.
- */
+/** Terminal failures, preflight included, must carry the workspace and executor tags; control flow is unchanged. */
 describe('a terminal failure names the workspace and the executor', () => {
-  /** The `terminal.*` rows one case produced, by event name. */
   function terminalRows(
     logs: readonly RecordedLog[], event: string,
   ): readonly RecordedLog[] {
@@ -444,17 +353,14 @@ describe('a terminal failure names the workspace and the executor', () => {
       async () => await terminalRequest(attachRequest('executor=sandbox'), deps),
     );
 
-    // Unchanged: the pane shows what it always showed.
     expect(response?.status).toBe(503);
     expect(String((await body(response)).error)).toContain('attach overran');
-    // And the fence has not moved: no session, no lease beat, no PTY.
     expect(trace.calls).toEqual(['prepareTerminal:sandbox']);
 
     const notReady = terminalRows(logs, 'terminal.not_ready');
     expect(notReady).toHaveLength(1);
     expect(notReady[0]?.fields).toMatchObject(scope);
-    // The refusal is already a rendered chain from the other side of the RPC, so
-    // it rides as the cause rather than being restated.
+    // The refusal is already a rendered chain from across the RPC, so it rides as the cause.
     expect(notReady[0]?.cause).toContain('attach overran');
   });
 
@@ -467,7 +373,6 @@ describe('a terminal failure names the workspace and the executor', () => {
       async () => await terminalRequest(attachRequest('executor=sandbox'), deps),
     );
 
-    // An answer rather than a throw out of the handler, with the whole chain.
     expect(response?.status).toBe(503);
     expect(String((await body(response)).error)).toContain('not answering');
     expect(trace.calls).toEqual(['prepareTerminal:sandbox']);
@@ -487,9 +392,6 @@ describe('a terminal failure names the workspace and the executor', () => {
       async () => await terminalRequest(attachRequest('executor=sandbox'), deps),
     );
 
-    // The parity assertion. Before this change the preflight and the attach
-    // disagreed about what a terminal failure is correlated by, and the
-    // preflight's answer was "nothing".
     const attach = terminalRows(logs, 'terminal.attach_failed');
     expect(attach).toHaveLength(1);
     expect(attach[0]?.fields).toMatchObject(scope);
@@ -502,10 +404,7 @@ describe('a terminal failure names the workspace and the executor', () => {
       async () => await terminalRequest(attachRequest('executor=parent'), deps),
     );
 
-    // The negative control, and a deliberate boundary: routing to line mode is a
-    // correct refusal the pane renders as a mode. Recording it as a failure would
-    // pool it with the defects above, and a rate that pools a correct refusal
-    // with a defect is worse than no rate.
+    // Line mode is a correct refusal, not a failure: pooling it with defects would make the rate meaningless.
     expect(logs.filter((log) => log.event.startsWith('terminal.'))).toEqual([]);
   });
 });
@@ -520,8 +419,6 @@ describe('line terminal executor switches', () => {
 
     const generation = state.reset();
 
-    // Deleting any reset, or accepting a completion from another generation,
-    // makes one of the assertions below red.
     expect(generation).not.toBe(oldGeneration);
     expect(state.recordOutput('old-output')).toBe(true);
     expect(state.takeCommand()).toBe('');
@@ -532,10 +429,8 @@ describe('line terminal executor switches', () => {
 });
 
 describe('an attached terminal and a container that wants to sleep', () => {
-  // The SDK renews its own activity clock on every frame the container proxy
-  // forwards, but the durable lease that `quiesceStep` reads is only moved by an
-  // operation on the object. So the pane's beat is the ONLY thing that keeps a
-  // container awake for a user who is reading rather than typing.
+  // The SDK renews its activity clock per proxied frame, but `quiesceStep` reads the durable lease, which only an
+  // object operation moves: the pane's beat keeps a reading (not typing) user's container awake.
   test('each beat renews the lease', async () => {
     const { deps, trace } = harness();
 
@@ -595,8 +490,6 @@ describe('the workspace shell', () => {
       headers: { upgrade: 'websocket', 'x-kinu-probe': 'rides-along' },
     }), deps);
 
-    // The object's answer is the route's answer, and the container was never
-    // touched: the shell is the runtime's, not a PTY in a container.
     expect(await response?.text()).toBe('workspace-socket');
     expect(trace.calls).toEqual(['prepareTerminal:workspace', 'fetch']);
     const forwarded = new URL(trace.forwarded?.url ?? '');
@@ -639,14 +532,8 @@ describe('the workspace shell', () => {
   });
 });
 
-// KINU-036. Past the preflight the route had no fence at all: the session and
-// the PTY upgrade were awaited unconditionally, so a client that closed its tab
-// left a shell being opened for nobody, and a container that never answered
-// `/ws/pty` held the request forever. The fix is OWNERSHIP, not a clock — the
-// request that starts an attach owns it, and `request.signal` is the platform's
-// own statement that the owner is gone. An outer deadline would have to be both
-// longer than a cold container start and shorter than an idle tab, which is not
-// one number.
+// KINU-036: the request that starts an attach owns it, and `request.signal` says the owner is gone. No outer
+// deadline: it would have to exceed a cold container start yet undercut an idle tab.
 describe('who owns a terminal attach', () => {
   test('a client already gone opens no session and beats no lease', async () => {
     const { deps, trace } = harness();
@@ -659,17 +546,12 @@ describe('who owns a terminal attach', () => {
 
     expect(response?.status).toBe(503);
     expect(String((await body(response)).error)).toContain('client disconnected');
-    // The preflight ran and is deliberately NOT fenced: the container belongs to
-    // the Durable Object and another attach may already be waiting on that
-    // start. Everything after it creates state for THIS client, so none of it
-    // ran.
+    // The preflight is not fenced: the container belongs to the DO and another attach may be waiting on it.
     expect(trace.calls).toEqual(['prepareTerminal:sandbox']);
   });
 
   test('a client that leaves mid-upgrade gets no shell, and its socket is released', async () => {
-    // Every step is awaited on the signal the code itself produces — the double
-    // entering `terminal()`, the late response, the socket being closed — so
-    // nothing here waits on a clock.
+    // Every step awaits a signal the code produces, never a clock.
     const entered = Promise.withResolvers<void>();
     const held = Promise.withResolvers<Response>();
     const closed = Promise.withResolvers<void>();
@@ -696,7 +578,6 @@ describe('who owns a terminal attach', () => {
 
     await entered.promise;
     expect(trace.calls).toContain('terminal');
-    // The tab closes while the container is still opening the shell.
     controller.abort();
 
     const response = await pending;
@@ -704,8 +585,7 @@ describe('who owns a terminal attach', () => {
     expect(String((await body(response)).error)).toContain('client disconnected');
     expect(retained).toHaveLength(1);
 
-    // The container answers late. Nobody is reading that socket, so this end is
-    // taken and closed rather than left for the edge to reap on idleness.
+    // Nobody reads the late socket, so it is taken and closed rather than left for the edge to reap.
     const late = new Response('pty-socket', { status: 200 });
     Object.defineProperty(late, 'webSocket', {
       value: {
@@ -718,9 +598,7 @@ describe('who owns a terminal attach', () => {
     });
     held.resolve(late);
 
-    // Await the request-retained cleanup rather than a local scheduling accident:
-    // after the response has returned, this is the only promise keeping the
-    // late socket release alive across an isolate turn.
+    // After the response returns, this request-retained promise is what keeps the late socket release alive.
     await retained[0];
     await closed.promise;
     expect(events).toEqual(['accept', 'close:1001:terminal client went away']);

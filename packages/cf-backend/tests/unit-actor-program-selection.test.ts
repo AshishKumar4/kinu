@@ -1,21 +1,6 @@
 /**
- * NOTE ON THE MATRIX. This file has ONE arm, the ROOT's.
- *
- * Every non-root actor is a logical actor whose turns run on one `ActorSession`
- * through the shared runner, so the four non-root kinds are asserted together —
- * with a STRONGER property than a per-kind matrix here would give — in
- * `tests/unit-loop-contract.test.ts`: the pinned version is selected with the
- * live alias POISONED, the claim records `program_version` and
- * `program_digest`, and a promotion does not move a claim already admitted,
- * for root, hired, temporary, head and node.
- *
- * The root's arm is here because it is genuinely different machinery: the
- * workspace root drives Think's own turn loop rather than an `ActorSession`, so
- * nothing in the loop-contract suite covers it — and this file drives a
- * scripted MODEL, so it is the one place the marker is
- * proven to have actually RUN rather than to have been selected. Deleting this
- * arm to "avoid duplication" would delete the only proof of the one path that
- * is not shared, and the only end-to-end execution proof of any of them.
+ * Root arm only: non-root kinds are covered in `tests/unit-loop-contract.test.ts`. The root drives Think's
+ * own loop, and this is the only proof the selected program actually ran; do not delete as a duplicate.
  */
 import { expect, test } from 'bun:test';
 import { scriptedTurnModel } from '@kinu.run/test-utils';
@@ -23,9 +8,6 @@ import { orchestratorHarness, chatSessionTurns } from './helpers/actor-harness';
 import { createSandboxedExecutor } from '../../cli-backend/src/executor';
 import { renderThrownChain } from '@kinu.run/core/obs';
 
-/** A turn that answers with one text part. Neither case here reads the answer —
- *  the selected program writes what the assertions look at — so both stand the
- *  model up the same way and only name what came back differently. */
 function oneTextTurn(text: string) {
   return scriptedTurnModel({ doGenerate: () => ({
     content: [{ type: 'text', text }], finishReason: { unified: 'stop', raw: undefined },
@@ -69,8 +51,7 @@ test('the loop\'s stop halts new selected-program effects and preserves its caus
 
     return result;
   } };
-  // The turn's own abort signal, read off the lease the loop hands the
-  // preparation: what a Stop aborts, and what the program's failure names.
+  // What a Stop aborts, and what the program's failure names.
   const signals: AbortSignal[] = [];
   agent.harnessObserveLease((lease) => { signals.push(lease.signal); });
 
@@ -88,7 +69,6 @@ test('the loop\'s stop halts new selected-program effects and preserves its caus
 
   const running = chatSessionTurns(agent).run('Run until stopped.');
   await started.promise;
-  // The composer's Stop, as the transport dispatches it: the loop's own stop.
   await agent.cancelCurrentWork();
   release.resolve();
   await running;

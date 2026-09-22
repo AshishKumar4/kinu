@@ -1,10 +1,5 @@
-// The hosted `eval` sandbox: what the prelude defines, how a crafted
-// tool is guarded, and what `require()` hands a program.
-//
-// The shim module is the SOURCE the dynamic Worker loads (codemode-node-shim.ts).
-// It is evaluated here for real — written to a file and imported — so these
-// tests run the same JavaScript the sandbox runs, against a fake `workspace`
-// namespace in place of the host dispatcher.
+// The hosted `eval` sandbox's prelude, crafted-tool guards and `require()`. The shim source (codemode-node-shim.ts)
+// is written to a file and imported, so tests run the JavaScript the sandbox runs.
 import { describe, test, expect } from "bun:test";
 import { writeFileSync } from "node:fs";
 import { join } from "node:path";
@@ -14,8 +9,7 @@ import { craftFailureMarker, selectInjectableCraftedTools } from "@kinu.run/core
 import { createTestSql, scratchDir } from "@kinu.run/test-utils";
 import { initCraftedToolsTables } from "@kinu.run/agent-utils/stores";
 import { KINU_NODE_MODULE_NAME, KINU_NODE_MODULE_SOURCE } from "@kinu.run/core";
-// @cloudflare/codemode (the DWE import) needs the workerd-only module, which
-// the preload's boundary stub serves.
+// @cloudflare/codemode needs the workerd-only module, which the preload's boundary stub serves.
 import { renderToolsPrelude } from "../src/codemode-sandbox";
 
 const shimDir = scratchDir("shim");
@@ -24,8 +18,7 @@ const shimPath = join(shimDir, KINU_NODE_MODULE_NAME);
 
 writeFileSync(shimPath, KINU_NODE_MODULE_SOURCE);
 
-// The one dynamic import in this file: the module under test is a string this
-// process wrote a moment ago, so no static specifier can name it.
+// The module under test is a string written moments ago, so no static specifier can name it.
 const shim = await import(shimPath);
 
 function makeCraftStore(tools: Array<{ name: string; code: string; description?: string }>): CraftStore {
@@ -60,9 +53,7 @@ async function rejectionOf(promise: Promise<unknown>): Promise<Error> {
 
 type SandboxMember = (...args: JsonValue[]) => Promise<JsonValue>;
 
-/** The vendor's namespace proxy, as DynamicWorkerExecutor declares it: own
- *  properties win over the host dispatch. Mirrors the vendor source in
- *  `@cloudflare/codemode` (`proxyInits`), minus the RPC crossing. */
+/** Mirrors `proxyInits` in `@cloudflare/codemode`, minus the RPC crossing: own properties win over host dispatch. */
 function vendorProxy(dispatch: (name: string, args: JsonValue[]) => Promise<JsonValue>) {
   const own: Record<string, SandboxMember> = {};
 
@@ -125,9 +116,7 @@ describe("renderToolsPrelude — one guarded definition per crafted tool", () =>
   });
 
   test("a stored body that does not parse becomes a definition that throws the parse error, and nothing else", () => {
-    // The production defect: one `const name = …` body stored verbatim was a
-    // SyntaxError for EVERY program in the workspace. Now it is a factory that
-    // throws on call, and the parse of the prelude itself stays clean.
+    // A body stored verbatim was a SyntaxError for every program; the factory throws on call and the prelude parses.
     const prelude = renderToolsPrelude(
       [
         { name: "broken", code: "const broken = async () => 1", description: "" },
@@ -138,17 +127,13 @@ describe("renderToolsPrelude — one guarded definition per crafted tool", () =>
 
     expect(prelude).toContain('"broken": __kinu.defineCrafted("broken", () => { throw new Error("stored source does not parse:');
     expect(prelude).toContain('"fine": __kinu.defineCrafted("fine", async () => (\nasync () => 2\n), tools["fine"])');
-    // The definitions block parses as JavaScript on its own.
     const block = prelude.slice(prelude.indexOf("Object.assign(tools, {"));
     expect(() => new Function("tools", "__kinu", block)).not.toThrow();
   });
 
   test("a top-level await body compiles in the factory instead of poisoning the prelude", () => {
-    // The production defect, same class as the const-body one above: `await foo()`
-    // passes the host-side parse gate (acorn runs with allowAwaitOutsideFunction),
-    // and the old `() => (await foo())` factory was a SyntaxError in the
-    // vendor-compiled prelude module — denying EVERY tool in the workspace. The
-    // async wrapper keeps the failure, if any, at the tool's own call time.
+    // `await foo()` passes the host parse gate (allowAwaitOutsideFunction) but a sync factory is a SyntaxError in the
+    // compiled prelude, denying every tool; the async wrapper keeps failure at call time.
     const prelude = renderToolsPrelude(
       [{ name: "waiter", code: "await foo()", description: "" }],
       { workspace: "w" },

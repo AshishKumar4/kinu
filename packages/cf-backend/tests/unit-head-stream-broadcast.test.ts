@@ -1,23 +1,12 @@
 /**
- * `publishHeadStream` — the transient frame's one wire, and what it may cost.
- *
- * A hosted head or node runs in its own facet, so the frames it produces reach
- * the socket only by calling back to the workspace root. That call is on the
- * critical path of the root's own turn (one Durable Object, one input gate), so
- * this RPC is the only head channel that is allowed to do nothing but fan out.
- *
- * The durable twin, `recordHeadStep`, is the contrast the tests are written
- * against: it WRITES, and its announcement rides that write. This one must not
- * touch storage at all — a frame is superseded by the step that contains it, and
- * a channel that persisted them would be keeping a second, weaker copy of the
- * trace the journal already holds.
+ * `publishHeadStream` sits on the root turn's critical path (one DO, one input gate), so it may only fan out and
+ * must never touch storage; `recordHeadStep` is the durable, writing twin.
  */
 
 import { describe, test, expect } from 'bun:test';
 import * as v from 'valibot';
 import { orchestratorHarness, type HarnessOrchestratorAgent } from './helpers/actor-harness';
 
-/** The client's own contract, restated: a frame the validator would keep. */
 const FrameSchema = v.object({
   type: v.literal('head_stream'),
   headId: v.string(),
@@ -54,8 +43,7 @@ describe('publishHeadStreamFrame', () => {
     captureFrames(harness.agent);
 
     const rows = (): number => {
-      // Parsed with the same validator the frames are, rather than cast: a count
-      // read back off SQLite is untyped input like any other.
+      // A count read back off SQLite is untyped input: parse, don't cast.
       const counted = v.parse(
         v.object({ n: v.number() }),
         harness.db.prepare('SELECT COUNT(*) AS n FROM head_steps').get(),
@@ -66,8 +54,7 @@ describe('publishHeadStreamFrame', () => {
 
     const before = rows();
     harness.agent.observePublishHeadStreamFrame({ headId: 'head-7', kind: 'text', delta: 'a partial answer' });
-    // The durable channel is `recordHeadStep`, and it is the ONLY writer of this
-    // table. A frame that had landed here would be a row no attempt produced.
+    // `recordHeadStep` is the only writer of this table.
     expect(rows()).toBe(before);
   });
 });

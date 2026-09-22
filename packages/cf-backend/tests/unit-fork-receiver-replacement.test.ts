@@ -1,17 +1,6 @@
 /**
- * A REPLACEMENT transfer through the fork receiver's activation cache.
- *
- * The receiver is cached per activation, and it has to FOLLOW a replacement
- * rather than stay built from the first frame's transferId for as long as the
- * activation lives. A failed fork retried under a fresh transferId otherwise
- * streams through a receiver whose sink still carries the predecessor's temp
- * suffix: the durable staging row says T2, the bytes sit in `.fork-T1.tmp`, and
- * the next activation — building its sink honestly from T2 — resumes into a
- * temp that never existed. Every retry fails identically and the fork is
- * destroyed as unresumable.
- *
- * This drives that exact interleaving: T1 begins and stages, T2 replaces it
- * mid-file, the activation dies, and the resumed activation finishes T2.
+ * A replacement transfer through the fork receiver's activation cache: the cached receiver must follow a fresh transferId,
+ * or bytes land in the predecessor's `.fork-T1.tmp` while the staging row says T2 and every resume fails.
  */
 import { describe, expect, test } from 'bun:test';
 import {
@@ -66,22 +55,15 @@ function range({ transferId, seq, offset, end, last }: RangeFrame): ForkFrame {
 
 describe('a replacement transfer stages under its OWN suffix', () => {
   test('T2 replaces T1 mid-activation, survives the reset, and publishes', async () => {
-    // The object under test IS the fork target. `rawCopyFromFork` runs on the
-    // TARGET's own Durable Object, and the publication fences every actor
-    // handle it opens on `this.name === forkName` — one database hosts every
-    // actor the source had, so the instruction-migration marker is written per
-    // actor and a marker written after a rename would key an authority decision
-    // to a workspace nobody asked about. A harness named anything else is not
-    // the receiver this case is about.
+    // The harness is the fork target: publication fences actor handles on `this.name === forkName`, so a
+    // differently named harness is not this receiver.
     const first = orchestratorHarness(undefined, { workspace: FORK });
 
-    // T1 begins and stages half a file, then its source gives up.
     expect((await first.agent.rawCopyFromFork(FORK, begin('tx-one'), OWNER)).ok).toBe(true);
     expect((await first.agent.rawCopyFromFork(FORK, cut('tx-one', 1), OWNER)).ok).toBe(true);
     expect((await first.agent.rawCopyFromFork(FORK, range({ transferId: 'tx-one', seq: 2, offset: 0, end: 10, last: false }), OWNER)).ok).toBe(true);
 
-    // The retry: a FRESH transfer id through the SAME activation. The begin
-    // resets the durable staging row to tx-two; the receiver must follow it.
+    // A fresh transfer id through the same activation; the receiver must follow the reset staging row.
     const beginTwo = begin('tx-two');
     const cutTwo = cut('tx-two', 1);
     const rangeTwo = range({ transferId: 'tx-two', seq: 2, offset: 0, end: 10, last: false });
@@ -89,7 +71,6 @@ describe('a replacement transfer stages under its OWN suffix', () => {
     expect((await first.agent.rawCopyFromFork(FORK, cutTwo, OWNER)).ok).toBe(true);
     expect((await first.agent.rawCopyFromFork(FORK, rangeTwo, OWNER)).ok).toBe(true);
 
-    // The eviction: same durable rows, fresh activation, no cached receiver.
     const second = await reactivateOrchestratorHarness(first.db, undefined, {
       world: { workspace: FORK },
     });

@@ -1,11 +1,5 @@
-// Regression tests for the Workers AI credential lifecycle.
-//
-// The owner's daily "Connect Cloudflare Workers AI" reauth came from an
-// access-token-only credential (no offline_access scope → no refresh token)
-// dying at expiry. These tests pin the whole silent-refresh path: rotated
-// tokens merge into the stored credential, a mid-flight 401 forces one
-// refresh-and-retry, and an expired-but-refreshable credential still
-// advertises Workers AI (so the connect CTA stays a fallback, not a ritual).
+// The Workers AI silent-refresh path: rotated tokens merge into the stored credential, a mid-flight 401 forces
+// one refresh-and-retry, and an expired-but-refreshable credential still advertises Workers AI.
 import { describe, test, expect } from 'bun:test';
 import { userCredentialSource } from './helpers/user-credentials';
 import { generateText } from 'ai';
@@ -19,9 +13,7 @@ import { requestBodyText } from '@kinu.run/test-utils';
 import { present } from '@kinu.run/test-utils';
 
 
-/** What a rejected `generateText` hands back: the AI SDK's error, whose
- *  `message` and `responseBody` are the two places the owner-visible text can
- *  land. Parsed rather than asserted — a rejection is an I/O boundary. */
+/** The AI SDK's error; `message` and `responseBody` are where owner-visible text lands. Parsed: an I/O boundary. */
 const ModelRejectionSchema = v.looseObject({
   message: v.optional(v.string()),
   responseBody: v.optional(v.string()),
@@ -180,13 +172,8 @@ describe('Workers AI credential refresh', () => {
   });
 
   test('a 401 that SURVIVES the refresh says what to do, not the word "Unauthorized"', async () => {
-    // Production, 2026-08-17: six runs across `stone-ash-71f2` and
-    // `sunlit-stone-4a20` ended `run_end {reason:'error', error:'Unauthorized'}`
-    // and the chat's failed-turn card printed that single word. Cloudflare
-    // answers a rejected credential with the plain text `Unauthorized`, and the
-    // shared fetch passed non-ok responses to `mapError` — which `workers-ai.ts`
-    // does not supply — so the raw body went to the model client untouched. The
-    // actionable sentence existed the whole time, in the gateway mapper only.
+    // Cloudflare answers a rejected credential with plain-text `Unauthorized`, and `workers-ai.ts` supplies no
+    // `mapError`, so the owner must get the actionable sentence instead of the raw body.
     const stub = userCredentialSource({
       getAuthHeaders: async (key: string) => (
         key === 'cloudflare.oauth' ? { authorization: 'Bearer cf-dead' } : null
@@ -207,9 +194,7 @@ describe('Workers AI credential refresh', () => {
       }),
     });
 
-    // `String(err)` on an AI SDK error is just its NAME — asserting against
-    // that would make the negative below unable to fail, which is the same as
-    // not having it. The body the owner is shown is `responseBody`/`message`.
+    // `String(err)` on an AI SDK error is just its name, which would make the negative below unable to fail.
     let failure = '';
 
     try {
@@ -225,17 +210,13 @@ describe('Workers AI credential refresh', () => {
     }
 
     expect(failure).toContain('Reconnect Cloudflare in User settings');
-    // The bare upstream word is what the owner was shown; it must not survive.
     expect(failure).not.toMatch(/(^|\W)Unauthorized(\W|$)/);
-    // Still exactly one forced-refresh retry — the fix reports the failure, it
-    // does not add another attempt against a credential already refused twice.
+    // Still exactly one forced-refresh retry against a credential already refused twice.
     expect(attempts).toBe(2);
   });
 
   test('an unrefreshable credential stops advertising Workers AI (CTA fallback)', async () => {
-    // UserDO returns null headers when the credential is expired with no
-    // refresh token — the provider must drop out of the model menu so the
-    // connect CTA appears, instead of advertising a dead provider.
+    // Null headers (expired, no refresh token) drop the provider so the connect CTA appears.
     const dead = userCredentialSource({
       getAuthHeaders: async () => null,
       listCredentials: async () => [{ key: 'cloudflare.oauth', kind: 'oauth', createdAt: 0, updatedAt: 0 }],
@@ -245,8 +226,6 @@ describe('Workers AI credential refresh', () => {
     const reg = createAgentProviderRegistry({ env: {}, userDO: dead });
     expect(await present(reg.registry.get('workers-ai'), 'the workers-ai provider').isAvailable(reg.deps)).toBe(false);
 
-    // …while a credential UserDO can still serve (fresh or silently
-    // refreshed) keeps Workers AI advertised — no CTA.
     const alive = userCredentialSource({
       getAuthHeaders: async (key: string) =>
         key === 'cloudflare.oauth' ? { authorization: 'Bearer cf-user-token' } : null,

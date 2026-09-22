@@ -1,24 +1,10 @@
 import * as v from 'valibot';
 import { WAKE_MARKER, WakeHoldPlacementSchema, type WakeHoldPlacement } from './two-turn-shapes';
 /**
- * The Node-side outbound handler for the two-turn HTTP-seam probe — the same
- * fail-and-record pattern the in-tree `slate-egress-probe` worker already
- * proves, and the host for the test-only control surface.
- *
- * WHAT REACHES HERE. `createAgentProviderRegistry` passes no `deps.fetch`
- * (owned-model-services.ts:90-98), so `createAuthedFetch` falls back to the
- * global fetch (providers/util.ts:73-74), which the pool routes through this
- * worker's `outboundService` callback. Three hosts are meaningful:
- *
- *  - `http://fake-models.invalid` — the model plane itself. The fixture
- *    credential's `baseURL` points every compat call at this host, so the
- *    requests it answers are exactly the turn's model traffic: streamed
- *    `/v1/chat/completions` posts keyed on the body `model` (never prompt
- *    text), plus the `/v1/models` listing the provider's `listModels` call
-  *    makes. Unknown paths and unknown models throw loudly rather than
-  *    defaulting to an echo: an unrecognized shape is a lane the probe does
-  *    not satisfy.
-  */
+ * Node-side outbound handler for the two-turn HTTP-seam probe, and its test-only control surface.
+ * The compat provider falls back to the global fetch, which the pool routes here; model routes key
+ * on the body `model` (never prompt text), and unknown paths/models throw rather than echo.
+ */
 
 export interface CapturedHttpCall {
   readonly url: string;
@@ -29,39 +15,29 @@ export interface CapturedHttpCall {
   readonly stream: boolean;
   readonly users: string[];
   readonly conversation: ReadonlyArray<{ role: string; content: string }>;
-  /** Non-text content parts per message — attachments as they reached the
-   *  wire (image_url / file / input_audio), which `textOf` drops. */
+  /** Non-text content parts as they reached the wire, which `textOf` drops. */
   readonly fileParts: ReadonlyArray<ReadonlyArray<{ type: string; url: string }>>;
   readonly authHeader: string | null;
-  /** Tool definitions the request offered, by function name — the real
-   *  registry surface as it reached the wire. */
+  /** Tool definitions the request offered, by function name. */
   readonly offeredTools: string[];
-  /** Assistant tool_calls in this request, by call id and function name. */
   readonly toolCalls: ReadonlyArray<{ id: string; name: string }>;
-  /** `role: 'tool'` contents in this request — the executed results. */
   readonly toolResults: string[];
 }
 
 const log: CapturedHttpCall[] = [];
 
-/** Readers parked on `/log/until?marker=`: released by the call that carries
- *  the marker, the moment it is recorded — the wake proof's end condition,
- *  never a poll against a clock. */
+/** Readers parked on `/log/until?marker=`, released the moment the marker is recorded (never a clock poll). */
 const logWaiters: { readonly marker: string; readonly resolve: () => void }[] = [];
 
 function carriesMarker(call: CapturedHttpCall, marker: string): boolean {
   return call.conversation.some((m) => m.content.includes(marker));
 }
 
-/** How many times the worker asked for the provider catalog. Read through
- *  `/log`, so a suite can assert the catalog was served rather than refused. */
+/** Catalog request count, read through `/log` to assert the catalog was served, not refused. */
 let catalogHits = 0;
 
-/** The provider catalog the probe serves for `https://models.dev/api.json`.
- *  One provider the fixture credential does not name, so the dynamic catalog
- *  source lists nothing and the static providers keep their fallback menus;
- *  what matters is that the answer is 200 and well-formed, so no provider
- *  takes the fallback path. Shape follows `ModelsDevCatalogSchema`. */
+/** The `https://models.dev/api.json` answer: 200 and well-formed so no provider takes the fallback
+ *  path; its one provider is unnamed by the fixture credential. Shape: `ModelsDevCatalogSchema`. */
 const MODELS_DEV_CATALOG = {
   groq: {
     id: 'groq', name: 'Groq', doc: 'https://console.groq.com/docs/models',
@@ -80,52 +56,28 @@ interface HeldGate {
   readonly release: PromiseWithResolvers<void>;
 }
 
-/** Armed by `/queue/hold`: either the FIRST `probe-queue` call (no `from`), or
- *  every `probe-queue` call numbered `from` onward until `/queue/release`. The
- *  second shape is how a drive parks ONE turn's model call — the queued ask,
- *  the durable submission, the continuation — while the turns before it run
- *  to completion. `arrived` resolves on the first call actually held, so a
- *  prepare RPC can join on "the held call exists" rather than a counter. */
+/** Armed by `/queue/hold`: the first `probe-queue` call, or every call numbered `from` onward until
+ *  `/queue/release`. `arrived` resolves on the first call actually held. */
 let heldRequest: { readonly gate: HeldGate; readonly from: number } | null = null;
 
-/**
- * The parity lane's own hold, armed by `/parity/hold`: the next `probe-parity`
- * call named by `parkAt` parks — `first` parks the turn's opening call
- * before it answers (the mid-turn window), `partial` streams one text delta
- * of the tool-answering step and then parks with the body open, which is the
- * exact instant an eviction leaves a flushed partial and a settled tool
- * result behind. Released by `/parity/release`; the parked producer is then
- * finished so the runtime can reclaim it.
- */
+/** The parity hold (`/parity/hold`): `first` parks the opening call; `partial` streams one text delta
+ *  of the tool-answering step then parks with the body open. Released by `/parity/release`. */
 let parityHold: { readonly gate: HeldGate; readonly parkAt: 'first' | 'partial' } | null = null;
 
-/** The gate a parity call is parked on right now — kept apart from the armed
- *  hold so `/parity/release` still reaches it after the call consumed the arm. */
+/** The gate a parity call is parked on now, apart from the arm so release reaches it after consumption. */
 let parityParked: HeldGate | null = null;
 
-/** The window the wake proof holds open while the detached job settles,
- *  armed by `/wake/hold` with the placement and released by `/wake/release`:
- *
- *   - `reply`: the interactive turn's REPLY step — the model call carrying the
- *     detach handle — parks in this fake, so the job settles while the turn
- *     is still running. This is the live incident's window (kinu-logs/
- *     bgjob-wake: the process exited one second before the reply step).
- *   - `settle`: the probe's turn-end extension — run by the inline
- *     turn_end_extensions effect, after the answer's commit — parks over
- *     `/wake/wait`, so the job settles inside the just-closed turn's settle. */
+/** The wake proof's hold (`/wake/hold`): `reply` parks the reply step carrying the detach handle;
+ *  `settle` parks the turn-end extension over `/wake/wait`, inside the just-closed turn's settle. */
 let wakeHold: { readonly where: WakeHoldPlacement; readonly gate: HeldGate } | null = null;
 
-/** Park the caller while a hold of this placement is armed; no hold, no park. */
 async function holdWakeWindow(where: WakeHoldPlacement): Promise<void> {
   if (wakeHold === null || wakeHold.where !== where) return;
   wakeHold.gate.arrived.resolve();
   await wakeHold.gate.release.promise;
 }
 
-/** Park a scripted call on the queue-lane hold when the arm names it: the
- *  call numbered `from` onward — counted per model, so each lane numbers its
- *  own calls — waits here until `/queue/release`. Shared by every scripted
- *  model that a drive holds at the provider. */
+/** Park a scripted call numbered `from` onward (counted per model) until `/queue/release`. */
 async function holdQueuedCall(model: string): Promise<void> {
   const hold = heldRequest;
 
@@ -140,8 +92,7 @@ const MessageContentSchema = v.union([v.string(), v.array(v.unknown())]);
 
 type MessageContent = v.InferOutput<typeof MessageContentSchema>;
 
-// `content: null` is valid OpenAI wire for an assistant row whose only
-// content is tool_calls — the exact shape the tool-call-only lane sends.
+// `content: null` is valid OpenAI wire for an assistant row whose only content is tool_calls.
 const NullableMessageContentSchema = v.union([v.null(), MessageContentSchema]);
 
 const OutboundMessageSchema = v.object({
@@ -181,9 +132,7 @@ function textOf(content: MessageContent | null | undefined): string {
   return content;
 }
 
-/** The attachment halves of one message's content array: non-text parts the
- *  wire carries (`image_url`, `file`, `input_audio`), reduced to a comparable
- *  `{type,url}` so a splice assertion reads the part, not the adapter shape. */
+/** Non-text parts of one message, reduced to `{type,url}` so assertions read the part, not the adapter shape. */
 function filePartsOf(content: MessageContent | null | undefined): { type: string; url: string }[] {
   if (!Array.isArray(content)) return [];
 
@@ -256,7 +205,6 @@ function sseDone(): string {
   return 'data: [DONE]\n\n';
 }
 
-/** One scripted SSE answer: the given frames, then stream close. */
 function sseResponse(chunks: readonly string[]): Response {
   const encoder = new TextEncoder();
 
@@ -272,27 +220,13 @@ function sseResponse(chunks: readonly string[]): Response {
   );
 }
 
-
-/**
- * The background-wake conversation's model. One lane, keyed on the request
- * shape, so the whole scripted exchange runs on one pin:
- *
- *   - the opening request answers with a real `shell` tool call — the command
- *     that sleeps past the detach window and prints the marker;
- *   - the request carrying that call's result (the detach handle) answers
- *     `echo:detached`, which ends the turn — the settle then owes the title;
- *   - the WOKEN turn's request — its typed line is the runner's own wake
- *     message, naming the job — answers with an `eval` call that reads
- *     the job's result through the one seam the wake message names;
- *   - the request carrying that result answers with the result's text, which
- *     is how the reply carries the job's output.
- */
+/** The background-wake model: a `shell` call, `echo:detached`, then the woken turn's `eval` reading
+ *  the job result, answered with that result's text. Keyed on request shape. */
 async function wakeBody(body: OutboundBody): Promise<Response> {
   const messages = body.messages ?? [];
   const users = messages.filter((m) => m.role === 'user').map((m) => textOf(m.content));
   const toolResults = messages.filter((m) => m.role === 'tool').map((m) => textOf(m.content));
-  // The runner's wake message is a user line among the runtime's own context
-  // lines; the turn it opens is told apart by that line, wherever it sits.
+  // The wake message sits among runtime context lines; the woken turn is found by that line, wherever it sits.
   const woken = users.map((line) => /Background shell job (\S+) completed/.exec(line)).find((match) => match !== null) ?? null;
 
   const answer = (content: string): Response => sseResponse([
@@ -314,8 +248,6 @@ async function wakeBody(body: OutboundBody): Promise<Response> {
   }
 
   if (toolResults.length > 0) {
-    // The reply step: the call carrying the detach handle. Held here when the
-    // proof's window is the running turn.
     await holdWakeWindow('reply');
 
     return answer('echo:detached');
@@ -324,7 +256,6 @@ async function wakeBody(body: OutboundBody): Promise<Response> {
   return call('call_wake_run_1', 'shell', { runtime: 'workspace', command: `sleep 45 && echo ${WAKE_MARKER}` });
 }
 
-/** A long streamed answer: the user line names the delta count (`long:N`). */
 function longBody(body: OutboundBody): Response {
   const users = (body.messages ?? []).filter((m) => m.role === 'user').map((m) => textOf(m.content));
   const spec = users.filter((u) => u.startsWith('long:')).at(-1) ?? 'long:100';
@@ -362,10 +293,8 @@ async function echoBody(body: OutboundBody): Promise<Response> {
 }
 
 async function earlyDoneBody(): Promise<Response> {
-  // Producer-open: the content frame and [DONE] go out, then the body stays
-  // open forever. The consumer's contract is to stop at [DONE]; whether the
-  // runtime's subrequest machinery does the same is the discriminating datum
-  // against the normal-EOF echo, which closes its own body.
+  // Producer-open: [DONE] is sent, then the body stays open forever. Whether the runtime stops at [DONE]
+  // is the datum discriminating this from the normal-EOF echo.
 
   const encoder = new TextEncoder();
 
@@ -385,13 +314,8 @@ async function earlyDoneBody(): Promise<Response> {
   );
 }
 
-/** The tools lane: the FIRST request is answered with a real `file` tool call
- *  (optionally after a narration text delta, `narration`); the second request
- *  carries the tool's result, answered with text. The `callId` differs per
- *  variant so the two lanes' wires stay distinguishable in the log. The
- *  assistant row the tool call round-trips into the next request legally
- *  carries `content: null` on the OpenAI wire, which is why
- *  `OutboundMessageSchema` accepts null content explicitly. */
+/** The tools lane: a real `file` tool call, then text. `callId` differs per variant to keep wires
+ *  distinguishable. The round-tripped assistant row legally carries `content: null`. */
 function toolBody(body: OutboundBody, callId: string, narration?: string): Response {
   const messages = body.messages ?? [];
 
@@ -425,18 +349,8 @@ function toolBody(body: OutboundBody, callId: string, narration?: string): Respo
   return sseResponse(chunks);
 }
 
-/**
- * The parity conversation's model. One lane, keyed on the request shape and
- * the last typed user line, so a whole scripted conversation runs on one pin:
- *
- *   - a user line naming `TOOL` opens a tool script: the first request is
- *     answered with a real `file` tool call; the request carrying its result
- *     streams `echo:part-one ` and — when the `partial` hold is armed — parks
- *     there with the body open; a request whose transcript already ends in
- *     that partial assistant text (the continuation) answers `part-two`;
- *   - every other line is an echo, parked before answering when the `first`
- *     hold is armed.
- */
+/** The parity model: a `TOOL` line opens a `file` call, then `echo:part-one ` (parked on `partial`)
+ *  and `part-two` for the continuation; other lines echo, parked on `first`. */
 async function parityBody(body: OutboundBody): Promise<Response> {
   const messages = body.messages ?? [];
   const users = messages.filter((m) => m.role === 'user').map((m) => textOf(m.content));
@@ -505,10 +419,8 @@ async function parityBody(body: OutboundBody): Promise<Response> {
 async function errorBody(body: OutboundBody): Promise<Response> {
   const messages = body.messages ?? [];
 
-  // One hard failure, then recovery — so the provider-error case ends with a
-  // settled turn rather than an owed one, which is what the probe asserts.
-  // `recordCall` already logged this request, so the first call is the only
-  // entry: a bare `some` would see itself and the 500 would never fire.
+  // One hard failure, then recovery. `recordCall` already logged this request, so a bare `some`
+  // would see itself and the 500 would never fire.
   if (log.filter((c) => c.model === 'probe-error').length <= 1) {
     return new Response(JSON.stringify({ error: { message: 'probe refuses this request' } }), { status: 500 });
   }
@@ -522,7 +434,6 @@ async function errorBody(body: OutboundBody): Promise<Response> {
     sseDone(),
   ]);
 }
-
 
 async function modelsBody(): Promise<Response> {
   return Response.json({
@@ -541,13 +452,7 @@ async function modelsBody(): Promise<Response> {
   });
 }
 
-/**
- * The outbound handler miniflare hands every subrequest on this worker.
- * Answers fake-model and probe-control hosts; records and throws everything
- * else — the "no passthrough" half of the contract.
- */
-/** The parity lane's three controls: arm a hold, wait for the parked call to
- *  arrive, release it. Its own dispatch, beside the queue lane's. */
+/** The parity lane's controls: arm a hold, wait for the parked call, release it. */
 async function parityControl(pathname: string, request: Request): Promise<Response> {
   if (pathname === '/parity/hold' && request.method === 'POST') {
     const spec = v.parse(v.object({ parkAt: v.picklist(['first', 'partial']) }), await request.json());
@@ -577,11 +482,7 @@ async function parityControl(pathname: string, request: Request): Promise<Respon
   throw new Error(`probe-control: unhandled ${request.method} ${pathname}`);
 }
 
-/**
- * The probe's own control host: the holds a drive arms, the call log, and the
- * reset between drives. Separate from the model routes below so each reads as
- * one list, and so the fake's own complexity stays in the lane it belongs to.
- */
+/** The probe control host: holds, the call log, and the reset between drives. */
 async function probeControl(url: URL, request: Request): Promise<Response> {
   if (url.pathname === '/queue/hold' && request.method === 'POST') {
     const raw = await request.text();
@@ -661,8 +562,7 @@ async function probeControl(url: URL, request: Request): Promise<Response> {
   throw new Error(`probe-control: unhandled ${request.method} ${url.pathname}`);
 }
 
-/** The provider catalog, for a GET of `https://models.dev/api.json`; `null`
- *  for any other request, so the caller's dispatch stays a host switch. */
+/** The catalog for a GET of `https://models.dev/api.json`; `null` for any other request. */
 function catalogAnswer(url: URL, request: Request): Response | null {
   if (url.host !== 'models.dev' || url.pathname !== '/api.json' || request.method !== 'GET') return null;
   catalogHits += 1;
@@ -670,6 +570,7 @@ function catalogAnswer(url: URL, request: Request): Response | null {
   return Response.json(MODELS_DEV_CATALOG);
 }
 
+/** The outbound handler for every subrequest: answers fake-model and control hosts; records and throws everything else. */
 export async function probeOutbound(request: Request): Promise<Response> {
   const url = new URL(request.url);
 
@@ -685,9 +586,7 @@ export async function probeOutbound(request: Request): Promise<Response> {
     }
 
     if (url.pathname === '/v1/chat/completions' && request.method === 'POST') {
-      // SAFETY: the compat SDK posts JSON chat-completion bodies — parsed here
-      // against `OutboundBodySchema` once, so every arm below reads typed
-      // fields and unknown models throw rather than trusting the shape.
+      // SAFETY: the compat SDK posts JSON chat-completion bodies; parsed once against `OutboundBodySchema`.
       const body = v.parse(OutboundBodySchema, await request.json());
 
       recordCall(url, request, body);
@@ -699,8 +598,7 @@ export async function probeOutbound(request: Request): Promise<Response> {
           return echoBody(body);
         }
 
-        // The same hold, answered with a real tool call: the held turn then
-        // HAS a second step, which is the boundary a mid-turn steer lands at.
+        // Answered with a real tool call so the held turn has a second step, the boundary a mid-turn steer lands at.
         case 'probe-steer': {
           await holdQueuedCall('probe-steer');
 

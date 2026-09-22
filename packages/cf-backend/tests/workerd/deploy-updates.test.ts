@@ -1,24 +1,7 @@
 /**
- * A deployment reading its own release channel and installing from it, in
- * workerd, over real Durable Object SQLite.
- *
- * WHAT IS PLATFORM HERE, and therefore why this is not a bun test: an update is
- * the SAME `deployPlan`, run from inside the deployment under the fixed
- * self-update run id. So the object `/api/updates/apply` drives is the object
- * `/api/updates/run` reads back, its ledger is `ctx.storage.sql`, and the
- * secrets the new version is re-bound with are the ones this Worker's own
- * bindings carry. The offer arithmetic is a pure function and is proved under
- * `bun test` (`packages/core/tests/unit-deploy-flow.test.ts`); these four rows
- * are the ones that need the runtime.
- *
- * The plane is the same Node-side fake as `deploy-ledger.test.ts`
- * (`deploy-fake.ts`), plus the two things only a DEPLOYED Kinu has: the build
- * stamp its own asset bundle serves (`env.ASSETS`, so `readBuildStamp` answers
- * what this deployment is running) and a refresh grant at the authorization
- * server. The probe worker is bound the way the flow leaves a deployment —
- * `KINU_DEPLOYMENT_RECORD`, `KINU_SELF_DEPLOY_REFRESH_TOKEN` and the two minted
- * root secrets — and an unmatched host throws in the fake, so nothing here
- * reaches a real network.
+ * Self-update in workerd over real DO SQLite: the same `deployPlan` under the fixed self-update run id,
+ * its ledger in `ctx.storage.sql`. Offer arithmetic is proved in `packages/core/tests/unit-deploy-flow.test.ts`.
+ * The plane is `deploy-fake.ts`; an unmatched host throws, so nothing reaches a real network.
  */
 import { env } from 'cloudflare:workers';
 import { beforeEach, describe, expect, it } from 'vitest';
@@ -32,8 +15,7 @@ import {
   DEPLOY_FAKE_ROTATED_REFRESH, DEPLOY_FAKE_VERSION,
 } from './deploy-fake';
 
-/** The record's own owner, signed in at a browser: the one session this
- *  surface answers at all. */
+/** The record's own owner at a browser: the only session this surface answers. */
 const OWNER = {
   userId: 'probe-owner',
   email: DEPLOY_FAKE_OWNER,
@@ -41,16 +23,13 @@ const OWNER = {
   provider: 'google',
 };
 
-/** The release after the channel's current one: a second build for a row that
- *  installs twice. */
 const NEXT_BUILD = {
   version: '0.4.1+probe02',
   sha: 'probe02',
   builtAt: '2026-09-19T00:00:00.000Z',
 };
 
-/** Whether the self-update object is still holding secret material. The run is
- *  over when it holds none. */
+/** The run is over when the self-update object holds no secret material. */
 async function hasVaultSecrets(): Promise<boolean> {
   const stub = env.DEPLOY_RUN_PROBE.get(env.DEPLOY_RUN_PROBE.idFromName(SELF_UPDATE_RUN_ID));
 
@@ -59,34 +38,21 @@ async function hasVaultSecrets(): Promise<boolean> {
 
 const STRANGER = { ...OWNER, userId: 'probe-other', email: 'someone@example.com' };
 
-/** The owner, but through a long-lived scoped CLI token rather than a person
- *  at a browser deciding to re-upload their Worker. */
+/** The owner via a long-lived scoped CLI token rather than a browser session. */
 const OWNERS_CLI_TOKEN = { ...OWNER, cliScopes: ['workspace:read'] };
 
-/** The same token with no scopes on it at all. A CLI ticket carries `scopes`
- *  only when the credential had any, so this is the shape that reached the
- *  gate as an ordinary browser session and was admitted by everything except
- *  which paths tickets happen to travel. */
+/** A CLI ticket carries `scopes` only when the credential had any, so this reaches the gate
+ *  looking like a browser session. */
 const UNSCOPED_CLI_TOKEN = { ...OWNER, provider: 'cli' };
 
 beforeEach(async () => {
   await env.DEPLOY_FAKE.reset();
-  // The update ledger is one object under a fixed id, shared by every row in
-  // this file. A row that started from the previous row's finished ledger would
-  // pass by skipping every step.
+  // One ledger under a fixed id shared by every row here; a row inheriting a finished ledger passes by skipping.
   await env.DEPLOY_RUN_PROBE.get(env.DEPLOY_RUN_PROBE.idFromName(SELF_UPDATE_RUN_ID)).forget();
 });
 
-/**
- * The update, awaited on the object that runs it and then read back the way the
- * page reads it.
- *
- * `apply` answers before the first step: the plan runs on the object's alarm.
- * The object parks this call on the end of that delivery and answers with the
- * state it left (`settledAfter`), so the read through `/api/updates/run` is the
- * page's own path taken ONCE, over a ledger that has stopped moving — not a
- * poll racing whatever else the machine is running.
- */
+/** `apply` answers before the first step and parks on the alarm delivery (`settledAfter`), so the
+ *  `/api/updates/run` read is taken once over a settled ledger. */
 async function settled(): Promise<DeploySnapshot> {
   await env.DEPLOY_RUN_PROBE.get(env.DEPLOY_RUN_PROBE.idFromName(SELF_UPDATE_RUN_ID))
     .settledAfter(['done', 'failed']);
@@ -118,9 +84,7 @@ describe('a deployment updating itself', () => {
     const applied = await env.UPDATES_PROBE.hit('POST', '/api/updates/apply', OWNER);
     const accepted = v.parse(DeploySnapshotSchema, JSON.parse(applied.body));
 
-    // The POST answers before the first step: the plan runs on the object's
-    // own alarm, which is what lets it outlive the request and the restart its
-    // own upload causes. The page polls exactly this way.
+    // The plan runs on the object's own alarm, so it outlives the request and its own upload's restart.
     expect(accepted.state).toBe('running');
 
     const snapshot = await settled();
@@ -133,14 +97,10 @@ describe('a deployment updating itself', () => {
     expect(snapshot.version).toBe(DEPLOY_FAKE_VERSION);
     expect(snapshot.steps.every((row) => row.state === 'done')).toBe(true);
     expect(made.uploads).toBe(1);
-    // The deployment spent its OWN refresh token and re-bound the rotated one:
-    // a deployment that wrote back the token it already held could update once
-    // and never again.
+    // A deployment that wrote back the token it already held could update once and never again.
     expect(made.secrets.KINU_SELF_DEPLOY_REFRESH_TOKEN).toBe(DEPLOY_FAKE_ROTATED_REFRESH);
     expect(written.version).toBe(DEPLOY_FAKE_VERSION);
 
-    // The rows that run wrote are what the page's poll reads back, from the
-    // object the fixed run id names.
     const watched = await env.UPDATES_PROBE.hit('GET', '/api/updates/run', OWNER);
     const polled = v.parse(DeploySnapshotSchema, JSON.parse(watched.body));
 
@@ -169,8 +129,7 @@ describe('a deployment updating itself', () => {
     const stranger = await env.UPDATES_PROBE.hit('GET', '/api/updates', STRANGER);
     const token = await env.UPDATES_PROBE.hit('POST', '/api/updates/apply', OWNERS_CLI_TOKEN);
 
-    // 404, not 403: whether this deployment has an update surface at all is
-    // itself a fact about its owner.
+    // 404, not 403: whether an update surface exists is itself a fact about the owner.
     expect(stranger.status).toBe(404);
     expect(token.status).toBe(404);
     expect((await env.DEPLOY_FAKE.state()).uploads).toBe(0);
@@ -189,13 +148,8 @@ describe('a deployment updating itself', () => {
 });
 
 /**
- * The second update, which is where a fixed run id bites.
- *
- * `runDeployPlan` skips rows that are `done` — right for a resume, wrong for
- * the next release over the same object. Without the ledger reset the second
- * apply uploads nothing, moves no pointer, and reports done while the Worker
- * still serves the old build; the refresh grant is spent either way, so the
- * deployment ends up unable to update again at all.
+ * `runDeployPlan` skips `done` rows, so without the ledger reset the next release over the same
+ * object uploads nothing while the refresh grant is still spent.
  */
 describe('a deployment updating itself twice', () => {
   it('uploads and repoints once per release', async () => {
@@ -209,8 +163,6 @@ describe('a deployment updating itself twice', () => {
     expect(first.uploads).toBe(1);
     expect(first.deployments).toEqual(['version-1']);
 
-    // The channel publishes the next release, and this deployment now serves
-    // the one it just installed.
     await env.DEPLOY_FAKE.serve(DEPLOY_FAKE_CHANNEL_BUILD);
     await env.DEPLOY_FAKE.publish(NEXT_BUILD);
 
@@ -231,28 +183,23 @@ describe('a deployment updating itself twice', () => {
     expect(second.version).toBe(NEXT_BUILD.version);
     expect(made.uploads).toBe(2);
     expect(made.deployments).toEqual(['version-1', 'version-2']);
-    // And the deployment holds the token the SECOND refresh handed it.
     expect(made.secrets.KINU_SELF_DEPLOY_REFRESH_TOKEN).toBe(DEPLOY_FAKE_ROTATED_REFRESH);
     expect(await hasVaultSecrets()).toBe(false);
   });
 
   it('writes the rotated refresh token before the plan, so a failed update can still be retried', async () => {
     await env.DEPLOY_FAKE.serve(DEPLOY_FAKE_OLDER_BUILD);
-    // The smoke check refuses once: the upload happened, the pointer moved, and
-    // the run failed after the grant was already spent.
+    // Smoke check refuses once: uploaded, pointer moved, grant already spent.
     await env.DEPLOY_FAKE.refuseOnce({ path: '/api/health', status: 502, code: 0, message: 'bad gateway' });
     await env.UPDATES_PROBE.hit('POST', '/api/updates/apply', OWNER);
 
     expect((await settled()).state).toBe('failed');
 
-    // THE POINT: the token that still works is already on the Worker, written
-    // before the first step rather than by the last one. A deployment holding
-    // the spent token here could never update again.
+    // The working token is written to the Worker before the first step, not by the last one.
     expect((await env.DEPLOY_FAKE.state()).secrets.KINU_SELF_DEPLOY_REFRESH_TOKEN)
       .toBe(DEPLOY_FAKE_ROTATED_REFRESH);
 
-    // Applying again refreshes with the token the run holds — the fake's
-    // authorization server refuses any other — and finishes the same ledger.
+    // The fake's authorization server refuses any token but the one the run holds.
     await env.UPDATES_PROBE.hit('POST', '/api/updates/apply', OWNER);
 
     const finished = await settled();

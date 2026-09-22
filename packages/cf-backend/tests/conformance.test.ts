@@ -1,12 +1,5 @@
-// Backend conformance — the cf composition roots, observed for real.
-//
-// Each observation below comes from the PRODUCTION composition path on a real
-// actor instance (tests/helpers/actor-harness.ts): the ToolSet is whatever
-// `getRawTools()` built, the action enums are read from the input schemas the
-// model would receive, and the tables are `sqlite_master` after the real
-// `ensureSchema()` ran. The manifest in core declares what each root wires
-// and why the rest is deliberately absent; `compareSurface` fails on any
-// disagreement in either direction. See core/src/conformance/manifest.ts.
+// cf composition roots observed on real actor instances, compared against
+// core/src/conformance/manifest.ts in both directions.
 import { describe, test, expect } from 'bun:test';
 import type { ToolSet } from 'ai';
 import {
@@ -44,12 +37,8 @@ async function observe(workspace: ActorHarness<RawToolsAgent>): Promise<Observed
 async function observeSubordinate(
   workspace: ActorHarness<HarnessOrchestratorAgent>,
 ): Promise<ObservedSurface> {
-  // A hired subordinate owns no database, so its table plane IS the
-  // workspace's — observed off the same sqlite_master the root reads. What
-  // differs is the model-facing profile: the delegated-turn surface built by
-  // the production builder over the child's own runtime, with the report lane
-  // the root never wires. Both planes come from the workspace's own wiring,
-  // never from a fixture's idea of the subordinate.
+  // A subordinate owns no database: its table plane is the workspace's; its tools are the
+  // production delegated-turn profile over the child's own runtime.
   const child = await hostedSubordinateHarness(workspace, {
     name: 'conformance-child',
     displayName: 'Conformance Child',
@@ -85,13 +74,7 @@ describe('cf backend conformance', () => {
     expect(report.unmeasured).toEqual([]);
   });
 
-  // Guards the guard, once per root rather than once in total. A floor
-  // asserted for the orchestrator alone leaves the SUBORDINATE's
-  // magnitudes unverified: a harness that drifted to a thin fake there
-  // would still fail on capabilities the manifest declares `wired`, but
-  // everything it declares `absent` would look conformant against a world
-  // that was never built. Same roots as above, so a third root added later is
-  // covered without a second place to remember.
+  // Per root: a thin fake would make everything declared `absent` look conformant.
   test('cf-orchestrator: the observation sees a real surface at all', async () => {
     const observed = await observe(orchestratorHarness());
     expect(present(observed.planes.tool, 'the observed tool plane').size).toBeGreaterThanOrEqual(6);

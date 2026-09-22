@@ -1,18 +1,6 @@
 /**
- * The stale-chunk recovery policy, driven without a browser through
- * `loadRouteChunk` — the seam the module hands out.
- *
- * Two claims are worth pinning here rather than only in a browser, because both
- * are about what the policy REFUSES to do:
- *
- *   1. The recognised set is closed. A reload is the most destructive thing this
- *      app does to a reader without being asked — it discards whatever they had
- *      on screen — so each engine wording that authorises one is a case below,
- *      and anything else rethrows the original failure and touches nothing.
- *   2. Every arm that is not a recognised, confirmed, unclaimed stale chunk
- *      rethrows the ORIGINAL failure. That is the whole safety property: the
- *      feature can only ever add one narrow recovery, never change another
- *      outcome.
+ * Stale-chunk recovery via `loadRouteChunk`. A reload discards the reader's screen, so the recognised set is closed
+ * and every other arm rethrows the original failure: the feature only adds one narrow recovery.
  */
 import { describe, expect, test } from 'bun:test';
 import {
@@ -22,7 +10,6 @@ import {
   type ChunkRecoveryDeps,
 } from '../src/lazy-route';
 
-/** The build the page loaded, and the one the origin moved to. */
 const LOADED = 'abc1234';
 
 const LIVE = 'deadbee';
@@ -47,11 +34,9 @@ function store(seed: string | null = null): ChunkReloadStore & { read: () => str
   };
 }
 
-/** One drive of the policy, with everything it reached recorded. */
 interface Drive {
   deps: ChunkRecoveryDeps;
-  /** Resolves when the policy has actually reloaded. Awaiting the EVENT is what
-   *  makes the non-settlement assertion below exact rather than a guessed wait. */
+  /** Awaiting the event makes the non-settlement assertion exact rather than a guessed wait. */
   reloaded: Promise<void>;
   reloads: () => number;
   liveReads: () => number;
@@ -82,15 +67,7 @@ function drive(options: { live?: string | null; baseline?: string | null; seed?:
   };
 }
 
-/**
- * Whether `pending` is still open.
- *
- * Called only after the policy has already reached its reload, which is the last
- * thing it does before holding the promise: anything that was going to settle has
- * settled by then, so racing an immediately-resolved sentinel decides it exactly.
- * No clock is involved — a settled `pending` queues its reaction before the
- * sentinel, which is created after it.
- */
+/** Called only after the reload, so an already-settled `pending` queues its reaction before the sentinel; no clock. */
 async function stillOpen(pending: Promise<unknown>): Promise<boolean> {
   const OPEN = Symbol('open');
 
@@ -102,12 +79,8 @@ async function stillOpen(pending: Promise<unknown>): Promise<boolean> {
   return first === OPEN;
 }
 
-/** The failure a browser raises for a chunk the origin no longer serves, which
- *  is the only failure this policy is about. */
 const stale = async (): Promise<never> => { throw new TypeError(ENGINE_MESSAGES.chromium); };
 
-/** A stale load against an origin that has moved on: one reload, the live build
- *  recorded as claimed, and the promise held open behind it. */
 async function reloadsOnce(run: Drive): Promise<void> {
   const pending = loadRouteChunk(stale, run.deps);
   await run.reloaded;
@@ -116,8 +89,6 @@ async function reloadsOnce(run: Drive): Promise<void> {
   expect(run.claimed()).toBe(LIVE);
 }
 
-/** A stale load the policy declines to answer with a reload: the failure reaches
- *  the caller and the page stays where it is. */
 async function refusesToReload(run: Drive): Promise<void> {
   await expect(loadRouteChunk(stale, run.deps)).rejects.toThrow(TypeError);
   expect(run.reloads()).toBe(0);
@@ -136,8 +107,7 @@ describe('recognising a module that would not load', () => {
   }
 
   test('an application error is not, even with the origin moved', async () => {
-    // The case that must never reload: a page whose own code threw. Reloading
-    // would discard the reader's context and land them on the same fault.
+    // A page whose own code threw must never reload: the reader would land on the same fault.
     const run = drive();
     const thrown = new TypeError("Cannot read properties of undefined (reading 'kind')");
     await expect(loadRouteChunk(async (): Promise<never> => { throw thrown; }, run.deps)).rejects.toBe(thrown);
@@ -179,22 +149,18 @@ describe('the one-reload-per-build guard', () => {
   });
 
   test('the second attempt for the same build is an error, not a reload', async () => {
-    // The loop bound. Reached when the first reload did not fix it, which means
-    // the assumption behind reloading was wrong and the reader deserves the
-    // error rather than another round trip.
+    // Loop bound: a second failure means reloading was the wrong assumption.
     await refusesToReload(drive({ seed: LIVE }));
   });
 
   test('a further build earns its own single reload', async () => {
-    // The bound is one reload per build TRANSITION, not one per tab: a tab left
-    // open across three deploys may recover from each, once.
+    // One reload per build transition, not per tab.
     await reloadsOnce(drive({ seed: 'c0ffee0' }));
   });
 });
 
 describe('a chunk that loads', () => {
   test('the module is returned and no build is read', async () => {
-    // The health read is a request. A route that loads must not make one.
     const run = drive();
     expect(await loadRouteChunk(async () => ({ default: 'page' }), run.deps)).toEqual({ default: 'page' });
     expect(run.liveReads()).toBe(0);
@@ -204,9 +170,7 @@ describe('a chunk that loads', () => {
 
 describe('a chunk that fails for a reason this is not about', () => {
   test('the original failure is rethrown, by identity', async () => {
-    // By identity, because the ErrorBoundary above reports the error's class and
-    // its stack: a wrapped or re-created error would arrive in Workers Logs
-    // describing this file instead of the fault.
+    // By identity: the ErrorBoundary reports class and stack, so a wrapped error would describe this file.
     const run = drive();
     const thrown = new Error('the module threw while evaluating');
     await expect(loadRouteChunk(async () => { throw thrown; }, run.deps)).rejects.toBe(thrown);
@@ -223,10 +187,7 @@ describe('a chunk that fails for a reason this is not about', () => {
 
 describe('a stale chunk', () => {
   test('one attempt costs exactly one build read', async () => {
-    // The read is a request to our own origin. React re-invokes a rejected lazy's
-    // loader on later render attempts, so a policy that read the build on every
-    // attempt would aim a storm at `/api/health` — measured at 47 reads in five
-    // seconds before the examination was bounded (see `lazyRoute`).
+    // React re-invokes a rejected lazy's loader, so reading the build on every attempt would storm `/api/health`.
     const run = drive({ live: LOADED });
     await expect(loadRouteChunk(stale, run.deps)).rejects.toThrow(TypeError);
     expect(run.liveReads()).toBe(1);
@@ -237,9 +198,7 @@ describe('a stale chunk', () => {
   });
 
   test('and the promise never settles, so no error flashes over the reload', async () => {
-    // Resolving would render a route out of a bundle just established to be
-    // gone; rejecting would show an error screen on a document about to be
-    // replaced. Holding the Suspense fallback is the honest picture.
+    // Neither resolving nor rejecting is honest on a document about to be replaced; hold the Suspense fallback.
     const run = drive();
     const pending = loadRouteChunk(stale, run.deps);
     await run.reloaded;
@@ -247,8 +206,7 @@ describe('a stale chunk', () => {
   });
 
   test('with the origin on the SAME build, it is an error and not a reload', async () => {
-    // No skew is no evidence of a stale chunk: the deploy or the network is
-    // broken, and reloading would loop a reader through a fault they cannot fix.
+    // No skew is no evidence of a stale chunk; reloading would loop the reader through an unfixable fault.
     const run = drive({ live: LOADED });
     await expect(loadRouteChunk(stale, run.deps)).rejects.toThrow('Failed to fetch dynamically imported module');
     expect(run.reloads()).toBe(0);
@@ -256,8 +214,7 @@ describe('a stale chunk', () => {
   });
 
   test('with no build served at all, it is an error and not a reload', async () => {
-    // A `vite dev` server publishes no stamp, so there is nothing to compare and
-    // no honest claim to make.
+    // `vite dev` publishes no stamp, so there is nothing to compare.
     await refusesToReload(drive({ live: null }));
   });
 
@@ -266,9 +223,7 @@ describe('a stale chunk', () => {
   });
 
   test('with the reload already spent on this build, it is an error', async () => {
-    // The loop bound. Reached when the first reload did not fix it, which means
-    // the assumption behind reloading was wrong and the reader deserves the
-    // error rather than another round trip.
+    // Loop bound: a second failure means reloading was the wrong assumption.
     await refusesToReload(drive({ seed: LIVE }));
   });
 

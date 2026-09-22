@@ -1,19 +1,6 @@
 /**
- * A hosted fork across two Durable Objects, evicted twice while it is in flight.
- *
- * WHAT IS BEING MEASURED, and why it cannot be measured under `bun test`. The
- * fork wire is resumable and idempotent BY CONTRACT — the receiver refuses a
- * frame that is not the next one, answers a re-delivered frame with the fork
- * that already landed, and publishes nothing until the commit has matched the
- * declared counts and the rolling digest. Every one of those statements is about
- * state that has to survive the end of an activation, and only workerd can end
- * one. `abortAllDurableObjects` is that ending: the isolate is reset, every
- * instance field goes with it, and the object's SQLite does not.
- *
- * The eviction points are the two the protocol actually has: between the last
- * row frame and the first file frame, and between the last file frame and the
- * commit. The source re-acquires its stub and resumes from the frame the target
- * reported, which is what a caller does after any cross-object failure.
+ * A hosted fork across two DOs, evicted at the row/file boundary and before commit. The wire's resumability and
+ * idempotence are state surviving an activation's end, which only workerd's `abortAllDurableObjects` can produce.
  */
 import { env } from 'cloudflare:workers';
 import { abortAllDurableObjects } from 'cloudflare:test';
@@ -23,14 +10,12 @@ import {
   PROBE_CUT_MESSAGE_ID, PROBE_CUT_RECORDED_AT, PROBE_SOUL_MISSION, PROBE_SOURCE_NAME,
 } from './fork-probe';
 
-/** A stub held across a reset is itself broken by the reset; the id survives.
- *  Re-acquiring is what a real caller does on its next request. */
+/** A stub held across a reset is broken by it; the id survives. */
 const source = (name: string) => env.FORK_SOURCE.get(env.FORK_SOURCE.idFromName(name));
 
 const target = (name: string) => env.FORK_TARGET.get(env.FORK_TARGET.idFromName(name));
 
-/** The cut entry's own stamp. The fork point is that entry's time, so the
- *  published result names this exact millisecond. */
+/** The fork point is this entry's time, so the published result names this exact millisecond. */
 const CUT_MS = PROBE_CUT_RECORDED_AT;
 
 describe('a fork transfer interrupted by a real eviction', () => {
@@ -42,21 +27,16 @@ describe('a fork transfer interrupted by a real eviction', () => {
       'SOUL.md', 'memory/deep/proof.bin', 'memory/notes.md',
     ]);
 
-    // ── Rows only. The activation ends at the row/file boundary. ──
     const rows = await source(name).deliver({ target: name, from: 0, stop: 'files' });
     expect(rows.refusal).toBeNull();
     expect(rows.staged).toBe(rows.sent);
-    // More frames than there are sections: at sixty-four payload bytes the
-    // config rows, the crafted tool, the memory chunks and the message updates
-    // each span frames, so the boundary this activation ends at is a real one.
+    // More frames than sections, so the boundary this activation ends at is a real one.
     expect(rows.sent).toBeGreaterThan(FORK_ROW_SECTIONS.length);
 
     const staged = await target(name).state();
     expect(staged.entries).toBe(3);
     expect(staged.contextMembers).toBe(3);
     expect(staged.craftedTools).toBe(1);
-    // Staged and unreachable: no lineage, no fork marker, no display name, no
-    // mission, and the identity row still the one the target came up with.
     expect(staged.lineage).toBeNull();
     expect(staged.markers).toBe(0);
     expect(staged.displayName).toBeNull();
@@ -72,16 +52,12 @@ describe('a fork transfer interrupted by a real eviction', () => {
     // The cursor is the object's own SQLite, so the reset did not touch it.
     expect(await target(name).cursor()).toEqual(cursorBefore);
 
-    // ── Files, on a fresh activation of both objects. ──
     const files = await source(name).deliver({ target: name, from: rows.nextSeq, stop: 'commit' });
     expect(files.refusal).toBeNull();
-    // SOUL in its one protected frame, then four ranges each for proof.bin and
-    // notes.md.
+    // SOUL in its one protected frame, then four ranges each for proof.bin and notes.md.
     expect(files.sent).toBe(9);
     expect(files.staged).toBe(9);
 
-    // Every inherited file is published into the plane, byte for byte, and the
-    // workspace is still not a fork.
     const beforeCommit = await target(name).state();
     expect(beforeCommit.files).toEqual(inherited);
     expect(beforeCommit.lineage).toBeNull();
@@ -95,7 +71,6 @@ describe('a fork transfer interrupted by a real eviction', () => {
     const commitSeq = files.nextSeq;
     await abortAllDurableObjects();
 
-    // ── The commit, on a third activation. ──
     const commit = await source(name).deliver({ target: name, from: commitSeq, stop: 'end' });
     expect(commit.refusal).toBeNull();
     expect(commit.fork).toEqual({ forkPointMs: CUT_MS, messagesCopied: 3, craftedToolsCopied: 1 });
@@ -106,20 +81,17 @@ describe('a fork transfer interrupted by a real eviction', () => {
       sourceMessageId: PROBE_CUT_MESSAGE_ID,
       sourceMessageCreatedAt: CUT_MS,
     });
-    // The mission was read from SOUL's bytes two activations ago and had to
-    // survive both resets to reach the identity row here.
+    // Read from SOUL two activations ago; had to survive both resets.
     expect(published.identity?.mission).toBe(PROBE_SOUL_MISSION);
     expect(published.identity?.name).toBe('fork-target');
     expect(published.displayName).toBe('fork-target');
     expect(published.markers).toBe(1);
     expect(published.entries).toBe(3);
-    // The carried conversation, plus the marker's own message: the public chain
-    // and the working context are two selections over ONE canonical store.
+    // The public chain and the working context are two selections over one canonical store.
     expect(published.messages).toBe(4);
     expect(published.contextMembers).toBe(3);
     expect(published.files).toEqual(inherited);
 
-    // ── Re-delivery of the tail: the last file frame and the commit again. ──
     const redrive = await source(name).deliver({ target: name, from: commitSeq - 1, stop: 'end' });
     expect(redrive.refusal).toBeNull();
     expect(redrive.settled).toBe(2);
@@ -128,8 +100,7 @@ describe('a fork transfer interrupted by a real eviction', () => {
 
     await abortAllDurableObjects();
 
-    // And again on a cold activation: the answer comes from storage, not from a
-    // receiver that happened to still be in memory.
+    // Answered from storage, not from a receiver still in memory.
     const cold = await source(name).deliver({ target: name, from: commitSeq, stop: 'end' });
     expect(cold.refusal).toBeNull();
     expect(cold.settled).toBe(1);
@@ -146,8 +117,7 @@ describe('a fork transfer interrupted by a real eviction', () => {
 
     await abortAllDurableObjects();
 
-    // One payload byte flipped, the frame's seal untouched: the receiver's own
-    // per-frame digest is what refuses it.
+    // Seal untouched: the receiver's per-frame digest is what refuses it.
     const corrupt = await source(name).deliver({
       target: name, from: rows.nextSeq, stop: 'end', corrupt: 'frame',
     });
@@ -157,8 +127,7 @@ describe('a fork transfer interrupted by a real eviction', () => {
     );
     expect(corrupt.fork).toBeNull();
 
-    // The cursor did not move, so the stream cannot be picked up after the hole:
-    // the next frame is out of order and the transfer can never reach a commit.
+    // The cursor did not move, so the transfer can never reach a commit.
     expect(await target(name).cursor()).toEqual(cursor);
     const after = await source(name).deliver({ target: name, from: rows.nextSeq + 1, stop: 'end' });
     expect(after.refusal).toMatch(
@@ -181,23 +150,18 @@ describe('a fork transfer interrupted by a real eviction', () => {
     const range = await source(name).deliver({ target: name, from: rows.nextSeq, stop: 'range' });
     expect(range.refusal).toBeNull();
 
-    // SOUL published from its one protected frame, and one range of a file that
-    // spans four is staged. The target's own row says which file and how far.
     const cursor = await target(name).cursor();
     expect(cursor).toMatchObject({ filePath: 'memory/deep/proof.bin', fileBytes: 64 });
 
     await abortAllDurableObjects();
 
-    // The staged offset is a column, so the resumed activation neither restarts
-    // the file nor refuses it: it adopts the staging and writes the next byte.
+    // The staged offset is a column: the resumed activation adopts the staging and writes the next byte.
     const rest = await source(name).deliver({ target: name, from: range.nextSeq, stop: 'end' });
     expect(rest.refusal).toBeNull();
-    // Three ranges of proof.bin, four of notes.md, then the commit.
     expect(rest.sent).toBe(8);
     expect(rest.fork).toEqual({ forkPointMs: CUT_MS, messagesCopied: 3, craftedToolsCopied: 1 });
 
-    // The file the eviction interrupted is whole, and its digest is the source's
-    // — computed by reading the staging back, since no activation saw every range.
+    // Digest computed by reading the staging back, since no activation saw every range.
     const published = await target(name).state();
     expect(published.files).toEqual(inherited);
     expect(published.lineage).toMatchObject({
@@ -207,8 +171,6 @@ describe('a fork transfer interrupted by a real eviction', () => {
     });
     expect(published.identity?.mission).toBe(PROBE_SOUL_MISSION);
 
-    // Re-delivering the ranges that crossed either side of the eviction changes
-    // nothing: the transfer has published, so each is answered with the fork.
     const redrive = await source(name).deliver({ target: name, from: rows.nextSeq, stop: 'end' });
     expect(redrive.refusal).toBeNull();
     expect(redrive.settled).toBe(redrive.sent);
@@ -225,10 +187,7 @@ describe('a fork transfer interrupted by a real eviction', () => {
 
     await abortAllDurableObjects();
 
-    // One byte of one middle range flipped and the frame resealed, so the frame
-    // digest, the offset and the sequence all agree. The remaining ranges go out
-    // intact, and the whole-file digest at the last range is the only check that
-    // can see it.
+    // Frame resealed so frame digest, offset and sequence agree: only the whole-file digest can see it.
     const resealed = await source(name).deliver({
       target: name, from: range.nextSeq, stop: 'end', corrupt: 'resealed',
     });
@@ -238,8 +197,6 @@ describe('a fork transfer interrupted by a real eviction', () => {
     );
     expect(resealed.fork).toBeNull();
 
-    // Nothing published, and the destination the staging shadowed never appeared:
-    // only SOUL, which had already been committed from its own frame.
     const state = await target(name).state();
     expect(state.lineage).toBeNull();
     expect(state.markers).toBe(0);

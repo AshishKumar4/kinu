@@ -1,30 +1,7 @@
 /**
- * The slate-durability probe — the REAL preview edge and the REAL
- * OrchestratorAgent, driven so the test file can ask the one question this
- * lane exists to answer: does a durable Nimbus application answer its own URL
- * after the object that hosted it is aborted?
- *
- * THE SEAM. `handleNimbusPreviewHostRequest` (nimbus-route.ts) is the
- * production edge: it parses `<port36>-<handle>-<token>-<workspace>` off the
- * hostname, verifies the v4 signature, resolves the workspace's
- * OrchestratorAgent stub and hands it `routeWorkspacePreview`. Everything
- * below that edge — `routePreview`'s durable re-drive, the reserved port and
- * capability, the retained facet — is production code; the probe contributes
- * only the trigger (this root's methods) and the observation window
- * (`portReservations` on the bound class).
- *
- * THE ORCHESTRATOR. The durableObjects table binds `OrchestratorAgent` to the
- * ObservedOrchestrator subclass below — the two-turn-probe mechanism: same
- * production class, same seal, plus one fixture read re-admitted to the
- * surface. `listPortReservations` is the Nimbus-owned scan of the object's own
- * storage, so the row the test compares across `abortAllDurableObjects()` is
- * the record the URL was minted from, not a shadow the fixture keeps.
- *
- * THE SLATE FILES. `/home/user/slates/<id>/{package.json,server.ts}` are
- * written through `writeExecutorFileChunk('workspace', …)` — the upload route
- * the browser itself uses — because the workspace executor's file plane is
- * the same VFS the slate host reads and its writes feed `filesChanged`, which
- * is how the host knows the tree moved.
+ * Does a durable Nimbus application answer its own URL after its hosting object is aborted?
+ * Everything below `handleNimbusPreviewHostRequest` is production code; the probe adds only the
+ * trigger and the observation.
  */
 import { Agent, getAgentByName, type AgentContext } from 'agents';
 import { WorkerEntrypoint } from 'cloudflare:workers';
@@ -48,28 +25,20 @@ import type {
   ServedSlate,
 } from './slate-durability-shapes';
 
-// Re-exported under their production names so the auxiliary worker's
-// durableObjects bind the classes themselves — the same mechanism
-// slate-actor-probe.ts uses, for the same reason: a probe that retargets the
-// class measures its own fixture, not the shipped surface.
+// Re-exported under production names so the auxiliary worker binds the classes themselves: a
+// probe that retargets the class measures its own fixture (as in slate-actor-probe.ts).
 export { UserDO } from '../../src/user/user-do';
 
-// The authored slate's bindings enter the guest env through
-// `exports.SlateBinding`, and a build-mode resident refuses to boot without a
-// `globalOutbound` — `exports.CodemodeEgress` is that loopback, here exactly
-// as in production.
+// A build-mode resident refuses to boot without a `globalOutbound`: `CodemodeEgress` is that
+// loopback.
 export { SlateBinding } from '../../src/slates/bindings';
 
-/** The deterministic network boundary: no authored fetch runs in this probe,
- *  so a fixed answer is the honest one. */
 export class CodemodeEgress extends WorkerEntrypoint {
   override async fetch(): Promise<Response> { return new Response('network allowed'); }
 }
 
 type ProbeEnv = ConstructorParameters<typeof ProductionOrchestrator>[1];
 
-/** The reservation record the preview URL was minted from, read off the
- *  object's own durable storage by Nimbus's own scan. */
 export class ObservedOrchestrator extends ProductionOrchestrator {
   constructor(ctx: AgentContext, env: ProbeEnv) {
     super(ctx, env);
@@ -90,23 +59,17 @@ export class ObservedOrchestrator extends ProductionOrchestrator {
 
 export { ObservedOrchestrator as OrchestratorAgent };
 
-// The composed supervisor entrypoint, exported exactly as `src/server.ts`
-// exports it: the hosted runtime refuses to compose over a worker whose
-// `ctx.exports` carries none, and every facet reaches its host through it.
+// Exported as `src/server.ts` does: the hosted runtime refuses a worker whose `ctx.exports` lacks
+// it.
 export { SupervisorRPC } from '@nimbus-sh/worker/workspace-host';
 
-/** Every call the probe makes on the workspace object's own stub.
- *  `slateAs` is absent on purpose: its `SlateCallResult` carries the recursive
- *  `JsonValue`, and mapping `Rpc.Result` over it is the TS2589 that
- *  `workspace-owner-rpc.ts` exists to avoid — the probe reaches that operation
- *  through `workspaceOwner()`, the same port production's actor uses. */
+/** `slateAs` is absent on purpose: `Rpc.Result` over its recursive `JsonValue` is TS2589; the probe
+ *  reaches it through `workspaceOwner()`, as production's actor does. */
 type SlateTarget = Pick<Fetcher, 'fetch'> & Pick<ProductionOrchestrator,
   'claimOwner' | 'writeExecutorFileChunk' | 'executeInExecutor'> & Pick<ObservedOrchestrator, 'portReservations'>;
 
-/** The probe worker's own bindings. `durableObjects` installs
- *  `ObservedOrchestrator` under the `OrchestratorAgent` name (the re-export
- *  above), which the production `Env` declares by its base class, so every
- *  stub the namespace returns carries the fixture read. */
+/** `ObservedOrchestrator` is installed under the `OrchestratorAgent` name, so every stub carries
+ *  the fixture read. */
 interface ProbeRootEnv extends Omit<ProbeEnv, 'OrchestratorAgent'> {
   readonly OrchestratorAgent: DurableObjectNamespace<ObservedOrchestrator>;
 }
@@ -121,21 +84,15 @@ const RemovedValueSchema = v.object({
   id: v.string(), removed: v.boolean(), port: v.nullable(v.number()),
 });
 
-/**
- * The probe root: it owns no identity row and answers only the fixture
- * methods the tests drive. Every call names the workspace, so
- * `abortAllDurableObjects()` between calls is exactly what it measures —
- * nothing the test holds is pinned by this object.
- */
+/** Every call names the workspace, so nothing the test holds pins this object across
+ *  `abortAllDurableObjects()`. */
 export class SlateDurabilityProbeRoot extends Agent<ProbeRootEnv> {
   private workspaceTarget(workspace: string): Promise<SlateTarget> {
     return getAgentByName<ProbeEnv, ObservedOrchestrator>(this.env.OrchestratorAgent, workspace);
   }
 
-  /** The production workspace-create sequence, exactly as
-   *  two-turn-probe's `claimQueueWorkspace` performs it: the owner registers
-   *  the name, the workspace claims its owner, and the UserDO mints the
-   *  capability token the workspace's privileged reads present. */
+  /** The production workspace-create sequence, as two-turn-probe's `claimQueueWorkspace`
+   *  performs it. */
   private async claimWorkspace(target: SlateTarget, workspace: string, owner: string): Promise<void> {
     const caller = await ownerCaller(this.env);
     const userDO = this.env.UserDO.get(this.env.UserDO.idFromName(owner));
@@ -146,15 +103,11 @@ export class SlateDurabilityProbeRoot extends Agent<ProbeRootEnv> {
     await userDO.ensureWorkspaceCapability(workspace, claim.capabilityHash);
   }
 
-  /** A claimed workspace and nothing else, for a suite whose subject is the
-   *  shell rather than a slate. */
   async openWorkspace(workspace: string, owner: string): Promise<void> {
     await this.claimWorkspace(await this.workspaceTarget(workspace), workspace, owner);
   }
 
-  /** One authored file onto the workspace's file plane, through the upload
-   *  chunk route: a single offset-0 final chunk, which (re)starts and
-   *  completes the transfer in one call. */
+  /** A single offset-0 final chunk (re)starts and completes the transfer in one call. */
   private async writeSlateFile(target: SlateTarget, path: string, content: string): Promise<void> {
     const written = await target.writeExecutorFileChunk({
       executorId: 'workspace',
@@ -170,9 +123,6 @@ export class SlateDurabilityProbeRoot extends Agent<ProbeRootEnv> {
     throw new Error(`writeExecutorFileChunk ${path}: ${'error' in written ? written.error : `revision ${String(written.revision)} conflict`}`);
   }
 
-  /** Claim the workspace, land the authored tree, and preview the slate:
-   *  the URL the durable reservation minted plus the reservation rows the
-   *  object held at that instant. */
   async serveSlate(input: {
     workspace: string; owner: string; id: string; body: string; preferredPort?: number;
   }): Promise<ServedSlate> {
@@ -203,8 +153,6 @@ export class SlateDurabilityProbeRoot extends Agent<ProbeRootEnv> {
     if (!preview.ok) throw new Error(`slate preview refused: ${preview.reason}: ${preview.error}`);
     const value = v.parse(PreviewValueSchema, preview.value);
 
-    // The capability the URL's handle was cut from, read off the same stored
-    // reservation the post-abort assertion compares.
     const held = (await target.portReservations()).find((row) => row.owner === input.id);
 
     if (held === undefined) throw new Error(`no port reservation for ${input.id}`);
@@ -219,16 +167,11 @@ export class SlateDurabilityProbeRoot extends Agent<ProbeRootEnv> {
     };
   }
 
-  /** Every stored port reservation on the named workspace object — the rows
-   *  the test compares across `abortAllDurableObjects()`. */
   async portReservations(workspace: string): Promise<DurabilityReservation[]> {
     return (await this.workspaceTarget(workspace)).portReservations();
   }
 
-  /** One request through the real preview edge: signed hostname, capability
-   *  handle check, durable re-drive, capability routing. A `null` answer is
-   *  the edge declining the hostname — a fixture fault, never a slate's
-   *  answer — so it throws rather than reporting a status. */
+  /** A `null` answer is the edge declining the hostname, a fixture fault, so it throws. */
   async drivePreview(url: string): Promise<PreviewAnswer> {
     const response = await handleNimbusPreviewHostRequest(new Request(url), this.env);
 
@@ -237,9 +180,7 @@ export class SlateDurabilityProbeRoot extends Agent<ProbeRootEnv> {
     return { status: response.status, body: await response.text() };
   }
 
-  /** One authored method over the durable URL's `/__rpc`: the WebSocket arm
-   *  of the same preview route, since a 101 cannot cross the RPC boundary the
-   *  plain drive uses. The socket lives and dies inside this call. */
+  /** Uses the WebSocket arm: a 101 cannot cross the RPC boundary the plain drive uses. */
   async rpcPreview(url: string, method: string, args: JsonValue[] = []): Promise<RpcAnswer> {
     const endpoint = new URL(url);
     endpoint.pathname = '/__rpc';
@@ -269,8 +210,6 @@ export class SlateDurabilityProbeRoot extends Agent<ProbeRootEnv> {
     }
   }
 
-  /** The root removing a slate, through the same operation the owner's
-   *  browser sends. */
   async removeSlate(workspace: string, id: string): Promise<RemovedSlate> {
     const removed = await workspaceOwner(this.env, workspace).slateAs(ROOT_SLATE_CALLER, { op: 'remove', id });
 
@@ -280,8 +219,6 @@ export class SlateDurabilityProbeRoot extends Agent<ProbeRootEnv> {
     return { ok: value.removed, port: value.port };
   }
 
-  /** One command through the workspace executor, the way the `shell` tool
-   *  reaches it: a process left running beside a served slate. */
   async runInWorkspace(workspace: string, command: string): Promise<{ exitCode: number; stdout: string }> {
     const target = await this.workspaceTarget(workspace);
     const answer = await target.executeInExecutor('workspace', command);
@@ -291,12 +228,6 @@ export class SlateDurabilityProbeRoot extends Agent<ProbeRootEnv> {
     return { exitCode: answer.exitCode, stdout: `${answer.stdout}${answer.stderr}` };
   }
 
-  /**
-   * The workspace's shell over the socket the terminal route forwards: one
-   * upgrade into the workspace object, a resize, one typed line, and the
-   * frames back until the shell has echoed `until`. The socket lives and
-   * dies inside this call, like `rpcPreview`'s.
-   */
   async driveTerminal(workspace: string, line: string, until: string): Promise<TerminalDrive> {
     const target = await this.workspaceTarget(workspace);
 
@@ -343,7 +274,6 @@ export class SlateDurabilityProbeRoot extends Agent<ProbeRootEnv> {
     }
   }
 
-  /** A file of the workspace as its user reads it, or null when absent. */
   async readWorkspaceFile(workspace: string, path: string): Promise<string | null> {
     const target = await this.workspaceTarget(workspace);
     const answer = await target.executeInExecutor('workspace', `cat ${path}`);

@@ -1,10 +1,5 @@
-/**
- * The eval-only abort route admits the eval-service identity and nobody
- * else: a person's session, whatever it owns, is answered as if the route
- * did not exist. The abort itself is a platform act (workerd
- * `do-eviction-recovery` and the `eval-abort` probe drive the real
- * `ctx.abort`); this pins the gate in front of it.
- */
+/** The eval-only abort route admits only the eval-service identity; the real `ctx.abort` is driven by the workerd
+ *  `do-eviction-recovery` and `eval-abort` probes. */
 import { describe, expect, test } from 'bun:test';
 import * as v from 'valibot';
 import type { AuthIdentity } from '../src/auth/session';

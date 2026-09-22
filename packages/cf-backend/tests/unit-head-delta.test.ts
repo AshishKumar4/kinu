@@ -1,18 +1,5 @@
-// A running head's live output: what the accumulator holds, when it is
-// retired, and how it reaches the chat.
-//
-// The property that carries the feature: the journal is the authority and the
-// delta is subordinate to it. So every assertion here is about one of two
-// things — the delta accumulating exactly what the provider sent, or the delta
-// getting out of the way once the journal holds the same words. Painting a
-// landed step twice (once as the durable step, once as the live tail under it)
-// is the defect this file is built around.
-//
-// The live half is rendered by the chat's own `MessageView`, which reads part
-// STATE to place its one live affordance (message-live-tail.ts). That is why
-// the projection's part states are asserted rather than its markup: a closed
-// part on the arriving step would move the caret onto finished text, and an
-// open part on a journalled step would leave two carets on screen.
+// Defends: a landed step painted twice (durable step plus live tail). The journal is the authority;
+// part states are asserted because `MessageView` places its live caret by part state.
 import { describe, expect, test } from 'bun:test';
 import { readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
@@ -25,7 +12,6 @@ import { present } from '@kinu.run/test-utils';
 
 const NOTHING: ReadonlyMap<string, HeadDelta> = new Map();
 
-/** Apply a run of frames the way the socket handler does. */
 function frames(
   ...sent: readonly [string, 'text' | 'reasoning', string][]
 ): ReadonlyMap<string, HeadDelta> {
@@ -73,9 +59,7 @@ describe('retirement — the journal caught up', () => {
   });
 
   test('retiring a head that holds nothing changes nothing, identity included', () => {
-    // A reader retires on every journal advance, and most advances belong to a
-    // head nobody is watching. A new Map for each would re-render every reader
-    // of the accumulator for no news at all.
+    // Most retirements are for unwatched heads; a new Map would re-render every reader for nothing.
     const map = frames(['h1', 'text', 'one']);
     expect(retireHeadDelta(map, 'h9')).toBe(map);
   });
@@ -86,8 +70,7 @@ describe('retirement — the journal caught up', () => {
   });
 
   test('a retired head starts clean when it writes again', () => {
-    // The step that follows a landed one is a new step, not a continuation:
-    // resuming the old buffer would replay the durable step's words under it.
+    // Resuming the old buffer would replay the durable step's words under the new one.
     const landed = retireHeadDelta(frames(['h1', 'text', 'first step.']), 'h1');
     expect(appendHeadDelta(landed, 'h1', 'text', 'second').get('h1'))
       .toEqual({ text: 'second', reasoning: '' });
@@ -173,22 +156,13 @@ describe('the journalled step, as the chat draws it', () => {
 });
 
 /**
- * The wiring the duplicate paint comes back through.
- *
- * A delta is retired by the `head_activity` push AND by a reader whose own
- * re-read found the landed step — the second half lives in `useNodeTranscript`,
- * because that is where the journal's step count arrives. A reader that instead
- * looks the delta up itself and hands it to `TranscriptBody` gets the push half
- * only, and paints the landed step twice whenever a frame is missed. There are
- * two such readers today (the Exploration panel and the branch chip) and both
- * take `pending` from the hook; this holds that shape.
+ * `useNodeTranscript` retires on the journal re-read; a reader that looks the delta up itself
+ * gets only the push half and paints the landed step twice when a frame is missed.
  */
 describe('every painted delta comes from the hook that retires it', () => {
   const SRC = join(import.meta.dir, '../src');
-  /** Every reader that draws a transcript with a live tail. */
   const READERS = ['components/NodeTranscript.tsx', 'components/AlternateTakes.tsx'];
-  /** The module that owns the pairing: it reads the journal's step count, so it
-   *  is the only place allowed to read the accumulator directly. */
+  /** Reads the journal's step count, so the only place allowed to read the accumulator. */
   const OWNER = 'components/NodeTranscript.tsx';
 
   test('the retire sits with the journal read', () => {
@@ -212,19 +186,10 @@ describe('every painted delta comes from the hook that retires it', () => {
   });
 });
 
-/**
- * The four facts that retire a delta, at the socket.
- *
- * There is no React here to drive `useKinu` with, and the accumulator's own
- * behavior is covered above — what is left is that each fact is WIRED. A
- * missing one is invisible until a user sees a half-written step claiming to be
- * live: after the step landed, after the branch failed, after the turn was
- * cancelled, or across a reconnect the client heard nothing during.
- */
+/** Each retiring fact must be wired: a missing one leaves a half-written step claiming to be live. */
 describe('the socket retires a delta on every fact that ends one', () => {
   const HOOK = readFileSync(join(import.meta.dir, '../src/hooks/use-kinu.ts'), 'utf8');
 
-  /** The handler arm for one frame type, up to the next arm. */
   function arm(type: string): string {
     const at = HOOK.indexOf(`msg.type === "${type}"`);
     expect(at).toBeGreaterThan(-1);
@@ -246,12 +211,8 @@ describe('the socket retires a delta on every fact that ends one', () => {
   });
 
   test('a dropped socket forgets every head — the gap is unheard, not empty', () => {
-    // The chat socket's own close, not the lightweight RPC hook's above it.
-    // The hook does not read close codes itself — the SDK classifies a terminal
-    // close (`isTerminalCloseEvent`) and publishes `connectionError`, so the pin
-    // is the close handler that BOTH marks the gap and drops the live paint. A
-    // second code-reading authority here would be a second answer to the same
-    // question.
+    // The SDK classifies terminal closes (`isTerminalCloseEvent`); a second code-reading authority
+    // here would be a second answer to the same question.
     const at = HOOK.indexOf('// No close-code list here.');
     expect(at).toBeGreaterThan(-1);
     const onClose = HOOK.slice(at, HOOK.indexOf('onError: useCallback', at));
@@ -260,7 +221,6 @@ describe('the socket retires a delta on every fact that ends one', () => {
   });
 });
 
-/** Every source file under `src`, for the gate above. */
 function sources(root: string): string[] {
   return readdirSync(root, { withFileTypes: true }).flatMap((entry) => {
     const path = join(root, entry.name);

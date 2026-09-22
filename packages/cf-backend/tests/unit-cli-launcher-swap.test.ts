@@ -1,13 +1,6 @@
 /**
- * The launcher's swap and its launch check, run as bash against a home the
- * test built — the launcher is the one file `kinu update` rewrites, so what
- * it does to `cli/current` and `cli/prev` is pinned by running it, not by
- * reading it.
- *
- * The served script resolves Bun through the launcher's own order (a managed
- * `runtime/bin/bun` first), so each home carries the running Bun under that
- * path and the script never reaches PATH. No origin is contacted: every case
- * below has a `cli/current` to run, and the launch check downloads nothing.
+ * Pins the launcher's `cli/current`/`cli/prev` swap by running it as bash;
+ * each home carries the running Bun at `runtime/bin/bun`, and no origin is contacted.
  */
 import { chmodSync, existsSync, mkdirSync, readFileSync, symlinkSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
@@ -26,7 +19,6 @@ async function launcherScript(): Promise<string> {
   return shim.text();
 }
 
-/** A home with the running Bun as its managed runtime and the launcher installed. */
 async function launcherHome(): Promise<{ home: string; launcher: string }> {
   const home = scratchDir('launcher-swap');
   mkdirSync(join(home, 'runtime', 'bin'), { recursive: true });
@@ -39,8 +31,7 @@ async function launcherHome(): Promise<{ home: string; launcher: string }> {
   return { home, launcher };
 }
 
-/** A CLI tree whose `cli.js` prints `stamp` for --version and echoes its
- *  arguments otherwise; `broken` makes it exit 1 on every launch. */
+/** `cli.js` prints `stamp` for --version, echoes args otherwise; `broken` exits 1. */
 function cliTree(home: string, name: string, stamp: string, broken = false): string {
   const tree = join(home, 'cli', name);
   mkdirSync(tree, { recursive: true });
@@ -103,10 +94,8 @@ describe('the launcher launch check', () => {
   });
 
   test('a swap killed after current moved out is finished from the proven next-* tree, no download', async () => {
-    // The state a kill between the swap's renames leaves: no current, prev is
-    // the build that last ran, next-<pid> is the tree the refresh had already
-    // proven. The origin here answers nothing (port 9), so a launch that
-    // reached for a download would fail as itself.
+    // State a kill between the swap's renames leaves; the origin (port 9) answers
+    // nothing, so a launch that reached for a download fails.
     const { home, launcher } = await launcherHome();
     cliTree(home, 'prev', '1.0.0+old');
     cliTree(home, 'next-4242', '2.0.0+new');
@@ -115,7 +104,6 @@ describe('the launcher launch check', () => {
     expect(run.exitCode).toBe(0);
     expect(run.stdout).toBe('2.0.0+new');
     expect(readFileSync(join(home, 'cli', 'current', 'cli.js'), 'utf-8')).toContain('2.0.0+new');
-    // The prev the killed swap had moved aside was proven by this launch and dropped.
     expect(existsSync(join(home, 'cli', 'next-4242'))).toBe(false);
   });
 
@@ -139,7 +127,6 @@ describe('the launcher launch check', () => {
     const run = await launch(home, launcher, '--version');
     expect(run.exitCode).toBe(0);
     expect(run.stdout).toBe('1.0.0+old');
-    // The live holder's lock is left in place.
     expect(existsSync(join(home, 'cli', '.lock'))).toBe(true);
   });
 

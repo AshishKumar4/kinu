@@ -1,22 +1,6 @@
 /**
- * A HIRED SUBORDINATE HAS THE FULL-AGENT SURFACE, AND IT WORKS.
- *
- * docs/TOOLS.md and AGENTS.md promise a hire the eight builtins through the
- * same `buildActorTools` path the workspace root's own turns are built by,
- * gated by the deps this workspace wires for it. The delegated turn used to be
- * built from the confined HEAD set instead — four tools, no `agents`, no
- * `memory`, no `tasks`, and not even the `report` lane the conformance manifest
- * declares for this exact root — so a colleague hired to work in the workspace
- * could neither remember anything, keep a task list, nor delegate under its own
- * depth.
- *
- * Conformance (tests/conformance.test.ts) pins the SHAPE: which tools and which
- * action enums a delegated turn is handed. This pins that two of them RUN, on
- * the child's own stores, driven the only way a subordinate's tools are ever
- * driven — its assigned turn through the production runner. The two chosen are
- * the two the shape check cannot vouch for: `memory` writes and reads back
- * through the workspace store, and `agents` needs a roster rung built from the
- * child's OWN directory row rather than the root's.
+ * A hired subordinate gets the full-agent surface via `buildActorTools`, and its `memory` and `agents` tools run on its own stores.
+ * Defends: delegated turns built from the confined head set. Shape is pinned in tests/conformance.test.ts.
  */
 import { expect, test } from 'bun:test';
 import { createProviderRegistry, type JsonObject } from '@kinu.run/core';
@@ -31,19 +15,15 @@ const USAGE = {
 
 const NOTE = 'the streaming parser holds no whole file';
 
-/** One scripted tool call. */
 interface ScriptedCall {
   readonly tool: string;
   readonly args: JsonObject;
 }
 
-/** The step this request is: how many tool results the conversation already
- *  carries. Read off the prompt rather than counted in a closure, so a retried
- *  request answers the same way the first one did. */
+/** Read off the prompt rather than counted in a closure, so a retried request answers the same way. */
 const step = (options: ScriptedTurnOptions): number =>
   options.prompt.filter((message) => message.role === 'tool').length;
 
-/** A turn that makes each call in order, one per step, then answers. */
 function turnCalling(calls: readonly ScriptedCall[]): MockLanguageModelV3 {
   return scriptedTurnModel({
     provider: 'fake',
@@ -73,12 +53,7 @@ function turnCalling(calls: readonly ScriptedCall[]): MockLanguageModelV3 {
   });
 }
 
-/** What each tool call ANSWERED, in call order — read off the requests the
- *  turn went on to make, which is where a tool's output reaches the model.
- *
- *  The output is kept as its DISCRIMINANT plus its rendered text: `json` and
- *  `error-json` are the two the SDK distinguishes, and a refusal from a
- *  missing dep arrives as the second. */
+/** A refusal from a missing dep arrives as `error-json`, so the discriminant is kept beside the text. */
 interface AnsweredCall {
   readonly tool: string;
   readonly kind: string;
@@ -106,8 +81,6 @@ function toolResults(model: MockLanguageModelV3): AnsweredCall[] {
   return [...seen.values()];
 }
 
-/** The system prompt the turn was actually issued under, off the request the
- *  provider received. */
 function systemPrompt(model: MockLanguageModelV3): string {
   for (const call of model.doStreamCalls) {
     for (const message of call.prompt) {
@@ -142,31 +115,16 @@ test('a hired subordinate saves and searches memory and lists its roster in its 
   await workspace.agent.runHostedTaskTurn(child.actor, 'Save what you know, read it back, and list your roster.');
 
   const results = toolResults(model);
-  // Each call ANSWERED, and answered with its own success: a missing dep or an
-  // unwired store comes back as `error-json` instead.
+  // A missing dep or an unwired store comes back as `error-json` instead.
   expect(results.map((r) => r.tool)).toEqual(['memory', 'memory', 'agents']);
   expect(results.filter((r) => r.kind === 'error-json')).toEqual([]);
   expect(results[0]?.rendered ?? '').toContain('Note saved to memory.');
-  // The note it saved, read back out of the workspace memory store by its own
-  // `memory` tool: the write landed and the search found it.
   expect(results[1]?.rendered ?? '').toContain('streaming parser');
-  // Its own roster, from its own directory row. An empty roster is the right
-  // answer for a child that has hired nobody; what matters is that the rung
-  // exists and answers, which is what the head surface had no tool for.
+  // An empty roster is right for a child that has hired nobody; what matters is that the rung answers.
   expect(results[2]?.rendered ?? '').toContain('subordinates');
 });
 
-/**
- * AND IT IS FRAMED AS ONE.
- *
- * `runHostedTask` passed no framing, so the shared runner fell to its own
- * default — the HEAD prompt — and a colleague hired into a workspace was told
- * it was one of several parallel reasoning threads competing over one tree,
- * with conventions for tools it does not hold and a merge nobody was running.
- * The framing a parent-assigned turn runs under is the product's own agent
- * prompt, and the `report` lane on its surface is what makes that prompt name
- * it as a hire (core's `state/delegation` section).
- */
+/** Defends: `runHostedTask` falling to the runner's default head prompt instead of the agent prompt that names a hire. */
 test('a hired subordinate is framed as a hire, not as a head', async () => {
   const workspace = orchestratorHarness();
 
@@ -186,9 +144,7 @@ test('a hired subordinate is framed as a hire, not as a head', async () => {
   await workspace.agent.runHostedTaskTurn(child.actor, 'Say what you are.');
 
   const system = systemPrompt(model);
-  // The hire's own name and the `report` lane it answers on. The head prompt
-  // carries neither: it opens on a task, a merge strategy and sibling threads
-  // racing one tree, none of which exist for a hire.
+  // The head prompt carries neither the hire's name nor the `report` lane.
   expect(system).toContain('Framing prover');
   expect(system).toContain('report');
 });

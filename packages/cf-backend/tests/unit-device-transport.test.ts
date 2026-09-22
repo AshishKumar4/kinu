@@ -1,5 +1,3 @@
-// createHubDeviceTransport — the device runtime's cached/authoritative status
-// over the user-level device hub. This is what beforeTurn refreshes so the
 import { describe, expect, test } from 'bun:test';
 import * as v from 'valibot';
 import {
@@ -80,9 +78,7 @@ describe('createHubDeviceTransport', () => {
     };
 
     const clock = handClock();
-    // Every re-check begins by resolving the caller, synchronously inside the
-    // kick; the hub list itself comes one await later. So the caller count is
-    // the read that can see a kick BEFORE anything else could list.
+    // The caller is resolved synchronously in the kick; the hub list comes one await later.
     let callerCalls = 0;
 
     const transport = createHubDeviceTransport({
@@ -100,26 +96,20 @@ describe('createHubDeviceTransport', () => {
     transport.status();
     transport.status();
     expect(callerCalls).toBe(1);        // fresh — no background re-check
-    // Past the 5 s status TTL, on the transport's own clock.
+    // Past the status TTL, on the transport's own clock.
     clock.advance(5_100);
     transport.status();                 // stale — kicks ONE background re-check
     transport.status();
-    // Read here, before `refreshStatus`: awaited first, it would begin a
-    // re-check of its own and hide a missing kick behind the same count.
+    // Read before `refreshStatus`, which would start its own re-check and hide a missing kick.
     expect(callerCalls).toBe(2);
-    // `refreshStatus` dedupes against the in-flight slot, so awaiting it here
-    // is awaiting the kicked re-check itself — a second list would show as 3.
+    // `refreshStatus` dedupes against the in-flight re-check.
     await transport.refreshStatus();
     expect(listCalls).toBe(2);
     expect(callerCalls).toBe(2);
   });
 
   test('no owner hub → the workspace is unattached, which is not an unlinked machine', async () => {
-    // This pin said "rpc rejects with the connect guidance", and the guidance
-    // was wrong: a null hub means the stub resolved off no owner id, so no hub
-    // was asked and no device question was reached. Telling that owner to run
-    // `kinu connect` sends them to re-link a machine they may already have
-    // linked — which is what the first-run tier observed on a deployed build.
+    // A null hub means no owner id resolved; `kinu connect` guidance would be wrong.
     const clock = handClock();
 
     const transport = createHubDeviceTransport({
@@ -132,8 +122,6 @@ describe('createHubDeviceTransport', () => {
     const refusal = transport.rpc('exec', ['ls']);
     await expect(refusal).rejects.toThrow(WORKSPACE_HAS_NO_OWNER);
     await expect(refusal).rejects.not.toThrow(/kinu connect/);
-    // Handled identically by every caller — the plane is unavailable — and told
-    // apart only where a person is being told what to do next.
     let unattached: Error | null = null;
 
     try { await transport.rpc('exec', ['ls']); }
@@ -142,8 +130,7 @@ describe('createHubDeviceTransport', () => {
     expect(isDeviceNotConnectedError({ cause: unattached })).toBe(true);
     expect(isWorkspaceUnattachedError({ cause: unattached })).toBe(true);
 
-    // The denominator: a hub that answers, with no device on it, is the OTHER
-    // condition and must not read as unattached.
+    // A hub that answers with no device must not read as unattached.
     const unlinked = createHubDeviceTransport({
       clock,
       hub: () => fakeHub(() => NO_DEVICE), agentName: 'agent-1', cliCwd: () => null, caller,
@@ -208,16 +195,12 @@ describe('createHubDeviceTransport', () => {
     await transport.refreshStatus();
     await transport.rpc('exec', ['echo hi']);
 
-    // The call proves the socket is there and says nothing about the toolchain.
-    // Re-seeding the snapshot from the call alone blanked the row the moment the
-    // agent used the device, which is exactly when it needs the row.
+    // A call proves the socket, not the toolchain: it must not re-seed the snapshot.
     expect(transport.status().toolchain).toEqual(probed.toolchain);
   });
 
   test('the caller\'s request identity is forwarded, not dropped or replaced', async () => {
-    // This seam is the one that could quietly lose the id: it rewrites `exec`
-    // params for the CLI cwd and adds checkpoint hints. An id that does not
-    // reach the hub is a command nothing can cancel.
+    // This seam rewrites `exec` params; a lost id is a command nothing can cancel.
     const hub = fakeHub(() => ({ connected: true, registered: true, toolchain: null }));
 
     const clock = handClock();
@@ -235,8 +218,7 @@ describe('createHubDeviceTransport', () => {
     expect(method).toBe('exec');
     expect(v.parse(v.string(), params[0])).toContain('make');
     expect(opts?.requestId).toBe(requestId);
-    // A call that needs no cancellation handle sends none, and the tunnel mints
-    // its own — one authority, not two.
+    // No handle sent: the tunnel mints its own.
     await transport.rpc('readFile', ['/home/me/project/readme.md']);
     expect(requiredCall(hub.rpcCalls, 1)[2]?.requestId).toBeUndefined();
   });
@@ -299,14 +281,12 @@ describe('createHubDeviceTransport', () => {
 
     await transport.rpc('exec', ['git status']);
     await transport.rpc('readFile', ['/tmp/a']);
-    // The workspace identity reaches the hub with every call, not just the first.
     expect(hub.rpcCalls.map((c) => c[3])).toEqual([FAKE_CALLER, FAKE_CALLER]);
     expect(hub.rpcCalls[0]?.[1]).toEqual(["cd '/home/u/my proj' && git status"]);
     expect(hub.rpcCalls[1]?.[1]).toEqual(['/tmp/a']); // only exec is cwd-rewritten
   });
 
-  // A workspace shared with a second human loses the device plane entirely at
-  // the user hub. What the agent must see is "no device", not a crashed turn.
+  // A workspace shared with a second human has no device plane: "no device", not a crash.
   test('a hub that refuses this workspace reads as no device, and calls surface the reason', async () => {
     const denial = () => { throw new Error('"device.rpc" is not available to a shared workspace.'); };
 

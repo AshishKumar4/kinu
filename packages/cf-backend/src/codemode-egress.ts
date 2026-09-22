@@ -1,64 +1,19 @@
 /**
- * Outbound network policy for eval and resident slate code.
- *
- * Both WorkerLoader paths explicitly select this loopback capability as
- * globalOutbound, rather than inherit unclassified network access. Null disables
- * outbound for restricted execution. Workerd's enable_ctx_exports
- * (compatibility date >= 2025-11-17; this Worker is at 2025-12-01) populates
- * exports from the module's exports, the same way
- * Nimbus reaches `NimbusDOStub` and the Sandbox SDK reaches `ContainerProxy`.
- * `env.d.ts` declares this one export in `Cloudflare.GlobalProps`, which is
- * what types `exports.CodemodeEgress` as the loopback stub.
- *
- * ── One destination judgment, at every seam that has one ──────────
- * The program is LLM-authored, so where it may reach is not the program's
- * decision. `refusedHostname` (packages/core/src/safety/egress-destination.ts)
- * is the project's one classifier, and this is its third enforcement point: the
- * container's egress hop judges with it (`egress/outbound.ts`), the agent's own
- * `web.fetch` judges with it (`core/src/web/url-safety.ts`), and so does the
- * same request as `fetch()` inside an `eval` program. Leave this seam
- * out and that request is judged by nothing at all — while the identical URL is
- * DENIED as a shell command by the approval gate. One judgment for the whole
- * project means this seam asks it too.
- *
- * A REDIRECT IS A DESTINATION. The forwarding fetch uses redirect:manual,
- * like egress/outbound.ts, so that it never follows an unjudged destination.
- * The handler returns the 3xx. A manual caller sees that response; native
- * global fetch may follow it outside the binding, in which case the next
- * destination re-enters this policy.
- *
- * What this is NOT: a policy about what a program MAY do with a public
- * destination. The programs are the owner's own code, run against the owner's
- * own account, so what the sandbox may reach is what the Worker may reach,
- * minus the addresses no untrusted code may reach.
- *
- * ── The residual, and it is NOT measured ─────────────────────────
- * The classifier judges LITERALS and reserved names. A hostname that is public
- * in spelling and RESOLVES to a private address is not caught here, because
- * this seam has no resolution to inspect — the same residual
- * `safety/egress-destination.ts` states for the other two. What bounds it is a
- * platform property nothing in this repository measures: that Workers `fetch`
- * egress does not reach RFC1918 or link-local addresses. Settling that needs a
- * deployed run, not a reading: on the deployment, one `eval`
- * program that fetches a name whose A record points at 169.254.169.254 and one
- * that fetches a public control, with both outcomes recorded. Source cannot
- * answer it: no line here decides what the runtime's resolver and egress path
- * do with an address they were handed.
+ * Outbound network policy for eval and resident slate code, exported via
+ * workerd `enable_ctx_exports` as the WorkerLoader `globalOutbound`.
+ * Applies `refusedHostname` like `egress/outbound.ts` and `web/url-safety.ts`.
+ * redirect:manual so no unjudged destination is followed. Unmeasured residual:
+ * public names resolving to private addresses are not caught here.
  */
 
 import { WorkerEntrypoint, exports } from 'cloudflare:workers';
 import { refusedHostname } from '@kinu.run/core';
 import { diagnostics, renderThrownChain, KinuError } from '@kinu.run/core/obs';
 
-/** The header a failed egress answers with. An exception thrown inside a
- *  loopback entrypoint reaches the caller as an opaque `internal error`, so the
- *  failure travels as a response the sandbox's `fetch` turns back into the
- *  rejection a Node program expects (codemode-node-shim.ts `createFetch`). */
+/** Loopback throws reach the caller as opaque `internal error`, so failures
+ *  travel as responses (codemode-node-shim.ts `createFetch` rethrows). */
 export const EGRESS_FAILURE_HEADER = 'x-kinu-egress-failure';
 
-/**
- * Judge, then forward.
- */
 async function forwardCodemodeEgress(request: Request): Promise<Response> {
   const url = new URL(request.url);
   const refusal = refusedHostname(url.hostname);
@@ -94,10 +49,7 @@ export class CodemodeEgress extends WorkerEntrypoint {
   }
 }
 
-/**
- * The loopback stub for {@link CodemodeEgress}, or null where the runtime
- * exposes none (a test harness that loads this module outside workerd).
- */
+/** Null outside workerd (test harnesses). */
 export function codemodeEgress(): Fetcher | null {
   return exports.CodemodeEgress ?? null;
 }

@@ -1,21 +1,5 @@
-// The three record RPCs, over a REAL orchestrator on a REAL workspace database.
-//
-// The reads themselves are proven in `packages/core/tests/unit-exploration-records-read.test.ts`.
-// What can only be proven here is the WIRING, and it has two halves that a core-level
-// test cannot reach:
-//
-//   1. THE TABLE EXISTS ON A WORKSPACE THAT HAS NEVER SEARCHED. `exploration_records`
-//      is part of `initWorkspaceSchema`, which is what the orchestrator's own `onStart`
-//      runs — not something the first swarm run creates. Created there, a leaderboard
-//      RPC on any other workspace is a `no such table` throw dressed as an empty pane.
-//      So the empty answer below is a read that ran, not a read that failed.
-//   2. THE REQUEST CARRIES THE HANDLE BACK. The RPCs take the digests as opaque values,
-//      and `floorDigest: null` and `descriptor: null` have to survive the round trip as
-//      NULLS. A request shape that dropped either would read another comparable set, or
-//      no cell at all.
-//
-// The rows are written by the real writer, because the identity columns the reads report
-// are only trustworthy as something the writer fills.
+// The record RPCs over a real orchestrator and workspace database. Defends: `exploration_records` missing
+// on a never-searched workspace (`no such table` as an empty pane), and null handle digests lost in transit.
 import { describe, expect, test } from 'bun:test';
 import {
   recordExploration,
@@ -26,8 +10,6 @@ import { orchestratorHarness } from './helpers/actor-harness';
 
 const OPEN: PublicationState = { kind: 'open' };
 
-/** The verifier digest is opaque to everything here — a literal stands in for one, which
- *  is exactly what a surface holds. */
 const CALLS: ObjectiveIdentity = {
   metric: 'oracle_calls',
   unit: 'oracle calls',
@@ -76,19 +58,12 @@ function write(over: Partial<ExplorationWrite>): ExplorationWrite {
   };
 }
 
-/** A claimed workspace with two comparable sets in it: one unfloored and unpartitioned,
- *  one under a floor and spread over three cells with five occupants in one. */
+/** One unfloored, unpartitioned set; one floored set over three cells, five occupants in one. */
 function seededWorkspace() {
   const harness = orchestratorHarness();
-  // The harness's OWN database, through the same tag the actor binds — a second
-  // connection would seed a different store from the one the RPCs read.
+  // The harness's own database: a second connection would seed another store.
   const sql = sqlOver(harness.db);
-  // The records belong to the workspace actor those RPCs read as — read off the
-  // live runtime, not issued a second time. The shared leaderboards are
-  // actor-scoped precisely so one actor's search cannot read or overwrite
-  // another's, and `listRecordObjectives` answers as `actorHandle()`: rows filed
-  // under any other actor come back as an EMPTY page rather than an error, so
-  // the assertions below would hold over a workspace that recorded nothing.
+  // `listRecordObjectives` answers as this actor; rows under any other read back as an empty page.
   const actor = harness.agent.observeRuntime().actor;
 
   for (const [index, value] of [41, 23, 88].entries()) {
@@ -119,9 +94,7 @@ function seededWorkspace() {
 
 describe('the record RPCs answer over a real workspace', () => {
   test('a workspace that has never searched answers with an empty page, not a throw', async () => {
-    // THE RED DIRECTION: remove `initExplorationRecordsTable` from `initWorkspaceSchema`
-    // and this throws `no such table: exploration_records` — the failure mode that made
-    // the leaderboard unreachable on every workspace but a searched one.
+    // Red if `initExplorationRecordsTable` leaves `initWorkspaceSchema`.
     const harness = orchestratorHarness();
     expect(harness.tableNames()).toContain('exploration_records');
     expect(await harness.agent.listRecordObjectives()).toEqual({ status: 'end', items: [] });
@@ -140,9 +113,6 @@ describe('the record RPCs answer over a real workspace', () => {
   });
 
   test('listRecordCells takes the handle back opaquely, NULL floor digest included', async () => {
-    // The unfloored set's handle carries `floorDigest: null`, and the no-partition cell
-    // comes back as `descriptor: null`. A request that dropped either null would answer
-    // about a different set, or about no cell at all.
     const harness = seededWorkspace();
     const objectives = await harness.agent.listRecordObjectives();
     const calls = objectives.items.find((item) => item.metric === 'oracle_calls');
@@ -160,8 +130,7 @@ describe('the record RPCs answer over a real workspace', () => {
   });
 
   test('readRecordCell pages a cell, and the walk neither drops nor repeats an occupant', async () => {
-    // The handle comes from the LIST, never rebuilt here — that is the contract: a
-    // surface passes back the opaque pair it was handed.
+    // The handle comes from the list, never rebuilt: a surface passes back the opaque pair.
     const harness = seededWorkspace();
     const objectives = await harness.agent.listRecordObjectives();
     const pass = objectives.items.find((item) => item.metric === 'pass_rate');

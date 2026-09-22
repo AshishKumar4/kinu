@@ -1,65 +1,8 @@
 /**
- * The two-turn probe worker — the REAL OrchestratorAgent driven through two
- * full Think turns against a model service that is this worker's own
- * WorkerEntrypoint.
- *
- * THE SEAM. `createAgentProviderRegistry` binds `env.AI` as the development
- * Workers AI binding whenever `env.DEV_USER_EMAIL` is also set
- * (agent-registry.ts:117-123), and `createWorkersAIProvider` then builds the
- * REAL openai-compatible model over `createDirectWorkersAIFetch(binding)`
- * (workers-ai.ts:44-49). That adapter calls one method —
- * `binding.run(model, inputs, { signal, returnRawResponse: true })`
- * (direct-workers-ai-fetch.ts:159) — so an entrypoint named `AI` on a service
- * binding IS the external inference plane, and no production flag exists.
- *
- * EVERY LANE, not just the turn. Three product call sites reach this binding
- * during the probe, and the fake answers each from that lane's own contract —
- * keyed on the request SHAPE (the stream flag, the leading system role),
- * never on prompt text:
- *  - the turn (`streamText`): `inputs.stream === true` with `messages`.
- *    Answered with one native-dialect SSE frame (`{response: "echo:<text>"}`)
- *    plus `data: [DONE]`, which `openAIChunkTransform` translates into the
- *    chat.completion.chunk stream the AI SDK consumes
- *    (direct-workers-ai-fetch.ts:282-338,358-534). The echo answers the last
- *    TYPED user line: the real prompt appends harness-side user rows after it
- *    (the `<dynamic_context>` block), and the dropped-message defect loses
- *    exactly the typed line.
- *  - the sleep-time judge (`generateText`, user-only messages):
- *    orchestrator.ts:2698 `runSleepTimeCompute` hands the answer to core's
- *    `extractJsonObject` + `SleepTimeUpdateSchema` (sleep-time-compute.ts),
- *    and null keeps the terminal row owed forever. Answered with a
- *    `v.parse` of the imported schema — the empty update, which is the
- *    model's honest "nothing to remember".
- *  - the title suggest (`generateText` with a system half):
- *    actor-agent.ts:5597 `suggestTitle` hands the answer to core's
- *    `parseWorkspaceTitle` (naming.ts:365, `{title}` JSON). Answered with a
- *    title JSON that is gated through that same parse at build time — the
- *    lane's own reader admits the fake's answer, or the fake throws.
- *  Anything else throws a named error: an unrecognized shape is a lane the
- *  probe does not satisfy, which is a product finding, not a gap to paper
- *  over with an echo.
- *
- * THE SETTLE. `terminal.settle` hands the close to a detached durable fiber
- * (`holdTerminalClose`), so the turn-driving RPC returns before the terminal
- * effects land. The probe joins the product's own evidence instead of the
- * fiber: after each turn it polls the installed recording sink until that
- * turn's sleep-time settle event arrives (`memory.facts_deferred` or
- * `memory.facts_compressed`) — the sleep-time effect's
- * completion record — then, after the second turn, waits for log quiescence
- * and asserts the captured log holds zero failures and zero
- * `turn.terminal_effects_owed` events. `end()` emits the owed event exactly
- * when a close finishes with effects still owed (terminal-transition.ts), so
- * its absence after quiescence is the close finishing clean, and the worker
- * exiting with no "hung" exceptions is the same fact from the runtime side.
- *
- * WHY THIS FILE EXISTS. Two shipped defects are observable only over a real
- * OrchestratorAgent running two turns end to end over the real canonical
- * store: a transcript count that named a column the store never created
- * (2026-09-08), and the second turn's model request dropping
- * the message that started it (2026-09-08). Every bun suite seeds history
- * itself; the earlier workerd claim that a full turn cannot be hosted here is
- * stale — CompiledWasm modules and `workerLoaders` are wired for the sibling
- * probes in vitest.config.ts.
+ * Two-turn probe: the real OrchestratorAgent drives two full Think turns against a
+ * fake `AI` WorkerEntrypoint, answering each lane (turn, sleep-time judge, title) by
+ * request shape, never prompt text. Defends (2026-09-08): a transcript count naming a
+ * missing column, and the second turn's request dropping the message that started it.
  */
 import { Agent, getAgentByName, type AgentContext } from 'agents';
 import { subscribe } from 'agents/observability';
@@ -121,25 +64,15 @@ import {
 import { ownerCaller, type WorkMode } from '@kinu.run/core';
 import type { ToolSet } from 'ai';
 
-// Re-exported under their production names so the auxiliary worker's
-// durableObjects bind the classes themselves — the same mechanism
-// slate-actor-probe.ts:43-48 uses, for the same reason: a probe that retargets
-// the class measures its own fixture, not the shipped surface.
+// Re-exported under production names so the auxiliary worker binds the shipped
+// classes, as slate-actor-probe.ts:43-48 does.
 export { UserDO } from '../../src/user/user-do';
 
-/** A TEXT column read as the string it holds. DO SQLite types every column as
- *  `ArrayBuffer | string | number | null`, so `String()` over a blob column
- *  would project `[object ArrayBuffer]` into a row the parity normalizer then
- *  compares as text; this refuses at the read instead. */
+/** DO SQLite types columns as `ArrayBuffer | string | number | null`; refuse a blob at the read. */
 const textColumn = (value: SqlStorageValue): string => v.parse(v.string(), value);
 
-/** The production orchestrator, sealed with its own surface plus the fixture
- *  reads, bound under the production name so the same service-binding
- *  wiring runs the actual production lifecycle. It adds NO production method
- *  and no state: the constructor only retains the given DurableObjectState so
- *  `pendingSteers` can observe the actor's durable send ledger — the rows the
- *  real socket path writes — as legitimate external storage, never reaching a
- *  protected member or a made-up setter. */
+/** The production orchestrator plus fixture reads; adds no production method or state,
+ *  only retains DurableObjectState to observe the durable send ledger. */
 export class ObservedOrchestrator extends ProductionOrchestrator {
   private readonly actorState: AgentContext;
 
@@ -162,10 +95,8 @@ export class ObservedOrchestrator extends ProductionOrchestrator {
     sealRpcSurface(this, [...ORCHESTRATOR_RPC_SURFACE, 'chatHistoryPage', 'pendingSteers', 'pendingSteerFileRows', 'agentLogEvents', 'inboxState', 'runEnds', 'seedStaleDrainEvent', 'runEventWake', 'parityRows', 'wakeRows', 'armedWakeRows', 'driveArmedWakes', 'runStartCauses']);
   }
 
-  /** The wake proof's hold on the SETTLE WINDOW: a turn-end extension is run
-   *  by the inline `turn_end_extensions` effect, between the answer's commit
-   *  and the pump's next item, so a hook that parks there holds the settle
-   *  open. Parks over `/wake/wait` while a settle-placed hold is armed. */
+  /** Parks a turn-end extension over `/wake/wait`, holding the settle window open
+   *  (between the answer's commit and the pump's next item). */
   private _settleHoldInstalled = false;
   private installSettleHold(): void {
     if (this._settleHoldInstalled) return;
@@ -178,10 +109,7 @@ export class ObservedOrchestrator extends ProductionOrchestrator {
     });
   }
 
-  /** The `shell` tool, for the wake proof: the command sleeps past the detach
-   *  window and prints the marker — no container, the same wrap. Only the
-   *  execute is the probe's; the schema, the wrap and the runner are the
-   *  product's, which is what the detach and the settle are proven on. */
+  /** Only the execute is the probe's; schema, wrap and runner are the product's. */
   protected override getRawToolsForWorkMode(mode: WorkMode, claimScope?: string): ToolSet {
     this.installSettleHold();
     const tools = super.getRawToolsForWorkMode(mode, claimScope);
@@ -202,16 +130,12 @@ export class ObservedOrchestrator extends ProductionOrchestrator {
     };
   }
 
-  /** The history page a reader gets, parsed into the shape the drive's result
-   *  schema names. The production read runs here, inside the object, because
-   *  `DurableObjectStub`'s mapping of its `Page<ChatHistoryEntry>` return —
-   *  the AI SDK's recursive message parts — overflows TypeScript's
-   *  instantiation depth at the caller. */
+  /** Runs inside the object: `DurableObjectStub`'s mapping of `Page<ChatHistoryEntry>`
+   *  overflows TypeScript's instantiation depth at the caller. */
   async chatHistoryPage(): Promise<HistoryResult> {
     return v.parse(HistorySchema, await this.getChatHistoryPage({}));
   }
 
-  /** The durable rows the wake proof reads: the job, the runs, the answers. */
   async wakeRows(): Promise<WakeRows> {
     const sql = this.actorState.storage.sql;
 
@@ -238,7 +162,6 @@ export class ObservedOrchestrator extends ProductionOrchestrator {
     });
   }
 
-  /** The chat's assistant answers as a reader projects them, root first. */
   private async assistantTexts(): Promise<string[]> {
     const texts: string[] = [];
 
@@ -252,7 +175,6 @@ export class ObservedOrchestrator extends ProductionOrchestrator {
     return texts;
   }
 
-  /** The chat's entries, root first, each as the UI message a client reads. */
   private async conversationRows(): Promise<ParityRows['assistantMessages']> {
     const rows: ParityRows['assistantMessages'] = [];
 
@@ -265,9 +187,7 @@ export class ObservedOrchestrator extends ProductionOrchestrator {
     return rows;
   }
 
-  /** The durable reservations a mid-turn send leaves: each accepted message's
-   *  own client id bound to the turn it will land in — the row a reset must
-   *  restore so a replayed frame keeps its token. */
+  /** The row a reset must restore so a replayed frame keeps its token. */
   async pendingSteers(): Promise<PendingSteer[]> {
     return this.actorState.storage.sql
       .exec('SELECT actor_id, id, turn_id, mode, text FROM pending_steers ORDER BY actor_id, id')
@@ -281,8 +201,6 @@ export class ObservedOrchestrator extends ProductionOrchestrator {
       }));
   }
 
-  /** The file parts reserved alongside a pending steer — the durable half of
-   *  an attachment that arrived while a turn was live. */
   async pendingSteerFileRows(): Promise<PendingSteerFile[]> {
     return this.actorState.storage.sql
       .exec('SELECT actor_id, steer_id, filename, media_type, url FROM pending_steer_files ORDER BY actor_id, steer_id, seq')
@@ -296,8 +214,6 @@ export class ObservedOrchestrator extends ProductionOrchestrator {
       }));
   }
 
-  /** The event rows an unbindStale sweep sees: which drain turn owns each and
-   *  the lease timestamp it judges staleness on. */
   async agentLogEvents(): Promise<AgentLogEvent[]> {
     return this.actorState.storage.sql
       .exec("SELECT id, turn_id, consumed_at, variant FROM agent_log WHERE kind = 'event' ORDER BY id")
@@ -311,12 +227,8 @@ export class ObservedOrchestrator extends ProductionOrchestrator {
   }
 
 
-  /** Whether the inbox reads a turn in flight — the public `busy` getter the
-   *  busy route itself consults, so a probe sees the admission the same way
-   *  `routeBusyChat` does. */
-  /** Every `run_end` the run ledger holds, in write order with its reason: how
-   *  many times each run was closed and by what. A run the loop continues
-   *  after a reset closes exactly once, by the loop. */
+  /** The public `busy` getter `routeBusyChat` consults. */
+  /** A run the loop continues after a reset closes exactly once, by the loop. */
   async runEnds(): Promise<Array<{ runId: string; reason: string }>> {
     return this.actorState.storage.sql
       .exec(`SELECT run_id, payload FROM run_events WHERE type = 'run_end' ORDER BY ts, rowid`)
@@ -331,10 +243,7 @@ export class ObservedOrchestrator extends ProductionOrchestrator {
     return { busy: this.orch.inbox.busy };
   }
 
-  /** The durable record the parity script compares: the transcript, the
-   *  pending-send ledger, the event log, the terminal ledger and the run
-   *  ledger's continuation rows — every one read raw, in table order, so the
-   *  test's normalizer is the only thing that decides what "the same" means. */
+  /** Read raw in table order, so the test's normalizer alone decides what "the same" means. */
   async parityRows(): Promise<ParityRows> {
     const sql = this.actorState.storage.sql;
 
@@ -357,9 +266,7 @@ export class ObservedOrchestrator extends ProductionOrchestrator {
         .map((row) => ({ runId: textColumn(row.run_id), type: textColumn(row.type), payload: textColumn(row.payload) })),
     });
   }
-  /** The state a dead activation leaves behind: an event bound to a drain turn
-   *  whose lease outlived it. `consumed_at = 0` is older than any grace, so the
-   *  next wake's unbindStale must re-pend it rather than skip it as live work. */
+  /** `consumed_at = 0` is older than any grace, so the next wake's unbindStale must re-pend it. */
   async seedStaleDrainEvent(marker: string): Promise<void> {
     this.ensureSchema();
     this.actorState.storage.sql.exec(
@@ -378,26 +285,16 @@ export class ObservedOrchestrator extends ProductionOrchestrator {
     );
   }
 
-  /** The wake frame, driven synchronously for the test: `owedDeliveryWork`
-   *  re-pends the stale leases (the unbindStale half), then the reactor drains
-   *  whatever is pending — the two halves the platform alarm runs in order.
-   *  The drain's model call lands async after admission, so the wake joins on
-   *  the buffered event's marker reaching the wire log before returning: the
-   *  fake parks `/log/until` until the call carrying the marker is recorded.
-   *  A wake that never re-delivers hangs here, ended and named by the row's
-   *  deadline. */
+  /** unbindStale then drain, as the platform alarm runs them; joins on the marker reaching
+   *  the wire log, so a wake that never re-delivers hangs until the row's deadline. */
   async runEventWake(marker: string): Promise<void> {
     await this.owedDeliveryWork();
     await this.orch.drainPendingEvents({ rethrow: true });
     await fetch(`http://probe-control.invalid/log/until?marker=${encodeURIComponent(marker)}`);
   }
 
-  /** The durable wake registry as the platform holds it: which callback each
-   *  armed row names, and when. The discriminating read for a two-chain
-   *  actor — a fold arms ONE chain's callback, and only that chain's frame
-   *  runs. Future rows only, the same rule `armWakeRow`'s collapse applies:
-   *  while a tick executes, the SDK keeps its own overdue row listed until the
-   *  callback returns, and counting it would report a wake nothing owes. */
+  /** Future rows only, as `armWakeRow`'s collapse: while a tick runs, the SDK keeps its
+   *  overdue row listed until the callback returns. */
   async armedWakeRows(): Promise<ArmedWake[]> {
     const nowSec = Math.floor(Date.now() / 1000);
 
@@ -408,27 +305,12 @@ export class ObservedOrchestrator extends ProductionOrchestrator {
   }
 
   /**
-   * Deliver the wakes this object has armed — ONE lap, in wake order — and
-   * answer which callbacks ran.
-   *
-   * THE FRAME, NEVER THE WORK. The probe reads the registry and invokes the
-   * callback each row names; it does not pick the chain and it does not call
-   * `drainPendingEvents`, `maintenanceWork` or any other pass by hand. That is
-   * the whole measurement for an actor with two wake chains: a fold arms a
-   * callback, the platform delivers exactly that callback, and whether the
-   * frame behind it can take the work is the product's answer — not the
-   * probe's. A probe that drove a hand-picked pass would report a product that
-   * was never asked (`hire-probe.ts:225-232` records that failure).
-   *
-   * In-request because the pool cannot deliver a real alarm to an object while
-   * a request holds its input gate. ONE lap because one delivery is what the
-   * platform owes for one armed row; a property that needs a second lap is a
-   * finding the caller states, not one this method hides by looping.
+   * Deliver armed wakes, one lap in wake order, invoking each row's callback: the frame,
+   * never a hand-picked pass (`hire-probe.ts:225-232`). In-request because the pool cannot
+   * deliver a real alarm while a request holds the input gate.
    */
   async driveArmedWakes(): Promise<string[]> {
-    // The two Kinu wake callbacks, paired with the frame each one names. A
-    // `const` tuple list rather than a dictionary: the registry answers a
-    // string, and this is the one place that string becomes a call.
+    // The one place the registry's callback string becomes a call.
     const frames = [
       ['_kinuTimerTick', () => this._kinuTimerTick()],
       ['_kinuTerminalRetryTick', () => this.terminalRetryPass()],
@@ -448,9 +330,7 @@ export class ObservedOrchestrator extends ProductionOrchestrator {
     return driven;
   }
 
-  /** Every run the ledger opened, by what caused it. A drain turn is
-   *  `caused_by: 'event_drain'`, which is how a reader tells the reactor's own
-   *  turn from a chat turn that happened to absorb the batch. */
+  /** A drain turn is `caused_by: 'event_drain'`, distinguishing it from a chat turn. */
   async runStartCauses(): Promise<string[]> {
     return this.actorState.storage.sql
       .exec("SELECT payload FROM run_events WHERE type = 'run_start' ORDER BY rowid")
@@ -464,11 +344,8 @@ export class ObservedOrchestrator extends ProductionOrchestrator {
 
 export { ObservedOrchestrator as OrchestratorAgent };
 
-/** The request shape `bindingInputs` hands the binding (direct-workers-ai-
- *  fetch.ts:209-227): the openai-compatible body minus `model`, with `stream`
- *  always set. The layer normalizes every call to `messages` first, so a turn
- *  carries `stream: true` and the completion lanes `stream: false` with a
- *  leading system message (title) or user-only messages (sleep). */
+/** The shape `bindingInputs` hands the binding (direct-workers-ai-fetch.ts:209-227):
+ *  a turn carries `stream: true`; completion lanes `stream: false`. */
 const TextPartSchema = v.object({ type: v.literal('text'), text: v.string() });
 
 const MessageContentSchema = v.union([v.string(), v.array(v.unknown())]);
@@ -487,24 +364,20 @@ const RunInputsSchema = v.object({
 
 type RunInputs = v.InferOutput<typeof RunInputsSchema>;
 
-/** `options` as the adapter builds it; `signal` stays `unknown` because what
- *  it arrives as IS the spike's measurement. */
+/** `signal` stays `unknown` because what it arrives as is the spike's measurement. */
 interface RunOptions {
   readonly signal?: unknown;
   readonly returnRawResponse?: boolean;
   readonly extraHeaders?: Record<string, string>;
 }
 
-/** The one method the adapter calls, typed the way it types it. */
 interface AIRunner {
   run(model: string, inputs: RunInputs, options?: RunOptions): Promise<Response | ReadableStream<Uint8Array> | object>;
 }
 
 
-/** The whole call log for this isolate; the test reads it through the root. */
 const recordedCalls: CallRecord[] = [];
 
-/** The model's side of `messages[].content`, schema-narrowed at the boundary. */
 function messageText(content: MessageContent): string {
   return v.is(v.string(), content)
     ? content
@@ -515,16 +388,12 @@ function messageText(content: MessageContent): string {
     }).join('');
 }
 
-/** The empty sleep-time update, parsed against the lane's own imported schema
- *  — the model's honest "nothing to remember", which the judge accepts and
- *  the tombstone records. */
+/** Parsed against the lane's own imported schema. */
 function sleepTimeAnswer(): string {
   return JSON.stringify(v.parse(SleepTimeUpdateSchema, { upserts: [], decay: [] }));
 }
 
-/** The title suggestion, admitted by the lane's own reader before it is ever
- *  served: `parseWorkspaceTitle` returning null is the fake failing its own
- *  build, loudly, rather than the lane failing the turn. */
+/** Admitted by `parseWorkspaceTitle` at build time, so the fake fails loudly, not the turn. */
 function titleAnswer(): string {
   const answer = JSON.stringify({ title: 'Two Turn Probe' });
 
@@ -535,11 +404,8 @@ function titleAnswer(): string {
   return answer;
 }
 
-/** The lane a call belongs to, keyed on request SHAPE and never on prompt
- *  text: a streamed call is the turn, and among the completion lanes a leading
- *  system message is the title suggest (`suggestTitle` passes the system half
- *  separately, actor-agent.ts:5609-5615) while user-only messages are the
- *  sleep-time judge (orchestrator.ts:2698). */
+/** Keyed on request shape: streamed is the turn; a leading system message is the title
+ *  (actor-agent.ts:5609-5615); user-only is the sleep-time judge (orchestrator.ts:2698). */
 function laneOf(stream: boolean, messages: readonly { role?: string }[]): CallRecord['lane'] {
   if (stream) return 'turn';
 
@@ -553,8 +419,7 @@ export class FakeAI extends WorkerEntrypoint {
   async run(model: string, inputs: RunInputs, options?: RunOptions): Promise<Response> {
     const signal = options?.signal;
 
-    // Absent and null stay distinct kinds: only one of them means the adapter
-    // never passed a signal at all.
+    // Absent and null stay distinct: only one means the adapter never passed a signal.
     let signalKind = 'foreign';
 
     if (signal === undefined) signalKind = 'undefined';
@@ -565,29 +430,19 @@ export class FakeAI extends WorkerEntrypoint {
     const stream = parsed.stream ?? false;
     const messages = parsed.messages ?? [];
 
-    // The turn now travels the HTTP seam (pinned `openai-compat/probe`), so
-    // the only streamed calls that still reach this binding are the probe's
-    // own `signalProbe` — answered by the turn lane below. The lifecycle
-    // variants (early-DONE, pending) moved to the HTTP fake with the turns
-    // that drive them; their RPC arms and red tests are evidence in the run
-    // logs, not permanent residents here.
+    // Turns travel the HTTP seam; the only streamed calls here are the probe's own `signalProbe`.
     const users = messages
       .filter((m) => m.role === 'user')
       .map((m) => messageText(v.parse(MessageContentSchema, m.content ?? '')));
 
-    // The openai-compatible layer normalizes every call to `messages` before
-    // the binding (a `prompt` string never arrives as one), so the lane key
-    // below reads the stream flag and the leading role.
+    // The layer normalizes every call to `messages`, so the lane key reads the stream flag and leading role.
     const lane = laneOf(stream, messages);
 
     recordedCalls.push({ model, users, signalKind, stream, lane });
 
     if (lane === 'turn') {
-      // The echo answers the last TYPED line — harness-side user rows
-      // (`<dynamic_context>` and friends) ride after it. A single buffered
-      // body rather than a custom ReadableStream: `streamedResponse` needs a
-      // body to forward (`direct-workers-ai-fetch.ts:253`), and a constructed
-      // string body keeps the pipe lifecycle entirely on workerd's side.
+      // Echo the last typed line (harness rows ride after it). A buffered body: `streamedResponse`
+      // needs one to forward (direct-workers-ai-fetch.ts:253).
 
       const text = users.filter((u) => !u.startsWith('<')).at(-1) ?? '';
 
@@ -615,23 +470,16 @@ export class FakeAI extends WorkerEntrypoint {
 
 type ProbeEnv = ConstructorParameters<typeof ProductionOrchestrator>[1];
 
-/** The probe worker's own bindings. `durableObjects` installs
- *  `ObservedOrchestrator` under the `OrchestratorAgent` name (the re-export at
- *  the top of this file), which the production `Env` declares by its base
- *  class, so every stub the namespace returns carries the fixture reads. */
+/** `durableObjects` installs `ObservedOrchestrator` under the `OrchestratorAgent` name,
+ *  so every stub the namespace returns carries the fixture reads. */
 interface ProbeRootEnv extends Omit<ProbeEnv, 'AI' | 'OrchestratorAgent'> {
   readonly OrchestratorAgent: DurableObjectNamespace<ObservedOrchestrator>;
-  /** `vitest.config.ts` binds `AI` to this worker's own `FakeAI` entrypoint,
-   *  whose `run` answers the probe's model name; the production `Env` declares
-   *  the platform Workers AI binding, keyed on its model catalogue. */
+  /** `vitest.config.ts` binds `AI` to this worker's own `FakeAI` entrypoint. */
   readonly AI?: AIRunner;
 }
 
-/** The orchestrator RPC the exercise arms drive, named member by member:
- *  `DurableObjectStub<OrchestratorAgent>` maps the whole class, and mapping
- *  `getChatHistoryPage`'s page of AI SDK message parts overflows TypeScript's
- *  instantiation depth — `chatHistoryPage` is that read, parsed inside the
- *  object into the shape the result schema names. */
+/** Named member by member: `DurableObjectStub<OrchestratorAgent>` over `getChatHistoryPage`
+ *  overflows TypeScript's instantiation depth. */
 type ExerciseTarget = Pick<Fetcher, 'fetch'> & Pick<ProductionOrchestrator,
   'claimOwner' | 'setModel' | 'runTaskFromMcp' | 'getWorkspaceSnapshot' | 'writeWorkspaceFile'>
   & Pick<ObservedOrchestrator, 'chatHistoryPage'>;
@@ -642,17 +490,13 @@ type QueueTarget = Pick<Fetcher, 'fetch'> & Pick<ProductionOrchestrator,
   & Pick<ObservedOrchestrator, 'pendingSteers' | 'pendingSteerFileRows' | 'agentLogEvents' | 'inboxState' | 'runEnds' | 'seedStaleDrainEvent' | 'runEventWake' | 'parityRows' | 'wakeRows'
   | 'armedWakeRows' | 'driveArmedWakes' | 'runStartCauses'>;
 
-/** How long the wake proof's command sleeps: past the interactive detach
- *  window (30 s), so the call detaches and the job settles out of turn. */
+/** Sleeps past the interactive detach window, so the call detaches and settles out of turn. */
 const WAKE_RUN_SLEEP_MS = 40_000;
 
 const SocketHistorySchema = v.array(v.object({ id: v.string(), role: v.string() }));
 
 type SocketHistory = v.InferOutput<typeof SocketHistorySchema>;
 
-/** Every frame the raw-chat drive reads off its socket, loosely: the chat
- *  request's own done frame (`id`, `done`, `landed`) and the steer lifecycle
- *  the object broadcasts beside it (`status`, `steerId`, `text`, `atStep`). */
 const RawChatFrameSchema = v.looseObject({
   type: v.string(),
   id: v.optional(v.string()),
@@ -664,20 +508,14 @@ const RawChatFrameSchema = v.looseObject({
   atStep: v.optional(v.number()),
 });
 
-/** The drive result shapes live in `./two-turn-shapes` — same schemas, same
- *  InferOutput types, but importable from the workerd typecheck project,
- *  which excludes this file for importing production `src` (see the
- *  `//exclude` note in this directory's tsconfig). */
+/** Result shapes live in `./two-turn-shapes`, importable from the workerd typecheck
+ *  project, which excludes this file (see this directory's tsconfig). */
 
-/** The sleep-time effect's own completion record, one per settled turn: the
- *  lane runs on a cadence, so a turn it declines says so on the log exactly
- *  as one it compresses does. */
+/** One per settled turn: a turn the lane declines logs it just as one it compresses. */
 function sleepTimeSettled(emitted: readonly { event: string }[]): number {
   return emitted.filter((e) => e.event === 'memory.facts_deferred' || e.event === 'memory.facts_compressed').length;
 }
 
-/** The effect keys a finished close left owed, as the `turn.terminal_effects_owed`
- *  rows carry them: one comma-joined field per row, empty when clean. */
 function owedEffectKeys(emitted: readonly RecordedLog[]): string[] {
   return emitted
     .filter((e) => e.event === 'turn.terminal_effects_owed')
@@ -688,15 +526,11 @@ function owedEffectKeys(emitted: readonly RecordedLog[]): string[] {
     });
 }
 
-/** Join on the product's own completion evidence: one sleep-time settle per
- *  turn, awaited on the recording sink's own delivery. A close that never
- *  finishes hangs here, ended and named by the row's deadline rather than by
- *  a clock beside it. */
+/** A close that never finishes hangs here, ended by the row's deadline, not a side clock. */
 function awaitSleepTimeSettled(recording: RecordingLogger, count: number): Promise<void> {
   return recording.until((emitted) => sleepTimeSettled(emitted) >= count);
 }
 
-/** A bounded wait on one promise, naming what did not arrive. */
 async function awaitWithLimit<T>(work: Promise<T>, ms: number, what: string): Promise<T> {
   const expiry = Promise.withResolvers<never>();
   const timer = setTimeout(() => expiry.reject(new Error(what)), ms);
@@ -705,9 +539,7 @@ async function awaitWithLimit<T>(work: Promise<T>, ms: number, what: string): Pr
   finally { clearTimeout(timer); }
 }
 
-/** Bounded quiescence: the isolate is quiet when no diagnostic line lands for
- *  a full second. The close's `end()` emits the owed event synchronously, so
- *  a quiet log with no owed event is a close that finished clean. */
+/** The close's `end()` emits the owed event synchronously, so a quiet log without it is a clean close. */
 async function awaitQuiet(recording: RecordingLogger): Promise<void> {
   const started = Date.now();
   let seen = recording.emitted.length;
@@ -736,9 +568,7 @@ async function awaitQuiet(recording: RecordingLogger): Promise<void> {
 
 
 export class TwoTurnProbeRoot extends Agent<ProbeRootEnv> {
-  /** Spike 1: does an AbortSignal cross the service binding into `shell`?
-   *  Returns the kind FakeAI recorded, or the throw's message — the caller
-   *  cannot distinguish "no signal" from a serialization failure otherwise. */
+  /** Returns the recorded kind or the throw's message, separating "no signal" from serialization failure. */
   async signalProbe(): Promise<{ signalKind: string } | { threw: string }> {
     try {
       const binding = this.env.AI;
@@ -750,8 +580,6 @@ export class TwoTurnProbeRoot extends Agent<ProbeRootEnv> {
         { signal: controller.signal, returnRawResponse: true },
       );
 
-      // The probe's own call never came from the product; it leaves the log
-      // it only entered to measure the marshalling.
       const recorded = recordedCalls.pop();
 
       return { signalKind: recorded?.signalKind ?? 'no-call-recorded' };
@@ -760,23 +588,13 @@ export class TwoTurnProbeRoot extends Agent<ProbeRootEnv> {
     }
   }
 
-  /** The recorded model requests, in order. */
   calls(): CallRecord[] {
     return recordedCalls;
   }
 
-  /** The real drive: claim, pin the model, two turns each joined on its own
-   *  terminal settle, snapshot, history, and the captured log's verdict. */
   async exercise(): Promise<ExerciseResult> {
-    // The documented test seam (obs/log.ts): record AND keep console output.
-    // Captured AFTER warmup, before every turn: each DO constructor installs
-    // the analytics sink on first stub use (actor-agent.ts:1453-1462), which
-    // REPLACES whatever sink exists — an install at the top of this method
-    // would be clobbered by the very constructors the drive warms. Past
-    // construction nothing reinstalls (install.ts:309, same env), so a capture
-    // before each turn owns the sink for that turn and its detached close.
-    // The analytics rows the capture displaces go nowhere in this pool; the
-    // console half keeps every line visible.
+    // Capture after warmup, before every turn: each DO constructor replaces the sink on first
+    // stub use (actor-agent.ts:1453-1462); nothing reinstalls after (install.ts:309).
     const recording = createRecordingLogger();
 
     const capture = (): (() => void) => setDiagnosticsSink(
@@ -790,10 +608,7 @@ export class TwoTurnProbeRoot extends Agent<ProbeRootEnv> {
         this.env.OrchestratorAgent, 'two-turn-workspace',
       );
 
-      // The production workspace-create sequence: the owner registers the name,
-      // the workspace claims its owner, and the UserDO mints the capability
-      // token `userCaller()` needs for the registry reads a turn performs
-      // (title hydration, release board, credential listing).
+      // The capability token is needed for the registry reads a turn performs.
       const caller = await ownerCaller(this.env);
       const userDO = this.env.UserDO.get(this.env.UserDO.idFromName('probe-owner'));
 
@@ -802,11 +617,7 @@ export class TwoTurnProbeRoot extends Agent<ProbeRootEnv> {
 
       await userDO.ensureWorkspaceCapability('two-turn-workspace', claim.capabilityHash);
 
-      // The HTTP seam's credential: the static openai-compat provider resolves
-      // its baseURL from this stored key (never models.dev), and the global
-      // fetch the agent falls back to reaches the Node-side fake through this
-      // worker's outboundService. Fixture values only — the wire assertions
-      // below prove they arrive.
+      // The static openai-compat provider resolves its baseURL from this key; fixture values only.
       await userDO.setCredential(caller, 'openai-compat.default', {
         kind: 'openai-compat',
         baseURL: 'http://fake-models.invalid/v1',
@@ -837,8 +648,7 @@ export class TwoTurnProbeRoot extends Agent<ProbeRootEnv> {
       const snapshot = await target.getWorkspaceSnapshot();
       const history = await target.chatHistoryPage();
 
-      // Parsed at the boundary: the wire carries exactly these shapes, so the
-      // RPC declaration (InferOutput below) can never drift from them.
+      // Parsed at the boundary, so the RPC declaration (InferOutput) cannot drift from the wire.
       return v.parse(ExerciseResultSchema, {
         register, claim, model, turnA, turnB, snapshot, history,
         calls: recordedCalls,
@@ -856,10 +666,7 @@ export class TwoTurnProbeRoot extends Agent<ProbeRootEnv> {
     }
   }
 
-  /** One workspace, `priorTurns` turns of `priorDeltas` streamed deltas
-   *  each, then one turn of `deltas` — each timed from enqueue to the turn's
-   *  settle, as the object itself experiences it. The transcript-cost gate
-   *  reads the two timings against each other. */
+  /** Timed enqueue-to-settle as the object experiences it; the transcript-cost gate compares them. */
   async longTurn(priorTurns: number, deltas: number, priorDeltas = 20): Promise<{ priorMs: number; longMs: number; calls: number }> {
     const workspace = `long-${priorTurns}-${deltas}-${priorDeltas}`;
     const target: QueueTarget = await this.queueTarget(workspace);
@@ -896,32 +703,23 @@ export class TwoTurnProbeRoot extends Agent<ProbeRootEnv> {
     return { priorMs, longMs, calls: (await this.httpCalls()).length };
   }
 
-  /** The HTTP seam's readback: the Node-side handler's captured request log
-   *  over the test-only control host. Only this worker's outbound handler
-   *  routes there, so this fetch is the established "pull the pool's log over
-   *  the existing RPC" pattern — no new Worker, no cross-worker binding. */
+  /** Only this worker's outbound handler routes to the control host, so no new Worker or binding. */
   async httpCalls(): Promise<HttpCall[]> {
     return (await this.probeLog()).calls;
   }
 
-  /** The probe's outbound log: every model call, and how many times the
-   *  worker fetched the provider catalog. */
   async probeLog(): Promise<{ calls: HttpCall[]; catalogHits: number }> {
     const response = await fetch('http://probe-control.invalid/log');
 
-    // Parsed at the boundary: the `/log` branch constructs its answer as
-    // `{ calls, catalogHits }`, and the schema names any drift.
     return v.parse(v.object({ calls: v.array(HttpCallSchema), catalogHits: v.number() }), await response.json());
   }
 
-  /** Clear the HTTP log before a drive, so each test's wire proof is its own. */
   async httpReset(): Promise<void> {
     await fetch('http://probe-control.invalid/reset', { method: 'POST' });
   }
 
-  /** Real socket intake and Think queue; only the remote model response is
-   * held. Peer ingress queues a durable event-drain submission while both
-   * socket inputs are pending, so its inherited lastBody belongs to B. */
+  /** Only the remote model response is held; peer ingress queues a durable event-drain
+   * submission while both socket inputs are pending, so its inherited lastBody belongs to B. */
   async queuedConversation(mode: Exclude<QueueProbeMode, 'cold' | 'attach-cold' | 'evt' | 'rwake' | 'twin'>): Promise<HttpCall[]> {
     const workspace = `queue-${mode}-workspace`;
     const owner = `queue-${mode}-owner`;
@@ -962,11 +760,8 @@ export class TwoTurnProbeRoot extends Agent<ProbeRootEnv> {
       if (response.status !== 101 || socket === null) throw new Error('queue probe did not receive a real WebSocket');
       socket.accept();
 
-      // A busy-routed send is announced `queued` under its client id the
-      // moment the running turn's inbox takes it — its request is answered
-      // only when the words land, which the held provider call forbids —
-      // while an idle send only persists its row. send() resolves on
-      // WHICHEVER arrives first, so it never outlives either path.
+      // A busy-routed send is announced `queued` when the inbox takes it; an idle send only
+      // persists its row. send() resolves on whichever arrives first.
       const admittedIds = new Set<string>();
       socket.addEventListener('message', (event) => {
         const raw = v.is(v.string(), event.data) ? event.data : '';
@@ -1028,9 +823,7 @@ export class TwoTurnProbeRoot extends Agent<ProbeRootEnv> {
       }
 
       if (mode === 'peer') {
-        // A peer event is not an SDK chat request: it does not splice, it
-        // writes a durable event row and its own event-drain turn drains it.
-        // No socket 'submission:running' frame is issued for it now.
+        // A peer event writes a durable event row drained by its own turn; no 'submission:running' frame.
         const peer = await target.receivePeerMessage({
           sender_event_id: 'queue-peer-input', sender_agent_name: 'queue-peer', sender_user_id: owner,
           topic: 'queue-probe', body: 'QUEUE-PROGRAMMATIC', mode: 'build', reply_expected: false,
@@ -1047,10 +840,8 @@ export class TwoTurnProbeRoot extends Agent<ProbeRootEnv> {
       if (heldCalls.length !== 1) throw new Error('queued requests ran before the held genesis response was released');
       await fetch('http://probe-control.invalid/queue/release', { method: 'POST' });
 
-      // Turns, not sends: the held genesis, then ONE user-origin rerun of the
-      // sends it could not land. A peer event that arrived mid-genesis rides
-      // that rerun's first step rather than queueing a turn behind it; a
-      // signal's own programmatic turn is the third.
+      // The held genesis, one user-origin rerun of the sends it could not land (a mid-genesis peer
+      // event rides its first step), and the signal's own turn.
       await awaitSleepTimeSettled(recording, { chat: 2, peer: 2, signal: 3, yield: 1, attach: 2 }[mode]);
       await awaitQuiet(recording);
 
@@ -1064,19 +855,9 @@ export class TwoTurnProbeRoot extends Agent<ProbeRootEnv> {
   }
 
   /**
-   * THE BACKGROUND WAKE, on the loop, with the settle window held.
-   *
-   * The owner asks for a command that sleeps past the detach window. The call
-   * detaches at 30 s and the turn goes on to its reply step. `where` says what
-   * is held while the job settles at 40 s: the reply step itself (the model
-   * call carrying the detach handle parks in the fake — the live incident's
-   * window, the turn still RUNNING when the job settles), or the settle (the
-   * probe's turn-end hook parks after the answer's commit). Either way the
-   * wake asks the loop for a turn while the interactive turn still owns it.
-   * The hold is released only after the job row says settled, and the drive
-   * then waits for the woken turn to reach its reply. On Think's queue this
-   * is the admission that parked forever; on the loop 'queued' means the pump
-   * runs it next.
+   * Background wake with the settle window held (`where`: reply step or settle): the wake
+   * asks the loop for a turn while the interactive turn owns it; on the loop, 'queued'
+   * means the pump runs it next.
    */
   async backgroundWakeConversation(where: WakeHoldPlacement): Promise<WakeDriveResult> {
     const workspace = `wake-workspace-${where}`;
@@ -1115,7 +896,6 @@ export class TwoTurnProbeRoot extends Agent<ProbeRootEnv> {
         }) },
       }));
 
-      // The job settles on its own clock; the title stays held until it has.
       const began = Date.now();
       let settledAt: number | null = null;
 
@@ -1137,14 +917,11 @@ export class TwoTurnProbeRoot extends Agent<ProbeRootEnv> {
         await new Promise<void>((resolve) => setTimeout(resolve, 250));
       }
 
-      // The window WAS held when the job settled: the held party arrived at
-      // the hold before now, and is released only here.
+      // The window was held when the job settled; the held party is released only here.
       await fetch('http://probe-control.invalid/wake/arrived');
       const releasedAt = Date.now();
       await fetch('http://probe-control.invalid/wake/release', { method: 'POST' });
 
-      // The woken turn: a second run, started for the runner's own message,
-      // closed with a reply.
       for (;;) {
         const rows = await target.wakeRows();
         const woken = rows.runs.filter((run) => run.userMessage.includes('Background shell job'));
@@ -1173,9 +950,6 @@ export class TwoTurnProbeRoot extends Agent<ProbeRootEnv> {
     }
   }
 
-  /** The shared workspace+owner claim both queue modes open with: a real
-   *  UserDO registration, the capability token, the compat credential, and the
-   *  queue model pinned so the fake can hold one turn's call. */
   private async claimQueueWorkspace(mode: QueueProbeMode): Promise<{ target: QueueTarget; workspace: string; owner: string }> {
     const workspace = `queue-${mode}-workspace`;
     const owner = `queue-${mode}-owner`;
@@ -1197,8 +971,7 @@ export class TwoTurnProbeRoot extends Agent<ProbeRootEnv> {
     return { target, workspace, owner };
   }
 
-  /** One chat frame over a real socket, persisted before it returns, and the
-   *  exact wire it sent — the frame the cold test replays after the reset. */
+  /** Returns the exact wire it sent, which the cold test replays after the reset. */
   private async socketHistory(target: QueueTarget, workspace: string): Promise<SocketHistory> {
     const page = await target.fetch(`https://probe/agents/orchestrator-agent/${workspace}/get-messages`);
 
@@ -1218,10 +991,7 @@ export class TwoTurnProbeRoot extends Agent<ProbeRootEnv> {
     if (response.status !== 101 || socket === null) throw new Error('queue probe did not receive a real WebSocket');
     socket.accept();
 
-    // The done frame carries `landed` — 'mid-turn' when the request was
-    // busy-routed into a splice, 'turn' when it opened its own turn. Capture
-    // it so a probe can assert WHICH admission the prompt took, not only that
-    // it persisted.
+    // `landed`: 'mid-turn' (busy-routed splice) or 'turn' (own turn).
     const landed = Promise.withResolvers<string | null>();
     socket.addEventListener('message', (event) => {
       const raw = v.is(v.string(), event.data) ? event.data : '';
@@ -1264,8 +1034,7 @@ export class TwoTurnProbeRoot extends Agent<ProbeRootEnv> {
         await new Promise<void>((resolve) => setTimeout(resolve, 20));
       }
 
-      // Wait on the done frame for `landed` — but a busy-routed frame can close
-      // before the socket echoes it, so bound the wait and fall back to null.
+      // A busy-routed frame can close before the socket echoes it, so bound the wait.
       const landedValue = await Promise.race([
         landed.promise,
         new Promise<string | null>((resolve) => setTimeout(() => resolve(null), 5000)),
@@ -1279,10 +1048,7 @@ export class TwoTurnProbeRoot extends Agent<ProbeRootEnv> {
 
 
 
-  /** The cold drive's setup: the genesis turn's model call is held from the
-   *  first probe-queue call, then B and C are sent mid-turn — each a
-   *  pending_steers reservation bound to the genesis turn, durable before the
-   *  reset. The replay must re-bind the same client id to the same turn id. */
+  /** The replay must re-bind the same client id to the same turn id. */
   async prepareQueuedConversation(mode: QueueProbeMode): Promise<PreparedConversation> {
     const { target, workspace, owner } = await this.claimQueueWorkspace(mode);
     await fetch('http://probe-control.invalid/queue/hold', {
@@ -1293,33 +1059,23 @@ export class TwoTurnProbeRoot extends Agent<ProbeRootEnv> {
 
     if (!genesis.started) throw new Error('queue probe genesis did not start');
 
-    // The 'attach' drive sends B with an image part: the reservation that must
-    // survive the reset carries a file row beside the steer row.
     const attach = mode === 'attach' || mode === 'attach-cold'
       ? { filename: 'chart.png', mediaType: 'image/png', url: 'data:image/png;base64,iVBORw0KGgo=' }
       : undefined;
 
-    // Both frames go out while the held call is in flight — after the fake
-    // reports it arrived — so each is a steer with no step left to land at
-    // before the reset. Sent earlier, B can reach the turn's first drain and
-    // land inside the held call, and the reset then has no reservation to keep.
+    // Sent after the fake reports the held call: sent earlier, B can land inside it and the
+    // reset has no reservation to keep.
     await fetch('http://probe-control.invalid/queue/arrived');
     const bWire = (await this.sendChatFrame(target, workspace, 'QUEUE-B', attach)).wire;
     const cWire = (await this.sendChatFrame(target, workspace, 'QUEUE-C')).wire;
 
-    // Both admissions are durable before the reset: B's and C's mid-turn sends
-    // each wrote a pending_steers row bound to the turn they will land in.
     const steers = await target.pendingSteers();
     const steerFiles = await target.pendingSteerFileRows();
 
     return v.parse(PreparedConversationSchema, { workspace, owner, bFrame: bWire, cFrame: cWire, steers, steerFiles });
   }
 
-  /** The reset half: a fresh socket to the SAME object replays B's and C's
-   *  exact frames. Each replay is a re-delivery of a reservation the object
-   *  already holds — the durable pending_steers row, not the socket, binds it
-   *  to the turn. Returns the post-reset ledger: the pending-steer
-   *  reservations and their file rows. */
+  /** The durable pending_steers row, not the socket, binds each replay to the turn. */
   async replayQueuedConversation(prepared: PreparedConversation): Promise<{ steers: PendingSteer[]; steerFiles: PendingSteerFile[] }> {
     const target: QueueTarget = await this.queueTarget(prepared.workspace);
 
@@ -1343,11 +1099,6 @@ export class TwoTurnProbeRoot extends Agent<ProbeRootEnv> {
     return { steers: await target.pendingSteers(), steerFiles: await target.pendingSteerFileRows() };
   }
 
-  /** The join: release the held model call and wait on the queued turn's own
-   *  completion evidence, then return the wire log, the two durable ledgers —
-   *  the pending-steer reservations and the file rows any attachment left
-   *  beside them — the transcript the drain wrote the landed sends into, and
-   *  every run close the ledger holds. */
   async completeQueuedConversation(prepared: PreparedConversation): Promise<{ http: HttpCall[]; steers: PendingSteer[]; steerFiles: PendingSteerFile[]; transcript: SocketHistory; runEnds: Array<{ runId: string; reason: string }> }> {
     const target: QueueTarget = await this.queueTarget(prepared.workspace);
 
@@ -1355,13 +1106,10 @@ export class TwoTurnProbeRoot extends Agent<ProbeRootEnv> {
     const restore = setDiagnosticsSink(createCompositeLogger([createConsoleLogger(), recording]));
 
     try {
-      // The fake logged the held call when it arrived, before the reset killed
-      // the object that made it; only the calls the restarted object makes are
-      // this half's measurement.
+      // Only calls the restarted object makes are this half's measurement.
       await this.httpReset();
       await fetch('http://probe-control.invalid/queue/release', { method: 'POST' });
-      // ONE turn: the re-opened genesis turn, with B and C landed at its first
-      // step — the step boundary both were waiting for when the reset came.
+      // One turn: the re-opened genesis, with B and C landed at its first step.
       await awaitSleepTimeSettled(recording, 1);
       await awaitQuiet(recording);
 
@@ -1375,17 +1123,9 @@ export class TwoTurnProbeRoot extends Agent<ProbeRootEnv> {
     }
   }
 
-  // ── The parity drive ────────────────────────────────────────────────────
-  //
-  // One scripted conversation over real sockets, the same script the local
-  // backend's `chat-session-parity.ts` runs: an idle send, a send mid-turn
-  // carrying a file, an interrupt, a tool-calling turn evicted after its tool
-  // step settled and its answer had begun, a send acknowledged mid-turn before
-  // the eviction, and the restart. `parityPrepare` runs to the instant of the
-  // eviction and hands back everything durable plus every frame the sockets
-  // saw; the test evicts; `parityComplete` reconnects, resumes, and finishes.
+  // The parity drive: the same script as the local backend's `chat-session-parity.ts`;
+  // `parityPrepare` runs to the eviction instant, `parityComplete` resumes after it.
 
-  /** A socket that records every frame it receives, in order, under a name. */
   private async paritySocket(
     target: QueueTarget, workspace: string, name: string, frames: ParityFrame[],
   ): Promise<{ socket: WebSocket; done: (id: string) => Promise<ParityFrame>; seen: (match: (frame: ParityFrame) => boolean, what: string) => Promise<void> }> {
@@ -1424,10 +1164,7 @@ export class TwoTurnProbeRoot extends Agent<ProbeRootEnv> {
 
       frames.push(frame);
 
-      // A done frame resolves the waiter for its request whether that waiter
-      // was asked for before or after the frame arrived: the script asks for
-      // a parked turn's done only after releasing the model, and the frame can
-      // land in between.
+      // A done frame resolves its waiter whether asked for before or after it arrived.
       if (type === 'cf_agent_use_chat_response' && done === true && id !== undefined) {
         const waiter = waiters.get(id) ?? Promise.withResolvers<ParityFrame>();
         waiters.set(id, waiter);
@@ -1456,7 +1193,6 @@ export class TwoTurnProbeRoot extends Agent<ProbeRootEnv> {
     };
   }
 
-  /** The socket's word that the running turn's inbox took this message. */
   private queuedSteer(steerId: string): (frame: ParityFrame) => boolean {
     return (frame) => frame.type === 'steer_status' && frame.status === 'queued' && frame.steerId === steerId;
   }
@@ -1509,16 +1245,12 @@ export class TwoTurnProbeRoot extends Agent<ProbeRootEnv> {
       const { socket, done, seen } = await this.paritySocket(target, workspace, 'A', frames);
 
       try {
-        // 1. An idle send runs as a turn of its own.
         socket.send(this.parityFrame('PARITY-ONE'));
         landings['PARITY-ONE'] = (await done('PARITY-ONE')).landed ?? null;
         await awaitSleepTimeSettled(recording, 1);
 
-        // 2. A send mid-turn, carrying a file, while the turn's model call is
-        //    parked. The echo lane has no second step, so the steer reruns as
-        //    the operator's next turn once the parked turn settles — and its
-        //    request is answered by that rerun, under the steer's own id,
-        //    not at admission. What admission announces is `queued`.
+        // 2. Mid-turn send with a file while the call is parked: it reruns as the next turn,
+        //    answered under its own id, not at admission (admission announces `queued`).
         await fetch('http://probe-control.invalid/parity/hold', { method: 'POST', body: JSON.stringify({ parkAt: 'first' }) });
         socket.send(this.parityFrame('PARITY-TWO'));
         await fetch('http://probe-control.invalid/parity/arrived');
@@ -1531,7 +1263,6 @@ export class TwoTurnProbeRoot extends Agent<ProbeRootEnv> {
         await awaitQuiet(recording);
         afterTwo = await target.parityRows();
 
-        // 3. An interrupt while the turn's model call is parked.
         await fetch('http://probe-control.invalid/parity/hold', { method: 'POST', body: JSON.stringify({ parkAt: 'first' }) });
         socket.send(this.parityFrame('PARITY-THREE'));
         await fetch('http://probe-control.invalid/parity/arrived');
@@ -1540,20 +1271,13 @@ export class TwoTurnProbeRoot extends Agent<ProbeRootEnv> {
         await fetch('http://probe-control.invalid/parity/release', { method: 'POST' });
         await awaitQuiet(recording);
 
-        // 4. A tool-calling turn: its tool step settles, its answer streams one
-        //    delta and parks — then a send acknowledged mid-turn, and the
-        //    eviction the test performs while everything is parked.
         await fetch('http://probe-control.invalid/parity/hold', { method: 'POST', body: JSON.stringify({ parkAt: 'partial' }) });
         socket.send(this.parityFrame('PARITY-FOUR-TOOL'));
-        // The join is the socket's own evidence: the tool step's settled result
-        // and the answer's first delta both reached the client before anything
-        // else happens, so the state the eviction cuts is the same every run.
+        // The eviction waits for the tool result and first delta on the socket, so it cuts the same state every run.
         await fetch('http://probe-control.invalid/parity/arrived');
         await seen((frame) => frame.id === 'PARITY-FOUR-TOOL' && frame.body !== undefined && frame.body.includes('"text-delta"'), "the parked answer's first delta");
         socket.send(this.parityFrame('PARITY-FOUR-STEER', file));
-        // Acknowledged, not landed: the eviction below cuts the turn before
-        // any step could take the words, and the request that sent them dies
-        // with the isolate. The reservation is what survives.
+        // Acknowledged, not landed: the eviction cuts the turn first; the reservation is what survives.
         await seen(this.queuedSteer('input-PARITY-FOUR-STEER'), 'the steer admitted into the parked turn');
       } finally {
         socket.close(1000, 'parity prepared');
@@ -1580,9 +1304,8 @@ export class TwoTurnProbeRoot extends Agent<ProbeRootEnv> {
     const callsBefore = prepared.modelCallsBefore.length;
 
     try {
-      // 5. The reconnect: the client asks to resume, the parked producer is
-      //    released (the dead activation never consumes it), the wake
-      //    continues the evicted turn and replays the acknowledged steer.
+      // 5. Resume: the parked producer is released, the wake continues the evicted turn and
+      //    replays the acknowledged steer.
       const { socket, done } = await this.paritySocket(target, prepared.workspace, 'B', frames);
 
       try {
@@ -1592,7 +1315,6 @@ export class TwoTurnProbeRoot extends Agent<ProbeRootEnv> {
         await awaitSleepTimeSettled(recording, 1);
         await awaitQuiet(recording);
 
-        // 6. A fresh send on the restarted actor.
         socket.send(this.parityFrame('PARITY-FIVE'));
         landings['PARITY-FIVE'] = (await done('PARITY-FIVE')).landed ?? null;
         await awaitSleepTimeSettled(recording, 2);
@@ -1612,8 +1334,6 @@ export class TwoTurnProbeRoot extends Agent<ProbeRootEnv> {
     }
   }
 
-  /** The orchestrator stub, typed to the fixture class `ProbeRootEnv` names
-   *  under the production binding. */
   private queueTarget(workspace: string): Promise<QueueTarget> {
     return getAgentByName<ProbeEnv, ObservedOrchestrator>(this.env.OrchestratorAgent, workspace);
   }
@@ -1621,52 +1341,38 @@ export class TwoTurnProbeRoot extends Agent<ProbeRootEnv> {
 
 
 
-  /** The durable mid-turn reservations a named workspace's actor holds — the
-   *  send-path ledger the warm arm reads to prove each socket input bound its
-   *  own request and no second SDK turn ran. */
+  /** Proves each socket input bound its own request and no second SDK turn ran. */
   async pendingSteersFor(workspace: string): Promise<PendingSteer[]> {
     const target: QueueTarget = await this.queueTarget(workspace);
 
     return await target.pendingSteers();
   }
 
-  /** The event-redelivery drive's workspace: a real owner claim, compat
-   *  credential and pinned queue model — the same claim every queue mode
-   *  opens with. */
   async claimEventWorkspace(): Promise<{ workspace: string; owner: string }> {
     const { workspace, owner } = await this.claimQueueWorkspace('evt');
 
     return { workspace, owner };
   }
 
-  /** The event rows an unbindStale sweep would see, for one workspace. */
   async agentLogEventsFor(workspace: string): Promise<AgentLogEvent[]> {
     const target: QueueTarget = await this.queueTarget(workspace);
 
     return await target.agentLogEvents();
   }
 
-  /** Seed the state a dead activation leaves: an event bound to a drain turn
-   *  whose lease outlived it, stale past every grace. */
   async seedStaleDrainEventFor(workspace: string, marker: string): Promise<void> {
     const target: QueueTarget = await this.queueTarget(workspace);
 
     await target.seedStaleDrainEvent(marker);
   }
 
-  /** Drive the wake frame the platform alarm would run: re-pend the stale
-   *  leases, then drain whatever is pending. */
   async runEventWakeFor(workspace: string, marker: string): Promise<void> {
     const target: QueueTarget = await this.queueTarget(workspace);
 
     await target.runEventWake(marker);
   }
 
-  /**
-   * The reactor-wake drive's workspace, claimed and left IDLE: no genesis
-   * turn, no due trigger, nothing owed. The state an external event actually
-   * arrives in for a workspace nobody is talking to.
-   */
+  /** Claimed and left idle: no genesis turn, no due trigger, nothing owed. */
   async claimReactorWakeWorkspace(): Promise<{ workspace: string; owner: string }> {
     const { workspace, owner } = await this.claimQueueWorkspace('rwake');
 
@@ -1674,17 +1380,8 @@ export class TwoTurnProbeRoot extends Agent<ProbeRootEnv> {
   }
 
   /**
-   * One real external event through a real ingress, and the wake it armed.
-   *
-   * `receivePeerMessage` is the shipped cross-DO receiver: it gates the sender,
-   * publishes through `EventLog.publish`, and calls the `onAdmitted` the
-   * production orchestrator wires to `scheduleDrain` — so both halves of the
-   * ingress contract run, the in-memory debounce and the durable arm. Nothing
-   * is hand-inserted into `agent_log`.
-   *
-   * The armed rows are read back in the SAME call, before the caller can evict:
-   * they are what the fold decided, and the verdict on a two-chain actor is
-   * which callback carries it.
+   * One external event via `receivePeerMessage` (the shipped cross-DO receiver, wired to
+   * `scheduleDrain`); armed rows are read in the same call, before the caller can evict.
    */
   async publishPeerEvent(workspace: string, owner: string, body: string): Promise<ArmedWake[]> {
     const target: QueueTarget = await this.queueTarget(workspace);
@@ -1699,39 +1396,30 @@ export class TwoTurnProbeRoot extends Agent<ProbeRootEnv> {
     return await target.armedWakeRows();
   }
 
-  /** The wake registry of one workspace, after an eviction: the rows that
-   *  survived, which is what the platform would deliver next. */
   async armedWakesFor(workspace: string): Promise<ArmedWake[]> {
     const target: QueueTarget = await this.queueTarget(workspace);
 
     return await target.armedWakeRows();
   }
 
-  /** Deliver one lap of whatever this workspace armed, and answer which
-   *  callbacks ran — the product's own frames, chosen by its own registry. */
   async driveArmedWakesFor(workspace: string): Promise<string[]> {
     const target: QueueTarget = await this.queueTarget(workspace);
 
     return await target.driveArmedWakes();
   }
 
-  /** What opened every run this workspace recorded. */
   async runStartCausesFor(workspace: string): Promise<string[]> {
     const target: QueueTarget = await this.queueTarget(workspace);
 
     return await target.runStartCauses();
   }
 
-  /** Park until the model wire has carried `marker`. Called only after the
-   *  durable row already proved the drain bound the event, so the join has a
-   *  reached condition behind it rather than a hope. */
+  /** Called only after the durable row proved the drain bound the event. */
   async awaitWireMarker(marker: string): Promise<void> {
     await fetch(`http://probe-control.invalid/log/until?marker=${encodeURIComponent(marker)}`);
   }
 
-  /** A fresh workspace's first chat: the claim, the socket's real
-   *  first-run bench never saw. Returns the model-call count and the turn's
-   *  terminal evidence so the test can say where the drive stopped. */
+  /** Returns the model-call count and terminal evidence so the test can say where the drive stopped. */
   async firstChat(): Promise<{ http: HttpCall[]; steers: PendingSteer[]; transcript: SocketHistory; sleepTimeSettled: number }> {
     const workspace = 'first-chat-workspace';
     const owner = 'first-chat-owner';
@@ -1753,16 +1441,11 @@ export class TwoTurnProbeRoot extends Agent<ProbeRootEnv> {
     const restore = setDiagnosticsSink(createCompositeLogger([createConsoleLogger(), recording]));
 
     try {
-      // One real chat frame — the same wire the composer's first prompt puts
-      // on the socket. No held genesis, no queue arm: the first-run repro is
-      // whether this one intake reaches the model.
       const { wire } = await this.sendChatFrame(target, workspace, 'FIRST-CHAT');
 
       void wire;
 
-      // The model call, if it happens, is the discriminating datum — wait on
-      // it directly rather than on the turn's settle, which the stall never
-      // reaches.
+      // Wait on the model call, not the turn's settle, which the stall never reaches.
       const began = Date.now();
 
       for (;;) {
@@ -1787,13 +1470,8 @@ export class TwoTurnProbeRoot extends Agent<ProbeRootEnv> {
 
 
   /**
-   * TWO CLIENTS, ONE MESSAGE, AT ONCE: two sockets on one conversation each
-   * put the same chat frame — the same client message id — on the wire with
-   * no await between them. The property is the object's, not the browser's:
-   * a message admitted once is one turn, one provider request and one row,
-   * however many sockets delivered it. `send-admission.test.ts` proved this
-   * on the retired submission surface; the loop's admission (`admitted` on
-   * the wire, the pending-send ledger) owns it now.
+   * Two sockets put the same client message id at once: a message admitted once is one
+   * turn, one provider request and one row, however many sockets delivered it.
    */
   async twinSends(): Promise<{ http: HttpCall[]; transcript: SocketHistory; steers: PendingSteer[]; runEnds: Array<{ runId: string; reason: string }> }> {
     const { target, workspace } = await this.claimQueueWorkspace('twin');
@@ -1822,9 +1500,7 @@ export class TwoTurnProbeRoot extends Agent<ProbeRootEnv> {
 
       for (const socket of sockets) socket.send(wire);
 
-      // The turn's own settle is the end condition; a second admitted turn
-      // would compress its facts too, so the count below is the count that
-      // discriminates.
+      // A second admitted turn would compress its facts too, so this count discriminates.
       await awaitSleepTimeSettled(recording, 1);
       await awaitQuiet(recording);
 
@@ -1841,11 +1517,8 @@ export class TwoTurnProbeRoot extends Agent<ProbeRootEnv> {
   }
 
   /**
-   * THE EVAL-ONLY ABORT ends an activation the way the platform does: the
-   * stub call that asked rejects (that rejection is the receipt), and the
-   * next request over a fresh stub finds the object alive again over the same
-   * storage. Measured here because the first-run `background-wake` row rests
-   * on it and the deployed build cannot be driven by `abortAllDurableObjects`.
+   * The eval-only abort ends an activation as the platform does; measured here because
+   * the deployed build cannot be driven by `abortAllDurableObjects`.
    */
   async evalAbort(): Promise<{ receipt: string | null; alive: boolean }> {
     const { target, workspace } = await this.claimQueueWorkspace('twin');
@@ -1864,17 +1537,8 @@ export class TwoTurnProbeRoot extends Agent<ProbeRootEnv> {
   }
 
   /**
-   * THE AGENT TAB, as the browser opens one: the workspace mints a hired
-   * actor the way the tab strip's "+" does (`createSubordinateAgent`), then a
-   * socket is opened on that actor's OWN chat path and the two reads the tab
-   * makes on mount are asked over it — `getActorSnapshot` and
-   * `listAgentTasks`.
-   *
-   * The path is the point. On build cba44dcb9 the client built
-   * a facet hop instead (the Agents SDK's `sub` option), which this transport
-   * refuses, so the socket never opened and both reads timed out at the SDK's
-   * 30 s backstop. Here the request goes to the object exactly as the edge
-   * hands it over, and the answers are the proof.
+   * The agent tab: a socket on the hired actor's own chat path (not a facet hop via the SDK
+   * `sub` option, which this transport refuses), then `getActorSnapshot` and `listAgentTasks`.
    */
   async hostedActorTab(): Promise<{ name: string; snapshot: string; tasks: string; frames: number }> {
     const { target, workspace } = await this.claimQueueWorkspace('twin');
@@ -1885,10 +1549,7 @@ export class TwoTurnProbeRoot extends Agent<ProbeRootEnv> {
 
     if (response.status !== 101 || socket === null) throw new Error(`the hosted actor path answered ${String(response.status)}, not a socket`);
     socket.accept();
-    // The answers are carried back as their JSON text: a stub return of the
-    // recursive JsonValue type is a type the compiler cannot instantiate
-    // through the RPC boundary, and the reads under test are what the frames
-    // say, which the text holds exactly.
+    // Carried as JSON text: the recursive JsonValue type cannot be instantiated through the RPC boundary.
     const answers = new Map<string, string>();
     const arrived = Promise.withResolvers<void>();
     let frames = 0;
@@ -1924,9 +1585,7 @@ export class TwoTurnProbeRoot extends Agent<ProbeRootEnv> {
     }
   }
 
-  /** The first-run regression: a workspace born with a mission (genesis turn
-   *  running) receives its owner's first chat — which lands as a mid-turn
-   *  steer — and the resume after genesis settles must reach the model. */
+  /** A first chat that lands as a steer on a live genesis turn must reach the model after resume. */
   async firstChatAfterGenesis(): Promise<{ http: HttpCall[]; steers: PendingSteer[]; inbox: { busy: boolean }; landed: string | null; transcript: SocketHistory; failures: Array<{ event: string; code: string; cause: string }> }> {
     const workspace = 'first-gen-workspace';
     const owner = 'first-gen-owner';
@@ -1946,20 +1605,13 @@ export class TwoTurnProbeRoot extends Agent<ProbeRootEnv> {
 
     const recording = createRecordingLogger();
     setDiagnosticsSink(createCompositeLogger([createConsoleLogger(), recording]));
-    // A real genesis turn — the shape create-with-mission leaves. No hold:
-    // the first-run stall is a FIRST turn that admits but never calls the
-    // model, so genesis runs to its own completion while the owner chat lands
-    // inside it (a steer) and is answered by that same turn.
     const genesis = await target.beginGenesisTurn();
 
     if (!genesis.started) throw new Error('first-gen probe genesis did not start');
 
     const { landed } = await this.sendChatFrame(target, workspace, 'FIRST-PROMPT');
 
-    // The first prompt is a steer on the live genesis turn: it lands inside
-    // that turn's step, not behind it — one model call carries both. Wait on
-    // the call AND the turn's close (busy falls when genesis settles) so the
-    // landed row and the retired steer are both observable before the read.
+    // Wait on the call and the turn's close so the landed row and retired steer are both observable.
     const began = Date.now();
 
     for (;;) {
@@ -1985,19 +1637,8 @@ export class TwoTurnProbeRoot extends Agent<ProbeRootEnv> {
   }
 
   /**
-   * ONE RAW CHAT FRAME PUT ON A BUSY CONVERSATION.
-   *
-   * The pinned model answers its first call with a real tool call, so the
-   * held turn HAS a second step — the boundary a mid-turn send lands at —
-   * and the provider is parked on that turn's first call while the frame
-   * goes out under the CLIENT's own message id.
-   *
-   * Everything returned is what the surface itself could see: what the
-   * admission announced while the turn still ran, the reservation it wrote,
-   * whether the words reached the transcript instead, how the request was
-   * answered once the words landed, the `steer_status` landings broadcast
-   * to the socket, the provider calls, and the assistant rows the drive
-   * ended with.
+   * One raw chat frame on a busy conversation: the provider is parked on the first call of a
+   * turn with a second step, and the frame goes out under the client's own message id.
    */
   async rawChat(): Promise<RawChatProbeResult> {
     const workspace = 'raw-steer-workspace';
@@ -2052,8 +1693,6 @@ export class TwoTurnProbeRoot extends Agent<ProbeRootEnv> {
       const genesis = await target.beginGenesisTurn();
 
       if (!genesis.started) throw new Error('raw chat probe genesis did not start');
-      // The turn's first provider call is parked in the fake: everything
-      // below happens while the conversation is genuinely busy.
       await fetch('http://probe-control.invalid/queue/arrived');
       socket.send(JSON.stringify({
         type: 'cf_agent_use_chat_request', id: 'raw-request',
@@ -2063,23 +1702,15 @@ export class TwoTurnProbeRoot extends Agent<ProbeRootEnv> {
         }) },
       }));
 
-      // The admission's own broadcast is the signal: the running turn's inbox
-      // announces the words `queued` under the client's id while the provider
-      // call is still parked, and only then are the durable traces read — the
-      // reservation under that id, and whether the words reached the
-      // transcript as a turn of their own instead. The hold stays armed until
-      // this frame arrives, so words the object does not take hang here and
-      // the row fails on its clock. The request itself is answered later, at
-      // the step that takes the words: the landing is decided there, never at
-      // admission.
+      // Read durable traces only after the `queued` broadcast; the landing is decided at the step
+      // that takes the words, never at admission.
       const admission = await admitted.promise;
       const persistedWhileHeld = (await this.socketHistory(target, workspace)).some((row) => row.id === 'raw-client-id');
       const pendingIds = (await target.pendingSteers()).map((row) => row.id);
 
       await fetch('http://probe-control.invalid/queue/release', { method: 'POST' });
       const landing = await answered.promise;
-      // ONE turn when the words landed inside it; a second turn when they
-      // could only run after it — each turn settles its own sleep-time lane.
+      // One turn when the words landed inside it; two when they ran after it.
       await awaitSleepTimeSettled(recording, persistedWhileHeld ? 2 : 1);
       await awaitQuiet(recording);
 
@@ -2100,16 +1731,10 @@ export class TwoTurnProbeRoot extends Agent<ProbeRootEnv> {
   }
 
 
-  /** One parameterized drive for the lifecycle variants: its own workspace so
-   *  Think state never crosses between experiments. The early-[DONE] variant
-   *  pins a model whose stream the fake leaves open after [DONE]; the turn
-   *  still completes, and whatever the runtime does with the un-closed pipe
-   *  is the discriminating datum against the normal-EOF drive. */
+  /** Own workspace per variant so Think state never crosses between experiments. */
   async driveOnce(input: DriveOnceInput): Promise<DriveOnceResult> {
     const drive = v.parse(DriveOnceInputSchema, input);
-    // Capture AFTER warmup, like `exercise`: each DO constructor installs the
-    // analytics sink on first stub use, replacing whatever exists — an install
-    // up front would be clobbered by the register/claim below.
+    // Capture after warmup: each DO constructor replaces the sink on first stub use.
     const recording = createRecordingLogger();
 
     const capture = (): (() => void) => setDiagnosticsSink(
@@ -2138,9 +1763,7 @@ export class TwoTurnProbeRoot extends Agent<ProbeRootEnv> {
       await this.httpReset();
       await target.setModel(drive.model);
 
-      // The tool roundtrip's fixture: a harmless file in the workspace the
-      // `file` tool reads for real when the fake answers the tool call.
-      // Seeded through the existing workspace-file RPC, never the VFS.
+      // Seeded through the workspace-file RPC, never the VFS.
       if (drive.seedFile !== undefined) {
         const seeded = await target.writeWorkspaceFile({
           kind: 'file',

@@ -1,23 +1,7 @@
 /**
- * The workspace-spend aggregate, run on real Durable Object SQLite.
- *
- * WHY THIS IS A PLATFORM TEST AND NOT A SQL-SHAPE ONE. The totals the Activity
- * panel renders are summed by ONE query: `RunEventRecorder.spendByProducer`
- * uses `WITH` common table expressions and the JSON1 function `json_extract`
- * over `run_events.payload`, so its behavior must be exercised on Durable
- * Object SQLite. Every other test of this read runs under `bun test`, i.e.
- * against `bun:sqlite`, and passing there does not establish workerd support.
- *
- * So the question is not whether our SQL is right. It is whether the platform
- * answers it at all. A workerd SQLite built without JSON1 would throw
- * `no such function: json_extract` on the first render of the cost panel, in
- * production, with 1,100 green bun tests behind it. That is the exact defect
- * class this layer exists for.
- *
- * The subject is the PRODUCTION recorder over `ctx.storage.sql`, not a
- * reimplementation: the same `initRunEventTables` DDL, the same `emit`, the same
- * `spendByProducer`. Only the SqlExecutor adapter is local, and it is the
- * tagged-template protocol `bindAgentSql` bridges in production.
+ * `RunEventRecorder.spendByProducer` on real DO SQLite: it uses `WITH` CTEs and JSON1 `json_extract`,
+ * which `bun:sqlite` passing does not prove workerd supports. Production recorder; only the SqlExecutor
+ * adapter is local.
  */
 import { DurableObject } from 'cloudflare:workers';
 import {
@@ -25,8 +9,7 @@ import {
   type ActorHandle, type SpendSource, type SqlExecutor, type SqlValue, type Usage,
 } from '@kinu.run/core';
 
-/** One producer's row, flattened for the RPC boundary — a `Map` is not
- *  structured-cloneable through a Durable Object stub. */
+/** Flattened: a `Map` is not structured-cloneable through a DO stub. */
 export interface ProbeTally {
   readonly source: SpendSource;
   readonly calls: number;
@@ -41,9 +24,7 @@ export class SpendProbeDO extends DurableObject<Cloudflare.Env> {
     query: TemplateStringsArray, ...values: SqlValue[]
   ): Row[] => this.ctx.storage.sql.exec<Row & Record<string, SqlStorageValue>>(query.join('?'), ...values).toArray();
 
-  /** This probe's own actor. `run_events` is actor-scoped, and the probe writes
-   *  and sums the same rows, so one bound identity serves both halves; there is
-   *  no directory in this worker to resolve one from. */
+  /** `run_events` is actor-scoped; no directory here, so one bound identity serves both halves. */
   private actor(): ActorHandle {
     return this._actor ??= bindActorHandle(this.sql, {
       actorId: 'spend-probe-actor', workspaceId: 'spend-probe-workspace', parentActorId: null,
@@ -59,15 +40,7 @@ export class SpendProbeDO extends DurableObject<Cloudflare.Env> {
     return new RunEventRecorder(this.sql, this.actor());
   }
 
-  /**
-   * Write more rows than any window this read was ever folded over, then sum
-   * them the way production does.
-   *
-   * `steps` carries a `messages` array on purpose: a `step_finish` payload holds
-   * the step's model messages, so it is the row kind whose JSON walk is
-   * expensive, and a query that only ever met a small payload would not have
-   * measured the shape the platform actually stores.
-   */
+  /** `steps` carries a `messages` array: `step_finish` is the payload kind whose JSON walk is expensive. */
   measure(steps: number, judges: number, silent: number): ProbeTally[] {
     const recorder = this.recorder();
 
@@ -90,8 +63,7 @@ export class SpendProbeDO extends DurableObject<Cloudflare.Env> {
       });
     }
 
-    // A provider that returns no usage field of any kind — the Workers AI
-    // utility bindings. Counted in calls, absent from tokens.
+    // No usage field at all (Workers AI utility bindings): counted in calls, absent from tokens.
     for (let i = 0; i < silent; i++) {
       recorder.emit(WORKSPACE_RUN_ID, { type: 'model_call', source: 'platform' });
     }
@@ -106,8 +78,7 @@ export class SpendProbeDO extends DurableObject<Cloudflare.Env> {
     }));
   }
 
-  /** How many rows the log holds, so the assertion can state that the sum
-   *  covered every one of them rather than a window's worth. */
+  /** So the assertion can state the sum covered every row, not a window's worth. */
   rows(): number {
     return this.ctx.storage.sql
       .exec<{ n: number }>(

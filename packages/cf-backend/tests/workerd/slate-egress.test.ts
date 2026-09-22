@@ -8,13 +8,11 @@ const Answer = v.object({ calls: v.number(), status: v.optional(v.number()),
 it('resident global fetch uses the shared destination and manual-redirect policy', async () => {
   const subject = env.SLATE_EGRESS_PROBE.get(env.SLATE_EGRESS_PROBE.idFromName('egress-policy'));
   const request = async (target: string, redirect: RequestRedirect = 'follow') => v.parse(Answer, JSON.parse(await subject.request('build', target, redirect)));
-  // This must pass before any forbidden URL is requested: it establishes the
-  // actual resident's final transport is the local mock, not the real network.
+  // Must pass before any forbidden URL: proves the resident's final transport is the local mock.
   expect(await request('https://example.com/control')).toMatchObject({ status: 200, body: 'public control' });
   const manual = await request('https://example.com/redirect', 'manual');
   expect.soft(manual).toMatchObject({ status: 302, location: 'http://169.254.169.254/forbidden' });
-  // Native global fetch may follow the response outside the binding; that next
-  // hop must re-enter the policy instead of reaching the denied transport.
+  // Global fetch may follow a redirect outside the binding; that hop must re-enter the policy.
   const redirected = await request('https://example.com/redirect');
   expect.soft(redirected.status).toBe(403);
   const denied = await request('http://169.254.169.254/forbidden');

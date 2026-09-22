@@ -1,10 +1,5 @@
-// Behavior tests for the MCP write/act tools (run_task, send_peer, list_peers,
-// release). Each is a thin wrapper over an existing @callable on the
-// orchestrator: the tests drive a real MCP `tools/call` through handleMcpRequest
-// and assert the wrapper (a) reached the right @callable with the right args,
-// (b) surfaced its result honestly, and (c) is gated by the SAME auth +
-// per-agent ownership as the read tools — a scoped access token can't reach the
-// write surface at all, and an unowned agent is refused before any tool runs.
+// MCP write/act tools must reach the right @callable and share the read
+// tools' auth + per-agent ownership gate.
 import { TEST_CREDENTIAL_ENCRYPTION_KEY } from './helpers/user-do';
 import { describe, test, expect } from 'bun:test';
 import * as v from 'valibot';
@@ -25,15 +20,11 @@ const ACCESS_TOKEN = `pta_${USER_ID}_abcdefghijklmnopqrstuvwxyz012345`;
 
 interface AgentCall { method: string; args: JsonValue[]; }
 
-/** Name one call this suite does not make on the workspace object. The
- *  refusal is the point: a write tool that reached a READ surface would
- *  otherwise resolve against a stand-in nobody asserted on. */
+/** A write tool that reached a read surface must fail, not resolve against a stand-in. */
 function unreached(member: string) {
   return (): never => { throw new Error(`OrchestratorAgent.${member}: not reachable in this test`); };
 }
 
-/** A change row carrying every field the real one does, so the double cannot
- *  answer with a shape production never returns. */
 function releaseChange(
   built: Pick<ReleaseChange, 'id' | 'status' | 'bindingId' | 'userPrompt' | 'plan'>,
 ): ReleaseChange {
@@ -67,8 +58,6 @@ function mcpWorkspace() {
     async ensureWorkspaceCapability() {},
   });
 
-  // The ownership gate's own reach, which is not the tool surface's: it holds
-  // the namespace, the tools hold the resolver.
   const owner = {
     async claimOwner(userId: string) {
       record('claimOwner', userId);
@@ -126,9 +115,8 @@ function mcpWorkspace() {
   };
 
   const env: McpEnv<string> = {
-    // Read on the cookie path only, and no case here sends a cookie — but its
-    // PRESENCE is what makes an unauthenticated request a 401 rather than the
-    // 500 an unconfigured deployment answers with.
+    // Its presence makes an unauthenticated request a 401 rather than the 500 an
+    // unconfigured deployment answers with.
     AUTH_KV: unreachableKv('AUTH_KV'),
     UserDO: { idFromName: (n) => n, get: () => userDO },
     OrchestratorAgent: { idFromName: (n) => n, get: () => owner },
@@ -154,7 +142,6 @@ function toolCall(agentName: string, name: string, args: JsonObject, token?: str
   });
 }
 
-/** The MCP result text for a tools/call — pulled out of the SSE body. */
 async function resultText(res: Response | null): Promise<string> {
   if (!res) throw new Error('Expected the MCP handler to return a response');
   const body = await res.text();
@@ -164,9 +151,8 @@ async function resultText(res: Response | null): Promise<string> {
 }
 
 describe('MCP write tools → real @callables', () => {
-  // The transport streams the tool result as SSE; the tool handler runs while
-  // the body is produced, so every test reads the body (resultText) BEFORE
-  // asserting on the recorded @callable invocations.
+  // The tool handler runs while the SSE body is produced: read the body before
+  // asserting on recorded @callable invocations.
 
   test('run_task invokes runTaskFromMcp and reports queued', async () => {
     const { env, calls, resolveAgent } = mcpWorkspace();

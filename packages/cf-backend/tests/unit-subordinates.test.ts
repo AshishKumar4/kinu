@@ -1,8 +1,5 @@
-// How the Cloudflare backend WIRES core's subordinate module. The module's own
-// behaviour is covered in core (core/tests/unit-subordinates.test.ts); what is
-// backend-specific is which names this backend's source exposes where, so most
-// of these read that source directly. The exception is the deps gate, which is
-// exercised through the raw ToolSet each actor class builds.
+// How this backend wires core's subordinate module (behaviour: core/tests/unit-subordinates.test.ts);
+// most tests read source, the deps gate runs through each actor's raw ToolSet.
 import './helpers/ui-module-globals';
 import { describe, expect, test } from 'bun:test';
 import { readFileSync } from 'node:fs';
@@ -24,23 +21,8 @@ const source = (path: string) => readFileSync(join(import.meta.dir, '..', 'src',
 mockAgentsSdk();
 
 describe('subordinate wiring', () => {
-  /**
-   * THE TEMPORARY RUNG'S CF WIRING — the three facts that make it the same
-   * roster and the same child, and the one that makes it work at all.
-   *
-   * The rung's behaviour is core's (core/tests/unit-temporary-agents.test.ts)
-   * and its end-to-end run is proved on the local substrate
-   * (cli-backend/tests/agent-host.test.ts). What is BACKEND-SPECIFIC is
-   * composition, which is what this reads.
-   */
-  /**
-   * THE CHILD KNOWS ITS OWN LIFETIME, and reports terminally because of it.
-   *
-   * This is the half no parent can do: only the child sees its own turn end. A
-   * temporary agent's caller is BLOCKED on one report, so every terminal state
-   * has to produce one — and the endings the durable policy withholds a report
-   * for are exactly the ones a task lifetime must still report.
-   */
+  /** The temporary rung's CF wiring; behaviour is core's (core/tests/unit-temporary-agents.test.ts). */
+  /** A temporary agent's caller is blocked on one report, so every terminal state must produce one. */
   test('registered task lifetime supplies a terminal report for each non-answer ending', async () => {
     const { agent } = orchestratorHarness();
     const actor = await agent.actorDirectory({ action: 'register', creationId: 'temporary-proof', name: 'temporary-child', kind: 'subordinate', lifetime: 'task' });
@@ -56,15 +38,12 @@ describe('subordinate wiring', () => {
     }
   });
 
-  /** NO DEADLINES. A delegation is never cut off by a clock in this engine, so
-   *  the rung must contain no timer at all — what makes the wait terminate is the
-   *  child always reporting, not an elapsed bound. */
+  /** No deadlines: the wait terminates because the child always reports, so the rung holds no timer. */
   test('the temporary rung carries no timer, deadline or elapsed bound', () => {
     const rung = readFileSync(
       join(import.meta.dir, '..', '..', 'core', 'src', 'subordinates', 'temporary.ts'), 'utf8');
 
-    // Code shapes only: the module's prose explains WHY there is no deadline,
-    // and banning the word would ban the explanation.
+    // Code shapes only: the module's prose explains why there is no deadline.
     for (const banned of ['setTimeout(', 'setInterval(', 'AbortSignal.timeout', 'timeoutMs', 'silenceLimit']) {
       expect({ banned, present: rung.includes(banned) }).toEqual({ banned, present: false });
     }
@@ -73,35 +52,25 @@ describe('subordinate wiring', () => {
   test('the temporary rung rides this actor\'s own roster, child runtime and report ingress', () => {
     const actor = source('actor-agent.ts');
 
-    // ONE child substrate, memoized, shared by both rungs. Two copies would be
-    // two `subAgent` paths to the same facets.
+    // One memoized child substrate shared by both rungs; two copies would be two `subAgent` paths.
     expect(actor).toContain('protected subordinateRuntime(): SubordinateRuntime {');
     expect(actor).toContain('runtime: this.subordinateRuntime(),');
 
-    // ONE ROSTER. The port is built over `subordinateRoster` — there is no
-    // second store, and no table of its own to construct: the handle scopes
-    // the roster's rows inside the workspace's one database.
+    // One roster: the port is built over `subordinateRoster`, with no second store.
     expect(actor).toContain('roster: this.subordinateRoster,');
     expect(actor).not.toContain('workspace_temporary_agents');
 
-    // The port is built ONCE PER ACTOR, and that is load-bearing rather than a
-    // caching nicety: `shell` parks a waiter on it and the report ingress resolves
-    // that waiter, and those are two different calls on the same isolate. A port
-    // rebuilt per call would hand the ingress an empty waiter map and leave
-    // every ask hanging on an answer that had already arrived.
+    // Built once per actor: `shell` parks a waiter and the report ingress resolves it in a different call,
+    // so a per-call port would leave every ask hanging.
     expect(actor).toContain('private _temporaryAgentPort: TemporaryAgentPort | null = null;');
     expect(actor).toContain('this._temporaryAgentPort ??= createTemporaryAgentPort({');
     expect(actor).toContain('temporary: this.temporaryAgentPort(),');
-    // Both readers reach the SAME port: the deps the model dispatches through,
-    // and the ingress a child reports into.
     expect(actor.match(/temporary: this\.temporaryAgentPort\(\),/gu)?.length).toBe(2);
 
 
     expect(actor).toContain('new SubordinateRosterStore(this.ctx.storage.sql, this.actorHandle())');
   });
 
-  /** The standalone recursive-LM namespace is gone from this backend's sandbox
-   *  and from its prompt flags — one delegation surface, no second lane. */
   test('no rlm provider, model spec or prompt flag survives in the cf composition', () => {
     const actor = source('actor-agent.ts');
     const execTools = source('codemode-tool.ts');
@@ -116,11 +85,8 @@ describe('subordinate wiring', () => {
         .toEqual({ name, hit: false });
     }
 
-    // The sandbox factory takes no model registry: nothing in it calls a model
-    // directly. Pinned on the options interface's member list, not on a
-    // syllable's absence from the file — `modelSpecForSource` (spend
-    // attribution) and core's `registry.renderCodemodeDescription` (a
-    // docstring renderer) legitimately use those syllables elsewhere.
+    // Pinned on the options interface's member list, not a syllable's absence: `modelSpecForSource` and
+    // `registry.renderCodemodeDescription` legitimately use those syllables.
     const options = execTools.slice(
       execTools.indexOf('export interface CodemodeFactoryOptions {'),
       execTools.indexOf('export function createCodemodeToolFactory'),
@@ -149,10 +115,7 @@ describe('subordinate wiring', () => {
   });
 
   test('a hosted child shares the workspace file plane under its own state root', async () => {
-    // The PATH a bound actor's scaffold resolves to, which survives the move
-    // of the helpers that compute it: a child that read its parent's row
-    // would run bytes its own claim could not verify after the parent
-    // promoted again, so the per-actor subtree is the load-bearing half.
+    // A child reading its parent's row would run bytes its own claim cannot verify after the parent promotes, so the per-actor subtree binds.
     const workspace = orchestratorHarness();
 
     const child = await hostedSubordinateHarness(workspace, {
@@ -163,7 +126,6 @@ describe('subordinate wiring', () => {
     expect(child.actor.runtime.identity.scaffold.path)
       .toBe(`.kinu/agents/${encodeURIComponent(key)}/scaffold/agent.js`);
     expect(child.actor.runtime.identity.scaffold.path).not.toBe('scaffold/agent.js');
-    // And no parent executor: a child never runs as its hirer.
     const hosting = source('actor-hosting.ts');
     expect(hosting).not.toContain('createParentExecutor');
     expect(hosting).not.toContain('registerParentWorkspace');
@@ -171,10 +133,7 @@ describe('subordinate wiring', () => {
   });
 
   test('delegated tools are the full-agent surface, with the report lane and without the peer rung', async () => {
-    // Asserted on the BUILT ToolSet, not on a gate function: what ships is the
-    // surface the production builder builds over the child's own runtime.
-    // `release` is not a native tool at all (release.* is codemode-only), so it
-    // needs no gate here.
+    // Asserted on the built ToolSet, which is what ships. `release` is codemode-only, so it needs no gate.
     const workspace = orchestratorHarness();
     const orchTools = workspace.agent.observeRawTools();
     expect(Object.keys(orchTools)).not.toContain(REPORT_TOOL);
@@ -188,35 +147,23 @@ describe('subordinate wiring', () => {
 
     const { tools: subTools } = await workspace.agent.observeHostedTaskProfile(child.actor, 'prove confinement');
     const subKeys = Object.keys(subTools);
-    // A hire is a colleague with a role: it gets the same builtins the
-    // workspace root gets, plus the report lane, over its OWN stores.
     expect(BUILTIN_TOOLS.filter((name) => !subKeys.includes(name))).toEqual([]);
-    // And not the head's accumulators: a delegated turn reports upward through
-    // `report` rather than banking findings for a merge.
     expect(subKeys).not.toContain('record_evidence');
     expect(subKeys).not.toContain('record_decision');
-    // The one rung it does NOT hold. `hire scope=workspace` mints the root of a
-    // fresh tree, so a subordinate holding the peer transport could leave its
-    // own subtree in one call and its depth cap would be decorative.
+    // `hire scope=workspace` mints a fresh tree root, so holding it would let a subordinate escape its depth cap.
     expect(observedActionEnum(subTools.agents)).not.toContain('reply');
     expect(observedActionEnum(subTools.agents)).toContain('hire');
-    // …and the report lane it gets lives in the sandbox too: the delegated
-    // eval declares the report namespace the root's never does.
     expect(subTools.eval?.description).toContain('declare const report:');
     expect(orchTools.eval?.description).not.toContain('declare const report:');
   });
 
   test('every deps-gated tool core declares is answered by this backend', () => {
-    // The compiler cannot hold this: core declares the set as
-    // `readonly BuiltinToolName[]`, which is the right type for a shared list
-    // and cannot key an exhaustive table. So a name added to DEPS_GATED_TOOLS
-    // with no dep check here would silently stay advertised on every actor —
-    // which is the whole failure the gate exists to prevent. This is that check.
+    // Core types the set as `readonly BuiltinToolName[]`, which cannot key an exhaustive table, so a new
+    // DEPS_GATED_TOOLS name with no dep check would stay advertised on every actor.
     const orchToolNames = Object.keys(orchestratorHarness().agent.observeRawTools());
     const ungated = DEPS_GATED_TOOLS.filter((name) => orchToolNames.includes(name));
     expect(ungated).toEqual([]);
-    // And the set is not vacuously empty, which would make the line above pass
-    // for the wrong reason.
+    // Non-empty, or the line above passes vacuously.
     expect(DEPS_GATED_TOOLS.length).toBeGreaterThan(0);
   });
 
@@ -226,9 +173,7 @@ describe('subordinate wiring', () => {
     expect(orchestrator).toContain('const result = await this.getTeamToolDeps().create({});');
     expect(orchestrator).toContain('const result = await this.getTeamToolDeps().rename({ name, displayName });');
     expect(orchestrator).toContain("requestedBy: 'user'");
-    // …and the shared substrate declares none of them: team callables are the
-    // orchestrator's own, so a hosted child never inherits a path around the
-    // roster the host owns.
+    // Team callables are the orchestrator's own, so a hosted child never inherits a path around the roster.
     const base = source('actor-agent.ts');
     expect(base).not.toContain('listSubordinates(');
     expect(base).not.toContain('dismissSubordinate(');
@@ -240,14 +185,12 @@ describe('subordinate wiring', () => {
     expect(hook).toContain('result.subordinate');
     expect(hook).toContain('entry.name !== result.subordinate.name');
     expect(hook).toContain('entry.name !== result.name');
-    // Zero-argument create: the server owns identity; the client sends nothing.
     expect(hook).toContain('rpc<{');
     expect(hook).toContain('>("createSubordinateAgent", [])');
     expect(hook).toContain('("renameSubordinateAgent", [name, displayName])');
     const mutations = hook.slice(hook.indexOf('createSubordinateAgent'), hook.indexOf('\n  };', hook.indexOf('createSubordinateAgent')));
     expect(mutations).not.toContain('await refreshSubordinates()');
-    // One generation bump per mutation — create, rename, dismiss — so a stale
-    // in-flight roster read cannot overwrite any of their results.
+    // One generation bump per mutation, so a stale in-flight roster read cannot overwrite the result.
     expect(mutations.match(/\+\+subordinateRefreshGeneration\.current;/g)).toHaveLength(3);
   });
 
@@ -266,10 +209,7 @@ describe('subordinate wiring', () => {
     expect(hook).toContain('++subordinateRefreshGeneration.current;');
   });
 
-  // The ingress sequence itself is core's, and its ordering is proven there by
-  // observation (core/tests/unit-subordinates.test.ts — the spill lands before
-  // the transaction opens). What is this backend's is the transaction it hands
-  // over: on a DO the admit + roster write must share one storage transaction.
+  // Ingress ordering is core's; on a DO the admit and roster write must share one storage transaction.
   test('the parent ingress runs core’s sequence inside the DO storage transaction', () => {
     const actor = source('actor-agent.ts');
 
@@ -281,55 +221,35 @@ describe('subordinate wiring', () => {
     expect(ingress).toContain('return receiveSubordinateEvent({');
     expect(ingress).toContain('transaction: (body) => this.ctx.storage.transactionSync(body),');
   });
-  // The policy itself is core's, and its behaviour is proven there
-  // (core/tests/unit-subordinates.test.ts). What is backend-specific is that
-  // BOTH hops actually tag the origin the relay reads, and that neither hop
-  // can be reached around.
+  // Policy is core's; backend-specific is that both hops tag the origin and neither can be bypassed.
   test('every upward channel is tagged with the origin the relay policy reads', () => {
     const hosting = source('subordinate-hosting.ts');
     const orchestrator = source('orchestrator.ts');
-    // Two senders, and what each of them is: a deliberate choice, and the
-    // automatic turn-end relay. Each file owns exactly one, so no upward
-    // channel can skip the origin.
     expect(orchestrator).toContain("status: input.status, content: input.content, origin: 'report_tool',");
     expect(hosting).toContain("status: relayed.status, content: relayed.content, origin: 'turn_end',");
     expect(orchestrator.match(/origin: 'report_tool'/g)).toHaveLength(1);
     expect(orchestrator).not.toContain("origin: 'turn_end'");
     expect(hosting.match(/origin: '/g)).toHaveLength(1);
-    // The sequence that owes it, and the mode it ran in, both TRAVEL rather
-    // than being re-derived at either end — which is what makes a replayed
-    // report recognisable.
+    // Sequence and mode travel rather than being re-derived, which is what makes a replayed report recognisable.
     expect(hosting).toContain('mode: task.mode, sequenceId: task.sequenceId,');
   });
 
   test('a delegated turn is never owner-driven, and settles by core’s closed report map', () => {
     const hosting = source('subordinate-hosting.ts');
-    // The common runner only ever runs programmatic tasks, so there is no
-    // owner-driven check left to get wrong: the delegation is `false` by
-    // construction, not by inspection of the last user turn.
     expect(hosting).toContain('reportedThisTurn: reports.spoke, ownerDriven: false, assistantText: report.summary,');
-    // Which report is owed is decided from the ENDING by core's closed map: a
-    // task child answers on every ending because a task-lifetime `agents.hire` is blocked on
-    // it, while a hire relays only a completed turn worth relaying — and both
-    // are suppressed by a report that already SETTLED the run, so one question
-    // never reaches the caller as two results.
+    // A task child answers on every ending because its `agents.hire` caller is blocked; a hire relays only a
+    // completed turn; both are suppressed once a report settled the run.
     expect(hosting).toContain('const owed = reports.settled');
     expect(hosting).toContain('terminalTaskReport({ lifetime: hostedLifetime(actor.record), ending, assistantText: report.summary });');
     expect(hosting).toContain('subordinateRelaysTurnEnd({');
-    // A delegated turn is not cancelled by the parent hanging up, by a socket
-    // closing, or by an eviction: an interrupted turn leaves its claim
-    // unsettled, which is the record that work is owed.
+    // An interrupted delegated turn leaves its claim unsettled: the record that work is owed.
     expect(hosting).toContain('isAborted: () => false,');
-    // The parent half — the drop, and that it happens before any file is
-    // written — is core's (core/tests/unit-subordinates.test.ts).
     expect(source('actor-agent.ts')).toContain('origin: SubordinateReportOrigin;');
   });
 
   test('the live roster stays a push channel; only the report rail is gated', () => {
     const actor = source('actor-agent.ts');
-    // subordinates_changed is the webUI's roster feed and is emitted from the
-    // team policy on every spawn/assign/message/dismiss, independently of
-    // whether any report was admitted.
+    // subordinates_changed feeds the webUI roster, emitted on every team mutation whether or not a report was admitted.
     expect(actor).toContain('broadcast: (event) => this.broadcastSubordinatesChanged(event),');
 
     const changed = actor.slice(
@@ -342,14 +262,10 @@ describe('subordinate wiring', () => {
 });
 
 describe('a dismissed agent keeps its conversation reachable', () => {
-  /** A child hired and then dismissed through the two controls a chat surface
-   *  offers. Dismissal gives up employability; it explicitly keeps the
-   *  conversation ("Its conversation is kept, not deleted"), so the row a
-   *  surface reads has to survive it. */
+  /** Dismissal keeps the conversation, so the row a surface reads must survive it. */
   async function dismissedChild() {
     const parent = orchestratorHarness();
-    // An added agent inherits the workspace's purpose, so the workspace has to
-    // have one — the same order the owner does it in.
+    // An added agent inherits the workspace's purpose, so the workspace needs one first.
     await parent.agent.setSoul('# Purpose\n\nBuild the chess app.');
 
     const { name } = await parent.agent.createSubordinateAgent();
@@ -389,15 +305,11 @@ describe('a dismissed agent keeps its conversation reachable', () => {
     const markup = strip();
 
     expect(markup).toContain('/workspace/hardy-workshop/agents/busy-mill-01');
-    // The reported disappearance: the dismissed child left the strip entirely,
-    // so nothing on screen said the conversation still existed.
     expect(markup).toContain('Dismissed (1)');
     expect(markup).toContain('aria-expanded="false"');
   });
 
   test('a deep link into a dismissed agent opens the section it lives in', () => {
-    // Navigating back to a kept conversation must not land on a strip that
-    // hides the tab the reader arrived through.
     const markup = strip('quiet-harbor-1a4e20');
 
     expect(markup).toContain('/workspace/hardy-workshop/agents/quiet-harbor-1a4e20');
@@ -405,8 +317,6 @@ describe('a dismissed agent keeps its conversation reachable', () => {
   });
 
   test('the kept pane draws an entry it could not read in its place, named, between the ones it could', () => {
-    // The page marks an entry whose content spilled to the dismissed agent's
-    // private files; an empty bubble there, or no row at all, is the loss.
     const row = (id: string, role: 'user' | 'assistant', text: string) =>
       ({ message: { id, role, parts: [{ type: 'text' as const, text }] }, steers: [] });
 

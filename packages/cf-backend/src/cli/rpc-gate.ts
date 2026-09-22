@@ -160,11 +160,11 @@ export const AGENT_RPC_ACCESS = {
   // Approving a stopped command is the approval; a scoped token calling it would bypass the gate.
   decideDeferredApprovals: 'interactive',
   // Authored code can act through the agent's bindings; interactive callers
-    // share the ordinary side-effect gates, not a second binding policy.
+  // share the ordinary side-effect gates, not a second binding policy.
   slate: 'interactive',
   previewSlate: 'interactive',
   // Instruction trust (KINU-N028): approval grants bytes system placement, so a scoped token must not
-    // let agent-written bytes authorise themselves.
+  // let agent-written bytes authorise themselves.
   approveInstruction: 'interactive',
   revokeInstruction: 'interactive',
   listInstructionApprovals: 'interactive',
@@ -287,7 +287,7 @@ export function cliScopesConnectionTag(headerValue: string | null): string | nul
   const normalized = normalizeAccessTokenScopes(headerValue.split(','));
 
   // A scoped header that fails to parse must fail closed, not fall open to
-    // an unrestricted connection: an empty scope set denies every RPC.
+  // an unrestricted connection: an empty scope set denies every RPC.
   return `${CLI_SCOPES_TAG_PREFIX}${normalized.ok ? normalized.scopes.join(',') : ''}`;
 }
 
@@ -352,7 +352,7 @@ export function rejectOutOfScopeRpc(tags: Iterable<string>, message: WSMessage):
   const { error, reason } = rpcDenial(method, access, required);
 
   // Log the refused method and wanted scope, never the token or frame. `outcome` is explicit: the
-    // sink reads 'ok' by default, which would count refusals as successes.
+  // sink reads 'ok' by default, which would count refusals as successes.
   diagnostics.event('rpc_gate.denied', {
     outcome: 'denied',
     reason,

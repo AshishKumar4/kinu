@@ -33,13 +33,10 @@ function source(path: string): string {
   return readFileSync(join(root, path), 'utf8');
 }
 
-/** These public static routes answer before reading a Worker binding, so every
- *  binding the CLI plane declares refuses here: the first reach names itself
- *  and fails the test. */
+/** Every binding refuses: these public routes must answer before reading any. */
 const PUBLIC_ROUTE_ENV = staticRouteCliEnv();
 
-/** The accounts listing the OAuth attachment reads, and the check that it asked
- *  the accounts endpoint rather than some other Cloudflare API for it. */
+/** Asserts the accounts endpoint is what was asked. */
 function oneAccountFetch() {
   return asFetchFunction(async (input) => {
     expect(requestUrl(input)).toBe('https://api.cloudflare.com/client/v4/accounts');
@@ -60,12 +57,8 @@ describe('auth and desktop security invariants', () => {
   });
 
   test('the ambient session cookie cannot approve a device flow over JSON', async () => {
-    // The CLI module is dispatched ahead of server.ts's CSRF gate, so that
-    // bearer clients are never asked for an `Origin`. A cookie-authenticated
-    // JSON approval route living behind that dispatch was reachable from any
-    // same-site page holding a user code, and it minted an unrestricted token.
-    // Approval is the browser form's alone; this path must buy the cookie
-    // nothing.
+    // The CLI module runs ahead of server.ts's CSRF gate, so a cookie-authed JSON approval was
+    // reachable same-site and minted an unrestricted token. Approval is the browser form's alone.
     const response = await handleCliRequest(
       new Request('https://kinu.example.com/api/cli/auth/approve', {
         method: 'POST',
@@ -149,16 +142,12 @@ describe('auth and desktop security invariants', () => {
     expect(provider.scopes).toContain('account-settings.read');
     expect(provider.scopes).toContain('ai.write');
     expect(provider.scopes).toContain('aig.run');
-    // Without offline_access dash.cloudflare.com never issues a refresh
-    // token, so the credential dies at access-token expiry and the user is
-    // forced to reconnect Workers AI on every visit.
+    // Without offline_access no refresh token is issued, forcing a reconnect every visit.
     expect(provider.scopes).toContain('offline_access');
     expect(provider.scopes).not.toContain('openid');
     expect(routes).toContain('processGenericTokenEndpointResponse');
     expect(routes).toContain('attachCloudflareWorkersAI');
-    // Identity must not depend on billing: the session is created before the
-    // Workers AI credential is fetched, so a missing account or a Cloudflare
-    // API outage cannot turn a valid sign-in into a 400.
+    // Session before Workers AI attach, so a Cloudflare API outage cannot fail a valid sign-in.
     expect(routes.indexOf('const session = await createSession'))
       .toBeLessThan(routes.indexOf('await attachCloudflareWorkersAI'));
     expect(routes).not.toContain('Cloudflare credential attachment skipped');
@@ -209,9 +198,7 @@ describe('auth and desktop security invariants', () => {
   });
 
   test('a token that sees no Cloudflare account still yields a credential, just an unusable one', async () => {
-    // Signing in must not depend on Workers AI billing: a user with no
-    // Cloudflare account gets an identity and the "connect Workers AI" notice,
-    // not a 400 that locks them out of the product.
+    // Sign-in must not depend on Workers AI billing.
     const originalFetch = globalThis.fetch;
     globalThis.fetch = asFetchFunction(async () => new Response(
       JSON.stringify({ success: true, result: [] }),
@@ -257,15 +244,12 @@ describe('auth and desktop security invariants', () => {
       ]);
       expect(accountIdFromCloudflareCredential(credential)).toBe('aaa111aaa111aaa111aaa111aaa111aa');
 
-      // Switching account only rewrites the selection — the token, refresh
-      // token and the discovered list are untouched.
+      // Switching rewrites only the selection.
       const switched = withCloudflareAccount(credential, 'bbb222bbb222bbb222bbb222bbb222bb');
       expect(accountIdFromCloudflareCredential(switched)).toBe('bbb222bbb222bbb222bbb222bbb222bb');
       expect(switched.metadata?.accountName).toBe('Employer');
       expect(switched.accessToken).toBe(credential.accessToken);
-      // Against the literal list the stubbed accounts API returned, not against
-      // a second call of the function under test: the switch must preserve the
-      // discovered accounts, junk row excluded.
+      // Against the literal list the stub returned, not a second call of the function under test.
       expect(cloudflareAccountsFromCredential(switched)).toEqual([
         { id: 'aaa111aaa111aaa111aaa111aaa111aa', name: 'Personal' },
         { id: 'bbb222bbb222bbb222bbb222bbb222bb', name: 'Employer' },
@@ -298,9 +282,7 @@ describe('auth and desktop security invariants', () => {
     }
   });
 
-  // Sign-in must not be gated on this lookup: it broke login for everyone. A
-  // failing accounts API throwing out of cloudflareTokenToCredential means
-  // setCredential never runs and the refresh token is lost with it.
+  // A throwing accounts lookup would skip setCredential and lose the refresh token.
   test('an accounts API failure still yields a storable credential', async () => {
     const originalFetch = globalThis.fetch;
     globalThis.fetch = asFetchFunction(async () => new Response(
@@ -323,7 +305,6 @@ describe('auth and desktop security invariants', () => {
     }
   });
 
-  // A login that predates account recording still has to render a picker.
   test('a credential stored before accounts were recorded reports its selected account', () => {
     expect(cloudflareAccountsFromCredential({
       kind: 'oauth', accessToken: 'cf-access',
@@ -348,10 +329,7 @@ describe('auth and desktop security invariants', () => {
     expect(cloudflareAIGatewayId({ CLOUDFLARE_AI_GATEWAY_ID: '  custom-gateway  ' })).toBe('custom-gateway');
   });
 
-/** A sign-in through the real /auth/cloudflare/callback handler, faking only
- *  the network: discovery, the token exchange, the user lookup and accounts.
- *  The observable outcomes are the redirect, the stored credential and the
- *  session row the UserDO stub recorded. */
+/** The real /auth/cloudflare/callback handler, faking only the network. */
 function cloudflareCallbackEnv() {
   const kv = makeKv();
   const credentials: Array<{ key: string; credential: OAuthCredential }> = [];
@@ -363,10 +341,7 @@ function cloudflareCallbackEnv() {
       _caller: UserCaller, tokenHash: string, expiresAt: number, identity: BrowserSessionIdentity,
     ) { sessions.set(tokenHash, { expiresAt, identity }); },
     async verifyBrowserSession(_caller: UserCaller, tokenHash: string) {
-      // The registered row is the whole answer: dropping expired sessions is
-      // the real object's rule (`user-do.ts` deletes rows past `expires_at`,
-      // and `unit-auth-session-revocation.test.ts` drives it), and every
-      // request here presents the cookie the callback has just minted.
+      // Expiry is the real object's rule (see `unit-auth-session-revocation.test.ts`).
       const row = sessions.get(tokenHash);
 
       return row ? { identity: row.identity } : null;
@@ -491,8 +466,7 @@ async function cloudflareSignIn(
 
     expect(done.status).toBe(302);
     expect(credentials).toHaveLength(1);
-    // A string expiry and an array scope arrive normalized: seconds of
-    // lifetime minus clock skew, and one scope string.
+    // Normalized: seconds of lifetime minus clock skew, one scope string.
     expect(credentials[0].credential.metadata?.scopes).toEqual(['user-details.read']);
     const lifetime = (credentials[0].credential.expiresAt ?? 0) - Date.now();
     expect(lifetime).toBeGreaterThan(800_000);
@@ -514,24 +488,18 @@ async function cloudflareSignIn(
     const routes = source('src/auth/routes.ts');
     const session = source('src/auth/session.ts');
     const store = source('src/auth/store.ts');
-    // Each cookie name has exactly one home (auth/session.ts); routes reuse it.
+    // Each cookie name has one home (auth/session.ts).
     expect(session).toContain("export const SESSION_COOKIE_NAME = '__Host-kinu_session'");
     expect(session).toContain("export const OAUTH_STATE_COOKIE_NAME = '__Host-kinu_oauth_state'");
     expect(routes).toContain('SESSION_COOKIE_NAME');
     expect(routes).toContain('OAUTH_STATE_COOKIE_NAME');
     expect(routes).not.toContain('__Host-kinu_session');
     expect(routes).not.toContain('__Host-kinu_oauth_state');
-    // The recipe lives beside the names and `routes.ts` imports it: the deploy
-    // door needed the same one, so `setCookie` moved into `auth/session.ts`,
-    // and two copies of a cookie's attributes is how one of them loses
-    // `Secure`.
+    // One cookie recipe: two copies of a cookie's attributes is how one loses `Secure`.
     expect(session).toContain('HttpOnly; Secure; SameSite=Lax');
     expect(routes).toContain('setCookie');
     expect(routes).not.toContain('HttpOnly');
-    // The browser holds two handles and neither is the state: the state token
-    // is hashed into the key, the binding that says a callback belongs to THIS
-    // browser is stored only as a hash too, and the record is burned on the
-    // way out.
+    // Only hashes are stored, and the record is burned on the way out.
     expect(store).toContain('`oauth-state:${await sha256Hex(state)}`');
     expect(store).toContain('await kv.delete(key)');
   });
@@ -542,8 +510,7 @@ async function cloudflareSignIn(
     const store = source('src/auth/store.ts');
     const cliRoutes = source('src/cli/routes.ts');
     expect(wrangler).toContain('"binding": "AUTH_KV"');
-    // No D1 anywhere, and no auth Durable Object either: a singleton DO in
-    // front of every sign-in is the chokepoint this deployment removed.
+    // No D1 and no auth DO: a singleton DO in front of every sign-in is a chokepoint.
     expect(wrangler).not.toContain('d1_databases');
     expect(wrangler).not.toContain('AUTH_DB');
     expect(wrangler).not.toContain('CLIAuthDO');
@@ -551,12 +518,10 @@ async function cloudflareSignIn(
     expect(session).toContain('verifySession(env, sessionToken)');
     expect(cliRoutes).toContain('startCliAuth(env');
     expect(cliRoutes).not.toContain('authDO(env)');
-    // Whether a cookie is still live is the user's own Durable Object's answer,
-    // read on every request; unreachable is a 503, never a KV-only pass.
+    // Liveness is the user's own DO's answer per request; unreachable is a 503, never a KV-only pass.
     expect(store).toContain('verifyBrowserSession(caller, tokenHash)');
     expect(session).toContain('new AuthError(503');
-    // Nothing in KV is a source of truth: every write carries an expiry, and
-    // the identity itself is addressed by derivation, not by a stored index.
+    // Nothing in KV is a source of truth: every write expires; identity is derived.
     expect(store).toContain('.ensureProfile(await ownerCaller(env), email');
     expect(store).not.toContain('kv.put(');
   });
@@ -626,10 +591,7 @@ async function cloudflareSignIn(
     expect(script).toContain('/downloads/kinu-runtime-cpython.tar.gz');
     expect(script).not.toContain('github.com');
     expect(script).not.toContain('Kinu-main');
-    // Verification against the SIGNED release is the only path: the manifest's
-    // signature is checked against the pinned key before any download, both
-    // downloads take fetch_verified, and no .sha256 the origin chooses for
-    // itself is ever asked for (SECURITY-devices C1).
+    // Only the signed release verifies; no origin-chosen .sha256 is ever fetched (SECURITY-devices C1).
     expect(script).toContain('verify_release "$tmp/kinu-version.json"');
     expect(script).not.toContain('"$url.sha256"');
     expect(script.split('fetch_verified "$').length - 1).toBe(2);
@@ -684,8 +646,7 @@ async function cloudflareSignIn(
   });
 
   test('web UI offers Cloudflare Workers AI reconnect instead of a no-provider dead end', () => {
-    // The shared self-fetching picker owns the reconnect CTA; every surviving
-    // creation/chat/settings surface embeds that same notice.
+    // The shared picker owns the reconnect CTA.
     const picker = source('src/components/ModelPicker.tsx');
     const workspace = source('src/pages/WorkspacePage.tsx');
     const home = source('src/pages/HomePage.tsx');

@@ -1,17 +1,6 @@
 /**
- * The Analytics Engine SQL transport's FAILURE behaviour.
- *
- * Every arm here is one an operator meets and a live deployment will not
- * reproduce on demand: a token that never reached the API and came back as an
- * HTML error page, an API refusal carrying no message, and a batch fill that
- * rejects. Each names itself, because reduced to a status code with nothing
- * after it all three read as the same two words on a panel — and the third must
- * not leave a cache entry serving one transient fault for its whole
- * thirty-second life.
- *
- * Driven through `runAnalyticsBatch` with `fetch` stubbed, because the reason
- * string IS the contract: it is the only thing the metrics view shows when a
- * panel has no rows, so what it says is the whole of what an operator has.
+ * Analytics Engine SQL transport failure reasons: the reason string is all the metrics view shows for an empty panel,
+ * so each failure names itself, and a rejected batch fill must not stay cached.
  */
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
 import { asFetchFunction } from '@kinu.run/core';
@@ -28,8 +17,7 @@ const CONFIGURED: AnalyticsSqlEnv = {
   ANALYTICS_SQL_API_TOKEN: 'token',
 };
 
-/** A Map because `AnalyticsQuerySet` is one: the batch key is built from the
- *  same pairs, so the set and the key it is cached under cannot drift. */
+/** A Map because `AnalyticsQuerySet` is one, so the set and its cache key cannot drift. */
 const ONE: ReadonlyMap<string, string> = new Map([['ops', 'SELECT 1']]);
 
 const originalFetch = globalThis.fetch;
@@ -48,14 +36,11 @@ afterEach(() => {
   setDiagnosticsSink(createRecordingLogger());
 });
 
-/** One canned API answer for every query in the batch. */
 function answering(status: number, body: string): void {
   globalThis.fetch = asFetchFunction(async () => new Response(body, { status }));
 }
 
-/** The `failed` reason for the single-panel batch, or a failure if the panel
- *  came back in any other state — a test that read `undefined` here would pass
- *  for a panel that never ran. */
+/** The `failed` reason, or a failure if the panel came back in any other state. */
 async function reasonOf(env: AnalyticsSqlEnv = CONFIGURED): Promise<string> {
   const panels = await runAnalyticsBatch(env, ONE);
   const panel = panels.ops;
@@ -69,15 +54,14 @@ async function reasonOf(env: AnalyticsSqlEnv = CONFIGURED): Promise<string> {
 
 describe('an error response whose body is not the documented envelope', () => {
   test('the reason says so, instead of reporting a bare status code', async () => {
-    // What an edge that never reached the API sends: a proxy's own error page.
+    // A proxy's own error page from an edge that never reached the API.
     const page = '<html><body>502 Bad Gateway</body></html>';
     answering(502, page);
 
     const reason = await reasonOf();
     expect(reason).toContain('502');
     expect(reason).toContain('not the documented error envelope');
-    // The size, because it is the one thing that distinguishes an empty body
-    // from a page of HTML without printing either into a log line.
+    // The size distinguishes an empty body from HTML without logging either.
     expect(reason).toContain(String(page.length));
   });
 
@@ -90,17 +74,14 @@ describe('an error response whose body is not the documented envelope', () => {
     );
 
     expect(line).toBeDefined();
-    // `bad_input` and not `unavailable`: at a decoder, an unrecognised failure
-    // means the bytes are not the shape they were declared to be. A fleet query
-    // for platform faults must not return this line.
+    // `bad_input`, not `unavailable`: a fleet query for platform faults must not return this line.
     expect(line?.code).toBe('bad_input');
     expect(line?.cause?.length ?? 0).toBeGreaterThan(0);
     expect(line?.fields).toMatchObject({ status: 502, bytes: 20 });
   });
 
   test('JSON that parses but is not the envelope is the same answer', async () => {
-    // The arm a schema-tolerant decode hides: valid JSON, wrong shape, which it
-    // reduces to the identical `{}` an envelope with no message produces.
+    // Valid JSON, wrong shape: a schema-tolerant decode would reduce it to `{}`.
     answering(500, '[1,2,3]');
     expect(await reasonOf()).toContain('not the documented error envelope');
   });
@@ -115,9 +96,7 @@ describe('an error response that IS the envelope', () => {
   });
 
   test('an envelope carrying no message is a bare status, and NOT a decode failure', async () => {
-    // The separation this whole arm exists for: absent and unreadable are now
-    // different answers, so a clean refusal with nothing to say must not be
-    // reported as a body nobody could read.
+    // Absent and unreadable are different answers.
     answering(404, JSON.stringify({ errors: [] }));
 
     expect(await reasonOf()).toBe('analytics API 404');
@@ -126,9 +105,7 @@ describe('an error response that IS the envelope', () => {
 });
 
 describe('a batch fill that rejects', () => {
-  /** An env whose first read throws, which is the shape of the programming
-   *  error the fill's catch exists for: `analyticsMissingSettings` runs before
-   *  `runAnalyticsSql`'s own try, so nothing below it can absorb this. */
+  /** `analyticsMissingSettings` runs before `runAnalyticsSql`'s own try, so only the fill's catch can absorb this. */
   function poisoned() {
     let reads = 0;
 
@@ -154,8 +131,7 @@ describe('a batch fill that rejects', () => {
   test('the rejected fill is evicted, so the next open re-runs it', async () => {
     const { env, reads } = poisoned();
 
-    // Same key, same TTL window: a cached rejection would be handed straight
-    // back without the fill running a second time.
+    // Same key within the TTL: a cached rejection would skip the fill.
     await expect(runAnalyticsBatch(env, ONE, 1_000)).rejects.toThrow('filling a control-plane analytics batch');
     await expect(runAnalyticsBatch(env, ONE, 1_001)).rejects.toThrow('filling a control-plane analytics batch');
 

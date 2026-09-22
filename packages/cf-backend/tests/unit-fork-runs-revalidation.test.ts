@@ -1,15 +1,5 @@
-// The fork list reads two stores nothing pushes. It must keep re-reading while
-// a fork is being written, and must never fall permanently silent once the
-// loaded snapshot looks settled — the workspace can start a NEW fork from a
-// background job, a drain, or an autonomous turn this browser tab was never
-// "streaming" for, and the old policy (stop polling entirely once nothing in
-// view looked live) left the tab frozen on a prior attempt until the operator
-// forced a remount. It still polls fast while work is visibly in flight, and
-// slow otherwise — never zero.
-//
-// The adapter tests below pin the other half of the unification: a merge is a
-// depth-1 tree that carries NO scores, so nothing downstream can draw it as a
-// competition that picked a winner.
+// The fork list reads two stores nothing pushes: it polls fast while work is in flight and slow
+// otherwise, never zero. A merge is a depth-1 tree with no scores, never drawn as a competition.
 import { describe, test, expect } from 'bun:test';
 import type {
   ExplorationCanvasRun, ForkRunParams, ForkRunSummary, HeadRunView, SearchRunParams,
@@ -67,7 +57,6 @@ describe('live fork runs', () => {
   test('a run is live while it is still running, whichever way it settles', () => {
     expect(hasLiveForkRun([summary({ status: 'running' })])).toBe(true);
     expect(hasLiveForkRun([summary({ hasSearchTree: true, status: 'running' })])).toBe(true);
-    // …and a live run anywhere in the list counts.
     expect(hasLiveForkRun([summary(), summary({ id: 'r2', status: 'running' })])).toBe(true);
   });
 
@@ -105,10 +94,7 @@ describe('fork revalidation policy', () => {
     expect(hasActiveForkWork(true, [])).toBe(true);
   });
 
-  // A search that moves while the list is on its idle clock. The canvas builds
-  // its bands by walking the POLLED list, so the list's answer being stale is
-  // the same thing as the search being invisible: measured on the live gallery
-  // frame at 13.2 seconds from the ledger gaining the row to the row appearing.
+  // The canvas builds its bands from the polled list, so a stale list is an invisible search.
   describe('a search whose movement the list cannot explain', () => {
     const canvasRow = (over: Partial<ForkRunSummary>): ExplorationCanvasRun => ({
       run: summary(over), params: null, tree: [], head: null, frontier: null,
@@ -125,10 +111,8 @@ describe('fork revalidation policy', () => {
     });
 
     test('a root the list believes is over is a RESUMED run', () => {
-      // A resume reuses its rootId and flips a reclaimed row back to running, so
-      // the row the list holds is the stale half of that flip — and a run the
-      // list thinks is finished is not a run it polls fast for. Every terminal
-      // state, because reclamation can leave a run in any of them.
+      // A resume reuses its rootId and flips a reclaimed row back to running, from any terminal
+      // state.
       for (const status of ['completed', 'failed', 'partial'] as const) {
         expect(
           unexplainedForkRoots([canvasRow({ id: 'again', status })], ['again']),
@@ -138,16 +122,14 @@ describe('fork revalidation policy', () => {
     });
 
     test('the answer is sorted and deduplicated, so it can be a memo key', () => {
-      // The caller re-reads once per CHANGE of this set. Two orderings of the
-      // same set must compare equal, or every journal write is a fresh read.
+      // Two orderings of the same set must compare equal, or every journal write is a fresh read.
       const listed = [canvasRow({ id: 'known', status: 'running' })];
       expect(unexplainedForkRoots(listed, ['b', 'a', 'b'])).toEqual(['a', 'b']);
       expect(unexplainedForkRoots(listed, ['b', 'a'])).toEqual(['a', 'b']);
     });
 
     test('nothing is unexplained before the list has answered at all', () => {
-      // No answer cannot be contradicted, and re-reading a read already in
-      // flight would loop it.
+      // Re-reading a read already in flight would loop it.
       expect(unexplainedForkRoots(null, ['anything'])).toEqual([]);
     });
   });
@@ -172,8 +154,6 @@ describe('fork permalink selection', () => {
   });
 });
 
-/** A run with journalled nodes and no search rows, folded the one way every
- *  fork surface folds a run. */
 function journalTree(run: HeadRunView) {
   return present(explorationForkTree({ tree: [], head: run }), 'the folded fork tree');
 }
@@ -200,8 +180,7 @@ describe('a merge is a tree of depth 1', () => {
   });
 
   test('and therefore no winning line is drawn down an arbitrary head', () => {
-    // Every comparison against null is false, so the naive walk would pick
-    // children[0] at each level and paint a spine that means nothing.
+    // Every comparison against null is false, so a naive walk would paint a meaningless spine.
     expect([...principalVariation(journalTree(headRun()))]).toEqual([]);
   });
 
@@ -229,10 +208,8 @@ describe('a merge is a tree of depth 1', () => {
   });
 });
 
-// The invisible spend ceiling (2026-08-18): `judgeSamples` is a REQUEST, capped
-// by the per-evaluation call budget it shares with check generation. A strip
-// that renders the request alone makes a search that asked for 20 judges and
-// ran 3 read as a search that ran 20.
+// `judgeSamples` is a request, capped by the per-evaluation call budget shared with check
+// generation: a strip rendering the request alone overstates what ran.
 describe('the judges row names what the search actually ran', () => {
   function searched(over: Partial<SearchRunParams> = {}): ForkRunParams {
     return {
@@ -251,9 +228,8 @@ describe('the judges row names what the search actually ran', () => {
   });
 
   test('an unrecoverable realised size is not reported as an honoured request', () => {
-    // No candidate's ensemble was ever observed, so the realised size is unknown.
-    // Unknown says "requested" and makes no per-branch claim: "20 per branch" would
-    // assert the very thing that cannot be known here.
+    // No ensemble was observed, so the realised size is unknown: say "requested", no per-branch
+    // claim.
     const rows = forkParamRows(searched({ judgeSamplesRequested: 20, judgeSamplesRealised: null }));
     expect(rows.find((row) => row.label === 'judges')?.value).toBe('20 requested');
   });

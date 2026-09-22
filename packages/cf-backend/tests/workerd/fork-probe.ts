@@ -1,32 +1,7 @@
 /**
- * A hosted fork, run across two real Durable Objects that are really evicted.
- *
- * WHY THIS FILE HAS TO EXIST. `identity/fork-transfer.ts` is a protocol between
- * TWO Durable Objects, and the bun suite runs both halves in one process where
- * neither can end. What bun cannot host is the platform fact the protocol
- * actually stands on: a Durable Object's activation is not the lifetime of the
- * work it is doing. The receiver's cursor — which frame is next, the rolling
- * digest of the frames that arrived, what the target has staged, whether the
- * fork already published — has to outlive an isolate reset, because the source
- * keeps sending frames after one. Instance fields do not, and a green bun suite
- * says nothing about it.
- *
- * So the probes here are the PRODUCTION halves, not stand-ins:
- * `forkTransferFrames` reads the source object's own SQLite and its own file
- * plane; `ForkTransferReceiver` over `ForkTargetWriter` and `NativeSinkPlan`
- * stages into the target object's own SQLite and file plane, with the
- * publication inside `ctx.storage.transactionSync` exactly as `rawCopyFromFork`
- * drives it. Only three things are local: the tagged-template SQL bridge (the
- * assertion `bindAgentSql` makes in production, made here because the Agents SDK
- * is not hosted in this worker), the file plane (Nimbus lives behind
- * NIMBUS_SESSION, which this pool does not bind), and the delivery driver.
- *
- * THE DRIVER IS RESUMABLE ON PURPOSE. The test evicts every object between two
- * frames, so the source's generator dies with the target's cursor. `deliver`
- * therefore regenerates the frame stream from the source's own rows and skips
- * what already landed — which is what makes the target's answer evidence: a
- * receiver that did not resume at the same frame with the same rolling digest
- * refuses the next one.
+ * A hosted fork across two real Durable Objects, evicted between frames: the receiver's cursor must
+ * outlive an isolate reset, which bun cannot host. The probes run the production halves; only the SQL
+ * bridge, file plane and (resumable) delivery driver are local.
  */
 import { DurableObject } from 'cloudflare:workers';
 import * as v from 'valibot';
@@ -39,48 +14,23 @@ import {
   type ForkStaging, type SqlExecutor, type SqlValue, type VFS, type VfsEntryStat,
 } from '@kinu.run/core';
 
-/**
- * Bytes of payload per frame.
- *
- * Small on purpose. Production passes `FORK_FRAME_BYTES` (8 MiB), and at that
- * size this fixture would cross in one frame per section, so the boundaries the
- * test evicts at would not exist. Sixty-four bytes makes each one real: the rows
- * span several frames, `memory/notes.md` spans four, and the protected SOUL
- * destination still fits the single frame it is allowed.
- */
+/** Small on purpose: at production `FORK_FRAME_BYTES` each section fits one frame and the eviction boundaries vanish. */
 const PROBE_FRAME_BYTES = 64;
 
-/** The cut point: the newest of the three seeded conversation entries. */
 export const PROBE_CUT_MESSAGE_ID = 'm3';
 
-/** Where both halves keep their payload files — the hosted main actor's own
- *  artifact directory, so the probe re-roots exactly what production re-roots. */
 const PROBE_ARTIFACTS = agentArtifactDirectory(agentHome(MAIN_AGENT));
 
-/**
- * When the cut entry was recorded.
- *
- * The production writer stamps `Date.now()`, which no assertion can name, so
- * the seed restamps its three entries onto this second. The fork point the
- * target publishes is the cut ENTRY's stamp, and that is what makes this
- * constant worth asserting against.
- */
+/** Fixture restamp of the cut entry: the target publishes the cut entry's stamp as the fork point. */
 export const PROBE_CUT_RECORDED_AT = Date.parse('2026-01-01T00:00:03.000Z');
 
-/** The source workspace's own name, so the published lineage is asserted
- *  against a value the test did not invent. */
 export const PROBE_SOURCE_NAME = 'fork-source';
 
 const SOUL_CONTENT = '# Mission\nProve a fork survives an eviction.\n';
 
-/** The mission the target must end up carrying, read from SOUL's bytes by the
- *  same summarizer the protected publisher uses. */
 export const PROBE_SOUL_MISSION = summarizeSoulBytes(new TextEncoder().encode(SOUL_CONTENT));
 
-/** workerd's streaming digest, which is how an object hashes bytes it must not
- *  hold. It lives on the runtime's `crypto`, and the ambient `Crypto` type this
- *  test project compiles against does not carry it — so the platform member is
- *  declared here rather than asserted away at the call site. */
+/** workerd's streaming digest; the ambient `Crypto` type does not declare it. */
 interface WorkerdDigestStream extends WritableStream<ArrayBufferView | ArrayBuffer> {
   readonly digest: Promise<ArrayBuffer>;
 }
@@ -90,22 +40,8 @@ declare const crypto: Crypto & {
 };
 
 /**
- * The probe's workspace file plane: one durable BLOB row per written range.
- *
- * Ranges rather than whole files, for the reason the wire is ranged at all — a
- * plane that could only hold a file whole would put the file back into the
- * isolate the framing exists to keep it out of. Both directions stay bounded: a
- * write stores the range it was handed, and `readRange` answers out of SQLite's
- * own `substr`, so reading a range costs the range.
- *
- * A range is bound as `bytes.slice().buffer` rather than `bytes.buffer`: a
- * frame's payload is a VIEW over a larger buffer, and binding the view's own
- * buffer would store far more than the range.
- *
- * The four native operations are exactly the ones
- * `createNimbusWorkspaceForkSink` serves from Nimbus in production, and the
- * rename runs inside `transactionSync` because that rename IS the atomic
- * publication of one staged file.
+ * The probe's file plane: one durable BLOB row per written range, so no file is ever held whole.
+ * Bind `bytes.slice().buffer`, not `bytes.buffer`: a payload is a view over a larger buffer.
  */
 class ProbeFilePlane implements VFS {
   static readonly DDL = `CREATE TABLE IF NOT EXISTS probe_file_ranges (
@@ -117,9 +53,6 @@ class ProbeFilePlane implements VFS {
 
   constructor(private readonly ctx: DurableObjectState) {}
 
-  /** The fork's native file authority over this plane. Deliberately separate
-   *  from the VFS: range writes and rename-to-publish are not ordinary
-   *  workspace writes. */
   get native(): ForkNativeFilePort {
     return {
       truncate: async (path, size) => {
@@ -136,9 +69,6 @@ class ProbeFilePlane implements VFS {
           path, offset, bytes.slice().buffer,
         );
       },
-      // The same ranged read the VFS serves. The fork's digest read-back goes
-      // through it, so verifying a staged file costs one range at a time here
-      // too.
       readRange: (path, offset, length) => this.readRange(path, offset, length),
       rename: async (from, to) => {
         this.ctx.storage.transactionSync(() => {
@@ -150,13 +80,7 @@ class ProbeFilePlane implements VFS {
     };
   }
 
-  /**
-   * One byte range, clipped inside SQLite.
-   *
-   * Each stored range answers only the part of itself the caller asked for, so
-   * a read never materializes a range wider than the request even when the
-   * plane holds the file in one row.
-   */
+  /** One byte range, clipped inside SQLite so a read never materializes more than the request. */
   async readRange(path: string, offset: number, length: number): Promise<Uint8Array> {
     const end = offset + length;
     const out = new Uint8Array(length);
@@ -200,8 +124,6 @@ class ProbeFilePlane implements VFS {
 
   async readdir(path: string): Promise<string[]> {
     const prefix = `${path}/`;
-    // Insertion-ordered, deduplicated: several ranges of several files share one
-    // directory name, and the walk wants each name once.
     const names = new Set<string>();
 
     for (const row of this.exec(
@@ -215,8 +137,6 @@ class ProbeFilePlane implements VFS {
     return [...names];
   }
 
-  /** Directories are implied by the paths under them, which is what the walk in
-   *  `forkFilePaths` reads them as. */
   async mkdir(): Promise<void> {}
 
   async writeFile(path: string, data: string | Uint8Array): Promise<void> {
@@ -229,9 +149,6 @@ class ProbeFilePlane implements VFS {
     });
   }
 
-  /** The base contract's whole-file read. The streamed fork never takes this
-   *  path — it reads and writes ranges — but a VFS that cannot answer it is not
-   *  a VFS. */
   async readFile(path: string, opts?: { encoding?: string }): Promise<Uint8Array | string> {
     const stat = await this.stat(path);
 
@@ -245,13 +162,7 @@ class ProbeFilePlane implements VFS {
     this.exec(`DELETE FROM probe_file_ranges WHERE path = ?`, path);
   }
 
-  /**
-   * Every path in the plane with its size and digest.
-   *
-   * Folded a range at a time through the platform's own streaming digest, so
-   * even the verification never holds a file — the property the transfer is
-   * asserted on has to hold in the assertion too.
-   */
+  /** Every path with size and digest, folded a range at a time so verification never holds a file. */
   async digests(): Promise<{ path: string; size: number; digest: string }[]> {
     const out: { path: string; size: number; digest: string }[] = [];
 
@@ -279,70 +190,42 @@ class ProbeFilePlane implements VFS {
     return out;
   }
 
-  /** The platform's own row vocabulary; callers narrow each field they read. */
   private exec(query: string, ...bindings: SqlStorageValue[]): Record<string, SqlStorageValue>[] {
     return this.ctx.storage.sql.exec(query, ...bindings).toArray();
   }
 }
 
-/** What one delivery run did. A refusal is reported rather than thrown: it is
- *  an outcome this test asserts on, and the production source catches it too —
- *  `deliverCloudFork` destroys the target on it. */
+/** A refusal is reported, not thrown: the production source catches it too (`deliverCloudFork`). */
 export interface ForkDeliveryReport {
-  /** Frames handed to the target this run. */
   sent: number;
-  /** The frame the target must expect next. A resumed run starts here. */
   nextSeq: number;
-  /** The source's OWN fold over every frame up to `nextSeq`. The target's
-   *  stored digest has to equal this, and the commit the source seals later is
-   *  the continuation of it — so a receiver that resumed from anything else
-   *  cannot reach a matching commit. */
+  /** The source's own fold up to `nextSeq`; the target's stored digest must equal it. */
   stream: string;
   staged: number;
-  /** Frames the target answered for a transfer it had already published. */
   settled: number;
-  /** The fork the target answered with, whether it published it on this run or
-   *  had already published it before. */
   fork: ForkResult | null;
   refusal: string | null;
 }
 
-/** Where a delivery run stops, so the test can end the activation at a boundary
- *  the protocol actually has. */
 export type ForkDeliveryStop =
-  /** Before the first file frame — the row/file boundary. */
   | 'files'
-  /** After a range that does NOT complete its file — the one boundary a
-   *  transfer cannot resume from, because the whole-file digest folding those
-   *  ranges lives in the activation. */
+  /** Mid-file: the one boundary a transfer cannot resume from (the whole-file digest lives in the activation). */
   | 'range'
-  /** Before the commit — the last-frame/publication boundary. */
   | 'commit'
   | 'end';
 
-/** How frame `from` is damaged on its way out. */
 export type ForkCorruption =
-  /** One payload byte flipped, the frame's seal left alone: the receiver's own
-   *  per-frame digest is what refuses it. */
   | 'frame'
-  /** One payload byte flipped and the frame RESEALED, so every per-frame check
-   *  passes and the only thing that can see it is the whole-file digest read
-   *  back out of the staging at the last range. */
+  /** Resealed, so only the whole-file digest at the last range can see it. */
   | 'resealed';
 
 export interface ForkDeliveryRequest {
   target: string;
-  /** First frame to send. Frames before it already landed. */
   from: number;
   stop: ForkDeliveryStop;
-  /** Damage frame `from`. Later frames go out intact, so a corruption the
-   *  per-frame digest cannot see reaches the check that can. */
   corrupt?: ForkCorruption;
 }
 
-/** The storage both probe objects hold: one tagged-template executor over this
- *  object's own SQLite, one file plane over it, and the workspace schema
- *  installed on first use. */
 abstract class ForkProbeDO extends DurableObject<Cloudflare.Env> {
   protected readonly sql: SqlExecutor = <Row,>(
     query: TemplateStringsArray, ...values: SqlValue[]
@@ -365,18 +248,8 @@ abstract class ForkProbeDO extends DurableObject<Cloudflare.Env> {
 
 export class ForkSourceProbeDO extends ForkProbeDO {
   /**
-   * One workspace worth forking: identity, config, a crafted tool, memory
-   * chunks, a three-entry canonical conversation and three files.
-   *
-   * The conversation is written through the PRODUCTION session writers — one
-   * message and one public entry per turn, each entry stamped with the working
-   * context the message was added to — because the rows a fork reads are the
-   * rows a turn writes, and a fixture that INSERTed them by hand would be a
-   * second writer of the shape under test.
-   *
-   * The transfer id is stored in the object's own storage rather than minted per
-   * call, because a resumed run has to regenerate the SAME stream and the id is
-   * part of every frame's sealed preimage.
+   * Conversation rows go through the production session writers, not hand INSERTs. The transfer id is
+   * stored, not minted per call: a resumed run must regenerate the same sealed stream.
    */
   async seed(): Promise<void> {
     this.ensureSchema();
@@ -419,9 +292,6 @@ export class ForkSourceProbeDO extends ForkProbeDO {
     let parentId: string | null = null;
 
     for (const [index, turn] of turns.entries()) {
-      // `append` publishes the message AND adds it to the working context; the
-      // transcript entry is the public half, and it is stamped with the context
-      // that append just committed.
       const reference = await history.append({
         id: turn.id,
         message: { role: turn.role, content: turn.text },
@@ -436,36 +306,23 @@ export class ForkSourceProbeDO extends ForkProbeDO {
       });
 
       parentId = turn.id;
-      // The writer stamps the wall clock; the fork point has to be a value an
-      // assertion can name, so the fixture restamps its own entries.
       void this.sql`UPDATE conversation_entries SET recorded_at = ${PROBE_CUT_RECORDED_AT - (turns.length - 1 - index) * 1000}
         WHERE actor_id = ${actor.actorId} AND session_id = ${CHAT_SESSION_ID} AND id = ${turn.id}`;
     }
 
     await this.plane.writeFile(SOUL_PATH, SOUL_CONTENT);
     await this.plane.writeFile('memory/notes.md', 'Everything the parent learned. '.repeat(7));
-    // Four ranges exactly, so an eviction after the first one leaves three to go.
     await this.plane.writeFile('memory/deep/proof.bin', new Uint8Array(PROBE_FRAME_BYTES * 4).fill(0x7a));
     await this.ctx.storage.put('transferId', transferId);
   }
 
-  /** This workspace's own files, so the test compares the target's bytes with
-   *  the source's rather than with a hardcoded digest. */
   async sourceFiles(): Promise<{ path: string; size: number; digest: string }[]> {
     this.ensureSchema();
 
     return this.plane.digests();
   }
 
-  /**
-   * Send frames to the target, starting at `from` and stopping at `stop`.
-   *
-   * The stream is REGENERATED from this workspace's own rows on every run,
-   * because an activation that was interrupted took its generator with it.
-   * Frames before `from` are produced and skipped, so what does go out carries
-   * the seqs and digests the target already folded — the resumption is real, not
-   * a re-sent prefix.
-   */
+  /** Regenerates the stream from own rows each run (an interrupted activation lost its generator). */
   async deliver(request: ForkDeliveryRequest): Promise<ForkDeliveryReport> {
     this.ensureSchema();
     const transferId = await this.ctx.storage.get<string>('transferId');
@@ -481,9 +338,7 @@ export class ForkSourceProbeDO extends ForkProbeDO {
     try {
       for await (const frame of forkTransferFrames({
         sql: this.sql,
-        // The probe's own actor: the seed issued a main and the conversation
-        // rows above are keyed to it, so forking under any other handle would
-        // read an empty transcript and pass while proving nothing.
+        // Forking under any other actor would read an empty transcript and pass vacuously.
         actor: openWorkspaceMainActor(this.sql),
         vfs: this.plane,
         artifactDirectory: PROBE_ARTIFACTS,
@@ -491,8 +346,6 @@ export class ForkSourceProbeDO extends ForkProbeDO {
         transferId,
         frameBytes: PROBE_FRAME_BYTES,
       })) {
-        // Frames that landed before this run are folded but not re-sent: the
-        // digest the target resumed with covers them.
         if (frame.seq < request.from) {
           report.stream = foldForkStream(report.stream, frame.digest);
           continue;
@@ -511,8 +364,7 @@ export class ForkSourceProbeDO extends ForkProbeDO {
         report.sent += 1;
         report.nextSeq = frame.seq + 1;
 
-        // The commit's own digest is not folded — it seals the value, so folding
-        // it would leave the two halves computing different sequences.
+        // The commit's own digest is not folded: it seals the value.
         if (frame.kind !== 'commit') report.stream = foldForkStream(report.stream, frame.digest);
 
         if (outcome.status === 'staged') report.staged += 1;
@@ -531,8 +383,6 @@ export class ForkSourceProbeDO extends ForkProbeDO {
   }
 }
 
-/** One frame with a payload byte flipped: as a transport would deliver it, or
- *  resealed as a sender that sent different bytes would. */
 function corruptFrame(frame: ForkFrame, how: ForkCorruption): ForkFrame {
   if (frame.kind !== 'file') throw new Error(`frame ${frame.seq} is a ${frame.kind} frame, not a file frame`);
   const bytes = frame.bytes.slice();
@@ -541,19 +391,13 @@ function corruptFrame(frame: ForkFrame, how: ForkCorruption): ForkFrame {
   return how === 'frame' ? { ...frame, bytes } : sealForkFrame({ ...frame, bytes });
 }
 
-/** Everything an owner could observe about the target. Read-only: asking does
- *  not advance the transfer. */
 export interface ForkTargetState {
   lineage: ForkLineageRow | null;
   identity: { id: string; name: string; mission: string | null } | null;
   displayName: string | null;
-  /** Public chain entries the fork carried, excluding its own marker. */
   entries: number;
-  /** The fork's own boundary entry: one once published, none before. */
   markers: number;
-  /** Canonical messages, so the marker's own message is visible too. */
   messages: number;
-  /** Live members of the restored working context. */
   contextMembers: number;
   configRows: number;
   craftedTools: number;
@@ -562,19 +406,10 @@ export interface ForkTargetState {
 }
 
 export class ForkTargetProbeDO extends ForkProbeDO {
-  /**
-   * One unpublished transfer's receiver, held for this ACTIVATION only —
-   * `rawCopyFromFork` holds it the same way and for the same reason: a file that
-   * spans frames is hashed and staged across several calls.
-   */
+  /** Per-activation only, as in `rawCopyFromFork`: a file spanning frames is staged across calls. */
   private receiver: ForkTransferReceiver | null = null;
 
-  /**
-   * One frame, driven exactly as `rawCopyFromFork` drives it: the identity row
-   * first (in production the file plane's precondition, and deliberately the
-   * only identity datum before publication), then the receiver, with the
-   * publication inside `transactionSync`.
-   */
+  /** Driven as `rawCopyFromFork` does: identity row first, publication inside `transactionSync`. */
   async accept(frame: ForkFrame): Promise<
     { status: 'staged' | 'settled' | 'published'; result: ForkResult | null }
   > {
@@ -590,15 +425,11 @@ export class ForkTargetProbeDO extends ForkProbeDO {
       new ForkTargetWriter(this.sql, this.plane, {
         workspaceId: this.ctx.id.toString(),
         workspaceName: 'fork-target',
-        // This target's OWN payload plane: every carried payload reference and
-        // payload file is re-rooted under it.
         artifactDirectory: PROBE_ARTIFACTS,
         transaction: (rows) => this.ctx.storage.transactionSync(rows),
       }),
       new NativeSinkPlan(this.plane.native, frame.transferId, {
-        // SOUL publishes through the protected write in production rather than
-        // by renaming a staged temp, and it carries the mission back from the
-        // one frame it is allowed to occupy.
+        // SOUL publishes through the protected write, not a staged-temp rename.
         owns: (targetPath) => targetPath === SOUL_PATH,
         publish: async (targetPath, bytes) => {
           await this.plane.writeFile(targetPath, bytes);
@@ -614,14 +445,7 @@ export class ForkTargetProbeDO extends ForkProbeDO {
       : { status: outcome.status, result: outcome.result };
   }
 
-  /**
-   * The durable cursor this transfer stands on, read straight out of the row the
-   * receiver resumes from.
-   *
-   * Read through the production accessor rather than by querying columns here,
-   * so the test is asserting on the same value the receiver uses and not on a
-   * transcription of it.
-   */
+  /** Read through the production accessor so the test asserts the value the receiver uses. */
   async cursor(): Promise<ForkStaging | null> {
     this.ensureSchema();
 

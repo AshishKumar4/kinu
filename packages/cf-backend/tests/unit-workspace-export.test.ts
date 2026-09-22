@@ -1,13 +1,6 @@
 /**
- * Cloud workspace export — the owner's backup of a Durable Object workspace.
- *
- * Asserts the two things the DO seam owns (core's `unit-workspace-archive`
- * owns the format itself):
- *   - the paging contract a caller walks, driven over the positional-binding
- *     SQL interface the DO's `ctx.storage.sql` implements, including a client
- *     cursor that is claimed rather than trusted;
- *   - the access class: a workspace database is interactive-session-only, so
- *     an exec-scoped CI token is refused on every transport.
+ * Cloud workspace export: the paging contract over DO-style positional SQL (cursor claimed, not trusted), and the access class
+ * (interactive-session-only, so exec-scoped CI tokens are refused). Format is core's `unit-workspace-archive`.
  */
 
 import { describe, expect, test } from 'bun:test';
@@ -22,7 +15,7 @@ import {
   AGENT_RPC_ACCESS, cliScopesConnectionTag, rejectOutOfScopeRpc, requiredRpcAccess,
 } from '../src/cli/rpc-gate';
 
-/** Enough chained entries that a 4 KiB page cannot hold the conversation. */
+/** Enough chained entries that one page cannot hold the conversation. */
 const MESSAGES = 450;
 
 interface WorkspaceFixture {
@@ -30,18 +23,14 @@ interface WorkspaceFixture {
   db: Database;
   actor: ActorHandle;
   vfs: VFS;
-  /** The chain's text, root first — what a restore has to reproduce. */
   said: readonly string[];
 }
 
-/** A workspace whose storage is reached exactly as the DO reaches its own, and
- *  whose conversation is written by the canonical writer a turn writes through. */
 async function workspace(): Promise<WorkspaceFixture> {
   const ws = createTestWorkspace();
   const actor = createTestActor(ws.sql, ws.execRaw, 'SCOUT', 'scout');
   ws.db.exec(`CREATE TABLE workspace_capability (id INTEGER PRIMARY KEY, token TEXT NOT NULL)`);
   ws.db.exec(`INSERT INTO workspace_capability (id, token) VALUES (1, 'pwc_secret')`);
-  // The DO's own bookkeeping tables, which belong to the platform, not the user.
   ws.db.exec(`CREATE TABLE _cf_KV (key TEXT PRIMARY KEY, value BLOB)`);
 
   const history = new SessionHistory({
@@ -65,12 +54,9 @@ async function workspace(): Promise<WorkspaceFixture> {
   return { sql: archiveSqlFromDatabase(ws.db), db: ws.db, actor, vfs: ws.vfs, said };
 }
 
-/** A walk that never reaches `next === null` is the defect, so the runaway
- *  guard REFUSES rather than returning a truncated archive that then fails as
- *  an incomplete one somewhere else. */
+/** The runaway guard refuses rather than returning a truncated archive that fails elsewhere. */
 const MAX_PAGES = 5_000;
 
-/** What the CLI and the browser both do: walk `next` until it is null. */
 async function drain(sql: SqlExec, maxBytes: number): Promise<{ lines: string[]; pages: number }> {
   const lines: string[] = [];
   let cursor: ArchiveCursor | null = null;
@@ -98,9 +84,7 @@ describe('cloud workspace export', () => {
     const result = await restoreWorkspaceArchive(archiveSqlFromDatabase(target), lines);
     expect(result.source).toBe('cloud');
 
-    // Read back through the production transcript reader, not by counting a
-    // table: what an owner is owed is the CONVERSATION, and a restore that
-    // landed the rows without their chain reads as an empty one here.
+    // Read back through the production transcript reader: rows landed without their chain read as empty here.
     const restored = await readTranscriptRows(sqlOver(target), source.actor, source.vfs);
     expect(restored.map((row) => row.content)).toEqual([...source.said]);
   });
@@ -130,7 +114,6 @@ describe('cloud workspace export', () => {
     const denial = rejectOutOfScopeRpc(execToken, frame);
     expect(denial).not.toBeNull();
     expect(denial).toContain('interactive CLI session token');
-    // A browser or interactive CLI connection carries no scope tag at all.
     expect(rejectOutOfScopeRpc([], frame)).toBeNull();
   });
 });

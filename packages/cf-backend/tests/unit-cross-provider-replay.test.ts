@@ -1,37 +1,19 @@
 /**
- * KINU-085, the hosted half. A conversation whose durable history was produced
- * by one provider is replayed to another the moment the owner (or a role tier)
- * resolves a different model, and the tool-call identifiers in that history were
- * minted by the provider that is no longer on the other end.
- *
- * Core owns the rewrite (`prompting/replay-normalization.ts`) and `runChat`
- * supplies it with the destination, so the CLI has done this since the module
- * landed. THIS backend does not run `runChat`: Think drives the loop and the
- * actor's `beforeStep` composes the same shared pipeline — so the pipeline's
- * destination input is the actor's to supply, and it was the one input the cloud
- * call site omitted. Every unit of the rewrite stayed green while no hosted
- * request was ever normalized.
- *
- * Driven through `beforeStep`, the real Think hook streamText calls, with this
- * actor's real registered extensions — the same entry point
- * `unit-mid-turn-steer.test.ts` drives. The harness cannot run a model turn and
- * does not need to: the request boundary is the assertion.
+ * KINU-085, hosted half: tool-call ids replayed to a different provider must be
+ * normalized; driven through `beforeStep`, where the actor supplies the destination.
  */
 import { describe, expect, test } from 'bun:test';
 import type { AssistantModelMessage, ModelMessage, ToolModelMessage } from 'ai';
 import { isPortableToolCallId } from '@kinu.run/core';
 import { orchestratorHarness, chatSessionTurns, type HarnessOrchestratorAgent } from './helpers/actor-harness';
 
-/** What the SOURCE provider named this call — Anthropic's own grammar, which no
- *  other family mints, so its presence on a request is unambiguous. */
+/** Anthropic's own id grammar, which no other family mints. */
 const SOURCE_ID = 'toolu_01SourceMinted';
 
 const SOURCE_REASONING = 'I should look this up.';
 
 const SOURCE_REASONING_SIGNATURE = 'anthropic-source-signature';
 
-/** A completed call and its result, exactly as the previous turn persisted
- *  them: joined by the id the provider that ran them chose. */
 const HISTORY: ModelMessage[] = [
   { role: 'user', content: 'what is the answer' },
   {
@@ -56,21 +38,13 @@ const HISTORY: ModelMessage[] = [
   { role: 'user', content: 'are you sure' },
 ];
 
-/**
- * The messages one step actually carries.
- *
- * Awaited: the shared pipeline is promoted to a Promise whenever a registered
- * extension must finish I/O before the model sees its rewrite, and this actor
- * registers three. Reading the result synchronously would take a pending
- * Promise for "nothing changed" and pass whatever the input was.
- */
+/** Awaited: the pipeline becomes a Promise when an extension must finish I/O first. */
 async function stepMessages(
   agent: HarnessOrchestratorAgent, messages: readonly ModelMessage[],
 ): Promise<ModelMessage[]> {
   return [...await chatSessionTurns(agent).step(0, messages)];
 }
 
-/** Both halves of every tool call on a request, in wire order. */
 function pairing(messages: readonly ModelMessage[]) {
   const calls: string[] = [];
   const results: string[] = [];
@@ -91,20 +65,15 @@ function pairing(messages: readonly ModelMessage[]) {
 describe('a hosted step whose history came from another provider', () => {
   test('is handed destination-neutral ids, still paired', async () => {
     const { agent } = orchestratorHarness();
-    // beforeStep refuses an unprepared turn: open it through beforeTurn, the
-    // way production does, so the step reads a real snapshot.
+    // beforeStep refuses an unprepared turn: open it through beforeTurn, as production does.
     await chatSessionTurns(agent).prepare({ messages: [...HISTORY] });
 
     const carried = pairing(await stepMessages(agent, [...HISTORY]));
 
-    // One call, one result, joined — the property a destination reads to decide
-    // the call is finished rather than pending.
     expect(carried.calls).toHaveLength(1);
     expect(carried.results).toEqual(carried.calls);
 
     for (const id of carried.calls) expect(isPortableToolCallId(id)).toBe(true);
-    // And the id belongs to the request, not to the provider that is no longer
-    // answering it.
     expect(carried.calls).not.toContain(SOURCE_ID);
   });
 

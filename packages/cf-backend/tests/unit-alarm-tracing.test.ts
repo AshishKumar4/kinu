@@ -1,27 +1,7 @@
 /**
- * The tracer, wired, observed on a REAL run of a REAL production method.
- *
- * WHAT THIS PROVES, and what it deliberately does not.
- *
- * PROVEN HERE: `OrchestratorAgent._kinuTimerTick` — the shipped method, not a
- * copy of its shape — opens a span tree when it runs, and the tree has the
- * structure and the attributes the contract requires. Every layer above the
- * platform is production code: `createWorkersTracer`, `createAgentTracing`,
- * `AgentConfigStore.countIsolateGeneration`, `renderSelfPath`, and every
- * `tick.span` call site. The ONLY substitution is `tracing.enterSpan` itself
- * (`tests/helpers/agents-sdk.ts`), which cannot exist under bun because
- * `cloudflare:workers` is a workerd module — and that is the platform boundary,
- * so a substitution there is the most faithful one available. A test that
- * injected our own `Tracer` would be asserting about the injected object.
- *
- * PROVEN ELSEWHERE, and NOT re-asserted here because this runner cannot see it:
- * that a span the shipped tracer opens is actually RECORDED. `isTraced` is false
- * with no collector attached, so recording is a runtime-plus-config fact, and
- * `scripts/tracing-gate.ts` measures it under real workerd in both directions —
- * `isTraced` true with a tail consumer and false without, the negative run being
- * the non-vacuity witness. The two halves are complementary and neither is
- * sufficient: this file proves the tree exists and is shaped right, that gate
- * proves a tree of that shape reaches a collector.
+ * The tracer on a real run of `OrchestratorAgent._kinuTimerTick`: the span tree's structure and attributes.
+ * Only `tracing.enterSpan` is substituted (`tests/helpers/agents-sdk.ts`; `cloudflare:workers` is workerd-only).
+ * That spans are actually recorded is proven under real workerd by `scripts/tracing-gate.ts`, not here.
  */
 import { describe, expect, test } from 'bun:test';
 import {
@@ -35,8 +15,7 @@ import {
   type AgentTracing, type RecordingTracer, type SpanAttributeValue, type TracedInvocation,
 } from '@kinu.run/core/obs';
 
-/** The phases, in the order `_kinuTimerTick` runs them. Named here so a phase
- *  silently dropped from the method fails rather than shrinking the tree. */
+/** In `_kinuTimerTick` order, so a phase dropped from the method fails rather than shrinking the tree. */
 const PHASES = [
   'alarm.due_triggers',
   'alarm.event_drain',
@@ -55,9 +34,7 @@ describe('alarm tick tracing', () => {
     await agent._kinuTimerTick();
 
     const spans = recordedNativeSpans();
-    // FIRST assertion, before any shape check: an empty array is the shape of
-    // instrumentation that was never reached, and every structural assertion below
-    // it would pass vacuously over it.
+    // First: an empty array is instrumentation never reached, over which every shape check passes vacuously.
     expect(spans.length).toBeGreaterThan(0);
 
     const roots = spans.filter((span) => span.parent === null);
@@ -65,13 +42,10 @@ describe('alarm tick tracing', () => {
 
     const rootIndex = spans.findIndex((span) => span.parent === null);
     const children = spans.filter((span) => span.parent === rootIndex);
-    // Order matters: the phases are sequential and a reordering changes what the
-    // durable timer chain does, not just what the trace looks like.
+    // Reordering changes what the durable timer chain does, not just the trace.
     expect(children.map((span) => span.name)).toEqual([...PHASES]);
 
-    // No phase nested inside another. Siblings, not a chain — which is the
-    // difference between "the alarm was slow" and "the email reconcile was slow",
-    // and is exactly what a flat list of span names cannot distinguish.
+    // Siblings, not a chain: distinguishes which phase was slow.
     expect(spans.filter((span) => span.parent !== null && span.parent !== rootIndex)).toEqual([]);
   });
 
@@ -83,16 +57,9 @@ describe('alarm tick tracing', () => {
     expect(spans.length).toBeGreaterThan(0);
 
     for (const span of spans) {
-      // Required by `SpanOpenAttributes`, and unforgeable at the call site: the
-      // seam supplies both, so no span can be opened without them.
       expect(span.attributes.get(SPAN_ATTR_ISOLATE_GEN)).toBe(1);
-      // `<className>:<name>`, never `root`: the SDK's getter is
-      // `[...parentPath, { className, name }]`, so self is always present and the
-      // empty-path branch of `renderSelfPath` is unreachable on a live agent. The
-      // class half is what a Durable Object id cannot tell you, and the name half
-      // is what the deployed tail stream has no field for at all. Derived from
-      // the harness agent rather than hardcoded: the name is the harness's to
-      // choose, and the invariant is the shape, not the value.
+      // `<className>:<name>`, never `root`: the SDK getter always includes self. Derived from the harness
+      // agent: the invariant is the shape, not the value.
       expect(span.attributes.get(SPAN_ATTR_SELF_PATH)).toBe(`HarnessOrchestratorAgent:${agent.name}`);
       expect(span.attributes.get(SPAN_ATTR_INVOCATION)).toBe(1);
     }
@@ -108,10 +75,8 @@ describe('alarm tick tracing', () => {
     const spans = recordedNativeSpans();
     expect(spans.filter((span) => span.parent === null)).toHaveLength(2);
 
-    // THE CONTRACT: trace context does not survive a wake. Two ticks are two
-    // invocation ordinals on one `isolateGen`, so a reader can tell "one isolate
-    // served two wakes" from "the object was reconstructed" — and no span spans
-    // both, because there is no span object that outlives its callback.
+    // Trace context does not survive a wake: two ticks are two invocation ordinals on one `isolateGen`,
+    // and no span outlives its callback.
     const ordinals = new Set(spans.map((span) => span.attributes.get(SPAN_ATTR_INVOCATION)));
     expect([...ordinals].sort((a, b) => Number(a) - Number(b))).toEqual([1, 2]);
     const generations = new Set(spans.map((span) => span.attributes.get(SPAN_ATTR_ISOLATE_GEN)));
@@ -124,9 +89,7 @@ describe('alarm tick tracing', () => {
     await first.agent._kinuTimerTick();
     await first.agent._kinuTimerTick();
     const oneObject = new Set(recordedNativeSpans().map((s) => s.attributes.get(SPAN_ATTR_ISOLATE_GEN)));
-    // Two ticks, one construction, one generation. A per-tick bump would make a
-    // discontinuity meaningless as a reset signal, which is the only thing the
-    // attribute is for.
+    // A per-tick bump would make a discontinuity meaningless as a reset signal.
     expect([...oneObject]).toEqual([1]);
   });
 
@@ -134,8 +97,7 @@ describe('alarm tick tracing', () => {
     const { agent } = orchestratorHarness();
     resetNativeSpans();
     await agent._kinuTimerTick();
-    // Pinned in full: the tree is the deliverable, so a change to it is a change
-    // to what an operator sees and belongs in a diff.
+    // Pinned in full: a change to the tree is a change to what an operator sees.
     expect(renderNativeSpanTree()).toBe(
       [
         'alarm.tick  [isolate_gen=1 invocation=1]',
@@ -152,13 +114,9 @@ describe('alarm tick tracing', () => {
 });
 
 /**
- * The seam's own contract, tested directly because it is the mechanism the whole
- * design rests on: a span cannot be opened from work that escaped its invocation.
- * Documenting that would not be enough — the failure is silent, since the span
- * exists, carries plausible attributes and closes cleanly.
+ * The seam's contract: a span cannot be opened from work that escaped its invocation. The failure is
+ * otherwise silent, since such a span looks plausible.
  */
-/** Where a test parks the handle a callback captured, so the assertion after the
- *  invocation can still reach it. */
 interface HandleSeat {
   handle: TracedInvocation | null;
 }
@@ -170,27 +128,20 @@ describe('invocation handles are revoked, not merely discouraged', () => {
     selfPath: [{ className: 'OrchestratorAgent', name: 'acme' }],
   });
 
-  /** A property rather than a bare `let`: control-flow narrowing collapses a `let`
-   *  assigned only inside a callback to `null`, and the handle that outlived its
-   *  invocation is the whole subject here. */
+  /** A property, not a `let`: narrowing collapses a `let` assigned only inside a callback to `null`. */
   const seatFor = (): HandleSeat => ({ handle: null });
 
   test('a handle stashed out of its invocation refuses to open a span', async () => {
     const seat = seatFor();
     await tracing().invocation('alarm', 'tick', (tick) => {
       seat.handle = tick;
-      // Live INSIDE the callback, which is what makes the assertion below about
-      // revocation rather than about a broken handle.
       tick.span('alarm.phase', () => undefined);
 
       return Promise.resolve();
     });
 
     expect(seat.handle).not.toBeNull();
-    // THE PROPERTY: this is the alarm-resumed-turn shape in code. The handle was
-    // captured during invocation 1 and used after it settled; a span opened here
-    // would claim coverage of an unbounded, unmeasured gap in which the isolate may
-    // have been reset.
+    // The alarm-resumed-turn shape: a span opened here would cover an unmeasured gap across a possible isolate reset.
     expect(() => seat.handle?.span('alarm.late', () => undefined)).toThrow(KinuError);
     expect(() => seat.handle?.span('alarm.late', () => undefined)).toThrow(/escaped its invocation/);
   });
@@ -203,8 +154,7 @@ describe('invocation handles are revoked, not merely discouraged', () => {
       await Promise.resolve();
       turn.span('turn.second_await', () => { names.push('second_await'); });
     });
-    // A handle revoked when the callback RETURNED its pending promise would have
-    // thrown on both of these, which is the bug the settle-aware revocation avoids.
+    // Revocation is settle-aware, not on the callback returning its pending promise.
     expect(names).toEqual(['after_await', 'second_await']);
   });
 
@@ -216,15 +166,12 @@ describe('invocation handles are revoked, not merely discouraged', () => {
     try {
       seat.handle?.span('rpc.late', () => undefined);
     } catch (thrown) {
-      // Narrowed, not asserted: the classification is the thing being tested, so a
-      // cast would be asserting the answer.
+      // Narrowed, not cast: the classification is what is tested.
       if (thrown instanceof KinuError) refusal = thrown;
       else throw thrown;
     }
 
-    // A refusal carries its classification, reason first: `unsupported`, because
-    // opening a span from escaped work is not a runtime condition to retry — it is a
-    // programming error, and a retry would produce the same lie.
+    // `unsupported`: opening a span from escaped work is a programming error, not retryable.
     expect(refusal).toBeInstanceOf(KinuError);
     expect(refusal?.code).toBe('unsupported');
   });
@@ -235,27 +182,16 @@ describe('invocation handles are revoked, not merely discouraged', () => {
       seat.handle = turn;
       throw new Error('phase exploded');
     })).toThrow('phase exploded');
-    // The `finally` is what makes this hold: a handle left live by a throwing
-    // invocation is exactly the one a `.catch()` continuation would reach for.
+    // The `finally` revokes a handle left live by a throwing invocation.
     expect(() => seat.handle?.span('fetch.late', () => undefined)).toThrow(KinuError);
   });
 });
 
 /**
- * The failure contract, both directions, on the SHIPPED tracer.
- *
- * Adopted from `~/cloudflare-os/packages/backend-utils/src/tracing.ts`: an
- * exception is MARKED and propagates UNCHANGED, and no error TEXT reaches a trace
- * attribute. Both halves are asserted, because the second is the one a future
- * "make the trace more useful" change breaks: `kinu.error_message` was on this
- * span until 2026-08-19, which put an upstream error's message — possibly a
- * secret, certainly unbounded — on a stream `ReservedLogField` cannot reach, and
- * marked ONLY the non-throwing `fail()` path, so a THROWN failure was not marked
- * at all.
+ * The failure contract on the shipped tracer (from `~/cloudflare-os/packages/backend-utils/src/tracing.ts`):
+ * an exception is marked and propagates unchanged, and no error text reaches a trace attribute.
  */
 describe('a span marks a failure and changes nothing about it', () => {
-  /** The tracer plus the first span's attributes, which is what every assertion
-   *  below reads. Inferred, so the fake's own surface is the contract. */
   const spanFor = () => {
     const tracer: RecordingTracer = createRecordingTracer();
     const empty: ReadonlyMap<string, SpanAttributeValue> = new Map();
@@ -278,15 +214,13 @@ describe('a span marks a failure and changes nothing about it', () => {
 
     expect(answer).toBe('done');
     expect(order).toEqual(['inside', 'after_await']);
-    // Opened, and opened ONCE. An empty `opened` is the shape of instrumentation
-    // that was never reached, which is the defect a tracing test exists to catch.
+    // Opened once; empty `opened` is instrumentation never reached.
     expect(tracer.opened).toHaveLength(1);
     const span = tracer.opened[0];
     expect(span?.name).toBe('work');
     expect(span?.attributes.get(SPAN_ATTR_ISOLATE_GEN)).toBe(3);
     expect(span?.attributes.get('kinu.rows')).toBe(4);
-    // Closed: no `kinu.error`, and the next span opened is a SIBLING rather
-    // than a child, which is the only observable a scoped span has for "closed".
+    // A sibling next span is the only observable a scoped span has for "closed".
     expect(span?.attributes.has(SPAN_ATTR_ERROR)).toBe(false);
     tracer.span('after', { isolateGen: 3, selfPath: 'A:a' }, () => undefined);
     expect(tracer.opened[1]?.parent).toBeNull();
@@ -295,8 +229,6 @@ describe('a span marks a failure and changes nothing about it', () => {
   test('a synchronous throw is marked and propagates UNCHANGED', () => {
     const { tracer, attributes } = spanFor();
     const thrown = new KinuError('io', 'writing the ledger', { cause: new Error('disk full') });
-    // Collected rather than parked in a `let`: the identity of what came out is the
-    // assertion, so nothing here may narrow or default it.
     const caught: Error[] = [];
 
     try {
@@ -306,8 +238,7 @@ describe('a span marks a failure and changes nothing about it', () => {
       caught.push(error);
     }
 
-    // IDENTITY, not shape: a wrapped error would satisfy `toThrow(...)` while
-    // having destroyed the classification and the chain the caller has to read.
+    // Identity, not shape: a wrapped error would destroy the classification and chain.
     expect(caught[0]).toBe(thrown);
     expect(caught[0]).toBeInstanceOf(KinuError);
     expect(renderCauseChain(thrown)).toBe('writing the ledger: disk full');
@@ -355,8 +286,7 @@ describe('a span marks a failure and changes nothing about it', () => {
     expect(tracer.opened).toHaveLength(2);
 
     for (const span of tracer.opened) {
-      // The whole recorded surface, not a named key: a future attribute carrying
-      // the message under any other name is the same leak.
+      // The whole surface, not a named key: the message under any other name is the same leak.
       expect([...span.attributes.values()].join(' ')).not.toContain(secret);
       expect(span.attributes.get(SPAN_ATTR_ERROR)).toBe(true);
     }
@@ -371,8 +301,7 @@ describe('a span marks a failure and changes nothing about it', () => {
       return 'continued';
     });
 
-    // The alarm tick's shape: the phase tolerates its failure and the invocation
-    // proceeds, so the span must say it failed while the caller sees success.
+    // The phase tolerates its failure, so the span says failed while the caller sees success.
     expect(answer).toBe('continued');
     expect(attributes().get(SPAN_ATTR_ERROR)).toBe(true);
   });

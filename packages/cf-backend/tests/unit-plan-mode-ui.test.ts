@@ -6,8 +6,7 @@ const source = (path: string) => readFileSync(join(import.meta.dir, '..', path),
 
 const page = source('src/pages/WorkspacePage.tsx');
 
-// The composer is one shared component: the mode control and the
-// Steer-as-Branch gate live in it, not in WorkspacePage.
+// The mode control and Steer-as-Branch gate live in the shared composer, not in WorkspacePage.
 const composer = source('src/components/Composer.tsx');
 
 const review = source('src/components/surfaces/PlanReviewView.tsx');

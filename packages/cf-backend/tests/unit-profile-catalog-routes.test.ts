@@ -1,6 +1,4 @@
-// The account profile catalog over both authenticated transports: browser
-// session routes and the CLI's bearer-authenticated route. Both delegate to the
-// same UserDO CAS row; neither serializes credentials or a second authority.
+// Both transports delegate to the same UserDO CAS row; neither serializes credentials.
 import { describe, expect, test } from 'bun:test';
 import * as v from 'valibot';
 import {
@@ -62,9 +60,6 @@ interface ProfileCatalogWriteRequest {
   expectedVersion: number;
 }
 
-/** The catalog is read and written from both planes, so the env satisfies
- *  both. Neither route reaches a workspace object, the device-code KV or the
- *  published assets. */
 function routeEnv(userDO: TestUserDO['userDO']): UserRoutesEnv<string> & CliRoutesEnv<string> {
   return {
     CREDENTIAL_ENCRYPTION_KEY: TEST_CREDENTIAL_ENCRYPTION_KEY,

@@ -1,17 +1,6 @@
 /**
- * The parked-command queue's decision half: what a bulk click records, what
- * stays selected afterwards, and what re-reads.
- *
- * The defect: `decide` reset the selection to null — and null means
- * "everything" (`chosen = selected ?? all`) — so approving re-ticked every
- * box the instant the RPC landed, and nothing re-read the queue, so the
- * decided rows sat there, still ticked, until the next ambient poll.
- *
- * `ParkedDecisionFlow` is the whole decision half, and it is a plain object
- * so every claim about it is provable without a browser: nothing it records
- * re-selects what was just decided, and a recorded decision always re-reads
- * the queue. `ParkedCommands` renders what the flow says; the flow is what
- * this file drives.
+ * The parked-command queue's decision half: a bulk decide must not reset the selection to null (null means everything)
+ * and must re-read the queue. `ParkedDecisionFlow` is a plain object, so this drives it without a browser.
  */
 import './helpers/ui-module-globals';
 import { describe, expect, test } from 'bun:test';
@@ -24,8 +13,7 @@ import type { PendingAction } from '@kinu.run/core';
 /** One fixed queue timestamp, so "queued X ago" is stable across renders. */
 const AT = Date.UTC(2026, 8, 3, 12, 0, 0);
 
-/** No component-level assertion here needs an RPC answer: the flow under
-  *  test is injected, so the seam stays silent. */
+/** The flow under test is injected, so the seam stays silent. */
 const SILENT_RPC: Rpc = () => Promise.withResolvers<never>().promise;
 
 function parked(id: string, detail = `run \`deploy --${id}\` on device`): PendingAction {
@@ -36,12 +24,9 @@ const ACTIONS = [parked('a'), parked('b'), parked('c')];
 
 const ALL = ACTIONS.map((a) => a.id);
 
-/** The flow's deps, recorded. `decideDeferredApprovals` answers with the ids
- *  it accepted; the recorder narrows the seam's promise to that payload. */
+/** `decideDeferredApprovals` answers with the ids it accepted; the recorder narrows the promise to that. */
 interface RecordingDeps extends ParkedDecisionDeps {
-  /** Every `(ids, decision)` the queue recorded, in order. */
   readonly decisions: Array<{ ids: string[]; decision: ParkedDecision }>;
-  /** How many times the queue asked for a re-read. */
   refreshes: number;
   /** Fail the next decide call with this message. */
   failNextWith: string | null;
@@ -109,7 +94,6 @@ describe('the parked queue, as the owner decides it', () => {
     flow.toggle('b', ALL);
     rec.failNextWith = 'connection lost';
     await flow.decide('approved', [...flow.chosen(ALL)]);
-    // The answer never landed, so the intent on screen stands.
     expect([...flow.chosen(ALL)].sort()).toEqual(['a', 'c']);
     expect(flow.snapshot().error).toContain('Could not record the decision');
     expect(rec.refreshes).toBe(0);
@@ -146,7 +130,6 @@ describe('the queue card, as the reader sees it', () => {
       rpc: SILENT_RPC,
     }));
 
-    // Three rows, three checked boxes.
     expect(html.match(/checked/g)?.length).toBe(3);
     expect(html).toContain('Approve all');
   });

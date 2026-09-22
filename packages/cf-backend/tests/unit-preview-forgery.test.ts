@@ -1,31 +1,7 @@
 /**
- * Forged sandbox previews, driven through the Worker entry against the REAL
- * Sandbox SDK.
- *
- * WHY THIS FILE EXISTS BESIDE `unit-preview-origin.test.ts`. That suite
- * replaces `proxyToSandbox` with a recorder, so everything it proves is about
- * the bytes Kinu adds around the SDK — containment, header stripping, the
- * stale-preview repair. What it cannot see is the act the SDK performs on
- * entry: `extractSandboxRoute` splits the hostname, and `getSandbox` resolves
- * the Durable Object (`getContainer` = `idFromName` then `get`) BEFORE the
- * port's token is looked at. The token travels onward as a header for the
- * object to check, so the object exists — and has run its constructor and its
- * init gate — by the time anyone knows the request was forged.
- *
- * The preview host is step 1 of the route table, ahead of authentication,
- * ahead of the CSRF gate and ahead of every ingress budget, and production
- * routes `*.kinu.run/*` here. So the ONLY place a guessed hostname can be
- * stopped is before `proxyToSandbox` is called, and the oracle for that is the
- * `Sandbox` namespace itself: a refusal that resolved no id created nothing.
- *
- * The namespace double records `idFromName`, which is the creation act — a
- * Durable Object comes into existence when a stub is used, and `KinuSandbox`
- * writes storage from its constructor (`packages/devbox/src/devbox.ts`
- * `blockConcurrencyWhile(#sweepUnknownSchedules)`) plus the SDK's own
- * constructor-time gate. Nothing here fakes the SDK: if a later change made
- * the real `proxyToSandbox` unreachable from this file, the positive control
- * ('a published preview still proxies') fails loudly rather than passing over
- * a stub that touches no namespace.
+ * The real Sandbox SDK resolves the Durable Object before checking the port token, and the preview
+ * host precedes auth, CSRF and budgets: a guessed hostname must be refused before `proxyToSandbox`.
+ * The oracle is the namespace's `idFromName`: a refusal that resolved no id created nothing.
  */
 import { afterAll, describe, expect, setSystemTime, test } from 'bun:test';
 import { readFileSync } from 'node:fs';
@@ -35,16 +11,14 @@ import { workerContext } from './helpers/bindings';
 import { TEST_CREDENTIAL_ENCRYPTION_KEY } from './helpers/user-do';
 import { sandboxPreviewExposures } from '@kinu.run/core';
 
-// Dynamic for the reason every cf-backend route suite loads the entry this way:
-// the entry's module graph reaches `cloudflare:email` and `cloudflare:workers`
-// through `agents`, and bun's preload shims have to be in place first.
+// Dynamic: the entry's graph reaches `cloudflare:email` and `cloudflare:workers` through `agents`,
+// and bun's preload shims must be in place first.
 const { default: worker } = await import('../src/server');
 
 const APP = 'https://app.example';
 
 const SUFFIX = 'previews.example';
 
-/** The workspace whose container the forged labels aim at. */
 const WORKSPACE = 'hello';
 
 const SANDBOX_ID = `kinu-${WORKSPACE}`;
@@ -60,10 +34,7 @@ const FORGED_TOKEN = 'p8080_deadbeef';
 afterAll(() => { setSystemTime(); });
 
 interface SandboxProbe {
-  /** Sandbox ids a request resolved a stub for. Empty is the contract for a
-   *  refusal that created nothing. */
   readonly resolved: string[];
-  /** Requests that reached the container object. */
   readonly forwarded: Request[];
   readonly kv: FakeKv;
   readonly env: Env;
@@ -109,10 +80,8 @@ function probe(): SandboxProbe {
     resolved,
     forwarded,
     kv,
-    // SAFETY: every member the preview rail reads is constructed above — the
-    // two host vars, the preview secret, the published-exposure store, the
-    // Sandbox namespace and the SPA fallback the rail never reaches. The rail
-    // is step 1 of the route table, so nothing unassigned is reachable.
+    // SAFETY: every member the preview rail reads is constructed above; the rail is step 1 of the
+    // route table, so nothing unassigned is reachable.
     env: view as Env,
     ctx: workerContext(),
   };
@@ -122,12 +91,9 @@ function previewUrl(label: string): string {
   return `https://${label}.${SUFFIX}/`;
 }
 
-/** The hostname a published exposure is reachable at. */
 const MINTED_URL = previewUrl(`${String(PORT)}-${SANDBOX_ID}-${MINTED_TOKEN}`);
 
-/** What the workspace's own executor lane does when it exposes a port: publish
- *  the exposure into the Worker's store, which is what the edge proves against.
- *  Driven through the real writer, so a change to either half is a red test. */
+/** Driven through the real exposure writer, so a change to either half is a red test. */
 async function publishExposure(p: SandboxProbe): Promise<void> {
   await sandboxPreviewExposures(p.kv, SANDBOX_ID).publish(PORT, MINTED_TOKEN);
 }
@@ -148,8 +114,7 @@ describe('a preview hostname nobody minted', () => {
     expect(res.status).toBe(404);
     expect(await res.json()).toMatchObject({ code: 'PREVIEW_NOT_EXPOSED' });
     expect(res.headers.get('cache-control')).toBe('no-store');
-    // Nothing persisted, in the Worker's own store either: a guess costs one
-    // read of a projection and leaves no state behind to grow.
+    // A guess leaves no state behind to grow.
     expect(p.kv.keys()).toEqual(before);
   });
 
@@ -185,8 +150,7 @@ describe('a preview hostname nobody minted', () => {
   test('a sandbox id outside the shape this deployment mints is refused on sight', async () => {
     const p = probe();
 
-    // The SDK admits any id up to 63 characters. This one is a legal SDK label
-    // and not a Kinu container, so it is refused before any lookup.
+    // A legal SDK label that is not a Kinu container: refused before any lookup.
     const res = await worker.fetch(
       new Request(previewUrl(`${String(PORT)}-someoneelses-box-${MINTED_TOKEN}`)),
       p.env,
@@ -202,8 +166,7 @@ describe('a preview hostname nobody minted', () => {
     const p = probe();
     const view: Partial<Env> = { ...p.env };
     delete view.AUTH_KV;
-    // SAFETY: copied from the env constructed by `probe`, minus the one binding
-    // under test, so every member the rail reads is still present.
+    // SAFETY: copied from the env `probe` constructs, minus the one binding under test.
     const res = await worker.fetch(new Request(MINTED_URL), view as Env, p.ctx);
 
     expect(p.resolved).toEqual([]);
@@ -222,8 +185,6 @@ describe('a preview this deployment published', () => {
     expect(p.resolved).toEqual([SANDBOX_ID]);
     expect(res.status).toBe(200);
     expect(await res.text()).toContain('container');
-    // The real SDK ran: these are its own preview-proxy headers, carrying the
-    // token onward for the object to validate.
     const forwarded = p.forwarded[0];
 
     if (!forwarded) throw new Error('expected the container to receive the request');
@@ -245,8 +206,6 @@ describe('a preview this deployment published', () => {
   test('destroying the workspace stops every URL it published', async () => {
     const p = probe();
     await publishExposure(p);
-    // What `destroyAgent` does before the container object's own token store is
-    // deleted with it: one watermark, no enumeration.
     await sandboxPreviewExposures(p.kv, SANDBOX_ID).revokeAll();
 
     const res = await worker.fetch(new Request(MINTED_URL), p.env, p.ctx);
@@ -258,10 +217,8 @@ describe('a preview this deployment published', () => {
 
   test('a workspace re-exposing a port after a destroy resolves again', async () => {
     const p = probe();
-    // The clock is pinned across the two acts because the watermark's boundary
-    // is INCLUSIVE: a record stamped in the same millisecond as a destroy reads
-    // as revoked, which is the fail-closed side of that tie. Here the exposure
-    // genuinely comes after, so it resolves.
+    // The watermark boundary is inclusive: a record stamped in the destroy's millisecond reads as
+    // revoked (fail-closed).
     setSystemTime(new Date('2026-03-01T12:00:00.000Z'));
     await sandboxPreviewExposures(p.kv, SANDBOX_ID).revokeAll();
     setSystemTime(new Date('2026-03-01T12:00:01.000Z'));
@@ -275,7 +232,6 @@ describe('a preview this deployment published', () => {
 
   test('an exposure published as the workspace was destroyed does not survive it', async () => {
     const p = probe();
-    // The other side of the same tie, and the reason it is inclusive.
     setSystemTime(new Date('2026-03-01T12:00:00.000Z'));
     await publishExposure(p);
     await sandboxPreviewExposures(p.kv, SANDBOX_ID).revokeAll();
@@ -298,8 +254,7 @@ describe('the premise this gate rests on', () => {
     const forward = sdk.indexOf('await sandbox.fetch(previewRequest)');
     expect(resolve).toBeGreaterThan(-1);
     expect(forward).toBeGreaterThan(resolve);
-    // The token is not checked here at all: it is SET as a header for the
-    // object to validate, which is why the object must already exist.
+    // The token is set as a header for the object to validate, so the object must already exist.
     expect(sdk).toContain('headers.set(PREVIEW_PROXY_TOKEN_HEADER, token)');
   });
 });

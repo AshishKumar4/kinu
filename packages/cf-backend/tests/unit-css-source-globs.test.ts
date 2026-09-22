@@ -1,22 +1,6 @@
 /**
- * Every Tailwind `@source` glob must match something.
- *
- * This is the config-correctness class of defect, and it is the quietest one we
- * have: a glob that matches no files is not an error anywhere. Tailwind scans
- * zero files, emits zero classes, exits 0. The build is green, the bundle is
- * valid, the deploy succeeds — and every vendor component renders unstyled,
- * which nobody notices until they look at the page.
- *
- * The defect this locks: `@source "../node_modules/@cloudflare/kumo/dist/..."`
- * resolved to `packages/cf-backend/node_modules/`, but bun hoists shared
- * dependencies to the workspace root, so the directory never existed. Verified
- * against the shipped bundle: `dist/client/assets/*.css` contained no
- * `bg-kumo-base` at all. Kumo's Button, Badge, Loader and Combobox are used on
- * the workspace page, the settings page and the MCTS explorer.
- *
- * The assertion is deliberately about the glob's EFFECT, not its text: any path
- * that finds the files passes, so hoisting can change without this failing for
- * the wrong reason.
+ * Every Tailwind `@source` glob must match something: an empty glob builds green and renders Kumo unstyled
+ * (bun hoists deps to the workspace root). Asserts the glob's effect, not its text.
  */
 
 import { describe, expect, test } from 'bun:test';
@@ -36,15 +20,13 @@ interface GlobScan {
   files: string[];
 }
 
-/** `@source "<glob>";` — Tailwind v4's scan directive. */
 function sourceGlobs(cssPath: string): string[] {
   const text = readFileSync(cssPath, 'utf8');
 
   return [...text.matchAll(/@source\s+"([^"]+)"/g)].map((m) => m[1]);
 }
 
-/** Split a glob into the longest literal prefix directory and the pattern
- *  under it, so the scan is rooted where the glob actually points. */
+/** Longest literal prefix directory plus the pattern under it. */
 function splitGlob(pattern: string): GlobParts {
   const parts = pattern.split('/');
   const firstMagic = parts.findIndex((p) => /[*?[{]/.test(p));
@@ -54,9 +36,7 @@ function splitGlob(pattern: string): GlobParts {
   return { root: parts.slice(0, firstMagic).join('/') || '.', rest: parts.slice(firstMagic).join('/') };
 }
 
-/** Files a `@source` glob actually reaches. A root that does not exist is the
- *  headline case — it is "matched nothing", not a crash, because the whole
- *  point is that Tailwind treats it that way too. */
+/** A missing root is "matched nothing", not a crash, as Tailwind treats it. */
 function scan(cssPath: string, pattern: string): GlobScan {
   const { root, rest } = splitGlob(pattern);
   const scanRoot = resolve(dirname(cssPath), root);
@@ -72,8 +52,7 @@ describe('Tailwind @source globs', () => {
     const globs = sourceGlobs(cssPath);
 
     test(`${relCss} declares at least one @source`, () => {
-      // Guards the guard: if the directives are removed or renamed, the loop
-      // below would silently assert nothing and this file would stop working.
+      // Guards the guard: removed directives would make the loop assert nothing.
       expect(globs.length).toBeGreaterThan(0);
     });
 
@@ -81,8 +60,6 @@ describe('Tailwind @source globs', () => {
       test(`${relCss} — "${pattern}" matches files that exist`, () => {
         const { scanRoot, files } = scan(cssPath, pattern);
 
-        // Asserted as an object so a failure names the glob and the directory
-        // it resolved to — the two things you need to fix it.
         expect({ pattern, scanRoot, matchedAnything: files.length > 0 })
           .toEqual({ pattern, scanRoot, matchedAnything: true });
       });
@@ -90,10 +67,7 @@ describe('Tailwind @source globs', () => {
   }
 
   test('the kumo scan reaches the classes the vendor components actually need', () => {
-    // Matching *some* file is necessary but not sufficient — pointing at the
-    // package root would match its README and still emit nothing. This asserts
-    // the scanned set contains the utility classes Kumo's compiled components
-    // reference, which is what has to reach the stylesheet.
+    // A package-root glob would match its README and emit nothing; require Kumo's utility classes.
     const cssPath = resolve(import.meta.dir, '../src/index.css');
     const kumo = sourceGlobs(cssPath).find((g) => g.includes('kumo'));
 

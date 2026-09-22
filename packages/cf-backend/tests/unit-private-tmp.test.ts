@@ -1,15 +1,6 @@
 /**
- * Per-credential `/tmp` — the `PrivateTmp` shape.
- *
- * One global view per workspace, every agent's `/tmp` at the SAME path, backed
- * by that agent's own storage. The requirement that makes it hard is that it
- * must hold on BOTH surfaces: the file tool (`box.files.*`, which resolves the
- * raw filesystem) and the one real shell (`box.exec`, which resolves through
- * the kernel mount table). Those are different routes to the same tree, so a
- * fix at the mount layer alone would move the shell and leave the file tool
- * behind — one path meaning two files, which is the divergence the
- * one-real-shell rule exists to prevent. Both planes are asserted here for
- * every claim, because a test that exercised one would not notice.
+ * Per-credential `/tmp` (the `PrivateTmp` shape): one path, per-agent storage. It must hold on both the
+ * file plane (raw filesystem) and the shell (kernel mount table), so every claim asserts both planes.
  */
 import { afterEach, describe, expect, test } from 'bun:test';
 import { Database, type SQLQueryBindings } from 'bun:sqlite';
@@ -56,11 +47,9 @@ function sqlBinding(value: SqlValue): SQLQueryBindings {
 interface Fixture {
   readonly workspace: NimbusWorkspace;
   readonly host: ProgrammaticHost;
-  /** Raw storage keys under the scratch tree — what actually got written where. */
   readonly storageKeys: () => string[];
-  /** Register a confined principal and provision its root, host-side. */
   readonly confine: (cred: VfsCred, name: string) => void;
-  /** A pid carrying `cred`, which is how a file-plane RPC names its identity. */
+  /** A pid carrying `cred`: how a file-plane RPC names its identity. */
   readonly pidFor: (cred: VfsCred) => number;
 }
 
@@ -99,7 +88,7 @@ async function openFixture(): Promise<Fixture> {
     storageKeys: () => [...sql.exec("SELECT path FROM inodes WHERE path LIKE 'tmp%'")]
       .map((row) => v.parse(v.string(), row.path)).sort(),
     confine: (cred, name) => {
-      // A guest cannot provision its own root: a per-agent chown is uid-0 only.
+      // A per-agent chown is uid-0 only.
       const root = workspace.vfs.as(ROOT);
       root.mkdir(`tmp/${name}`, { recursive: true });
       root.chown(`tmp/${name}`, cred.uid, cred.gid);
@@ -118,13 +107,11 @@ describe('per-credential /tmp holds on both surfaces', () => {
     const pidA = f.pidFor(AGENT_A);
     const pidB = f.pidFor(AGENT_B);
 
-    // One write per plane per agent, all naming the identical logical path.
     await f.workspace.supervisorOp({ op: 'writeFile', args: ['/tmp/note.txt', 'A via file plane'], pid: pidA });
     await f.workspace.supervisorOp({ op: 'writeFile', args: ['/tmp/note.txt', 'B via file plane'], pid: pidB });
     await rpcExec(f.host, 'echo A-shell > /tmp/shell.txt', { cred: AGENT_A });
     await rpcExec(f.host, 'echo B-shell > /tmp/shell.txt', { cred: AGENT_B });
 
-    // Backed by separate storage, which is what makes the same path private.
     expect(f.storageKeys()).toEqual([
       'tmp',
       'tmp/agent-a',
@@ -135,7 +122,6 @@ describe('per-credential /tmp holds on both surfaces', () => {
       'tmp/agent-b/shell.txt',
     ]);
 
-    // The file plane reads its own.
     expect(v.parse(v.nullable(v.string()), await f.workspace.supervisorOp({
       op: 'readFile', args: ['/tmp/note.txt'], pid: pidA,
     }))).toBe('A via file plane');
@@ -143,14 +129,12 @@ describe('per-credential /tmp holds on both surfaces', () => {
       op: 'readFile', args: ['/tmp/note.txt'], pid: pidB,
     }))).toBe('B via file plane');
 
-    // The shell plane reads THE SAME bytes as the file plane, per agent. This
-    // is the assertion the whole design exists to satisfy.
+    // The design's core assertion: the shell reads the same bytes as the file plane, per agent.
     expect(await rpcExec(f.host, 'cat /tmp/note.txt', { cred: AGENT_A }))
       .toMatchObject({ stdout: 'A via file plane', exitCode: 0 });
     expect(await rpcExec(f.host, 'cat /tmp/note.txt', { cred: AGENT_B }))
       .toMatchObject({ stdout: 'B via file plane', exitCode: 0 });
 
-    // ...and the file plane reads what the shell wrote.
     expect(v.parse(v.nullable(v.string()), await f.workspace.supervisorOp({
       op: 'readFile', args: ['/tmp/shell.txt'], pid: pidA,
     }))).toBe('A-shell\n');
@@ -165,15 +149,13 @@ describe('per-credential /tmp holds on both surfaces', () => {
     f.confine(AGENT_B, 'agent-b');
     await f.workspace.supervisorOp({ op: 'writeFile', args: ['/tmp/secret.txt', 'A only'], pid: f.pidFor(AGENT_A) });
 
-    // B naming the same path gets its own absence, not A's file.
     expect(v.parse(v.nullable(v.string()), await f.workspace.supervisorOp({
       op: 'readFile', args: ['/tmp/secret.txt'], pid: f.pidFor(AGENT_B),
     }))).toBeNull();
     expect(await rpcExec(f.host, 'cat /tmp/secret.txt', { cred: AGENT_B }))
       .toMatchObject({ exitCode: 1 });
 
-    // And B cannot reach A's storage by spelling the private root either: that
-    // spelling lands inside B's own tree.
+    // Spelling the private root lands inside B's own tree.
     expect(await rpcExec(f.host, 'cat /tmp/agent-a/secret.txt', { cred: AGENT_B }))
       .toMatchObject({ exitCode: 1 });
     expect(f.storageKeys()).not.toContain('tmp/agent-b/secret.txt');
@@ -197,10 +179,8 @@ describe('per-credential /tmp holds on both surfaces', () => {
     f.confine(AGENT_A, 'agent-a');
     await rpcExec(f.host, 'echo shared > /tmp/plain.txt');
 
-    // No registration, so no rewrite — the key is the one it always was.
     expect(f.storageKeys()).toContain('tmp/plain.txt');
     expect(await rpcExec(f.host, 'cat /tmp/plain.txt')).toMatchObject({ stdout: 'shared\n' });
-    // And a confined agent does not see it, because /tmp is its own root.
     expect(await rpcExec(f.host, 'cat /tmp/plain.txt', { cred: AGENT_A }))
       .toMatchObject({ exitCode: 1 });
   });
@@ -211,7 +191,6 @@ describe('per-credential /tmp holds on both surfaces', () => {
     await rpcExec(f.host, 'echo shared-secret > /tmp/bait.txt');
     expect(f.storageKeys()).toContain('tmp/bait.txt');
 
-    // A link A can create, whose target names the shared tree by absolute path.
     await rpcExec(f.host, 'ln -s /tmp/bait.txt /tmp/escape', { cred: AGENT_A });
     const read = await rpcExec(f.host, 'cat /tmp/escape', { cred: AGENT_A });
 
@@ -228,7 +207,6 @@ describe('per-credential /tmp holds on both surfaces', () => {
     expect(await rpcExec(f.host, 'rm /tmp/keep.txt', { cred: AGENT_A }))
       .toMatchObject({ exitCode: 0 });
 
-    // A's copy is gone; the shared one it shares a NAME with is untouched.
     expect(f.storageKeys()).not.toContain('tmp/agent-a/keep.txt');
     expect(f.storageKeys()).toContain('tmp/keep.txt');
   });
@@ -240,14 +218,12 @@ describe('per-credential /tmp holds on both surfaces', () => {
     await f.workspace.supervisorOp({ op: 'writeFile', args: ['/tmp/draft.txt', 'first'], pid: pidA });
     await f.workspace.supervisorOp({ op: 'writeFile', args: ['/tmp/final.txt', 'old'], pid: pidA });
 
-    // The file plane replaces atomically: write beside, rename over.
     f.workspace.vfs.as(AGENT_A).rename('/tmp/draft.txt', '/tmp/final.txt');
     expect(v.parse(v.nullable(v.string()), await f.workspace.supervisorOp({
       op: 'readFile', args: ['/tmp/final.txt'], pid: pidA,
     }))).toBe('first');
     expect(f.storageKeys()).toEqual(['tmp', 'tmp/agent-a', 'tmp/agent-a/final.txt']);
 
-    // The shell resolves the same rewrite.
     expect(await rpcExec(f.host, 'mv /tmp/final.txt /tmp/moved.txt', { cred: AGENT_A }))
       .toMatchObject({ exitCode: 0 });
     expect(v.parse(v.nullable(v.string()), await f.workspace.supervisorOp({
@@ -267,11 +243,8 @@ describe('per-credential /tmp holds on both surfaces', () => {
 
     f.workspace.vfs.releasePrincipal(AGENT_A.uid);
 
-    // The registration is the only thing that pointed /tmp at that tree, so
-    // dropping it makes the scratch unreachable by the path that wrote it —
-    // which is what lets a node's /tmp be discarded at node death while its
-    // home survives to be graded at settle. The bytes are still there for the
-    // host to remove, and only for the host.
+    // Dropping the registration makes the scratch unreachable by path, so node /tmp is discarded at node
+    // death while home survives to settle; only the host can remove the bytes.
     expect(v.parse(v.nullable(v.string()), await f.workspace.supervisorOp({
       op: 'readFile', args: ['/tmp/scratch.txt'], pid: f.pidFor(AGENT_A),
     }))).toBeNull();
@@ -291,12 +264,9 @@ describe('per-credential /tmp holds on both surfaces', () => {
     const seen = f.workspace.vfs.as(AGENT_A).list(null, 500).entries.map((e) => e.path)
       .filter((p) => p === 'tmp' || p.startsWith('tmp/'));
 
-    // Its own file under the name it knows, and nothing it cannot name: not the
-    // private root, not the shared tree, not the other agent's.
     expect(seen).toContain('tmp/mine.txt');
     expect(seen).not.toContain('tmp/agent-a/mine.txt');
-    // `tmp` names exactly one directory here — the caller's own root. Emitting
-    // the shared root under the same name would enumerate one name twice.
+    // Emitting the shared root under `tmp` too would enumerate one name twice.
     expect(seen.filter((p) => p === 'tmp')).toHaveLength(1);
     expect(seen.some((p) => p.startsWith('tmp/agent-b'))).toBe(false);
     expect(seen).not.toContain('tmp/theirs.txt');
@@ -310,8 +280,7 @@ describe('per-credential /tmp holds on both surfaces', () => {
 
     await f.workspace.supervisorOp({ op: 'writeFile', args: ['/tmp/r.txt', 'private'], pid: f.pidFor(AGENT_A) });
 
-    // Same spelling, two files, so two counters. One clock for both would make
-    // an agent's cache invalidate on a stranger's write.
+    // Two counters: one clock would invalidate an agent's cache on a stranger's write.
     expect(f.workspace.vfs.as(AGENT_A).revision('tmp/r.txt')).not.toBe(0);
     expect(f.workspace.vfs.as(SESSION_USER).revision('tmp/r.txt')).toBe(sharedRev);
   });
@@ -334,9 +303,7 @@ describe('a confined principal may move its own bits and no others', () => {
     expect(await rpcExec(f.host, 'chmod u+x /home/agent-a/build.sh', { cred: AGENT_A }))
       .toMatchObject({ exitCode: 0 });
 
-    // The redirect created it 0644 under the default umask; u+x moves exactly
-    // the owner x bit and leaves group and other at the value they were
-    // provisioned with, which is the whole rule.
+    // u+x moves exactly the owner x bit and leaves group/other as provisioned.
     const mode = f.workspace.vfs.as(ROOT).stat('/home/agent-a/build.sh').mode & 0o777;
     expect(mode).toBe(0o744);
   });
@@ -355,11 +322,8 @@ describe('a confined principal may move its own bits and no others', () => {
     const refused = await rpcExec(f.host, 'chmod 777 /home/agent-a/s.sh', { cred: AGENT_A });
 
     expect(refused.exitCode).not.toBe(0);
-    // The refusal names the spelling that works, so the caller is not left
-    // guessing which part offended.
     expect(`${refused.stdout}${refused.stderr}`).toContain('u+x');
-    // A clamp would have applied 0o700 and reported success; the mode is
-    // untouched, which is the difference between a refusal and a lie.
+    // A clamp would apply 0o700 and report success; untouched mode is a refusal, not a lie.
     expect(f.workspace.vfs.as(ROOT).stat('/home/agent-a/s.sh').mode & 0o777).toBe(0o600);
   });
 

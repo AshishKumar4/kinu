@@ -1,13 +1,6 @@
 /**
- * The `eval` sandbox, run for real: the @cloudflare/codemode
- * DynamicWorkerExecutor over `env.LOADER`, loading Kinu's `kinu-node.js`
- * module beside the program, with the `tools` prelude defining crafted tools.
- *
- * `bun test` cannot host this: the loader, the child isolate, the `nodejs_compat`
- * builtins the shim imports (`node:path`, `node:crypto`, …) and the RPC hop
- * between the sandbox proxy and the host dispatcher are all platform. What the
- * unit tier checks is the prelude TEXT and the shim's functions in isolation;
- * this file checks that the whole thing loads and runs under workerd.
+ * The `eval` sandbox under workerd: DynamicWorkerExecutor over `env.LOADER` with `kinu-node.js` and the `tools` prelude.
+ * The loader, child isolate, `nodejs_compat` builtins and sandbox RPC hop are platform, so `bun test` cannot host this.
  */
 import { env } from 'cloudflare:test';
 import { describe, expect, test } from 'vitest';
@@ -22,11 +15,9 @@ import { codemodeEgress } from '../../src/codemode-egress';
 
 const files = new Map<string, string>([['notes.md', 'hello from the workspace']]);
 
-/** A host function's arguments arrive positionally over the sandbox RPC, the
- * same shape every production provider parses at its own boundary. */
+/** Arguments arrive positionally over the sandbox RPC, as every production provider parses them. */
 const text = (args: unknown[], at: number): string => v.parse(v.string(), args[at]);
 
-/** A `workspace` namespace with the members the fs shim reaches. */
 const workspace = {
   name: 'workspace',
   fns: {
@@ -187,10 +178,7 @@ describe('the eval sandbox under workerd', () => {
   });
 
   test('a stored body may await at its top level, and one that evaluates to a value fails by name', async () => {
-    // A body that awaits before it hands back its function is legal source:
-    // the host-side parse gate admits it, so the prelude's factory must be
-    // async and the definition must settle it before the first call. A body
-    // that evaluates to a value rather than a function poisons only itself.
+    // An awaiting body passes the host parse gate, so the factory must be async; a non-function value poisons only itself.
     const crafted = [
       { name: 'waited', code: 'await Promise.resolve(async (n) => n * 3)', description: '' },
       { name: 'value', code: '42', description: '' },
@@ -257,26 +245,19 @@ describe('the eval sandbox under workerd', () => {
     const offline = await executor.execute(program, [toolsProvider([]), stateProvider, workspace]);
     expect(String(offline.result)).toContain('threw: ');
 
-    // `exports.CodemodeEgress` is the loopback stub `enable_ctx_exports` mints
-    // for the class the test worker exports beside its probes.
+    // The loopback stub `enable_ctx_exports` mints for the exported class.
     const egress = codemodeEgress();
     expect(egress).not.toBeNull();
     const online = new KinuSandboxExecutor({ loader: env.LOADER, egress });
     const result = await online.execute(program, [toolsProvider([]), stateProvider, workspace]);
-    // A `.invalid` host resolves for nobody, so what differs from the offline
-    // arm is the message: the network stack's own failure, carried back through
-    // the egress entrypoint's marked 502 and rethrown by the program's `fetch`,
-    // instead of the sandbox refusing the call outright.
+    // `.invalid` resolves for nobody: the network's own failure comes back via the marked 502, not a sandbox refusal.
     expect(String(offline.result)).toContain('not permitted to access the internet');
     expect(String(result.result)).toContain('threw: fetch failed: ');
     expect(String(result.result)).not.toContain('not permitted to access the internet');
   });
 
   test('a program cannot reach cloud metadata, and is told why', async () => {
-    // The seam's whole point, inside the real runtime: the same address the
-    // approval gate denies as a shell command and `web.fetch` refuses as a URL
-    // is refused here too, by the one shared classifier — before any DNS
-    // lookup or socket, so nothing leaves the isolate.
+    // Refused by the shared classifier before any DNS lookup or socket, as shell and `web.fetch` refuse it.
     const egress = codemodeEgress();
     expect(egress).not.toBeNull();
     const online = new KinuSandboxExecutor({ loader: env.LOADER, egress });

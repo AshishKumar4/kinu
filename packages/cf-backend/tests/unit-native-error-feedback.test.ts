@@ -64,8 +64,7 @@ test('parallel hosted native calls retain their SDK identities after reverse com
     return await readRange.apply(files, args);
   };
 
-  // The order the tools SETTLED in, read where the loop's runner reports each
-  // result: the actor's extension host.
+  // The order tools settled in, read from the actor's extension host where the runner reports each result.
   const order: string[] = [];
   agent.harnessRegisterExtension({
     name: 'probe.tool-order',
@@ -117,13 +116,8 @@ test('parallel hosted native calls retain their SDK identities after reverse com
 });
 
 test('a delegated turn sends the same typed native error feedback in its NEXT provider request', async () => {
-  // A hired child running the production delegated runner — admission,
-  // confined tools, report relay — with an injected model. A builtin loop
-  // needs no parent versions, so this reaches the shared inference loop
-  // without the seeding the node path requires. The `file` tool it calls is
-  // the child's own, built over the child's runtime by the production
-  // builder, which is what makes the refusal the loop's own rather than a
-  // fixture's.
+  // A hired child on the production delegated runner with an injected model; its `file` tool is built over the
+  // child's runtime by the production builder, so the refusal is the loop's own, not a fixture's.
   const workspace = orchestratorHarness();
 
   const child = await hostedSubordinateHarness(workspace, {

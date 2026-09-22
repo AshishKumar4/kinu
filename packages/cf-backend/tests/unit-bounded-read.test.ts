@@ -1,30 +1,14 @@
 /**
- * The ONE bounded-read policy, through both shapes that use it.
- *
- * Two readers pull request bodies here — one materialises the whole body
- * (`readBounded`, for JSON ingress), one streams it onward without ever holding
- * it (`readBoundedStream`, for the file plane's upload). They each had their own
- * loop, which is how the materialising one came to be missing the
- * declared-length pre-filter its own comment promised: an honest oversized
- * sender was pulled byte by byte until the count caught it, rather than refused
- * on a header parse.
- *
- * The bound itself is the count of ARRIVING bytes, never the announced length,
- * because an absent `content-length` reads as 0 and passes every declared-size
- * check. Both halves are asserted here, in both directions.
+ * One bounded-read policy for `readBounded` and `readBoundedStream`: bound by arriving bytes, never the announced
+ * length (absent `content-length` reads as 0), plus a declared-length pre-filter.
  */
 import { describe, expect, test } from 'bun:test';
 import { KinuError } from '@kinu.run/core/obs';
 import { readBounded, readBoundedStream } from '@kinu.run/core';
 
-/**
- * `duplex: 'half'` is REQUIRED by the runtime whenever a Request body is a
- * stream, and is absent from the DOM `RequestInit` this TypeScript target
- * ships. Named once here so neither construction below needs a cast.
- */
+/** `duplex: 'half'` is required for a streamed Request body and missing from the DOM `RequestInit`. */
 type StreamingRequestInit = RequestInit & { duplex: 'half' };
 
-/** A request whose body arrives in the given chunks, with no declared length. */
 function streamed(chunks: readonly Uint8Array[], headers: Record<string, string> = {}): Request {
   let pulled = 0;
 
@@ -62,8 +46,7 @@ describe('readBoundedStream', () => {
   });
 
   test('a declared length over the limit is refused before the body is pulled', async () => {
-    // The pre-filter's whole point: an honest oversized sender costs a header
-    // parse, not a full transfer. `pulled` proves nothing was read.
+    // An honest oversized sender costs a header parse; `pulled` proves nothing was read.
     const parts: number[] = [];
     const request = streamed([chunk(1, 8)], { 'content-length': '4096' });
     const outcome = await readBoundedStream(request, 1024, (part) => { parts.push(part.byteLength); });
@@ -72,8 +55,6 @@ describe('readBoundedStream', () => {
   });
 
   test('an absent declared length is no defence — the arriving count is the gate', async () => {
-    // `Number(null)` is 0, which passes every declared-size check, so a chunked
-    // sender with no header must still be refused at the first byte past.
     const parts: number[] = [];
 
     const outcome = await readBoundedStream(streamed([chunk(1, 4), chunk(2, 4)]), 5, (part) => {
@@ -81,7 +62,6 @@ describe('readBoundedStream', () => {
     });
 
     expect(outcome).toBe('too_large');
-    // The first chunk fits and is handed on; the second crosses and is not.
     expect(parts).toEqual([4]);
   });
 
@@ -97,8 +77,7 @@ describe('readBoundedStream', () => {
   });
 
   test("the sink's own failure is the caller's, and is not swallowed as a read failure", async () => {
-    // The file upload has to tell "the body stopped" from "the actor refused a
-    // chunk" apart, because only one of those aborts a half-written transfer.
+    // Only an actor refusal aborts a half-written transfer, so the two must be distinguishable.
     const attempt = readBoundedStream(streamed([chunk(1, 4)]), 1024, () => {
       throw new Error('the actor refused this chunk');
     });

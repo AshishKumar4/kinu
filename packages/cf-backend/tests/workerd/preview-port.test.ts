@@ -7,12 +7,8 @@ describe('a served port from the hosted workspace', () => {
   it('a user-invoked program runs past the old 30 s wall-clock lifetime and reports its own exit', async () => {
     const subject = open('outlast');
 
-    // PLATFORM PIN — measured 2026-09-15 under workerd on @nimbus-sh/worker
-    // 0.7.0 / core 0.9.0 (commit 0bed921f7): `sleep 33 && echo outlasted`
-    // exits 0 with its output where worker 0.6 killed it at the 30 s
-    // wall-clock lifetime. Worker 0.7 dropped that cap on a user-invoked
-    // program (a Ctrl-C now reports 130); a program that runs 33 s must end
-    // on its own terms.
+    // Measured 2026-09-15 under workerd, @nimbus-sh/worker 0.7.0: `sleep 33 && echo outlasted`
+    // exits 0 where worker 0.6 killed it at its wall-clock cap.
     const ran = await subject.outlast(33);
     expect(ran.exitCode).toBe(0);
     expect(ran.stdout).toContain('outlasted');
@@ -21,22 +17,18 @@ describe('a served port from the hosted workspace', () => {
   it('answers a loopback fetch with served bytes or a classified refusal, never a bare 1003', async () => {
     const subject = open('loopback');
 
-    // A virtual server the host registered with no compilation. `curl` must
-    // answer with its bytes: today the library `curl` loads with no kernel,
-    // skips the virtual check, and falls through to the platform `fetch`.
+    // A host-registered virtual server: `curl` must answer with its bytes, not fall through to
+    // the platform `fetch`.
     const served = await subject.serveLoopback(8789, 'Kinu live preview 2026-09-05');
     expect(served.registered).toBe(true);
     const hit = await subject.curlLoopback(8789);
     const hitCombined = `${hit.stdout}\n${hit.stderr}`;
-    // RED QUOTE (staging b04c01d31, workerd): the body carried
-    // "error code: 1003" — the edge's page for a request that never reached
-    // any virtual server.
+    // Red (staging b04c01d31, workerd): the body carried "error code: 1003", the edge's page.
     expect(hitCombined).not.toContain('1003');
     expect(hit.exitCode).toBe(0);
     expect(hit.stdout).toContain('Kinu live preview 2026-09-05');
 
-    // With nothing listening, the same fetch is a classified refusal (curl's
-    // own exit 7), still never the edge's page.
+    // Nothing listening: a classified refusal (curl exit 7), never the edge's page.
     await subject.unserveLoopback(8789);
     const missed = await subject.curlLoopback(8789);
     expect(missed.exitCode).toBe(7);

@@ -1,7 +1,5 @@
-// The composer's per-message attachment budget. The cap is an AGGREGATE, so
-// admitting a file spends capacity the other pending parts already hold — and
-// the defect was that two overlapping additions each sized themselves against
-// the list as it was BEFORE either landed, then both appended.
+// The composer's attachment cap is an aggregate: concurrent additions must each be sized against
+// the list as it is when they commit.
 import { describe, test, expect } from 'bun:test';
 import type { FileUIPart } from 'ai';
 import { admitAttachments } from '../src/hooks/use-pending-attachments';
@@ -9,8 +7,7 @@ import { dataUrlRawBytes } from '../src/components/AttachmentChip';
 
 const LIMIT = 1024 * 1024;
 
-/** A data-URL part of exactly `bytes` raw bytes, as `dataUrlRawBytes` measures
- *  them: base64 carries 3 raw bytes per 4 characters. */
+/** Exactly `bytes` raw bytes as `dataUrlRawBytes` measures them (3 per 4 base64 chars). */
 function part(filename: string, bytes: number): FileUIPart {
   return {
     type: 'file',
@@ -31,8 +28,7 @@ describe('attachment budget admission', () => {
   });
 
   test('the order is the user\'s, not best-fit', () => {
-    // 'big' is admitted first and leaves no room for 'small'. Reordering to fit
-    // more would rewrite the message the user assembled.
+    // Reordering to fit more would rewrite the message the user assembled.
     const admission = admitAttachments([], [part('big', 900_000), part('small', 200_000)], LIMIT);
     expect(names(admission.parts)).toEqual(['big']);
     expect(admission.refused).toEqual(['small']);
@@ -46,9 +42,6 @@ describe('attachment budget admission', () => {
   });
 
   test('INTERLEAVED ADDITIONS CANNOT BOTH SPEND THE SAME CAPACITY', () => {
-    // The reproduction. Two additions convert concurrently; both then commit.
-    // Each commit is sized against the list AS IT IS at that moment, which is
-    // what the reducer guarantees — so the second sees the first one's parts.
     const dropped = [part('dropped', 700_000)];
     const pasted = [part('pasted', 700_000)];
 
@@ -62,9 +55,7 @@ describe('attachment budget admission', () => {
   });
 
   test('NEGATIVE CONTROL: sizing both against the pre-await list exceeds the cap', () => {
-    // The mechanism this replaced: each addition read the remaining capacity
-    // from the SAME starting list, then appended. Both fit "the remaining
-    // capacity" and the combined message broke the cap.
+    // The replaced mechanism: both sized against the same starting list, and together broke the cap.
     const start: readonly FileUIPart[] = [];
     const first = admitAttachments(start, [part('dropped', 700_000)], LIMIT);
     const second = admitAttachments(start, [part('pasted', 700_000)], LIMIT);
@@ -77,7 +68,7 @@ describe('attachment budget admission', () => {
   test('nothing admitted keeps the exact list it was handed', () => {
     const pending = [part('held', LIMIT)];
     const admission = admitAttachments(pending, [part('late', 1)], LIMIT);
-    // Identity, not just equality: an unchanged list must not re-render chips.
+    // Identity: an unchanged list must not re-render chips.
     expect(admission.parts).toBe(pending);
   });
 

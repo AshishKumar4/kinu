@@ -1,24 +1,6 @@
 /**
- * A `p-*` class used with a variant prefix must be declared as an `@utility`.
- *
- * Tailwind can only generate variant forms (`hover:`, `focus:`, `disabled:`, …)
- * for utilities it knows about. A plain `.p-text { … }` rule inside
- * `@layer components` is not one, so `hover:p-text` compiles to nothing at all:
- * no rule is emitted, no error is raised, and the element simply has no hover
- * state. The app had 130 such call sites — `hover:p-text` ×59,
- * `hover:p-card-hover` ×43, `hover:p-card` ×10, `hover:p-text-2` ×9,
- * `hover:p-danger` ×7, plus `hover:p-elevated` and `hover:p-accent` — which is
- * to say essentially every hover affordance in the product was dead. Verified
- * against the compiled stylesheet at the time: zero `.hover\:p-*` rules were
- * emitted for any of them.
- *
- * `hover:p-card-hover` is the tell that this is a trap rather than carelessness:
- * `.p-card-hover:hover` already existed and worked, and 43 call sites still
- * reached for the framework spelling.
- *
- * This is a drift test. It reads the call sites as the requirement and the
- * stylesheet as the implementation, so new `p-*` roles and new variants stay
- * covered without anyone remembering this file exists.
+ * A `p-*` class used with a variant prefix must be declared as an `@utility`: Tailwind silently emits nothing
+ * for `hover:p-text` when `.p-text` is a plain `@layer components` rule. A drift test over call sites vs stylesheet.
  */
 
 import { describe, expect, test } from 'bun:test';
@@ -42,12 +24,10 @@ function sourceFiles(dir: string): string[] {
   return out;
 }
 
-/** `p-*` classes declared with `@utility`, i.e. the ones variants work on. */
 const asUtility: ReadonlySet<string> = new Set(
   [...CSS.matchAll(/@utility\s+(p-[a-z0-9-]+)/gi)].map((m) => m[1]),
 );
 
-/** Every `variant:p-name` written in the app, mapped to where it appears. */
 function variantUses(): Map<string, string[]> {
   const uses = new Map<string, string[]>();
 
@@ -77,15 +57,12 @@ describe('p-* utility variants', () => {
   });
 
   test('the stylesheet actually declares p-* utilities', () => {
-    // Guards the test itself: if the `@utility` block were renamed away, the
-    // assertion above would pass vacuously by finding no declarations AND no
-    // uses, which is the failure mode a drift test is most prone to.
+    // Guards the test: a renamed `@utility` block would pass vacuously with no declarations and no uses.
     expect(asUtility.size).toBeGreaterThan(0);
   });
 
   test('no p-* class is declared both as an @utility and as a plain rule', () => {
-    // Two declarations of one name land in different cascade layers, and which
-    // one wins stops being obvious. One home per role.
+    // Two declarations land in different cascade layers; one home per role.
     const duplicated = [...asUtility].filter((name) =>
       new RegExp(`^\\s*\\.${name}\\s*(,|\\{)`, 'm').test(CSS),
     );

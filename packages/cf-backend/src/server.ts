@@ -1,45 +1,7 @@
 /**
- * Worker entry point — exports all DO classes and routes agent requests.
- *
- * Routing order (Worker runs first for every non-hashed-asset path):
- *   0. Transport — plain HTTP is redirected to HTTPS before anything is
- *      served, and every HTTPS response leaves pinned with HSTS.
- *   1. Preview host — every host under PREVIEW_HOST_SUFFIX serves an isolated
- *      Workspace or Sandbox preview and nothing else.
- *   2. /pc/* — PC agent WebSocket tunnel (ticket exchange + upgrade only).
- *   2b. CLOUDFLARE ACCESS GATE — /control* and /api/control* only. A verified
- *       `Cf-Access-Jwt-Assertion` before every bypass below it: this Worker's own
- *       auth, the public path list, its assets, any binding and any Durable
- *       Object. Path-scoped on purpose — the root app, /api/feedback,
- *       /api/client-errors, the hashed asset bundles and the preview hostnames
- *       are NOT behind Access (control-plane/access-gate.ts).
- *   3. /login, /auth/*, /logout, /api/auth/* — OAuth/OIDC app auth.
- *   4. / — public landing page when no Kinu session is present.
- *   5. /install, /install.sh, /downloads/kinu, /api/cli/* — CLI install/auth/API.
- *   6. /downloads/kinu-worker-<version>.tar.gz, /deploy, /deploy/callback,
- *      /api/deploy/*, /api/health, /api/shared/blueprint/<id> — public
- *      endpoints (no auth). The worker release artifact is streamed from R2
- *      because it exceeds the 25 MiB static-asset limit; the deploy door is
- *      gated by the run key rather than a session, because a person deploying
- *      their own Kinu has no account here yet (deploy/routes.ts); the
- *      blueprint id carries its own signature.
- *   6b. /mcp/v1/* — MCP server; CLI-bearer-token or session auth + ownership
- *       enforced inside (external MCP clients can't do browser OAuth).
- *   7. AUTH GATE — every other request needs a Kinu session
- *      (or the DEV_USER_EMAIL identity; see auth/session.ts).
- *   7b. /api/workspaces/<name>/webhook/<trigger>/v1-<token> — public webhook
- *       delivery, served before the gate above because the route capability in
- *       the URL is its gate (events/webhook-route.ts).
- *   8. /api/feedback — in-product feedback; any signed-in user.
- *   8a. /api/client-errors — browser render-failure reports; any signed-in user.
- *   8b. /api/control/* — admin control plane; a verified Access identity that
- *       EQUALS an allowlisted session email, and a fresh sign-in for anything
- *       that mutates.
- *   9. /api/user/*, /api/shared/*, /api/updates/* — signed-in: account-
- *      scoped APIs plus this deployment's own release channel and installs.
- *   10. /api/workspaces/<name>/* — owner check via UserDO.hasWorkspace.
- *   11. /agents/* — Think DOs (chat WebSocket).
- *   12. env.ASSETS fallback — SPA for everything else.
+ * Worker entry point: exports every DO class and routes requests. Order matters:
+ * HTTPS upgrade, preview hosts, /pc, the Cloudflare Access gate (/control*,
+ * /api/control* only), public routes, the auth gate, CSRF, then signed-in routes.
  */
 
 import { routeAgentRequest } from "agents";
@@ -100,104 +62,37 @@ import {
 import { observeIdentity, observeWorkspaceUse } from "./control-plane/index-feed";
 import { installAnalyticsDiagnostics } from "@kinu.run/core/analytics";
 
-// The ONE actor-bearing Durable Object class. Every logical actor in a
-// workspace — the main actor, a hired subordinate, an ask-by-role temporary, a
-// branching head, a swarm node, an MCTS rollout branch — is hosted by this one
-// object over its one SQLite. There is no second exported agent class and no
-// facet class: a child gets no database of its own, so there is nothing left
-// for a second class, a second worker registration or a facet registration to
-// carry.
+// The one actor-bearing DO class: every actor in a workspace shares its SQLite.
 export { OrchestratorAgent } from "./orchestrator";
 
 export { KinuSandbox } from "./kinu-sandbox";
 
-// The loopback Fetcher every `fetch()` inside an `eval` program rides
-// (codemode-egress.ts). Resolved by `enable_ctx_exports` like the Nimbus
-// entrypoints below; absent, the sandbox has no network at all.
+// Loopback egress for `eval` programs (codemode-egress.ts); absent, they have no network.
 export { CodemodeEgress } from "./codemode-egress";
 
 export { SlateBinding } from "./slates/bindings";
 
-// REQUIRED for outbound interception, and silent if forgotten. The Sandbox DO
-// builds its interception fetchers from `ctx.exports.ContainerProxy`, so
-// without this export `applyOutboundInterception` throws and no egress handler
-// ever runs — meaning every request would leave the container unintercepted
-// while the secret vault still believed it was substituting. Pinned by
-// tests/unit-egress-interception.test.ts.
+// Required: the Sandbox DO builds outbound interception from
+// `ctx.exports.ContainerProxy`; without it egress goes unintercepted.
 export { ContainerProxy } from "@cloudflare/sandbox";
 
 export { UserDO } from "./user/user-do";
 
-// The user-level shared Drive: Mossaic's two Durable Object classes, built
-// from the vendored SDK source (scripts/mossaic-sdk.ts). Re-exported under
-// Kinu names because `UserDO` is already this Worker's own per-user object;
-// the SDK addresses them by BINDING name (`MOSSAIC_USER`, `MOSSAIC_SHARD`),
-// never by class name, so the rename costs nothing. One Mossaic tenant per
-// Kinu user, mounted at `/shared` in every workspace that user owns.
+// Mossaic Drive DOs, renamed to avoid clashing with `UserDO`; the SDK
+// addresses them by binding name (`MOSSAIC_USER`, `MOSSAIC_SHARD`).
 export { UserDO as MossaicUserDO, ShardDO as MossaicShardDO } from "@mossaic/sdk";
 
-// Synthetic monitoring's durable state: open incidents + the alert outbox.
 export { MonitorDO } from "./monitor/monitor-do";
 
-// The admin control plane's index and audit log. One instance ("site").
 export { ControlPlaneDO } from "./control-plane/control-plane-do";
 
-// One guided self-deployment per run: its step ledger, and the Cloudflare
-// tokens it holds until the last step hands them to the new Worker.
 export { DeployRunDO } from "./deploy/deploy-do";
 
-// This module's exports are the names workerd hangs on `ctx.exports`
-// (`enable_ctx_exports`; compatibility date 2025-12-01 clears the >= 2025-11-17
-// threshold). Three consumers read names out of that bag. The agents SDK
-// resolves a facet's class by its export name (`_cf_resolveSubAgent` reads
-// `ctx.exports[className]` and throws "not found in worker exports" when the
-// name is absent — agents/dist/index.js:5766). The Sandbox SDK builds its
-// outbound-interception fetchers from `ctx.exports.ContainerProxy`
-// (@cloudflare/sandbox/dist/sandbox-CPj2jsbz.js:11509). The fabric mints each
-// facet's `env.SUPERVISOR` binding from the composed supervisor entrypoint
-// (`supervisorEntrypoint`, adopted by the hosted runtime in workspace-host.ts).
-//
-// REQUIRED, and the binding or lookup that requires each one.
-//   OrchestratorAgent carries the `OrchestratorAgent` durable_objects binding
-//     in wrangler.jsonc, the fabric's `hostNamespace`, and the `/agents/*`
-//     route.
-//   There is no facet class to register. Every actor is hosted by the
-//     OrchestratorAgent above, so nothing is resolved by class name beneath it
-//     and the SDK's recursive `/sub/{class}/{key}` router has nothing to reach
-//     (agent-routing.ts refuses that segment on the public transport).
-//   KinuSandbox carries the `KinuSandbox` durable_objects binding (bound as
-//     `Sandbox`) and the `containers` entry of the same class.
-//   CodemodeEgress carries the loopback stub `codemodeEgress()` hands to
-//     `eval` sandboxes (codemode-egress.ts).
-//   ContainerProxy carries the Sandbox SDK's outbound-interception fetchers.
-//   UserDO, MonitorDO, and ControlPlaneDO carry their durable_objects
-//     bindings.
-//   SupervisorRPC carries the composed supervisor entrypoint. Every hosted
-//     workspace's facets reach their host through it, including the git-network
-//     facet, so `git clone` refuses without it. It comes from the module that
-//     declares it, never from `@nimbus-sh/sdk/worker`: that path evaluates
-//     `@nimbus-sh/worker`'s root, whose module scope calls `composeFabric` for
-//     the hosted product (no `hostNamespace`, so `NIMBUS_SESSION`). The holder
-//     is first-write-wins per isolate, so the root's write beat this Worker's
-//     the host fabric composition (workspace-host.ts) and every facet dispatch
-//     asked for a namespace this Worker does not bind.
-//
-// NOT EXPORTED, because no live path reads them. Kinu holds Nimbus as a
-// library in the orchestrator that owns each workspace (workspace-host.ts) and
-// never composes a Nimbus wrangler config, an inner worker, an inner Durable
-// Object class, or a Vite dev server. That leaves the asset binding
-// (NimbusAssetsRPC), the worker-loader binding (NimbusLoaderRPC), the inner
-// worker stubs (NimbusLoadedWorker, NimbusLoadedEntrypoint), the inner
-// namespace and stub (NimbusDurableObjectNamespace, NimbusDOStub), and the HMR
-// binding (CirrusHmrRPC) without a reader. Their lookups sit behind paths Kinu
-// never enters. The config bindings resolve in nimbus-wrangler.js. The worker
-// stubs and the inner stub resolve in the fabric's inner loader paths and the
-// facet manager Kinu leaves null. The HMR binding resolves in cirrus-real.js.
-// A missing export is an absent property, so removing one breaks only a path
-// that reads it.
+// Exports are what workerd exposes on `ctx.exports` (`enable_ctx_exports`).
+// SupervisorRPC comes from its declaring module, never `@nimbus-sh/sdk/worker`,
+// whose root composes a hosted fabric first (first-write-wins per isolate).
 export { SupervisorRPC } from "@nimbus-sh/worker/workspace-host";
 
-/** The SPA and every other static asset, under the app's document policy. */
 async function serveApp(request: Request, env: Env): Promise<Response> {
   const suffix = previewHostSuffix(env);
   const asset = await env.ASSETS.fetch(request);
@@ -236,11 +131,9 @@ function authError(request: Request, e: AuthError): Response {
 }
 
 function extractAgentName(pathname: string): string | null {
-  // /api/workspaces/<name>/...
   let m = pathname.match(/^\/api\/workspaces\/([^/]+)/);
 
   if (m) return decodeURIComponent(m[1]);
-  // /agents/orchestrator-agent/<name>/...  (Think framework convention)
   const orchestratorName = extractOrchestratorAgentName(pathname);
 
   if (orchestratorName) return orchestratorName;
@@ -304,9 +197,7 @@ async function authenticateCliAgentTicketRequest(
 
     if (verified.scopes) identity.cliScopes = verified.scopes;
 
-    // The socket's own authority, carried so the DO can persist it on the
-    // connection: without the token hash a revocation has nothing to name, and
-    // without the generation it cannot tell which sockets predate it.
+    // Persisted on the connection so revocation can name the socket.
     if (verified.tokenHash && verified.authGeneration !== undefined) {
       identity.cliBearer = { tokenHash: verified.tokenHash, generation: verified.authGeneration };
     }
@@ -316,10 +207,7 @@ async function authenticateCliAgentTicketRequest(
       request: new Request(url.toString(), request),
     };
   } catch (cause) {
-    // Ticket problems answer above through `verified.ok`. A throw past that
-    // point is infrastructure (the UserDO call, the owner capability), so it
-    // answers 500. A 401 would send the owner to mint a fresh ticket for an
-    // outage.
+    // A throw here is infrastructure, not a bad ticket: 500, not 401.
     return new Response(JSON.stringify({ error: renderThrownChain({ cause }) }), {
       status: 500,
       headers: { 'content-type': 'application/json' },
@@ -329,16 +217,9 @@ async function authenticateCliAgentTicketRequest(
 
 export default {
   async fetch(request: Request, env: Env, ctx: ExecutionContext) {
-    // Composes the analytics sink onto the console logger for THIS isolate, so
-    // core's dotted diagnostics events reach the fleet datasets as well as
-    // Workers Logs. Idempotent per invocation. It has to be repeated in
-    // `scheduled` and inside every Durable Object activation: a sink installed
-    // in the Worker isolate is invisible to code running inside a DO, which is a
-    // different isolate with its own module scope.
+    // Per isolate: repeat in `scheduled` and every DO activation, which run in other isolates.
     installAnalyticsDiagnostics(env);
     const url = new URL(request.url);
-    // Cleartext gets a redirect and nothing else; everything actually served
-    // leaves through the one pin.
     const upgrade = httpsUpgrade(url, env);
 
     if (upgrade) return upgrade;
@@ -346,18 +227,12 @@ export default {
     return withTransportSecurity(await route(request, env, ctx, url), url, env);
   },
 
-  // Mission Inbox — Cloudflare Email Routing (catch-all rule on EMAIL_DOMAIN)
-  // delivers inbound mail here. Addressing, trust gating, and the turn wake
-  // live in email/handler.ts + the agent's acceptEmailDelivery RPC.
+  // Cloudflare Email Routing catch-all on EMAIL_DOMAIN.
   async email(message: ForwardableEmailMessage, env: Env) {
     await handleInboundEmail(message, env);
   },
 
-  // Synthetic monitoring — the cron trigger in wrangler.jsonc. Probes the
-  // public surface (health/build stamp, the CLI download checksum pair, the
-  // sign-in page) and emails the owner when something breaks, so an outage is
-  // self-reported rather than user-reported. All state and alert dedupe live
-  // in MonitorDO; a failed run must not take the schedule down with it.
+  // Synthetic monitoring cron; a failed run must not take the schedule down.
   async scheduled(_event: ScheduledController, env: Env, ctx: ExecutionContext) {
     installAnalyticsDiagnostics(env);
     ctx.waitUntil((async () => {
@@ -390,24 +265,17 @@ function appendIdentityHeaders(h: Headers, identity: AuthIdentity): Headers {
   next.set(USER_ID_HEADER, identity.userId);
 
   if (identity.authTime) next.set(AUTH_TIME_HEADER, String(identity.authTime));
-  // Always rewritten from the verified identity so a client can never smuggle
-  // (or strip) the scope restriction the DO websocket boundary enforces.
+  // Identity headers are always rewritten from the verified identity so a
+  // client can never smuggle or strip scopes, bearer, or session hash.
   next.delete(CLI_SCOPES_HEADER);
 
   if (identity.cliScopes) next.set(CLI_SCOPES_HEADER, identity.cliScopes.join(','));
-  // Same rule for the bearer the socket runs on, and for the same reason: it is
-  // what the frame-time revocation check names, so a client that could set it
-  // could name somebody else's live token instead of its own.
   next.delete(CLI_BEARER_HEADER);
 
   if (identity.cliBearer) {
     next.set(CLI_BEARER_HEADER, `${identity.cliBearer.tokenHash}:${identity.cliBearer.generation}`);
   }
 
-  // And the same rule a third time for the browser session: the hash of the
-  // cookie the upgrade authenticated, rewritten from the verified identity so
-  // a browser connection cannot present somebody else's session (or strip its
-  // own) on the way to the workspace websocket boundary.
   next.delete(SESSION_BEARER_HEADER);
 
   if (identity.sessionTokenHash) {
@@ -429,24 +297,14 @@ function wantsHtml(request: Request): boolean {
   return request.method === 'GET' && (accept.includes('text/html') || accept.includes('*/*'));
 }
 
-/**
- * The hostnames this deployment publishes over HTTPS.
- *
- * Derived from the two vars that already state what this deployment is on the
- * internet — the same pair the preview router keys on — rather than from a new
- * flag or a hand-maintained private-address list. A dev server on localhost or
- * a LAN address matches neither and is left on plain HTTP, which is what makes
- * `vite dev` keep working with nothing to remember.
- */
+/** Dev hosts (localhost, LAN) match neither and stay on plain HTTP. */
 function isPublishedHost(url: URL, env: Env): boolean {
   if (isPreviewHostRequest(url, env)) return true;
 
   return url.hostname.toLowerCase() === hostOf(env.CLI_PUBLIC_ORIGIN);
 }
 
-/** Vite's unbundled client graph exists only on an unpublished dev host.
- * Production serves hashed `/assets/*`; these paths must never bypass auth on
- * a published host. */
+/** Vite dev paths must never bypass auth on a published host. */
 function isViteDevAssetPath(url: URL, env: Env): boolean {
   if (isPublishedHost(url, env)) return false;
 
@@ -456,44 +314,19 @@ function isViteDevAssetPath(url: URL, env: Env): boolean {
     || url.pathname === '/client-node-stubs.ts';
 }
 
-/**
- * Redirect cleartext to HTTPS.
- *
- * Nothing upstream does this: a zone carries no "Always Use HTTPS" rule by
- * default and a Workers custom domain does not add one, so plain-HTTP requests
- * reach the Worker and are answered in the clear. Measured against the
- * then-production origin on 2026-08-16: `http://<host>/install.sh` returned 200
- * and baked an `http://` download origin into the script it hands to `sh`.
- * `url.protocol` is the client-facing scheme at this edge, confirmed by that
- * same probe, so no `CF-Visitor` parsing is involved.
- */
+/** Nothing upstream redirects: measured 2026-08-16, plain HTTP reached the Worker
+ *  and `url.protocol` is the client-facing scheme (no `CF-Visitor` needed). */
 function httpsUpgrade(url: URL, env: Env): Response | null {
   if (url.protocol !== 'http:' || !isPublishedHost(url, env)) return null;
 
-  // The port is dropped rather than carried: Cloudflare's other plaintext
-  // ports (8080, 2052, …) have no TLS counterpart on this zone.
+  // Drop the port: other plaintext ports have no TLS counterpart on this zone.
   return Response.redirect(`https://${url.hostname}${url.pathname}${url.search}`, 301);
 }
 
-// One year: a pin that lapses between visits is not a pin.
 const HSTS = 'max-age=31536000; includeSubDomains';
 
-/**
- * Pin the browser to HTTPS for this host.
- *
- * `includeSubDomains` deliberately reaches the preview hosts. They are strict
- * subdomains of the app host (`isPreviewHostRequest` matches `.<suffix>` and
- * the app host is the suffix itself), they are matched before app auth, and
- * they serve agent-authored HTML — the hosts most worth pinning. Every one of
- * them is this same Worker behind the zone certificate, whose SANs include the
- * second-level wildcard, so subdomain inclusion cannot strand a preview on a
- * hostname that has no TLS. No `preload`: that is a one-way submission over the
- * whole subtree.
- *
- * 101 passes through untouched — a WebSocket handshake's headers are immutable
- * and its socket does not survive reconstruction (same rule, and reason, as
- * `containPreviewResponse`).
- */
+/** `includeSubDomains` deliberately covers preview hosts (the zone cert has the
+ *  wildcard); no `preload`. 101 passes untouched: handshake headers are immutable. */
 function withTransportSecurity(response: Response, url: URL, env: Env): Response {
   if (url.protocol !== 'https:' || response.status === 101 || !isPublishedHost(url, env)) {
     return response;
@@ -509,9 +342,7 @@ function withTransportSecurity(response: Response, url: URL, env: Env): Response
   });
 }
 
-/** The whole preview-host step: a live share is one more hostname per share —
- *  the signed label plus its share row is the capability — checked before the
- *  preview label so neither parser ever sees the other's input. */
+/** Share hosts are checked first so neither parser sees the other's input. */
 async function routePreviewHost(request: Request, env: Env): Promise<Response> {
   const share = await handleSlateShareHostRequest(request, env);
 
@@ -523,54 +354,23 @@ async function routePreviewHost(request: Request, env: Env): Promise<Response> {
   return servePreviewRequest(request, env);
 }
 
-/** The two refusals a hosted actor's chat path answers with a status of their
- *  own. Every other code is this workspace failing to answer rather than the
- *  client asking wrong, which is the 500 below. */
+/** Every other code is a workspace failure: 500. */
 const HOSTED_ACTOR_ROUTE_STATUS: Partial<Readonly<Record<ErrorCode, number>>> = {
   missing: 404,
   denied: 403,
 };
 
-/** The host-aware route table. Transport security is settled by the caller. */
 async function route(request: Request, env: Env, ctx: ExecutionContext, url: URL): Promise<Response> {
-  // 1. Preview host — Workspace and Sandbox each get one hostname per exposed
-  //    port, capability-gated by that hostname, and a live share is one more
-  //    hostname per share, capability = signed label + share row. It is the
-  //    ONLY thing served there: no SPA, no login, no OAuth callback, so nothing
-  //    ever mints a session on those origins and hostile preview HTML has none
-  //    to steal (core preview/preview-origin.ts).
+  // Preview hosts serve only previews: no session is ever minted there
+  // (core preview/preview-origin.ts).
   if (isPreviewHostRequest(url, env)) return await routePreviewHost(request, env);
 
-  // 2. PC agent tunnel — its own auth (short-lived ticket + UserDO token hash).
   if (url.pathname.startsWith("/pc/")) {
     return handlePcRequest(request, env);
   }
 
-  // 2b. CLOUDFLARE ACCESS — the OUTER gate on the admin control plane, and the
-  //     reason it is HERE, above every bypass this Worker has: it must run before
-  //     the auth gate, before the public bypass list, before `env.ASSETS`, before
-  //     the index feed's Durable Object write and before any binding is touched.
-  //     Every one of those was a way in. An ungated `/control` reached the AUTH_KV
-  //     session lookup and the SPA document; an ungated `/api/control/x` reached
-  //     both plus `observeIdentity`'s ControlPlaneDO write; and a `/control` entry
-  //     added to `isPublicPath` would have skipped the lot. Placed above them all,
-  //     none of that is reachable without a verified assertion — the gate cannot
-  //     be outranked by a later edit to a bypass list it sits in front of.
-  //
-  //     SCOPED TO TWO PATH PREFIXES, and the narrowness is deliberate rather than
-  //     incremental. `/api/feedback`, `/api/client-errors`, the root app, `/login`,
-  //     the hashed `/assets/*` bundles, the `*.kinu.run` preview hostnames and
-  //     every workspace or sandbox origin stay OUTSIDE Access: a host-wide Access
-  //     application would put an interactive corporate login in front of every
-  //     preview URL an agent hands out and every public landing page. The preview
-  //     hosts cannot reach this line at all — step 1 answered them — and the rest
-  //     are excluded by `isControlPlaneSurface`, which
-  //     `tests/unit-control-plane-access.test.ts` pins from both directions,
-  //     including against `isPublicPath`.
-  //
-  //     The verified identity travels to step 8b as a REQUIRED argument, so it is
-  //     verified exactly once per request and the admin routes cannot be reached
-  //     without it.
+  // Cloudflare Access must run before every bypass (auth, public list, ASSETS,
+  // DO writes) and only on `isControlPlaneSurface` paths, never previews or the app.
   let controlAccess: AccessIdentity | null = null;
 
   if (isControlPlaneSurface(url.pathname)) {
@@ -585,32 +385,19 @@ async function route(request: Request, env: Env, ctx: ExecutionContext, url: URL
     controlAccess = access.access;
   }
 
-  // 3. OAuth/OIDC login, callback, session, logout.
   const appAuthResp = await handleAuthRequest(request, env, ctx);
 
   if (appAuthResp) return appAuthResp;
 
-  // 4. Public landing page for visitors with no Kinu session.
   const landingResp = await handleLandingRequest(request, env);
 
   if (landingResp) return landingResp;
 
-  // 5. CLI install + device-code auth + token-authenticated account API.
   const cliResp = await handleCliRequest(request, env, ctx);
 
   if (cliResp) return cliResp;
 
-  // 6. Public, unauthenticated answers, in one band: the worker release
-  //    artifact, the deploy door, health's build stamp, and a blueprint's
-  //    page data by link. The artifact is served out of R2 rather than as an
-  //    asset because it is larger than Cloudflare's per-file asset limit, and
-  //    it answers first so it keeps its place beside the CLI's downloads
-  //    above. The deploy door stands in front of the auth gate because it
-  //    belongs to a person with no Kinu account: what authorizes every call
-  //    is the key the run was minted with, compared inside DeployRunDO
-  //    against a digest. The blueprint id carries a signature checked inside
-  //    its handler before any object is touched, and the owner's object
-  //    re-reads the share row on every call.
+  // Public: the deploy door is authorized by its run key, blueprints by a signed id.
   const publicResp = await firstResponse(request, [
     (req) => handleReleaseArtifactRequest(req, env.RELEASES_BUCKET),
     (req) => handleDeployRequest(req, env),
@@ -620,36 +407,26 @@ async function route(request: Request, env: Env, ctx: ExecutionContext, url: URL
 
   if (publicResp) return publicResp;
 
-  // 6b. MCP server — its own auth (CLI bearer token for external MCP
-  //     clients, which can never pass the browser-session gate below;
-  //     session/dev identity otherwise) + per-agent ownership inside.
+  // MCP does its own auth: external clients cannot pass the browser-session gate.
   if (url.pathname.startsWith("/mcp/v1/")) {
     const mcpResp = await handleMcpRequest(request, env, mcpAgentResolver(env));
 
     if (mcpResp) return mcpResp;
   }
 
-  // Vite's source modules are public assets only on a local dev host. Without
-  // this, the landing document loads but every hydration/CSS request receives
-  // the sign-in page from the auth gate below.
   if (isViteDevAssetPath(url, env)) {
     return serveApp(request, env);
   }
 
-  // 7. Public bypass list.
   if (isPublicPath(url.pathname)) {
     return serveApp(request, env);
   }
 
-  // 7b. Webhook delivery — public, and reachable only with the route capability
-  //     its URL carries. Verified before the ingress budget, the body and any
-  //     workspace object; the per-trigger HMAC / Bearer / mTLS check then
-  //     authenticates the payload inside the workspace.
+  // Webhook delivery: the URL's route capability is its gate.
   const webhookResp = await handleWebhookDeliveryRequest(request, env, webhookDeliveryResolver(env));
 
   if (webhookResp) return webhookResp;
 
-  // 8. Auth gate. Everything below requires an authenticated identity.
   let identity: AuthIdentity;
   let authenticatedRequest = request;
   const cliAgentTicket = await authenticateCliAgentTicketRequest(request, env);
@@ -671,46 +448,25 @@ async function route(request: Request, env: Env, ctx: ExecutionContext, url: URL
     }
   }
 
-  // 8b. CSRF. Everything below is reachable with the ambient session cookie,
-  //     so a state-changing request must prove the app issued it.
   const crossSite = crossSiteRejection(request);
 
   if (crossSite) return crossSite;
 
-  // The control-plane index learns WHO exists here, retained so it never delays
-  // a response and memoised per isolate so it is not a Durable Object round trip
-  // per request. Every row it writes is a derived fact whose source of truth is a
-  // UserDO, which is why a dropped observation costs a briefly stale operator
-  // list and nothing else. Placed after the CSRF gate so a cross-site request
-  // never feeds it. What it deliberately does NOT do here is index the workspace
-  // the path names: at this point that name is a string the caller chose, and
-  // the ownership gate has not run. See step 10.
+  // After CSRF so cross-site requests never feed the index; workspaces are
+  // indexed only after the ownership check below.
   observeIdentity(env, identity, { retain: ctx });
 
-  // 8. /api/feedback — any signed-in user may file a report. Deliberately not on
-  //    the public bypass list: a report carries a screenshot of a signed-in
-  //    session, so an unauthenticated writer would be an anonymous upload
-  //    endpoint.
+  // Not public: reports carry screenshots, so it would be an anonymous upload endpoint.
   const feedbackResp = await handleFeedbackRequest(authenticatedRequest, env, identity);
 
   if (feedbackResp) return feedbackResp;
 
-  // 8a. /api/client-errors — the browser's own render failures. Behind the auth
-  //     unguarded. Entered only with the Access identity step 2b verified, which
-  //     the operator's log sink, and an unauthenticated writer would be a
-  //     log-injection endpoint. The route refuses a null identity itself as
-  //     well, so its guard does not depend on this call site.
+  // Not public: an unauthenticated writer would be a log-injection endpoint.
   const clientErrorResp = await handleClientErrorRequest(authenticatedRequest, env, identity);
 
   if (clientErrorResp) return clientErrorResp;
 
-  // 8b. /api/control/* — the admin control plane. The allowlist, the
-  //     dev-identity refusal, the Access-to-session email equality and the
-  //     step-up window all live inside that module, never here: a route whose
-  //     authorization is performed by its caller is one refactor away from being
-  //     unguarded. Entered only with the Access identity step 7c verified, which
-  //     is why the call is inside the narrowing rather than beside it — there is
-  //     no `null` to pass.
+  // Admin authorization lives inside the module; entered only with a verified Access identity.
   if (controlAccess !== null) {
     const controlResp = await handleControlRequest(
       authenticatedRequest, env, identity, controlAccess,
@@ -719,16 +475,7 @@ async function route(request: Request, env: Env, ctx: ExecutionContext, url: URL
     if (controlResp) return controlResp;
   }
 
-  // 9. The signed-in account APIs — /api/user/* profile and roster,
-  //    /api/shared/* publish, list, fork, /api/drive/* the owner's Drive —
-  //    plus /api/updates/*, this
-  //    deployment reading its own release channel and installing from it.
-  //    The updates owner check is the deployment's own record, inside that
-  //    module: everyone else is answered 404, including the fact that the
-  //    surface exists. Ownership of every workspace named in a body is
-  //    claimed inside. The account-authority endpoints answer first: their
-  //    writes land on owner_only UserDO methods, so they never pass through
-  //    the workspace-token surface behind them.
+  // Account-authority endpoints answer first: they write owner_only UserDO methods.
   const accountResp = await firstResponse(authenticatedRequest, [
     (req) => handleAccountRequest(req, env, identity),
     (req) => handleUserRequest(req, env, identity, ctx),
@@ -739,70 +486,46 @@ async function route(request: Request, env: Env, ctx: ExecutionContext, url: URL
 
   if (accountResp) return accountResp;
 
-  // 10. Per-agent routes — reject every namespace/facet path outside the
-  // closed public actor grammar before ownership lookup or SDK routing.
+  // Refuse any namespace/facet path outside the public actor grammar before SDK routing.
   if (isForeignAgentNamespacePath(url.pathname)) {
     return err(404, 'Not found');
   }
 
-  // Verify ownership of the root workspace. A direct subordinate facet is
-  // owned through its parent workspace; extractAgentName returns that parent.
   const agentName = extractAgentName(url.pathname);
 
   if (agentName) {
-    // SECURITY (F1): routeAgentRequest (partyserver) maps EVERY DO namespace
-    // binding by slug, and its facet router recursively resolves literal
-    // /sub/{class}/{name} segments. The closed-path rejection above keeps
-    // UserDO and KinuSandbox worker-side-only, and now refuses the `sub`
-    // segment outright: there is no facet class left for it to resolve.
+    // routeAgentRequest maps every DO binding by slug; the rejection above keeps
+    // UserDO and KinuSandbox unreachable.
     const claim = await claimOwnedWorkspace(env, identity.userId, agentName);
 
     if (!claim.ok) return err(claim.status, claim.error);
 
-    // Now the path's workspace name is evidence: this account has been shown to
-    // own it. Indexed here rather than at the auth gate, where a 403'd request
-    // for a name the caller invented would still have written a row attributed
-    // to them.
     observeWorkspaceUse(env, identity, agentName, { retain: ctx });
 
-    // Inject the userId so downstream handlers can resolve UserDO without
-    // re-running auth. Worker → DO requests preserve headers.
     const reqWithId = new Request(authenticatedRequest, {
       headers: appendIdentityHeaders(authenticatedRequest.headers, identity),
     });
 
-    // The home card's one read — the stub the gate already claimed, so the
-    // route never re-proves ownership.
     const agent = claim.agent;
 
     const eventsResp = await firstResponse(reqWithId, [
       (req) => handleWorkspaceOverviewRequest(req, () => agent.getWorkspaceOverview()),
       (req) => handleRunEventsRequest(req, runEventsResolver(env), REAL_CLOCK),
-      // Eval-only: ends the activation; every other identity is answered 404.
       (req) => handleEvalAbortRequest(req, identity, () => agent.evalAbortActivation()),
     ]);
 
     if (eventsResp) return eventsResp;
-    // EventsHub authenticated routes: /triggers, /events
     const hubResp = await handleHubRequest(reqWithId, env, agentName, hubAgentResolver(env));
 
     if (hubResp) return hubResp;
-    // File uploads: HTTP rather than an agent RPC, because the RPC transport
-    // is the chat WebSocket and its frame ceiling is below ordinary files.
+    // Files and terminal bypass agent RPC: the chat socket's frame ceiling is too small.
     const filesResp = await handleFilesRequest(reqWithId, env, agentName);
 
     if (filesResp) return filesResp;
-    // The interactive terminal's own WebSocket. Same reason files are HTTP: the
-    // agents SDK's RPC rail is the chat socket, which carries JSON text under a
-    // 1 MiB frame ceiling, and PTY bytes are neither.
     const terminalResp = await handleTerminalRequest(reqWithId, terminalRouteDeps(env), agentName, ctx);
 
     if (terminalResp) return terminalResp;
-    // A hosted actor's chat is checked here and routed UNCHANGED: the target is
-    // this same object, so nothing rewrites the path and no facet storage key is
-    // substituted into the SDK's `/sub/{class}/{key}` hop. The only thing left
-    // to do before handing the request over is refuse a name this workspace does
-    // not host, which keeps a 404/403 at the edge instead of inside the actor.
+    // Routed unchanged; only refuse names this workspace does not host.
     const hosted = hostedActorRoute(url.pathname);
 
     if (hosted) {
@@ -819,6 +542,5 @@ async function route(request: Request, env: Env, ctx: ExecutionContext, url: URL
     if (agentResp) return agentResp;
   }
 
-  // 11. SPA fallback.
   return serveApp(request, env);
 }

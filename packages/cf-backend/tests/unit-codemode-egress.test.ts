@@ -1,22 +1,7 @@
 /**
- * The codemode sandbox's outbound egress: the third seam of the one
- * destination classifier.
- *
- * `eval` programs are LLM-authored, and this repository treats them
- * that way everywhere else: the approval gate DENIES `169.254.169.254` in a
- * shell command on every executor, and the agent's own `web.fetch` refuses the
- * same destinations. The identical request as `fetch()` inside a program rode a
- * pass-through entrypoint that judged nothing, which is the one place the
- * project's rule — destination judgment is one judgment for the whole project —
- * did not hold.
- *
- * What is asserted here is the SEAM, not the classifier: the table itself is
- * `packages/core/tests/unit-egress-destination.test.ts`, and the container hop
- * holds its own copy of the destination list in
- * `unit-egress-interception.test.ts`. This file proves that the loopback
- * entrypoint asks, that a refusal never reaches the network, that a refusal
- * arrives as the failure shape the program's `fetch` turns into a rejection,
- * and that a redirect is not a way around the check.
+ * Codemode sandbox egress, the third seam of the one destination classifier: `eval` programs are LLM-authored, so their
+ * `fetch()` must be judged like shell and `web.fetch`. Asserts the seam (the table lives in core's
+ * unit-egress-destination.test.ts): the entrypoint asks, refusals never reach the network, and redirects do not bypass it.
  */
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
 import { readFileSync } from 'node:fs';
@@ -28,10 +13,7 @@ import {
 import { CodemodeEgress, EGRESS_FAILURE_HEADER } from '../src/codemode-egress';
 import { workerContext } from './helpers/bindings';
 
-/** The loopback entrypoint under test, outside workerd. Its fetch override
- *  reads no instance state, so an empty env and a bare execution context are
- *  the whole construction — the platform handle in full, because
- *  `WorkerEntrypoint`'s own constructor takes it whole. */
+/** Its fetch override reads no instance state; `WorkerEntrypoint`'s constructor still takes the platform handle whole. */
 const entry = new CodemodeEgress(workerContext(), {});
 
 const egressFetch = (url: string, init?: RequestInit): Promise<Response> =>
@@ -41,7 +23,7 @@ const originalFetch = globalThis.fetch;
 
 let logs: RecordingLogger;
 
-/** Requests that reached the network. A refusal must leave this empty. */
+/** A refusal must leave this empty. */
 let attempted: Request[] = [];
 
 beforeEach(() => {
@@ -64,9 +46,7 @@ afterEach(() => {
   setDiagnosticsSink(createRecordingLogger());
 });
 
-/** Every family the classifier refuses, spelled the way a program would. The
- *  list is deliberately the same shape the container hop's suite holds: one
- *  seam per file, the same destinations. */
+/** Same shape as the container hop's suite: one seam per file, the same destinations. */
 const REFUSED = [
   'http://169.254.169.254/latest/meta-data/',
   'http://metadata.google.internal/computeMetadata/v1/',
@@ -95,9 +75,7 @@ describe('a program may not reach a destination no untrusted code may reach', ()
 
     expect(response.status).toBe(403);
     expect(attempted).toEqual([]);
-    // The marked failure is what `codemode-node-shim.ts createFetch` turns into
-    // the rejection a Node program expects, so a refused fetch throws inside the
-    // program instead of returning a body it might parse.
+    // `codemode-node-shim.ts createFetch` turns this marked failure into a rejection, so a refused fetch throws in the program.
     expect(response.headers.get(EGRESS_FAILURE_HEADER)).toBe('1');
     expect(await response.json()).toMatchObject({ reason: 'denied' });
   });
@@ -122,9 +100,8 @@ describe('a public destination is still the program\'s own business', () => {
 
     if (!sent) throw new Error('expected the request to reach the network');
     expect(sent.url).toBe('https://api.example.com/v1/things');
-    // A hop the runtime follows never re-enters this handler, so a public host
-    // answering 302 to a private address would reach it unjudged. The 3xx goes
-    // back to the program, whose next fetch is judged like the first.
+    // A followed hop never re-enters this handler, so a 302 to a private address would go unjudged:
+    // the 3xx goes back to the program, whose next fetch is judged.
     expect(sent.redirect).toBe('manual');
   });
 
@@ -155,8 +132,7 @@ describe('one judgment, three enforcement points', () => {
     const read = (path: string): string =>
       readFileSync(join(import.meta.dir, '..', '..', path), 'utf8');
 
-    // Removing the call from any one of these is how this defect happened the
-    // first time: two of the three asked, and the third was a pass-through.
+    // Two of the three asked and the third was a pass-through: each call is pinned.
     expect(read('cf-backend/src/codemode-egress.ts')).toContain('refusedHostname(url.hostname)');
     expect(read('cf-backend/src/egress/outbound.ts')).toContain('refusedHostname(url.hostname)');
     expect(read('core/src/web/url-safety.ts')).toContain('refusedHostname(parsed.hostname)');

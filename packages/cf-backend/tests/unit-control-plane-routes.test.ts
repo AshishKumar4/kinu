@@ -1,20 +1,6 @@
 /**
- * `/api/control/*` end to end, over the real gate, the real store, the real
- * ownership resolution and the real action dispatcher.
- *
- * Only the TRANSPORT is stood in for: `ControlPlaneDO` is backed by the same
- * `store.ts` functions the deployed object calls, over a real SQLite database;
- * each UserDO stub keeps a real roster; each workspace stub keeps a real owner
- * identity row and refuses a claim by anybody else, exactly as
- * `OrchestratorAgent.claimOwner` does. Everything the assertions are about — who
- * is refused, what a refused mutation leaves behind, which RPC an action proxies
- * to, whether one account's roster row can reach another account's workspace —
- * is production code running unmodified.
- *
- * The reason to test at this altitude rather than at the store's: the properties
- * that matter here are properties of the ROUTE. "Every mutation is audited
- * before it runs" is not a fact about a SQL function; it is a fact about the
- * order of operations in one handler, and a store test cannot see it.
+ * `/api/control/*` at route altitude: "every mutation is audited before it runs" is an ordering
+ * inside one handler that a store test cannot see. Only the transport is stood in for.
  */
 import { describe, expect, test } from 'bun:test';
 import { Database } from 'bun:sqlite';
@@ -36,15 +22,12 @@ import type { WorkspaceEntry } from '../src/user/user-do';
 
 mockAgentsSdk();
 
-// `routes.ts` reaches the orchestrator's module graph at load, so it is imported
-// after the mock is registered.
+// `routes.ts` reaches the orchestrator's module graph at load: import it after the mock is
+// registered.
 const { handleControlRequest: routeControlRequest } = await import('../src/control-plane/routes');
 
 const { requireControl } = await import('@kinu.run/core/control-plane');
 
-/** The bindings the route reads. Named for its role rather than its structure:
- *  it is the environment these routes run in. Its ids are the names this
- *  harness mints, which is what a namespace here resolves by. */
 type ControlRoutesEnv = ControlEnv<string>;
 
 const SECRET = 'routes-test-secret-0123456789';
@@ -55,8 +38,6 @@ const USER_ID = 'a'.repeat(32);
 
 const OTHER_ID = 'b'.repeat(32);
 
-/** What each workspace stub was asked to do, so an assertion can say WHICH
- *  existing RPC an admin action proxied to rather than only that it succeeded. */
 interface RpcLog {
   calls: { workspace: string; method: string; args: unknown[] }[];
 }
@@ -69,8 +50,6 @@ interface Harness {
   close: () => void;
 }
 
-/** Answers the workspace stubs give. Overridden per test to drive the refusal
- *  arms, which are the ones an audit row has to distinguish. */
 interface WorkspaceBehaviour {
   cancel?: { ok: boolean };
   retry?: { ok: boolean; jobId?: string; error?: string };
@@ -80,19 +59,14 @@ interface WorkspaceBehaviour {
   throws?: string;
 }
 
-/** Which phase of the two-phase audit write is broken, when a test breaks one.
- *  `append` is the store being unreachable before the action; `settle` is it
- *  becoming unreachable after. */
+/** `append` breaks the store before the action; `settle` after. */
 type AuditFault = 'append' | 'settle';
 
 interface World {
   admins?: string;
   behaviour?: WorkspaceBehaviour;
   rosterError?: string;
-  /** Each account's roster. An account absent here owns nothing. */
   rosters?: Record<string, WorkspaceEntry[]>;
-  /** Each workspace's own identity row: the account its Durable Object believes
-   *  owns it. A name absent here is an unclaimed workspace. */
   owners?: Record<string, string>;
   audit?: AuditFault;
 }
@@ -103,10 +77,8 @@ function roster(...names: string[]): WorkspaceEntry[] {
   }));
 }
 
-/** What `getActivitySnapshot` answers for a workspace that has run nothing: the
- *  real shape, at the values an empty log produces. The drilldown hands it back
- *  whole, so a stand-in of some other shape would let the panel's contract drift
- *  from the object's. */
+/** The real empty-log shape: the drilldown hands it back whole, so a stand-in would let
+ *  contracts drift. */
 function unrunActivity(): ActivitySnapshot {
   return {
     latest: null,
@@ -145,9 +117,8 @@ function harness(options: World = {}): Harness {
   const rosters = new Map(Object.entries(options.rosters ?? { [USER_ID]: roster('alpha') }));
   const owners = new Map(Object.entries(options.owners ?? { alpha: USER_ID }));
 
-  // The control-plane DO, backed by the real store. The capability gate is the
-  // production one: the route derives a caller and this forwards it, so a route
-  // that forgot to authorize would be refused here exactly as in production.
+  // The capability gate is the production one, so a route that forgot to authorize is refused here
+  // too.
   const controlPlane = {
     async observeUser(caller: PresentedCaller, observation: store.UserObservation) {
       await gate(caller, 'index.observe'); store.observeUser(sql, observation);
@@ -215,15 +186,12 @@ function harness(options: World = {}): Harness {
 
       return row;
     },
-    /** The index feed's fourth row, which no admin route writes: the feed is
-     *  reached from the Worker's ownership gate, never from here. */
+    /** No admin route writes this row: the feed is reached from the Worker's ownership gate. */
     touchWorkspace(): Promise<void> {
       throw new Error('ControlPlaneDO.touchWorkspace: not reachable in this test');
     },
   };
 
-  /** A list read that records the call and answers with nothing — the three
-   *  surfaces below differ only in the method name the route reaches for. */
   const emptyListStub = (workspace: string, method: string) => async () => {
     rpc.calls.push({ workspace, method, args: [] });
 
@@ -231,10 +199,8 @@ function harness(options: World = {}): Harness {
   };
 
   const workspaceStub = (name: string) => ({
-    // The workspace's own identity check, in the shape `OrchestratorAgent`
-    // implements it: an unclaimed object accepts the first claimant, a claimed
-    // one refuses anybody else. This is what a roster row in the wrong account
-    // runs into, so a stub that always said yes would test nothing.
+    // As `OrchestratorAgent` implements it: unclaimed accepts the first claimant, claimed refuses
+    // others.
     async claimOwner(userId: string) {
       rpc.calls.push({ workspace: name, method: 'claimOwner', args: [userId] });
       const current = owners.get(name);
@@ -324,10 +290,9 @@ function harness(options: World = {}): Harness {
       return { entries, total: entries.length, nextCursor: null };
     },
     async removeWorkspace(_caller: UserCaller, workspace: string, owner: string) {
-      // `UserDO.removeWorkspace` tears the object down FIRST, and
-      // `destroyAgent` refuses unless the stored owner is this account. A
-      // teardown failure keeps the registry row, which is what fail-closed
-      // means here.
+      // `UserDO.removeWorkspace` tears the object down first; a teardown failure keeps the registry
+      // row
+      // (fail-closed).
       const stored = owners.get(workspace);
       rpc.calls.push({ workspace, method: 'destroyAgent', args: [owner] });
 
@@ -359,10 +324,7 @@ function harness(options: World = {}): Harness {
   return { env, sql, rpc, removed, close: () => db.close() };
 }
 
-/** The production gate, so the harness cannot be more permissive than the
- *  deployed object. `capability` is the real closed union, so a harness method
- *  naming one the matrix does not declare is a type error here rather than a
- *  silently ungated stub. */
+/** The production gate, so the harness cannot be more permissive than the deployed object. */
 async function gate(caller: PresentedCaller, capability: ControlCapability): Promise<void> {
   await requireControl({ CREDENTIAL_ENCRYPTION_KEY: SECRET }, caller, capability);
 }
@@ -374,22 +336,12 @@ function identity(over: Partial<AuthIdentity> = {}): AuthIdentity {
   };
 }
 
-/** The verified Cloudflare Access identity `server.ts` produces before this
- *  route is reached. Defaults to the SAME address `identity()` carries, because
- *  the two gates naming one person is the ordinary case and every assertion
- *  below about the INNER gate would otherwise be answered by a mismatch. */
+/** Defaults to the same address `identity()` carries, so inner-gate assertions are not answered
+ *  by a mismatch. */
 function access(over: Partial<AccessIdentity> = {}): AccessIdentity {
   return { email: OPERATOR, sub: 'access-uuid-1', ...over };
 }
 
-/**
- * The route under test, with the outer gate's proof defaulted.
- *
- * A wrapper rather than a fourth argument at each of thirty-six call sites: the
- * subject of almost every test here is the inner gate, and an `access()` repeated
- * thirty-six times is noise that hides the two tests where the Access identity is
- * the point. Those two pass it explicitly.
- */
 function handleControlRequest(
   request: Request,
   env: ControlRoutesEnv,
@@ -403,17 +355,13 @@ function get(path: string): Request {
   return new Request(`https://kinu.run/api/control${path}`);
 }
 
-/** A request body a test sends. `JsonValue` rather than `unknown` because a
- *  malformed-action test sends real JSON that the SCHEMA refuses — the point is
- *  the schema's refusal, not an unserializable value. */
 function post(path: string, body: JsonValue): Request {
   return new Request(`https://kinu.run/api/control${path}`, {
     method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body),
   });
 }
 
-/** The response a control path produced. A `null` here means the route DECLINED
- *  a path it owns, which is a failure rather than something to assert away. */
+/** A `null` means the route declined a path it owns: a failure, not something to assert away. */
 function answered(response: Response | null): Response {
   if (response === null) throw new Error('the control plane declined a path it owns');
 
@@ -457,8 +405,6 @@ describe('the gate, over HTTP', () => {
 
   test('an unconfigured deployment says so instead of pretending the route is absent', async () => {
     const h = harness();
-    // The harness env with its root secret cleared. A spread of a value that
-    // already has the type, so nothing is asserted here.
     const unconfigured: ControlRoutesEnv = { ...h.env, CREDENTIAL_ENCRYPTION_KEY: '' };
     const answer = await handleControlRequest(get('/overview'), unconfigured, identity());
     expect(answer?.status).toBe(503);
@@ -484,11 +430,8 @@ describe('the gate, over HTTP', () => {
   });
 
   test('an Access identity that is not the session identity is refused, and reads nothing', async () => {
-    // THE JOIN BETWEEN THE TWO GATES. Both halves here are individually valid:
-    // Access authenticated a real member of the Zero Trust organization, and the
-    // browser session belongs to a real allowlisted operator. They are different
-    // people, which is what a borrowed session cookie looks like from the origin,
-    // and admitting it would make two gates behave as one.
+    // Both gates valid but different people: what a borrowed session cookie looks like. Must
+    // refuse.
     const h = harness();
     store.observeUser(h.sql, { userId: USER_ID, email: OPERATOR, at: 1_000 });
 
@@ -502,9 +445,7 @@ describe('the gate, over HTTP', () => {
   });
 
   test('an Access identity for a non-operator is still refused by the allowlist', async () => {
-    // The other direction: the two gates agree about WHO, and that person is not
-    // an operator. Access is an outer gate, never a substitute for the allowlist,
-    // so an Access policy that admits the whole company still admits nobody here.
+    // Access is an outer gate, never a substitute for the allowlist.
     const h = harness();
 
     const answer = await handleControlRequest(
@@ -517,8 +458,8 @@ describe('the gate, over HTTP', () => {
   });
 
   test('a mutation still needs a fresh sign-in when both gates name the operator', async () => {
-    // Access sessions last hours by configuration; the step-up window is five
-    // minutes and is this deployment's own. A valid assertion must not satisfy it.
+    // The step-up window is this deployment's own, shorter than an Access session: an assertion
+    // must not satisfy it.
     const h = harness();
 
     const answer = await handleControlRequest(
@@ -534,8 +475,6 @@ describe('the gate, over HTTP', () => {
 
 describe('mutations', () => {
   test('a stale sign-in is refused AND audited', async () => {
-    // The row is the point. An attempted destructive action by a real operator
-    // that left no trace would be the one gap an audit log may not have.
     const h = harness();
     const stale = identity({ authTime: Date.now() - 6 * 60 * 1000 });
 
@@ -579,9 +518,7 @@ describe('mutations', () => {
     );
 
     expect(answer?.status).toBe(200);
-    // The action proxied to the callable the owner's own UI calls — not to a
-    // second implementation of cancelling a job — and only after the workspace's
-    // own object confirmed this account owns it.
+    // Proxied to the owner UI's own callable, only after the workspace object confirmed ownership.
     expect(h.rpc.calls.map((c) => c.method)).toEqual(['claimOwner', 'cancelBackgroundJob']);
     expect(store.listAudit(h.sql).items[0]).toMatchObject({
       operation: 'job_cancel', targetKind: 'job', target: `${USER_ID}/alpha/job-7`, outcome: 'ok',
@@ -615,8 +552,7 @@ describe('mutations', () => {
     expect(answer?.status).toBe(502);
     const row = store.listAudit(h.sql).items[0];
     expect(row?.outcome).toBe('failed');
-    // The rendered chain stays in the durable row. What the analytics sink gets
-    // instead is a closed word, which `unit-analytics-plane` covers.
+    // The analytics sink gets a closed word, covered by `unit-analytics-plane`.
     expect(row?.detail).toContain('the workspace is evicted');
     h.close();
   });
@@ -661,8 +597,6 @@ describe('mutations', () => {
 
     expect(answer?.status).toBe(409);
     expect(h.removed).toEqual([]);
-    // The typo is caught before anything is woken, so not even the identity
-    // check reaches the workspace.
     expect(h.rpc.calls).toEqual([]);
     expect(store.listAudit(h.sql).items[0]).toMatchObject({
       operation: 'workspace_remove', outcome: 'denied', detail: 'the typed name did not match',
@@ -682,9 +616,6 @@ describe('mutations', () => {
     );
 
     expect(answer?.status).toBe(200);
-    // UserDO.removeWorkspace tears the workspace's own DO down before dropping
-    // the registry row, which is why the action proxies it rather than doing
-    // either half.
     expect(h.removed).toEqual([{ userId: OTHER_ID, workspace: 'alpha' }]);
     expect(store.listWorkspaces(h.sql).items).toEqual([]);
     expect(store.listWorkspaces(h.sql, {}, { includeRemoved: true }).items[0]?.removedAt).not.toBe(null);
@@ -693,9 +624,7 @@ describe('mutations', () => {
   });
 
   test('every mutation path this route accepts leaves exactly one settled audit row', async () => {
-    // The property stated as a sweep rather than as eight separate assertions:
-    // whatever the outcome, one attempt is one row — and none of them is left
-    // pending, because a pending row means an outcome nobody recorded.
+    // One attempt is one row, whatever the outcome, and none is left pending.
     const attempts: JsonValue[] = [
       { action: 'job.cancel', userId: USER_ID, workspace: 'alpha', jobId: 'j' },
       { action: 'job.retry', userId: USER_ID, workspace: 'alpha', jobId: 'j' },
@@ -704,7 +633,6 @@ describe('mutations', () => {
       { action: 'approvals.decide', userId: USER_ID, workspace: 'alpha', ids: ['x'], decision: 'approved' },
       { action: 'shell_grants.revoke', userId: USER_ID, workspace: 'alpha' },
       { action: 'workspace.remove', userId: USER_ID, workspace: 'alpha', confirm: 'alpha' },
-      // Refused shapes count too: an unaudited rejected attempt is the gap.
       { action: 'nonsense' },
     ];
 
@@ -717,7 +645,6 @@ describe('mutations', () => {
     const rows = store.listAudit(h.sql, { limit: 50 }).items;
     expect(rows.length).toBe(attempts.length);
     expect(store.listPendingAudit(h.sql)).toEqual([]);
-    // All seven verbs the union declares are reachable and named in the log.
     expect(new Set(rows.map((row) => row.operation))).toEqual(new Set([
       'job_cancel', 'job_retry', 'job_dismiss', 'jobs_clear',
       'approvals_decide', 'shell_grants_revoke', 'workspace_remove', 'action_rejected',
@@ -728,9 +655,8 @@ describe('mutations', () => {
 
 describe('the audit log is written before the action, not after', () => {
   test('an unavailable audit store runs NOTHING', async () => {
-    // The defect this closes: appending the row AFTER the mutation and logging a
-    // failed append lets a successful job clear, an approval decision or a grant
-    // revocation return 200 with no durable record that anybody had done it.
+    // Defends: appending the row after the mutation let a mutation return 200 with no durable
+    // record.
     const h = harness({ audit: 'append' });
 
     const attempts: JsonValue[] = [
@@ -739,7 +665,6 @@ describe('the audit log is written before the action, not after', () => {
       { action: 'approvals.decide', userId: USER_ID, workspace: 'alpha', ids: ['x'], decision: 'approved' },
       { action: 'shell_grants.revoke', userId: USER_ID, workspace: 'alpha' },
       { action: 'workspace.remove', userId: USER_ID, workspace: 'alpha', confirm: 'alpha' },
-      // And the refusals: a plane that cannot record its own refusal says so.
       { action: 'nonsense' },
     ];
 
@@ -755,8 +680,6 @@ describe('the audit log is written before the action, not after', () => {
   });
 
   test('a lost settlement leaves a pending row and does not answer success', async () => {
-    // The action has already happened; the honest answer is that its outcome was
-    // not recorded, plus a durable row an operator can find.
     const h = harness({ audit: 'settle' });
 
     const answer = await handleControlRequest(
@@ -803,8 +726,6 @@ describe('cross-user isolation', () => {
     const answer = await handleControlRequest(get(`/users/${USER_ID}`), h.env, identity());
     const detail = await bodyOf(answer);
     expect(detail).toMatchObject({ reconcile: { status: 'ok' }, viewer: OPERATOR });
-    // `alpha` is what the fake registry holds; `stale` is what the index held.
-    // The reconcile is what makes the second one a tombstone.
     const rows = store.listWorkspaces(h.sql, {}, { userId: USER_ID }).items;
     expect(rows.map((row) => row.name)).toEqual(['alpha']);
     h.close();
@@ -820,8 +741,7 @@ describe('cross-user isolation', () => {
     expect(detail).toMatchObject({
       reconcile: { status: 'failed', reason: expect.stringContaining('the user object is evicted') },
     });
-    // Nothing tombstoned on a failed read: an operator deciding to remove a
-    // workspace must not be shown a list that a failure emptied.
+    // Nothing tombstoned on a failed read: a failure must not empty the list an operator acts on.
     expect(store.listWorkspaces(h.sql, {}, { userId: USER_ID }).items.map((r) => r.name)).toEqual(['kept']);
     h.close();
   });
@@ -843,16 +763,11 @@ describe('cross-user isolation', () => {
 });
 
 /**
- * Two accounts, one global workspace name.
- *
- * `OrchestratorAgent` is addressed by name across the whole deployment while a
- * roster row is per-account, so two accounts CAN hold a row for the same string
- * and only one of them can own the object. Everything below is that situation.
+ * `OrchestratorAgent` is addressed by name deployment-wide while roster rows are per-account:
+ * two accounts can hold a row for one name, and only one owns the object.
  */
 describe('a global-name collision between two accounts', () => {
-  /** The loser's roster row: it exists in their UserDO and names a workspace the
-   *  other account's Durable Object owns. Reachable in production when a create
-   *  registered its row and then lost the ownership claim. */
+  /** Reachable in production when a create registered its row and then lost the ownership claim. */
   const collided = () => harness({
     rosters: { [USER_ID]: roster('contested'), [OTHER_ID]: roster('contested') },
     owners: { contested: USER_ID },
@@ -874,11 +789,7 @@ describe('a global-name collision between two accounts', () => {
       get(`/workspaces/contested?userId=${OTHER_ID}`), h.env, identity(),
     );
 
-    // 403: a genuine cross-user collision, refused by the workspace's own
-    // identity row rather than by a guess about the name.
     expect(theirs?.status).toBe(403);
-    // The refusal happened at the identity check. Not one panel RPC ran, so the
-    // operator never saw a byte of the owner's runs, spend, jobs or approvals.
     expect(h.rpc.calls.map((c) => c.method)).toEqual(['claimOwner']);
     h.close();
   });
@@ -901,12 +812,8 @@ describe('a global-name collision between two accounts', () => {
       expect(answer?.status, JSON.stringify(attempt)).not.toBe(200);
     }
 
-    // Every attempt was refused by the object's own identity check — the six
-    // proxied verbs at `claimOwner`, the removal at `destroyAgent` — and not one
-    // of them reached a method that reads or changes the owner's state.
     expect(new Set(h.rpc.calls.map((c) => c.method))).toEqual(new Set(['claimOwner', 'destroyAgent']));
     expect(h.removed).toEqual([]);
-    // The owner still owns it, and the audit log has one settled row per attempt.
     const rows = store.listAudit(h.sql, { limit: 50 }).items;
     expect(rows.length).toBe(7);
     expect(store.listPendingAudit(h.sql)).toEqual([]);
@@ -916,10 +823,6 @@ describe('a global-name collision between two accounts', () => {
   });
 
   test('a failed cross-user create leaves the loser no roster row and no index row', async () => {
-    // The other half of the same defect, proven through the account's own
-    // registry rather than through the control plane: after the losing create
-    // rolled back, the loser's drilldown reconciles to an empty list and the
-    // owner's workspace is untouched.
     const h = harness({
       rosters: { [USER_ID]: roster('contested'), [OTHER_ID]: [] },
       owners: { contested: USER_ID },
@@ -972,11 +875,8 @@ describe('paging over HTTP', () => {
   });
 
   test('250 of one account\u2019s workspaces are walkable, and only page one reconciles', async () => {
-    // The defect: the drilldown asked for exactly one `CONTROL_PAGE_MAX` page, so
-    // an account with more than 200 workspaces had every row past 200
-    // unreachable under copy that said the table was the registry's. And the
-    // reconcile REWRITES `last_seen_at`, which the cursor orders on, so running
-    // it again mid-walk would reorder the list underneath the walk.
+    // Defends: the drilldown read exactly one `CONTROL_PAGE_MAX` page. The reconcile rewrites
+    // `last_seen_at`, which the cursor orders on, so it must not run again mid-walk.
     const many = roster(...Array.from({ length: 250 }, (_, i) => `w${String(i).padStart(3, '0')}`));
     const h = harness({ rosters: { [USER_ID]: many }, owners: {} });
     store.observeUser(h.sql, { userId: USER_ID, email: OPERATOR, at: 1_000 });
@@ -1023,8 +923,7 @@ describe('paging over HTTP', () => {
     const h = harness();
     store.observeUser(h.sql, { userId: USER_ID, email: OPERATOR, at: 1_000 });
     const answer = await handleControlRequest(get('/users?cursor=forged'), h.env, identity());
-    // A 500 with the reason, not a silent first page: restarting a walk from the
-    // top looks like success and repeats every row already seen.
+    // A 500, not a silent first page: restarting a walk looks like success and repeats rows.
     expect(answer?.status).toBe(500);
     expect(JSON.stringify(await bodyOf(answer))).toContain('cursor');
     h.close();
@@ -1045,9 +944,6 @@ describe('reads that reach through', () => {
       userId: USER_ID,
       runs: { status: 'ok' },
       jobs: { status: 'ok' },
-      // The one stub that throws. A workspace whose sandbox is down still has
-      // runs, jobs and approvals worth reading, and that is the workspace an
-      // operator is looking at.
       executors: { status: 'failed' },
     });
     h.close();
@@ -1063,9 +959,6 @@ describe('reads that reach through', () => {
   });
 
   test('metrics report themselves unconfigured rather than failing', async () => {
-    // No analytics account id and no token on this deployment. The metrics view
-    // is a sentence, and every other view is unaffected — a 500 here would send
-    // an operator looking for an outage that does not exist.
     const h = harness();
     const answer = await handleControlRequest(get('/metrics?hours=24'), h.env, identity());
     expect(answer?.status).toBe(200);

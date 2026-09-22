@@ -1,6 +1,4 @@
-// The cross-workspace peers tool's one self-exclusion filter. The workspace
-// AGENT roster (orchestrator + subordinates) is served by `listSubordinates`
-// and the roster broadcast, not by a projection beside this filter.
+// The cross-workspace peers tool's one self-exclusion filter; the agent roster is served by `listSubordinates`.
 import { describe, expect, test } from 'bun:test';
 import { teamPeers } from '../src/lib/workspace-roster';
 

@@ -1,18 +1,6 @@
 /**
- * The CF head runtime's merge synthesis: what model it runs on, and that it
- * files its operation lifecycle.
- *
- * `createHeadRuntime` hands core's `headMergeLLM` a profile thunk and a model
- * binder and nothing else, so the MODEL, the EFFORT and the SPEND LABEL are one
- * decision made in core: the merge files `judge` spend, `judge` is the
- * account-wide `deep` tier, and a tier is a (model, effort) pair.
- *
- * The route assertions compare against `MERGE_POLICY_BINDING` from
- * `@kinu.run/test-utils` — the SAME value the local backend's suite compares
- * against, over the same catalog — so "both backends resolve one policy" is an
- * equality between two suites rather than two expectations maintained apart.
- * These tests drive `mergeLLM` directly; the spawn substrate beside it is inert
- * by construction.
+ * CF head runtime merge: model, effort and spend label are one core decision (`judge` = `deep` tier).
+ * Routes compare against `MERGE_POLICY_BINDING`, the same value the local backend's suite uses.
  */
 
 import { describe, expect, test } from 'bun:test';
@@ -30,9 +18,7 @@ import {
 import { createHeadRuntime } from '../src/head-runtime';
 import type { ExplorationHostSeams } from '../src/exploration-hosting';
 
-/** A scripted merge model: valid JSON unless the test says otherwise. Every
- *  call's options are handed back so a suite can read the REQUEST this backend
- *  built, not just the answer it got. */
+/** Calls' options are handed back so a suite can read the request this backend built. */
 function mergeModel(text: string, calls?: LanguageModelV3CallOptions[]): MockLanguageModelV3 {
   return new MockLanguageModelV3({
     doGenerate: async (options) => {
@@ -54,16 +40,7 @@ function mergeModel(text: string, calls?: LanguageModelV3CallOptions[]): MockLan
 const GOOD_MERGE =
   '{"narrative":"Unified: both heads agree the parser is sound.","selected_decisions":[],"unresolved_questions":[],"recommendations":["ship it"]}';
 
-/**
- * The exploration substrate, fail-loud: `mergeLLM` must never reach it, so any
- * touch is a wiring regression this suite wants named, not absorbed.
- *
- * Every member refuses, the `host` included — a hosted head is acquired from
- * the workspace's one `ActorHost` now, so "the spawn substrate" is that host
- * plus the seams a run reads around it rather than a facet class and an
- * identity thunk. A member that answered would let a merge quietly acquire an
- * actor while this suite stayed green.
- */
+/** Fail-loud: `mergeLLM` must never reach the substrate; an answering member could acquire an actor. */
 const neverHost: ExplorationHostSeams = {
   host: {
     acquire() { throw new Error('mergeLLM acquired a hosted actor'); },
@@ -93,9 +70,7 @@ const neverHost: ExplorationHostSeams = {
 function runtimeWith(text: string) {
   const operations: ModelOperationEvent[] = [];
   const reports: ModelCallReport[] = [];
-  /** What the merge asked the resolver for — the route it actually took. */
   const resolved: Array<{ spec: string | null | undefined; effort: ReasoningEffort }> = [];
-  /** The provider requests this backend built, options and all. */
   const calls: LanguageModelV3CallOptions[] = [];
 
   const runtime = createHeadRuntime({
@@ -127,7 +102,6 @@ describe('createHeadRuntime — the merge call carries the operation sink', () =
     expect(operations.every((e) => e.source === 'judge' && e.op === 'generate_json')).toBe(true);
     expect(operations[1].outcome).toBe('ok');
     expect(operations[1].usage).toEqual({ input: 41, output: 7 });
-    // The cost report rides the same call, unchanged.
     expect(reports).toEqual([{
       source: 'judge', usage: { input: 41, output: 7 }, modelId: 'mock-model-id',
     }]);
@@ -138,8 +112,7 @@ describe('createHeadRuntime — the merge call carries the operation sink', () =
 
     await expect(runtime.mergeLLM('merging the findings', MergeOutputSchema)).rejects.toThrow();
 
-    // The provider answered and was billed; the parse refusal is the
-    // controller's fallback path, not this frame's failure.
+    // Billed; the parse refusal is the controller's fallback, not this frame's failure.
     expect(operations.map((e) => e.phase)).toEqual(['start', 'end']);
     expect(operations[1].outcome).toBe('ok');
     expect(operations[1].usage).toEqual({ input: 41, output: 7 });
@@ -151,13 +124,9 @@ describe('createHeadRuntime — the merge call carries the operation sink', () =
 
     await runtime.mergeLLM('merging the findings', MergeOutputSchema);
 
-    // The DEEP model at the DEEP tier's effort, not the turn's chat model at a
-    // constant. Compared against the shared binding rather than against local
-    // literals: the local backend's suite compares against this same value, so
-    // one of them drifting from the policy is a failure here.
+    // Compared against the binding the local backend's suite also uses.
     expect(resolved).toEqual([MERGE_POLICY_BINDING]);
-    // And the spend label agrees with the route it resolved, because one
-    // `'judge'` literal in core produced both.
+    // One `'judge'` literal in core produced both route and spend label.
     expect(reports.map((r) => r.source)).toEqual([MERGE_POLICY_SPEND_SOURCE]);
   });
 
@@ -167,8 +136,7 @@ describe('createHeadRuntime — the merge call carries the operation sink', () =
     await runtime.mergeLLM('first merge', MergeOutputSchema);
     await runtime.mergeLLM('second merge', MergeOutputSchema);
 
-    // A thunk, not a captured value: `profile()` is asked again each time, so an
-    // account that moves its deep tier does not need a new runtime to take effect.
+    // `profile()` is re-read per call, so a moved deep tier needs no new runtime.
     expect(resolved).toEqual([MERGE_POLICY_BINDING, MERGE_POLICY_BINDING]);
   });
 
@@ -177,10 +145,7 @@ describe('createHeadRuntime — the merge call carries the operation sink', () =
 
     await runtime.mergeLLM('merging the findings', MergeOutputSchema);
 
-    // The routed effort is how this call's cost is controlled. An output cap is
-    // not a field any request this backend builds sets: completion length is
-    // the model's, bounded by the provider, and a cap truncates a reasoning
-    // model's answer or starves it before it emits one.
+    // Effort controls cost; an output cap truncates or starves a reasoning model.
     expect(calls).toHaveLength(1);
     expect(calls[0]?.maxOutputTokens).toBeUndefined();
   });

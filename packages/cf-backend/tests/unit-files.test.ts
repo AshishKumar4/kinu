@@ -1,5 +1,3 @@
-// Behavior tests for the file-manager plumbing: each executor's own file view
-// and the writeExecutorFileOp seam over it.
 import { afterEach, describe, test, expect } from "bun:test";
 import {
   deleteExecutorPathOp, getExecutorFiles, inlineFileType, readExecutorFile, readExecutorFileBytes,
@@ -27,8 +25,7 @@ describe("sortDirEntries", () => {
 });
 
 describe("writeExecutorFileOp", () => {
-  /** A router of one executor whose file view captures what it is given —
-   *  optionally throwing, like an environment that went offline. */
+  /** Captures what its file view is given; optionally throws, like an offline environment. */
   function makeDeps(opts: { throwOn?: RegExp; error?: string } = {}) {
     const written = new Map<string, Uint8Array | string>();
 
@@ -65,7 +62,7 @@ describe("writeExecutorFileOp", () => {
 
   test("workspace upload round-trips binary content through the VFS", async () => {
     const { deps, written } = makeDeps();
-    const bytes = new Uint8Array([0, 1, 2, 255, 0, 128]); // includes NULs — binary-safe path
+    const bytes = new Uint8Array([0, 1, 2, 255, 0, 128]);
     const result = await writeExecutorFileOp(deps, "workspace", "/uploads/blob.bin", { bytes: bytes });
     expect(result).toEqual({ ok: true });
     expect(written.get("/uploads/blob.bin")).toEqual(bytes);
@@ -74,8 +71,7 @@ describe("writeExecutorFileOp", () => {
   test("executor uploads land BINARY-SAFE through the executor's own file view", async () => {
     const { deps, written } = makeDeps();
     const bin = new Uint8Array([0x89, 0x50, 0x00, 0xff, 0xfe]);
-    // Each environment gets the path in ITS OWN namespace — no prefix is added
-    // and none is stripped, because there is no namespace above them to map.
+    // Each environment gets the path in its own namespace: nothing prefixed or stripped.
     expect(await writeExecutorFileOp(deps, "sandbox", "/workspace/logo.png", { bytes: bin })).toEqual({ ok: true });
     expect(written.get("/workspace/logo.png")).toEqual(bin);
 
@@ -113,12 +109,7 @@ describe("writeExecutorFileOp", () => {
   });
 
   test("a file past the old 2 MB cap is written, not refused", async () => {
-    // The cap sat ABOVE the transport it claimed to respect: 2 MB raw is
-    // ~2.7 MB of base64 over a WebSocket whose message ceiling is 1 MiB, so
-    // files between ~750 KB and 2 MB passed the app check and died at the
-    // socket as an opaque connection failure. Uploads are HTTP now, the bytes
-    // are raw, and the VFS chunks what it stores — so there is nothing left
-    // for an app-level cap to protect.
+    // Uploads are HTTP with raw bytes and the VFS chunks storage, so no app-level size cap applies.
     const { deps, written } = makeDeps();
     const big = new Uint8Array(3 * 1024 * 1024);
     expect(await writeExecutorFileOp(deps, "workspace", "/uploads/big.bin", { bytes: big })).toEqual({ ok: true });
@@ -129,10 +120,7 @@ describe("writeExecutorFileOp", () => {
   });
 });
 
-/** A tree-shaped file view with real directory semantics, plus recorders for
- *  the native mutations a plane may declare — what the file-manager ops probe.
- *  `unlinkFails` makes removal of matching paths fail, which is how a rename's
- *  carry gets caught half-done. */
+/** `unlinkFails` makes removal of matching paths fail, catching a half-done rename carry. */
 function makeTree(seed: Record<string, string>, opts: { native?: boolean; unlinkFails?: RegExp } = {}) {
   const files = new Map<string, string | Uint8Array>(Object.entries(seed));
   const dirs = new Set<string>();
@@ -233,10 +221,7 @@ describe("renameExecutorPathOp", () => {
   });
 
   test("a carry that cannot destroy the source leaves ONE name, not two", async () => {
-    // KINU-013: the fallback wrote the destination and then unlinked the
-    // source. A failed unlink reported an error and left the file under BOTH
-    // names, so nothing said which name to trust. A rename either happened or
-    // it did not: the carry's copy is removed and the plane is as it was.
+    // KINU-013: a rename either happened or did not; a failed unlink removes the carry's copy.
     const { deps, files } = makeTree({ "/home/user/a.txt": "carried" }, { unlinkFails: /a\.txt$/ });
     const out = await renameExecutorPathOp(deps, "workspace", "/home/user/a.txt", "/home/user/b.txt");
     expect("error" in out).toBe(true);
@@ -273,9 +258,7 @@ describe("deleteExecutorPathOp", () => {
   });
 
   test("a tree removal that fails mid-tree reports what was removed and what remains", async () => {
-    // KINU-013: entry-by-entry removal with no failure boundary left a
-    // half-removed directory reported only as an error string. Now the pass
-    // fails closed and the refusal carries the two sets itself.
+    // KINU-013: removal fails closed and the refusal carries both entry sets.
     const { deps, files, dirs } = makeTree({
       "/home/user/build/out.js": "x",
       "/home/user/build/deep/two.js": "y",
@@ -338,14 +321,12 @@ describe("getExecutorFiles", () => {
   });
 
   test("every ancestor of the canonical home names the next segment down, even where the box lists nothing", async () => {
-    // A fresh workspace's physical root has no directory entries at all, so
-    // '/' listed only the mounts and the whole tree was unreachable.
+    // A fresh workspace's physical root has no entries, so '/' must still list the tree.
     const { deps } = makeTree({});
     const root = await getExecutorFiles(deps, "workspace", "/");
     expect(root.entries).toEqual([{ name: "home", type: "dir" }]);
     const mid = await getExecutorFiles(deps, "workspace", "/home");
     expect(mid.entries).toEqual([{ name: "user", type: "dir" }]);
-    // …and a real entry set is left alone: no duplicate, no phantom.
     const seeded = await getExecutorFiles(deps, "workspace", "/home/user");
     expect(seeded.entries).toEqual([]);
   });
@@ -393,15 +374,8 @@ describe("CLOUD_MAX_INLINE_ATTACHMENT_BYTES", () => {
   test("a max-size attachment message fits the agents SDK row guard, under the platform row cap", async () => {
     const { CLOUD_MAX_INLINE_ATTACHMENT_BYTES, PLATFORM_CATALOG } = await import("@kinu.run/core");
     const { ROW_MAX_BYTES } = await import("agents/chat");
-    // Chat messages persist as ONE DO SQLite row; the SDK truncates to
-    // ROW_MAX_BYTES but can shrink only TEXT parts — file parts ride through
-    // verbatim as base64 data URLs (4/3 × raw). Keep slack for the message text
-    // + JSON envelope so a max-size attachment message never hits the guard.
-    //
-    // The platform end of the chain is read from `do.sqlite.row_bytes` rather
-    // than retyped here. That is the whole point of the catalog: this assertion
-    // is what makes the entry load-bearing, and it fails if either the entry or
-    // the SDK moves.
+    // A chat message is one DO SQLite row and the SDK cannot shrink file parts (base64, 4/3 × raw).
+    // The limit is read from catalog `do.sqlite.row_bytes`, making that entry load-bearing.
     const platformRowBytes = PLATFORM_CATALOG["do.sqlite.row_bytes"].limit.value;
     const encoded = Math.ceil((CLOUD_MAX_INLINE_ATTACHMENT_BYTES * 4) / 3);
     const slack = 256 * 1024;
@@ -411,24 +385,17 @@ describe("CLOUD_MAX_INLINE_ATTACHMENT_BYTES", () => {
 });
 
 /**
- * The drive's ONE way in, and what the user is told when it is refused.
- *
- * The uploader and the viewer's save are the same PUT; each had its own copy of
- * this failure reading, so a refusal one of them could name the other showed as
- * a bare status. The route's words are the message wherever it has any — a body
- * over the transfer limit is a 413 that names the limit, and a reader who
- * dropped a 40 MiB file has to be told that, not "upload failed (413)".
+ * The uploader and viewer save share one PUT; the route's refusal words are the
+ * message wherever it has any (a 413 names the limit, not "upload failed (413)").
  */
 describe("putFileBytes", () => {
   const { fetch: realFetch } = globalThis;
   afterEach(() => { globalThis.fetch = realFetch; });
 
-  /** Every PUT this module makes, plus the answer it gets back. */
   function answering(reply: Response) {
     const calls: { url: string; init: RequestInit | undefined }[] = [];
-    // `asFetchFunction` is the canonical way to satisfy `typeof globalThis.fetch`
-    // here: Bun-types' shape carries a `preconnect` member that a bare function
-    // literal lacks, and the shim attaches the no-op the SDK never calls.
+    // `asFetchFunction` satisfies `typeof globalThis.fetch`: Bun-types' shape carries a
+    // `preconnect` member a bare function literal lacks.
     globalThis.fetch = asFetchFunction((url, init) => {
       calls.push({ url: requestUrl(url), init });
 
@@ -472,13 +439,8 @@ describe("putFileBytes", () => {
 });
 
 /**
- * Which pane a path opens in, and the two answers that are more than layout.
- *
- * The viewer is its own state machine over ONE file — reading, an edit buffer, a
- * save in flight, and the form the text is shown in — and this is its dispatch
- * table, held outside the component so it is assertable. The registry is
- * `inlineFileType`, the same one the download route's headers are built from, so
- * "shown inline here" and "sent inline by the route" cannot drift apart.
+ * The viewer's pane dispatch; its registry is `inlineFileType`, the same one the
+ * download route's headers use, so "shown inline" and "sent inline" cannot drift.
  */
 describe("the file viewer's dispatch", () => {
   const viewerKinds = [
@@ -514,7 +476,6 @@ describe("the file viewer's dispatch", () => {
   });
 
   test("the render is decided by the file's own name, not by a directory above it", () => {
-    // `/docs.md/notes.txt` is a text file inside an oddly named directory.
     expect(textRenderOf("/docs.md/notes.txt")).toBe("source");
   });
 
@@ -525,9 +486,7 @@ describe("the file viewer's dispatch", () => {
   test("a failed read cannot be edited, and neither can a read that has not arrived", () => {
     expect(fileTextEditable({ error: "ENOENT" })).toBe(false);
     expect(fileTextEditable(null)).toBe(false);
-    // An error field at all is a failed read. A blank reason is a defect in
-    // whatever answered, and the safe reading of it is still "do not write
-    // this buffer back over the file".
+    // Any error field, even a blank reason, is a failed read: never write this buffer back.
     expect(fileTextEditable({ error: "" })).toBe(false);
   });
 
@@ -541,22 +500,14 @@ describe("the file viewer's dispatch", () => {
     const framed = sandboxedHtml("<script>fetch('https://x.example')</script><p>hi</p>");
     expect(framed.startsWith("<meta http-equiv=\"Content-Security-Policy\"")).toBe(true);
     expect(framed).toContain("default-src 'none'");
-    // Styles and embedded/blob images are all the document may use.
     expect(framed).toContain("style-src 'unsafe-inline'");
     expect(framed).toContain("img-src data: blob:");
-    // The markup itself is untouched — the iframe's empty sandbox is what
-    // neutralises it, and rewriting a user's file to preview it would be a lie.
+    // The markup is untouched; the iframe's empty sandbox neutralises it.
     expect(framed.endsWith("<script>fetch('https://x.example')</script><p>hi</p>")).toBe(true);
   });
 });
 
-/**
- * A plane that records exactly what the read model asked it for.
- *
- * `bytes` is the whole file; `readFile` hands back a copy of all of it, the way
- * every plane with no ranged read must. `readRange` is declared only when
- * `ranged` is set, which is how the seam's two halves are told apart.
- */
+/** `readRange` is declared only when `ranged` is set; `readFile` returns a whole copy. */
 function makeCountingPlane(
   path: string, bytes: Uint8Array, opts: { ranged?: boolean; statSize?: number; unstatable?: boolean } = {},
 ) {
@@ -613,7 +564,6 @@ describe("readExecutorFile bounds the preview before it reads", () => {
     const out = await readExecutorFile(deps, "workspace", "/home/user/huge.log");
     expect(out.truncated).toBe(true);
     expect(out.content?.length).toBe(VIEW_CAP);
-    // When the plane supports ranged reads, `readFile` never runs.
     expect(asked).toEqual([{ op: "readRange", length: VIEW_CAP }]);
   });
 
@@ -621,10 +571,7 @@ describe("readExecutorFile bounds the preview before it reads", () => {
     const big = new Uint8Array(VIEW_CAP * 4).fill(0x61);
     const { deps, asked } = makeCountingPlane("/home/user/huge.log", big);
     const out = await readExecutorFile(deps, "workspace", "/home/user/huge.log");
-    // NEGATIVE CONTROL for the ranged case above: this plane cannot serve a
-    // prefix, so the read is refused BEFORE any byte moves. A whole-file read
-    // here would be exactly the allocation the bound exists to prevent, wearing
-    // the bound's name.
+    // Negative control: a plane with no prefix read refuses before any byte moves.
     expect(out.content).toBeUndefined();
     expect(out.error).toContain("no ranged read");
     expect(out.error).toContain("download");
@@ -663,7 +610,6 @@ describe("readExecutorFile bounds the preview before it reads", () => {
     const { deps, asked } = makeCountingPlane("/home/user/shot.PNG", png, { ranged: true });
     const out = await readExecutorFile(deps, "workspace", "/home/user/shot.PNG");
     expect(out.error).toContain("image/png");
-    // The registry answered; the plane was never touched for bytes.
     expect(asked).toEqual([]);
   });
 
@@ -675,7 +621,6 @@ describe("readExecutorFile bounds the preview before it reads", () => {
   });
 
   test("truncation is measured in BYTES, so multi-byte text is not mis-reported", async () => {
-    // Exactly the cap in bytes, well under it in characters.
     const text = "é".repeat(VIEW_CAP / 2);
     const bytes = new TextEncoder().encode(text);
     expect(bytes.byteLength).toBe(VIEW_CAP);
@@ -689,16 +634,13 @@ describe("readExecutorFile bounds the preview before it reads", () => {
     const { deps } = makeTree({ "/home/user/src/app.ts": "x" });
     expect((await readExecutorFile(deps, "workspace", "/home/user/src")).error)
       .toBe("path is a directory");
-    // A path the plane cannot stat has no proven size, so a plane with no
-    // ranged read refuses it rather than reading it to find out.
+    // No proven size: a plane with no ranged read refuses rather than reading to find out.
     expect((await readExecutorFile(deps, "workspace", "/home/user/gone.txt")).error)
       .toContain("unknown size");
   });
 });
 
 describe("getExecutorFiles isolates one child's failure", () => {
-  /** A plane whose stat refuses exactly one entry — a file that vanished, or one
-   *  the plane may not describe. */
   function makePoisonedDir(poisoned: string, code = "ENOENT") {
     const names = ["alpha", "beta.txt", poisoned];
 
@@ -730,19 +672,15 @@ describe("getExecutorFiles isolates one child's failure", () => {
     expect(out.error).toBeUndefined();
     expect(out.entries?.map((e) => e.name).sort())
       .toEqual(["alpha", "beta.txt", "ghost.txt"]);
-    // The one that could not be described arrives without metadata rather than
-    // wearing invented metadata.
+    // The undescribable entry arrives without metadata rather than invented metadata.
     const ghost = out.entries?.find((e) => e.name === "ghost.txt");
     expect(ghost).toEqual({ name: "ghost.txt", type: "file", size: undefined, mtimeMs: undefined });
-    // …and the ones that could keep theirs.
     expect(out.entries?.find((e) => e.name === "beta.txt")).toMatchObject({ size: 7, mtimeMs: 42 });
     expect(out.entries?.find((e) => e.name === "alpha")).toMatchObject({ type: "dir" });
   });
 
   test("a child the plane REFUSED propagates — an outage is not a sizeless file", async () => {
-    // The control for the case above. Absence is an answer; a permission or I/O
-    // fault is the plane failing, and reporting it as an entry with no metadata
-    // would hide an outage behind a plausible directory.
+    // A permission or I/O fault is an outage, not an entry with no metadata.
     for (const code of ["EACCES", "EIO"]) {
       const out = await getExecutorFiles(makePoisonedDir("locked", code), "workspace", "/home/user");
       expect(out.entries).toBeUndefined();
@@ -784,8 +722,7 @@ describe("getExecutorFiles isolates one child's failure", () => {
     const out = await getExecutorFiles(deps, "workspace", "/home/user");
     expect(out.entries?.map((e) => e.name).sort()).toEqual(["a.txt", "b.txt", "c.txt", "d"]);
     expect(listings).toBe(1);
-    // No per-child stat at all. One stat per entry costs a full relisting of the
-    // parent on the container plane, once per child.
+    // No per-child stat: on the container plane each one costs a full relisting of the parent.
     expect(stats).toBe(0);
   });
 });
@@ -805,15 +742,12 @@ describe("the tree cache is revalidated, not just keyed by path", () => {
       ["/home/user/src/deep", { entries: [], revision: entryRevision(dirEntry("deep", 5)) }],
     ]);
 
-    // The shell wrote into src, so its mtime moved.
     const next = nextTreeCache(before, "/home/user", [dirEntry("src", 2)]);
     expect(next.has("/home/user/src")).toBe(false);
     expect(next.has("/home/user/src/deep")).toBe(false);
   });
 
   test("NEGATIVE CONTROL: an unchanged child keeps its cached listing", () => {
-    // Without this the invalidation would be indistinguishable from clearing
-    // the cache on every listing, which is not a cache.
     const src = dirEntry("src", 1);
 
     const before = new Map([
@@ -845,9 +779,7 @@ describe("the tree cache is revalidated, not just keyed by path", () => {
   });
 
   test("a plane that reports no metadata yields one constant revision, honestly", () => {
-    // The container synthesizes stat from a listing and has no mtime, so
-    // nothing here can tell fresh from stale — only the explicit Refresh can,
-    // and it drops the cache outright.
+    // The container has no mtime, so only the explicit Refresh (which drops the cache) can tell stale.
     expect(entryRevision({})).toBe(":");
     expect(entryRevision({ size: 0, mtimeMs: 0 })).toBe("0:0");
   });

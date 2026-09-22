@@ -1,16 +1,11 @@
-/**
- * Run Timeline projection — contract tests for the pure classifiers that map
- * the agent's event sources onto the unified TimelineSpan spine. These run
- * without booting the Durable Object (the projection lives in core read-models).
- */
+/** Run Timeline classifiers onto the TimelineSpan spine, without booting the Durable Object. */
 import { describe, test, expect } from 'bun:test';
 import {
   runEventToSpan, classifyEvolutionType, toolKindFor, safeJsonParse,
   type RunEvent, type RunEventInput, type Usage,
 } from '@kinu.run/core';
 
-/** A recorded event over an input that carries no step messages: every row
- *  here reads spans, and the recorder's codec has nothing to encode. */
+/** Carries no step messages, so the recorder's codec has nothing to encode. */
 function ev(event: Exclude<RunEventInput, { type: 'step_finish' }> | (Extract<RunEventInput, { type: 'step_finish' }> & { messages?: undefined })): RunEvent {
   return { eventIndex: 0, runId: 'r1', timestamp: '2026-06-01T00:00:00.000Z', ...event };
 }
@@ -58,13 +53,10 @@ describe('runEventToSpan', () => {
     };
 
     expect(detail({ input: 120, output: 8 })).toBe('120 in + 8 out tok');
-    // A reported zero is evidence and prints; an unreported side is left out
-    // entirely rather than rendered as "undefined" or as a zero.
+    // A reported zero prints; an unreported side is omitted, never "undefined" or zero.
     expect(detail({ input: 0, output: 0 })).toBe('0 in + 0 out tok');
     expect(detail({ input: 120 })).toBe('120 in tok');
     expect(detail({ output: 8 })).toBe('8 out tok');
-    // Nothing reported — no detail line at all, which is the pre-existing
-    // behaviour for a turn_end carrying no usage.
     expect(detail({})).toBeUndefined();
     expect(detail()).toBeUndefined();
   });

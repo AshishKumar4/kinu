@@ -1,34 +1,7 @@
 /**
- * The Files-tab EIO, executed for real in workerd.
- *
- * The owner opened `/etc/hostname` in the Files tab of a live workspace and the
- * tab answered `EIO: EvalError: Code generation from strings disallowed for
- * this context`, with `new Function` inside the `node` command shim as the
- * top frame. Every frame of that stack is the seam this probe drives:
- * `readNimbusOriginRange` (core/src/execution/nimbus.ts) reads a byte window
- * by shelling `node -e <one-line CJS reader>` through the box's exec —
- * `rpcExec` → `execOnShell` → `Shell.execute` → `Interpreter` → the `node`
- * command → `new Function('return ' + wrapped)()`. workerd's V8 CSP forbids
- * codegen from strings, so the first read that needs a range dies exactly as
- * the owner saw it — while `bun test` executes `new Function` happily, which
- * is why nothing caught this before the pool.
- *
- * The probe composes the REAL workspace over this object's own SQLite and
- * wraps its session vfs in the same box-shaped file plane the orchestrator's
- * Files tab reads through (`nimbusSessionFiles` over `files`), with ONE
- * recording difference: `box.exec` writes down every command it is asked to
- * run and refuses it — a read that reaches it has already failed the contract
- * this probe exists to hold, so the assertion can be "no exec carried this
- * read AND the bytes are the file's own" rather than "the read succeeded".
- *
- * `NimbusWorkspace.create` directly, not `createWorkspace`: the Kinu bundle's
- * boot runs `provisionWorkspaceRuntimes`, whose toolkit eagerly imports
- * `cpython-runner` → `python-pip` → `pip-requirements-js`, a CJS
- * `require('ohm-js')` this pool cannot shim — an unrelated loader boundary
- * the read under test never reaches. `create` with no runtimes and no facets
- * is the same filesystem, the same shell, and the same `/etc/hostname` rows
- * the read path serves; the registry it registers `node` into is exactly the
- * one the shell-out reaches in production.
+ * workerd's V8 CSP forbids codegen from strings, so a ranged read shelling `node -e` dies with EIO
+ * (bun test allows `new Function`). `NimbusWorkspace.create` avoids a CJS loader this pool cannot
+ * shim.
  */
 import { DurableObject } from 'cloudflare:workers';
 import { nimbusSessionFiles } from '@kinu.run/core';
@@ -38,14 +11,12 @@ import { CRED_SESSION_USER } from '@nimbus-sh/core/runtime/os-contracts.js';
 import type { CredentialedVfs } from '@nimbus-sh/core/vfs/sqlite-vfs.js';
 
 export interface RangeReadReport {
-  /** What `box.exec` was asked to run while the file plane served the read. */
   readonly execs: readonly string[];
   readonly error: string | null;
   readonly content: string | null;
 }
 
-/** ENOENT is how the durable filesystem reports a missing path; the SDK file
- *  contract answers `null` for exactly that case, and nothing else. */
+/** The SDK file contract answers `null` for ENOENT, and nothing else. */
 function absentAsNull<T>(read: () => T): T | null {
   try {
     return read();
@@ -71,11 +42,8 @@ export class FilesEioProbeDO extends DurableObject<Cloudflare.Env> {
     return this._session;
   }
 
-  /**
-   * The same `NimbusSandboxHandle` the orchestrator hands the file plane, with
-   * one recording difference: `exec` refuses and records. A read that reaches
-   * it has already failed the contract this probe exists to hold.
-   */
+  /** The orchestrator's file-plane handle, except `exec` refuses and records: a read reaching it
+   *  failed. */
   private async box(): Promise<NimbusSandboxHandle> {
     const vfs = await this.session();
 
@@ -99,10 +67,8 @@ export class FilesEioProbeDO extends DurableObject<Cloudflare.Env> {
       chmod: async (path, mode) => { vfs.chmod(path, mode); },
       exists: async (path) => vfs.exists(path),
       mkdir: async (path) => { vfs.mkdir(path, { recursive: true }); },
-      // Line-for-line the member workspace-host.ts's workspaceBoxFiles
-      // carries: the native SqliteVFS ranged read over the same credentialed
-      // vfs. The typecheck holds the shape to the production plane; this
-      // probe holds the behavior.
+      // Mirrors workspace-host.ts's workspaceBoxFiles; the typecheck holds the shape, this probe
+      // the behavior.
       readRange: async (path, offset, length) => absentAsNull(() => vfs.readRange(path, offset, length)),
       delete: async (path, options) => {
         if (options?.recursive) {
@@ -133,11 +99,7 @@ export class FilesEioProbeDO extends DurableObject<Cloudflare.Env> {
 
   private execs: string[] = [];
 
-  /**
-   * The viewer's bounded read, in the exact shape the Files tab pays for:
-   * `readBoundedWithVfsOps` prefers the plane's `readRange`, and the box
-   * plane's `readRange` is `readNimbusOriginRange` — the `node -e` reader.
-   */
+  /** The box plane's `readRange` is `readNimbusOriginRange`, the `node -e` reader. */
   async readRange(path: string, offset: number, length: number): Promise<RangeReadReport> {
     this.execs = [];
     const plane = nimbusSessionFiles(await this.box());

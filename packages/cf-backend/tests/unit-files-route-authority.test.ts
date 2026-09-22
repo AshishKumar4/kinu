@@ -1,34 +1,7 @@
 /**
- * WHO may move bytes through the files route, proved at the boundary that
- * decides it rather than described beside it.
- *
- * `unit-files-routes.test.ts` covers the TRANSFER contract — chunking, the
- * total-size refusal, a streamed response — against an injected actor. It says
- * nothing about authority, because its actor answers everyone. So this suite
- * drives the whole rail instead:
- *
- *   the real Worker `fetch`  (auth → CSRF → ownership → files route)
- *     over a real browser session in real KV + the owner's real UserDO,
- *   into a real OrchestratorAgent, whose runtime is the production one —
- *     the workspace plane, the mount table, and the device executor over
- *     `createHubDeviceTransport`,
- *   into the real `UserDO.deviceRpc` consent chokepoint,
- *   into a device socket that answers the way the daemon does.
- *
- * Nothing between the cookie and the machine is stood in for. That is the
- * point: every refusal below is produced by the code that produces it in
- * production, and each one is checked twice — the caller's answer, AND whether
- * a frame reached the machine or a byte changed on a plane. A refusal that
- * still touched the file is not a refusal.
- *
- * The `/pc` path is the product's own: the file manager addresses the device as
- * a MOUNT inside the workspace plane (`executor=workspace&path=/pc/...`,
- * FilesSurface.tsx), so that is how the device is reached here.
- *
- * The 412 revision conflict itself lives in `unit-files-routes.test.ts`, where
- * a plane with compare-and-write is injected. What belongs here is the half
- * that is about authority over bytes: a precondition this plane cannot honour
- * must refuse WITHOUT writing, and a malformed one must never reach a plane.
+ * Who may move bytes through the files route, driven through the real Worker `fetch`, UserDO consent chokepoint and a
+ * daemon-shaped device socket. Each refusal is checked twice: the caller's answer and that no frame reached the machine
+ * nor a byte changed. The transfer contract and the 412 conflict live in `unit-files-routes.test.ts`.
  */
 import { afterEach, describe, expect, test } from 'bun:test';
 import * as v from 'valibot';
@@ -43,10 +16,8 @@ import { workerContext } from './helpers/bindings';
 import type { UserCaller } from '@kinu.run/core';
 import type { JsonValue } from '@kinu.run/core';
 
-// Dynamic, and deliberately: the helpers imported above install the agents-SDK
-// mock at module load, and every module below reaches `agents`, whose dist
-// imports workerd-only `cloudflare:*` modules that crash bun's loader. Same
-// shape, and same reason, as unit-files-routes.test.ts.
+// Dynamic: the helpers above install the agents-SDK mock at load, and `agents` imports workerd-only
+// `cloudflare:*` modules that crash bun's loader.
 const { createSession, deriveUserId } = await import('../src/auth/store');
 
 const { SESSION_COOKIE_NAME } = await import('../src/auth/session');
@@ -59,33 +30,27 @@ const OWNER_EMAIL = 'owner@kinu.example.com';
 
 const STRANGER_EMAIL = 'stranger@kinu.example.com';
 
-/** The device's own absolute paths, as the daemon reports them. */
 const DEVICE_HOME = '/home/dev';
 
 const DEVICE_FILE = `${DEVICE_HOME}/notes.md`;
 
-/** The same file as the file manager addresses it: the `/pc/<name>` mount. */
 const PC_FILE = `/pc/ashish@studio${DEVICE_FILE}`;
 
 const WORKSPACE_FILE = '/home/user/report.bin';
 
-/** Device methods that MOVE or REVEAL a file. `which` (the toolchain probe) and
- *  the exec ack are hub bookkeeping and deliberately consent-free, so counting
- *  them would make every refusal look like a leak. */
+/** `which` and the exec ack are consent-free hub bookkeeping; counting them would make every refusal look like a leak. */
 const FILE_METHODS = {
   readFile: true, readRange: true, writeFile: true, listFiles: true,
   statPath: true, unlinkPath: true, mkdirPath: true, exists: true,
 } as const;
 
-/** The write frame's option bag, as the daemon reads it. */
 const Base64WriteSchema = v.object({ encoding: v.literal('base64') });
 
 const ErrorReplySchema = v.object({ error: v.string() });
 
 const OkReplySchema = v.object({ ok: v.literal(true) });
 
-/** A daemon over an in-memory filesystem: the far end has to answer, or a call
- *  that PASSED consent could not be told from one that was stopped. */
+/** The far end has to answer, or a call that passed consent could not be told from one that was stopped. */
 function daemon(files: Map<string, string>) {
   return (frame: DeviceFrame): JsonValue => {
     const path = v.parse(v.string(), frame.params[0] ?? '');
@@ -110,26 +75,21 @@ function daemon(files: Map<string, string>) {
         return { success: true };
       }
 
-      // The consented root: the file view asks the machine where its home is.
       default: return { stdout: DEVICE_HOME, stderr: '', exitCode: 0 };
     }
   };
 }
 
 interface Seam {
-  /** The owner's real Durable Object — grants, tokens, device socket. */
   readonly user: TestUserDO;
   readonly stranger: TestUserDO;
   readonly owner: UserCaller;
   readonly deviceId: string;
-  /** The device's filesystem, so a refusal can be checked against the bytes. */
   readonly device: Map<string, string>;
   readonly ownerSession: string;
   readonly strangerSession: string;
   actorFor(workspace: string): HarnessOrchestratorAgent;
-  /** Device frames that moved or revealed a file. */
   fileFrames(): DeviceFrame[];
-  /** One files-route request, through the real Worker entry point. */
   files(input: {
     session: string;
     workspace: string;
@@ -139,12 +99,9 @@ interface Seam {
     body?: BodyInit;
     ifMatch?: string;
   }): Promise<Response>;
-  /** Any request through the same entry point, for the gate the agent RPC
-   *  transport (rename/delete) sits behind. */
   fetch(url: string, session: string, init?: RequestInit): Promise<Response>;
   removeWorkspace(name: string): Promise<void>;
-  /** End every live browser session at the ONE authority that decides it — the
-   *  owner's own Durable Object — leaving the KV record where it is. */
+  /** Ends sessions at the owner's DO only, leaving the KV record in place. */
   signOutAtAuthority(): Promise<void>;
   close(): Promise<void>;
 }
@@ -156,13 +113,8 @@ afterEach(async () => {
 });
 
 /**
- * The whole rail, standing up.
- *
- * `workspaces` are the owner's; `strangerWorkspaces` are registered in the
- * OTHER user's registry, which is how a name can be claimed by two people at
- * once. Every actor is a real OrchestratorAgent holding the capability token
- * the owner's UserDO actually minted for it — the handshake `claimOwnedWorkspace`
- * performs — so the device plane it builds answers to real consent.
+ * `strangerWorkspaces` live in the other user's registry, so a name can be claimed by two people at once.
+ * Actors hold the token the owner's UserDO really minted, so the device plane answers to real consent.
  */
 async function seam(options: {
   workspaces: readonly string[];
@@ -177,10 +129,7 @@ async function seam(options: {
   const owner = await testOwner();
   const { deviceId } = await user.userDO.registerDevice(owner, 'ashish@studio');
   user.attachDevice(deviceId);
-  // The daemon reports on connect, exactly as a real one does: what it proved
-  // about sandboxing, where it keeps agent homes, and the directory the owner
-  // ran `kinu connect` in. Without the last of those the file view reaches
-  // nothing, which is F2's rule and not what these tests are about.
+  // Without the reported cwd the file view reaches nothing (F2's rule), which is not what these tests are about.
   await user.sendDeviceHello({ ...CAPABLE_HELLO, root: DEVICE_HOME, home: DEVICE_HOME });
 
   const actors = new Map<string, ActorHarness<HarnessOrchestratorAgent>>();
@@ -189,8 +138,7 @@ async function seam(options: {
     const token = await provisionTestWorkspace(user, workspace, workspace);
     const actor = orchestratorHarness(undefined, { userDO: user.userDO, workspace, ownerUserId });
     actor.agent.harnessHoldsCapability(token);
-    // The turn-start refresh, which is what makes a connected device visible to
-    // the mount table. Awaited here because production detaches it.
+    // The turn-start refresh makes a device visible to the mount table; awaited here because production detaches it.
     await actor.agent.harnessRefreshDeviceStatus();
     actors.set(workspace, actor);
   }
@@ -230,9 +178,7 @@ async function seam(options: {
 
   const partial: Partial<Env> = {};
   Object.assign(partial, bindings);
-  // SAFETY: the Worker path under test reads exactly the bindings constructed
-  // above — session KV, the owner capability secret, the SPA fallback, and the
-  // two namespaces the auth, ownership and files steps resolve through.
+  // SAFETY: the Worker path under test reads exactly the bindings constructed above.
   const env = partial as Env;
   const ctx = workerContext();
 
@@ -307,8 +253,6 @@ async function bytesOf(response: Response): Promise<string> {
   return new TextDecoder().decode(new Uint8Array(await response.arrayBuffer()));
 }
 
-/** Where a rename puts the device's file — the mount-relative path both the
- *  refused mutation and the allowed one name. */
 const MOVED = `/pc/ashish@studio${DEVICE_HOME}/moved.md`;
 
 describe('a workspace the caller does not hold', () => {
@@ -324,15 +268,12 @@ describe('a workspace the caller does not hold', () => {
 
     expect([read.status, write.status]).toEqual([404, 404]);
     expect(await errorOf(read)).toContain('not in your registry');
-    // Nothing was asked of the machine, and the file it holds is untouched.
     expect(rail.fileFrames()).toEqual([]);
     expect(rail.device.get(DEVICE_FILE)).toBe('hello');
   });
 
   test('a name someone else owns is refused by the workspace, not by the path', async () => {
-    // The registry says this stranger has a workspace called `authority-own`.
-    // The object of that name belongs to the owner, and it is the object that
-    // settles the question — a roster row is a claim about a name.
+    // The object of that name belongs to the owner and settles it: a roster row is only a claim about a name.
     const rail = await seam({ workspaces: ['authority-own'], strangerWorkspaces: ['authority-own'] });
 
     const read = await rail.files({ session: rail.strangerSession, workspace: 'authority-own', path: PC_FILE });
@@ -345,17 +286,13 @@ describe('a workspace the caller does not hold', () => {
   test('the same gate stands in front of the transport rename and delete ride', async () => {
     const rail = await seam({ workspaces: ['authority-own'] });
 
-    // The endpoint the chat pane's own transport uses, and the one the file
-    // manager's rename/delete RPCs ride behind.
     const transport = (workspace: string) =>
       `${ORIGIN}/agents/orchestrator-agent/${workspace}/get-messages`;
 
     const foreign = await rail.fetch(transport('authority-other'), rail.ownerSession);
     const owned = await rail.fetch(transport('authority-own'), rail.ownerSession);
 
-    // Refused before dispatch for a name the caller does not hold; dispatched
-    // (and, with no live agent transport under bun, falling through to the app)
-    // for one they do. The difference IS the gate.
+    // Refused before dispatch for a name the caller does not hold; dispatched for one they do. The difference is the gate.
     expect(foreign.status).toBe(404);
     expect(await errorOf(foreign)).toContain('not in your registry');
     expect(await owned.text()).toContain('the app');
@@ -365,7 +302,7 @@ describe('a workspace the caller does not hold', () => {
 describe('a device the workspace has no grant on', () => {
   test('read, write, rename and delete are all refused, and no frame reaches the machine', async () => {
     const rail = await seam({ workspaces: ['device-a'] });
-    // The owner is away from the card. An unanswered prompt is not a grant.
+    // An unanswered prompt is not a grant.
     rail.user.consentDecision = 'deny';
 
     const read = await rail.files({ session: rail.ownerSession, workspace: 'device-a', path: PC_FILE });
@@ -397,8 +334,7 @@ describe('a device the workspace has no grant on', () => {
 
     expect([granted.status, await bytesOf(granted)]).toEqual([200, 'hello']);
 
-    // The sibling holds no grant of its own, and consent is keyed on the PROVEN
-    // workspace behind the capability token — never the name a caller passes.
+    // Consent is keyed on the proven workspace behind the capability token, never the name a caller passes.
     rail.user.consentDecision = 'deny';
 
     const sibling = await rail.files({
@@ -431,11 +367,7 @@ describe('a device the workspace has no grant on', () => {
   });
 
   test('an unbound workspace reaches no file on the device, and is asked once', async () => {
-    // There is no action tier that stops short of the file view: the paths
-    // arrive on HELLO rather than being learned by running a shell command, and
-    // there is ONE binding rather than a shell tier beside a file tier. So the
-    // boundary here is the binding itself: refuse it, and no frame reaches the
-    // machine.
+    // Paths arrive on HELLO and there is one binding, no shell tier: refuse the binding and no frame reaches the machine.
     const rail = await seam({ workspaces: ['device-base'] });
     rail.user.consentDecision = 'deny';
 
@@ -462,7 +394,6 @@ describe('an executor id the caller made up', () => {
         executor, method: 'PUT', body: 'overwritten',
       });
 
-      // Named in the assertion, so a failure says WHICH id was let through.
       const refusal = executor === ''
         ? 'executor query parameter required'
         : `Executor "${executor}" has no file plane`;
@@ -491,8 +422,7 @@ describe('a request the authority behind it has since withdrawn', () => {
   test('a workspace removed from the registry closes behind the isolate that proved it', async () => {
     const rail = await seam({ workspaces: ['stale-workspace'] });
     rail.user.consentDecision = 'always';
-    // The proof this isolate now holds: membership answered once, remembered
-    // for the life of the isolate (workspace-ownership.ts).
+    // Membership is answered once and remembered for the life of the isolate (workspace-ownership.ts).
     expect((await rail.files({
       session: rail.ownerSession, workspace: 'stale-workspace', path: PC_FILE,
     })).status).toBe(200);
@@ -520,14 +450,8 @@ describe('a request the authority behind it has since withdrawn', () => {
 
     await rail.removeWorkspace('stale-capability');
 
-    // The token the actor still holds is no longer a workspace identity, so the
-    // user plane refuses it — the route's 404 is not the only thing standing
-    // between a deleted workspace and the owner's machine.
-    // Refused, and nothing reached the machine. The MESSAGE is whichever
-    // refusal the caller met first: the file view reads its scope off the
-    // device row before it sends anything, and that read is refused for the
-    // same reason the RPC would have been. Pinning one of the two sentences
-    // would pin the order rather than the boundary.
+    // The user plane refuses the stale token too, not just the route's 404. The message is whichever refusal came first,
+    // so pinning one sentence would pin the order rather than the boundary.
     const before = rail.fileFrames().length;
     const stale = await rail.actorFor('stale-capability').readExecutorFile('workspace', PC_FILE);
     expect(stale).toMatchObject({ error: expect.any(String) });
@@ -539,10 +463,7 @@ describe('a request the authority behind it has since withdrawn', () => {
     const rail = await seam({ workspaces: ['stale-session'] });
     rail.user.consentDecision = 'always';
 
-    // Sign-out at the AUTHORITY only, which is what a colo the KV delete has
-    // not reached still sees: the record is readable and the row behind it is
-    // gone. A route that trusted the record would carry this cookie for a
-    // minute after logout.
+    // Sign-out at the authority only, as a colo the KV delete has not reached sees it: a route trusting the record would honour this cookie.
     await rail.signOutAtAuthority();
 
     const read = await rail.files({ session: rail.ownerSession, workspace: 'stale-session', path: PC_FILE });
@@ -593,7 +514,6 @@ describe('the authority the caller does hold', () => {
     expect(v.parse(OkReplySchema, await write.json())).toEqual({ ok: true });
     expect(renamed).toEqual({ ok: true });
     expect(deleted).toEqual({ ok: true });
-    // The machine's own bytes moved, which is the only proof that matters.
     expect([...rail.device.keys()]).toEqual([]);
   });
 });
@@ -616,8 +536,7 @@ describe('a transfer that does not finish', () => {
 
     expect(interrupted.status).toBe(400);
     expect(await errorOf(interrupted)).toBe('the upload stopped before the whole file arrived');
-    // No half file on the machine: bytes are held until the final chunk, and the
-    // abandoned transfer took its buffer with it.
+    // No half file: bytes are held until the final chunk.
     expect(rail.device.get(DEVICE_FILE)).toBe('hello');
     expect(rail.fileFrames().some((frame) => frame.method === 'writeFile')).toBe(false);
 
@@ -658,7 +577,6 @@ describe('a transfer that does not finish', () => {
     expect(await errorOf(mountedConditional)).toContain('cannot protect an in-place edit');
     expect(malformed.status).toBe(400);
     expect(await errorOf(malformed)).toBe('If-Match must encode a numeric or string revision');
-    // Every refusal left its file as it was.
     expect(await bytesOf(await rail.files({
       session: rail.ownerSession, workspace: 'upload-conditional', path: WORKSPACE_FILE,
     }))).toBe('first');

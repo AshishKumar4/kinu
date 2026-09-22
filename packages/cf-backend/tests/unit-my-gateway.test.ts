@@ -1,13 +1,5 @@
-// Behavior tests for the my-gateway provider — the USER'S own Cloudflare AI
-// Gateway driven with the user's Cloudflare OAuth credential.
-//
-// Wire contract under test (AI Gateway REST API):
-//   POST {account}/ai/v1/chat/completions
-//   Authorization: Bearer <user token> + cf-aig-gateway-id: <selected gateway>
-// plus discovery (gateway BYOK provider_configs + credit balance → model menu),
-// availability gating (credential usable AND gateway selected), the
-// refresh-on-401 retry, and actionable error mapping for the documented
-// gateway failures (2008 invalid provider / 2021 invalid user credentials).
+// my-gateway: the user's own AI Gateway via their Cloudflare OAuth credential
+// (POST {account}/ai/v1/chat/completions + cf-aig-gateway-id header).
 import { describe, test, expect, setSystemTime } from 'bun:test';
 import { userCredentialSource } from './helpers/user-credentials';
 import { createTestUserDO, testOwner } from './helpers/user-do';
@@ -96,7 +88,6 @@ describe('my-gateway request shape', () => {
     expect(seen[0].url).toBe(`${AI_BASE_URL}/chat/completions`);
     expect(seen[0].auth).toBe('Bearer cf-user-token');
     expect(seen[0].gateway).toBe('prod-gw');
-    // The spec's modelId after the provider prefix IS the wire author/model id.
     expect(seen[0].model).toBe('openai/gpt-4.1');
   });
 
@@ -239,7 +230,6 @@ describe('my-gateway model discovery', () => {
 
     const models = await present(reg.registry.get('my-gateway'), 'the my-gateway provider').listModels(reg.deps);
     const ids = models.map((m) => m.id);
-    // Curated unified-billing set ∩ what models.dev knows in this fixture.
     expect(ids).toContain('openai/gpt-4.1');
     expect(ids).toContain('anthropic/claude-sonnet-4-5');
     expect(ids).toContain('google/gemini-2.5-pro');
@@ -266,10 +256,7 @@ describe('my-gateway model discovery', () => {
   });
 
   test('a 5xx keeps the last catalog the account was shown, and caches nothing', async () => {
-    // The defect: every non-ok answer was read as "this gateway serves no
-    // providers", and that narrowed menu was written into the 60-second module
-    // cache. One transient upstream failure made connected providers vanish
-    // from the model picker with nothing to say why.
+    // A non-ok answer must not be cached as "this gateway serves no providers".
     const token = `t-${Math.random()}`;
     let upstream: 'ok' | 'down' = 'ok';
 
@@ -307,8 +294,6 @@ describe('my-gateway model discovery', () => {
       setSystemTime(new Date(Date.now() + 61_000));
       expect((await provider.listModels(reg.deps)).map((m) => m.id)).toEqual(['openai/gpt-4.1']);
 
-      // And the failure was not published as the new truth: once the gateway
-      // answers again, its own observation is what the menu follows.
       upstream = 'ok';
       setSystemTime(new Date(Date.now() + 61_000));
       expect((await provider.listModels(reg.deps)).map((m) => m.id)).toEqual(['openai/gpt-4.1']);
@@ -393,8 +378,6 @@ describe('my-gateway registry precedence', () => {
     // same /ai/v1 endpoint, no my-gateway involvement.
     await generateText({ model: reg.resolveModel('workers-ai/@cf/moonshotai/kimi-k2.6'), prompt: 'ping' });
     expect(wire).toEqual([`${AI_BASE_URL}/chat/completions`]);
-    // …and my-gateway is a static provider, so the dynamic models.dev source
-    // is never consulted for its id.
     expect(reg.registry.get('my-gateway')).toBeDefined();
     expect(reg.registry.canResolve('my-gateway')).toBe(true);
   });
@@ -463,8 +446,7 @@ describe('UserDO gateway credential derivation', () => {
   }
 
   test('the derived cloudflare.ai-gateway view rides the stored cloudflare.oauth credential', async () => {
-    // Two gateways, so login-time discovery selects nothing and the view below
-    // is exercised through an explicit selection.
+    // Two gateways, so login-time discovery selects nothing.
     const restore = stubGatewayListing([
       { id: 'gw-one', authentication: false },
       { id: 'gw-two', authentication: false },
@@ -476,7 +458,6 @@ describe('UserDO gateway credential derivation', () => {
       const owner = await testOwner();
       await harness.userDO.setCredential(owner, CLOUDFLARE_OAUTH_CRED_KEY, oauthCredential());
 
-      // No selected gateway → null headers → my-gateway honestly unavailable.
       expect(await harness.userDO.getAuthHeaders(owner, CLOUDFLARE_AI_GATEWAY_CRED_KEY)).toBeNull();
 
       await harness.userDO.selectAIGateway(owner, 'gw-one');
@@ -507,8 +488,7 @@ describe('UserDO gateway credential derivation', () => {
 
     try {
       const owner = await testOwner();
-      // setCredential(cloudflare.oauth) discovers inline, so my-gateway works
-      // without a settings visit; listAIGateways persists the only gateway.
+      // setCredential(cloudflare.oauth) discovers and persists the only gateway inline.
       await harness.userDO.setCredential(owner, CLOUDFLARE_OAUTH_CRED_KEY, oauthCredential());
       expect(await harness.userDO.listAIGateways(owner)).toMatchObject({
         connected: true,

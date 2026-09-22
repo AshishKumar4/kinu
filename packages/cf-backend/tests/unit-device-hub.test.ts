@@ -1,8 +1,5 @@
-// DeviceSocketHub — the hibernation-aware device-socket lifecycle behind the
-// /pc/connect upgrade (accept inside the DO, tag-based liveness, tunnel
-// rebuild on wake). Regression coverage for the WS-over-RPC break: workerd
-// cannot serialize a WebSocket as a DO-RPC argument, so an upgrade path that
-// passes one 500s the tunnel on every connect.
+// DeviceSocketHub behind the /pc/connect upgrade. Defends the WS-over-RPC break: workerd cannot
+// serialize a WebSocket as a DO-RPC argument, so passing one 500s the tunnel on every connect.
 import { describe, expect, test } from 'bun:test';
 import { createTestUserDO, testOwner, type TestUserDO } from './helpers/user-do';
 import { readFileSync } from 'node:fs';
@@ -105,7 +102,7 @@ describe('DeviceSocketHub', () => {
     const socket = fakeSocket();
     new DeviceSocketHub(ctx).accept('dev-a', socket);
 
-    // Simulate hibernation: in-memory hub state is gone, sockets survive on ctx.
+    // Hibernation: in-memory hub state is gone, sockets survive on ctx.
     const woken = new DeviceSocketHub(ctx);
     expect(woken.isConnected('dev-a')).toBe(true);
     expect(woken.connectedDeviceId()).toBe('dev-a');
@@ -166,14 +163,10 @@ describe('DeviceSocketHub', () => {
   });
 });
 
-/**
- * The toolchain probe. The hub owns it because the answer describes ONE machine
- * over ONE connection, and that is exactly the socket attachment's lifetime.
- */
+/** The hub owns the toolchain probe: its answer describes one machine over one connection, the socket attachment's lifetime. */
 describe('DeviceSocketHub toolchain probe', () => {
   const NOW = 1_700_000_000_000;
 
-  /** Answer the frame the hub just sent, as a daemon would. */
   function answerLast(hub: DeviceSocketHub, ws: FakeSocket, reply: Record<string, JsonValue>) {
     const raw = ws.sent[ws.sent.length - 1];
 
@@ -200,8 +193,7 @@ describe('DeviceSocketHub toolchain probe', () => {
     const { hub, ws } = connected();
 
     const probing = hub.probeToolchain('dev-a', NOW);
-    // The names come from core's single table rather than a list the hub keeps:
-    // one answer to "which binaries prove python", shared with the CLI host row.
+    // Names come from core's single table, shared with the CLI host row.
     const frame = answerLast(hub, ws, { result: { present: ['node', 'python3'] } });
     expect(frame.method).toBe('which');
     expect(frame.params[0]).toEqual([...TOOLCHAIN_PROBE_BINARIES]);
@@ -211,11 +203,9 @@ describe('DeviceSocketHub toolchain probe', () => {
       asked: ['javascript', 'typescript', 'python', 'npm', 'git'],
       probedAt: NOW,
     });
-    // `typescript`, `npm` and `git` were looked for and not found — measured
-    // absent, which the row may act on. Nothing was measured about docker or gpu.
+    // Measured absent (actionable); nothing was measured about docker or gpu.
     expect(hub.toolchain('dev-a', NOW)?.present).toEqual(['javascript', 'python']);
 
-    // Asked once: a second read serves the recorded answer, no second frame.
     expect(await hub.probeToolchain('dev-a', NOW)).not.toBeNull();
     expect(ws.sent).toHaveLength(1);
   });
@@ -226,21 +216,16 @@ describe('DeviceSocketHub toolchain probe', () => {
     const probing = hub.probeToolchain('dev-a', NOW);
     answerLast(hub, ws, { error: 'unknown method: which' });
 
-    // The failure mode this exists to prevent: an empty answer would strip
-    // python from a machine that may well have it.
+    // An empty answer would strip python from a machine that may well have it.
     expect(await probing).toBeNull();
     expect(hub.toolchain('dev-a', NOW)).toBeNull();
 
-    // And it stops asking — the install will not grow the method mid-connection.
     expect(await hub.probeToolchain('dev-a', NOW + 1)).toBeNull();
     expect(ws.sent).toHaveLength(1);
   });
 
   test('the daemon speaks the frame types core names, since it cannot import them', () => {
-    // The daemon ships as one dependency-free file and cannot import these
-    // constants, so every literal it mirrors is pinned here rather than left
-    // to drift. Its own comments claimed this pin for the rotation pair while
-    // only the unknown-method reply was actually checked.
+    // The daemon is one dependency-free file that cannot import these constants, so every mirrored literal is pinned here.
     const daemon = readFileSync(join(import.meta.dir, '..', '..', 'pc-agent', 'src', 'index.js'), 'utf8');
     expect(daemon).toContain(`'${DEVICE_UNKNOWN_METHOD}: ' + method`);
     expect(daemon).toContain(`const TOKEN_ROTATION = '${DEVICE_TOKEN_ROTATION}'`);
@@ -254,7 +239,6 @@ describe('DeviceSocketHub toolchain probe', () => {
     answerLast(hub, ws, { error: 'EIO reading /usr/bin' });
     expect(await probing).toBeNull();
 
-    // Nothing durable was learned, so the next read asks again.
     const reprobing = hub.probeToolchain('dev-a', NOW + 1);
     expect(ws.sent).toHaveLength(2);
     answerLast(hub, ws, { error: 'EIO reading /usr/bin' });
@@ -268,8 +252,7 @@ describe('DeviceSocketHub toolchain probe', () => {
     answerLast(hub, ws, { result: { present: ['node'] } });
     await probing;
 
-    // The agent can install a toolchain onto that machine through `exec`, so an
-    // answer is evidence for a bounded time and then stops being one.
+    // The agent can install toolchains via `exec`, so an answer is evidence only for a bounded time.
     const later = NOW + DEVICE_TOOLCHAIN_TTL_MS;
     expect(hub.toolchain('dev-a', later)).toBeNull();
     const reprobing = hub.probeToolchain('dev-a', later);
@@ -286,9 +269,7 @@ describe('DeviceSocketHub toolchain probe', () => {
     await probing;
     expect(hub.toolchain('dev-a', NOW)).not.toBeNull();
 
-    // A DIFFERENT device can reconnect under the same device row. Recording the
-    // answer on the socket rather than in SQL is what keeps it from inheriting
-    // its predecessor's capabilities.
+    // A different device can reconnect under the same row; recording on the socket, not SQL, keeps it from inheriting capabilities.
     hub.accept('dev-a', fakeSocket());
     expect(hub.toolchain('dev-a', NOW)).toBeNull();
   });
@@ -306,8 +287,7 @@ describe('/pc/connect upgrade wiring', () => {
 
   test('the worker forwards the upgrade Request to the UserDO instead of passing a WebSocket over RPC', () => {
     const pcHandler = read('../core/src/http/pc-ingress.ts');
-    // WebSockets are not RPC-serializable in workerd — this exact pattern
-    // 500'd every daemon connect in production.
+    // WebSockets are not RPC-serializable in workerd.
     expect(pcHandler).not.toContain('attachDeviceSocket');
     expect(pcHandler).not.toContain('WebSocketPair');
     expect(pcHandler).toContain('.fetch(request)');
@@ -323,22 +303,17 @@ describe('/pc/connect upgrade wiring', () => {
       upgrade ? { headers: { Upgrade: 'websocket' } } : {},
     ));
 
-    // The socket path answers itself: no upgrade header is a 426 from the
-    // accept, not a fall-through to the agent protocol.
     expect((await connect('', false)).status).toBe(426);
-    // No ticket, or a forged one, is a 401 before any socket is accepted.
     expect((await connect('', true)).status).toBe(401);
     expect((await connect('?ticket=pct_forged', true)).status).toBe(401);
     expect(harness.acceptedSockets).toHaveLength(0);
 
-    // A ticket the owner minted for this device upgrades the socket.
     const issued = await harness.userDO.issueDeviceConnectTicket(owner, token);
 
     if (!issued.ok || !issued.ticket) throw new Error('the owner could not mint a connect ticket');
     expect((await connect(`?ticket=${issued.ticket}`, true)).status).toBe(101);
     expect(harness.acceptedSockets).toHaveLength(1);
 
-    // And the WS-over-RPC seam is gone: no such entry point exists to call.
     expect('attachDeviceSocket' in harness.userDO).toBe(false);
     await harness.joinFibers();
     harness.close();
@@ -367,10 +342,7 @@ describe('device links expire on an absolute window, renewed by rotation', () =>
     const { deviceId, token } = await harness.userDO.registerDevice(await testOwner(), 'studio tower');
     expect(storedExpiry(harness, deviceId)).toBeGreaterThan(Date.now());
 
-    // The window is anchored to the last ROTATION, which is what a real daemon
-    // does on every connect. Verification is not rotation: an idle-sliding
-    // window kept a copied device.json alive for as long as someone kept using
-    // it, which is exactly the credential a copy should not be.
+    // Anchored to the last rotation, not verification: an idle-sliding window kept a copied device.json alive indefinitely.
     const anchor = Date.now() + day;
     ageDevice(harness, deviceId, anchor);
     expect(await harness.userDO.verifyDeviceToken(await testOwner(), token))
@@ -394,8 +366,7 @@ describe('device links expire on an absolute window, renewed by rotation', () =>
     const { deviceId, token } = await harness.userDO.registerDevice(await testOwner(), 'studio tower');
     ageDevice(harness, deviceId, null);
 
-    // A null window is "never measured", not "expired": the row keeps working
-    // and gets its absolute window stamped the next time the daemon connects.
+    // A null window is "never measured", not "expired": it is stamped on the next daemon connect.
     expect(await harness.userDO.verifyDeviceToken(await testOwner(), token))
       .toEqual({ ok: true, deviceId, current: true });
     expect(storedExpiry(harness, deviceId)).toBeNull();
@@ -413,16 +384,12 @@ describe('device links expire on an absolute window, renewed by rotation', () =>
 
   test('the runtime status separates "no device" from "registered but away", with nothing claimed', async () => {
     const harness = createTestUserDO();
-    // Nothing registered: the agent's device row is not configured at all, and
-    // the fleet it can see is empty rather than unknown.
     expect(await harness.userDO.deviceRuntimeStatus(await testOwner()))
       .toEqual({ connected: false, registered: false, toolchain: null, devices: [] });
 
     const { deviceId } = await harness.userDO.registerDevice(await testOwner(), 'studio tower');
-    // Registered and offline. `toolchain: null` is the honest answer for a
-    // machine that is not there to be asked — never an empty capability set,
-    // which would tell the model the user's machine runs nothing. The row is
-    // still NAMED, because an agent that cannot see it cannot ask for it.
+    // `toolchain: null` offline, never an empty set (the model would read "runs nothing"); the row stays
+    // named so the agent can ask for it.
     expect(await harness.userDO.deviceRuntimeStatus(await testOwner())).toEqual({
       connected: false,
       registered: true,
@@ -434,18 +401,10 @@ describe('device links expire on an absolute window, renewed by rotation', () =>
 });
 
 /**
- * The daemon's keepalive, answered by the hub: 30s after open the machine
- * sends a bare `ping` text frame and closes the socket when no `pong` returns
- * within 10s. Unanswered, every device link drops once a minute and a command
- * landing in the gap reads "no device connected". These drive the REAL accept
- * and message paths — a `ping` through the upgrade, and a pasted "ping" on a
- * terminal pane that must NOT be answered, because the platform's
- * auto-response cannot tell the two sockets apart and the hub's answer is
- * deliberately narrower.
+ * The daemon's bare `ping`/`pong` keepalive; unanswered, every device link drops periodically. A pasted
+ * "ping" on a terminal pane must not be answered: the platform auto-response cannot tell the sockets apart.
  */
 describe('the daemon keepalive, answered by the hub', () => {
-  /** One connected device through the real upgrade path: registered, ticketed,
-   *  accepted — the same socket the hub then hears frames on. */
   async function connectDevice(harness: TestUserDO) {
     const { deviceId, token } = await harness.userDO.registerDevice(await testOwner(), 'studio tower');
     const issued = await harness.userDO.issueDeviceConnectTicket(await testOwner(), token);
@@ -470,15 +429,12 @@ describe('the daemon keepalive, answered by the hub', () => {
     const harness = createTestUserDO();
     const { deviceId, device } = await connectDevice(harness);
 
-    // Exactly what the daemon sends and expects back: the bare text frames
-    // `ping` and `pong` — the wire contract is the literals, not our names.
+    // The wire contract is the literal text frames, not our names.
     const before = device.sent.length;
     await harness.userDO.webSocketMessage(device.ws, 'ping');
     expect(device.sent.slice(before)).toEqual(['pong']);
     expect(device.ws.readyState).toBe(1);
 
-    // The socket is still live — a second beat is answered again, and the
-    // hub still reports the machine connected.
     await harness.userDO.webSocketMessage(device.ws, 'ping');
     expect(device.sent.slice(before)).toEqual(['pong', 'pong']);
     expect(device.ws.readyState).toBe(1);
@@ -496,9 +452,7 @@ describe('the daemon keepalive, answered by the hub', () => {
     await harness.userDO.webSocketMessage(device.ws, JSON.stringify(CAPABLE_HELLO));
     harness.consentDecision = 'always';
 
-    // The pane exists because the workspace opened a real terminal on this
-    // machine. The open frame is answered by hand: this socket pair has no
-    // far end to respond with.
+    // The open frame is answered by hand: this socket pair has no far end.
     const opening = harness.userDO.openDeviceTerminal({ workspaceToken: workspace }, WORKSPACE, { cols: 80, rows: 24 });
 
     for (let turn = 0; turn < 100; turn += 1) {
@@ -524,18 +478,13 @@ describe('the daemon keepalive, answered by the hub', () => {
 
     if (!pane) throw new Error('the pane upgrade produced no socket');
 
-    // The pane announced itself with `ready`; nothing else may arrive on it.
     expect(pane.sent).toEqual([JSON.stringify({ type: 'ready' })]);
     const framesBefore = device.sent.length;
 
-    // Text first: not a control frame, so it is recorded unreadable and
-    // dropped — the one thing it may NOT do is come back as `pong`.
     await harness.userDO.webSocketMessage(pane.ws, 'ping');
     expect(pane.sent).toEqual([JSON.stringify({ type: 'ready' })]);
     expect(device.sent.length).toBe(framesBefore);
 
-    // Bytes are keystrokes: the same word as input reaches the machine as
-    // terminal input, and the pane is still answered with nothing.
     await harness.userDO.webSocketMessage(pane.ws, new TextEncoder().encode('ping'));
 
     expect(pane.sent).toEqual([JSON.stringify({ type: 'ready' })]);

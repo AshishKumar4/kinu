@@ -1,32 +1,7 @@
 /**
- * Operator cancellation reaches a HOSTED swarm node.
- *
- * A node runs in the search's own isolate over its own hosted actor — there is
- * no facet, no RPC for the run to be pending on, and no instance to evict. So
- * the transport verbs this suite's predecessor pinned (`subAgent` handing back
- * a stub, `abortSubAgent` rejecting the in-flight `runAsNode`, `deleteSubAgent`
- * reclaiming the storage) are gone with the facet: deleting a database that no
- * longer exists would be the leak family re-enacted as theatre.
- *
- * What replaces them is one path, and it is the same path every actor kind
- * cancels through. The search's abort signal is bridged onto the node actor's
- * OWN session abort inside `runHeadInference`: the step in flight is cut rather
- * than waited for, the durable claim settles `aborted` rather than being left
- * open, and the search's journal row records the aborted report. Cancellation
- * is an explicit caller stop and nothing else — a socket close, a request
- * abort or an evicted isolate never reaches it, which is why an unsettled
- * claim is the record that work is owed rather than a reason to cancel it.
- *
- * WHAT THIS SUITE CAN AND CANNOT RUN. A hosted node inherits its loop, so its
- * turn runs scaffold code — and scaffold code cannot execute in this harness
- * (the loader that runs it is a workerd binding; measured: the runtime
- * executor answers every call with a loader error). A mid-step cut therefore
- * has no step to cut here: no model call is ever issued, and a test that waits
- * for one hangs rather than fails. The mid-step cut and the finished-untouched
- * cases are proven where the loop runs model-driven — core's head-inference
- * abort tests — and what is proven HERE is the hosted half those cannot see:
- * seating a node under the workspace's loop, and a cancelled search running
- * nothing while still reporting `aborted` to the journal.
+ * Operator cancellation reaches a hosted swarm node: the search's abort is bridged onto the node actor's own
+ * session abort, the claim settles `aborted` and the journal records it. Scaffold code cannot run here (the
+ * loader is a workerd binding), so mid-step cuts are proven by core's head-inference abort tests.
  */
 import { describe, expect, test } from 'bun:test';
 import type { MockLanguageModelV3 } from 'ai/test';
@@ -61,9 +36,7 @@ function nodeInput(nodeId: string): NodeAgentInput {
   };
 }
 
-/** A search over one workspace, with the production seat factory: each node is
- *  acquired from the workspace's one host, so the run under test is the
- *  backend's own wiring rather than a re-declaration of it. */
+/** Uses the production seat factory, so the run is the backend's own wiring. */
 async function hostedSearch(signal?: AbortSignal) {
   const workspace = orchestratorHarness();
   const seams = workspace.agent.observeExplorationSeams();
@@ -75,7 +48,6 @@ async function hostedSearch(signal?: AbortSignal) {
   return { workspace, seams, journal, signal };
 }
 
-/** A model that reports on its first step, the way a settled node does. */
 function reportingModel(answer: string, calls: { count: number }): MockLanguageModelV3 {
   let call = 0;
 
@@ -120,9 +92,7 @@ describe('cancelling a search reaches its hosted nodes', () => {
   test('a node seats as a hosted actor under the workspace loop', async () => {
     const search = await hostedSearch();
     const seat = await hostNodeSeat(search.seams, { nodeId: NODE_ID, rootId: 'root-1', depth: 1 });
-    // The hosted half the loop tests cannot see: the run below is bridged
-    // onto THIS actor's session, so the seating — kind, store scoping,
-    // inherited loop — is load-bearing rather than incidental.
+    // The run is bridged onto this actor's session, so the seating (kind, store scoping, loop) is load-bearing.
     expect(seat.actor.record.kind).toBe('head');
     expect(seat.actor.record.parentActorId).toBe(search.workspace.agent.observeRuntime().actor.actorId);
   });

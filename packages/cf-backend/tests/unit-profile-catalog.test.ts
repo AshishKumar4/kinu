@@ -1,10 +1,5 @@
-// The profile catalog — the account's authority over roles and tiers.
-//
-// Stored as one JSON row of user_config under a compare-and-swap integer
-// version, so two writers cannot silently overwrite each other and every
-// accepted write moves the version by exactly one. Owner-session only: the
-// catalog IS authority, so even a full-tier workspace is refused until the
-// runtime integration adds its narrow read surface.
+// The profile catalog: one user_config JSON row under a compare-and-swap version (each write +1).
+// Owner-session only: the catalog is authority, so even a full-tier workspace is refused.
 import { describe, expect, test } from 'bun:test';
 import * as v from 'valibot';
 import {
@@ -20,7 +15,6 @@ import { CapabilityDeniedError } from '@kinu.run/core';
 import { createTestUserDO, provisionTestWorkspace, testOwner, type TestUserDO } from './helpers/user-do';
 
 const MODEL = 'workers-ai/@cf/deepseek-ai/deepseek-v4-pro-0813';
-
 
 function role(overrides: Partial<RoleDefinition> = {}): RoleDefinition {
   return {
@@ -66,7 +60,6 @@ describe('profile catalog reads', () => {
     expect(envelope.authority).toEqual({ kind: 'account', accountId: expect.any(String) });
     expect(envelope.catalog).toEqual(BUILTIN_PROFILE_CATALOG);
     expect(envelope.digest).toBe(profileCatalogDigest(BUILTIN_PROFILE_CATALOG));
-    // The envelope is wire truth, not just an internal shape.
     expect(v.safeParse(ProfileCatalogEnvelopeSchema, envelope).success).toBe(true);
     harness.close();
   });
@@ -178,12 +171,8 @@ describe('profile catalog compare-and-swap writes', () => {
     const harness = createTestUserDO();
     await write(harness, 0, catalog());
 
-    // The third member is the path the refusal MUST name. This reason is the
-    // whole of what an owner is shown about a catalog the account would not
-    // take, so a refusal that says only "invalid" leaves them guessing which of
-    // two dozen fields to look at. It is rendered from the whole cause chain for
-    // the same reason: the frame that names the path can sit one `cause` below a
-    // wrapper, and the outermost message is the least informative one.
+    // The refusal must name the path, rendered from the whole cause chain: the naming frame can sit
+    // below a wrapper.
     const cases: Array<[string, JsonValue, string]> = [
       ['role missing its description', {
         roles: { task: { instructions: 'Do the task directly.', tier: 'default', preset: 'ideate' } },
@@ -301,7 +290,6 @@ describe('profile catalog storage hygiene', () => {
     expect(Object.keys(envelope).sort()).toEqual(['authority', 'catalog', 'digest', 'version']);
     expect(JSON.stringify(envelope)).not.toContain(secret);
 
-    // The canonical row holds exactly one key whose value is the catalog JSON.
     const rows = harness.db.query<{ key: string; value: string }, []>(
       `SELECT key, value FROM user_config`,
     ).all();

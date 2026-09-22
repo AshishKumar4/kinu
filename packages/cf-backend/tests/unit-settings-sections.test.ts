@@ -1,21 +1,6 @@
 /**
- * Account settings, as a place a person navigates.
- *
- * The report: "the settings page itself isn't very easy to navigate — maybe it
- * can have some tabbed views or links." It was one column of eight cards, and
- * `/user/settings#devices` — the link the Environment tab, the drive and every
- * per-agent settings page carry — landed mid-scroll with nothing saying where
- * you were.
- *
- * Two properties, and both are about the hash, because the hash is what a deep
- * link carries: the hash decides the section, and the rail says which section
- * that is. An unknown hash opens the first section rather than a blank page —
- * the failure mode that matters, because a stale bookmark is a hash nobody
- * removed.
- *
- * What is NOT here and is proved in the browser by
- * `scripts/chat-and-files-ux.test.ts`: that a section renders ALONE, and that
- * switching sections does not re-read the account.
+ * Account settings sections: the URL hash decides the section and the rail marks it; an unknown hash
+ * (a stale bookmark) opens the first section. Rendering alone is proved in `scripts/chat-and-files-ux.test.ts`.
  */
 import './helpers/ui-module-globals';
 import { describe, expect, test } from 'bun:test';
@@ -25,8 +10,7 @@ import { MemoryRouter } from 'react-router-dom';
 import { SettingsRail, settingsSection, type SettingsSection } from '../src/components/SettingsRail';
 import { present } from '@kinu.run/test-utils';
 
-/** The rail as a reader sees it, under a router, since every entry is a link
- *  that keeps the pathname and changes only the hash. */
+/** Under a router: every entry is a link that changes only the hash. */
 function rail(active: SettingsSection): string {
   return renderToStaticMarkup(createElement(
     MemoryRouter,
@@ -35,17 +19,12 @@ function rail(active: SettingsSection): string {
   ));
 }
 
-/** Every section the rail publishes, read off the rail. A list retyped here
- *  would be a second copy of the set, and a section added to one and not the
- *  other is exactly the drift these assertions exist to catch. */
+/** Read off the rail, not retyped, so a section added to one copy but not the other is caught. */
 const RAW_IDS = [...rail('account').matchAll(/data-settings-section="([a-z]+)"/g)]
   .map((match) => match[1] ?? '');
 
-/** The same ids as sections. Narrowed through the module's own reader, which
- *  the first assertion below pins to the identity on this set. */
 const SECTION_IDS = RAW_IDS.map(settingsSection);
 
-/** The one entry for `id`, as markup. */
 function entry(html: string, id: string): string {
   const match = present(new RegExp(`<a[^>]*data-settings-section="${id}"[^>]*>`).exec(html), `the ${id} settings link`);
 
@@ -54,12 +33,10 @@ function entry(html: string, id: string): string {
 
 describe('the URL hash decides the section', () => {
   test('every section is reachable by its own hash', () => {
-    // Non-vacuity: a rail that published nothing would make this loop empty
-    // and every id assertion below unfired.
+    // Non-vacuity: an empty rail would leave every id assertion unfired.
     expect(RAW_IDS).toContain('devices');
     expect(RAW_IDS.length).toBeGreaterThan(3);
-    // Not circular: an entry the reader does not recognise answers `account`,
-    // which is not the id that was read off the rail.
+    // Not circular: an unrecognised entry reads as `account`.
     const read: string[] = RAW_IDS.map((raw) => settingsSection(`#${raw}`));
     expect(read).toEqual(RAW_IDS);
   });
@@ -72,7 +49,6 @@ describe('the URL hash decides the section', () => {
     expect(settingsSection('')).toBe('account');
   });
 
-  /** Each hash a deep link can carry, and the one section it opens. */
   const HASH_CASES = [
     { name: 'a hash nobody recognises opens the first section', hashes: ['#connections', '#__proto__'], opens: 'account' },
     { name: 'a hash is read with or without its leading #', hashes: ['providers', '#providers'], opens: 'providers' },
@@ -104,8 +80,6 @@ describe('the rail says which section is open', () => {
       expect(entry(html, id)).toContain(`href="/user/settings#${id}"`);
     }
 
-    // The entries are readable words, not ids: the rail is what a person picks
-    // a section from.
     expect(html).toContain('Devices');
     expect(html).toContain('Providers');
   });

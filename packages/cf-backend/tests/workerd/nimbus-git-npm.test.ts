@@ -1,50 +1,8 @@
 /**
- * Git and npm in the hosted workspace, over the supervisor boundary a facet
- * crosses.
- *
- * Every program Nimbus runs outside the object — the git network facet, the
- * npm resolver, a peer shard — reaches the filesystem through
- * `SupervisorRPC`, which resolves the workspace object out of the composed
- * `OrchestratorAgent` namespace and calls `supervisorOp`. Half of the
- * operations it can carry are filesystem ops a bare workspace answers; the
- * other half are HOST ops, served only by the composed hosted runtime
- * (`@nimbus-sh/core/dist/workspace/supervisor-op.js:279-285`). The resolver's
- * wide layers go further: they open SIBLING objects of the same namespace by
- * name (`nbf:npm-resolve-fanout:<doId>:<shard>`,
- * `@nimbus-sh/fabric/dist/fanout.js:150-156`) and send them `fanoutExecute`,
- * so a sibling must answer with a hosted runtime too.
- *
- * MEASURED here on 2026-09-21, worker 0.10.0 / core 0.12.0, this box:
- *   - With `workspace-host.ts` answering from `bundle.session()`, the bare
- *     workspace: 3 pass, 1 fail. "npm install resolves a wide layer through
- *     sibling objects" fails with `resolver-fanout failed at layer 0: peer
- *     shard nbf:npm-resolve-fanout:9d8e18eb2375:3 ... supervisor op:
- *     'fanoutExecute' is a host op, and this handler is a bare workspace's`.
- *   - With it answering from the composed runtime: 4 pass.
- *
- * The CLONE cases pass on both, and the reason is upstream rather than here.
- * Worker 0.9.0 minted a facet's supervisor binding with props
- * `{ doId, pid, mutationOwner }` (`dist/git/network-facet.js:410`) and the
- * entrypoint read the host namespace off its own isolate
- * (`dist/session/supervisor-rpc.js:88`), which holds no composition in the
- * isolate workerd serves an entrypoint from — the `env.NIMBUS_SESSION`
- * refusal a clone met on 2026-09-21. 0.10.0 mints `route: hostRoute()` into
- * those props and resolves the namespace from the route. Every operation the
- * clone facet then performs is a filesystem op, which a bare workspace also
- * answers, so the clone is green either way. It stays because it is the
- * end-to-end proof that a facet reaches this object at all.
- *
- * `git clone` of a LOCAL path cannot pass on worker 0.10.0 and is asserted
- * here as the refusal it is: every clone is delegated to the network facet
- * (`dist/git/commands.js:385`) and the facet's isomorphic-git registers
- * `http` and `https` transports only (`GitRemoteManager.getRemoteHelperFor`
- * in `dist/git-bundle.generated.js`), so a bare path never parses as a URL.
- * The clone this suite proves is therefore an HTTP one, against the fixture
- * origin the probe worker's outbound service serves.
- *
- * WHY `bun test` CANNOT HOST IT. The facets are Worker Loader isolates and
- * the resolver's shards are Durable Objects addressed by name; neither exists
- * outside workerd.
+ * Defends: a resolver fanout shard (a sibling DO) answering `fanoutExecute` from a bare workspace.
+ * Measured 2026-09-21 under workerd, worker 0.10.0 / core 0.12.0: bare host 3 pass, 1 fail
+ * ("'fanoutExecute' is a host op"); composed runtime 4 pass. Local-path `git clone` is refused on
+ * 0.10.0 (the facet registers http/https transports only), so the clone case is HTTP.
  */
 import { env } from 'cloudflare:workers';
 import { expect, it } from 'vitest';
@@ -53,7 +11,6 @@ import { REGISTRY_ENTRY, REGISTRY_FANOUT_PKGS, REGISTRY_HOST, REGISTRY_MANIFEST,
 
 const subject = (name: string) => env.SLATE_DURABILITY_PROBE.get(env.SLATE_DURABILITY_PROBE.idFromName(name));
 
-/** A seed repository the workspace's own git makes: one commit over one file. */
 const seedRepo = (dir: string) => [
   `mkdir -p ${dir}`,
   `cd ${dir}`,
@@ -96,10 +53,8 @@ it('git clone of a workspace path is refused for what it is, never for a missing
 
   const cloned = await probe.runInWorkspace(workspace, 'cd /home/user && git clone -q seed copy');
 
-  // The facet ran and reported the transport it has no helper for. A host the
-  // facet could not reach answers differently — `SupervisorRPC: env.* must be
-  // the Durable Object namespace configured by composeFabric`, or a host op
-  // refused — and this workspace must never say that.
+  // A host the facet could not reach answers `SupervisorRPC: env.* must be the Durable Object
+  // namespace ...` or refuses a host op; this workspace must never say that.
   expect(cloned.stdout).not.toContain('composeFabric');
   expect(cloned.stdout).not.toContain('is a host op');
   expect(cloned.stdout).toContain('clone failed');
@@ -137,9 +92,7 @@ it('npm install resolves a wide layer through sibling objects', async () => {
 
   expect(made.exitCode, made.stdout).toBe(0);
 
-  // Six roots: one layer wider than the coordinator resolves alone, so the
-  // resolver opens siblings of this workspace's namespace and every one of
-  // them answers `fanoutExecute` from a hosted runtime.
+  // Six roots: one layer wider than the coordinator resolves alone, so siblings are opened.
   const install = await probe.runInWorkspace(workspace,
     `cd /home/user/fanout && NPM_REGISTRY=http://${REGISTRY_HOST} npm install ${REGISTRY_FANOUT_PKGS.join(' ')}`);
 

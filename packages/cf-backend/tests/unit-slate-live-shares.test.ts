@@ -1,9 +1,6 @@
 /**
- * Live slate shares, driven through `orchestratorHarness` and a real owner
- * UserDO the way `unit-slate-sharing.test.ts` drives blueprints: the graph is
- * cut from the workspace's own catalog, the grant lives on the share row, and
- * every viewer call is admitted, routed and audited by the host — so this file
- * asserts the S-rules end to end rather than mocking them.
+ * Live slate shares end to end through `orchestratorHarness` and a real owner UserDO: the S-rules
+ * (graph from the catalog, grant on the share row, host-admitted viewer calls) unmocked.
  */
 import { expect, test } from 'bun:test';
 import * as v from 'valibot';
@@ -99,8 +96,7 @@ test('graph walks every binding, classifies members, and follows the app hop', a
     const ask = byName.get('issues.ASK');
 
     expect(ask?.members?.[0]?.risk.users).toBe('Sends a message to your agent\'s inbox as this slate. Your agent reads it and acts on it in workspace issues-owner. Anyone you named on this share can trigger it.');
-    // The cycle: PEER walks digest, digest's BACK would re-enter issues, and
-    // both of digest's own rows are appended under the digest slate.
+    // The cycle: digest's BACK would re-enter issues; digest's own rows are appended under digest.
     const digestFiles = byName.get('digest.DIGEST_FILES');
 
     expect(digestFiles?.members?.map((m) => m.member)).toEqual(['readFile']);
@@ -292,8 +288,7 @@ test('an app hop under a share is admitted by grant.slates and audited under its
 
     if (admission instanceof Response) throw new Error(`admission refused: ${admission.status}`);
     const viewerCaller: SlateCaller = { ...ROOT_SLATE_CALLER, share: created.share.id };
-    // The PEER hop passes the grant; it fails for the real reason — the harness
-    // cannot boot the digest process — never for 'does not grant'.
+    // Fails because the harness cannot boot the digest process, never for 'does not grant'.
     const hop = await world.owner.agent.slateBindingCallAs(viewerCaller, 'issues', 'PEER', { member: 'probe', args: [], invocation: admission.invocation });
 
     expect(hop).toMatchObject({ ok: false });

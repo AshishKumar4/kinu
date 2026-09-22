@@ -280,7 +280,7 @@ export function createHostedWorkspace<Id>(deps: HostedWorkspaceDeps<Id>): Hosted
     transactions: deps.ctx,
     generation: workspaceGenerationStorage(sql),
     // The fabric mints each facet's `env.SUPERVISOR`, and `ctx.exports` comes off `transactions` (the DO's
-        // own `ctx`). Without both, `git clone` refuses.
+    // own `ctx`). Without both, `git clone` refuses.
     fabric: HOST_FABRIC_COMPOSITION,
     runtimeSource,
   });
@@ -292,7 +292,7 @@ export function createHostedWorkspace<Id>(deps: HostedWorkspaceDeps<Id>): Hosted
   let composing: Promise<HostComposition> | undefined;
 
   // This object's alarm slot is the SDK scheduler's, so tasks run on a timer plus waitUntil. Timers die with
-    // a hibernated isolate, hence the launch pump also runs once per incarnation.
+  // a hibernated isolate, hence the launch pump also runs once per incarnation.
   const pending = new Map<HostedRuntimeTask, { timer: ReturnType<typeof setTimeout>; settle: (run: boolean) => void }>();
 
   const lifecycle: HostedRuntimeOptions['lifecycle'] = {
@@ -456,7 +456,7 @@ export function createHostedWorkspace<Id>(deps: HostedWorkspaceDeps<Id>): Hosted
 
       const publicRequest = new Request(request);
       // Drop the visitor's header first: naming the invocation stops retained preview bindings standing in
-            // for a deeper lineage.
+      // for a deeper lineage.
       publicRequest.headers.delete('x-slate-call');
       const upgrade = request.headers.get('upgrade')?.toLowerCase() === 'websocket';
       const invocation = deps.slateInvocation?.(port, upgrade) ?? null;

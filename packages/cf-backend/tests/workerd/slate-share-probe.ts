@@ -1,13 +1,6 @@
 /**
- * A real SlateHost driven inside workerd, reached the way the share rail
- * reaches it: one viewer request crossing `routeShare` into a resident
- * process over Cap'n Web — the batch arm and the socket arm both.
- *
- * The class binds under two names in its vitest project: `SLATE_SHARE_PROBE`,
- * the handle the tests hold, and `OrchestratorAgent`, because the slate's
- * FILES binding is a `SlateBinding` worker entrypoint whose `call` resolves
- * `workspaceOwner(env, workspace).slateBindingCallAsWire` — the probe's own DO,
- * named by `ctx.id.name`.
+ * A real SlateHost in workerd, reached through `routeShare` over Cap'n Web (batch and socket arms).
+ * Also bound as `OrchestratorAgent` because the slate's FILES binding resolves `workspaceOwner(...).slateBindingCallAsWire` by `ctx.id.name`.
  */
 import { DurableObject, WorkerEntrypoint } from 'cloudflare:workers';
 import * as v from 'valibot';
@@ -31,16 +24,12 @@ import { ROOT_SLATE_CALLER, type SlateCaller } from '../../src/slates/bindings';
 import { slateBatchStub } from '../../src/slates/rpc-transport';
 import { renderThrownChain } from '@kinu.run/core/obs';
 
-// The slate's `env.FILES` resolves `exports.SlateBinding` in THIS worker, and
-// `codemodeEgress()` resolves `exports.CodemodeEgress`: both must be exports
-// of the probe bundle or a `build` boot throws before the route is reached.
+// `env.FILES` and `codemodeEgress()` resolve exports of this worker; without them a `build` boot throws before the route.
 export { SlateBinding } from '../../src/slates/bindings';
 
 export { CodemodeEgress } from '../../src/codemode-egress';
 
-/** The fixture catalog the graph and grant are cut against: one executor and
- *  nothing else — every other binding kind the probe slate declares surfaces
- *  as a `problem` row the share dialog would show. */
+/** Every other binding kind the probe slate declares surfaces as a `problem` row. */
 const CATALOG = {
   executors: [{ namespace: 'workspace', members: ['readFile', 'writeFile'] }],
   mcp: [],
@@ -48,8 +37,6 @@ const CATALOG = {
   tiers: [],
 };
 
-/** The text an RPC refusal arrives as: 'mutate answered' when the member ran
- *  despite the grant, the thrown chain when it refused. */
 const refusedText = async (call: Promise<JsonValue>): Promise<string> => {
   try {
     await call;
@@ -62,9 +49,6 @@ const refusedText = async (call: Promise<JsonValue>): Promise<string> => {
 
 const SLATE_ID = 'board';
 
-/** One DO holding a real SlateHost over its own SQLite. The slate it shares
- *  is authored in `start()` below; the ROUTE boots the process, so a viewer
- *  call is the whole path — admission, boot, port hop, binding call, audit. */
 export class SlateShareProbeDO extends DurableObject<Cloudflare.Env> {
   private readonly vfs = new SqliteVFS(this.ctx.storage.sql, this.ctx);
   private readonly processes = new SessionProcessSupervisor();
@@ -72,16 +56,11 @@ export class SlateShareProbeDO extends DurableObject<Cloudflare.Env> {
   private readonly host: SlateHost;
   private _budget: MissionGovernor | undefined;
   private readonly gen: Parameters<typeof adoptGeneration>[0];
-  /** The `x-slate-call` of the most recent forwarded request — the socket's
-   *  invocation for the replay check, kept because nothing else surfaces it. */
   private lastCall: string | null = null;
 
   constructor(ctx: DurableObjectState, env: Cloudflare.Env) {
     super(ctx, env);
-    // The workspace schema creates the slate store tables; the live-share
-    // tables are the new ones this probe exists to drive. The tagged-template
-    // bridge is the one `bindAgentSql` (src/runtime.ts) makes, hosted where the
-    // Agents SDK is not.
+    // The tagged-template bridge mirrors `bindAgentSql` (src/runtime.ts), hosted where the Agents SDK is not.
 
     const sql: SqlExecutor = <Row,>(
       query: TemplateStringsArray, ...values: SqlValue[]
@@ -94,10 +73,7 @@ export class SlateShareProbeDO extends DurableObject<Cloudflare.Env> {
     initWorkspaceSchema({ execRaw: (ddl: string) => ctx.storage.sql.exec(ddl), sql, exec });
     initSlateLiveShareTables((ddl: string) => ctx.storage.sql.exec(ddl));
     seedBaseFilesystem(this.vfs, ['home', 'etc']);
-    // The supervisor's pids are generation-scoped, exactly as a hosted
-    // workspace's are: each boot of this object adopts the persisted counter's
-    // next generation, so a slate process re-spawned after an eviction is
-    // never handed a pid the filesystem still holds an append writer for.
+    // Pids are generation-scoped per boot so a re-spawned process never gets a pid with a live append writer.
     this.gen = workspaceGenerationStorage(ctx.storage.sql);
     const facets = probeFacetManager({ ctx, env, processes: this.processes, portRegistry: this.ports, vfs: this.vfs });
 
@@ -124,9 +100,7 @@ export class SlateShareProbeDO extends DurableObject<Cloudflare.Env> {
       },
       catalog: async () => ({ ...CATALOG, slates: await this.host.projects(ROOT_SLATE_CALLER) }),
       shareUrl: async (handle) => `https://${handle}.share.test/`,
-      // The probe has no AUTH_KV binding — no request bound, the same answer
-      // the edge gives on a deployment without it. The spend bound is real:
-      // a governor over this object's own SQLite, acting as the root actor.
+      // No AUTH_KV binding, as on a deployment without it; the spend bound is real.
       budget: () => this._budget ??= new MissionGovernor({
         storage: { sql, execRaw: (ddl: string) => ctx.storage.sql.exec(ddl) },
         actor: bindActorHandle(sql, {
@@ -138,8 +112,6 @@ export class SlateShareProbeDO extends DurableObject<Cloudflare.Env> {
     });
   }
 
-  /** The authored slate: `probe` spends the granted read member, `mutate`
-   *  spends the member the grant does not name, `fetch` answers plainly. */
   async start(): Promise<void> {
     await adoptGeneration(this.gen);
     this.processes.setPidBase(generation(this.gen) * PID_GEN_STRIDE);
@@ -164,13 +136,10 @@ export class SlateShareProbeDO extends DurableObject<Cloudflare.Env> {
     files.writeFile('/x', 'fixture-bytes');
   }
 
-  /** The owner's `share` op: cuts the grant (read members only here) and
-   *  opens the share row. */
   async share(): Promise<SlateCallResult> {
     return this.host.operation(ROOT_SLATE_CALLER, { op: 'share', id: SLATE_ID, visibility: 'public', approved: [] });
   }
 
-  /** GET / through the real route: admission, the boot, the port hop. */
   async viewerFetch(handle: string, claim: ShareViewerClaim): Promise<{ status: number; body: string }> {
     try {
       const response = await this.host.routeShare(handle, claim, new Request('https://share.invalid/'), '/');
@@ -181,8 +150,7 @@ export class SlateShareProbeDO extends DurableObject<Cloudflare.Env> {
     }
   }
 
-  /** A Cap'n Web batch through `routeShare` — the transport's POST path. The
-   *  transport ships one batch, so both calls issue in the same tick. */
+  /** The transport ships one batch, so both calls issue in the same tick. */
   async viewerBatch(handle: string, claim: ShareViewerClaim): Promise<{ probe: string | null; mutateError: string }> {
     const stub = slateBatchStub<Record<string, (...args: JsonValue[]) => Promise<JsonValue>>>(
       { request: (request) => this.host.routeShare(handle, claim, request, '/__rpc') }, 'ignored',
@@ -200,8 +168,6 @@ export class SlateShareProbeDO extends DurableObject<Cloudflare.Env> {
     return { probe, mutateError };
   }
 
-  /** A WebSocket session through `routeShare` — the socket arm, whose
-   *  invocation lives until `close` fires `release` back at `__host`. */
   async viewerSocket(handle: string, claim: ShareViewerClaim): Promise<{ probe: string | null; mutateError: string }> {
     const response = await this.host.routeShare(
       handle, claim, new Request('https://share.invalid/__rpc', { headers: { Upgrade: 'websocket' } }), '/__rpc',
@@ -221,55 +187,43 @@ export class SlateShareProbeDO extends DurableObject<Cloudflare.Env> {
       return { probe, mutateError };
     } finally {
       socket.close();
-      // `release` reaches this DO over RPC: a tick so the audit row is settled
-      // before the test reads it.
+      // `release` reaches this DO over RPC: a tick so the audit row is settled before the test reads it.
       const { promise, resolve } = Promise.withResolvers<void>();
       setTimeout(resolve, 0);
       await promise;
     }
   }
 
-  /** The socket's invocation replayed after close: the retired id refuses. */
   async replay(share: string): Promise<SlateCallResult> {
     return this.host.bindingCall(
       { ...ROOT_SLATE_CALLER, share }, SLATE_ID, 'FILES', { member: 'readFile', args: ['/x'], invocation: this.lastCall },
     );
   }
 
-  /** The audit rows the `viewerRequests` op answers. */
   async requests(share: string): Promise<SlateCallResult> {
     return this.host.operation(ROOT_SLATE_CALLER, { op: 'viewerRequests', share });
   }
 
-  /** Revoke the share — `unshare` stops the process the share carried. */
   async revoke(share: string): Promise<SlateCallResult> {
     return this.host.operation(ROOT_SLATE_CALLER, { op: 'unshare', share });
   }
 
-  /** Whether the share's process is gone: revoking stops it, and a stopped
-   *  resident leaves no running process in the supervisor. */
   async stopped(): Promise<boolean> {
     return this.processes.getRunning().length === 0;
   }
 
-  /** The `workspaceOwner` arm: the slate's FILES binding calls back into this
-   *  object under the share caller it was booted with. */
   async slateBindingCallAs(caller: SlateCaller, id: string, name: string, request: JsonValue): Promise<SlateCallResult> {
     const parsed = v.safeParse(v.object({ invocation: v.nullable(v.string()) }), request);
 
-    // The socket's close listener releases with a null invocation; the id
-    // the slate's own call carried is the one a replay must present.
+    // The close listener releases with a null invocation; a replay must present the id the slate's call carried.
     if (parsed.success && parsed.output.invocation !== null) this.lastCall = parsed.output.invocation;
 
     return this.host.bindingCall(caller, id, name, request);
   }
 
-  /** The wire half `workspaceOwner` reads, as the production object answers
-   *  it: the same result as a JSON string, decoded at the one adapter. */
   async slateBindingCallAsWire(caller: SlateCaller, id: string, name: string, request: JsonValue): Promise<string> {
     return JSON.stringify(await this.slateBindingCallAs(caller, id, name, request));
   }
 }
 
-/** The probe worker: no fetch surface — the tests drive the DO by binding. */
 export default class SlateShareProbeWorker extends WorkerEntrypoint<Cloudflare.Env> {}

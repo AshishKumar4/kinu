@@ -1,19 +1,6 @@
 /**
- * What a fresh activation does with what an interruption left behind.
- *
- * Two obligations outlive the isolate that took them on: an event batch bound to
- * a drain turn whose reply was never dispatched, and the durable fibers a lane
- * was running inside. Both are read from storage by an activation that shares
- * nothing with the one that opened them, which is why every case here drives a
- * REAL restart rather than re-entering the same instance.
- *
- * The interrupted-fiber sweep's oracle is the SQL it issues: "does not
- * materialize a snapshot" is a claim about the READ, and only the read can
- * answer it. A test that checked which rows survived would pass over a sweep
- * that loaded every blob and then deleted the right ones.
- *
- * The terminal ledger itself — claim, effects, replay — is
- * unit-durable-terminal.test.ts.
+ * What a fresh activation does with an interrupted drain lease or fiber; every case drives a real restart.
+ * The fiber sweep's oracle is the reads it issues, not which rows survive. Terminal ledger: unit-durable-terminal.test.ts.
  */
 import { describe, expect, test } from 'bun:test';
 import { Database, type SQLQueryBindings } from 'bun:sqlite';
@@ -34,11 +21,8 @@ import {
   type FiberRowStore,
 } from '../src/fiber-recovery';
 
-// The actor harness replaces `agents`; load the installed artifact separately.
-// Its Workers builtins come from the preload's boundary stub, and since
-// cloudflare/agents#2133 vendored PartyServer into `agents/lifecycle` it needs
-// no other module supplied. A narrow `cloudflare:workers` mock here once
-// dropped `WorkerEntrypoint` and `tracing` for every suite sharing the process.
+// The actor harness replaces `agents`; load the installed artifact separately. A narrow
+// `cloudflare:workers` mock here would drop `WorkerEntrypoint`/`tracing` for every suite in the process.
 const installedAgentModule = [
   '../../../node_modules/agents/dist/index.js',
   'fiber-recovery-sql-probe',
@@ -52,12 +36,7 @@ const installedRecoveryMethods = v.parse(InstalledRecoveryMethodsSchema, Install
 
 const installedCheckRunFibers = installedRecoveryMethods._checkRunFibers;
 
-// The wake's own callback name, from the module that arms it — DYNAMICALLY,
-// after the harness above has replaced `agents`. A static import here would pull
-// the actor module (and the real SDK behind it) in before the stand-in is
-// installed, and every case in this file would construct a vendor Agent with no
-// storage. The name is imported rather than restated because the sweep, the arm
-// and this assertion must agree about which row is the terminal wake.
+// Dynamic: a static import would load the real SDK before the harness stand-in is installed.
 const { TERMINAL_RETRY_CALLBACK } = await import('../src/actor-agent');
 
 const FiberRecoveryEventSchema = v.object({
@@ -79,16 +58,8 @@ const RecoveryMetadataSchema = v.object({});
 
 type RecoveryMetadata = v.InferOutput<typeof RecoveryMetadataSchema>;
 
-/** One admitted event bound to a synthetic drain turn with its recovery lease
- *  OPEN — what a drain leaves behind on its way to a turn. The payload is a
- *  real delivery shape, because the events-hub row schema parses it.
- *
- *  Filed under the workspace's OWN actor, read off the live runtime rather than
- *  restated: one database now holds every logical actor's inbox and
- *  `agent_log`'s key leads with `actor_id`, so a row seeded under any other id
- *  is a row the resume's actor-scoped reads cannot see. Nothing would error —
- *  the lease reads would simply come back empty and every assertion here would
- *  hold for the wrong reason. */
+/** One admitted event bound to a synthetic drain turn with its lease open. Filed under the workspace's own
+ *  actor: a row under any other id is invisible to actor-scoped reads, so assertions would hold vacuously. */
 function boundDelivery(
   harness: ActorHarness<HarnessOrchestratorAgent>,
   eventId: string,
@@ -107,8 +78,7 @@ function boundDelivery(
   ).run(harness.agent.observeRuntime().actor.actorId, eventId, drainTurnId, consumedAt);
 }
 
-/** The durable transcript pair a resumed reply reads: the queued drain turn's
- *  user entry carrying `drainTurnId`, and the assistant entry answering it. */
+/** The transcript pair a resumed reply reads: the drain turn's user entry and its assistant answer. */
 async function persistedDrainTurn(
   harness: ActorHarness<HarnessOrchestratorAgent>,
   drainTurnId: string,
@@ -123,19 +93,13 @@ async function persistedDrainTurn(
     message: { role: 'assistant', content: answer } });
 }
 
-/** A lease a LIVE activation left open, inside the sweep's 10-minute grace. The
- *  distinction is load-bearing: an ancient lease is one the activation sweep is
- *  RIGHT to reclaim, so seeding one would measure the sweep where the resume is
- *  what is under test. */
+/** Inside the sweep's grace, so the sweep leaves it alone and only the resume is under test. */
 const RECENT = Date.now();
 
 function lease(
   harness: ActorHarness<HarnessOrchestratorAgent>,
   eventId: string,
 ): { turn_id: string | null; consumed_at: number | null } {
-  // Parsed, not cast: a row that came back with the wrong shape (or a missing
-  // row) fails by name here rather than reading as `undefined` two assertions
-  // later.
   return v.parse(
     v.object({ turn_id: v.nullable(v.string()), consumed_at: v.nullable(v.number()) }),
     harness.db.query(`SELECT turn_id, consumed_at FROM agent_log WHERE id = ?`).get(eventId),
@@ -147,56 +111,32 @@ describe('an interrupted terminal transition finishes the reply it still owed', 
     const harness = orchestratorHarness();
     boundDelivery(harness, 'ev-owed', 'evt-owed', 5);
     await persistedDrainTurn(harness, 'evt-owed', 'the build passed');
-    // The prefix: the turn answered, the transition was claimed, and the isolate
-    // died before the reply left.
     expect(harness.agent.harnessBeginTerminalTransition('u-owed')).toBe('first');
 
-    // Classification arms the wake and dispatches NOTHING — the init ruling
-    // covers spawned work too. The activation's whole answer is this boolean;
-    // the alarm frame is what pays for the reply.
+    // Classification arms the wake and dispatches nothing; the alarm frame sends the reply.
     expect(harness.agent.harnessOwedWorkExists()).toBe(true);
     expect(lease(harness, 'ev-owed')).toEqual({ turn_id: 'evt-owed', consumed_at: 5 });
     await harness.agent.terminalRetryPass();
 
-    // The delivery is settled: lease closed, BINDING kept, so no later drain can
-    // select it and no sweep can re-ask the question.
     expect(lease(harness, 'ev-owed')).toEqual({ turn_id: 'evt-owed', consumed_at: null });
-    // And the transition is closed, so a recovery reads the settled
-    // disposition rather than re-offering the effects.
     expect(harness.agent.harnessBeginTerminalTransition('u-owed')).toBe('done');
   });
 
-  /**
-   * The negative control, and the case the sweep exists for. A lease whose turn
-   * produced NO answer must not be closed: nothing was said, so there is nothing
-   * to send, and the question has to be asked again. Without this, "the resume
-   * closes leases" would be satisfied by a resume that closed all of them and
-   * silently dropped the unanswered ones.
-   */
+  /** Negative control: a lease whose turn produced no answer must stay open to be re-asked. */
   test('a lease whose turn never answered is left open for the sweep to re-ask', async () => {
     const harness = orchestratorHarness();
     boundDelivery(harness, 'ev-silent', 'evt-silent', RECENT);
     await persistedDrainTurn(harness, 'evt-silent', null);
     harness.agent.harnessBeginTerminalTransition('u-silent');
-    // The lease is in the RESUME's OWN view before the resume runs. Both
-    // assertions below are "nothing moved", and a row filed under an actor this
-    // agent is not would read as no row at all rather than as an error — so
-    // without this the case would hold just as well over an empty table.
+    // Without this, a row filed under another actor would read as no row and the case would pass vacuously.
     expect(harness.agent.harnessOwedWorkExists()).toBe(true);
 
-    // THE WAKE FRAME, not `resumeAll()` in isolation. `_kinuTerminalRetryTick`
-    // is the public callback the platform's alarm dispatches, and it runs the
-    // stale-lease sweep BEFORE the terminal replay. Both must leave this lease
-    // exactly as it is — the replay because no answer exists to send, the sweep
-    // because `RECENT` is inside its grace — so the assertion below is "nothing
-    // moved" against the whole frame instead of one half of it.
+    // The full wake frame (stale-lease sweep, then replay), not `resumeAll()` alone.
     await harness.agent.terminalRetryPass();
 
     expect(lease(harness, 'ev-silent')).toEqual({ turn_id: 'evt-silent', consumed_at: RECENT });
   });
 
-  /** An empty answer is not an answer. A turn that streamed nothing must not
-   *  close a channel whose sender is still waiting. */
   test('an empty answer does not count as a reply', async () => {
     const harness = orchestratorHarness();
     boundDelivery(harness, 'ev-blank', 'evt-blank', RECENT);
@@ -204,15 +144,11 @@ describe('an interrupted terminal transition finishes the reply it still owed', 
     harness.agent.harnessBeginTerminalTransition('u-blank');
     expect(harness.agent.harnessOwedWorkExists()).toBe(true);
 
-    // The same public wake frame as above.
     await harness.agent.terminalRetryPass();
 
     expect(lease(harness, 'ev-blank')).toEqual({ turn_id: 'evt-blank', consumed_at: RECENT });
   });
 
-  /** An unfinished transition with nothing re-derivable is CLOSED rather than
-   *  re-offered. Left open it would be handed to every future activation
-   *  forever, which is a sweep that never converges. */
   test('an unfinished transition with nothing to resume stops being re-offered', async () => {
     const harness = orchestratorHarness();
     harness.agent.harnessBeginTerminalTransition('u-nothing');
@@ -222,10 +158,6 @@ describe('an interrupted terminal transition finishes the reply it still owed', 
     expect(harness.agent.harnessBeginTerminalTransition('u-nothing')).toBe('done');
   });
 
-  /**
-   * Activation, end to end: the answered lease is finished and the unanswered
-   * one is re-asked, from one pass, in that order.
-   */
   test('activation finishes what was answered and re-asks only what was not', async () => {
     const harness = orchestratorHarness();
     boundDelivery(harness, 'ev-answered', 'evt-answered', 5);
@@ -234,30 +166,20 @@ describe('an interrupted terminal transition finishes the reply it still owed', 
     await persistedDrainTurn(harness, 'evt-unanswered', null);
 
     await harness.agent.activateActor();
-    // The reconcile is detached from `onStart` (a bounded sweep plus one
-    // schedule write); the activation's own join settles that chain.
+    // The reconcile is detached from `onStart`; the activation's own join settles it.
     await harness.agent.harnessSettleBackgroundTasks();
 
-    // The activation touched NOTHING: both leases are exactly as the dead
-    // activation left them — it proved existence and armed the wake, which is
-    // the whole contract. The wake's frame joins the answered set, sweeps the
-    // unanswered lease back to pending, and dispatches the owed reply.
+    // Activation only proves existence and arms the wake; the wake frame does the work.
     expect(lease(harness, 'ev-answered')).toEqual({ turn_id: 'evt-answered', consumed_at: 5 });
     expect(lease(harness, 'ev-unanswered')).toEqual({ turn_id: 'evt-unanswered', consumed_at: 5 });
     await harness.agent.terminalRetryPass();
 
-    // Answered: finished, binding kept.
     expect(lease(harness, 'ev-answered').turn_id).toBe('evt-answered');
     expect(lease(harness, 'ev-answered').consumed_at).toBeNull();
-    // Unanswered: back in the pending pool to be asked again.
     expect(lease(harness, 'ev-unanswered')).toEqual({ turn_id: null, consumed_at: null });
   });
 });
 
-/**
- * The recovery context the SDK builds for the terminal lane's own fiber row.
- * Only `name` is a decision here; the rest is the shape the hook is handed.
- */
 const interruptedTerminalFiber: FiberRecoveryContext = {
   id: 'fiber-terminal',
   name: TERMINAL_LANE_FIBER,
@@ -266,57 +188,35 @@ const interruptedTerminalFiber: FiberRecoveryContext = {
   recoveryReason: 'interrupted',
 };
 
-/**
- * The terminal lane's recovery arm, which must NOT replay.
- *
- * The replay is the expensive one — `terminal-effects.ts` says so itself: "a
- * reply makes an SMTP round trip, a branch waits on a live head, and the
- * between-turn lanes each spend a model call" — and it says the cost is
- * acceptable because "a recovery runs off an alarm with no queue to block, and
- * awaits everything". That was true of two of the three entry points. It was
- * false of this one: the SDK awaits the fiber-recovery hook inside
- * `blockConcurrencyWhile`, where the whole object's queue is exactly what is
- * blocked, so a branch wait of a few minutes was the platform's 30s cancellation
- * and a RESET of the object with the same rows still owed.
- */
+/** The SDK awaits the fiber-recovery hook inside `blockConcurrencyWhile`, so replaying there blocks the whole
+ *  object into platform cancellation with the rows still owed: the arm must only schedule the wake. */
 describe('an interrupted terminal fiber arms the durable wake rather than replaying', () => {
   test('the hook classifies and arms; the replay happens off the gate', async () => {
     const harness = orchestratorHarness();
     const agent = harness.agent;
-    // A settled response whose sequence was claimed and never closed — what an
-    // isolate that died mid-report leaves on disk.
     expect(agent.harnessBeginTerminalTransition('u-owed')).toBe('first');
     expect((await agent.listSchedules()).map((row) => row.callback))
       .not.toContain(TERMINAL_RETRY_CALLBACK);
 
     const result = await agent.harnessRecoverFiber(interruptedTerminalFiber);
 
-    // THE property: the claim is still open at the instant the hook answered. The
-    // in-gate arm settled this row before returning, because it had run the whole
-    // replay — every owed reply, branch wait and between-turn model call — inside
-    // `blockConcurrencyWhile` first.
+    // The claim is still open when the hook returns: no replay ran inside the gate.
     expect(agent.harnessTerminalClaims().map((row) => row.result_json)).toEqual([null]);
     expect(result).toEqual({
       status: 'completed', snapshot: { lane: TERMINAL_LANE_FIBER, redrive: 'terminal-wake' },
     });
 
     await agent.harnessJoinDetachedFibers();
-    // The wake, durably: the ledger's own retry row, which is the carrier the
-    // module was designed for and the one the stale-schedule sweep spares.
+    // The ledger's own retry row: the carrier the stale-schedule sweep spares.
     expect((await agent.listSchedules()).map((row) => row.callback))
       .toContain(TERMINAL_RETRY_CALLBACK);
 
-    // Idempotent, and this is the entry the module documents as free to await
-    // everything: it acquires each sequence under the claim join, so the wake and
-    // this activation's own detached reconcile cannot both replay one row.
+    // The claim join keeps the wake and the detached reconcile from both replaying one row.
     await agent.terminalRetryPass();
 
     expect(agent.harnessBeginTerminalTransition('u-owed')).toBe('done');
   });
 
-  /** Nothing owed, nothing armed. Without this, "recovery arms the wake" would be
-   *  satisfied by an arm that fired on every activation and woke an idle
-   *  workspace for a roster that was already empty. */
   test('a workspace with no incomplete sequence arms no wake', async () => {
     const harness = orchestratorHarness();
     const agent = harness.agent;
@@ -328,9 +228,6 @@ describe('an interrupted terminal fiber arms the durable wake rather than replay
       .not.toContain(TERMINAL_RETRY_CALLBACK);
   });
 });
-
-
-// ── The installed Agents recovery scan ───────────────────────────────────
 
 interface SqlTrace {
   readonly query: string;
@@ -481,8 +378,6 @@ describe('the installed Agents recovery scan', () => {
         query.trimStart().startsWith('SELECT') && query.includes('snapshot')
       ));
 
-      // The corrupt terminal payload and every large expired payload are never
-      // fetched. The two survivors are fetched exactly at their own ids.
       expect(snapshotReads.map(({ bindings }) => bindings[0]))
         .toEqual(['fresh-control', 'ledger-only']);
 
@@ -559,23 +454,9 @@ describe('the installed Agents recovery scan', () => {
     }
   });
 });
-// ── The interrupted-fiber sweep ──────────────────────────────────────────
 
-/** A SqlExecutor over a scripted `cf_agents_runs`, recording every query it is
- *  asked to run — the only oracle that can answer "did this read a snapshot?".
- *  `onBoundaryRead` fires immediately after `MAX(rowid)` is answered, which is
- *  the one moment a frozen-boundary claim can be tested at. */
-/**
- * A scripted {@link FiberRowStore}, recording every question the sweep asks.
- *
- * ZERO casts: the port declares four narrow answers, so the fake states them
- * directly. That is also the strongest form the "never materializes a snapshot"
- * oracle can take — the interface has no method that could return one, so the
- * property is structural rather than a claim about a query string.
- *
- * `onBoundaryRead` fires immediately after `upperBoundary()` answers, which is
- * the one moment a frozen-boundary claim can be tested at.
- */
+/** A scripted {@link FiberRowStore} recording every question the sweep asks; no port member can return a snapshot.
+ *  `onBoundaryRead` fires right after `upperBoundary()` answers. */
 function scriptedFibers(
   rows: readonly FiberMetaRow[],
   onBoundaryRead?: (table: Map<string, FiberMetaRow>) => void,
@@ -633,14 +514,9 @@ const NOW = 1_700_000_000_000;
 
     sweepUnrecoverableFibers(scene.store, NOW);
 
-    // The framework's own scan opens with `SELECT id, name, snapshot,
-    // created_at` over every row, which is the allocation this pass exists to
-    // precede. What the pass asks for instead is exactly this, and no member of
-    // `FiberRowStore` can answer with a snapshot — so the property is carried by
-    // the interface rather than by a query string a refactor could change.
+    // No `FiberRowStore` member can return a snapshot, so the property rides the interface, not a query string.
     expect(new Set(scene.asked)).toEqual(new Set(['present', 'upperBoundary', 'page', 'dropIfExpired']));
-    // The cutoff lives in the query, so the fresh row is never paged at all:
-    // one drop for the single expired row is the whole conversation.
+    // The cutoff lives in the query: the fresh row is never paged.
     expect(scene.asked.filter((question) => question === 'dropIfExpired')).toHaveLength(1);
   });
 
@@ -657,9 +533,6 @@ const NOW = 1_700_000_000_000;
     expect(scene.survivors()).toEqual(['fresh-1']);
   });
 
-  /** The negative control for the case above: with nothing past the budget the
-   *  sweep must remove NOTHING. A pass that dropped unconditionally would
-   *  satisfy every "it dropped the old ones" assertion. */
   test('a workspace with no expired rows loses nothing', () => {
     const scene = scriptedFibers([
       { rowid: 1, id: 'fresh-1', created_at: inBudget(1) },
@@ -676,12 +549,7 @@ const NOW = 1_700_000_000_000;
       .toEqual({ dropped: 0, scanned: 0, truncated: false });
   });
 
-  /**
-   * Paging, exercised past the quantum. 600 expired rows are more than two
-   * pages, so a pass that read one page and stopped would report a third of
-   * them — and a pass that read the table once would issue exactly one
-   * `SELECT rowid`.
-   */
+  /** 600 expired rows span more than two pages. */
   test('it pages until the frozen boundary rather than reading the table once', () => {
     const rows = Array.from({ length: 600 }, (_unused, index) => ({
       rowid: index + 1, id: `old-${index}`, created_at: overAge(index + 1),
@@ -697,13 +565,7 @@ const NOW = 1_700_000_000_000;
     expect(pages).toBeGreaterThan(2);
   });
 
-  /**
-   * The upper boundary, frozen — asserted at the only moment it can be: a lane
-   * starts DURING the pass, right after `MAX(rowid)` was taken. Its row is
-   * expired by age and would otherwise be dropped, and it survives because it
-   * landed above the boundary. That is what makes a liveness check unnecessary
-   * rather than racy.
-   */
+  /** A row landing above the frozen boundary survives; that is why no liveness check is needed. */
   test('a row written after the boundary was frozen is outside the pass', () => {
     const scene = scriptedFibers(
       [{ rowid: 1, id: 'old-1', created_at: overAge(1) }],
@@ -727,21 +589,15 @@ const NOW = 1_700_000_000_000;
 
     const result = sweepUnrecoverableFibers(scene.store, NOW);
 
-    // An inherent bound on the work itself — rows scanned — never a stopwatch:
-    // the pass stops at the budget and says so rather than keep going.
     expect(result.truncated).toBe(true);
     expect(result.scanned).toBe(SWEEP_MAX_ROWS);
     expect(result.dropped).toBeGreaterThan(0);
     expect(result.dropped).toBeLessThan(rows.length);
-    // What it did not reach is still there for the next activation.
     expect(scene.survivors().length).toBeGreaterThan(0);
   });
 
   test('deletion is the cursor: the next wake reaches what this one did not', () => {
-    // A backlog deeper than one budget, all expired. No durable cursor exists,
-    // and none is needed: rowid order tracks insertion, so an expired row
-    // cannot sit BEHIND a fresh one, and the rows a wake drops are exactly the
-    // prefix the next wake no longer scans.
+    // Rowid order tracks insertion, so no durable cursor is needed across wakes.
     const rows = Array.from({ length: SWEEP_MAX_ROWS + 300 }, (_unused, index) => ({
       rowid: index + 1, id: `old-${index}`, created_at: overAge(index + 1),
     }));
@@ -758,10 +614,7 @@ const NOW = 1_700_000_000_000;
   });
 
   test('an expired row behind a wall of fresh ones is dropped on the FIRST wake', () => {
-    // The adversarial ordering `created_at`-tracks-rowid would starve: imported
-    // rows or a stepped clock put fresh timestamps at LOW rowids and an expired
-    // row above the whole budget. The cutoff sits in the query, so the wall is
-    // never scanned and the expired row is page one.
+    // Fresh timestamps at low rowids: the cutoff in the query keeps them unscanned.
     const rows = [
       ...Array.from({ length: SWEEP_MAX_ROWS + 10 }, (_unused, index) => ({
         rowid: index + 1, id: `fresh-${index}`, created_at: inBudget(index + 1),
@@ -779,12 +632,7 @@ const NOW = 1_700_000_000_000;
   });
 
   test('the PATCHED framework scan carries the same row budget, never a stopwatch', async () => {
-    // This repo owns patches/agents@0.22.0.patch: its _checkRunFibers rewrite
-    // is Kinu code wearing a vendor path, so the init ruling applies to it the
-    // same way. The budget half runs the INSTALLED scan past the sweep's own
-    // budget: every expired row reports skipped, and the first row past the
-    // budget is the last one the scan names. Sized from the imported sweep
-    // budget because the patch exists to carry that same bound.
+    // patches/agents@0.22.0.patch rewrites _checkRunFibers as Kinu code; its budget must match the sweep's.
     const scene = installedFiberRecoveryScene();
 
     try {
@@ -811,9 +659,7 @@ const NOW = 1_700_000_000_000;
       scene.database.close();
     }
 
-    // The stopwatch half has no behavioral surface: a fast suite never trips a
-    // wall-clock exit, so its absence is only observable in the installed
-    // scan's own source. A repin that resurrects it fails here by name.
+    // The stopwatch's absence is only observable in the installed scan's source.
     const scan = installedCheckRunFibers.toString();
     expect(scan).not.toContain('scan_deadline_exceeded');
     expect(scan).not.toContain('scanStartedAt');

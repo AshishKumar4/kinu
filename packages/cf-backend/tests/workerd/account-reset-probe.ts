@@ -1,22 +1,7 @@
 /**
- * Account deletion on the REAL UserDO over real workerd.
- *
- * WHAT ONLY THIS CAN PROVE. `unit-account-delete.test.ts` drives the same
- * method over bun:sqlite with a stand-in SDK, so it can say the sweeps ran and
- * the harness's `deleteAll` emptied its database. Two facts are the platform's
- * to state and nothing in bun can state them: that the SDK's `destroy()` really
- * takes every table of a SQLite-backed object and that the object addressed by
- * the same id afterwards is a FRESH one — empty tables, no profile, no
- * onboarding stamp — rather than the aborted one revived over its old rows.
- * And that the workspace objects the delete tore down answer the owner's next
- * question with no capability at all, which is what a real teardown leaves.
- *
- * The probe is the production class plus four fixture methods, sealed through
- * the production seal — the same shape user-socket-probe.ts uses — so every
- * call the test makes crosses the real RPC boundary into the real object.
- * The object is addressed BY THE OWNER'S USER ID, because `deleteAccount`
- * hands that id to each workspace's `destroyAgent`, which compares it to the
- * owner the workspace claimed.
+ * Account deletion on the real UserDO over workerd: only the platform can show `destroy()` takes every
+ * table and the same id then addresses a fresh object, and that torn-down workspaces hold no capability.
+ * Addressed by the owner's user id, which `deleteAccount` hands to each workspace's `destroyAgent`.
  */
 import { getAgentByName, type AgentContext } from 'agents';
 import { ownerCaller } from '@kinu.run/core';
@@ -24,15 +9,12 @@ import { OrchestratorAgent as ProductionOrchestrator } from '../../src/orchestra
 import { USER_DO_RPC_SURFACE, sealRpcSurface } from '../../src/rpc-surface';
 import { UserDO, type UserProfile } from '../../src/user/user-do';
 
-// Bound under their production names so the auxiliary worker's durableObjects
-// carry the classes themselves: `deleteAccount` reaches each workspace through
-// `env.OrchestratorAgent`, exactly as production does.
+// Bound under production names: `deleteAccount` reaches workspaces through `env.OrchestratorAgent`.
 export { UserDO } from '../../src/user/user-do';
 
 export { OrchestratorAgent } from '../../src/orchestrator';
 
-// A Worker module may export only handlers and classes, so the fixture values
-// stay module-private and the test spells the owner id for itself.
+// A Worker module may export only handlers and classes, so fixture values stay module-private.
 const RESET_OWNER_ID = '0123456789abcdef0123456789abcdef';
 
 const RESET_WORKSPACES = ['ws-alpha', 'ws-beta'] as const;
@@ -47,7 +29,6 @@ type ProbeEnv = ConstructorParameters<typeof ProductionOrchestrator>[1];
 
 type ClaimTarget = Pick<Fetcher, 'fetch'> & Pick<ProductionOrchestrator, 'claimOwner' | 'getWorkspaceCapabilityHash'>;
 
-/** The tables the account writes, by the prefixes the user schema uses. */
 const ACCOUNT_TABLE_PREFIXES = ['user_', 'device_', 'cli_', 'codex_'];
 
 export class AccountResetProbeDO extends UserDO {
@@ -62,9 +43,7 @@ export class AccountResetProbeDO extends UserDO {
     return getAgentByName<ProbeEnv, ProductionOrchestrator>(this.env.OrchestratorAgent, workspace);
   }
 
-  /** A lived-in account: two owned workspaces with minted capabilities, a
-   *  blueprint someone shared here, an MCP server, a credential and a device
-   *  grant — one row in every store the delete has to empty. */
+  /** One row in every store the delete has to empty. */
   async seed(): Promise<SeededAccount> {
     const owner = await ownerCaller(this.env);
     await this.ensureProfile(owner, 'owner@probe.local', 'Owner');
@@ -88,7 +67,6 @@ export class AccountResetProbeDO extends UserDO {
     return { hashes: await this.hashes() };
   }
 
-  /** The capability each workspace object holds, asked of the object itself. */
   async hashes(): Promise<WorkspaceHashes> {
     const alpha = await (await this.workspaceTarget('ws-alpha')).getWorkspaceCapabilityHash();
     const beta = await (await this.workspaceTarget('ws-beta')).getWorkspaceCapabilityHash();
@@ -96,9 +74,7 @@ export class AccountResetProbeDO extends UserDO {
     return { 'ws-alpha': alpha, 'ws-beta': beta };
   }
 
-  /** Row counts of every account table that exists. The profile read first is
-   *  what runs the schema init on a fresh activation, so an emptied object
-   *  reports its tables as present and empty rather than as absent. */
+  /** The profile read runs schema init first, so an emptied object reports tables present and empty, not absent. */
   async counts(): Promise<Record<string, number>> {
     await this.getProfile(await ownerCaller(this.env));
 
@@ -119,8 +95,7 @@ export class AccountResetProbeDO extends UserDO {
     return this.deleteAccount(await ownerCaller(this.env), RESET_OWNER_ID);
   }
 
-  /** What the next sign-in's first request does: upsert the profile, then
-   *  read it. On a reset account that is an insert, and the stamp is null. */
+  /** The next sign-in's first request; on a reset account it inserts and the stamp is null. */
   async freshProfile(): Promise<UserProfile | null> {
     const owner = await ownerCaller(this.env);
     await this.ensureProfile(owner, 'owner@probe.local');

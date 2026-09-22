@@ -1,16 +1,6 @@
 /**
- * The PC daemon's `exec` RPC — the cf backend's `device` runtime.
- *
- * `packages/pc-agent/src/index.js` is the other end of the device tunnel: when
- * a cloud agent calls `run device`, this is the process that actually runs the
- * command on the user's machine. It ships as one dependency-free file the user
- * downloads, it had no suite at all, and it carried the same two defects as the
- * local host shell — which is the point. The bug was never "a mistake in one
- * function", it was one contract implemented three times with nobody checking
- * that the copies agreed.
- *
- * Tested through the exported RPC entry point (`handle`) with a fake socket,
- * so these assert what the cloud agent receives, not how the daemon is built.
+ * The PC daemon's `exec` RPC (`packages/pc-agent/src/index.js`), the far end of the device tunnel.
+ * Defends: the device copy of the shell contract drifting from the local host shell. Driven through `handle`.
  */
 
 import { scratchDir } from '../../test-utils/src/scratch';
@@ -40,21 +30,14 @@ interface DaemonMessage {
 
 interface ReplySocket { send(data: string): void }
 
-/** One frame as the tunnel writes it onto the device socket — the shape the
- *  daemon's dispatch reads back off the wire. */
 const DaemonFrameSchema = v.object({
   id: v.string(),
   method: v.string(),
   params: v.array(v.union([v.string(), v.number()])),
 });
 
-/** The daemon members these tests drive. `inFlight` is the command registry a
- *  cancellation resolves ids against; a dropped socket calls into it directly,
- *  which is how the disconnect case is exercised without a real WebSocket. */
-/** One sweep's terminations, parsed where they arrive: each names its request
- *  and carries the promise that settles when that command's kill is confirmed.
- *  `terminated` stays unparsed here and is parsed once awaited, because a
- *  pending promise carries no shape to check yet. */
+/** A dropped socket calls into `inFlight` directly, so disconnect is exercised without a real WebSocket. */
+/** `terminated` stays unparsed until awaited: a pending promise has no shape to check. */
 const SweepSchema = v.array(v.object({ requestId: v.string(), terminated: v.unknown() }));
 
 const ConfirmedCancellationSchema = v.object({ requestId: v.string(), cancelled: v.string() });
@@ -63,8 +46,6 @@ const PcAgentModuleSchema = v.object({
   handle: v.function(),
   inFlight: v.object({
     size: v.function(),
-    /** Returns one promise per command it terminated; each resolves with the
-     *  confirmed outcome and rejects when the kill is unproven. */
     terminateUnanswered: v.function(),
   }),
   createInFlight: v.function(),
@@ -84,8 +65,6 @@ const PcAgentModuleSchema = v.object({
   waitForSupervisorState: v.function(),
 });
 
-/** The registry surface the unregistered-window test drives, which is the
- *  same `createInFlight` the daemon builds its own from. */
 const SupervisorRegistrySchema2 = v.object({
   terminateUnanswered: v.function(),
 });
@@ -112,9 +91,6 @@ const ExecReplySchema = v.object({
 
 type ExecReply = v.InferOutput<typeof ExecReplySchema>;
 
-/** Any frame the daemon writes back, narrowed by the caller that knows which
- *  answer it asked for. One recorder serves exec and cancellation both, and a
- *  schema that only fit exec would fail the moment it saw a cancellation. */
 const DaemonReplySchema = v.object({
   id: v.string(),
   result: v.optional(JsonValueSchema),
@@ -129,7 +105,6 @@ function rpcId(sequence: number): string {
   return `rpc-testepoch0-${sequence}`;
 }
 
-/** Issue one `exec` RPC and resolve with the daemon's reply. */
 function exec(command: string): Promise<{ reply: ExecReply; elapsed: number }> {
   const { promise, resolve } = Promise.withResolvers<{ reply: ExecReply; elapsed: number }>();
   const started = Date.now();
@@ -182,20 +157,10 @@ describe('pc-agent exec RPC', () => {
 });
 
 /**
- * Cancellation, at the only layer that can prove it: real processes.
- *
- * A cancelled command means a cancelled PROCESS, not a cancelled WAIT. A daemon
- * with no method to stop anything, no record of what it had started, and a
- * command's own exit answered by unref'ing the child leaves a `sleep &` inside
- * the command running on the user's machine after Kinu reports the turn stopped.
- *
- * So each test below reads a real descendant's pid out of the command itself and
- * asks the kernel about it. The `alive before` assertion in the first test is
- * the negative control: without it, a test that cannot spawn a descendant at all
- * would pass for the wrong reason.
+ * Cancellation proven against real processes: a cancelled command means a killed process, not a
+ * cancelled wait. The `alive before` assertion is the negative control.
  */
 
-/** A recording socket plus the frames the daemon has written to it. */
 function recorder() {
   const replies: DaemonReply[] = [];
   const awaited = new Map<string, (reply: DaemonReply) => void>();
@@ -210,9 +175,7 @@ function recorder() {
       },
     },
     of(id: string): DaemonReply[] { return replies.filter((reply) => reply.id === id); },
-    /** The daemon's answer to `id` as a promise: the same frame `of` returns,
-     *  awaitable before it has arrived. A wait on something a command produces
-     *  needs this to race, or it can only end by giving up. */
+    /** Awaitable before arrival, so a wait on command output can race the answer. */
     answerTo(id: string): Promise<DaemonReply> {
       const arrived = replies.find((reply) => reply.id === id);
 
@@ -225,12 +188,7 @@ function recorder() {
   };
 }
 
-/**
- * Whether the kernel still knows `pid`. Every answer is accounted for: ESRCH is
- * the process being gone, EPERM is a process that exists and is not ours to
- * signal, and anything else is this test's own breakage rather than a reading
- * about the process.
- */
+/** ESRCH = gone, EPERM = exists but not ours; anything else is test breakage. */
 function alive(pid: number): boolean {
   try {
     process.kill(pid, 0);
@@ -246,16 +204,7 @@ function alive(pid: number): boolean {
   }
 }
 
-/**
- * Poll until `read` answers, and name what was being waited for when it never
- * does — so a failure reads as "the descendant is still alive" rather than as a
- * bare timeout.
- *
- * Real time, deliberately: the subject here is a process group on this machine,
- * and whether a SIGKILL landed is a question only the kernel can answer. A fake
- * clock cannot advance a `kill(2)`, and a fixed sleep would either guess or
- * hide the condition. Every wait ends on the condition, never on the interval.
- */
+/** Real time on purpose: only the kernel can say whether a SIGKILL landed. Ends on the condition, never an interval. */
 async function settled<T>(read: () => T | undefined, what: string): Promise<T> {
   const deadline = Date.now() + 10_000;
 
@@ -269,14 +218,7 @@ async function settled<T>(read: () => T | undefined, what: string): Promise<T> {
   }
 }
 
-/**
- * Wait until `pid` is no longer in the process table.
- *
- * SIGKILL is definitive the moment the kernel accepts it, but the corpse stays
- * visible to `kill(pid, 0)` until whoever inherited it reaps it, and that
- * happens on init's schedule rather than the killer's. Nothing else was going
- * to end a `sleep 30` inside this window, so disappearing here means killed.
- */
+/** The corpse stays visible to `kill(pid, 0)` until init reaps it. */
 function gone(pid: number): Promise<true> {
   return settled(() => (alive(pid) ? undefined : true), `process ${pid} to leave the process table`);
 }
@@ -285,14 +227,7 @@ const PidSchema = v.pipe(v.number(), v.integer(), v.minValue(1));
 
 const SupervisorStateSchema = v.object({ pid: PidSchema, group: PidSchema });
 
-/**
- * The two processes one command actually has: the supervisor the daemon
- * signals, and the group the command itself runs in.
- *
- * Read from the supervisor's own published state, which is where the daemon
- * reads it too. A test that stopped at the RPC surface could not name either
- * process, and every claim here is about what the kernel knows.
- */
+/** Read from the supervisor's published state, where the daemon reads it too. */
 function supervisorState(requestId: string): Promise<v.InferOutput<typeof SupervisorStateSchema>> {
   const file = join(pcAgent.INFLIGHT_ROOT, requestId, 'state');
 
@@ -315,35 +250,15 @@ function supervisorState(requestId: string): Promise<v.InferOutput<typeof Superv
   }, `the published supervisor state for ${requestId}`);
 }
 
-/**
- * A command that leaves a descendant of its own behind, plus the file that
- * descendant's pid is written to — the process a group kill has to reach.
- *
- * The pid is PUBLISHED rather than written in place: the shell writes it beside
- * the name and renames, which is the discipline the supervisor already uses for
- * its own `state` and `result`. A watcher then cannot see the name appear
- * before the pid is in it, so the file appearing IS the readiness signal and
- * needs no second look to confirm.
- */
+/** The pid file is published by rename, so its appearance is the readiness signal. */
 function commandWithDescendant(dir: string, name: string) {
   const pidFile = join(dir, `${name}.pid`);
 
   return {
     command: `(sleep 30 & echo $! > ${pidFile}.part && mv ${pidFile}.part ${pidFile}); sleep 30`,
     /**
-     * The descendant's pid, on the daemon's own file watch rather than on a
-     * clock. `waitForFile` is the synchronisation the daemon itself uses to
-     * learn that a supervisor has published, so this ends on the write.
-     *
-     * `answer` is the daemon's reply channel for this same command, and racing
-     * it is the load-bearing half. This pid file is written by a command that
-     * RAN; a command the daemon never started writes nothing, and a wait on
-     * that name alone can only end by giving up — which is how a supervisor
-     * that refused to start was reported for ten seconds as a missing
-     * descendant while the daemon's own error frame sat unread on the socket.
-     * These commands run `sleep 30` twice, so no honest result can arrive
-     * before the descendant does: an answer that wins this race is a refusal,
-     * and it is reported as the refusal it is.
+     * Races `answer`: a command the daemon refused never writes the pid file, so the daemon's error frame
+     * must win the race instead of the wait timing out.
      */
     pidOf: async (answer: Promise<unknown>): Promise<number> => {
       const watching = new AbortController();
@@ -364,8 +279,7 @@ function commandWithDescendant(dir: string, name: string) {
         const published: Promise<unknown> = Promise.resolve(pcAgent.waitForFile(pidFile, watching.signal));
         await Promise.race([published, refused()]);
       } finally {
-        // A lost race leaves the watch open otherwise, and this is one inotify
-        // instance out of the 128 the kernel allows the whole user.
+        // A lost race otherwise leaks an inotify instance from the per-user kernel cap.
         watching.abort();
       }
 
@@ -389,8 +303,7 @@ describe('pc-agent command cancellation', () => {
     expect(pcAgent.EXEC_ACK_METHOD).toBe(DEVICE_EXEC_ACK_METHOD);
   });
 
-  // The daemon ships dependency-free and cannot import these, so a rename on
-  // either side of the tunnel has only this test to go red.
+  // The daemon is dependency-free and cannot import these; this test is the only drift check.
   test('the daemon and core name the same terminal protocol', () => {
     expect(pcAgent.PTY_OPEN_METHOD).toBe(DEVICE_PTY_OPEN_METHOD);
     expect(pcAgent.PTY_INPUT_FRAME).toBe(DEVICE_PTY_INPUT);
@@ -509,10 +422,7 @@ describe('pc-agent command cancellation', () => {
   test('a sweep reaches a command the registry has not registered yet', async () => {
     const dir = scratchDir('pc-agent-unregistered');
     const waiting = commandWithDescendant(dir, 'unregistered');
-    // Built over the root while it is still empty, so it holds no entry for
-    // the request below. That is the live window: the supervisor publishes
-    // its state before `register` runs, and a socket dropping in between
-    // would leave the command running with nothing left to name it.
+    // Built over the empty root: the live window where the supervisor published but `register` hasn't run.
     const detached = v.parse(SupervisorRegistrySchema2, pcAgent.createInFlight(pcAgent.INFLIGHT_ROOT));
     const ws = recorder();
     handle({ id: rpcId(260), method: 'exec', params: [waiting.command] }, ws.socket);
@@ -534,24 +444,10 @@ describe('pc-agent command cancellation', () => {
     handle({ id: rpcId(250), method: 'exec', params: [waiting.command] }, ws.socket);
     const abandoned = await waiting.pidOf(ws.answerTo(rpcId(250)));
     expect(alive(abandoned)).toBe(true);
-    // The supervisor has published its state, which is the fact the daemon
-    // reconciles from: a socket that drops before this names no command yet.
     await supervisorState(rpcId(250));
 
-    // Asserted at the moment the daemon GUARANTEES the fact, not on a
-    // deadline. `terminateUnanswered` returns its terminations; each resolves
-    // only once the supervisor has published a terminal result AND the daemon
-    // has confirmed the owned process group holds no live process, and it
-    // REJECTS when either is unproven. So this settles exactly when the kill
-    // has landed.
-    //
-    // Polling `kill(pid, 0)` could not assert the same thing twice over: it
-    // reads "not yet" and "never" as the same value, and it stays true for a
-    // corpse nobody has reaped, which is a state the daemon's own confirmation
-    // deliberately ignores.
-    // Selected by request id: a sweep terminates every abandoned command at
-    // once, and this suite shares one in-flight root, so a positional pick
-    // would assert about whichever command happened to be first.
+    // Settles only once the kill is confirmed and rejects when unproven; polling `kill(pid, 0)` cannot tell
+    // "not yet" from "never". Selected by request id: the sweep terminates every abandoned command at once.
     const swept = v.parse(SweepSchema, pcAgent.inFlight.terminateUnanswered());
     const mine = swept.find((entry) => entry.requestId === rpcId(250));
     expect(mine).toBeDefined();
@@ -684,23 +580,9 @@ describe('pc-agent supervisor guards', () => {
   });
 });
 
-/**
- * The whole chain, once, with a real process on the end of it.
- *
- * Every layer above is exercised in its own file, and each of those could pass
- * while the chain stayed broken — the executor mints an identity, the tunnel
- * issues the frame under it, the daemon registers a process group under it, and
- * a cancellation has to travel all of that to reach a `sleep`. So this wires the
- * real executor to the real tunnel to the real daemon and aborts the tool the
- * way a stopped turn does.
- */
+/** The whole chain, executor → tunnel → daemon → real process, aborted the way a stopped turn does. */
 describe('stopping a turn reaches the process on the user\'s machine', () => {
-  /** Executor → tunnel → daemon dispatch → supervisor, with nothing stubbed in
-   *  between. The socket the tunnel writes onto IS the daemon's dispatch, and
-   *  the daemon's replies go straight back into the tunnel's correlation. The
-   *  binding is declared before the socket because the two own each other: the
-   *  socket cannot be built after the tunnel that takes it, and nothing reads
-   *  it until the first frame, which is after the assignment below. */
+  /** The binding is declared before the socket: the two reference each other, and nothing reads it before the first frame. */
   function deviceChain() {
     let tunnel: DeviceTunnel;
 
@@ -735,8 +617,6 @@ describe('stopping a turn reaches the process on the user\'s machine', () => {
     const descendant = await pidOf(pending);
     expect(alive(descendant)).toBe(true);
 
-    // The Stop button, `kinu stop`, a cancelled background job and the turn's
-    // own abort all arrive here as this one signal.
     controller.abort();
 
     await expect(pending).rejects.toMatchObject({
@@ -747,15 +627,7 @@ describe('stopping a turn reaches the process on the user\'s machine', () => {
     tunnel.dispose();
   });
 
-  /**
-   * The same chain when the far end genuinely cannot kill the command.
-   *
-   * The daemon's authority over a running command is its supervisor: that
-   * process holds the command's group and is the only thing that can signal it.
-   * Kill the supervisor and the group is beyond the daemon's reach — the case
-   * where "terminated" would be a lie about the user's own machine, and the
-   * processes are there to prove it.
-   */
+  /** The far end genuinely cannot kill: with the supervisor gone, the group is beyond the daemon's reach. */
   test('a stop the device cannot perform is reported as unconfirmed, with the command still running', async () => {
     const dir = scratchDir('pc-agent-orphan');
     const { command, pidOf } = commandWithDescendant(dir, 'orphan');
@@ -772,17 +644,13 @@ describe('stopping a turn reaches the process on the user\'s machine', () => {
     const supervisor = await supervisorState(issued[0]);
 
     process.kill(supervisor.pid, 'SIGKILL');
-    // Not "signalled" — GONE from the process table. A supervisor still visible
-    // as a corpse would be signalled by the daemon and never answer, which is a
-    // different failure from the one under test.
+    // Gone, not just signalled: a supervisor corpse would never answer, a different failure.
     expect(await gone(supervisor.pid)).toBe(true);
     controller.abort();
 
     await expect(pending).rejects.toMatchObject({ name: 'AbortError' });
     await expect(pending).rejects.toThrow(/could not stop the command, which may still be running/);
     await expect(pending).rejects.toThrow(/supervisor identity no longer matches/);
-    // And that report is true, which is the whole point: the command's own
-    // child is still on this machine after the turn said it could not be stopped.
     expect(alive(descendant)).toBe(true);
 
     tunnel.dispose();
@@ -792,15 +660,8 @@ describe('stopping a turn reaches the process on the user\'s machine', () => {
 });
 
 /**
- * The completion boundary, from the machine's side.
- *
- * A command finishes on its own, and the supervisor spends a drain window
- * before publishing the result. A cancellation landing anywhere in there has
- * nothing left to kill, and the answer it gets is one of two refusals: inside
- * the window the command's own process group leader is already gone, so the
- * daemon will not signal a pid it can no longer identify; after it, no control
- * entry remains. Neither is "terminated", and the command's own result must
- * still arrive, once, exactly as it happened.
+ * The completion boundary: a cancel during or after the drain window gets a refusal, never "terminated",
+ * and the command's own result still arrives exactly once.
  */
 describe('pc-agent cancellation racing a command\'s own completion', () => {
   test('claims no kill, and the command\'s real result still lands exactly once', async () => {
@@ -809,16 +670,12 @@ describe('pc-agent cancellation racing a command\'s own completion', () => {
     handle({ id: runId, method: 'exec', params: ['echo finished'] }, ws.socket);
     const supervisor = await supervisorState(runId);
 
-    // The command's shell has left the process table, so the command is over
-    // and the supervisor is at or inside its drain window.
     expect(await gone(supervisor.group)).toBe(true);
     cancel(rpcId(271), runId, ws.socket);
 
     const answer = await settled(() => ws.of(rpcId(271))[0], 'the cancellation answer');
     const claim = v.safeParse(DeviceCancelResultSchema, answer.result);
 
-    // Never a claimed kill — this cancellation stopped nothing, because there
-    // was nothing left to stop.
     if (claim.success) expect(claim.output).toEqual({ requestId: runId, cancelled: 'unknown' });
     else expect(answer.error).toContain(`cannot terminate ${runId}`);
 
@@ -829,8 +686,6 @@ describe('pc-agent cancellation racing a command\'s own completion', () => {
 
     acknowledge(rpcId(272), runId, ws.socket);
     await settled(() => ws.of(rpcId(272))[0], 'the completion ACK');
-    // One result frame for this command, before the cancellation and after it:
-    // a settled request publishes nothing further.
     expect(ws.of(runId)).toHaveLength(1);
   });
 });

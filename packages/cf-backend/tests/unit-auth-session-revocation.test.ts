@@ -1,7 +1,5 @@
-// A session cookie is live while ONE row in the signing-in user's own Durable
-// Object says so. These tests read that row through the real UserDO, and read
-// KV through two colos that disagree about a delete for a minute, because the
-// disagreement is what a stolen cookie would survive on.
+// A session cookie is live while one row in the user's own DO says so. KV is read through two colos that
+// disagree about a delete for a window, because that disagreement is what a stolen cookie would survive on.
 
 import {
   TEST_CREDENTIAL_ENCRYPTION_KEY, createTestUserDO, type TestUserDO,
@@ -26,27 +24,19 @@ import {
   createRecordingLogger, renderThrownChain, setDiagnosticsSink, type RecordingLogger,
 } from '@kinu.run/core/obs';
 
-/** What Cloudflare gives a KV write, or a KV delete, to reach every colo. */
 const KV_REPLICATION_LAG_MS = 60_000;
 
 interface KvEntry { value: string; expiresAt: number; replicatedAt: number }
 
 interface ReplicatedKv {
-  /** The colo that served the write or the delete. */
   near: KvStore;
-  /** A colo a delete has not reached yet. */
   far: KvStore;
-  /** A colo a WRITE has not reached yet: a record written less than
-   *  {@link KV_REPLICATION_LAG_MS} ago reads as absent here, which is what the
-   *  first request after a sign-in redirect can land on. */
+  /** A record written less than {@link KV_REPLICATION_LAG_MS} ago reads as absent here: the first request after sign-in can land on it. */
   cold: KvStore;
   keys(): string[];
 }
 
-/** One KV namespace as three colos see it. A put is visible at `near` at once
- *  and at `cold` only after the replication window; a delete is visible at
- *  `near` at once and at `far` only after it. Both directions are the same
- *  window, and a session cookie has to be answered correctly in both. */
+/** Puts reach `cold`, deletes reach `far`, only after the replication window; a cookie must be answered correctly in both directions. */
 function replicatedKv(): ReplicatedKv {
   const origin = new Map<string, KvEntry>();
   const lagging = new Map<string, { entry: KvEntry; until: number }>();
@@ -58,7 +48,6 @@ function replicatedKv(): ReplicatedKv {
     async get(key) {
       const current = live(origin.get(key));
 
-      // A write is not readable at a colo it has not reached yet.
       if (current) return !lag.writes || Date.now() >= current.replicatedAt ? current.value : null;
 
       if (!lag.deletes) return null;
@@ -92,8 +81,6 @@ function replicatedKv(): ReplicatedKv {
   };
 }
 
-/** A KV view with one operation refused, for the awaits a session lifecycle
- *  spends inside KV. */
 function kvFailing(kv: KvStore, operation: 'get' | 'put' | 'delete'): KvStore {
   return {
     get: (key) => (operation === 'get'
@@ -110,20 +97,16 @@ function kvFailing(kv: KvStore, operation: 'get' | 'put' | 'delete'): KvStore {
 
 type SessionMethod = 'registerBrowserSession' | 'verifyBrowserSession' | 'revokeBrowserSession';
 
-/** A namespace binding as this suite supplies it: the two members the auth
- *  store calls on one, handing back a stub-shaped double of a real UserDO. */
 type TestNamespace = ObjectNamespace<string, AuthRoutesAuthority>;
 
 interface Fleet {
   namespace: TestNamespace;
-  /** The user's real Durable Object, built on first address, as the runtime does. */
+  /** Built on first address, as the runtime does. */
   objectFor(userId: string): TestUserDO;
-  /** The same fleet with one session method refusing every call. */
   broken(method: SessionMethod): TestNamespace;
   close(): void;
 }
 
-/** Real UserDO instances behind a namespace binding, one per user id. */
 function fleet(): Fleet {
   const objects = new Map<string, TestUserDO>();
 
@@ -147,10 +130,8 @@ function fleet(): Fleet {
         ? Promise.reject(new Error('Durable Object unreachable'))
         : null);
 
-      // A double with a stub's shape: methods on the prototype, so the
-      // delegation cannot be flattened away by a copy.
-      // The sign-in path's other two calls: no case here signs in with
-      // Cloudflare, so reaching either names itself rather than answering.
+      // Methods on the prototype, so a copy cannot flatten the delegation away. No case signs in with Cloudflare,
+      // so reaching the other two sign-in calls names itself rather than answering.
       return jsrpcStub({
         setCredential: (): never => { throw new Error('setCredential: not reachable in this test'); },
         listActiveWorkspaces: (): never => { throw new Error('listActiveWorkspaces: not reachable in this test'); },
@@ -182,8 +163,7 @@ function envWith(
     AUTH_KV: kv,
     UserDO: namespace,
     CREDENTIAL_ENCRYPTION_KEY: credentialEncryptionKey,
-    // Only the Cloudflare callback fans a credential change out, and no case
-    // here signs in.
+    // Only the Cloudflare callback fans a credential change out, and no case here signs in.
     OrchestratorAgent: unreachableNamespace('OrchestratorAgent'),
   };
 }
@@ -192,7 +172,6 @@ function profile(email: string, sub = 'cf-1'): OAuthProfile {
   return { provider: 'cloudflare', providerSub: sub, email, emailVerified: true, displayName: null };
 }
 
-/** The session hashes this user's Durable Object still calls live. */
 function liveSessions(harness: TestUserDO): string[] {
   return harness.db
     .query<{ token_hash: string }, []>('SELECT token_hash FROM user_browser_sessions ORDER BY token_hash')
@@ -200,7 +179,6 @@ function liveSessions(harness: TestUserDO): string[] {
     .map((row) => row.token_hash);
 }
 
-/** The `AuthError` a cookie was refused with, as a value to assert against. */
 async function refusalFor(token: string, env: AuthEnv<string>): Promise<AuthError> {
   const request = new Request('https://kinu.example.com/api/workspaces', {
     headers: { cookie: `${SESSION_COOKIE_NAME}=${encodeURIComponent(token)}` },
@@ -216,8 +194,7 @@ async function refusalFor(token: string, env: AuthEnv<string>): Promise<AuthErro
   throw new Error('the cookie was accepted');
 }
 
-/** The error a call rejected with, as a value, so its class and its cause
- *  chain can both be read. */
+/** As a value, so both its class and its cause chain can be read. */
 async function rejection(call: Promise<unknown>): Promise<Error> {
   try {
     await call;
@@ -250,8 +227,7 @@ function openFleet(): Fleet {
   return built;
 }
 
-/** The diagnostics the step after this call emits. An instrument nobody asserts
- *  on is an instrument nobody notices has stopped. */
+/** An instrument nobody asserts on is one nobody notices has stopped. */
 function recordDiagnostics(): RecordingLogger {
   const logger = createRecordingLogger();
   restoreSinks.push(setDiagnosticsSink(logger));
@@ -280,8 +256,7 @@ describe('logout ends one session everywhere at once', () => {
 
     await revokeSession(near, session.token);
 
-    // The far colo still HAS the KV record — the propagation window a stolen
-    // cookie would live in — and refuses the cookie anyway.
+    // The far colo still has the KV record, the window a stolen cookie would live in, and refuses anyway.
     expect(await kv.far.get(`session:${await sha256Hex(session.token)}`)).not.toBeNull();
     expect(await verifySession(far, session.token)).toBeNull();
     expect(await verifySession(near, session.token)).toBeNull();
@@ -333,15 +308,13 @@ describe('logout ends one session everywhere at once', () => {
 
     expect(refused?.status).toBe(503);
     expect(refused?.headers.get('location')).toBeNull();
-    // The cookie is NOT cleared: it is the only handle that can still revoke
-    // this session, and the page says the session is still signed in.
+    // Not cleared: the cookie is the only handle that can still revoke this session.
     expect(refused?.headers.get('set-cookie')).toBeNull();
     const page = await refused?.text() ?? '';
     expect(page).toContain('NOT signed out');
     expect(page).toContain('href="/logout?return_to=%2F"');
     expect(await verifySession(env, session.token)).not.toBeNull();
 
-    // The retry the page offers, once the authority answers again.
     const retried = await handleAuthRequest(logoutRequest(session.token), env);
 
     expect(retried?.status).toBe(302);
@@ -373,8 +346,7 @@ describe('logout ends one session everywhere at once', () => {
     const cleanupFails = envWith(kvFailing(kv.near, 'delete'), authority.namespace);
     await revokeSession(cleanupFails, session.token);
 
-    // The authority row went first, so the session is already dead at every
-    // colo. What KV kept is a snapshot standing for nothing.
+    // The authority row went first, so the session is already dead at every colo.
     expect(await verifySession(env, session.token)).toBeNull();
     expect(await verifySession(envWith(kv.far, authority.namespace), session.token)).toBeNull();
     expect(kv.keys().filter((key) => key.startsWith('session:'))).toHaveLength(1);
@@ -412,13 +384,11 @@ describe('a sign-in that cannot publish its session hands out no cookie', () => 
     const authority = openFleet();
     const env = envWith(kvFailing(kv.near, 'put'), authority.broken('revokeBrowserSession'));
 
-    // The failure the operator needs is the one that stopped the sign-in, not
-    // the tidy-up that also failed.
+    // Report the failure that stopped the sign-in, not the tidy-up that also failed.
     const failure = await rejection(createSession(env, profile('person@example.com')));
     expect(renderThrownChain({ cause: failure })).toContain('KV write refused');
 
-    // The row is stranded until it expires, and it stands for nothing: the
-    // token was never returned and no KV record was ever written for it.
+    // Stranded until expiry, harmlessly: the token was never returned and no KV record written.
     const userId = await deriveUserId('person@example.com');
     expect(liveSessions(authority.objectFor(userId))).toHaveLength(1);
     expect(kv.keys().filter((key) => key.startsWith('session:'))).toEqual([]);
@@ -489,14 +459,10 @@ describe('a store that will not answer is refused, never waved through', () => {
     await kv.near.delete(`session:${await sha256Hex(session.token)}`);
 
     const logs = recordDiagnostics();
-    // An absent projection is what a colo the write has not reached sees, and
-    // what an evicted record leaves. The row is still there, so the session is
-    // still live — and every path that ENDS a session deletes the row first, so
-    // this can never be a revoked one coming back.
+    // An absent projection is an unreached colo or an evicted record; the row keeps the session live, and every
+    // path that ends a session deletes the row first, so this cannot be a revoked one coming back.
     expect(await verifySession(env, session.token)).toMatchObject(session.identity);
 
-    // A cookie for a session this deployment has never held is still simply not
-    // signed in: refused, with nothing to report about it.
     const stranger = `ps_${session.identity.userId}_${'x'.repeat(64)}`;
     expect((await refusalFor(stranger, env)).status).toBe(401);
     expect(logs.emitted).toEqual([]);
@@ -508,7 +474,6 @@ describe('a store that will not answer is refused, never waved through', () => {
     const env = envWith(kv.near, authority.namespace);
     const session = await createSession(env, profile('person@example.com'));
     const key = `session:${await sha256Hex(session.token)}`;
-    // What a deployment that changed the record's shape leaves behind.
     await kv.near.put(key, JSON.stringify({ userId: session.identity.userId }), { expirationTtl: 600 });
 
     const logs = recordDiagnostics();
@@ -522,8 +487,7 @@ describe('a store that will not answer is refused, never waved through', () => {
     expect(malformed[0]?.cause ?? '').not.toContain(session.token);
     expect(malformed[0]?.cause ?? '').not.toContain(await sha256Hex(session.token));
     expect(malformed[0]?.fields).toEqual({});
-    // Both stores are cleared, so the dead credential is gone rather than
-    // waiting on a 30-day expiry, and no cleanup was reported as failed.
+    // Both stores are cleared rather than waiting on expiry, and no cleanup is reported failed.
     expect(await kv.near.get(key)).toBeNull();
     expect(liveSessions(authority.objectFor(session.identity.userId))).toEqual([]);
     expect(logs.emitted.map((line) => line.event)).toEqual(['auth.browser_session_record_malformed']);
@@ -537,13 +501,10 @@ describe('a store that will not answer is refused, never waved through', () => {
     const key = `session:${await sha256Hex(session.token)}`;
     await kv.near.put(key, JSON.stringify({ userId: session.identity.userId }), { expirationTtl: 600 });
 
-    // Both cleanups refused: the row through an unreachable object, the record
-    // through a KV delete that will not run.
     const outage = envWith(kvFailing(kv.near, 'delete'), authority.broken('revokeBrowserSession'));
     const logs = recordDiagnostics();
     const refusal = await refusalFor(session.token, outage);
 
-    // Refused, never authenticated, and neither failure was swallowed.
     expect(refusal.status).toBe(401);
     expect(logs.emitted.map((line) => line.event)).toEqual([
       'auth.browser_session_record_malformed',
@@ -568,19 +529,14 @@ describe('expiry needs no sweeper', () => {
     const fresh = await createSession(env, profile('person@example.com'));
 
     expect(await verifySession(env, fresh.token)).not.toBeNull();
-    // The lapsed row is gone, and no alarm or sweep removed it.
     expect(liveSessions(object)).toHaveLength(1);
     expect(await verifySession(env, session.token)).toBeNull();
   });
 });
 
 /**
- * The other half of the same propagation window. A KV write is no faster than
- * a KV delete, so the first request after a sign-in redirect can land at a colo
- * that has no record of the session — read as "not signed in" that sends the
- * browser back to a sign-in whose own write loses the same race. The row the
- * authority already has to be asked about liveness carries the identity too, so
- * the answer is there in the same round trip.
+ * The write side of the window: the first request after sign-in can reach a colo with no record, so the
+ * authority row (already asked about liveness) carries the identity in the same round trip.
  */
 describe('a sign-in is usable before its KV projection has replicated', () => {
   test('the first request at a colo the write has not reached is signed in, not sent back to sign in', async () => {
@@ -589,12 +545,9 @@ describe('a sign-in is usable before its KV projection has replicated', () => {
     const session = await createSession(envWith(kv.near, authority.namespace), profile('person@example.com'));
     const cold = envWith(kv.cold, authority.namespace);
 
-    // The projection genuinely is not readable there — this is the negative
-    // read a bounce back to sign-in would come from.
     expect(await kv.cold.get(`session:${await sha256Hex(session.token)}`)).toBeNull();
 
-    // What comes back is the row's own copy, and it is the identity the
-    // projection would have carried, not a thinner stand-in for it.
+    // The row's own copy, carrying the full identity the projection would have.
     expect(await verifySession(cold, session.token)).toMatchObject(session.identity);
 
     const request = new Request('https://kinu.example.com/api/workspaces', {
@@ -612,8 +565,7 @@ describe('a sign-in is usable before its KV projection has replicated', () => {
 
     await revokeSession(near, session.token);
 
-    // The fallback reads a row that is GONE, so an absent projection cannot
-    // become a reason to trust the cookie.
+    // The fallback reads a row that is gone, so an absent projection cannot become a reason to trust the cookie.
     const cold = envWith(kv.cold, authority.namespace);
     expect(await kv.cold.get(`session:${await sha256Hex(session.token)}`)).toBeNull();
     expect(await verifySession(cold, session.token)).toBeNull();
@@ -637,18 +589,14 @@ describe('a sign-in is usable before its KV projection has replicated', () => {
     const authority = openFleet();
     const near = envWith(kv.near, authority.namespace);
     const session = await createSession(near, profile('person@example.com'));
-    // What a deployment from before the identity columns leaves in the table:
-    // a live row that cannot say what its cookie stands for.
+    // Pre-identity-columns row: live, but cannot say what its cookie stands for.
     authority.objectFor(session.identity.userId).db.run(
       `UPDATE user_browser_sessions
           SET email = NULL, display_name = NULL, provider = NULL, provider_sub = NULL, auth_time = NULL`,
     );
 
-    // Where the projection replicated, it still answers, so a deploy does not
-    // sign everybody out.
+    // Where the projection replicated it still answers, so a deploy does not sign everybody out.
     expect(await verifySession(near, session.token)).toMatchObject(session.identity);
-    // Where it has not, the cookie is refused. The row is the only other copy,
-    // and it has nothing to say.
     expect(await verifySession(envWith(kv.cold, authority.namespace), session.token)).toBeNull();
   });
 });

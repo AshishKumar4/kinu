@@ -1,45 +1,8 @@
 /**
- * ONE turn through the product's PUBLIC surface, inside the pool.
- *
- * WHAT IS PLATFORM HERE, by this layer's own rule. The subject is not the
- * orchestrator's arithmetic — it is the three runtime mechanisms the public door
- * is built out of, none of which `bun test` has: a WebSocket UPGRADE answered by
- * a Worker and carried back to its caller (101 plus a live `response.webSocket`,
- * which bun's fetch cannot produce), the agents-SDK chat rail running inside the
- * Durable Object that owns the conversation, and the durable transcript read
- * back over HTTP from that same object's SQLite. Until this file the whole door
- * was measured only against a deployment (`tests/evals/public-session.ts`), so a
- * break in the route table, the upgrade, or the identity gate was findable only
- * after a deploy.
- *
- * THE PATH, all of it the product's own: `POST /api/user/workspaces` creates the
- * workspace (`handleCreateWorkspaceRequest`, the same handler the CLI plane
- * calls), the socket is opened at `/agents/orchestrator-agent/<name>` and the
- * turn is a `cf_agent_use_chat_request` frame carrying one UIMessage, and the
- * ANSWER is read from `GET /agents/.../get-messages` — the route the web pane is
- * seeded from — rather than from the stream, so what is asserted is what the
- * object durably recorded.
- *
- * THE MODEL SEAM IS THE HTTP ONE, pinned over the product's own `setModel`, and
- * that choice is a measurement rather than a preference: driven instead through
- * the `AI` SERVICE binding on 2026-09-16, the turn's answer still arrived and
- * committed but the model stream's EOF did not — four `llm_call.deferred_rejected`
- * lines, one `chat.stream_observe_failed`, and workerd cancelling the abandoned
- * callee as hung — because the adapter reads the stream's head eagerly and pulls
- * the rest lazily (`direct-workers-ai-fetch.ts:279-330`) and an RPC response body
- * cannot be read after its invocation ends; reproduced identically with the socket
- * opened on the workspace object's own stub, so it is the model plane's shape.
- * Production's `AI` is a Workers AI binding over a subrequest
- * (`wrangler.jsonc:373`), so the seam under test here — openai-compat over the
- * global fetch — is the shape production actually takes.
- *
- * The fake's turn lane answers `echo:<last typed user line>`, so the assertion is
- * an exact string: the answer in the transcript is this test's prompt, echoed,
- * which is only true if the frame reached the DO, the turn ran, and the
- * transcript was written.
- *
- * NO CLOCK. Every wait here ends on a frame the runtime sent — the terminal
- * `done` frame, or the `done` frame that carries the DO's own failure words.
+ * One turn through the product's public surface in the pool: WebSocket upgrade, the agents-SDK chat rail in the owning DO,
+ * and the transcript read back over HTTP (`get-messages`), so what is asserted is what the object durably recorded.
+ * Model seam is openai-compat over global fetch, not the `AI` service binding: measured 2026-09-16, the RPC-bound
+ * stream's EOF never arrived (`llm_call.deferred_rejected`, callee cancelled as hung). No clock: every wait ends on a `done` frame.
  */
 import { env } from 'cloudflare:test';
 import { CHAT_MESSAGE_TYPES } from 'agents/chat';
@@ -49,9 +12,7 @@ import {
 import { describe, expect, it } from 'vitest';
 import * as v from 'valibot';
 
-/** Loopback: the one host `authenticateRequest` accepts without an identity
- *  secret, because possession of the machine is the boundary there
- *  (auth/session.ts:200-213). */
+/** Loopback: the one host `authenticateRequest` accepts without an identity secret (auth/session.ts:200-213). */
 const ORIGIN = 'http://localhost';
 
 const PROMPT = 'ping from the pool';
@@ -75,16 +36,12 @@ const FrameSchema = v.object({
 
 const SetModelSchema = v.object({ spec: v.string() });
 
-/** The credential the pinned model resolves through — the same fixture the
- *  two-turn probe installs, whose `baseURL` is the Node-side fake's host. */
 const FIXTURE_CREDENTIAL = {
   kind: 'openai-compat',
   baseURL: 'http://fake-models.invalid/v1',
   apiKey: 'probe-fixture-key',
 };
 
-/** The model the fake echoes for. `openai-compat` is the provider the static
- *  credential above serves, so the spec is the product's own spelling. */
 const PINNED_MODEL = 'openai-compat/probe';
 
 async function publicJson<T>(path: string, schema: v.GenericSchema<T>, init?: RequestInit): Promise<T> {
@@ -96,15 +53,12 @@ async function publicJson<T>(path: string, schema: v.GenericSchema<T>, init?: Re
   return v.parse(schema, JSON.parse(text));
 }
 
-/** One `{type:'rpc', …}` frame — the shape the agents-SDK client sends for a
- *  callable method, which is what the web client's `rpc()` wrapper is bound to.
- *  The type word is a literal because the SDK exports no constant for it. */
+/** The SDK exports no constant for the `rpc` type word, hence the literal. */
 function rpcRequest(id: string, method: string, args: readonly JsonValue[]): string {
   return JSON.stringify({ type: 'rpc', id, method, args: [...args] });
 }
 
-/** The chat frame the web client's transport sends, by the SDK's own constant so
- *  a rename there is a compile error rather than a silent hang. */
+/** By the SDK's own constant, so a rename there is a compile error rather than a silent hang. */
 function chatRequest(id: string, text: string): string {
   return JSON.stringify({
     type: CHAT_MESSAGE_TYPES.USE_CHAT_REQUEST,
@@ -121,26 +75,18 @@ function chatRequest(id: string, text: string): string {
 
 const CreatedActorSchema = v.object({ name: v.string() });
 
-/** One marker per side, used as BOTH the request id and the prompt: a frame
- *  that names either is traceable to the pane that sent it, whichever field
- *  carried it. */
+/** Used as both request id and prompt, so a frame naming either is traceable to its pane. */
 const ROOT_MARKER = 'root-pane-marker';
 
 const ACTOR_MARKER = 'actor-pane-marker';
 
-/** One pane's socket, with everything read off it. `frames` is every raw
- *  frame in arrival order, which is what makes an absence assertable: the
- *  question is not "did the right frame come" but "did the wrong one". */
+/** `frames` is every raw frame in arrival order, which makes an absence assertable. */
 interface Pane {
   send(frame: string): void;
-  /** Settle when a `use_chat_response` for this request id says `done`; the
-   *  reject path carries the runtime's own words. */
+  /** The reject path carries the runtime's own words. */
   settled(requestId: string): Promise<void>;
-  /** The request id of every chat response this socket received. */
   responseIds(): string[];
-  /** How many transcript frames this socket received carrying this text. */
   transcriptsCarrying(text: string): number;
-  /** One RPC reply, admitted by the caller's own schema at this boundary. */
   rpc<T>(id: string, schema: v.GenericSchema<T>): Promise<T>;
   close(): void;
 }
@@ -222,9 +168,7 @@ async function openPane(path: string): Promise<Pane> {
 
 describe('the public surface, driven inside the pool', () => {
   it('creates a workspace over REST and answers one socket turn', async () => {
-    // The Settings pane's own route: the fixture credential is what the pinned
-    // model resolves its baseURL and key through, so the turn's requests are
-    // addressed at the fake by the product's credential store, not by a flag.
+    // The fixture credential routes the pinned model to the fake via the product's credential store, not a flag.
     await publicJson(`/api/user/credentials/openai-compat.default`, v.object({ ok: v.boolean() }), {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
@@ -234,8 +178,7 @@ describe('the public surface, driven inside the pool', () => {
     const created = await publicJson('/api/user/workspaces', WorkspaceEntrySchema, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      // No `purpose`: a mission on the create would queue the workspace's own
-      // genesis turn, and this file's subject is ONE turn, the one it sends.
+      // No `purpose`: a mission would queue a genesis turn, and this file's subject is one turn.
       body: JSON.stringify({ name: 'pool-public', displayName: 'Pool Public Surface' }),
     });
 
@@ -259,7 +202,6 @@ describe('the public surface, driven inside the pool', () => {
 
       if (!frame.success) return;
 
-      // An RPC REPLY, told from a request by the field only a reply carries.
       if (frame.output.type === 'rpc' && frame.output.id === 'pin' && frame.output.success !== undefined) {
         if (frame.output.success) pinned.resolve(frame.output.result);
         else pinned.reject(new Error(`setModel was refused: ${JSON.stringify(frame.output.error)}`));
@@ -271,10 +213,8 @@ describe('the public surface, driven inside the pool', () => {
 
       if (frame.output.id !== PROMPT) return;
 
-      // `error` is carried on non-terminal frames too — a broken RELAY is
-      // reported that way while the turn goes on (chat-transport.ts:432-446) —
-      // so what settles this wait is the DO saying `done`, and only a `done`
-      // frame that also carries `error` is a failed turn, in its own words.
+      // `error` also rides non-terminal frames (a broken relay, chat-transport.ts:432-446): only a `done` frame
+      // carrying `error` is a failed turn.
       if (frame.output.done !== true) return;
 
       if (frame.output.error === true) {
@@ -289,10 +229,7 @@ describe('the public surface, driven inside the pool', () => {
       turn.reject(new Error('the public chat socket closed before the turn finished'));
     });
 
-    // Pin the arm's model before the prompt, the call the web client makes for
-    // the model menu. The accepted spec is asserted by CONTAINMENT because the
-    // deployment normalizes a spec, and what matters is that no substitution
-    // happened: a turn on the account default would answer from another lane.
+    // Asserted by containment because the deployment normalizes a spec; a substitution would answer from another lane.
     socket.send(rpcRequest('pin', 'setModel', [PINNED_MODEL]));
     expect(v.parse(SetModelSchema, await pinned.promise).spec).toContain(PINNED_MODEL);
 
@@ -312,32 +249,15 @@ describe('the public surface, driven inside the pool', () => {
     ]);
 
     socket.close();
-    // The model fake's captured log is one Node-side module for every worker
-    // bound to it, and `two-turn.test.ts:281` reads it unfiltered: this file
-    // borrows the log and hands it back empty.
+    // The fake's log is shared by every bound worker and `two-turn.test.ts:281` reads it unfiltered: hand it back empty.
     await env.SURFACE_CONTROL.resetModelLog();
   });
 });
 
 describe('two panes on one workspace object are two chat rooms', () => {
   /**
-   * THE DEFECT THIS PINS, measured on main 9c801574b through the browser:
-   * one workspace is one Durable Object, so `broadcast` reached every socket
-   * and the chat rail had no idea which actor a socket had addressed. The
-   * root's transcript rendered in a just-created agent's pane and the agent's
-   * words rendered in the root's.
-   *
-   * Driven the way the product is: one socket on the workspace, one on
-   * `/actor/<name>` after the `+` tab's own RPC created the actor, one message
-   * on each. What is asserted is the RECIPIENT SET — a socket sees its own
-   * actor's `cf_agent_use_chat_response` and `cf_agent_chat_messages` frames
-   * and none of the other's — with both positive directions asserted too, so
-   * a room that answers nothing at all cannot read as scoped.
-   *
-   * NO CLOCK. Each side's wait ends on the `done` frame its own request gets.
-   * The hosted turn itself runs on the actor's durable wake and is not waited
-   * for: admission closes the request, which is the contract the pane's hook
-   * is written against.
+   * Pins: one workspace is one DO, so `broadcast` reached every socket and actors' transcripts rendered in each other's panes
+   * (measured on main 9c801574b). Asserts the recipient set in both directions, so a room that answers nothing cannot read as scoped.
    */
   it('keeps the root chat and a hosted actor chat on separate sockets', async () => {
     await publicJson(`/api/user/credentials/openai-compat.default`, v.object({ ok: v.boolean() }), {
@@ -358,30 +278,24 @@ describe('two panes on one workspace object are two chat rooms', () => {
     root.send(rpcRequest('pin', 'setModel', [PINNED_MODEL]));
     expect((await root.rpc('pin', SetModelSchema)).spec).toContain(PINNED_MODEL);
 
-    // The `+` tab's own call, so the actor exists exactly as the product makes
-    // it — no fixture registration beside the shipped path.
+    // The `+` tab's own call, so the actor exists exactly as the product makes it.
     root.send(rpcRequest('hire', 'createSubordinateAgent', []));
     const actorName = (await root.rpc('hire', CreatedActorSchema)).name;
 
     root.send(chatRequest(ROOT_MARKER, ROOT_MARKER));
     await root.settled(ROOT_MARKER);
 
-    // Opened AFTER the root's turn landed: a pane that connects onto a
-    // workspace with words already in it is the direction the browser caught,
-    // because the seed frame is the first thing it receives.
+    // Opened after the root's turn landed: the seed frame is what the browser caught leaking.
     const actor = await openPane(`${rootPath}/${hostedActorSocketPath(actorName)}`);
 
     actor.send(chatRequest(ACTOR_MARKER, ACTOR_MARKER));
     await actor.settled(ACTOR_MARKER);
 
-    // Each room answered its OWN request, and each pane was handed a
-    // transcript carrying its own words.
     expect(root.responseIds()).toContain(ROOT_MARKER);
     expect(actor.responseIds()).toContain(ACTOR_MARKER);
     expect(root.transcriptsCarrying(ROOT_MARKER)).toBeGreaterThan(0);
     expect(actor.transcriptsCarrying(ACTOR_MARKER)).toBeGreaterThan(0);
 
-    // And neither room reached the other's socket.
     expect(actor.responseIds()).not.toContain(ROOT_MARKER);
     expect(root.responseIds()).not.toContain(ACTOR_MARKER);
     expect(actor.transcriptsCarrying(ROOT_MARKER)).toBe(0);
@@ -394,8 +308,7 @@ describe('two panes on one workspace object are two chat rooms', () => {
 });
 
 describe('a hosted actor pane reads its own chat back from nothing', () => {
-  /** A workspace whose root and one hosted actor each said one marker, with
-   *  every socket closed again, so what follows reads durable rows only. */
+  /** Every socket closed again, so what follows reads durable rows only. */
   async function workspaceWithTwoChats(name: string): Promise<{ rootPath: string; actorName: string; actorPath: string }> {
     await publicJson(`/api/user/credentials/openai-compat.default`, v.object({ ok: v.boolean() }), {
       method: 'POST',
@@ -440,8 +353,7 @@ describe('a hosted actor pane reads its own chat back from nothing', () => {
   it('serves the actor its own words, not the workspace\'s, on both of the pane\'s reads', async () => {
     const { actorName, actorPath } = await workspaceWithTwoChats('pool-kept-chat');
 
-    // The pane's two reads, on fresh sockets: the seed on its own path, then the
-    // pager named by its snapshot's actor id (naming none answers the root's rows).
+    // Naming no actor id in the pager answers the root's rows.
     const seed = await publicJson(`${actorPath}/get-messages`, HistorySchema);
     const seedText = seed.flatMap((row) => row.parts ?? []).map((part) => part.text ?? '').join('\n');
     const pane = await openPane(actorPath);
@@ -467,12 +379,11 @@ describe('a hosted actor pane reads its own chat back from nothing', () => {
     workspace.send(rpcRequest('rename', 'renameSubordinateAgent', [actorName, 'Kept Title']));
     const { subordinate: employed } = await workspace.rpc('rename', v.object({ subordinate: RowSchema }));
 
-    // The Dismiss dialog's call: no `keepHistory`, so the conversation is kept.
+    // No `keepHistory`: the conversation is kept.
     workspace.send(rpcRequest('dismiss', 'dismissSubordinate', [actorName]));
     await workspace.rpc('dismiss', v.object({ historyKept: v.literal(true) }));
 
-    // The kept pane's reads: its row off the roster, its page off this socket
-    // by the row's actor id. Dismissal changes the row's status and nothing else.
+    // Dismissal changes the row's status and nothing else.
     workspace.send(rpcRequest('roster', 'listSubordinates', []));
     const kept = (await workspace.rpc('roster', v.array(RowSchema))).find((row) => row.name === actorName);
 
@@ -484,7 +395,6 @@ describe('a hosted actor pane reads its own chat back from nothing', () => {
     await expect(pageText(workspace, 'stranger', 'actor-this-workspace-never-had')).rejects.toThrow(/not registered in this workspace/);
     workspace.close();
 
-    // It no longer executes: the chat path it had is refused at the edge.
     expect((await env.PUBLIC_SURFACE.fetch(`${ORIGIN}${actorPath}/get-messages`)).status).toBe(404);
     await env.SURFACE_CONTROL.resetModelLog();
   });

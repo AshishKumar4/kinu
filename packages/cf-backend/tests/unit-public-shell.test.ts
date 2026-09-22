@@ -1,23 +1,6 @@
 /**
- * The signed-out pages must be the same product as the app.
- *
- * They cannot import `index.css`: they are served by the worker as one
- * self-contained document, with no bundler and no stylesheet link. So the
- * public shell carries a PROJECTION of that palette, and the projection is
- * exactly the drift this file exists to make impossible. Hand-copied sets of
- * the umber hexes across the four surfaces, with `index.css` asking in a
- * comment that they "stay identical to it", is how that drift lands: no light
- * mode at all, a different hairline alpha, three different button heights.
- *
- * A comment is not a gate. This is:
- *
- *   · every token the shell declares equals what `index.css` resolves for the
- *     same token in the same theme, with the cascade replayed rather than
- *     assumed;
- *   · every radius role equals the Tailwind rung `index.css` maps it to;
- *   · the pre-paint theme script resolves the four cases it claims;
- *   · every public document uses the Kinu product identity in its visible
- *     copy, URLs and attributes.
+ * Defends: the signed-out pages (self-contained, no `index.css`) drifting from the app's palette,
+ * radii, pre-paint theme and Kinu identity; the shell's projection is checked against the cascade.
  */
 
 import { describe, expect, test } from 'bun:test';
@@ -38,19 +21,13 @@ import {
 
 const INDEX_CSS = readFileSync(resolve(import.meta.dir, '../src/index.css'), 'utf8');
 
-/** The palette blocks that apply to each theme, in source order. Same model as
- *  `unit-palette-contrast`: every block carries specificity (0,1,0) or higher
- *  and later declarations win, so a selector list in source order replays the
- *  cascade faithfully. */
+/** Palette blocks per theme in source order; later declarations win, replaying the cascade (as `unit-palette-contrast`). */
 const CASCADE = {
   'dark': [':root'],
   'light': [':root', '[data-mode="light"]'],
 } satisfies Readonly<Record<string, readonly string[]>>;
 
-
-/** One block of `index.css`, as name → value. Anchored at line start so
- *  `[data-palette="silk"]` cannot match the compound selector or a mention of
- *  itself inside a comment. */
+/** Anchored at line start so `[data-palette="silk"]` cannot match a compound selector or a comment. */
 function block(selector: string) {
   const at = INDEX_CSS.search(new RegExp(`^${selector.replace(/[[\]"().*+?^${}|\\]/g, '\\$&')}\\s*\\{`, 'm'));
 
@@ -69,8 +46,7 @@ function block(selector: string) {
   );
 }
 
-/** The tokens `index.css` leaves standing for one theme. An unknown theme name
- *  is a test that would silently measure nothing, so it throws. */
+/** Throws on an unknown theme, which would otherwise measure nothing. */
 function resolved(theme: string) {
   const selectors = Object.entries(CASCADE).find(([name]) => name === theme)?.[1];
 
@@ -82,10 +58,7 @@ function resolved(theme: string) {
   return out;
 }
 
-
-/** The stylesheet the shell ships, as the document carries it. The parity
- *  below reads the projection out of this text rather than out of the
- *  module's internals, so it holds the shipped bytes to the app. */
+/** Reads the shipped bytes, not the module's internals. */
 function shippedStyle(): string {
   const page = publicPage({ title: 't', body: '' });
   const start = page.indexOf('<style>');
@@ -96,7 +69,6 @@ function shippedStyle(): string {
   return page.slice(start + '<style>'.length, end);
 }
 
-/** One `selector{...}` rule of the shipped stylesheet, as name → value. */
 function shippedBlock(style: string, selector: string) {
   const at = style.indexOf(`${selector}{`);
 
@@ -122,7 +94,6 @@ function shippedBlock(style: string, selector: string) {
   );
 }
 
-
 describe('public shell tokens are the app palette', () => {
   const style = shippedStyle();
 
@@ -132,8 +103,7 @@ describe('public shell tokens are the app palette', () => {
     const shellAt = style.indexOf('@font-face');
     expect(rootAt).toBeGreaterThanOrEqual(0);
     expect(lightAt).toBeGreaterThan(rootAt);
-    // The projection precedes the shell it themes, so a theme edit cannot
-    // hide under it.
+    // The projection precedes the shell it themes.
     expect(shellAt).toBeGreaterThan(lightAt);
   });
 
@@ -153,9 +123,7 @@ describe('public shell tokens are the app palette', () => {
   }
 
   test('every projected token is declared in every theme', () => {
-    // A token the projection carries but a palette block never declares would
-    // resolve to whichever theme declared it last — the failure mode
-    // `index.css` states its own completeness rule against.
+    // An undeclared token would resolve to whichever theme declared it last.
     const names = Object.keys(shippedBlock(style, ':root')).filter((name) => !name.startsWith('--r-'));
 
     for (const theme of Object.keys(CASCADE)) {
@@ -166,10 +134,7 @@ describe('public shell tokens are the app palette', () => {
   });
 
   test('radius roles match what index.css resolves', () => {
-    // control and row alias Tailwind rungs on purpose (a `.p-*` class and a
-    // `rounded-*` utility written beside one cannot disagree); card and
-    // overlay are the mock's own 14px literals. Resolve each the way the
-    // browser would.
+    // control and row alias Tailwind rungs; card and overlay are the mock's 14px literals.
     const root = block(':root');
     const rungs = block('@theme');
     const shipped = shippedBlock(style, ':root');
@@ -191,19 +156,13 @@ describe('public shell tokens are the app palette', () => {
   });
 
   test('the display face is one stack, shared with the app', () => {
-    // The signed-out pages and the app must speak in the same voice. Two
-    // stacks would diverge on the first platform where one has a face the
-    // other does not.
     const app = block(':root')['--font-display'];
     expect(app).toBeString();
     expect(publicPage({ title: 't', body: '' })).toContain(`--font-display:${app.replaceAll(', ', ',')}`);
   });
 
   test('both faces lead with the shipped webfonts in both stylesheets', () => {
-    // The faces themselves, not just the stack strings: the app declares the
-    // @font-face over the same asset paths the shell inlines, and the shell
-    // preloads them. A path that drifts between the two is a landing page in
-    // the fallback face — exactly the drift this file exists to prevent.
+    // The app's @font-face must use the asset paths the shell inlines and preloads.
     expect(block(':root')['--font-display']).toStartWith('"Schibsted Grotesk"');
     expect(block(':root')['--font-mono']).toStartWith('"Fragment Mono"');
     expect(INDEX_CSS).toContain('src: url("/assets/fonts/schibsted-latin-var.woff2") format("woff2-variations")');
@@ -222,9 +181,8 @@ describe('public shell tokens are the app palette', () => {
     ['Schibsted Grotesk', 50_000],
     ['Fragment Mono', 30_000],
   ])('%s is a real woff2 latin subset inside its byte budget', (family, budget) => {
-    // 46,752 B Schibsted [wght] latin, 25,224 B Fragment Mono latin. The
-    // budgets refuse the full-axes builds and any unsubset swap; the licence
-    // must travel with the files because OFL requires it.
+    // 46,752 B Schibsted [wght] latin, 25,224 B Fragment Mono latin; refuses full-axes or
+    // unsubset builds. OFL requires the licence travel with the files.
     const page = publicPage({ title: 't', body: '' });
     const face = new RegExp(`@font-face\\{font-family:"${family}";src:url\\("([^"]+)"\\)`).exec(page);
 
@@ -237,17 +195,13 @@ describe('public shell tokens are the app palette', () => {
   });
 
   test('Newsreader stays in the React bundle rather than the standalone shell', () => {
-    // Landing and the app share the Kinu wordmark through the React stylesheet.
-    // Login/install pages remain small standalone documents.
     expect(publicPage({ title: 't', body: '' })).not.toContain('Newsreader');
     expect(INDEX_CSS).toContain('/assets/fonts/newsreader-latin-var.woff2');
   });
 
 });
 
-
 describe('the pre-paint theme script', () => {
-  /** The pre-paint script the document ships, as the document carries it. */
   function shippedBoot(): string {
     const page = publicPage({ title: 't', body: '' });
     const match = /<script>([\s\S]*?)<\/script>/.exec(page);
@@ -260,7 +214,6 @@ describe('the pre-paint theme script', () => {
     return text;
   }
 
-  /** Run the shipped snippet against stubbed storage and report what it set. */
   function boot(stored: Record<string, string>, prefersLight: boolean) {
 
     const attrs: Record<string, string> = {};
@@ -277,8 +230,6 @@ describe('the pre-paint theme script', () => {
       window: { matchMedia: (query: string) => ({ matches: query.includes('light') && prefersLight }) },
     };
 
-    // The snippet is an IIFE over three globals, which is why it can be checked
-    // by call rather than by reading it.
     // SAFETY: the snippet is this repo's own text, evaluated against the three
     // stub globals declared immediately above.
     new Function('document', 'localStorage', 'window', shippedBoot())(scope.document, scope.localStorage, scope.window);
@@ -304,7 +255,6 @@ describe('the pre-paint theme script', () => {
   });
 });
 
-/** Every public document, with the arguments its route passes. */
 const DOCUMENTS = {
   login: loginDocument([{ href: '/auth/github/start', label: 'GitHub' }]),
   authFailure: authDocument('Sign in failed', '<p class="lede">Try again.</p>'),
@@ -312,16 +262,13 @@ const DOCUMENTS = {
   approval: approvalDocument('Connect the Kinu CLI', '<p>A terminal asked to sign in.</p>'),
 } satisfies Readonly<Record<string, string>>;
 
-/** The retired product name, assembled from parts so this file carries no
- *  literal copy of what it forbids — the gate below is the reason the tracked
- *  tree can be grepped for it and come back empty. */
+/** Assembled from parts so the tracked tree can be grepped for the retired name and come back empty. */
 const RETIRED_NAME = ['prot', 'eus'].join('');
 
 describe('public copy', () => {
   for (const [name, html] of Object.entries(DOCUMENTS)) {
     test(`${name} uses Kinu branding throughout the document`, () => {
-      // Not only the visible text: the repository URL, the icon href and every
-      // attribute are the places a rename leaves a survivor behind.
+      // URLs and attributes too: that is where a rename leaves survivors.
       expect(html.toLowerCase()).not.toContain(RETIRED_NAME);
     });
 
@@ -330,8 +277,7 @@ describe('public copy', () => {
     });
 
     test(`${name} pins the theme before it paints`, () => {
-      // The boot script must precede the stylesheet, or the first frame is the
-      // wrong palette and the page flashes.
+      // Boot script before the stylesheet, or the first frame flashes the wrong palette.
       expect(html.indexOf('data-mode')).toBeLessThan(html.indexOf('<style>'));
       expect(html).toContain('<link rel="icon" type="image/svg+xml" href="/assets/kinu-icon.svg" />');
     });
@@ -343,8 +289,7 @@ describe('public copy', () => {
   }
 
   test('no page reaches for a font, a script or an image it cannot serve', () => {
-    // `publicHtmlHeaders` allows `'self'` and inline only. A remote font or
-    // image URL renders as a missing asset in production and nowhere else.
+    // `publicHtmlHeaders` allows `'self'` and inline only; remote assets break in production alone.
     for (const [name, html] of Object.entries(DOCUMENTS)) {
       expect(html, name).not.toContain('https://fonts.');
       expect(html.match(/src="https?:\/\//g), name).toBeNull();
@@ -358,7 +303,6 @@ describe('the mark', () => {
     for (const id of MARK_IDS) {
       const svg = mark(24, id);
       expect(svg, id).toContain('viewBox="0 0 24 24"');
-      // `currentColor` is what lets one mark be the accent of four themes.
       expect(svg, id).toContain('currentColor');
       expect(svg, id).not.toContain('gradient');
     }
@@ -379,19 +323,7 @@ describe('the mark', () => {
     expect(onDisk).toBe(markDocument());
   });
 
-  /**
-   * The README banners carry the shipped mark, not a copy of one.
-   *
-   * `docs/assets/banner*.svg` are hand-authored documents outside the bundle,
-   * so the stroke in them is a LITERAL of the shipping mark's path data.
-   * Nothing regenerates them and nothing read them, so changing which mark
-   * ships moved the favicon, the four public pages and the app, and left the
-   * banner at the top of the README drawing the previous one.
-   *
-   * The path DATA is what is asserted, not the whole element: the banners fill
-   * with `var(--thread)` so their own two themes can colour the stroke, which
-   * is a real difference from `currentColor` and the only one allowed.
-   */
+  /** `docs/assets/banner*.svg` hand-copy the shipped mark's path data; only the fill (`var(--thread)`) may differ. */
   test('both README banners draw the mark that ships', () => {
     const shipped = [...mark(24, KINU_MARK).matchAll(/<path d="([^"]+)"/g)].map((m) => m[1]);
     expect(shipped, `${KINU_MARK} renders no path`).not.toBeEmpty();
@@ -405,24 +337,8 @@ describe('the mark', () => {
 });
 
 /**
- * The README opens on the planning-walkthrough film.
- *
- * A GIF paints frame over frame, so its failure mode is a leak: a frame
- * whose disposal asks the compositor to blank or restore the canvas beneath
- * it, a frame rectangle that escapes the canvas, or a base frame that does
- * not cover it all show states that were never photographed — the same smear
- * an earlier landing film shipped when the chat, the approval card and the
- * tree rendered all at once. The invariant here is GIF's real
- * self-consistency: frame 0 covers the canvas, every frame stays inside it,
- * and no frame carries disposal 2 (restore-to-background) or 3
- * (restore-to-previous). Transparency on a later frame is legal — under
- * disposal 0/1 it means "keep the pixel beneath", ffmpeg's delta encoding —
- * and frame 0's opacity is proven by decoding it in
- * `scripts/plan-demo-film.test.ts`, since a GCE flag cannot say whether the
- * transparent index is ever used.
- *
- * `readFilm` validates framing and metadata only — never pixels; ffprobe's
- * independent decode in `plan-demo-film.ts` remains the content evidence.
+ * README film: frame 0 covers the canvas, every frame stays inside it, and no frame uses disposal 2 or 3
+ * (both paint unphotographed states). Frame 0 opacity is decoded in `scripts/plan-demo-film.test.ts`.
  */
 describe('the README demo film', () => {
   const FILM = readFileSync(resolve(import.meta.dir, '../../../docs/assets/kinu-plan-demo.gif'));
@@ -431,21 +347,17 @@ describe('the README demo film', () => {
   interface Frame {
     readonly x: number; readonly y: number;
     readonly width: number; readonly height: number;
-    /** The graphic-control extension's disposal: 2 blanks the canvas under
-     *  the frame, 3 restores the previous state — both rewrite pixels this
-     *  frame does not carry, so the film must carry neither. */
+    /** Disposal 2 blanks under the frame, 3 restores previous; the film must carry neither. */
     readonly disposal: number;
   }
 
   interface Film {
     readonly width: number; readonly height: number;
-    /** The NETSCAPE2.0 loop count, 0 spelling "loop forever". */
     readonly loops: number | null;
     readonly frames: readonly Frame[];
   }
 
-  /** A bounded byte read — `Buffer[at]` returns undefined past the end and
-   *  undefined arithmetic can loop a sub-block skip forever. */
+  /** Bounded: `Buffer[at]` is undefined past the end, and undefined arithmetic can loop a skip forever. */
   function byteAt(gif: Buffer, at: number, what: string): number {
     if (at < 0 || at >= gif.byteLength) {
       throw new Error(`the film ends mid-${what} at ${String(at)}`);
@@ -456,7 +368,6 @@ describe('the README demo film', () => {
 
   interface TakenBlock { readonly body: Buffer; readonly next: number }
 
-  /** A bounded slice of `size` bytes starting at `at`, advancing past it. */
   function takeBlock(gif: Buffer, at: number, size: number, what: string): TakenBlock {
     if (at + size > gif.byteLength) {
       throw new Error(`the film ends mid-${what} at ${String(at)}`);
@@ -465,10 +376,7 @@ describe('the README demo film', () => {
     return { body: gif.subarray(at, at + size), next: at + size };
   }
 
-  /** Walks the GIF block stream: header and logical screen descriptor, then
-   *  image descriptors and extensions until the 0x3b trailer. Every offset
-   *  comes from the file's own length fields and every read is bounded, so a
-   *  malformed film throws promptly instead of faking a pass or hanging. */
+  /** Every offset comes from the file's length fields and every read is bounded, so a malformed film throws. */
   function readFilm(gif: Buffer): Film {
     if (gif.byteLength < 13 || gif.subarray(0, 6).toString() !== 'GIF89a') {
       throw new Error('not a GIF89a film');
@@ -489,8 +397,7 @@ describe('the README demo film', () => {
     let at = 13 + gctSize;
     let loops: number | null = null;
     const frames: Frame[] = [];
-    // The graphic-control extension carries the NEXT image's disposal, so it
-    // is staged between descriptors.
+    // A GCE carries the NEXT image's disposal, so it is staged between descriptors.
     let gce = { disposal: 0 };
 
     const skipSubBlocks = (what: string): void => {
@@ -504,15 +411,13 @@ describe('the README demo film', () => {
       }
     };
 
-    /** An application extension: NETSCAPE2.0 carries the film's loop count,
-     *  every other application block is skipped like any other extension. */
     const readApplicationExtension = (): void => {
       const size = byteAt(gif, at, 'application extension');
       const app = takeBlock(gif, at + 1, size, 'application extension');
 
       at = app.next;
 
-      // NETSCAPE2.0's first sub-block is {1, lo, hi} — the loop count.
+      // NETSCAPE2.0's first sub-block is {1, lo, hi}: the loop count.
       if (size === 11 && app.body.toString() === 'NETSCAPE2.0'
         && byteAt(gif, at, 'loop sub-block') === 3) {
         const loopBlock = takeBlock(gif, at + 1, 3, 'loop sub-block');
@@ -586,8 +491,6 @@ describe('the README demo film', () => {
     }
   }
 
-  /** GIF's self-consistency invariant as named reasons — the same check the
-   *  shipped film and the negative fixtures are held to. */
   function selfContained(film: Film): string[] {
     const problems: string[] = [];
     const [base] = film.frames;
@@ -625,15 +528,11 @@ describe('the README demo film', () => {
       `src="docs/assets/kinu-plan-demo.gif" width="${String(film.width)}" height="${String(film.height)}">`,
     );
     expect(README).toMatch(/<img alt="[^"]+" src="docs\/assets\/kinu-plan-demo\.gif"/);
-    // The install steps live under "Using it" since the flagship
-    // restructure; the invariant is unchanged — the film shows first.
     expect(README.indexOf('kinu-plan-demo.gif'))
       .toBeLessThan(README.indexOf('## Using it'));
   });
 
-  /** Minimal well-formed GIF89a frames on a 2x2 canvas with a two-colour
-   *  global palette — one descriptor per entry, each with its own optional
-   *  graphic-control extension. */
+  /** Minimal GIF89a frames on a 2x2 canvas with a two-colour palette. */
   function fixtureGif(
     ...frames: { gce?: { transparent?: boolean; disposal?: number }; x?: number; y?: number; w?: number; h?: number }[]
   ): Buffer {
@@ -701,15 +600,7 @@ describe('the README demo film', () => {
   });
 });
 
-
-/**
- * The plan frame's walkthrough is data before it is motion: every cue and
- * cursor position lives in `landing-movie-timeline.ts`, and the component
- * only paints it. These pin the story's order — typing before tools, tools
- * before the plan, the plan before the approval, the approval before the
- * slate — so a shifted timestamp or a dropped beat goes red here, without a
- * browser.
- */
+/** Pins the walkthrough's order in `landing-movie-timeline.ts`: typing, tools, plan, approval, slate. */
 describe('the landing walkthrough timeline', () => {
   test('cues run in story order and the cursor enters mid-investigation', () => {
     const order = [
@@ -723,8 +614,6 @@ describe('the landing walkthrough timeline', () => {
     expect([...times].sort((a, b) => a - b)).toEqual(times);
     expect(MOVIE_END).toBe(MOVIE_CUES.end);
     expect(CURSOR_ENTER_AT).toBe(4_700);
-    // The journey's load-bearing precedences, each explicit so a shifted
-    // timestamp goes red naming the beat it broke.
     expect(MOVIE_CUES.sent).toBeLessThan(MOVIE_CUES.reasoning);
     expect(MOVIE_CUES.searchDone).toBeLessThan(MOVIE_CUES.submitted);
     expect(MOVIE_CUES.submitted).toBeLessThan(MOVIE_CUES.planReady);
@@ -742,9 +631,7 @@ describe('the landing walkthrough timeline', () => {
 
   test('the composer types the request, then clears on send', () => {
     expect(composerTextAt(0)).toBe('');
-    // A PREFIX of the finished draft, asserted through the function rather than
-    // against the constant: the observable contract is that typing grows toward
-    // the request and is not yet complete partway through.
+    // Asserted through the function: typing grows toward the request, incomplete partway.
     const full = composerTextAt(MOVIE_CUES.sent - 1);
     const mid = composerTextAt((MOVIE_CUES.typeStart + MOVIE_CUES.sent) / 2);
     expect(mid.length).toBeGreaterThan(0);

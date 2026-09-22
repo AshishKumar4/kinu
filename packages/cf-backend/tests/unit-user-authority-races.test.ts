@@ -1,16 +1,5 @@
-// Authority that was WITHDRAWN, against calls that were already in flight.
-//
-// Every case here is an interleaving, not a state: a Durable Object serializes
-// nothing across an await, so between a call's read and its write another call
-// runs to completion. Each test drives that second call at the exact point the
-// first is waiting — on a workspace teardown, on a provider's token endpoint, on
-// a device-code approval, on a websocket frame — and asserts that the authority
-// the owner took away cannot act, cannot be re-issued, and cannot be written
-// back by a reply that was already in the air.
-//
-// The doubles here are the real objects wherever the race lives in one: a real
-// UserDO over bun:sqlite, and (for the socket cases) a real OrchestratorAgent
-// holding the capability token that UserDO actually minted for it.
+// Withdrawn authority vs calls already in flight: a Durable Object serializes nothing across an await,
+// so each test runs a second call while the first is parked and asserts revoked authority cannot act, re-issue, or be written back.
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
 import {
   CODEX_CRED_KEY,
@@ -67,8 +56,7 @@ interface CodexApproval {
   code_verifier: string;
 }
 
-/** A promise a test resolves by hand — how a teardown or a token endpoint is
- *  held open at the exact instant another call has to run. */
+/** A promise a test resolves by hand, holding a teardown or token endpoint open mid-call. */
 function gate() {
   let open = (): void => {};
 
@@ -117,9 +105,7 @@ describe('a workspace whose delete has begun', () => {
         harness.close();
       }
     });
-    // The delete is now parked on the destroy — the window in which the old
-    // order (revoke AFTER the teardown) left the dying workspace holding a
-    // token its own registry still honoured.
+    // The delete is parked on the destroy; revocation must already have happened.
     await entered.promise;
 
     const doomedCaller: UserCaller = { workspaceToken: token };
@@ -127,12 +113,9 @@ describe('a workspace whose delete has begun', () => {
     await expect(harness.userDO.getAuthHeaders(doomedCaller, 'openai.bearer'))
       .rejects.toThrow(CapabilityDeniedError);
     await expect(harness.userDO.deviceRpc(doomedCaller, 'exec', ['ls'])).rejects.toThrow(CapabilityDeniedError);
-    // Fenced, not broken: the workspace beside it is untouched. Read through
-    // the exact listing, which is the one roster read that does NOT drive the
-    // pending-teardown retry — the retry is parked on the gate this test holds.
+    // Read through the exact listing: the one roster read that does not drive the pending-teardown retry.
     expect((await harness.userDO.listActiveWorkspaces({ workspaceToken: survivor })).map((row) => row.name))
       .toEqual(['survivor']);
-    // And no identity remains that a same-name recreate could inherit.
     expect(capabilityRows(harness)).toEqual(['survivor']);
 
     held.open();
@@ -151,9 +134,7 @@ describe('a workspace whose delete has begun', () => {
 
     await expect(harness.userDO.removeWorkspace(owner, 'doomed', USER_ID)).rejects.toThrow('refused to go');
 
-    // The row survives because the teardown is still owed — but the authority
-    // does not. A fail-closed teardown that kept both would leave the marked row
-    // holding a live capability token indefinitely.
+    // The row survives because the teardown is still owed, but the capability token must not.
     expect(harness.db.prepare<{ delete_pending: number }, []>(
       `SELECT delete_pending FROM user_workspaces WHERE name = 'doomed'`,
     ).all()).toEqual([{ delete_pending: 1 }]);
@@ -161,8 +142,6 @@ describe('a workspace whose delete has begun', () => {
       .rejects.toThrow(CapabilityDeniedError);
     expect(capabilityRows(harness)).toEqual([]);
 
-    // Nothing re-mints it, either: the front door refuses the name, and the
-    // refusal writes nothing a later commit could authenticate against.
     await expect(harness.userDO.ensureWorkspaceCapability('doomed', null))
       .rejects.toThrow(/not in your registry|being deleted/);
     expect(capabilityRows(harness)).toEqual([]);
@@ -181,8 +160,7 @@ describe('a workspace whose delete has begun', () => {
       harness.userDO.ensureWorkspaceCapability('fresh', null),
     ]);
 
-    // The surviving stored hash and the surviving installed token are from ONE
-    // mint, which is the only way the workspace can authenticate at all.
+    // Stored hash and installed token must come from one mint for the workspace to authenticate.
     const installed = harness.installed.get('fresh');
     expect(installed).toMatch(/^pwc_/);
     expect(harness.db.prepare<{ token_hash: string }, []>(
@@ -202,8 +180,7 @@ describe('a credential the owner moved while a provider was answering', () => {
     });
   }
 
-  /** A token endpoint that runs `during` before it answers — the interleaving
-   *  every test in this block is about. */
+  /** A token endpoint that runs `during` before it answers. */
   function tokenEndpoint(during: () => Promise<void>, body: CodexTokens): void {
     globalThis.fetch = asFetchFunction(async (input: RequestInfo | URL) => {
       if (requestUrl(input) !== CODEX_TOKEN_URL) throw new Error(`unexpected fetch: ${requestUrl(input)}`);
@@ -226,9 +203,7 @@ describe('a credential the owner moved while a provider was answering', () => {
 
     const headers = await harness.userDO.getAuthHeaders(owner, CODEX_CRED_KEY, { forceRefresh: true });
 
-    // The owner disconnected mid-flight, so the reply is dropped rather than
-    // written back. Pre-fix this rewrote the row and the account came back
-    // connected with freshly rotated tokens nobody had asked for.
+    // The owner disconnected mid-flight, so the reply is dropped rather than written back.
     expect(headers).toBeNull();
     expect((await harness.userDO.listCredentials(owner)).map((row) => row.key)).toEqual([]);
     expect((await harness.userDO.getCodexStatus(owner)).connected).toBe(false);
@@ -248,8 +223,6 @@ describe('a credential the owner moved while a provider was answering', () => {
 
     const headers = await harness.userDO.getAuthHeaders(owner, CODEX_CRED_KEY, { forceRefresh: true });
 
-    // The store is the authority: the answer is the credential the OWNER wrote,
-    // and the rotation derived from its predecessor is discarded.
     expect(headers).toMatchObject({ Authorization: 'Bearer access-from-owner' });
     expect(JSON.stringify(headers)).not.toContain('access-rotated');
     expect((await harness.userDO.getCodexStatus(owner)).connected).toBe(true);
@@ -272,11 +245,8 @@ describe('a credential the owner moved while a provider was answering', () => {
 
     await harness.userDO.getAuthHeaders(owner, CODEX_CRED_KEY, { forceRefresh: true });
 
-    // `invalid_grant` retires the credential it was refused for — never the one
-    // the owner signed in with while the refusal was travelling. Read through
-    // the status, which reports the stored credential without asking the
-    // provider again: a second refresh against this stub would be a second,
-    // legitimate rejection of the credential that is now current.
+    // `invalid_grant` retires only the credential it was refused for. Read via status: a second refresh
+    // against this stub would be a legitimate rejection of the now-current credential.
     expect((await harness.userDO.listCredentials(owner)).map((row) => row.key)).toEqual([CODEX_CRED_KEY]);
     expect((await harness.userDO.getCodexStatus(owner)).connected).toBe(true);
     harness.close();
@@ -287,8 +257,7 @@ describe('a device-code sign-in the owner superseded', () => {
   const USERCODE_URL = 'https://auth.openai.com/api/accounts/deviceauth/usercode';
   const POLL_URL = 'https://auth.openai.com/api/accounts/deviceauth/token';
 
-  /** The provider, answering a device-code flow. `duringExchange` runs at the
-   *  final token exchange — the last await a poll makes before it would write. */
+  /** `duringExchange` runs at the final token exchange, the last await before a poll writes. */
   function codexProvider(options: {
     userCode: () => string;
     duringExchange?: () => Promise<void>;
@@ -341,8 +310,6 @@ describe('a device-code sign-in the owner superseded', () => {
     codexProvider({
       userCode: () => code,
       duringExchange: async () => {
-        // The owner gave up on the first code and asked for another one; that
-        // second attempt is the only one they are looking at now.
         code = 'CCCC-DDDD';
         await harness.userDO.startCodexDeviceFlow(owner);
       },
@@ -353,8 +320,6 @@ describe('a device-code sign-in the owner superseded', () => {
 
     expect(polled.connected).toBe(false);
     expect(polled.error).toContain('superseded');
-    // The newer attempt is still open and still the one on screen — pre-fix the
-    // stale reply wrote its own tokens and deleted this row out from under it.
     expect((await harness.userDO.getCodexStatus(owner)).startedFlow)
       .toMatchObject({ userCode: 'CCCC-DDDD' });
     expect((await harness.userDO.listCredentials(owner)).map((row) => row.key)).toEqual([]);
@@ -369,9 +334,7 @@ describe('a device-code sign-in the owner superseded', () => {
 
     expect(await harness.userDO.pollCodexDeviceFlow(owner)).toMatchObject({ connected: true });
     expect((await harness.userDO.getCodexStatus(owner)).connected).toBe(true);
-    // The settled attempt is no longer a portal page the owner is being sent to.
     expect((await harness.userDO.getCodexStatus(owner)).startedFlow).toBeNull();
-    // And a second poll of the same attempt cannot mint a second credential.
     expect(await harness.userDO.pollCodexDeviceFlow(owner))
       .toMatchObject({ connected: false, error: expect.stringContaining('No device flow in progress') });
     harness.close();
@@ -396,8 +359,7 @@ describe('one browser approval mints one CLI token', () => {
     const harness = createTestUserDO({ durableObjectId: USER_ID });
     const owner = await testOwner();
 
-    // The KV record both polls read said `approved`; the claim that decides is
-    // the mint's own, in the object that owns CLI tokens.
+    // Both polls read `approved` from KV; the mint's own claim in the CLI-token object decides.
     const settled = await Promise.allSettled([
       harness.userDO.mintCliToken(owner, USER_ID, AUTHORIZATION, 'terminal'),
       harness.userDO.mintCliToken(owner, USER_ID, AUTHORIZATION, 'terminal'),
@@ -422,9 +384,7 @@ describe('one browser approval mints one CLI token', () => {
   });
 });
 
-/** The connection the platform hands `onMessage`: tags and a wire, which is
- *  all a restored-from-hibernation connection has. Shared by both socket rails
- *  below — one token kind per rail, one connection double for both. */
+/** The connection the platform hands `onMessage`: tags and a wire, all a hibernation-restored connection has. */
 interface FakeConnection {
   tags: string[];
   sent: string[];
@@ -444,12 +404,8 @@ function connection(tags: string[]) {
   return { fake, wire };
 }
 
-/** A frame the SCOPE gate refuses on a scoped connection. It is the probe for
- *  the ordering under test: the AUTHORITY gate runs FIRST, so a live authority
- *  reaches this refusal (an rpc-error frame, socket intact) and a revoked one
- *  never gets that far (a close, with the revocation's own words). Refusing the
- *  frame downstream is also what keeps this off the agents-SDK dispatcher,
- *  which under bun is a stub the real Agent constructor would have installed. */
+/** A frame the scope gate refuses. The authority gate runs first, so a live authority gets an rpc-error
+ *  frame and a revoked one gets a close. Refusing downstream also avoids the agents-SDK dispatcher, a stub under bun. */
 const scopedFrame = JSON.stringify({ type: 'rpc', id: 'r1', method: 'destroyAgent', args: [] });
 
 describe('a CLI bearer revoked under a live websocket', () => {
@@ -483,10 +439,7 @@ describe('a CLI bearer revoked under a live websocket', () => {
     expect(cliBearerFromTags([tag ?? ''])).toEqual({
       readable: true, tokenHash: 'a'.repeat(64), generation: 7,
     });
-    // No CLI bearer at all — a browser session, which pays for nothing.
     expect(cliBearerFromTags(['cli-scopes:workspace.read'])).toBeNull();
-    // A bearer header that does not parse is still a CLI connection, and one
-    // whose authority cannot be read is refused rather than waved through.
     expect(cliBearerFromTags([cliBearerConnectionTag('garbage') ?? ''])).toEqual({ readable: false });
     expect(cliBearerConnectionTag(null)).toBeNull();
   });
@@ -498,15 +451,11 @@ describe('a CLI bearer revoked under a live websocket', () => {
 
     await actor.agent.onMessage(live.wire, scopedFrame);
 
-    // Past the bearer gate: the socket is intact and the answer came from the
-    // scope gate downstream of it.
     expect(live.fake.closed).toEqual([]);
     expect(JSON.parse(live.fake.sent[0] ?? '{}')).toMatchObject({
       type: 'rpc', id: 'r1', success: false, error: expect.stringContaining('not remotely invokable'),
     });
 
-    // The owner revokes it. Nothing about the socket changes — it is the same
-    // connection, with the same tags, mid-session.
     expect(await user.userDO.revokeCliTokenHash(owner, tokenHash)).toEqual({ ok: true });
 
     const after = connection(scopedTags(bearerTag));
@@ -515,8 +464,7 @@ describe('a CLI bearer revoked under a live websocket', () => {
     expect(after.fake.closed).toEqual([
       { code: 1008, reason: 'This CLI authorization is invalid. Sign in again with: kinu auth' },
     ]);
-    // The pending call is answered rather than left hanging on a socket that is
-    // about to disappear — and answered by the BEARER gate, not the scope one.
+    // Answered by the bearer gate, not the scope one.
     expect(JSON.parse(after.fake.sent[0] ?? '{}')).toMatchObject({
       type: 'rpc', id: 'r1', success: false, error: expect.stringContaining('no longer valid'),
     });
@@ -528,9 +476,7 @@ describe('a CLI bearer revoked under a live websocket', () => {
     const owner = await testOwner();
     await user.userDO.revokeCliTokenHash(owner, tokenHash);
 
-    // A connection restored from its attachment carries tags and nothing else,
-    // which is exactly why the bearer had to be ON the tags: before that, a
-    // woken socket had its scopes and no identity to check at all.
+    // A connection restored from its attachment carries only tags, so the bearer must be on the tags.
     const restored = connection(scopedTags(bearerTag));
     await actor.agent.onMessage(restored.wire, scopedFrame);
 
@@ -543,8 +489,7 @@ describe('a CLI bearer revoked under a live websocket', () => {
     const stale = connection([bearerTag]);
     const admittedAfter = connection([cliBearerConnectionTag(`${'b'.repeat(64)}:5`) ?? '']);
     const browser = connection(['cli-scopes:workspace.read']);
-    // SAFETY: the platform supplies the connection set; the mocked Agent base
-    // under bun has none, so the sockets this test is about are supplied here.
+    // SAFETY: the mocked Agent base under bun has no connection set, so the sockets are supplied here.
     Object.defineProperty(actor.agent, 'getConnections', {
       configurable: true,
       value: () => [stale.wire, admittedAfter.wire, browser.wire],
@@ -552,8 +497,7 @@ describe('a CLI bearer revoked under a live websocket', () => {
 
     expect(await actor.agent.closeRevokedCliSockets(5)).toEqual({ closed: 1 });
 
-    // A socket that never speaks would otherwise keep receiving this
-    // workspace's stream for as long as it liked.
+    // A socket that never speaks would otherwise keep receiving this workspace's stream.
     expect(stale.fake.closed).toHaveLength(1);
     expect(admittedAfter.fake.closed).toEqual([]);
     expect(browser.fake.closed).toEqual([]);
@@ -574,12 +518,9 @@ describe('a CLI bearer revoked under a live websocket', () => {
     const verified = await harness.userDO.verifyCliSocketBearer(owner, minted.tokenHash);
     expect(verified.live).toBe(false);
     expect(verified.generation).toBe(1);
-    // The revocation reached the workspace holding the socket, under the
-    // generation it must now beat.
     expect(harness.revokedSocketPushes).toEqual(['workspace-a:1']);
 
-    // An access-token revocation moves the same counter, so one comparison
-    // covers every kind of bearer.
+    // Access-token revocation moves the same counter, so one comparison covers every bearer kind.
     await harness.userDO.revokeAccessToken(owner, 'nothing-by-that-name');
     expect((await harness.userDO.verifyCliSocketBearer(owner, minted.tokenHash)).generation).toBe(2);
     harness.close();
@@ -587,10 +528,7 @@ describe('a CLI bearer revoked under a live websocket', () => {
 });
 
 describe('a capability rotation whose subtree push missed a replica', () => {
-  /** The reconciliation intent as the registry holds it: the workspace, the
-   *  hash the root is expected to be holding, and how many times the retry has
-   *  been attempted. Read from SQL because the row IS the mechanism — nothing
-   *  else remembers that a replica was stranded. */
+  /** The reconciliation intent from SQL: the row is the only record that a replica was stranded. */
   function reconcileIntent(harness: TestUserDO): Array<{ workspace: string; hash: string; attempts: number }> {
     return harness.db.prepare<{ workspace_name: string; token_hash: string; attempts: number }, []>(
       `SELECT workspace_name, token_hash, attempts FROM workspace_capability_reconcile
@@ -599,10 +537,7 @@ describe('a capability rotation whose subtree push missed a replica', () => {
   }
 
   test('the next touch repushes it to convergence, and only then forgets it', async () => {
-    // The push misses one descendant. Swallowing that as a diagnostics line and
-    // answering `{ ok: true }` would record the rotation as landed while a live
-    // subordinate goes on presenting a token this account does not recognize,
-    // with nothing standing to retry it.
+    // The push misses one descendant; answering `{ ok: true }` would leave nothing to retry it.
     let missed = 1;
 
     const harness = createTestUserDO({
@@ -614,25 +549,19 @@ describe('a capability rotation whose subtree push missed a replica', () => {
     const hash = await sha256Hex(token);
 
     expect(reconcileIntent(harness)).toEqual([{ workspace: 'stranded', hash, attempts: 1 }]);
-    // The root and the registry AGREE on the hash — which is exactly why the
-    // hash comparison alone reads as "done" and why the intent has to exist.
+    // Root and registry agree on the hash, which is why the hash comparison alone cannot mean done.
     expect(harness.installed.get('stranded')).toBe(token);
 
-    // A touch while the replica is still unreachable retries and stays armed,
-    // with the attempt count rising rather than the failure going quiet.
     await harness.userDO.ensureWorkspaceCapability('stranded', hash);
     expect(harness.capabilityRepushes).toEqual(['stranded']);
     expect(reconcileIntent(harness)).toEqual([{ workspace: 'stranded', hash, attempts: 2 }]);
 
-    // The replica comes back. The very next ordinary touch — a claim, an open,
-    // any caller that presents the hash — converges and clears the intent.
     missed = 0;
     await harness.userDO.ensureWorkspaceCapability('stranded', hash);
 
     expect(harness.capabilityRepushes).toEqual(['stranded', 'stranded']);
     expect(reconcileIntent(harness)).toEqual([]);
-    // Nothing was re-minted: the retry carries the token the registry already
-    // committed, so an old copy stays denied and no live holder is orphaned.
+    // Nothing re-minted: the retry carries the committed token, so an old copy stays denied.
     expect(harness.installed.get('stranded')).toBe(token);
     expect(harness.db.prepare<{ token_hash: string }, []>(
       `SELECT token_hash FROM workspace_capability_tokens WHERE workspace_name = 'stranded'`,
@@ -648,8 +577,6 @@ describe('a capability rotation whose subtree push missed a replica', () => {
     expect(reconcileIntent(harness)).toEqual([]);
     await harness.userDO.ensureWorkspaceCapability('whole', hash);
 
-    // The agreeing case is still the cheap case: the hash matched and no intent
-    // was pending, so the root was never asked to do anything.
     expect(harness.capabilityRepushes).toEqual([]);
     harness.close();
   });
@@ -665,9 +592,7 @@ describe('a capability rotation whose subtree push missed a replica', () => {
     const first = await provisionTestWorkspace(harness, 'rotating');
     expect(reconcileIntent(harness)).toHaveLength(1);
 
-    // A caller presenting NOTHING re-mints. The intent names a hash that is
-    // about to stop existing, so carrying it forward would arm the retry
-    // against a token no replica should be holding.
+    // A caller presenting nothing re-mints, so the intent's hash is about to stop existing and must not carry forward.
     missed = 0;
     await harness.userDO.ensureWorkspaceCapability('rotating', null);
 
@@ -679,19 +604,12 @@ describe('a capability rotation whose subtree push missed a replica', () => {
 });
 
 describe('a browser session revoked under a live websocket', () => {
-  /** The wire state a cookie-authenticated upgrade leaves: the edge rewrote the
-   *  session header from the VERIFIED identity (appendIdentityHeaders), the
-   *  actor persisted it as a connection tag (getConnectionTags), and the socket
-   *  now carries the one handle a later logout can reach it by. The scope tag
-   *  rides along so the frame under test lands on the gate downstream of the
-   *  authority check rather than on the agents-SDK dispatcher, which under bun
-   *  is a stub — the same probe the CLI rail above uses. */
+  /** The wire state a cookie-authenticated upgrade leaves: session header rewritten from the verified identity,
+   *  persisted as a connection tag. The scope tag lands the frame downstream of the authority check, as on the CLI rail. */
   const sessionTags = (sessionTokenHash: string): string[] =>
     [sessionBearerConnectionTag(sessionTokenHash) ?? '', 'cli-scopes:workspace.read'];
 
-  /** One registered browser session, and the workspace holding a socket that
-   *  authenticated on it. The session row is REAL — `verifySocketSession` reads
-   *  the same rows `revokeBrowserSession` deletes. */
+  /** The session row is real: `verifySocketSession` reads the rows `revokeBrowserSession` deletes. */
   async function browserRail(sessionTokenHash: string): Promise<{
     user: TestUserDO;
     actor: ActorHarness<HarnessOrchestratorAgent>;
@@ -724,15 +642,11 @@ describe('a browser session revoked under a live websocket', () => {
 
     await actor.agent.onMessage(live.wire, scopedFrame);
 
-    // Past the session gate: the socket is intact and the answer came from the
-    // scope gate downstream of it, exactly as a live CLI bearer reads.
     expect(live.fake.closed).toEqual([]);
     expect(JSON.parse(live.fake.sent[0] ?? '{}')).toMatchObject({
       type: 'rpc', id: 'r1', success: false, error: expect.stringContaining('not remotely invokable'),
     });
 
-    // Logout. Nothing about the socket changes — same connection, same tags,
-    // mid-session — and the cookie it was admitted under is now deleted.
     await user.userDO.revokeBrowserSession(owner, sessionTokenHash);
 
     const after = connection(sessionTags(sessionTokenHash));
@@ -741,8 +655,7 @@ describe('a browser session revoked under a live websocket', () => {
     expect(after.fake.closed).toEqual([
       { code: 1008, reason: 'This session has been signed out. Sign in again.' },
     ]);
-    // The pending call is answered rather than left hanging on a socket about
-    // to disappear — and answered by the SESSION gate, not the scope one.
+    // Answered by the session gate, not the scope one.
     expect(JSON.parse(after.fake.sent[0] ?? '{}')).toMatchObject({
       type: 'rpc', id: 'r1', success: false, error: expect.stringContaining('signed out'),
     });
@@ -756,8 +669,7 @@ describe('a browser session revoked under a live websocket', () => {
     const otherSession = connection(sessionTags('a'.repeat(64)));
     const cliSocket = connection([cliBearerConnectionTag(`${'c'.repeat(64)}:0`) ?? '']);
     const untagged = connection(['cli-scopes:workspace.read']);
-    // SAFETY: the platform supplies the connection set; the mocked Agent base
-    // under bun has none, so the sockets this test is about are supplied here.
+    // SAFETY: the mocked Agent base under bun has no connection set, so the sockets are supplied here.
     Object.defineProperty(actor.agent, 'getConnections', {
       configurable: true,
       value: () => [signedOut.wire, otherSession.wire, cliSocket.wire, untagged.wire],
@@ -765,11 +677,8 @@ describe('a browser session revoked under a live websocket', () => {
 
     expect(await actor.agent.closeRevokedSessionSockets(sessionTokenHash)).toEqual({ closed: 1 });
 
-    // A copied cookie that says nothing sends no frames, so the frame gate can
-    // never reach it: it would keep RECEIVING this workspace's stream for as
-    // long as it liked. Only the socket that named THIS session closes — the
-    // account's other sign-in, a CLI bearer, and an untagged connection are
-    // each somebody else's authority to end.
+    // A silent copied cookie never reaches the frame gate, so the push must close it. Only the socket that named
+    // this session closes; other sign-ins, CLI bearers and untagged connections are someone else's authority.
     expect(signedOut.fake.closed).toEqual([
       { code: 1008, reason: 'This session has been signed out. Sign in again.' },
     ]);
@@ -794,11 +703,9 @@ describe('a browser session revoked under a live websocket', () => {
 
     await harness.userDO.revokeBrowserSession(owner, sessionTokenHash);
 
-    // The row's absence IS the revocation, so the frame-time answer flips
-    // whether or not the push landed...
+    // The row's absence is the revocation, so the frame-time answer flips whether or not the push landed;
     expect(await harness.userDO.verifySocketSession(owner, sessionTokenHash)).toEqual({ live: false });
-    // ...and the push is what reaches a socket that is not speaking, in every
-    // workspace this account holds.
+    // the push is what reaches a silent socket, in every workspace this account holds.
     expect(harness.revokedSessionPushes).toEqual([
       `workspace-a:${sessionTokenHash}`, `workspace-b:${sessionTokenHash}`,
     ]);
@@ -811,9 +718,7 @@ describe('a browser session revoked under a live websocket', () => {
     const owner = await testOwner();
     await user.userDO.revokeBrowserSession(owner, sessionTokenHash);
 
-    // A connection that never held a live frame, restored from tags or freshly
-    // admitted: the authority question is asked per frame against the object
-    // that owns the row, so there is no admitted state to inherit.
+    // Authority is asked per frame against the row's owner, so there is no admitted state to inherit.
     const fresh = connection(sessionTags(sessionTokenHash));
     await actor.agent.onMessage(fresh.wire, scopedFrame);
 
@@ -826,10 +731,7 @@ describe('a browser session revoked under a live websocket', () => {
   test('the session rides the connection tags, and an unreadable one fails closed', () => {
     const tag = sessionBearerConnectionTag('e'.repeat(64));
     expect(sessionBearerFromTags([tag ?? ''])).toEqual({ tokenHash: 'e'.repeat(64) });
-    // No session at all — a CLI ticket connection, which pays for nothing here.
     expect(sessionBearerFromTags(['cli-scopes:workspace.read'])).toBeNull();
-    // A session header that does not parse is still a browser connection, and
-    // one whose authority cannot be read is refused rather than waved through.
     expect(sessionBearerFromTags([sessionBearerConnectionTag('garbage') ?? ''])).toEqual({ unreadable: true });
     expect(sessionBearerConnectionTag(null)).toBeNull();
   });
@@ -846,9 +748,7 @@ describe('creating a workspace whose name is already taken', () => {
 
     expect(again.status).toBe('active');
     expect(third.status).toBe('active');
-    // The row's own identity, every time: same name, same birth, same title.
-    // A fresh `createdAt` on the conflict branch also meant a rollback could
-    // never match the row it was trying to release.
+    // A fresh `createdAt` on the conflict branch would stop a rollback from matching the row it releases.
     expect(again).toMatchObject({ entry: { name: 'jarvis', displayName: 'Jarvis', createdAt: created.createdAt } });
     expect(third).toMatchObject({ entry: { displayName: 'Jarvis', createdAt: created.createdAt } });
     expect((await harness.userDO.getWorkspaceTitle(owner, 'jarvis')))
@@ -864,9 +764,6 @@ describe('creating a workspace whose name is already taken', () => {
     const registered = await harness.userDO.registerWorkspace(owner, 'in-flight', 'Hijacked', { purpose: 'another mission' });
 
     expect(registered).toEqual({ status: 'reserved' });
-    // The reservation is untouched: same title, still unpublished, still the
-    // transfer's to commit. Pre-fix this rewrote its title and let the create
-    // run a whole birth sequence into the workspace being streamed into.
     expect(harness.db.prepare<{ display_name: string; create_pending: number }, []>(
       `SELECT display_name, create_pending FROM user_workspaces WHERE name = 'in-flight'`,
     ).all()).toEqual([{ display_name: 'Fork target', create_pending: 1 }]);

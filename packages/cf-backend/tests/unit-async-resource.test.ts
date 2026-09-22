@@ -25,7 +25,6 @@ describe('async resource transitions', () => {
     const ready = loadSucceeded([1, 2, 3]);
     const state = loadFailed(ready, { cause: new Error('offline') });
     expect(lastValue(state)).toEqual([1, 2, 3]);
-    // …and keeps carrying it across a second failure.
     expect(lastValue(loadFailed(state, { cause: new Error('offline again') }))).toEqual([1, 2, 3]);
   });
 
@@ -58,8 +57,7 @@ describe('async resource transitions', () => {
 
     expect(mapResource(LOADING, lengths)).toEqual({ status: 'loading' });
 
-    // A failure passes through with its message, but the stale value it still
-    // carries is the mapped one — the view reads `last`, not the old shape.
+    // The stale value it carries is the mapped one: the view reads `last`, not the old shape.
     const stale = loadFailed(loadSucceeded([1, 2, 3]), { cause: new Error('offline') });
     expect(mapResource(stale, lengths)).toEqual({ status: 'error', message: 'offline', last: 3 });
 

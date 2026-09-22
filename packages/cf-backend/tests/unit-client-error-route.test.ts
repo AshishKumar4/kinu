@@ -1,17 +1,6 @@
 /**
- * `POST /api/client-errors` — the browser render-failure endpoint.
- *
- * The endpoint writes into the operator's log sink, on behalf of a browser, so
- * the two things worth locking down are the two ways that goes wrong: something
- * OTHER than a report reaching the sink, and the release identity being taken on
- * the browser's word.
- *
- * So this suite is mostly refusals — no auth, wrong method, over the bound, off
- * the schema, prose where a stack frame belongs — plus the four release verdicts
- * and the exact field set one accepted report writes. The client half's own claim
- * (that a message, a path and a component label never enter the payload at all)
- * is asserted here too, through the production send with a stubbed transport,
- * because the claim is about what leaves the browser.
+ * `POST /api/client-errors` writes to the operator's log sink on a browser's behalf.
+ * Defends: anything other than a report reaching the sink, and release identity taken on the browser's word.
  */
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
 import * as v from 'valibot';
@@ -38,7 +27,6 @@ const ORIGIN = 'https://kinu.example.com';
 
 const URL_ = `${ORIGIN}${CLIENT_ERROR_ENDPOINT}`;
 
-/** The build the fixture deployment serves. */
 const STAMP = { version: '0.1.0+abc1234', sha: 'abc1234', builtAt: '2026-08-07T00:00:00.000Z' };
 
 const SPA_SHELL = '<!doctype html>\n<html lang="en"><head><title>Kinu</title></head><body></body></html>';
@@ -51,11 +39,7 @@ const ME: AuthIdentity = {
   authTime: Date.now(),
 };
 
-/**
- * An ASSETS binding that publishes the build stamp, or — when `stamp` is null —
- * answers the way the real `single-page-application` fallback does, which is how
- * an undeployed bundle and a `vite dev` server look from in here.
- */
+/** `stamp: null` answers like the real `single-page-application` fallback (an undeployed bundle or `vite dev`). */
 function envWithStamp(stamp: typeof STAMP | null): ClientErrorEnv {
   return {
     ASSETS: {
@@ -72,7 +56,6 @@ function envWithStamp(stamp: typeof STAMP | null): ClientErrorEnv {
   };
 }
 
-/** A well-formed report, with the fields each case varies overridden. */
 function report(over: Partial<ClientErrorReport> = {}): ClientErrorReport {
   return {
     event: CLIENT_RENDER_FAILED,
@@ -89,10 +72,7 @@ function post(body: string, init: RequestInit = {}): Request {
   return new Request(URL_, { method: 'POST', body, ...init });
 }
 
-/** The route's verdict, parsed rather than asserted: the response SHAPE is part
- *  of the contract, so a body that is not this is a failure here too. The arms
- *  restate the contract's `ReleaseMatch`, so the suite pins the wire answer on
- *  its own terms instead of borrowing the implementation's list. */
+/** The arms restate the contract's `ReleaseMatch` so the wire answer is pinned on its own terms. */
 const AcceptedSchema = v.object({
   releaseMatch: v.picklist(['match', 'stale', 'unreported', 'undeployed'] as const),
 });
@@ -114,7 +94,6 @@ async function send(
   return response;
 }
 
-/** The one line an accepted report writes. */
 async function recorded(
   body: string,
   stamp: typeof STAMP | null = STAMP,
@@ -136,8 +115,7 @@ describe('routing', () => {
   });
 
   test('a GET of the endpoint is a 405, not the SPA', async () => {
-    // Falling through would answer an API path with the app shell, which is the
-    // defect /api/health's own suite exists to catch.
+    // Falling through would answer an API path with the app shell.
     const response = await handleClientErrorRequest(
       new Request(URL_), envWithStamp(STAMP), ME,
     );
@@ -148,8 +126,7 @@ describe('routing', () => {
 
 describe('who may write to the log sink', () => {
   test('an unauthenticated report is refused by the route itself', async () => {
-    // Not merely by server.ts's gate: this route writes to the operator's logs,
-    // and a guard performed only by the caller is one refactor from absent.
+    // Guarded here too, not only by server.ts: a caller-only guard is one refactor from absent.
     const response = await send(JSON.stringify(report()), null);
     expect(response.status).toBe(401);
   });
@@ -193,9 +170,7 @@ describe('a body that is not a report', () => {
   });
 
   test('prose where a stack frame belongs is refused', async () => {
-    // The log-injection case, and the reason the frame grammar is a schema and
-    // not only a client-side filter: a hostile sender rebuilding the body by
-    // hand is the whole threat model of an endpoint that writes to logs.
+    // The frame grammar is a schema, not only a client filter: a hostile hand-built body is the threat model.
     const response = await send(JSON.stringify({
       ...report(),
       stack: 'TypeError: the user said "my api key is sk-live-9x2"\n    at f (https://h/a.js:1:2)',
@@ -222,8 +197,6 @@ describe('a body that is not a report', () => {
 
 describe('the bound', () => {
   test('a body over the request bound is a 413', async () => {
-    // One frame repeated past the ceiling: every line is a legal frame, so the
-    // refusal is the SIZE and not the shape.
     const frame = '    at f (https://kinu.example.com/assets/index-a1b2c3.js:1:2345)';
 
     const huge = JSON.stringify({
@@ -236,8 +209,7 @@ describe('the bound', () => {
   });
 
   test('the bound is not the declared length', async () => {
-    // `readBounded` counts arriving bytes, so a body that declares nothing —
-    // which is every chunked sender — is still refused at the ceiling.
+    // `readBounded` counts arriving bytes, so a chunked body that declares nothing is still refused.
     const frame = '    at f (https://kinu.example.com/assets/index-a1b2c3.js:1:2345)';
 
     const huge = JSON.stringify({
@@ -270,10 +242,7 @@ describe('the release the report is bound to', () => {
   });
 
   test('a stale tab’s report is LABELLED, not refused', async () => {
-    // The most interesting report this endpoint receives: a page that rode
-    // through a deploy is running code the origin no longer serves, and its
-    // stack cannot be reproduced against the live build. Refusing it would
-    // discard the evidence for the one failure mode nothing else reports.
+    // A page that rode through a deploy is the one failure mode nothing else reports; refusing it discards the evidence.
     const { response, lines } = await recorded(JSON.stringify(report({ release: 'deadbee' })));
     expect(response.status).toBe(202);
     expect(await verdict(response)).toBe('stale');
@@ -299,8 +268,7 @@ describe('the release the report is bound to', () => {
   });
 
   test('a deployment with no build stamp cannot claim a mismatch', async () => {
-    // A `vite dev` server publishes no stamp. Reporting `stale` there would be a
-    // fabricated finding on every local session.
+    // `vite dev` publishes no stamp; reporting `stale` there would be fabricated on every local session.
     const { lines } = await recorded(JSON.stringify(report({ release: 'deadbee' })), null);
     expect(lines[0]?.fields.releaseMatch).toBe('undeployed');
     expect(lines[0]?.fields.release).toBe('');
@@ -314,8 +282,7 @@ describe('what one accepted report writes', () => {
   });
 
   test('exactly the safe fields, and no others', async () => {
-    // The whole field set, asserted as a set: a field added here later has to
-    // pass this test, which is where "is that safe to log?" gets asked.
+    // Asserted as a set: a field added later has to pass here, where "is that safe to log?" gets asked.
     const { lines } = await recorded(JSON.stringify(report()));
     expect(Object.keys(lines[0]?.fields ?? {}).sort()).toEqual([
       'builtAt', 'componentStack', 'errorName', 'release', 'releaseMatch',
@@ -324,8 +291,6 @@ describe('what one accepted report writes', () => {
   });
 
   test('the stack reaches the sink intact, so the coordinates survive', async () => {
-    // A report whose frames are dropped or rewritten on the way in cannot be
-    // deobfuscated from source, which is the only reason to collect one.
     const sent = report();
     const { lines } = await recorded(JSON.stringify(sent));
     expect(lines[0]?.fields.stack).toBe(sent.stack);
@@ -353,7 +318,6 @@ describe('the route a report is addressed by', () => {
   });
 
   test('a path the router does not know is a finding, not a leak', () => {
-    // The literal wire value: the server validates reports against REPORTED_ROUTES.
     expect(routeTemplateOf('/nope/acme-billing-q3')).toBe('/unmatched');
   });
 
@@ -376,14 +340,11 @@ describe('the payload the browser builds', () => {
     '    at ErrorBoundary (https://kinu.example.com/assets/index-a1b2c3.js:1:4444)',
   ].join('\n');
 
-  /** Bodies the production send POSTed, in order. */
   const posts: { url: string; body: string }[] = [];
   const realFetch = globalThis.fetch;
 
   beforeEach(() => {
     posts.length = 0;
-    // A page on a workspace route, whose health endpoint is unreachable: every
-    // report below is one a page with no build identity produced.
     Object.assign(globalThis, { location: { pathname: '/workspace/demo' } });
     globalThis.fetch = asFetchFunction(async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = requestUrl(input);
@@ -401,7 +362,6 @@ describe('the payload the browser builds', () => {
     Reflect.deleteProperty(globalThis, 'location');
   });
 
-  /** One caught render error through the production send, parsed back. */
   async function posted(error: Error, componentStack: string): Promise<ClientErrorReport> {
     await reportRenderFailure(error, componentStack, {
       release: await pageDeployedBuildSha(),
@@ -421,8 +381,7 @@ describe('the payload the browser builds', () => {
   }
 
   test('the message never leaves, in any field', async () => {
-    // V8 puts `${name}: ${message}` on the first line of `stack`, which is the
-    // one line that must not travel.
+    // V8 puts `${name}: ${message}` on the first line of `stack`, which must not travel.
     const body = JSON.stringify(await posted(failedRender(), COMPONENT_STACK));
     expect(body).not.toContain('SAVE20');
     expect(body).not.toContain('Cannot read properties');
@@ -449,9 +408,7 @@ describe('the payload the browser builds', () => {
   });
 
   test('a name assigned over the identifier shape falls back rather than travels', async () => {
-    // Built at runtime: exercises the production token pattern without placing
-    // a credential-shaped literal in source (which the push-time scanner must
-    // treat as real until proven otherwise).
+    // Built at runtime so no credential-shaped literal sits in source for the push-time scanner.
     const syntheticToken = ['ptc', 'deadbeef'].join('_');
     const error = new Error('boom');
     error.name = `the user said: my token is ${syntheticToken}`;
@@ -489,7 +446,6 @@ describe('fitting a report to the one bound', () => {
   });
   test('an oversized report comes back inside the bound', () => {
     const fitted = fitClientErrorReport(oversized(400, 400));
-    // The bound is on arriving bytes, measured here in the test's own terms.
     expect(new TextEncoder().encode(JSON.stringify(fitted)).byteLength)
       .toBeLessThanOrEqual(CLIENT_ERROR_MAX_REQUEST_BYTES);
   });
@@ -509,16 +465,12 @@ describe('fitting a report to the one bound', () => {
   });
 
   test('the share is proportional to what each asked for', () => {
-    // Nine times as much stack as component path: the split has to reflect that,
-    // or one long minified stack silently costs the whole component tree.
     const fitted = fitClientErrorReport(oversized(450, 50));
     expect(fitted.stack.length).toBeGreaterThan(fitted.componentStack.length * 4);
   });
 
   test('whole frames survive, never half of one', () => {
-    // A byte slice can leave a partial frame, which the route's own schema then
-    // refuses — a truncation that produces an unsendable report is worse than
-    // one that drops a frame.
+    // A partial frame would be refused by the route's schema, so truncation drops whole frames.
     const fitted = fitClientErrorReport(oversized(400, 400));
 
     for (const line of [...fitted.stack.split('\n'), ...fitted.componentStack.split('\n')]) {
@@ -532,8 +484,7 @@ describe('fitting a report to the one bound', () => {
   });
 
   test('non-ASCII frames are measured in bytes, not characters', () => {
-    // The bound is on encoded bytes. Counting characters would let a stack of
-    // multi-byte identifiers pass the fit and be refused at the route.
+    // Encoded bytes, not characters: multi-byte identifiers would pass the fit and be refused at the route.
     const wide = `    at Iñtërnâtiônàlizætiøn☃ (https://kinu.example.com/assets/index-a1b2c3.js:1:2345)`;
 
     const fitted = fitClientErrorReport(report({

@@ -1,26 +1,7 @@
 /**
- * The global view: one filesystem, a home per agent, permissions as the boundary.
- *
- * Every claim is driven through the REAL Nimbus shell — `rpcExec`, the same
- * `_rpcExec` path a workspace agent's `shell` tool takes — because a boundary
- * asserted only against a filesystem API is a boundary the thing that actually
- * runs commands has never been held to. There is no second shell to test, which
- * is the point: `/home/<agent>` is an ordinary directory in the one tree, so the
- * shell plane and the file plane resolve it identically by construction rather
- * than by agreement.
- *
- * The two halves that matter, and neither is sufficient alone:
- *
- *   FAIL-CLOSED — a write outside an agent's own home is REFUSED. An identity
- *   that writes as itself but is never refused anywhere is a label, not a
- *   credential.
- *
- *   THE READ WINDOW — the origin's files are READABLE by every agent. This is
- *   the half that got the last isolation attempt reverted
- *   (`unit-head-fork.test.ts:4-8`): a subagent handed a fresh empty filesystem
- *   could not see a codebase the user had cloned. A test that proved only
- *   refusal would pass on exactly that regression, so the read of a file only
- *   the origin has is asserted here as a first-class requirement.
+ * One filesystem, a home per agent, permissions as the boundary, driven through the real Nimbus shell (`rpcExec`).
+ * Defends both halves: writes outside an agent's home are refused, and the origin's files stay readable
+ * (the regression that reverted the last isolation attempt, `unit-head-fork.test.ts:4-8`).
  */
 import { afterEach, describe, expect, test } from 'bun:test';
 import { Database, type SQLQueryBindings } from 'bun:sqlite';
@@ -74,9 +55,7 @@ interface Fixture {
   readonly workspace: NimbusWorkspace;
   readonly host: ProgrammaticHost;
   readonly sql: SqlDatabase;
-  /** Provision an agent through the production seam, and return its credential. */
   readonly join: (agentName: string) => VfsCred;
-  /** A pid carrying `cred` — how a file-plane RPC names its identity. */
   readonly pidFor: (cred: VfsCred) => number;
   readonly processes: SessionProcessSupervisor;
 }
@@ -142,8 +121,7 @@ describe('the layout — one function answers for every agent', () => {
   });
 
   test('a name that could escape /home is refused, not sanitised', () => {
-    // The cap is 96, not 64: the longest valid subordinate slug runs to 64
-    // and the `sub-` kind prefix must not push it out of the namespace.
+    // The cap is 96: the longest valid subordinate slug is 64 and the `sub-` prefix must not push it out.
     for (const bad of ['../etc', 'a/b', '/abs', '', 'Node-A', 'a'.repeat(97)]) {
       expect(() => agentHome(bad)).toThrow(/not a usable agent name/);
     }
@@ -160,7 +138,6 @@ describe('the layout — one function answers for every agent', () => {
     expect(other.uid).not.toBe(first.uid);
     // Its own group, so group membership is never a second way into a sibling.
     expect(first.gid).toBe(first.uid);
-    // The workspace agent is the substrate's session user, never an allocation.
     expect(agentIdentity(f.sql, MAIN_AGENT)).toEqual({ uid: SESSION_UID, gid: SESSION_UID });
   });
 
@@ -223,7 +200,7 @@ describe('permissions are the boundary — through the one real shell', () => {
     const f = await openFixture();
     const nodeA = f.join('node-a');
 
-    // chmod is confined to the caller's own triad: refused, never quietly clamped.
+    // chmod is confined to the caller's own triad: refused, never clamped.
     expect(() => f.workspace.vfs.as(nodeA).chmod('/home/node-a', 0o777)).toThrow(
       expect.objectContaining({ code: 'EPERM' }),
     );
@@ -244,7 +221,7 @@ describe('permissions are the boundary — through the one real shell', () => {
 describe('the read window — the regression that must be unreachable', () => {
   test('a node reads a file only the origin has, through the real shell', async () => {
     const f = await openFixture();
-    // The origin's own bytes: a codebase the user cloned, which the node did not create.
+    // The origin's own bytes, which the node did not create.
     f.workspace.vfs.as(ROOT).mkdir(`${WORKSPACE_ROOT}/repo`, { recursive: true });
     f.workspace.vfs.as(ROOT).writeFile(`${WORKSPACE_ROOT}/repo/main.ts`, 'export const answer = 42;\n');
     const nodeA = f.join('node-a');
@@ -321,9 +298,7 @@ describe('/tmp is private at the shared path, on both planes', () => {
 
     await rpcExec(f.host, 'echo via-shell > /tmp/both.txt', { cred: nodeA });
 
-    // Written by the shell, read back through the workspace's supervisor op —
-    // the same file plane the session's file RPC serves — under the same
-    // identity.
+    // Read back through the supervisor op (the session's file plane) under the same identity.
     const sameAgent = v.parse(v.nullable(v.string()), await f.workspace.supervisorOp({
       op: 'readFile', args: ['/tmp/both.txt'], pid: f.pidFor(nodeA),
     }));

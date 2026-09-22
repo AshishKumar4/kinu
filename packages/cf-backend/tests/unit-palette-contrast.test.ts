@@ -1,19 +1,6 @@
 /**
- * Every text role must meet WCAG AA against every surface it can land on, in
- * every theme — both palettes × both modes.
- *
- * This is the defect the design audit measured and the owner saw: light mode
- * shipped `--c-text-3` at 2.90:1 behind 10–11px meta text, and the accent and
- * every status tone failed AA on paper. Nothing catches that — a colour is
- * never "wrong" to a compiler, and the failure is invisible to whoever picked
- * the hex on a good monitor.
- *
- * Tokens are read out of `index.css` rather than restated here, so the test
- * measures what actually ships and a palette edit is checked by the same run
- * that makes it. The four themes are assembled by REPLAYING the cascade: every
- * palette block in the stylesheet carries specificity (0,1,0) — `:root` is a
- * pseudo-class, the others are attribute selectors — so source order alone
- * decides, and a selector list in source order is a faithful model of it.
+ * Every text role must meet WCAG AA against every surface it can land on, in both palettes × both modes.
+ * Tokens come from `index.css`; every palette block has specificity (0,1,0), so source order models the cascade.
  */
 
 import { describe, expect, test } from 'bun:test';
@@ -23,10 +10,7 @@ import { present } from '@kinu.run/test-utils';
 
 const INDEX_CSS = resolve(import.meta.dir, '../src/index.css');
 
-/** Text roles, and the surfaces each is allowed to sit on. `--c-text-3` is
- *  the dim role and `--c-text-4` the micro-label role: both land anywhere,
- *  dialogs included, so `--c-overlay` and `--c-elevated` are in scope for
- *  them like every other surface. */
+/** Text roles and allowed surfaces; dim and micro-label roles land anywhere, dialogs included. */
 const SURFACES = ['--c-bg', '--c-sidebar', '--c-surface', '--c-elevated', '--c-overlay', '--c-recessed', '--c-fill'] as const;
 
 const TEXT_ROLES = [
@@ -34,7 +18,6 @@ const TEXT_ROLES = [
   '--c-success', '--c-warning', '--c-danger', '--c-info',
 ] as const;
 
-/** Ink-on-fill pairs: a filled control supplies both halves itself. */
 const FILLS: ReadonlyArray<readonly [ink: string, fill: string, what: string]> = [
   ['--c-accent-on', '--c-accent', 'p-btn label on brass'],
   ['--c-bg', '--c-danger', 'p-btn-danger label on danger'],
@@ -65,16 +48,12 @@ function parse(css: string): Rgb {
   throw new Error(`palette token is not a hex or rgb() literal: ${css}`);
 }
 
-/** The one palette, two modes. `:root` holds dark; `[data-mode="light"]`
- *  overrides the whole set. */
 const CASCADE = [
   { theme: 'dark', blocks: [':root'] },
   { theme: 'light', blocks: [':root', '[data-mode="light"]'] },
 ] as const;
 
-/** One palette block, as name → value, `--c-*` only. Anchored at the start of
- *  a line so `[data-palette="silk"]` cannot match the compound selector or a
- *  mention of itself in a comment. */
+/** Anchored at line start so the selector cannot match a compound selector or a mention in a comment. */
 function block(css: string, selector: string) {
   const at = css.search(new RegExp(`^${selector.replace(/[[\]"().*+?^${}|\\]/g, '\\$&')}\\s*\\{`, 'm'));
 
@@ -92,9 +71,7 @@ function block(css: string, selector: string) {
   );
 }
 
-/** The theme as the browser would compute it: every matching block applied in
- *  source order, then one level of `var(--c-…)` indirection resolved, which is
- *  all the palette uses. */
+/** Blocks applied in source order, then one level of `var(--c-…)` resolved, which is all the palette uses. */
 function palette(blocks: readonly string[]) {
   const css = readFileSync(INDEX_CSS, 'utf8');
   const merged: Record<string, string> = {};
@@ -110,7 +87,6 @@ function palette(blocks: readonly string[]) {
   return merged;
 }
 
-/** Alpha-composite `fg` over an opaque `bg`. */
 const over = (fg: Rgb, bg: Rgb): Rgb => ({
   r: fg.r * fg.a + bg.r * (1 - fg.a),
   g: fg.g * fg.a + bg.g * (1 - fg.a),
@@ -145,8 +121,7 @@ describe('palette contrast', () => {
       const p = palette(blocks);
 
       test('every token the roles need is declared', () => {
-        // Guards the guard: a renamed token would otherwise make the loops
-        // below iterate over nothing and pass silently.
+        // A renamed token would make the loops below iterate over nothing and pass.
         const needed = [...SURFACES, ...TEXT_ROLES, ...FILLS.flatMap(([i, f]) => [i, f])];
         expect(needed.filter((t) => !(t in p))).toEqual([]);
       });
@@ -156,7 +131,6 @@ describe('palette contrast', () => {
           SURFACES.map((surface) => ({ role, surface, ratio: Number(contrast(p[role], p[surface]).toFixed(2)) }))
             .filter((r) => r.ratio < AA));
 
-        // Reported as rows so a failure names the exact pair and its number.
         expect(failures).toEqual([]);
       });
 

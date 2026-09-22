@@ -49,7 +49,7 @@ describe("computeWorkspaceDiff", () => {
       ["b.ts", "removed"],   // gone from current
       ["d.ts", "added"],     // new in current
     ]);
-    // c.ts unchanged → omitted.
+    // c.ts unchanged: omitted.
     expect(diff.find((f) => f.path === "c.ts")).toBeUndefined();
     expect(present(diff.find((f) => f.path === "a.ts"), "the a.ts diff entry").added).toBe(1);
     expect(present(diff.find((f) => f.path === "d.ts"), "the d.ts diff entry").added).toBe(1);
@@ -164,10 +164,7 @@ describe("parseGitDiff", () => {
   });
 
   test("a file past the row bound still counts every line, and says it was bounded", () => {
-    // The counters run over every line and the bound stops only the BODY: above
-    // them a large file stops counting as well as stops showing, and then
-    // presents the undercount as the file's +/- totals with nothing marking it
-    // as partial.
+    // Counters run over every line; the bound stops only the body, so totals are never an undercount.
     const adds = 1_400, dels = 300;
 
     const raw = [
@@ -183,8 +180,7 @@ describe("parseGitDiff", () => {
     expect(file.added).toBe(adds);
     expect(file.removed).toBe(dels);
     expect(file.truncated).toBe(true);
-    // The body is bounded exactly — hunk headers are carried through the same
-    // bound, so a truncated file cannot grow past it either.
+    // Hunk headers pass through the same bound, so a truncated body cannot exceed it.
     expect(file.lines.length).toBe(MAX_LINES_PER_FILE);
   });
 
@@ -207,16 +203,9 @@ describe("parseGitDiff", () => {
 
 describe("diffLines cost bound", () => {
   /**
-   * 256 KiB of 32-byte lines: the adversarial file the snapshot gate admits,
-   * because that gate counts BYTES while the alignment's cost is driven by
-   * LINES. A lockfile, a CSV, a log, a minified bundle.
-   *
-   * Measured in a real workerd isolate (local://v8-sizing-probe.md): a whole-file
-   * (n+1)x(m+1) table over this input peaks the isolate at +330 MiB and 4.6 s.
-   * The wall it crosses is `do.isolate.reset_silent` (~200 MiB), whose breach
-   * resets the object with nothing thrown and nothing logged — and Output polls
-   * this path every 2 seconds, so one such file reset the DO in a loop the owner
-   * could only escape by closing the tab.
+   * 256 KiB of 32-byte lines: the snapshot gate counts bytes, alignment cost is driven by lines.
+   * Measured in workerd (local://v8-sizing-probe.md): a whole-file table peaks at +330 MiB, past
+   * `do.isolate.reset_silent` (~200 MiB), resetting the DO silently on every Output poll.
    */
   const LINES = 8192;
   const body = (i: number) => `${i % 10}`.repeat(31);
@@ -236,43 +225,33 @@ describe("diffLines cost bound", () => {
     const d = diffLines(before, after);
     const elapsed = performance.now() - started;
 
-    // Only the differing REGION is aligned, so this is a 1x1 table rather than
-    // 8193x8193 — and the answer is therefore exact, not a coarse fallback.
+    // Only the differing region is aligned: a 1x1 table, and exact.
     expect(d.added).toBe(1);
     expect(d.removed).toBe(1);
-    // Cost guard against a whole-file table: this input took 1.15 s building one
-    // in this runtime and 4.6 s in workerd, while the region-scoped path needs
-    // single-digit ms. 250 ms is far under the former and far over the latter,
-    // so it is not sensitive to machine speed.
+    // Cost guard against a whole-file table; 250 ms is far from both paths, so machine speed does not matter.
     expect(elapsed).toBeLessThan(250);
-    // The body is still held to the row bound, and says so.
     expect(d.lines.length).toBe(MAX_LINES_PER_FILE);
     expect(d.truncated).toBe(true);
   });
 
   test("a huge file whose every line differs is refused rather than aligned", () => {
-    // No shared head or tail to strip, so the differing region IS the file and
-    // the bound is what stands between this input and a 330 MiB table.
+    // No shared head or tail: the bound is all that prevents a whole-file table.
     const rewritten = Array.from({ length: LINES }, (_, i) => `${(i % 10) + 1}`.repeat(31)).join("\n");
 
     const started = performance.now();
     const d = diffLines(before, rewritten);
     const elapsed = performance.now() - started;
 
-    // No alignment was computed, so no body is offered — and it says so rather
-    // than presenting an empty diff as "no changes".
+    // Says so, rather than presenting an empty diff as "no changes".
     expect(d.lines).toEqual([]);
     expect(d.truncated).toBe(true);
-    // Coarse but true: every line of the differing region out, every line in.
     expect(d.removed).toBe(LINES);
     expect(d.added).toBe(LINES);
     expect(elapsed).toBeLessThan(250);
   });
 
   test("a body clipped at the row bound still reports the file's real totals", () => {
-    // Inside the alignment bound, past the row bound: every line differs, so
-    // the alignment yields 2x MAX_LINES_PER_FILE rows and the body clips while
-    // the counters keep counting.
+    // Past the row bound: the body clips while the counters keep counting.
     const n = MAX_LINES_PER_FILE;
     const a = Array.from({ length: n }, (_, i) => `old ${i}`).join("\n");
     const b = Array.from({ length: n }, (_, i) => `new ${i}`).join("\n");
@@ -286,9 +265,7 @@ describe("diffLines cost bound", () => {
   });
 
   test("a large newly added file is still readable — one empty side needs no table", () => {
-    // The workspace-birth shape: every file diffed against an empty baseline.
-    // The common subsequence is empty by definition there, so the bound must
-    // not refuse a file it can answer exactly and cheaply.
+    // Workspace-birth shape: an empty baseline is answered exactly and cheaply, never refused.
     const d = diffLines("", after);
 
     expect(d.added).toBe(LINES);

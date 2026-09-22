@@ -1,13 +1,6 @@
 /**
- * The exec credential seam.
- *
- * A programmatic exec runs under the session user unless the caller names an
- * identity. These probes drive the real chain — SDK `exec` -> `_rpcExec` ->
- * `processes.spawn` -> `Shell.execute` -> `vfs.as(cred)` -> coreutil — and
- * assert both halves of an identity: what it may write, and what it may not.
- *
- * Fail-closed is the half worth testing. An identity that writes as itself but
- * is not refused anywhere is a label, not a credential.
+ * Drives the real exec chain (SDK `exec` -> ... -> `vfs.as(cred)`) and asserts both halves of an identity:
+ * what it may write and what it is refused. Fail-closed is the half worth testing.
  */
 import { afterEach, describe, expect, test } from 'bun:test';
 import { Database, type SQLQueryBindings } from 'bun:sqlite';
@@ -93,11 +86,7 @@ function sdkBox(host: ProgrammaticHost) {
     .sandbox('workspace', { root: '/home/user' });
 }
 
-/**
- * Host-side provisioning. Per-agent-uid `chown` is uid-0 only, so the agent's
- * own home cannot be created by the agent — the host creates it and hands it
- * over, which is the same order a real workspace boot uses.
- */
+/** Per-uid `chown` is uid-0 only, so the host creates the agent's home and hands it over, as a real boot does. */
 function provisionHome(workspace: NimbusWorkspace, path: string, cred: VfsCred): void {
   const root = workspace.vfs.as(ROOT);
   root.mkdir(path, { recursive: true });

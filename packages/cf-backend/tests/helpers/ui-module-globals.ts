@@ -1,13 +1,6 @@
 /**
- * The smallest browser shims that let cf-backend's UI module graph evaluate
- * outside a browser: the theme store reads `matchMedia` and `localStorage` at
- * import time, and every surface transitively reaches it. Imported BEFORE any
- * component module — ES module evaluation follows import order — by unit tests
- * that exercise pure seams of those modules and never render.
- *
- * The values are inert: no theme listener can fire, nothing persists. Each is
- * installed only when the real global is absent, so a browser environment is
- * never shadowed.
+ * Inert `matchMedia`/`localStorage` shims the theme store reads at import time; import before any component
+ * module. Installed only when absent, so a browser is never shadowed.
  */
 
 interface MediaQueryListShim {

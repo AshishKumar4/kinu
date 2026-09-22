@@ -69,9 +69,7 @@ function workerHost(workspace: NimbusWorkspace, durableState: DurableShellState)
   return programmaticHostOver(workspace, { durable: durableState });
 }
 
-/** The SDK over the runtime's verbs, with the port verbs mapped exactly as
- *  the production box maps them: `expose` is the app exposure of the port's
- *  serving process, `unexpose` retires the capability before the listener. */
+/** Port verbs mapped as production: `expose` exposes the serving process, `unexpose` retires the capability first. */
 function sdkBox({ host, portRegistry, durable }: TestProgrammaticHost) {
   const stub = {
     _rpcReady: (options?: { preinstall?: string[] }) => ensureProgrammaticReady(host, options),
@@ -201,8 +199,7 @@ describe('hosted workspace preview capabilities', () => {
       return guestRequest;
     };
 
-    // The serving pid is a process of the workspace's own table: an
-    // application's owner is derived from the process serving its port.
+    // An application's owner is derived from the process serving its port.
     const server = workspace.processes.spawn('node', ['node', 'server.js'], '/home/user');
     host.portRegistry.bindFacetStub(server.pid, guest);
     host.portRegistry.register(4321, server.pid);

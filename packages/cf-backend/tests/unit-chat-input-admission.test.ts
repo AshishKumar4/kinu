@@ -31,18 +31,8 @@ async function opening(): Promise<Harness> {
 }
 
 describe('request-owned chat inputs', () => {
-  // The socket-admission properties the harness once simulated are now proven
-  // end to end over a real socket and the installed Think queue in
-  // tests/workerd/two-turn.test.ts: 'admits two websocket asks after held
-  // genesis through the installed Think queue' (queued ordering + per-request
-  // binding), 'a durable programmatic submission excludes a later pending chat
-  // from its provider prefix' (a programmatic turn cannot consume pending B),
-  // and 'keeps a queued chat on its durable token through a cold reset and
-  // replay' (durable token identity, continuation never consumes pending, and a
-  // settled token is not replayed). What the chat transport admits — a
-  // client's message under its own id, before the loop is asked, and nothing
-  // a replay carries — is unit-chat-transport.test.ts. The cases kept here
-  // exercise the alarm/conversion lifecycle directly.
+  // Socket admission is proven end to end in tests/workerd/two-turn.test.ts and transport admission in
+  // unit-chat-transport.test.ts; these cases exercise the alarm/conversion lifecycle directly.
   test('alarm recovery leaves the live Think root claim with its foreground owner', async () => {
     const harness = await opening();
     const turn = claims(harness).latestTurn();
@@ -81,12 +71,8 @@ describe('request-owned chat inputs', () => {
     const turn = claims(warm).latestTurn();
 
     if (turn === null) throw new Error('no root turn was admitted');
-    // GENUINELY idle: the process died after the turn committed and its run
-    // closed, before the claim settled. A run the ledger still held open would
-    // not be idle — the next activation's loop re-opens it and continues the
-    // turn under its claim — and a send still reserved would rerun; so the
-    // reservation is spent and the run closed here, the way the commit spends
-    // and the loop closes them, and only the claim is left unverified.
+    // Genuinely idle: the run closed and the reservation spent, as commit and loop would leave them, so only the
+    // claim is left unverified (an open run would be re-opened, a reserved send rerun).
     warm.db.query('DELETE FROM pending_steers').run();
     warm.agent.harnessEventRecorder.emit(turn.runId, { type: 'run_end', reason: 'error', error: 'the process died before the claim settled' });
     const cold = await reactivateOrchestratorHarness(warm.db);

@@ -1,11 +1,4 @@
-/**
- * Cross-family judge selection against a real AgentProviderRegistry.
- *
- * The policy lives in core (unit-judge-model.test.ts in @kinu.run/core covers
- * it); what is pinned here is the adapter: which specs the registry actually
- * offers up as judge candidates, and that the choice tracks the owner's
- * connected credentials rather than a hardcoded list.
- */
+/** Adapter half of cross-family judge selection (policy is core's): candidates track connected credentials. */
 
 import { describe, test, expect } from 'bun:test';
 import { DEFAULT_WORKERS_AI_MODEL_SPEC } from '@kinu.run/core';
@@ -18,12 +11,9 @@ const CLOUDFLARE_BASE = 'https://api.cloudflare.com/client/v4/accounts/acct';
 
 const KIMI = 'workers-ai/@cf/moonshotai/kimi-k2.6';
 
-/** A registry whose owner has exactly `keys` connected. `cloudflare.oauth`
- *  needs a baseURL to count as available (that is what workers-ai checks). */
+/** `cloudflare.oauth` needs a baseURL to count as available (what workers-ai checks). */
 function registryWith(...keys: string[]) {
-  // The models.dev catalog is fetched to enumerate dynamic providers. Left to
-  // the global fetch this reaches the live service, and the suite fails
-  // whenever it answers slower than the 5s test timeout — which it does.
+  // Stub the models.dev catalog fetch: the live service answers slower than the test timeout.
   const mock = createMockFetch([
     { match: 'models.dev/api.json', respond: { status: 200, body: {} } },
   ]);
@@ -44,7 +34,7 @@ describe('resolveReviewingModelSelection', () => {
     const selection = await resolveReviewingModelSelection({
       registry: registryWith('cloudflare.oauth'),
       pinned: null,
-      chatSpec: null, // unset → the workers-ai default, the shipping configuration
+      chatSpec: null, // unset → the workers-ai default
     });
 
     expect(selection).toEqual({
@@ -65,7 +55,6 @@ describe('resolveReviewingModelSelection', () => {
   });
 
   test('candidates come from connected credentials, not from the static roster', async () => {
-    // openai is registered ahead of anthropic, but only anthropic is connected.
     const selection = await resolveReviewingModelSelection({
       registry: registryWith('cloudflare.oauth', 'anthropic.bearer'),
       pinned: null,
@@ -80,7 +69,7 @@ describe('resolveReviewingModelSelection', () => {
       chatSpec: DEFAULT_WORKERS_AI_MODEL_SPEC,
     });
 
-    // Registry preference order: openai is offered before anthropic.
+    // Registry preference order: openai before anthropic.
     expect(withOpenAI.spec).toBe('openai/gpt-5.5');
   });
 
@@ -91,8 +80,6 @@ describe('resolveReviewingModelSelection', () => {
       chatSpec: 'openai/gpt-5.5',
     });
 
-    // Workers AI comes first and its native DeepSeek default is a real
-    // cross-vendor jump from GPT.
     expect(selection.spec).toBe(DEFAULT_WORKERS_AI_MODEL_SPEC);
     expect(selection.source).toBe('cross-family');
   });

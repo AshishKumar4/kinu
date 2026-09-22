@@ -9,7 +9,6 @@ import { ChatLiveTail, MessageView } from '../src/components/MessageView';
 
 type Part = UIMessage['parts'][number];
 
-/** How a part settled: the default is a call that answered `'ok'`. */
 interface ToolPartResult {
   readonly state?: 'input-available' | 'output-available' | 'output-error';
   readonly output?: JsonValue;
@@ -131,12 +130,7 @@ describe('MessageView reasoning', () => {
   });
 
   test('an inter-step pause and a live reasoning part carry the SAME Thinking affordance', () => {
-    // Two vocabularies for one fact is what made "Thinking" appear, vanish and
-    // reappear across a turn that reasons, pauses and reasons again: the pause
-    // drew a shimmering dotted row and the reasoning drew a bordered block with
-    // a pulsing word, so every transition between them swapped the shape.
-    // The pause is the THREAD's tail, drawn by the page beside the list; the
-    // reasoning is the part's own row. Both come from the same live tail.
+    // One vocabulary for one fact: the pause and the reasoning come from the same live tail, so transitions keep one shape.
     const pauseMessage: UIMessage = { id: 'turn-1', role: 'assistant', parts: [tool('a', 'file', { action: 'read', path: 'x' })] };
 
     const pause = renderToStaticMarkup(createElement(ChatLiveTail, {
@@ -145,7 +139,6 @@ describe('MessageView reasoning', () => {
 
     const reasoning = render([{ type: 'reasoning', state: 'streaming', text: thought }], true);
 
-    // The affordance is the element that carries the word, whatever encloses it.
     const label = (html: string): string => {
       const end = html.indexOf('Thinking');
       expect(end).toBeGreaterThan(-1);
@@ -185,10 +178,7 @@ describe('MessageView reasoning', () => {
 
 describe('MessageView turn end', () => {
   test('a turn that stopped with work pending says so, from its own durable row', () => {
-    // The loop ended while the model was still calling tools. Nothing in the
-    // parts says that — the last part is an ordinary settled call — so without
-    // the row's own verdict the transcript reads as a turn that answered, which
-    // is the "session stopped unexpectedly" the owner reported.
+    // The last part is an ordinary settled call, so only the row's own verdict shows the loop ended mid-tools.
     const stopped: UIMessage = {
       id: 'turn-1', role: 'assistant',
       parts: [tool('a', 'shell', { command: 'node server.js' })],
@@ -199,7 +189,6 @@ describe('MessageView turn end', () => {
 
     expect(html).toContain('Stopped before the work was finished');
 
-    // A turn that ended on its own says nothing of the kind.
     expect(render([tool('a', 'shell', { command: 'node server.js' })])).not.toContain('Stopped before the work was finished');
   });
 });

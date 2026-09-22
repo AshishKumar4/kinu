@@ -1,12 +1,6 @@
 /**
- * The preview sanitizer strips exactly the authority the app itself minted.
- *
- * A preview request crosses into agent-controlled guest code, and the strip
- * list decides which of the browser's cookies and which bearer go with it. The
- * list is derived from the modules that own it, never hand-kept beside their
- * enumerations: a copy drifts in both directions, stripping a cookie no setter
- * in the tree writes and letting a cookie `cli/routes.ts` does set through.
- * This file holds the two sides of that derivation to the same set.
+ * The strip list is derived from the modules that own it, never hand-kept: a copy drifts in
+ * both directions. This file holds both sides of that derivation to the same set.
  */
 import { describe, expect, test } from 'bun:test';
 import { sanitizePreviewRequestHeaders } from '../src/lib/preview-request';
@@ -17,8 +11,7 @@ import { parseCliBearer } from '../src/cli/auth-store';
 
 const USER_ID = '0123456789abcdef0123456789abcdef';
 
-/** 44 characters of the alphabet `nanoid` mints from: what a real token
- *  carries after its user id. */
+/** 44 characters of `nanoid`'s alphabet: what a real token carries after its user id. */
 const SECRET = 'AbCdEfGhIjKlMnOpQrStUvWxYz0123456789_-abcdef';
 
 function forwarded(headers: Record<string, string>): Headers {
@@ -27,8 +20,6 @@ function forwarded(headers: Record<string, string>): Headers {
 
 describe('cookies: the strip set is the set of cookies the app sets', () => {
   test('every cookie the app sets is stripped, and only those', () => {
-    // Parametric over the owner's set: a cookie registered in auth/session.ts
-    // is covered here the moment it is registered.
     const guest = 'guest_session=guest';
     const cookie = [...KINU_COOKIE_NAMES.map((name) => `${name}=owner`), guest].join('; ');
 
@@ -36,8 +27,6 @@ describe('cookies: the strip set is the set of cookies the app sets', () => {
   });
 
   test('the approval CSRF cookie the CLI sign-in page sets is one of them', () => {
-    // The drift the hand-kept copy had: `cli/routes.ts` sets this cookie on the
-    // browser approval page, and the copy did not know it.
     expect(KINU_COOKIE_NAMES.includes(CLI_APPROVAL_CSRF_COOKIE_NAME)).toBe(true);
     expect(forwarded({ cookie: `${CLI_APPROVAL_CSRF_COOKIE_NAME}=csrf; guest=1` }).get('cookie')).toBe('guest=1');
   });
@@ -48,9 +37,7 @@ describe('cookies: the strip set is the set of cookies the app sets', () => {
   });
 
   test('a Kinu-looking cookie nothing here sets is a guest cookie', () => {
-    // The other direction of the same drift: the copy stripped a bookmark
-    // cookie no setter in the tree writes. A name outside the owner's set is
-    // the guest's, whatever it is called.
+    // A name outside the owner's set is the guest's, whatever it is called.
     const forged = '__Host-kinu_d1_bookmark=bookmark';
     expect(KINU_COOKIE_NAMES.includes('__Host-kinu_d1_bookmark')).toBe(false);
     expect(forwarded({ cookie: forged }).get('cookie')).toBe(forged);
@@ -65,12 +52,10 @@ describe('bearer: stripped exactly when the CLI authenticator would route it', (
   const candidates = [
     `ptc_${USER_ID}_${SECRET}`,
     `pta_${USER_ID}_${SECRET}`,
-    // Prefix alone is not a token: the authenticator refuses these as
-    // malformed, so they carry no authority and belong to the guest.
+    // Prefix alone is not a token: refused as malformed, so it belongs to the guest.
     'ptc_not-a-token',
     `pta_${USER_ID}`,
-    // A device token travels in the body of `/pc/connect-ticket`, never as a
-    // bearer; no authenticator reads one from this header.
+    // A device token travels in the `/pc/connect-ticket` body, never as a bearer.
     `pdt_${SECRET}`,
     'guest-token',
   ];

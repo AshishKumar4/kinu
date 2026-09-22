@@ -254,7 +254,7 @@ export function createCFRuntime(
   const originVfs = nimbusSessionFiles(workspaceBox);
 
   // Both of the actor's planes or neither (see `workspaceExecution`). This unmounted tree keeps foreign
-    // bytes out of memory and agent-state snapshots.
+  // bytes out of memory and agent-state snapshots.
   const baseWorkspaceVfs = hooks.workspaceExecution
     ? nimbusSessionFiles(workspaceBox, hooks.workspaceExecution.cred)
     : originVfs;
@@ -269,7 +269,7 @@ export function createCFRuntime(
   // Built before the memory adapter so writes embed.
   const vectorStore = buildVectorStore(env, actor, hooks.reportModelCall);
   // An exploration facet's own storage is untouched by `initWorkspaceSchema`; without this every head
-    // dies on `no such table: actor_config`.
+  // dies on `no such table: actor_config`.
   initAgentConfigTable(execRaw);
   // The rest of a full-loop actor's own tables (e.g. `crafted_tools`, `evolution_events`), for the same reason.
   initActorTables(execRaw, sql);
@@ -306,8 +306,8 @@ export function createCFRuntime(
   const identity = createIdentity(actor.actor, originVfs, sql, actor.scaffoldPath);
 
   // Main vs hosted is stated (`rootActor`), never derived from the name. Grants are only written to
-    // main's rows, so a hosted actor inherits the root's answers intersected with its own narrowing, with no
-    // `remember`: never a superset. `deferrals` parks a 'gate' decision under 'strict' on the owner.
+  // main's rows, so a hosted actor inherits the root's answers intersected with its own narrowing, with no
+  // `remember`: never a superset. `deferrals` parks a 'gate' decision under 'strict' on the owner.
   const isRootActor = actor.rootActor;
 
   const approvalPolicy: ShellApprovalPolicy = isRootActor
@@ -326,7 +326,7 @@ export function createCFRuntime(
   const shell = withApprovalGatedShell(nimbusSessionShell(executionBox), approvalPolicy);
   const executionRouter: ExecutionRouter = new DefaultExecutionRouter(approvalPolicy);
   // State services keep `baseWorkspaceVfs` and never index foreign bytes. The context mount is last:
-    // the only per-actor entry.
+  // the only per-actor entry.
   const mounts = [...standardMounts((name) => executionRouter.getProvider(name))];
 
   // `/shared`: the owner's Drive, resolved at every call, never captured, so a later claim mounts it.
@@ -380,14 +380,14 @@ export function createCFRuntime(
   if (env.Sandbox) {
     try {
       // Must be passed identically on every getSandbox() for an id: changing it disconnects the client, and
-            // the SDK persists transport in storage. The route clients cannot restore a large workspace
-            // (`sandbox.route_client.restore_bytes`).
+      // the SDK persists transport in storage. The route clients cannot restore a large workspace
+      // (`sandbox.route_client.restore_bytes`).
       const sdk = getSandbox(env.Sandbox, sandboxId, {
         normalizeId: true, transport: SANDBOX_TRANSPORT,
       });
 
       // Egress is configured before the container runs anything, not in `onStart` (too late); until then
-            // the container has no network, so it fails closed. Only the owning workspace configures.
+      // the container has no network, so it fails closed. Only the owning workspace configures.
       const handle = adaptCloudflareSandbox(sdk, async () => {
         const userId = actor.ownerUserId();
 
@@ -464,7 +464,7 @@ export function createCFRuntime(
   })();
 
   // Scoped to the directory named at `kinu connect` unless the device's Sandbox switch is off. A failed
-    // hub read is rethrown with its cause, never answered as null. Answers are per machine.
+  // hub read is rethrown with its cause, never answered as null. Answers are per machine.
   const deviceScope = async (
     field: 'consentedRoot' | 'deviceHome',
     deviceId: string | undefined,

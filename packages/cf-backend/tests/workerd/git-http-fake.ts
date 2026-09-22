@@ -1,20 +1,6 @@
 /**
- * One repository over git's smart HTTP protocol, for a hosted `git clone`.
- *
- * A hosted clone is always a NETWORK clone: `@nimbus-sh/worker`
- * (`dist/git/commands.js:385`) hands every `git clone` to the git network
- * facet, and the facet's isomorphic-git registers `http` and `https`
- * transports only, so a workspace path is not a thing it can read. A clone
- * this suite can prove therefore needs an origin, and this is it: one root
- * commit over one file, served by the same outbound function the npm registry
- * fixture uses.
- *
- * The client asks for a shallow single-branch clone (`depth: opts.depth || 1`
- * in `dist/git/network-facet.js`), so the advertisement carries `shallow`,
- * and it carries `side-band-64k` because isomorphic-git demultiplexes the
- * upload-pack response as side-band frames whatever it negotiated
- * (`GitSideBand.demux`). The commit is a root commit, so no `shallow` line is
- * owed: nothing is cut off its history.
+ * One repository over git's smart HTTP protocol: a hosted `git clone` is always a network clone.
+ * isomorphic-git demuxes upload-pack as side-band frames whatever it negotiated, so `side-band-64k`.
  */
 import { createHash } from 'node:crypto';
 import { deflateSync } from 'node:zlib';
@@ -29,7 +15,6 @@ export const GIT_COMMIT_MESSAGE = 'fixture commit';
 
 export const GIT_BRANCH = 'main';
 
-/** A git object: its type, its bytes, and the id git addresses it by. */
 interface GitObject {
   readonly kind: 'blob' | 'tree' | 'commit';
   readonly body: Uint8Array;
@@ -58,8 +43,7 @@ const REPO = (() => {
   treeBody.set(Uint8Array.from(Buffer.from(blob.oid, 'hex')), entry.length);
   const tree = object('tree', treeBody);
 
-  // A fixed instant, so the commit id is the same on every run and a cached
-  // packfile can never be the reason a clone differs.
+  // Fixed instant, so the commit id is stable across runs.
   const stamp = '1758412800 +0000';
 
   const commit = object('commit', encoder.encode([
@@ -75,7 +59,6 @@ const REPO = (() => {
 
 export const GIT_COMMIT_OID = REPO.commit.oid;
 
-/** A pkt-line: its own four-hex-digit length, then the payload. */
 function pkt(bytes: Uint8Array): Uint8Array {
   const length = encoder.encode((bytes.length + 4).toString(16).padStart(4, '0'));
   const out = new Uint8Array(length.length + bytes.length);
@@ -97,7 +80,6 @@ function concat(parts: readonly Uint8Array[]): Uint8Array<ArrayBuffer> {
   return out;
 }
 
-/** The packfile holding the three objects, undeltified, with its trailing id. */
 const PACKFILE = (() => {
   const header = new Uint8Array(12);
   const view = new DataView(header.buffer);
@@ -109,8 +91,7 @@ const PACKFILE = (() => {
   const entries: Uint8Array[] = [];
 
   for (const held of [REPO.commit, REPO.tree, REPO.blob]) {
-    // The object header: type and the low four bits of the size in the first
-    // byte, then seven size bits per byte, little end first.
+    // Type and low four size bits in the first byte, then seven size bits per byte, little end first.
     const bytes: number[] = [];
     let size = held.body.length;
     let first = (typeOf[held.kind] << 4) | (size & 0x0f);
@@ -133,8 +114,7 @@ const PACKFILE = (() => {
   return concat([body, digest]);
 })();
 
-/** The upload-pack response: no ack of anything the client has, then the pack
- *  in side-band channel 1, in frames the pkt-line length can carry. */
+/** NAK, then the pack in side-band channel 1, in frames a pkt-line length can carry. */
 const UPLOAD_PACK = (() => {
   const frames: Uint8Array[] = [pkt(encoder.encode('NAK\n'))];
   const band = 65_515;
@@ -161,10 +141,7 @@ const ADVERTISEMENT = concat([
   FLUSH,
 ]);
 
-/**
- * The repository's two smart-HTTP routes, or null when the request names
- * something else — the npm registry's paths share this origin.
- */
+/** Null for other paths: the npm registry fixture shares this origin. */
 export function gitRepositoryRoute(request: Request, pathname: string): Response | null {
   if (pathname === `${GIT_REPO_PATH}/info/refs`) {
     return new Response(ADVERTISEMENT, {

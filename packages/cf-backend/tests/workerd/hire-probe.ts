@@ -1,28 +1,7 @@
 /**
- * The workerd fixture for the delegation path: a real workspace Durable
- * Object, a real hire authored by a real model, and reads over the storage the
- * product wrote.
- *
- * WHAT IS REAL HERE. The orchestrator is the shipped class, bound under the
- * production name, sealed with the production RPC surface plus read-only
- * fixture queries. Nothing stubs `scheduleDrain`, nothing hand-calls
- * `relayHostedReport`, and no case asserts on source text: a hire is driven by
- * pinning the workspace model to a fake wire whose first answer IS the real
- * `agents` tool call, and every verdict is read back out of
- * `actor_subordinates`, `agent_log`, `run_events` and the child's own
- * transcript.
- *
- * WHY THE CHILD SPEAKS ON A DIFFERENT WIRE. A hosted actor's turn profile
- * resolves its model from the role's tier in the profile catalog
- * (`actor-agent.ts:hostedActorProfile`), which does NOT take the workspace pin
- * — so the child's spec is a `workers-ai/` model and its request arrives on the
- * AI service binding, not over HTTP. `HireAI` below is that wire.
- *
- * NO CLOCKS, ANYWHERE. `scripts/test-clocks.ts` locks the clock corpus
- * shrink-only and this file is inside it, so every wait is a gate some request
- * resolves. A case whose product path never arrives therefore hangs instead of
- * failing on a deadline; the workerd tier sets `testTimeout: 0`, so a hang is
- * reported as a hang rather than dressed up as an assertion.
+ * Workerd fixture for delegation: the shipped orchestrator, a hire authored by a fake model wire, verdicts read from storage.
+ * The child resolves its model from the role tier (`actor-agent.ts:hostedActorProfile`), not the workspace pin.
+ * No clocks: `scripts/test-clocks.ts` locks this file, so every wait is a gate and a missing path hangs.
  */
 
 import { Agent, getAgentByName, type AgentContext } from 'agents';
@@ -34,8 +13,6 @@ import { OrchestratorAgent as ProductionOrchestrator } from '../../src/orchestra
 import type { UserDO } from '../../src/user/user-do';
 import { HIRE_CHILD_MODEL, type ActorRow, type ChildScript, type HireObservation, type LogRow, type RosterRow, type TurnCount } from './hire-shapes';
 
-// The production user object, re-exported so the fixture worker binds the
-// shipped class rather than a stand-in.
 export { UserDO } from '../../src/user/user-do';
 
 type ProbeEnv = ConstructorParameters<typeof ProductionOrchestrator>[1];
@@ -47,12 +24,8 @@ export class HireOrchestrator extends ProductionOrchestrator {
     super(ctx, env);
     this.probeState = ctx;
 
-    // `ActorAgent`'s own constructor sealed the surface BEFORE this body ran,
-    // and that pass installs an own non-enumerable shadow over every
-    // prototype member it does not allow — including these reads, which it
-    // could not have known about. Deleting the shadow restores the prototype
-    // method so the wider seal below actually exposes it. Same three lines the
-    // two-turn probe carries, for the same reason.
+    // `ActorAgent`'s constructor already sealed the surface with non-enumerable shadows over these reads;
+    // deleting the shadow lets the wider seal below expose the prototype method.
     for (const name of ['rosterRows', 'actorRows', 'logRows', 'turnCounts', 'driveOwedWork', 'rootActorId', 'childTranscript']) {
       Reflect.deleteProperty(this, name);
     }
@@ -63,9 +36,7 @@ export class HireOrchestrator extends ProductionOrchestrator {
     ]);
   }
 
-  /** The workspace's own top-level actor, read from the directory rather than
-   *  assumed: every child-scoped count is "not this id", and a literal guessed
-   *  here would silently count the root's rows as a child's. */
+  /** Read, not assumed: child counts are "not this id", and a guessed literal would count the root's rows. */
   async rootActorId(): Promise<string> {
     const rows = this.probeState.storage.sql.exec<{ actor_id: string }>(
       `SELECT actor_id FROM workspace_actors WHERE kind = 'main' LIMIT 1`).toArray();
@@ -73,7 +44,6 @@ export class HireOrchestrator extends ProductionOrchestrator {
     return rows[0]?.actor_id ?? '';
   }
 
-  /** Every roster row in this object, dismissed rows included. */
   async rosterRows(): Promise<RosterRow[]> {
     const rows = this.probeState.storage.sql.exec<{
       actor_id: string; name: string; lifetime: string; status: string; task_event_id: string | null;
@@ -86,10 +56,7 @@ export class HireOrchestrator extends ProductionOrchestrator {
     }));
   }
 
-  /** Every identity row in this workspace, retired ones included. The roster
-   *  and the directory are two different tables and a settled task hire moves
-   *  only the second, so an assertion that reads a child's rows states which
-   *  plane it is reading. */
+  /** A settled task hire moves only the directory, not the roster, so child assertions state which plane they read. */
   async actorRows(): Promise<ActorRow[]> {
     const rows = this.probeState.storage.sql.exec<{
       actor_id: string; name: string; kind: string; retiring_at: number | null; deleted_at: number | null;
@@ -102,8 +69,6 @@ export class HireOrchestrator extends ProductionOrchestrator {
     }));
   }
 
-  /** Delegation rows across every actor's log: the admission ledger a bounded
-   *  assertion counts, plus the reports that came back. */
   async logRows(): Promise<LogRow[]> {
     const rows = this.probeState.storage.sql.exec<{
       actor_id: string; id: string; variant: string; turn_id: string | null;
@@ -136,7 +101,6 @@ export class HireOrchestrator extends ProductionOrchestrator {
     });
   }
 
-  /** Turns per actor, from the run ledger the product writes. */
   async turnCounts(): Promise<TurnCount[]> {
     const rows = this.probeState.storage.sql.exec<{ actor_id: string; runs: number }>(
       `SELECT actor_id, COUNT(DISTINCT run_id) AS runs FROM run_events
@@ -145,15 +109,8 @@ export class HireOrchestrator extends ProductionOrchestrator {
     return rows.map((row) => ({ actorId: row.actor_id, runs: row.runs }));
   }
 
-  /** One named subordinate's own transcript, by the name the roster carries.
-   *
-   *  A delegated turn reports rather than chats, so its durable record is the
-   *  child's OWN `run_events` — `run_start` carries the admitted brief as the
-   *  turn's input, `step_partial` the streamed answer as it accumulated, and
-   *  `step_finish` the step's settled messages. The transcript is not it:
-   *  that store is written by the conversational path a delegated turn never
-   *  enters. Read here rather than over RPC so the assertion sees what the
-   *  child's turn actually persisted, not a projection built for a pane. */
+  /** A delegated turn's durable record is its own `run_events` (`run_start` brief, `step_partial` stream,
+   *  `step_finish` messages); the transcript store is never written by a delegated turn. */
   async childTranscript(name: string): Promise<string[]> {
     const rows = this.probeState.storage.sql.exec<{ run_id: string; type: string; payload: string }>(
       `SELECT e.run_id AS run_id, e.type AS type, e.payload AS payload
@@ -163,9 +120,7 @@ export class HireOrchestrator extends ProductionOrchestrator {
        ORDER BY e.rowid`, name).toArray();
 
     const lines: string[] = [];
-    // `step_partial` rewrites one step's text-so-far, so the row that counts
-    // is the last per (run, step): the partial cadence flushes cumulative
-    // text, and earlier flushes are prefixes of it.
+    // Partial flushes are cumulative, so only the last row per (run, step) counts.
     const partials = new Map<string, string>();
 
     for (const row of rows) {
@@ -216,23 +171,8 @@ export class HireOrchestrator extends ProductionOrchestrator {
   }
 
   /**
-   * The owed-work frame this object runs on its own wake, driven in-request.
-   *
-   * This is the re-entry a suite needs after an eviction: an in-flight request
-   * holds the input gate, so a probe cannot sit and wait for the platform's
-   * alarm to be delivered.
-   *
-   * THE WAKE ITSELF, `_kinuTerminalRetryTick`, and not a hand-picked subset of
-   * it. The subset this used to drive — `owedDeliveryWork` alone — left out
-   * both maintenance passes, so the re-entry ran neither the chat-loop resume,
-   * nor the interrupted-claim recovery, nor the delegation sweep, and a case
-   * that needed any of them measured a product that had never been asked. A
-   * probe that narrows the frame it claims to drive reports a hang the product
-   * does not have.
-   *
-   * The reactor drain after it is the one thing the frame genuinely cannot do
-   * in-request: `owedDeliveryWork` re-pends stale leases and asks for a
-   * DEBOUNCED drain, whose 250 ms timer no request can wait for.
+   * Runs the full wake `_kinuTerminalRetryTick` in-request (an in-flight request holds the input gate, so no alarm arrives).
+   * A narrower frame would report hangs the product does not have. The debounced reactor drain is driven separately.
    */
   async driveOwedWork(): Promise<void> {
     await this.terminalRetryPass();
@@ -242,17 +182,8 @@ export class HireOrchestrator extends ProductionOrchestrator {
 
 export { HireOrchestrator as OrchestratorAgent };
 
-/** The auxiliary Workers AI lanes: the title suggester and the sleep-time
- *  judge, which resolve their own models and must be answered for every
- *  workspace here.
- *
- *  The CHILD's turn is deliberately NOT on this binding: the workspace is
- *  pinned to an `openai-compat` spec and a hosted actor's turn runs on that
- *  pin, so a delegated turn travels the same HTTP seam the two-turn tier
- *  already proves — the direct Workers AI streaming path hangs a delegated
- *  turn for a minute and then reports "ReadableStream reader has been
- *  released", which is its own finding and not something the delegation
- *  assertions should ride on. */
+/** The auxiliary Workers AI lanes (title suggester, sleep-time judge). The child's turn is deliberately not on this
+ *  binding: the direct Workers AI streaming path hangs a delegated turn ("ReadableStream reader has been released"). */
 export class HireAI extends WorkerEntrypoint {
   async run(
     _model: string,
@@ -260,8 +191,7 @@ export class HireAI extends WorkerEntrypoint {
     _options?: HireRunOptions,
   ): Promise<Response> {
 
-    // Lane by ROLE, never by text, as the two-turn fake keys it: the title lane
-    // leads with a system message, the sleep judge is user-only.
+    // Lane by role, never by text: the title lane leads with a system message, the sleep judge is user-only.
     const title = body.messages?.[0]?.role === 'system';
 
     return Response.json({
@@ -272,32 +202,22 @@ export class HireAI extends WorkerEntrypoint {
   }
 }
 
-/** The control host's `/hire/log` answer: captured model calls, each with the
- *  tool-result strings it carried in. */
 const WireLogSchema = v.looseObject({
   calls: v.array(v.looseObject({ toolResults: v.optional(v.array(v.unknown())) })),
 });
 
-/** `options` as the Workers AI adapter builds it; the fixture does not read
- *  it, only names its contract so the binding call resolves. */
 interface HireRunOptions {
   readonly signal?: unknown;
   readonly returnRawResponse?: boolean;
   readonly extraHeaders?: Readonly<Record<string, string>>;
 }
 
-
-/** The narrow view of the workspace this fixture drives. Stated as a `Pick`
- *  intersection for the reason the two-turn probe states it: the full stub type
- *  instantiates too deeply to compile. */
+/** A `Pick` intersection: the full stub type instantiates too deeply to compile. */
 type HireTarget = Pick<ProductionOrchestrator, 'claimOwner' | 'setModel' | 'setSoul' | 'runTaskFromMcp'>
   & Pick<HireOrchestrator,
     'rosterRows' | 'actorRows' | 'logRows' | 'turnCounts' | 'driveOwedWork' | 'rootActorId' | 'childTranscript'>;
 
-/** The probe worker's own bindings. `durableObjects` installs `HireOrchestrator`
- *  under the `OrchestratorAgent` name (the re-export above), which the
- *  production `Env` declares by its base class, so every stub the namespace
- *  returns carries the fixture reads. */
+/** `durableObjects` installs `HireOrchestrator` under the `OrchestratorAgent` name, so every stub carries the fixture reads. */
 interface ProbeRootEnv extends Omit<ProbeEnv, 'OrchestratorAgent'> {
   readonly OrchestratorAgent: DurableObjectNamespace<HireOrchestrator>;
 }
@@ -319,7 +239,6 @@ export class HireProbeRoot extends Agent<ProbeRootEnv> {
     return this.env.UserDO.get(this.env.UserDO.idFromName(name));
   }
 
-  /** Claim the workspace, pin the root's wire, and arm the child's script. */
   async setup(workspace: string, model: string, script: ChildScript): Promise<void> {
     await fetch('http://hire-control.invalid/hire/reset', {
       method: 'POST', body: JSON.stringify({ script }),
@@ -337,12 +256,8 @@ export class HireProbeRoot extends Agent<ProbeRootEnv> {
     await userDO.setCredential(caller, 'openai-compat.default', {
       kind: 'openai-compat', baseURL: 'http://hire-models.invalid/v1', apiKey: 'hire-fixture-key',
     });
-    // The default tier, written through the account catalog's own
-    // compare-and-swap rather than by reaching into any actor's config: every
-    // tier slot is checked against the provider listing at the turn boundary,
-    // so the default has to name a spec this fixture's host offers. The
-    // child's own turn runs on the workspace pin below, as every turn of a
-    // pinned workspace does.
+    // Written through the account catalog's compare-and-swap: every tier slot is checked against the provider
+    // listing at the turn boundary, so the default must name a spec this host offers.
     const catalog = await userDO.getProfileCatalog(caller);
 
     await userDO.putProfileCatalog(
@@ -370,7 +285,6 @@ export class HireProbeRoot extends Agent<ProbeRootEnv> {
     await fetch('http://hire-control.invalid/hire/root-saw');
   }
 
-  /** Open the turn that authors the hire. */
   async openHire(workspace: string, prompt: string): Promise<void> {
     const target = await this.target(workspace);
 
@@ -384,7 +298,6 @@ export class HireProbeRoot extends Agent<ProbeRootEnv> {
     await target.driveOwedWork();
   }
 
-  /** Everything the assertions read, in one round trip. */
   async observe(workspace: string): Promise<HireObservation> {
     const target = await this.target(workspace);
     const rootActorId = await target.rootActorId();
@@ -406,7 +319,6 @@ export class HireProbeRoot extends Agent<ProbeRootEnv> {
         if (v.is(v.string(), result)) toolResults.push(result);
       }
     }
-
 
     const transcript: string[] = [];
 

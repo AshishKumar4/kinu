@@ -1,18 +1,6 @@
-// A fork target being streamed into is not a workspace the owner has yet.
-//
-// KINU-027: `reserveWorkspace` holds the NAME before the transfer starts, so a
-// second reservation of it cannot race in. Before this fence the row it held was
-// indistinguishable from a finished workspace, so the owner's roster, the
-// ownership gate and the title reads all offered a workspace whose contents were
-// still arriving. `create_pending = 1` makes that row absent from every
-// owner-visible surface, and `publishWorkspaceReservation` is the only thing that
-// clears it.
-//
-// The oracle is per-surface on purpose. A loop over the surfaces would still
-// pass with one `AND create_pending = 0` missing if the others covered for it, so
-// each surface is asserted on its own line, and each has a published control
-// beside it — "absent" has to be a fact about the fence, not about a harness that
-// never registered anything.
+// KINU-027: a reserved fork target (`create_pending = 1`) must be absent from every
+// owner-visible surface until `publishWorkspaceReservation`; each surface is asserted
+// on its own line beside a published control, so one missing filter cannot hide.
 import { describe, expect, test } from 'bun:test';
 import {
   createTestUserDO, createdWorkspace, provisionTestWorkspace, testOwner, type TestUserDO,
@@ -20,18 +8,13 @@ import {
 
 const USER_ID = '0123456789abcdef0123456789abcdef';
 
-/** The durable row behind the surfaces, which no wire shape exposes. */
 function rowOf(harness: TestUserDO, name: string): { create_pending: number; last_visited: number } | null {
   return harness.db.prepare<{ create_pending: number; last_visited: number }, [string]>(
     `SELECT create_pending, last_visited FROM user_workspaces WHERE name = ?`,
   ).get(name);
 }
 
-/**
- * The refusal as its CALLER sees it. A fork rollback branches on the error's
- * name, because that is what survives the Durable Object RPC boundary — the
- * class does not — so the name is what this suite pins.
- */
+/** A fork rollback branches on the error's name: it survives DO RPC, the class does not. */
 async function refusalOf(publish: Promise<void>): Promise<{ name: string; message: string }> {
   try {
     await publish;
@@ -44,19 +27,15 @@ async function refusalOf(publish: Promise<void>): Promise<{ name: string; messag
   return { name: 'no refusal at all', message: 'the publish resolved' };
 }
 
-/** A known `last_visited`, so "the touch did nothing" is a fact rather than an
- *  artefact of two writes landing in the same millisecond. */
+/** A known `last_visited`, so a no-op touch is not masked by two writes in the same millisecond. */
 function markVisited(harness: TestUserDO, name: string, at: number): void {
   harness.db.prepare<unknown, [number, string]>(
     `UPDATE user_workspaces SET last_visited = ? WHERE name = ?`,
   ).run(at, name);
 }
 
-/** Two published siblings, so the roster has a page to walk and a total to be
- *  wrong about. Ordered `keeper-a` then `keeper-b` by descending last_visited,
- *  with a gap between them for the row under test: a pending row sorting AHEAD
- *  of the first page's cursor would be hidden by the cursor predicate rather
- *  than by the fence, leaving the cursor branch of the listing query unread. */
+/** Ordered `keeper-a`, `keeper-b` by last_visited with a gap for the row under test,
+ *  so the fence (not the cursor predicate) hides it and the cursor branch is read. */
 async function seedPublishedPair(harness: TestUserDO): Promise<void> {
   await provisionTestWorkspace(harness, 'keeper-b');
   await provisionTestWorkspace(harness, 'keeper-a');
@@ -64,8 +43,6 @@ async function seedPublishedPair(harness: TestUserDO): Promise<void> {
   markVisited(harness, 'keeper-b', 1_000);
 }
 
-/** Every page of the roster, so the cursor branch of the listing query is read
- *  and not only its first-page twin. */
 async function walkRoster(harness: TestUserDO): Promise<string[]> {
   const owner = await testOwner();
   const names: string[] = [];
@@ -89,41 +66,29 @@ describe('a reservation the fork transfer has not committed', () => {
     expect(reserved.reserved).toBe(true);
     markVisited(harness, 'in-flight', 1_500);
 
-    // The listing: the most recently visited workspaces the owner has.
     const list = await harness.userDO.listWorkspaces(owner);
     expect(list.entries.map((entry) => entry.name)).not.toContain('in-flight');
 
-    // The total beside it, which is what a roster UI counts.
     expect(list.total).toBe(2);
 
-    // Every page, cursor branch included — a fork target must not surface on
-    // page two of a roster it was hidden from on page one.
     expect(await walkRoster(harness)).toEqual(['keeper-a', 'keeper-b']);
 
-    // The complete server-side enumeration: credential invalidation and the
-    // CLI's config reconcile fan out over this, so a pending name here would be
-    // pushed secrets and config for a workspace that does not exist.
+    // Credential invalidation and config reconcile fan out over this enumeration.
     const active = await harness.userDO.listActiveWorkspaces(owner);
     expect(active.map((entry) => entry.name)).not.toContain('in-flight');
 
-    // The ownership gate every open goes through.
     expect(await harness.userDO.hasWorkspace(owner, 'in-flight')).toBe(false);
 
-    // The identity bootstrap, which reads that same gate: an uncommitted target
-    // must not be issued a capability by anyone but the publish.
+    // The identity bootstrap reads that same gate: only the publish may issue a capability.
     await expect(harness.userDO.ensureWorkspaceCapability('in-flight', null))
       .rejects.toThrow('not in your registry');
     expect(harness.installed.has('in-flight')).toBe(false);
 
-    // The title read an actor hydrates its naming cache from.
     expect(await harness.userDO.getWorkspaceTitle(owner, 'in-flight')).toBeNull();
 
-    // The title WRITE, which reports the not-found answer rather than committing
-    // a name onto a row the owner cannot see.
     expect(await harness.userDO.setWorkspaceDisplayName(owner, 'in-flight', 'Renamed', 'user'))
       .toEqual({ applied: false });
 
-    // Recency: a workspace the owner cannot open is not one they can visit.
     await harness.userDO.touchWorkspace(owner, 'in-flight');
     expect(rowOf(harness, 'in-flight')?.last_visited).toBe(1_500);
 
@@ -131,8 +96,6 @@ describe('a reservation the fork transfer has not committed', () => {
   });
 
   test('a published workspace IS visible on every one of those surfaces', async () => {
-    // The negative control. Without it, "absent" would pass against a harness
-    // that registers nothing, and the fence would be untested.
     const harness = createTestUserDO({ durableObjectId: USER_ID });
     const owner = await testOwner();
     await seedPublishedPair(harness);
@@ -158,8 +121,6 @@ describe('a reservation the fork transfer has not committed', () => {
   });
 
   test('still refuses a second reservation of the same name', async () => {
-    // The whole point of holding the row: absence from the roster must never
-    // become a reason to hand the same name to a second transfer.
     const harness = createTestUserDO();
     const owner = await testOwner();
     const first = await harness.userDO.reserveWorkspace(owner, 'contested', 'First');
@@ -196,8 +157,7 @@ describe('a reservation the fork transfer has not committed', () => {
     await harness.userDO.touchWorkspace(owner, 'in-flight');
     expect(rowOf(harness, 'in-flight')?.last_visited).toBeGreaterThan(1_500);
 
-    // Publishing is also what gives the target its identity, so the workspace
-    // can take its first turn without being opened first.
+    // Publishing also mints the target's identity, so it can take a first turn unopened.
     expect(harness.installed.get('in-flight')).toMatch(/^pwc_/);
     harness.close();
   });
@@ -238,8 +198,6 @@ describe('publishWorkspaceReservation refuses anything that is not an open reser
     expect(refusal.name).toBe('WorkspaceReservationNotPendingError');
     expect(refusal.message).toContain('no reservation of that name is open');
 
-    // Refused BEFORE any identity was minted, and the row is left exactly as the
-    // reservation wrote it — still invisible, still the caller's to release.
     expect(harness.installed.has('in-flight')).toBe(false);
     expect(rowOf(harness, 'in-flight')?.create_pending).toBe(1);
     expect(await harness.userDO.hasWorkspace(owner, 'in-flight')).toBe(false);
@@ -309,8 +267,7 @@ describe('failure cleanup still finds a pending row', () => {
 });
 
 describe('a reservation whose transfer stopped renewing it is reclaimed', () => {
-  /** Age a live reservation into one whose sender is gone — what a source-side
-   *  eviction leaves behind, since nothing renews the lease after it. */
+  /** Nothing renews the lease after a source-side eviction; age it to that state. */
   function expireLease(harness: TestUserDO, name: string): void {
     harness.db.prepare<unknown, [number, string]>(
       `UPDATE user_workspaces SET fork_lease_expires_at = ? WHERE name = ?`,
@@ -318,11 +275,7 @@ describe('a reservation whose transfer stopped renewing it is reclaimed', () => 
   }
 
   test('a retry of the same name adopts it instead of being refused forever', async () => {
-    // The defect: the sender's loop holds the reservation in memory, so a
-    // source Durable Object that died mid-transfer left `create_pending = 1`
-    // with nothing to clear it. Every retry then hit "agent name already
-    // exists" before the destroy-capable block, while every roster read filtered
-    // the row out — the name was wedged and invisible at once.
+    // Defends: a source DO dying mid-transfer left `create_pending = 1` wedged and invisible.
     const harness = createTestUserDO({ durableObjectId: USER_ID });
     const owner = await testOwner();
     await harness.userDO.reserveWorkspace(owner, 'in-flight');
@@ -331,7 +284,6 @@ describe('a reservation whose transfer stopped renewing it is reclaimed', () => 
     const retry = await harness.userDO.reserveWorkspace(owner, 'in-flight');
 
     expect(retry.reserved).toBe(true);
-    // The half-written target went with the reservation it belonged to.
     expect(harness.destroyedWorkspaces).toContain('in-flight');
     expect(rowOf(harness, 'in-flight')?.create_pending).toBe(1);
     expect(retry.entry.createdAt).toBeGreaterThanOrEqual(0);
@@ -346,7 +298,6 @@ describe('a reservation whose transfer stopped renewing it is reclaimed', () => 
     expect((await harness.userDO.reserveWorkspace(owner, 'in-flight')).reserved).toBe(false);
     expect(harness.destroyedWorkspaces).not.toContain('in-flight');
 
-    // And the sender can keep holding it.
     expect(await harness.userDO.renewWorkspaceReservation(owner, 'in-flight', held.entry.createdAt)).toBe(true);
     harness.close();
   });
@@ -374,7 +325,6 @@ describe('a reservation whose transfer stopped renewing it is reclaimed', () => 
 
     expect(rowOf(harness, 'landed')?.create_pending).toBe(0);
     expect(harness.destroyedWorkspaces).not.toContain('landed');
-    // And the sender's late renewal finds nothing of its own left to hold.
     expect(await harness.userDO.renewWorkspaceReservation(owner, 'landed', reserved.entry.createdAt)).toBe(false);
     harness.close();
   });

@@ -1,8 +1,5 @@
-// Mission Inbox — outbound side. The email_thread dispatcher (correct
-// In-Reply-To / References threading), the per-turn reply dispatch over a
-// real EventLog + ReplyChannelStore (the full inbound → turn → threaded
-// reply flow at the seams), and owner notifications. The only mock is the
-// send_email binding.
+// Mission Inbox outbound: email_thread dispatch, per-turn reply over a real EventLog +
+// ReplyChannelStore, owner notifications. Only the send_email binding is faked.
 import { describe, expect, test } from 'bun:test';
 import { Database } from 'bun:sqlite';
 import * as v from 'valibot';
@@ -49,7 +46,6 @@ const ReplyAttemptSchema = v.object({
   outcome: v.object({ outcome: v.string() }),
 });
 
-/** A capture fake for the send_email Workers binding. */
 function fakeSendBinding(opts: { fail?: boolean } = {}) {
   const sent: SentEmail[] = [];
   function send(message: EmailMessage): Promise<EmailSendResult>;
@@ -65,7 +61,6 @@ function fakeSendBinding(opts: { fail?: boolean } = {}) {
 
   return { binding, sent };
 }
-
 
 describe('inbound email → turn → threaded reply (the full flow at the seams)', () => {
   function setup(sendOpts: { fail?: boolean } = {}) {
@@ -114,7 +109,7 @@ describe('inbound email → turn → threaded reply (the full flow at the seams)
     const { log, replies, sent, sql } = setup();
     const eventId = await admitOwnerEmail(log, replies);
 
-    // The drain binds the event to a synthetic turn (as AgentOrchestrator does).
+    // Bound to a synthetic turn, as AgentOrchestrator does.
     log.markConsumed(eventId, 'evt-turn-1', 0);
 
     const result = await dispatchEmailRepliesForTurn(
@@ -138,7 +133,6 @@ describe('inbound email → turn → threaded reply (the full flow at the seams)
     // The idempotency key rides the wire as a stable Message-ID (SPEC §7.4).
     expect(sent[0].headers?.['Message-ID']).toMatch(/^<kinu\.[0-9a-f]{64}@agents\.example\.com>$/);
 
-    // The channel is settled and an audit row exists.
     expect(replies.findOpenByEvent(eventId)).toBeNull();
 
     const attempts = sql.exec(
@@ -150,7 +144,6 @@ describe('inbound email → turn → threaded reply (the full flow at the seams)
       kind: 'email_thread', outcome: { outcome: 'delivered' },
     });
 
-    // Re-dispatch is a no-op (channel already replied).
     expect(await dispatchEmailRepliesForTurn({ log, replies }, 'evt-turn-1', 'again', 3_000))
       .toEqual({ delivered: 0, pending: false });
     expect(sent).toHaveLength(1);
@@ -160,9 +153,7 @@ describe('inbound email → turn → threaded reply (the full flow at the seams)
     const { log, replies, sent } = setup();
     const eventId = await admitOwnerEmail(log, replies);
 
-    // A turn is live: the seam splices the drain into the turn's next step
-    // instead of queueing it (the same decision every backend delegates), as
-    // the orchestrator wires it.
+    // A live turn absorbs the drain into its next step instead of queueing it.
     const host: BackendHost = {
       broadcast: () => {},
       enqueueTurn: async () => { throw new Error('must inject, not enqueue — a turn is live'); },
@@ -183,8 +174,7 @@ describe('inbound email → turn → threaded reply (the full flow at the seams)
     if (!step?.[1]) throw new Error('expected injected signal step');
     expect(v.parse(v.string(), step[1].content)).toContain('Is staging green?');
 
-    // Turn end: the absorbed signal's reply turn id keys the SAME dispatch the
-    // queued drain-turn path uses — the live turn's answer threads back.
+    // The absorbed signal's reply turn id keys the same dispatch as the queued path.
     const { absorbed } = orch.inbox.settle({ completed: true });
     expect(absorbed).toHaveLength(1);
     const absorbedSignal = absorbed[0];
@@ -266,7 +256,6 @@ describe('sendOwnerEmail — changelog digests + job completions', () => {
       text: 'Self-change digest: 3 entries…',
     });
     expect(sent[0].headers?.['Auto-Submitted']).toBe('auto-generated');
-    // The idempotency key materializes as a deterministic Message-ID on the wire.
     expect(sent[0].headers?.['Message-ID']).toMatch(/^<kinu\.[0-9a-f]{64}@agents\.example\.com>$/);
   });
 
@@ -294,10 +283,7 @@ describe('sendOwnerEmail — changelog digests + job completions', () => {
   });
 });
 
-// KINU-054. Two halves of one finding: the sender got nothing until a turn
-// answered — which can be minutes, can be queued, and can be an empty answer
-// that sends no mail at all — and the threading headers the reply carried grew
-// without a bound.
+// KINU-054: the sender got nothing until a turn answered, and threading headers grew unbounded.
 describe('the receipt an accepted message gets immediately', () => {
   const THREAD = {
     to: 'owner@example.com',
@@ -320,8 +306,7 @@ describe('the receipt an accepted message gets immediately', () => {
       to: 'owner@example.com',
       subject: 'Re: Check the deploy',
       headers: {
-        // RFC 3834. Without it a peer agent's own inbox would admit this and
-        // answer it, and two Kinus would talk until a rate window closed.
+        // RFC 3834: without it a peer agent's inbox would answer, looping two Kinus.
         'Auto-Submitted': 'auto-replied',
         'In-Reply-To': '<abc@mail.example.com>',
         References: '<root@mail.example.com> <abc@mail.example.com>',
@@ -331,9 +316,7 @@ describe('the receipt an accepted message gets immediately', () => {
   });
 
   test('a redelivery of the same message sends exactly one receipt', async () => {
-    // The mail edge retries. The event id is stable across those retries
-    // because ingress dedupes on Message-ID, so the outbox key is stable too
-    // and the second call never reaches the binding.
+    // Ingress dedupes on Message-ID, so a retried event keeps its outbox key and never re-sends.
     const { binding, sent } = fakeSendBinding();
     const outbox = freshOutbox();
     const ctx = { email: binding, agentDisplayName: 'Scout', outbox };
@@ -341,7 +324,6 @@ describe('the receipt an accepted message gets immediately', () => {
     expect(await sendInboundEmailReceipt(ctx, THREAD, 'evt-1')).toBe(true);
     expect(sent).toHaveLength(1);
 
-    // A genuinely different message is a different key and does send.
     expect(await sendInboundEmailReceipt(ctx, THREAD, 'evt-2')).toBe(true);
     expect(sent).toHaveLength(2);
   });
@@ -369,8 +351,7 @@ describe('the receipt an accepted message gets immediately', () => {
   });
 
   test('the reply this thread later gets is a second message, not a repeat of the receipt', async () => {
-    // Different outbox keys, so the receipt never suppresses the answer and
-    // the answer never re-sends the receipt.
+    // Distinct outbox keys: receipt and answer never suppress each other.
     const { binding, sent } = fakeSendBinding();
     const outbox = freshOutbox();
     await sendInboundEmailReceipt({ email: binding, agentDisplayName: 'Scout', outbox }, THREAD, 'evt-1');
@@ -403,7 +384,6 @@ describe('the receipt an accepted message gets immediately', () => {
 describe('threading headers stay inside the line a receiver must accept', () => {
   const REFERENCES_BUDGET = 998 - 'References'.length - 2;
 
-  /** The threading headers one receipt carried, through the production send. */
   async function receiptHeaders(
     thread: { message_id: string | null; references: string | null },
     eventId: string,

@@ -1,14 +1,6 @@
-// executeInExecutor carries the machine: with two live devices an unnamed
-// device call is refused with the fleet ask and raises no card, while a call
-// that names its machine raises that machine's card and runs there.
-//
-// The first-run two-machines case grants each machine through this RPC. Its
-// raise named no machine, so with two live the fleet refused it locally, the
-// refusal string parsed as a success, and the grant read as "no device consent
-// card was ever raised". The contract (docs/EXECUTION-LAYER-SPEC.md "The
-// user's account is a fleet", AGENTS.md § Execution Layer) says every device
-// call names its machine when several are live — so the RPC must carry the
-// name through to the tool context the tunnel executor reads.
+// executeInExecutor carries the machine name through to the tunnel executor. Defends the first-run
+// two-machines grant: an unnamed raise was refused locally and parsed as success, so no card was raised
+// (docs/EXECUTION-LAYER-SPEC.md "The user's account is a fleet").
 import { describe, expect, test } from 'bun:test';
 import { createDeviceTunnelExecutor, type JsonValue } from '@kinu.run/core';
 import {
@@ -22,9 +14,7 @@ import { joinHarnessFibers } from './helpers/agents-sdk';
 
 const WORKSPACE = 'workspace-exec-device';
 
-/** The daemon answers identification (`which`) and runs a command with an
- *  exit-0 result that SAYS which machine ran it, so a routing claim is read
- *  off the answer and not inferred from the frame log alone. */
+/** The answer names the machine that ran it, so routing is read off the answer, not the frame log. */
 function daemonOn(frame: DeviceFrame): JsonValue {
   if (frame.method === 'which') return { present: ['node'] };
 
@@ -41,8 +31,6 @@ interface Fleet extends TestUserDO {
   end(): Promise<void>;
 }
 
-/** Two machines registered and LIVE at once, each having said HELLO with its
- *  own platform, exactly as the owner's Mac and Linux PC did. */
 async function twoDaemons(): Promise<Fleet> {
   const harness = createTestUserDO({ deviceResponder: daemonOn });
   const owner = await testOwner();
@@ -70,8 +58,6 @@ async function twoDaemons(): Promise<Fleet> {
   });
 }
 
-/** A real orchestrator whose device executor rides the fleet above: the
- *  production RPC, executor, transport and hub over fake sockets. */
 async function orchestratorOnFleet(fleet: Fleet) {
   const transport = createHubDeviceTransport({
     hub: () => fleet.userDO,
@@ -107,11 +93,10 @@ describe('executeInExecutor names its machine', () => {
     const answer = await agent.executeInExecutor('device', 'true');
 
     if (!('stdout' in answer)) throw new Error(`expected a tool answer, got ${JSON.stringify(answer)}`);
-    // The ask names both machines, and says a name is required.
     expect(answer.stdout).toContain('ashish@mac');
     expect(answer.stdout).toContain('mrwhite@rig');
     expect(answer.stdout).toContain('device:');
-    // Refused before the hub: no card, no frame on either machine.
+    // Refused before the hub.
     expect(fleet.consentPrompts).toEqual([]);
     expect(execFrames(fleet.mac)).toHaveLength(0);
     expect(execFrames(fleet.rig)).toHaveLength(0);
@@ -130,7 +115,6 @@ describe('executeInExecutor names its machine', () => {
     expect(fleet.consentPrompts).toHaveLength(1);
     expect(execFrames(fleet.rig)).toHaveLength(1);
     expect(execFrames(fleet.mac)).toHaveLength(0);
-    // The grant is per (workspace, device): the rig is bound, the mac is not.
     const grants = await fleet.userDO.listDeviceConsents(fleet.owner);
     expect(grants).toContainEqual(expect.objectContaining({
       agentName: WORKSPACE, deviceId: fleet.rigId, policy: 'allow',
@@ -149,7 +133,6 @@ describe('executeInExecutor names its machine', () => {
 
     if (!('stdout' in answer)) throw new Error(`expected a tool answer, got ${JSON.stringify(answer)}`);
     expect(answer.stdout).toContain(`ran on ${fleet.rigId}`);
-    // One card per machine, not one shared grant.
     expect(fleet.consentPrompts).toHaveLength(2);
     const grants = await fleet.userDO.listDeviceConsents(fleet.owner);
     expect(grants.filter((grant) => grant.policy === 'allow')).toHaveLength(2);

@@ -1,14 +1,5 @@
-// Where a live turn's one indicator goes, and what it says.
-//
-// The property that carries the feature: the affordance is derived from the
-// stream's own part STATE, never from part order. Both reported defects were
-// order-inference — a caret hung off the last text part even when tool rows
-// came after it, and a "Thinking" row that existed only while a message had no
-// parts at all, so a turn that went quiet between steps showed nothing.
-//
-// These are also the honesty tests. Nothing here animates on a clock: a part
-// the stream closed reports `thinking` (the request is open, nothing is
-// arriving) and a part the stream is still writing reports itself.
+// A live turn's one indicator is derived from each part's stream state, never part order; nothing
+// animates on a clock: a closed part reports `thinking`, an open one reports itself.
 import './helpers/ui-module-globals';
 import { describe, test, expect } from 'bun:test';
 import { createElement } from 'react';
@@ -18,8 +9,6 @@ import { threadLiveTail, turnLiveness, type TurnLiveness } from '@kinu.run/core'
 import { ChatLiveTail, MessageView } from '../src/components/MessageView';
 import { Composer } from '../src/components/Composer';
 
-/** The composer as WorkspacePage mounts it: one liveness value, nothing else
- *  that decides which action row it draws. */
 function composerMarkup(liveness: TurnLiveness): string {
   return renderToStaticMarkup(createElement(Composer, {
     value: '', onValueChange: () => {}, onSend: () => {}, placeholder: 'Send a message...',
@@ -47,9 +36,6 @@ const text = (content: string, state?: TextUIPart['state']): TextUIPart =>
 const reasoning = (content: string, state?: ReasoningUIPart['state']): ReasoningUIPart =>
   state === undefined ? { type: 'reasoning', text: content } : { type: 'reasoning', text: content, state };
 
-/** The tail a live assistant row paints, asked the one way the surfaces ask it.
- *  The per-message reading is not a public name of its own: a thread decides
- *  liveness and the row's parts answer the rest. */
 const tailOf = (parts: readonly Part[]) =>
   threadLiveTail({ last: { role: 'assistant', parts: [...parts] }, liveness: { kind: 'live', turnId: 't1' } });
 
@@ -60,9 +46,7 @@ describe('the tail of a live assistant row', () => {
   });
 
   test('a turn whose prose is finished and whose calls are done is thinking, not writing', () => {
-    // The reported misplacement: a caret rendered after the last TEXT part sits
-    // above the tool rows that followed it. There is no text being written here
-    // at all — the model is between steps.
+    // A caret after the last text part would sit above later tool rows; the model is between steps.
     const parts: Part[] = [
       text('Reading the handler.', 'done'),
       tool('a', 'output-available'),
@@ -73,8 +57,7 @@ describe('the tail of a live assistant row', () => {
   });
 
   test('a call in flight owns the indicator — nothing is added after it', () => {
-    // Its own row already carries a live dot. A second indicator below it
-    // would claim two things are happening.
+    // Its row already carries a live dot; a second indicator would claim two things are happening.
     for (const state of ['input-streaming', 'input-available'] as const) {
       expect(tailOf([text('Running the suite.', 'done'), tool('a', state)]))
         .toEqual({ kind: 'tool' });
@@ -95,9 +78,7 @@ describe('the tail of a live assistant row', () => {
   });
 
   test('a part the stream never closed is treated as the one being written', () => {
-    // `state` is optional on both text and reasoning parts. Undefined means
-    // the stream never said, and this is only ever asked of an OPEN stream, so
-    // the honest reading is "still arriving" — never a caret that vanishes.
+    // `state` is optional; asked only of an open stream, undefined reads as still arriving.
     const part = text('no state field');
     expect(tailOf([part])).toEqual({ kind: 'text', part });
   });
@@ -120,9 +101,7 @@ describe('turnLiveness', () => {
   });
 
   test('a stranded claim is not live — Stop would never land', () => {
-    // The isolate that admitted this turn is gone. Nothing will settle the
-    // claim and nothing will answer an interrupt, so the surface must not
-    // offer one.
+    // The admitting isolate is gone: nothing settles the claim or answers an interrupt, so offer none.
     expect(turnLiveness({ claim: { kind: 'stranded', turnId: 't9', claimedAt: 4 }, streaming: true }))
       .toEqual({ kind: 'stranded', turnId: 't9', claimedAt: 4 });
   });
@@ -136,8 +115,7 @@ describe('the thread the page paints', () => {
   const userTurn: UIMessage = { id: 'u1', role: 'user', parts: [text('build the chess app')] };
 
   test("a live turn whose last row is the user's still has a tail", () => {
-    // The reported wedge: Stop offered, no Thinking row. `isLast && streaming
-    // && !isUser` is false for every turn before its first assistant row.
+    // `isLast && streaming && !isUser` is false before the first assistant row.
     const liveness = turnLiveness({ claim: { kind: 'admitted', turnId: 't1', claimedAt: 1 }, streaming: true });
     expect(threadLiveTail({ last: userTurn, liveness })).toEqual({ kind: 'thinking' });
   });
@@ -158,8 +136,6 @@ describe('the thread the page paints', () => {
 });
 
 describe('WorkspacePage paints exactly one live indicator', () => {
-  /** The page's thread block, assembled the way WorkspacePage assembles it:
-   *  every message through MessageView, then the tail the page owns. */
   function thread(messages: readonly UIMessage[], liveness: TurnLiveness): string {
     const tail = threadLiveTail({ last: messages.at(-1), liveness });
 

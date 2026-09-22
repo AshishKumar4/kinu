@@ -1,17 +1,6 @@
 /**
- * `db` on the hosted backend, for real: a model-authored program in the
- * dynamic-Worker sandbox, over one Durable Object's own SQLite.
- *
- * The two platform mechanisms under test are named in `db-capability-probe.ts`:
- * `ctx.storage.transactionSync` (which is the whole of the all-or-nothing batch
- * AND of "evidence rolls back with its mutation") and `… RETURNING` (which is
- * how a row count crosses the `SqlExecutor` seam). Both are the runtime's to
- * provide, and every other test of this capability runs against `bun:sqlite`,
- * whose feature set says nothing about workerd's.
- *
- * Each test uses its OWN object id: the probe opens a workspace once per
- * instance, and a shared one would let an earlier program's tables decide a
- * later assertion.
+ * `db` in the dynamic-Worker sandbox over Durable Object SQLite: `transactionSync` and `… RETURNING` are workerd's to provide,
+ * and `bun:sqlite` says nothing about them. Each test uses its own object id so earlier tables cannot decide a later assertion.
  */
 import { describe, expect, test } from 'vitest';
 import { env } from 'cloudflare:test';
@@ -26,8 +15,6 @@ const LEDGER = `await db.createTable({ name: 'ledger', scope: 'actor', columns: 
   { name: 'detail', type: 'json' },
 ] });`;
 
-/** The sandbox answers `{ result, logs? }`; the probe hands it back as JSON, so
- *  the assertion parses it rather than trusting the string. */
 const AnswerSchema = v.object({ result: JsonValueSchema });
 
 function probe(id: string) {
@@ -38,10 +25,7 @@ function resultOf(answer: string): JsonValue {
   return v.parse(AnswerSchema, JSON.parse(answer)).result;
 }
 
-/**
- * The store is never called: this reads the namespace's member NAMES, which
- * `createDbCodemodeProvider` fixes without touching a database.
- */
+/** Reads member names only; `createDbCodemodeProvider` fixes them without touching a database. */
 function memberNames(): readonly string[] {
   const unused: AppDataStore = {
     createTable: () => { throw new Error('not called'); },
@@ -76,7 +60,6 @@ describe('the db capability on Durable Object SQLite', () => {
     `, 'main');
 
     expect(resultOf(run.answer)).toEqual({
-      // Row counts through `RETURNING` on the real runtime.
       updated: { rowsAffected: 1 },
       removed: { rowsAffected: 1 },
       rows: [{ key: 'a', amount: 9, blob_col: 'AAECf4D//g==', detail: { tag: 'first' } }],
@@ -113,8 +96,6 @@ describe('the db capability on Durable Object SQLite', () => {
       landed: [{ rowsAffected: 1 }, { rowsAffected: 1 }],
       rows: [{ key: 'c', amount: 5, blob_col: null, detail: null }],
     });
-    // The rolled-back operations left NO db_op rows, and the batch that landed
-    // left one per operation naming the batch size.
     expect(run.evidence).toEqual([
       'createTable:ledger:actor:0:null',
       'insert:ledger:actor:1:2',
@@ -136,13 +117,10 @@ describe('the db capability on Durable Object SQLite', () => {
 
     expect(resultOf(mine.answer)).toMatchObject({ mine: [{ key: 'shared', amount: 1 }] });
     expect(resultOf(theirs.answer)).toMatchObject({ mine: [{ key: 'shared', amount: 2 }] });
-    // One physical table, one key value, two rows with different owners.
     expect(theirs.rows).toHaveLength(2);
     expect(new Set(theirs.rows.map((row) => row.actor)).size).toBe(2);
     expect(theirs.rows.every((row) => row.key === 'shared')).toBe(true);
 
-    // The sibling cannot retire the shared physical table while rows of the
-    // other actor are in it, and cannot drop a table it did not declare.
     const refused = await probe('isolation').program(`return await db.dropTable('ledger');`, 'scout');
     expect(resultOf(refused.answer)).toMatchObject({ reason: 'denied' });
     expect(refused.tables).toContain('app_ledger');
@@ -182,8 +160,6 @@ describe('the db capability on Durable Object SQLite', () => {
       mine: 1,
     });
 
-    // Every host table the program reached for is still there, and no table was
-    // created under an injected name.
     for (const name of [
       'conversation_entries', 'session_messages', 'workspace_actors', 'workspace_identity',
       'agent_data_tables', 'run_events',
@@ -200,14 +176,9 @@ describe('the db capability on Durable Object SQLite', () => {
   });
 
   /**
-   * The guard for the defect this file found: `deleteRows` is spelled that way
-   * because the hosted sandbox RENAMES a member whose name is a JavaScript
-   * reserved word before it registers the host dispatcher, while the sandbox
-   * proxy dispatches whatever the program typed — so `db.delete` answered
-   * `Tool "delete" not found` on the real runtime while every local test
-   * passed. Asserted against the vendor's OWN rule rather than a copy of its
-   * word list, so a member added later cannot reintroduce it.
-   */
+     * Defends: the hosted sandbox renames reserved-word members, so `db.delete` answered `Tool "delete" not found` on the real runtime.
+     * Asserted against the vendor's own rule, not a copy of its word list.
+     */
   test('no member of the namespace is a name this sandbox would rename', () => {
     const names = memberNames();
     expect(names).toContain('deleteRows');

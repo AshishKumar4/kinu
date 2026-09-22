@@ -1,8 +1,5 @@
-// Account deletion against the REAL UserDO over bun:sqlite: every workspace
-// object torn down through the same path a single delete takes, every device
-// and MCP row swept through its own revoke, then the object's storage gone and
-// its context aborted with the SDK's sentinel — and, over the same database, a
-// fresh object that reads as a brand-new account.
+// Account deletion against the real UserDO over bun:sqlite: each workspace, device and MCP row goes through its own
+// revoke path, then storage and context are gone, and a fresh object over the same database is a brand-new account.
 import { Database } from 'bun:sqlite';
 import { describe, expect, test } from 'bun:test';
 import { createTestUserDO, provisionTestWorkspace, testOwner } from './helpers/user-do';
@@ -11,7 +8,6 @@ const USER_ID = '0123456789abcdef0123456789abcdef';
 
 const OTHER_OWNER = 'f'.repeat(32);
 
-/** Every table the account writes, by the prefixes the user schema uses. */
 function accountTables(db: Database): string[] {
   return db.query<{ name: string }, []>(
     `SELECT name FROM sqlite_master WHERE type = 'table'
@@ -58,15 +54,12 @@ describe('deleting the account', () => {
 
     expect(result).toEqual({ ok: true, workspaces: 2 });
     expect([...harness.destroyedWorkspaces].sort()).toEqual(['ws-alpha', 'ws-beta']);
-    // The abort is deferred past the returning call, as the SDK defers it;
-    // the harness raises it as a signal, and that is what is awaited.
+    // Deferred past the returning call, as the SDK defers it; the harness raises it as a signal.
     expect(harness.aborted).toEqual([]);
     await harness.abortRaised();
     expect(harness.aborted).toEqual(['destroyed']);
     expect(accountTables(db)).toEqual([]);
 
-    // The next activation over this storage is a new account: no profile, no
-    // onboarding stamp, no workspaces.
     const revived = createTestUserDO({ storage: db, durableObjectId: USER_ID });
     const profile = await revived.userDO.ensureProfile(owner, 'owner@example.test');
 
@@ -107,8 +100,7 @@ describe('deleting the account', () => {
     await provisionTestWorkspace(harness, 'ws-alpha', 'Alpha');
 
     await expect(harness.userDO.deleteAccount(owner, USER_ID)).rejects.toThrow('container refused to stop');
-    // Fail-closed, exactly as one delete: the row stays, marked, and the
-    // object is still here for the retry.
+    // Fail-closed like a single delete: the row stays, marked, and the object remains for the retry.
     expect(db.query<{ n: number }, []>(`SELECT COUNT(*) AS n FROM user_workspaces WHERE delete_pending = 1`).get()?.n).toBe(1);
     expect(harness.aborted).toEqual([]);
     db.close();

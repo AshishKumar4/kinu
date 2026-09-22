@@ -1,5 +1,4 @@
-// The dust the hero settles for where the copy stacks: what the backdrop
-// claims — deterministic, slow, faint — must hold before any canvas draws it.
+// The backdrop's claims (deterministic, slow, faint) must hold before any canvas draws it.
 import { describe, expect, test } from 'bun:test';
 import * as v from 'valibot';
 import { readFileSync } from 'node:fs';
@@ -30,7 +29,6 @@ function fieldAfter(seconds: number, seed = 91, count = 56, aspect = 1): DustFie
   return field;
 }
 
-/** A mote is x, y, radius, alpha — the stride the buffer declares for itself. */
 function strideOf(frame: DustFrame): number {
   return frame.motes.length / frame.count;
 }
@@ -42,7 +40,6 @@ interface Recording {
   readonly ops: string[];
 }
 
-/** A CanvasRenderingContext2D that remembers what was asked of it, in order. */
 function recordingSurface(): DustSurface & Recording {
   const styles: string[] = [];
   const ops: string[] = [];
@@ -87,7 +84,6 @@ describe('the dust drifts deterministically', () => {
     const frame = fieldAfter(90, 91, 56, 844 / 390).frame();
     const stride = strideOf(frame);
 
-    // Four floats a mote, no more: the declaration is what the loop reads.
     expect(DUST_SOURCE).toContain('DUST_STRIDE = 4');
     expect(stride).toBe(4);
 
@@ -112,7 +108,6 @@ describe('the dust drifts deterministically', () => {
     const after = field.frame();
     const stride = strideOf(after);
 
-    // One second of drift may not move a mote further than the top speed.
     expect(DUST_SOURCE).toContain('MAX_DRIFT = 0.015');
 
     for (let index = 0; index < after.count; index += 1) {
@@ -200,7 +195,6 @@ describe('the backdrop swaps where the copy stacks', () => {
   test('the hero renders the tree at lg and the dust below it', () => {
     const source = readFileSync(resolve(LANDING_DIR, 'LandingHero.tsx'), 'utf8');
 
-    // The grid's second column and the backdrop change hands at one width.
     expect(source).toContain('lg:grid-cols-[');
     expect(source).toContain('wide ? <SearchTreeHero /> : <HeroDust />');
   });

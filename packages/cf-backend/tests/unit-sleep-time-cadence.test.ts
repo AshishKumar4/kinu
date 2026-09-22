@@ -1,16 +1,6 @@
 /**
- * When the sleep-time compute runs, and what it reads when it does.
- *
- * The lane used to run after EVERY completed turn over that one turn, so a
- * fresh workspace's "hello" paid a model call to record an empty workspace.
- * Now one core rule decides three triggers — the third completed turn since
- * the last run, ten idle minutes, a closed tab — and every run reads the
- * turns since the last run. The oracle throughout is the scripted fast model:
- * how many prompts it was asked, and what each carried.
- *
- * The timed triggers ride the workspace's one durable wake, so they are driven
- * the way the platform drives them: the settled instant is stored, the clock
- * moves, `_kinuTimerTick` fires.
+ * Sleep-time compute cadence: third turn since the last run, idle interval, or
+ * closed tab; each run reads the turns since the last. Timed triggers fire via `_kinuTimerTick`.
  */
 import { afterEach, describe, expect, setSystemTime, test } from 'bun:test';
 import type { Connection } from 'agents';
@@ -32,18 +22,14 @@ async function settle(harness: ActorHarness<HarnessOrchestratorAgent>, n: number
   await joinHarnessFibers();
 }
 
-/** What the world model holds, off the durable table the compute writes and
- *  the "Learned N things" card reads. */
+/** The world model, off the durable table the "Learned N things" card reads. */
 function facts(harness: ActorHarness<HarnessOrchestratorAgent>): { key: string; value: string }[] {
   return harness.db.prepare<{ key: string; value: string }, []>(
     'SELECT key, value_json AS value FROM agent_facts ORDER BY key',
   ).all();
 }
 
-/** A tab's socket, as the actor's own hooks see one: an id, no actor tag, and
- *  a wire that swallows the transcript seed a connect sends — the cadence is
- *  what these cases measure, not the frames. Every other member refuses, so a
- *  hook that reached past those would name the member it wanted. */
+/** A tab's socket: an id, no actor tag, a wire that swallows frames; other members refuse. */
 function tab(id: string): Connection {
   return socketConnection({ id, send: () => {} });
 }
@@ -57,7 +43,6 @@ describe('the turn-count trigger', () => {
 
     await settle(harness, 1);
     expect(prompts).toHaveLength(0);
-    // And nothing was learned: the store the "Learned N things" card reads is empty.
     expect(facts(harness)).toEqual([]);
 
     await settle(harness, 2);
@@ -71,7 +56,6 @@ describe('the turn-count trigger', () => {
     expect(prompt.indexOf('ask-1')).toBeLessThan(prompt.indexOf('ask-3'));
     expect(facts(harness)).toEqual([{ key: 'user.editor', value: '"helix"' }]);
 
-    // The fourth turn is one turn past a run: nothing.
     await settle(harness, 4);
     expect(prompts).toHaveLength(1);
   });
@@ -109,12 +93,10 @@ describe('the idle trigger', () => {
     expect(prompts[0]).toContain('ask-1');
     expect(prompts[0]).toContain('ask-2');
 
-    // A second wake over the same turns has nothing unprocessed.
     await harness.agent._kinuTimerTick();
     expect(prompts).toHaveLength(1);
 
-    // And the turn-count trigger does not run over turns the wake read: two
-    // more turns are two since the last run, not four.
+    // Turns the wake read do not count toward the next turn-count trigger.
     await settle(harness, 3);
     await settle(harness, 4);
     expect(prompts).toHaveLength(1);

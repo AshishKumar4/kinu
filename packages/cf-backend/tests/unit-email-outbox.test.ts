@@ -1,17 +1,6 @@
 /**
- * EmailOutbox — write-ahead intent + idempotency for outbound mail
- * (agent-core SPEC §7.4). Asserts, at the store seam over bun:sqlite:
- *   - the intent row is committed `pending` BEFORE the binding.send lands;
- *   - a replay under the same idempotency key is a no-op (never re-sends);
- *   - a stable Message-ID rides every attempt (so a re-send is deduped, not new);
- *   - a failing send backs off by the declared curve, 30s doubling per attempt;
- *   - an indeterminate intent (crash mid-send) is RECONCILED — re-driven with the
- *     same key/Message-ID — rather than blind-retried or lost;
- *   - a permanent failure dead-letters ON the 8th attempt, not the 9th.
- *
- * The rows are the shared outbox's (`outbox_email`), so these read fabric's
- * columns: `dedupe_key` is the idempotency key and the Message-ID rides the
- * stored message's own headers rather than a column beside it.
+ * EmailOutbox write-ahead intent and idempotency (agent-core SPEC §7.4), over the shared
+ * `outbox_email` rows: `dedupe_key` is the idempotency key; Message-ID rides the stored headers.
  */
 
 import { describe, expect, test } from 'bun:test';
@@ -50,9 +39,7 @@ const OutboxTestRowSchema = v.object({
   next_attempt_at: v.number(),
 });
 
-/** A capture fake for the send_email binding.
- *  `onSend` can observe the outbox state mid-flight (before status is written)
- *  or throw to simulate a transport failure / crash. */
+/** `onSend` can observe the row mid-flight or throw to simulate a transport failure. */
 function fakeBinding(onSend?: (m: Sent) => void) {
   const sent: Sent[] = [];
   function send(outgoing: EmailMessage): Promise<EmailSendResult>;
@@ -86,9 +73,7 @@ function outbox() {
   return { box: new EmailOutbox(sql), sql };
 }
 
-/** The stored row plus the Message-ID riding its message. Every intent is
- *  stamped before it is queued, so a row without one is a defect, not a shape
- *  the caller has to narrow. */
+/** Every intent is stamped before queueing, so a missing Message-ID is a defect. */
 function rowFor(sql: SqlExec, key: string) {
   const row = sql.exec(
     `SELECT state, message, attempt_count, next_attempt_at FROM outbox_email WHERE dedupe_key = ?`, key,
@@ -110,7 +95,6 @@ describe('EmailOutbox — write-ahead intent', () => {
     let stateAtSend: string | undefined;
 
     const { binding } = fakeBinding(() => {
-      // Inside the send call the row must already exist and be pending.
       stateAtSend = rowFor(sql, 'k1')?.state;
     });
 
@@ -197,7 +181,6 @@ describe('EmailOutbox — reconciliation of an indeterminate', () => {
   test('a send that crashed mid-flight stays pending and is re-driven with the SAME Message-ID', async () => {
     const { box, sql } = outbox();
 
-    // Attempt 1: the transport throws (crash / not-yet-verified sender).
     const failing = fakeBinding(() => { throw new Error('E_SENDER_NOT_VERIFIED'); });
     const first = await box.send(failing.binding, 'recon', message(), 1_000);
     expect(first.status).toBe('failed');
@@ -209,13 +192,12 @@ describe('EmailOutbox — reconciliation of an indeterminate', () => {
     expect(pending.attempt_count).toBe(1);
     const boundMessageId = pending.messageId;
 
-    // The alarm sweep re-drives due pending intents; now the binding accepts.
     const ok = fakeBinding();
     const reconciled = await box.reconcile(ok.binding, 10_000_000);
 
     expect(reconciled).toBe(1);
     expect(ok.sent).toHaveLength(1);
-    // Re-driven under the ORIGINAL Message-ID — a safe re-send, not a new one.
+    // The original Message-ID makes this a safe re-send.
     expect(ok.sent[0].headers?.['Message-ID']).toBe(boundMessageId);
     expect(first.messageId).toBe(boundMessageId);
     expect(rowFor(sql, 'recon')?.state).toBe('sent');
@@ -244,8 +226,7 @@ describe('EmailOutbox — reconciliation of an indeterminate', () => {
   });
 
   test('a failed send arms the host timer for its own backoff', async () => {
-    // Without this the outbox has no scheduler: a retry only ever happened if
-    // some unrelated timer woke the agent and the sweep noticed the row.
+    // Otherwise a retry only happened if an unrelated timer woke the agent.
     const { sql } = makeSql();
     const armed: number[] = [];
     const box = new EmailOutbox(sql, async (at) => { armed.push(at); });
@@ -256,8 +237,7 @@ describe('EmailOutbox — reconciliation of an indeterminate', () => {
     const next = box.nextRetryAt();
 
     if (next === null) throw new Error('expected a scheduled retry');
-    // Admission arms too: delivery is owed to the alarm even when the caller
-    // never drains inline. The LAST arm is the backoff this failure earned.
+    // Admission arms too; the last arm is this failure's backoff.
     expect(armed).toEqual([1_000, next]);
   });
 
@@ -282,8 +262,6 @@ describe('EmailOutbox — reconciliation of an indeterminate', () => {
     const failing = fakeBinding(() => { attempts++; throw new Error('permanent'); });
     await box.send(failing.binding, 'dead', message(), 0);
 
-    // Advance `now` past each backoff so every reconcile actually re-drives,
-    // exhausting the attempt budget.
     for (let i = 1; i < 10; i++) await box.reconcile(failing.binding, i * 1_000_000_000);
 
     const row = rowFor(sql, 'dead');
@@ -297,7 +275,6 @@ describe('EmailOutbox — reconciliation of an indeterminate', () => {
 
   test('re-sending a dead-lettered key re-admits it and buys one more attempt', async () => {
     // fabric's `onDuplicate: retry-now`: a caller asking again is new intent.
-    // The old hand-built outbox re-delivered a dlq row on the same path.
     const { box, sql } = outbox();
     const failing = fakeBinding(() => { throw new Error('permanent'); });
     await box.send(failing.binding, 'revive', message(), 0);

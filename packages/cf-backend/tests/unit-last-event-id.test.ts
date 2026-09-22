@@ -1,17 +1,9 @@
-// The Last-Event-ID resume contract of the SSE stream route.
-//
-// The subject is the exported function the route actually calls, never a
-// hand-copied MIRROR of the validator kept in sync by docstring. A mirror
-// asserts nothing about the route: flipping the shipped `n >= -1` to `n >= 0`,
-// or dropping the `Number.isInteger` arm, leaves every case here green while a
-// reconnect either replays events the client already had or seeks past them.
-// The function lives beside the run-event wire rather than in the route because
-// the route reaches `cloudflare:*`.
+// The Last-Event-ID resume contract, asserted on the exported function the SSE route calls, never a mirror.
+// It lives beside the run-event wire because the route reaches `cloudflare:*`.
 import { describe, test, expect } from 'bun:test';
 import { resumeIndexFromLastEventId } from '@kinu.run/core';
 
-/** The refusal, asked of every header that must not become a cursor: the answer
- *  is the replay-from-start sentinel rather than a position. */
+/** Answers the replay-from-start sentinel rather than a position. */
 function eachReplaysFromStart(headers: readonly string[]): void {
   for (const header of headers) {
     expect(resumeIndexFromLastEventId(header)).toBe(-1);
@@ -37,7 +29,7 @@ describe('Last-Event-ID resume index', () => {
   });
 
   test('a negative below the sentinel is not a position', () => {
-    // -2 must not become a cursor: `readSince(-2)` is a seek to nothing.
+    // `readSince(-2)` is a seek to nothing.
     eachReplaysFromStart(['-2', '-1000']);
   });
 
@@ -46,15 +38,12 @@ describe('Last-Event-ID resume index', () => {
   });
 
   test('unparseable and non-finite headers replay from the start', () => {
-    // The reason the guard exists: a NaN cursor compares false against every
-    // index, so the stream would re-deliver the whole run on each reconnect.
+    // A NaN cursor compares false against every index, re-delivering the whole run on each reconnect.
     eachReplaysFromStart(['NaN', 'abc', '', ' ', 'Infinity', '-Infinity', '1e400']);
   });
 
   test('every accepted value is an integer at or above the sentinel', () => {
-    // The invariant the route depends on, quantified rather than sampled: the
-    // cursor `streamRunEvents` receives is never a fraction, a NaN, or a seek
-    // below the start.
+    // Quantified: the cursor is never a fraction, NaN, or below the start.
     const headers = [
       null, '0', '1', '42', '-1', '-2', '-7', '3.14', '-0.5', 'NaN', 'abc', '',
       'Infinity', '1e21', '0x10', '7 ', ' 7', '+7', '1_000',

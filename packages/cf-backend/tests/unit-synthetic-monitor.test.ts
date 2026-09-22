@@ -1,14 +1,6 @@
 /**
- * Synthetic monitoring — the probes that would have caught the broken install
- * pipeline, and the incident ledger that keeps them from becoming noise.
- *
- * Two contracts:
- *   1. each probe fails on the real failure it exists for — chiefly the SPA
- *      fallback answering `200 index.html` for a missing download, which is
- *      what made a checksum mismatch look like a healthy site;
- *   2. one alert per distinct failure, not one per tick: a check that stays
- *      broken for hours produces exactly one email, and one more when it
- *      recovers.
+ * Defends: the SPA fallback answering `200 index.html` for a missing download made a checksum
+ * mismatch look healthy. One alert per distinct failure, one more on recovery.
  */
 
 import { describe, expect, test } from 'bun:test';
@@ -20,14 +12,11 @@ import { runSyntheticProbes, type ProbeDeps, type ProbeOutcome } from '@kinu.run
 import { CLI_DIST_PATHS } from '@kinu.run/core';
 import { sqlExec } from './helpers/user-do';
 
-// ── A site to probe ──────────────────────────────────────────────
-
 const SHA = 'c0ffee1234567890';
 
 const SPA_SHELL = '<!doctype html><html><body><div id="root"></div></body></html>';
 
-/** Distinct bytes per artifact, so a probe that checks one and calls the rest
- *  green cannot pass by accident. */
+/** Distinct bytes per artifact, so checking one cannot pass for all. */
 function artifactBytes(path: string) {
   return new TextEncoder().encode(`pretend this is ${path}`);
 }
@@ -38,7 +27,6 @@ async function artifactSha(path: string): Promise<string> {
   return Array.from(new Uint8Array(digest), (b) => b.toString(16).padStart(2, '0')).join('');
 }
 
-/** A healthy origin, with `broken` naming the routes to sabotage. */
 function site(broken: Partial<Record<string, () => Response>> = {}): ProbeDeps['fetch'] {
   const fetchSite: ProbeDeps['fetch'] = async (input) => {
     const path = new URL(new Request(input).url).pathname;
@@ -72,11 +60,8 @@ function site(broken: Partial<Record<string, () => Response>> = {}): ProbeDeps['
   return fetchSite;
 }
 
-/** The SPA fallback answering for a missing asset — the actual outage. */
 const spaFallback = () => new Response(SPA_SHELL, { headers: { 'content-type': 'text/html' } });
 
-/** A body the origin never finishes sending: the response head arrives, the
- *  read errors. */
 const unreadable = () => new Response(new ReadableStream({
   start(c) { c.error(new Error('connection reset')); },
 }));
@@ -115,8 +100,7 @@ describe('synthetic probes', () => {
     expect(outcome(outcomes, 'downloads').detail).toContain('install and update are both refusing');
   });
 
-  // One platform's artifact going missing bricks that platform and nothing
-  // else, so a probe that reads only the first would call the outage green.
+  // A missing artifact bricks only its platform, so every one must be read.
   test('any single missing platform artifact is caught, not just the first', async () => {
     expect(CLI_DIST_PATHS.length).toBeGreaterThan(1);
 
@@ -187,8 +171,6 @@ describe('synthetic probes', () => {
   });
 });
 
-// ── The incident ledger ──────────────────────────────────────────
-
 function ledger(alertEmail: string | null = 'owner@example.com') {
   const db = new Database(':memory:');
   const sql = sqlExec(db);
@@ -243,11 +225,9 @@ describe('alert fatigue', () => {
     expect(l.sent).toHaveLength(1);
     expect(l.sent[0].subject).toContain('downloads is failing');
     expect(l.sent[0].text).toContain('checksum mismatch');
-    // The alert says what a user hits, and what to do about it.
     expect(l.sent[0].text).toContain('kinu update');
     expect(l.sent[0].text).toContain('scripts/deploy.sh');
 
-    // Nine more ticks over the next two hours: still broken, still one email.
     for (let tick = 1; tick <= 9; tick++) {
       const again = await recordProbeRun(l.deps(1_000 + tick * 900_000), FAILING);
       expect(again.emails).toBe(0);
@@ -265,7 +245,6 @@ describe('alert fatigue', () => {
     expect(l.sent[1].text).toContain('3 hours');
     expect(listIncidents(l.sql)).toEqual([]);
 
-    // A passing check with no open incident is silent.
     expect((await recordProbeRun(l.deps(2_000_000), PASSING)).emails).toBe(0);
     expect(l.sent).toHaveLength(2);
   });

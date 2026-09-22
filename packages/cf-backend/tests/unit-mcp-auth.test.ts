@@ -1,9 +1,5 @@
-// Behavior tests for the MCP server auth + ownership gate.
-//
-// /mcp/v1/<agentName> is routed BEFORE the browser-session gate (server.ts
-// step 6b) because external MCP clients can't do browser OAuth — they
-// authenticate with their per-user CLI bearer token, and every request runs
-// the same ownership claim as the rest of the per-agent API.
+// /mcp/v1/<agentName> is routed before the browser-session gate (server.ts step 6b): external MCP clients authenticate
+// with their CLI bearer token and run the same ownership claim as the rest of the per-agent API.
 import { TEST_CREDENTIAL_ENCRYPTION_KEY } from './helpers/user-do';
 import { describe, test, expect } from 'bun:test';
 import { mockAgentsSdk } from './helpers/agents-sdk';
@@ -40,17 +36,14 @@ function mcpWorkspace() {
   };
 
   const env: McpEnv<string> = {
-    // Read on the cookie path only, and no case here sends a cookie — but
-    // its PRESENCE is what makes an unauthenticated request a 401 rather than
-    // the 500 an unconfigured deployment answers with.
+    // Its presence makes an unauthenticated request a 401 rather than the unconfigured deployment's 500.
     AUTH_KV: unreachableKv('AUTH_KV'),
     UserDO: { idFromName: (n) => n, get: () => userDO },
     OrchestratorAgent: { idFromName: (n) => n, get: () => agent },
     CREDENTIAL_ENCRYPTION_KEY: TEST_CREDENTIAL_ENCRYPTION_KEY,
   };
 
-  // The tool surface is never driven here — every case stops at the gate —
-  // so resolving one is itself the failure this suite would want named.
+  // Every case stops at the gate, so resolving the tool surface is itself the failure.
   const resolveAgent = (name: string): Promise<McpAgentClient> => {
     throw new Error(`OrchestratorAgent.${name}: the MCP tool surface is not reachable in this test`);
   };

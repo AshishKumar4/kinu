@@ -14,8 +14,7 @@ import type { UserCaller } from '@kinu.run/core';
 function setupEnv() {
   const kv = makeKv();
   const ensuredProfiles: string[] = [];
-  // The authority behind a cookie, at the RPC seam. The real table is
-  // exercised against the real UserDO in unit-auth-session-revocation.
+  // The real table is exercised against the real UserDO in unit-auth-session-revocation.
   const rows = new Map<string, { expiresAt: number; identity: BrowserSessionIdentity }>();
 
   const userDO: SessionAuthority = {
@@ -71,7 +70,6 @@ describe('the browser auth store', () => {
     expect(created.token).toStartWith(`ps_${created.identity.userId}_`);
     expect(created.identity.email).toBe('ashish@example.com');
     expect(created.identity.userId).toBe(await deriveUserId('ashish@example.com'));
-    // The durable half of the identity went to the user's own DO, not to KV.
     expect(ensuredProfiles).toEqual(['ashish@example.com:Ashish']);
 
     const verified = await verifySession(env, created.token);
@@ -91,7 +89,6 @@ describe('the browser auth store', () => {
     const second = await createSession(env, profile('google', 'google-user-1', 'PERSON@example.com'));
 
     expect(second.identity.userId).toBe(first.identity.userId);
-    // Two sessions, one identity — and no third record standing for the user.
     expect(kv.keys().filter((key) => key.startsWith('session:'))).toHaveLength(2);
     expect(kv.keys().filter((key) => !key.startsWith('session:'))).toEqual([]);
   });
@@ -135,17 +132,14 @@ describe('the browser auth store', () => {
   test('the authority answers when no KV projection has arrived, and stops the moment it is revoked', async () => {
     const { env, kv } = setupEnv();
     const created = await createSession(env, profile('cloudflare', 'cf-1', 'person@example.com'));
-    // What a colo the sign-in's KV write has not reached sees: no projection of
-    // the identity, and a row that is strongly consistent from everywhere.
+    // What a colo the sign-in's KV write has not reached sees; the row is strongly consistent everywhere.
     await kv.delete(`session:${await sha256Hex(created.token)}`);
 
-    // The row-backed answer carries the session's own hash — the socket
-    // revocation tag needs it — beside the identity the sign-in minted.
+    // The socket revocation tag needs the session's own hash.
     expect(await verifySession(env, created.token)).toEqual({
       ...created.identity, sessionTokenHash: await sha256Hex(created.token),
     });
 
-    // The same absence must not read as "trust the row" once the row is gone.
     await revokeSession(env, created.token);
     expect(await verifySession(env, created.token)).toBeNull();
   });
@@ -180,12 +174,10 @@ describe('OAuth handoff state', () => {
     const kv = makeKv();
     const { state, binding } = await started(kv);
 
-    // This is the login-CSRF attempt: the attacker has a working `state` and
-    // hands the callback link to a browser that holds no binding for it.
+    // Login-CSRF: a working `state` handed to a browser holding no binding for it.
     await expect(consumeOAuthState(kv, state, 'cloudflare', null))
       .rejects.toThrow(/not issued to this browser/);
-    // Burned before it was judged, so the refusal is not a free probe that
-    // leaves the link workable for whoever does hold the cookie.
+    // Burned before judged, so the refusal is not a free probe that leaves the link workable.
     await expect(consumeOAuthState(kv, state, 'cloudflare', binding))
       .rejects.toThrow(/invalid or already used/);
   });
@@ -229,13 +221,8 @@ describe('OAuth handoff state', () => {
   });
 });
 
-/**
- * `DEV_USER_EMAIL` names ONE identity a caller may act as without signing in.
- * The published deployment sets it, so what decides whether a caller HAS it
- * is the whole security property of that deployment: gated on the absence of
- * a session cookie, every unauthenticated request reaching the then-staging
- * origin arrived as the eval service account.
- */
+/** `DEV_USER_EMAIL` lets a caller act without signing in; the published deployment sets it, so who gets it is its
+ *  whole security property. */
 describe('the synthetic development identity', () => {
   const DEV_ENV = {
     AUTH_KV: makeKv(),
@@ -243,9 +230,6 @@ describe('the synthetic development identity', () => {
     DEV_IDENTITY_SECRET: 'deployment-shared-secret',
   };
 
-  /** Who the request resolved as, or the status it was refused with — a tag
-   *  rather than a union of an identity and a number, so a case reads the
-   *  outcome it means. */
   type Resolution =
     | { readonly granted: true; readonly identity: AuthIdentity }
     | { readonly granted: false; readonly status: number };

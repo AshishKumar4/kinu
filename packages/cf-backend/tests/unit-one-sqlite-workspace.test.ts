@@ -1,27 +1,6 @@
 /**
- * ONE PHYSICAL WORKSPACE SQLITE FOR EVERY LOGICAL ACTOR (open-38).
- *
- * The whole claim in one file: a workspace with a main actor, two hired
- * subordinates, a branching head and a swarm node touches exactly ONE database,
- * every one of those five actors has its own rows in it, and the archive of that
- * database is a complete workspace — export it, restore it into an empty
- * database, and all five actors' transcripts, scaffold pointers and turn claims
- * come back.
- *
- * WHAT MAKES THIS NON-VACUOUS, because a "one database" test is easy to write
- * so that it cannot fail:
- *
- *   • `databasesOpened()` is asserted to have LENGTH ONE. The fixture is the
- *     only thing in the tree that opens a `Database`, so a regression that gave
- *     any actor storage of its own has to open a second one and fails here
- *     before any per-actor assertion could pass over it.
- *   • Every actor's rows are read by `actor_id` from `sqlite_master`'s own
- *     tables, so "the subordinate has a transcript" and "the subordinate's
- *     transcript is distinct from the main actor's" are separate assertions and
- *     the second is what a shared-row implementation fails.
- *   • The restore is compared per actor and not in aggregate. A restore that
- *     rebuilt four actors out of five, or merged two into one, passes a row
- *     count and fails this.
+ * One physical workspace SQLite for every logical actor (open-38): five actors, one database, and its archive restores
+ * every actor. Non-vacuous: exactly one `Database` opened, rows read per `actor_id`, restore compared per actor.
  */
 
 import { afterEach, describe, expect, test } from 'bun:test';
@@ -36,9 +15,7 @@ import {
 } from './helpers/hosted-workspace';
 import { readTranscriptRows, sqlOver } from '@kinu.run/test-utils';
 
-/** One scripted turn on one actor: admit it, name its outcome, release it. The
- *  smallest thing that leaves a durable claim, which is what every assertion
- *  below reads. */
+/** Admit, name the outcome, release: the smallest thing that leaves a durable claim. */
 async function scriptedTurn(actor: HostedActor, text: string): Promise<string> {
   const turnId = `turn-${actor.record.name}`;
   const { profile, inputs } = fixtureProfile();
@@ -49,12 +26,8 @@ async function scriptedTurn(actor: HostedActor, text: string): Promise<string> {
     birthContext: () => { throw new Error('this fixture opens no delegated turn'); },
   });
 
-  // The claim, admitted through the same store the session admits through and
-  // settled through the same store the session settles through — the session
-  // only attaches a claim to a lease inside `execute`, which needs a provider
-  // this fixture has none of. What it costs is the model call, not the claim,
-  // and the claim row is what every assertion below reads. The lease itself
-  // never ran, so releasing it names nothing.
+  // Admitted and settled through the session's own store; the session attaches a claim only inside `execute`,
+  // which needs a provider this fixture lacks.
   const program = await prepareActorProgram({
     runtime: actor.runtime, mode: 'build',
     version: await actor.runtime.identity.scaffold.version(),
@@ -73,10 +46,7 @@ async function scriptedTurn(actor: HostedActor, text: string): Promise<string> {
   actor.stores.claims.settle(admitted, 'completed');
   actor.session.finishTurn(lease);
 
-  // The public chain, through the canonical writer that publishes the message
-  // and its entry together. What the archive has to bring back is the
-  // TRANSCRIPT, and a working context alone leaves nothing for a reader to
-  // walk.
+  // Through the canonical writer: the archive must bring back the transcript, not just a working context.
   await actor.stores.history.record(CHAT_SESSION_ID, {
     id: `${turnId}:said`, parentId: null, message: { role: 'user', content: text }, origin: 'input',
   });
@@ -96,17 +66,13 @@ describe('one SQLite for every logical actor', () => {
     const node = await fixture.hire(fixture.main, 'exp:node-b2', 'head');
     const actors = [main, first, second, head, node];
 
-    // THE measurement. One database exists, so there is no per-actor storage to
-    // find — and this is asserted before anything else, because every assertion
-    // below it would read true over a fixture that had opened five.
+    // Asserted first: every assertion below would read true over a fixture that had opened five.
     expect(databasesOpened()).toHaveLength(1);
     expect(fixture.tables()).toContain('workspace_actors');
 
     for (const actor of actors) await scriptedTurn(actor, `work for ${actor.record.name}`);
 
-    // Five distinct actor ids, five distinct claim sets. The DISTINCTNESS is the
-    // assertion a shared-row implementation fails: it would satisfy "every actor
-    // has a claim" with one row read five times.
+    // Distinctness is what a shared-row implementation fails.
     const ids = actors.map((actor) => actor.handle.actorId);
     expect(new Set(ids).size).toBe(5);
 
@@ -117,8 +83,6 @@ describe('one SQLite for every logical actor', () => {
       expect(claims.map((row) => row.turn_id)).toEqual([`turn-${actor.record.name}`]);
     }
 
-    // Every actor's scaffold pointer is its own, which is what lets five actors
-    // run five different promoted programs out of one database.
     const pointers = fixture.sql<{ actor_id: string }>`
       SELECT DISTINCT actor_id FROM scaffold_versions`;
 
@@ -139,14 +103,7 @@ describe('one SQLite for every logical actor', () => {
 
     for (const actor of roster) await scriptedTurn(actor, `work for ${actor.record.name}`);
 
-    // Walked to exhaustion, as a caller does: a workspace's rows have no
-    // bounded size, so the archive is paged and `next` is what says there is
-    // more. Collected whole here because the restore below has to be handed the
-    // same sequence a `kinu import` would replay.
-    // Walked to exhaustion, as a caller does: a workspace's rows have no
-    // bounded size, so the archive is paged and `next` is what says there is
-    // more. Collected whole here because the restore below has to be handed the
-    // same line sequence a `kinu import` would replay.
+    // Paged to exhaustion (rows have no bounded size), in the sequence `kinu import` would replay.
     const pages: ArchivePage[] = [];
     let cursor: Parameters<typeof readWorkspaceArchivePage>[1]['cursor'] = null;
     const archiveSql = archiveSqlFromDatabase(fixture.db);
@@ -162,32 +119,22 @@ describe('one SQLite for every logical actor', () => {
       cursor = page.next;
     }
 
-    // The archive declares its roster size, retired actors included, and a
-    // restore refuses an archive whose count does not match what it rebuilt —
-    // which is what makes "one snapshot contains every retained actor"
-    // checkable rather than implied.
-
     const restored = new Database(':memory:');
 
     const result = await restoreWorkspaceArchive(
       archiveSqlFromDatabase(restored), pages.flatMap((page) => page.lines),
     );
 
-    // The archive DECLARES its roster size, retired actors included, and a
-    // restore refuses an archive whose count does not match what it rebuilt —
-    // which is what makes "one snapshot contains every retained actor"
-    // checkable rather than implied.
+    // A restore refuses an archive whose declared roster size (retired included) does not match what it rebuilt.
     expect(result.actors).toBe(5);
 
-    // PER ACTOR, not in aggregate: a restore that merged two actors or dropped
-    // one satisfies a total and fails this.
+    // Per actor: a restore that merged two actors or dropped one satisfies a total.
     for (const actor of roster) {
       const files = actor.runtime.storage.vfs;
       const before = await readTranscriptRows(fixture.sql, actor.handle, files);
       const after = await readTranscriptRows(sqlOver(restored), actor.handle, files);
 
-      // Non-empty first: a restore that rebuilt nothing satisfies "equal
-      // transcripts" over two empty reads.
+      // Non-empty first: two empty reads would satisfy "equal transcripts".
       expect(before.map((row) => row.content)).toEqual([`work for ${actor.record.name}`]);
       expect(after).toEqual(before);
 

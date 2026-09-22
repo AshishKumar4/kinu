@@ -1,18 +1,7 @@
 /**
- * The public webhook delivery route, and the capability that gates it.
- *
- * The defect this pins: `/api/workspaces/<name>/webhook/<trigger>` resolving the
- * Orchestrator stub for whatever name the caller typed, before anything knows
- * the workspace or the trigger exists. Naming one would then be enough to
- * ACTIVATE a persistent Durable Object, unauthenticated. The edge knock budget
- * prices that; it does not close it. So most assertions here are about what does
- * NOT happen: no object addressed, no budget spent, no body read, unless the URL
- * carries a capability this deployment minted.
- *
- * `activations` records every resolve — exactly what the production resolver
- * does to reach an object, so an empty list is proof none was touched. `AUTH_KV`
- * is a real KV double for the same reason: a refusal that spends a KV write has
- * still spent something a caller chose to make us spend.
+ * Defends: the webhook route activated an Orchestrator DO for any typed name, unauthenticated.
+ * Nothing is addressed, budgeted or read unless the URL carries a capability this deployment
+ * minted.
  */
 import { describe, expect, test } from 'bun:test';
 import { mockAgentsSdk } from './helpers/agents-sdk';
@@ -25,8 +14,7 @@ import {
   matchWebhookDeliveryPath, verifyWebhookRoute, webhookRoutePath,
 } from '@kinu.run/core';
 
-// The route's module graph reaches `cloudflare:email` through `agents`, so the
-// stub has to be installed before it loads.
+// The route's graph reaches `cloudflare:email` through `agents`: install the stub before it loads.
 mockAgentsSdk();
 
 const { handleWebhookDeliveryRequest, handleHubRequest } = await import('../src/events/routes');
@@ -47,11 +35,8 @@ const SIBLING_TRIGGER = '01HZY6QK9N4T7M2P8V3XABCDEG';
 const ORIGIN = 'https://app.example';
 
 interface DeliveryProbe {
-  /** Names the route resolved an Orchestrator stub for. */
   readonly activations: string[];
-  /** Trigger ids the ingress was asked to accept a delivery for. */
   readonly deliveries: string[];
-  /** Body text the ingress was handed, if it got that far. */
   bodyText: string | undefined;
 }
 
@@ -60,8 +45,6 @@ interface Harness {
   readonly resolveAgent: WebhookDeliveryResolver;
   readonly resolveHubAgent: HubResolver;
   readonly probe: DeliveryProbe;
-  /** The knock budget's store, so a refusal that SPENT budget is visible: an
-   *  empty key set is proof the ingress budget was never consulted. */
   readonly kv: FakeKv;
 }
 
@@ -92,9 +75,6 @@ function harness(options: { secret?: string | null; reject?: boolean } = {}): Ha
     return agent;
   };
 
-  // The hub's own routes reach a different set of methods on the same object,
-  // and no case in this file drives one to the point of calling any of them:
-  // what they prove is that the hub refuses the delivery path outright.
   const resolveHubAgent: HubResolver = async (name) => {
     probe.activations.push(`resolve:${name}`);
 
@@ -104,9 +84,6 @@ function harness(options: { secret?: string | null; reject?: boolean } = {}): Ha
   return { env, resolveAgent, resolveHubAgent, probe, kv };
 }
 
-/** The hub half of the same object, refusing: this file drives the delivery
- *  endpoint, and a hub route that reached a trigger call here would be the
- *  refusal under test failing to refuse. */
 function hubObject(): HubTarget {
   const refuse = (member: string) => (): never => {
     throw new Error(`OrchestratorAgent.${member}: not reachable in this test`);
@@ -148,10 +125,7 @@ describe('a minted route reaches the workspace', () => {
     expect(probe.activations).toEqual([`resolve:${WORKSPACE}`]);
     expect(probe.deliveries).toEqual([TRIGGER]);
     expect(probe.bodyText).toBe(body);
-    // The two witnesses every refusal below asserts the ABSENCE of. Read here on
-    // the accepted path so neither can be silently vacuous: a `bodyUsed` that
-    // never flips, or a budget that never records, would make those refusals
-    // measure nothing.
+    // Read on the accepted path so the refusals' absence checks cannot be vacuous.
     expect(request.bodyUsed).toBe(true);
     expect(kv.keys()).toHaveLength(1);
   });
@@ -166,7 +140,6 @@ describe('a minted route reaches the workspace', () => {
 });
 
 describe('no unminted route reaches a Durable Object', () => {
-  /** Every refusal below must be this answer, and must cost nothing. */
   async function expectRefused(request: Request, { env, resolveAgent, probe, kv }: Harness): Promise<void> {
     const response = await handleWebhookDeliveryRequest(request, env, resolveAgent);
 
@@ -176,8 +149,7 @@ describe('no unminted route reaches a Durable Object', () => {
     expect(probe.activations).toEqual([]);
     expect(probe.deliveries).toEqual([]);
     expect(request.bodyUsed).toBe(false);
-    // The knock budget is downstream of the capability, so a refused caller
-    // costs not even a KV write.
+    // The knock budget is downstream of the capability: a refused caller costs no KV write.
     expect(kv.keys()).toEqual([]);
   }
 
@@ -353,9 +325,8 @@ describe('the builder and the matcher are one contract', () => {
     expect(tokens.size).toBe(4);
   });
 
-  /** The property that makes the identity grammar check sufficient rather than
-   *  merely tidy: two identities whose concatenation collides must not share a
-   *  capability. Held by the NUL delimiter, which no path segment can carry. */
+  /** Concatenation-colliding identities must not share a capability: the NUL delimiter holds
+   *  this. */
   test('a colliding concatenation does not collide as a capability', async () => {
     const [left, right] = await Promise.all([
       webhookRoutePath(ROUTE_SECRET, { workspaceName: 'ab', triggerId: TRIGGER }),
@@ -384,11 +355,7 @@ describe('the builder and the matcher are one contract', () => {
 });
 
 /**
- * The wiring, through the real `server.ts` entry rather than the route module.
- * The ordering IS the property: delivery is served at step 7b, before the auth
- * gate, so the capability has to be what admits it — and an unsigned URL must
- * not fall through to the gate, the SPA fallback, or anything else that would
- * tell a caller more than 404 does.
+ * Delivery is served at step 7b, before the auth gate: an unsigned URL must 404, not fall through.
  */
 describe('the Worker entry serves delivery before the auth gate', () => {
   function entryHarness() {
@@ -396,9 +363,6 @@ describe('the Worker entry serves delivery before the auth gate', () => {
     const partialEnv: Partial<Env> = {};
     Object.assign(partialEnv, env, {
       CLI_PUBLIC_ORIGIN: ORIGIN,
-      // The entry binds its own resolver off this namespace, so the recording
-      // one lives here rather than on the harness: what the block proves is
-      // that the capability, not a session, is what reaches the object.
       OrchestratorAgent: {
         idFromName: (name: string) => name,
         get: (name: string) => {
@@ -421,17 +385,10 @@ describe('the Worker entry serves delivery before the auth gate', () => {
       },
     });
 
-    // SAFETY: the `Object.assign` above constructs every binding the route table
-    // reads on its way to step 7b — the knock budget's KV and the
-    // route secret from `harness()`, the published origin, the SPA fallback and
-    // the Orchestrator namespace — and nothing past step 7b is reached, because
-    // each case asserts the answer the delivery endpoint itself returns. The
-    // assertion stands rather than the value being typed because the entry
-    // takes the deployment's whole `Env`: a recording namespace cannot satisfy
-    // `DurableObjectNamespace<OrchestratorAgent>` (its stub names 380+ required
-    // members), and the binding cannot be narrowed either, because `route()`
-    // binds its resolvers through the SDK's `getAgentByName`, which takes the
-    // platform namespace. Measured on this tree 2026-09-22.
+    // SAFETY: every binding the route reads up to step 7b is constructed above; a recording
+    // namespace
+    // cannot satisfy `DurableObjectNamespace<OrchestratorAgent>`, and `getAgentByName` needs the
+    // platform type.
     return { env: partialEnv as Env, ctx: workerContext(), probe };
   }
 

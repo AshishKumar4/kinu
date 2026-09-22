@@ -8,14 +8,12 @@ import { createTestUserDO, provisionTestWorkspace, testOwner } from './helpers/u
 import { resetRecordedMcp } from './helpers/agents-sdk';
 import { ROOT_SLATE_CALLER, type SlateCaller } from '../src/slates/bindings';
 
-/** Answer a slate operation or fail naming the refusal. */
 function answered<Schema extends v.GenericSchema>(result: SlateAnswer<unknown>, schema: Schema): v.InferOutput<Schema> {
   if (!result.ok) throw new Error(result.reason + ': ' + result.error);
 
   return v.parse(schema, result.value);
 }
 
-/** The owner's slate, committed once, with every credentialed kind declared. */
 async function authorIssuesSlate(files: AgentRuntime['storage']['vfs'], extra: Record<string, string> = {}) {
   const root = '/home/user/slates/issues';
   await files.mkdir(root + '/src', { recursive: true });
@@ -46,9 +44,7 @@ test('a blueprint admits with every requirement unsatisfied and carries nothing 
     const owner = orchestratorHarness(undefined, { userDO: user.userDO, workspace: 'issues-owner', ownerUserId });
     await owner.agent.installWorkspaceCapability(capability);
     const caller = await testOwner();
-    // Everything of the owner's that a live share would spend: an MCP header,
-    // a provider key and a vault secret. None of it is in the slate tree, and
-    // the assertion below is that none of it reaches the forker.
+    // MCP header, provider key and vault secret: none is in the slate tree, and none may reach the forker.
     const mcpHeader = 'Bearer owner-mcp-header-' + 'a1b2c3d4e5f6';
     await user.userDO.userMcp_list(caller);
     user.sql.exec(`INSERT INTO user_mcp_servers (id, name, server_url, transport, headers, allowed_tools, created_at, updated_at)
@@ -71,7 +67,6 @@ test('a blueprint admits with every requirement unsatisfied and carries nothing 
     expect(published.share).toMatchObject({ slate: 'issues', kind: 'blueprint', included: ['package.json', 'src'], revokedAt: null });
     expect(answered(await owner.agent.slate({ op: 'shares' }), v.array(SlateShareRecordSchema)).map((share) => share.id)).toEqual([published.share.id]);
 
-    // What leaves the owner's object: skeleton, tree, blobs — and no field or byte of the owner's.
     const bundle = answered(await owner.agent.blueprintBundle(published.share.id), BlueprintBundleSchema);
     expect(Object.keys(bundle).sort()).toEqual(['blobs', 'skeleton', 'tree']);
     const carried = JSON.stringify(bundle) + Object.values(bundle.blobs).map((blob) => atob(blob)).join('\n');
@@ -87,11 +82,9 @@ test('a blueprint admits with every requirement unsatisfied and carries nothing 
     expect(reading.value.view.title).toBe('Issue triage');
     expect(reading.value.view.entries.map((entry) => entry.path)).toEqual(['package.json', 'src', 'src/server.ts']);
 
-    // The forker admits it into their own workspace; every requirement is theirs to map.
     const forker = orchestratorHarness(undefined, { userDO: forkerUser.userDO, workspace: 'issues-fork', ownerUserId: 'fedcba9876543210fedcba9876543210' });
     await forker.agent.installWorkspaceCapability(await provisionTestWorkspace(forkerUser, 'issues-fork'));
-    // Every slate process starts through `ensure`; armed as a tripwire, an
-    // import that ran the source would throw here instead of landing.
+    // Every slate process starts through `ensure`, armed as a tripwire.
     const launches: string[] = [];
     Reflect.set(forker.agent.observeSlateHost(), 'ensure', (_caller: SlateCaller, id: string) => { launches.push(id); throw new Error('a blueprint import started a slate process'); });
     const fork = answered(await forker.agent.admitBlueprint(bundle), BlueprintForkSchema);
@@ -113,17 +106,14 @@ test('a blueprint admits with every requirement unsatisfied and carries nothing 
 
     for (const secret of [mcpHeader, providerKey, vaultSecret, vault.placeholder]) expect(admittedTree).not.toContain(secret);
 
-    // Import never executes the source: the launch seam was never reached, and
-    // the listing shows the slate without a live port.
     expect(launches).toEqual([]);
     expect((await forker.agent.listSlates()).slates).toEqual([{ id: fork.slate, title: 'Issue triage', bindings: ['GITHUB', 'FILES', 'NOTES', 'PEER'], port: undefined }]);
 
-    // The forker's bindings resolve in the forker's workspace: the owner's MCP
-    // connection is not there, so the same binding refuses as missing.
+    // Bindings resolve in the forker's workspace, where the owner's MCP connection is absent.
     expect(await forker.agent.slateBindingCallAs(ROOT_SLATE_CALLER, fork.slate, 'GITHUB', { member: 'read_issue', args: [{}], invocation: null }))
       .toMatchObject({ ok: false, reason: 'missing' });
 
-    // Revoked: the next read and the next bundle refuse (S6 for blueprints).
+    // S6 for blueprints.
     const revoked = answered(await owner.agent.slate({ op: 'unshare', share: published.share.id }), SlateShareRecordSchema);
     expect(revoked.revokedAt).not.toBeNull();
     expect(await owner.agent.readBlueprint(published.share.id)).toMatchObject({ ok: false, reason: 'denied', error: expect.stringContaining('no longer shared') });
@@ -150,7 +140,7 @@ test('the export warns about secret-shaped text and stays silent on a clean tree
   await files.writeFile('/home/user/slates/issues/src/config.ts', 'export const AWS = process.env.AWS_KEY;\n');
   const clean = answered(await owner.agent.slate({ op: 'commit', id: 'issues' }), v.object({ id: v.string() }));
   expect(answered(await owner.agent.slate({ op: 'inspect', id: 'issues', version: clean.id }), BlueprintInspectionSchema).warnings).toEqual([]);
-  // Published bytes are what is scanned: the warning follows the version, not the working tree.
+  // Published bytes are scanned: the warning follows the version, not the working tree.
   expect(answered(await owner.agent.slate({ op: 'publish', id: 'issues', version: committed.id }), PublishedBlueprintSchema).inspection.warnings.length).toBe(1);
   expect(answered(await owner.agent.slate({ op: 'inspect', id: 'issues', version: committed.id, include: ['scratch'] }), BlueprintInspectionSchema).warnings).toEqual([]);
 });
@@ -188,9 +178,7 @@ test('naming users on a blueprint records them with the owner and projects the r
     expect(await recipient.userDO.sharesReceived_list(caller)).toEqual([
       { ownerUserId, ownerEmail: 'owner@example.test', workspace: 'issues-owner', shareId: published.share.id, title: 'Issue triage, renamed', createdAt: expect.any(Number) },
     ]);
-    // A workspace token never reads the owner's library.
     await expect(recipient.userDO.sharesReceived_list({ workspaceToken: 'not-an-owner' })).rejects.toThrow();
-    // Revoked: naming more users refuses, and the owner's list keeps the names it had.
     answered(await owner.agent.slate({ op: 'unshare', share: published.share.id }), SlateShareRecordSchema);
     expect(await owner.agent.shareBlueprintWith(published.share.id, [{ userId: 'x', email: 'x@example.test' }])).toMatchObject({ ok: false, reason: 'denied' });
     expect(answered(await owner.agent.slate({ op: 'shares' }), v.array(SlateShareRecordSchema))[0]?.users).toEqual(['pat@example.test']);

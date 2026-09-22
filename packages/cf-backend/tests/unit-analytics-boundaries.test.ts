@@ -1,41 +1,6 @@
 /**
- * The set-equality gate over the fleet event boundaries.
- *
- * ## What class of defect this exists to catch
- *
- * Instrumentation is uniquely prone to going missing without a symptom. A deleted
- * emit line leaves a passing build, a passing suite, and a dataset whose absent
- * rows read exactly like "nothing happened there" — so the failure looks like
- * good news. Nothing else in this package can see that: a unit test over an
- * adapter proves the adapter works, and proves nothing about whether anything
- * calls it.
- *
- * So this file asserts the EQUALITY the declaration claims, in both directions:
- *
- *   DECLARED ⊆ PRESENT.  Every boundary in `FLEET_BOUNDARIES` has a live emit at
- *   the file it names. Deleting the call in `actor-agent.ts` reds this.
- *
- *   PRESENT ⊆ DECLARED.  Every emitter this package exports for the purpose is
- *   declared as a boundary. Adding `recordSomethingNew` and wiring it without
- *   declaring it reds this — which is the shape that leaves a dataset with a
- *   column nobody documented and a query nobody wrote.
- *
- *   FAMILIES ARE EXACTLY THE PINNED FIVE.  A sixth family is a new question and
- *   has to be argued for rather than appear.
- *
- * ## Why the presence half is read from the AST
- *
- * "Is there a call to X in this file" is a question about SOURCE STRUCTURE, and
- * that is what a wiring assertion is for — the same job `gate:wired` does one
- * layer up. It is deliberately not a substitute for behaviour: the ROW each
- * boundary produces is asserted for real, against a fake binding, in
- * `unit-analytics-plane.test.ts` and again below where the declared event name is
- * compared with the one the adapter actually writes. Structure plus behaviour is
- * the pair; either alone is the gap this file exists to close.
- *
- * The predicate is an AST walk rather than a text search because a text search
- * matches a mention in a comment, a name inside a string, and an import that
- * nothing calls — three ways to report an instrument as wired when it is not.
+ * Defends: a deleted emit line leaves a passing suite and a silently empty dataset. Asserts
+ * `FLEET_BOUNDARIES` equals the emit sites both ways, via an AST walk (text search matches comments).
  */
 import { describe, expect, test } from 'bun:test';
 import { readFileSync } from 'node:fs';
@@ -55,8 +20,6 @@ interface Captured {
   doubles?: number[];
 }
 
-/** A fake plane: the two datasets a boundary can land on, and the environment
- *  that carries them. Named because three tests destructure it. */
 interface CapturedPlane {
   readonly env: AnalyticsEnv;
   readonly agent: Captured[];
@@ -77,25 +40,14 @@ function captureEnv(): CapturedPlane {
   };
 }
 
-/** One call in a file: the callee's readable name, and its first argument when
- *  that argument is a plain string. `diagnostics.failure('x.y', …)` reads as
- *  `{ callee: 'failure', firstString: 'x.y' }`. */
 interface CallSite {
   readonly callee: string;
   readonly firstString: string | null;
 }
 
-/**
- * A string-valued literal, parsed rather than shape-tested.
- *
- * `StringLiteral` and `NumericLiteral` are both `type: 'Literal'` in ESTree and
- * differ only in what `value` holds — a fact about the parser's output, not about
- * our types — so the question "is this argument a name" is answered by parsing
- * the value, exactly as `scripts/syntax.ts` answers it.
- */
+/** ESTree string and numeric literals are both `type: 'Literal'`, so the value is parsed. */
 const StringValued = v.object({ value: v.string() });
 
-/** `f(…)` reads as `f` and `a.b.f(…)` as `f`; a computed callee has no name. */
 function calleeName(callee: Expression): string | null {
   if (callee.type === 'Identifier') return callee.name;
 
@@ -111,8 +63,6 @@ function callSites(file: string): readonly CallSite[] {
   const parsed = parseSync(file, text);
   const sites: CallSite[] = [];
 
-  // The parser's OWN visitor rather than a hand-rolled walk: it knows which keys
-  // hold children, so no node is missed and nothing has to guess at the spine.
   const visitor = new Visitor({
     CallExpression(node) {
       const callee = calleeName(node.callee);
@@ -133,9 +83,6 @@ function callSites(file: string): readonly CallSite[] {
   return sites;
 }
 
-/** Parsed once per file: the corpus is fixed and several boundaries share a
- *  file, and re-parsing `actor-agent.ts` four times is four passes over 4,000
- *  lines for one answer. */
 const SITES_BY_FILE: Map<string, readonly CallSite[]> = new Map();
 
 function sitesOf(file: string): readonly CallSite[] {
@@ -150,15 +97,7 @@ function sitesOf(file: string): readonly CallSite[] {
 
 const BOUNDARIES_FILE = 'packages/core/src/obs/analytics/boundaries.ts';
 
-/**
- * One recovered row.
- *
- * Every field is a string because that is what the syntax yields. The
- * DECLARATION is still typed `readonly FleetBoundary[]`, so a mistyped family is
- * a compile error where it is written; `mechanism` is narrowed again here because
- * this gate BRANCHES on it, and a typo would quietly drop a boundary out of both
- * halves of the equality instead of failing.
- */
+/** `mechanism` is narrowed because the gate branches on it; a typo would silently drop a boundary. */
 const BoundaryRow = v.object({
   id: v.string(),
   family: v.string(),
@@ -201,9 +140,7 @@ const TopLevelConst = v.object({
   declarations: v.array(v.object({ id: v.object({ name: v.string() }), init: v.unknown() })),
 });
 
-/** A string literal, or a `+` chain of them. `means` is written as a
- *  concatenation because one sentence does not fit one line, and a recovery that
- *  read only `Literal` would report every `means` as absent. */
+/** `means` is written as a `+` concatenation, so a bare `Literal` read would miss it. */
 function stringValueOf(input: { node: unknown }): string | null {
   const literal = v.safeParse(StringLiteral, input.node);
 
@@ -217,9 +154,7 @@ function stringValueOf(input: { node: unknown }): string | null {
   return left === null || right === null ? null : left + right;
 }
 
-/** The elements of the top-level array `const` of this name, past any `as
- *  const`. Absent or not an array is a THROW rather than an empty list: an empty
- *  list would make every loop below vacuous and the whole gate pass. */
+/** Throws rather than returning empty: an empty list would make every loop vacuous. */
 function declaredElements(name: string): readonly unknown[] {
   const parsed = parseSync(BOUNDARIES_FILE, readFileSync(`${REPO}${BOUNDARIES_FILE}`, 'utf8'));
 
@@ -240,19 +175,7 @@ function declaredElements(name: string): readonly unknown[] {
   throw new Error(`${BOUNDARIES_FILE} declares no array named ${name}`);
 }
 
-/**
- * The declaration, read from the module's own syntax.
- *
- * `FLEET_BOUNDARIES` and `BOUNDARY_FAMILIES` are module-private: production reads
- * them through `boundaryOf`, and an export whose only consumer is this file is
- * exactly the surface `gate:wired` exists to remove. So the declaration is read
- * the way the emit sites already are — one walk over one file's AST — which also
- * makes both sides of the set equality the same kind of measurement instead of
- * one imported fact weighed against one parsed one.
- *
- * Parsed, never text-searched, for the reason stated at the top of this file: a
- * text search over a table of names matches its own data.
- */
+/** Module-private in production (an export only this file uses is what `gate:wired` removes), so parsed. */
 const FLEET_BOUNDARIES: readonly BoundaryRow[] = declaredElements('FLEET_BOUNDARIES')
   .map((element) => {
     const fields: Record<string, string> = {};
@@ -271,11 +194,7 @@ const BOUNDARY_FAMILIES: readonly string[] = declaredElements('BOUNDARY_FAMILIES
 
 describe('the declared boundaries are the instrumented boundaries', () => {
   test('the declaration was read, not silently read as empty', () => {
-    // THE ONE FAILURE THIS GATE CANNOT SURVIVE. Every check below iterates the
-    // recovered table, so a recovery that yielded nothing would pass all of them
-    // and prove nothing — the vacuity this file exists to prevent, turned on the
-    // file itself. `declaredElements` throws on an absent declaration; this
-    // catches the other shape, a declaration that parsed to no rows.
+    // A recovery that yielded no rows would make every check below pass vacuously.
     expect(FLEET_BOUNDARIES.length).toBeGreaterThanOrEqual(BOUNDARY_FAMILIES.length);
 
     for (const boundary of FLEET_BOUNDARIES) {
@@ -310,8 +229,7 @@ describe('the declared boundaries are the instrumented boundaries', () => {
       if (!called) missing.push(`${boundary.id} -> ${boundary.emitter}() in ${boundary.site}`);
     }
 
-    // Named rather than counted: the whole value of this gate is that the failure
-    // message says which instrument stopped.
+    // Named rather than counted, so the failure says which instrument stopped.
     expect(missing).toEqual([]);
   });
 
@@ -325,10 +243,7 @@ describe('the declared boundaries are the instrumented boundaries', () => {
       if (!emitted) missing.push(`${boundary.id} -> '${boundary.event}' in ${boundary.site}`);
     }
 
-    // The stronger half of the check for a diagnostics boundary: `failure()` is a
-    // common callee, and the EVENT NAME is what the sink routes and the dataset
-    // groups by. A renamed event with the call left in place is a boundary that
-    // still runs and can no longer be found.
+    // A renamed event with the call left in place still runs and can no longer be found.
     expect(missing).toEqual([]);
   });
 
@@ -338,9 +253,7 @@ describe('the declared boundaries are the instrumented boundaries', () => {
     for (const boundary of FLEET_BOUNDARIES) {
       if (boundary.mechanism !== 'writer') continue;
       const found = exports.find(([name]) => name === boundary.emitter);
-      // A declared emitter that is not an exported FUNCTION is a boundary whose
-      // gate would pass on a type-only export, which is the shape of an
-      // instrument that was renamed and left behind.
+      // A type-only export would otherwise pass.
       expect(found).toBeDefined();
       expect(v.is(v.function(), found?.[1])).toBe(true);
     }
@@ -352,10 +265,7 @@ describe('the declared boundaries are the instrumented boundaries', () => {
     );
 
     const adapters = Object.keys(record).filter((name) => /^record[A-Z]/.test(name));
-    // Both directions, so the sets are EQUAL rather than one merely containing
-    // the other: an adapter that exists and is not declared produces rows no
-    // query knows to look for, and a declaration with no adapter is a gate
-    // measuring nothing.
+    // Equal, not contained: an undeclared adapter writes rows no query looks for.
     expect(adapters.slice().sort()).toEqual([...declared].sort());
   });
 
@@ -378,9 +288,7 @@ describe('the registry is read at runtime, not only by this gate', () => {
       expect(boundaryOf(boundary.event)).toBe(boundary.id);
     }
 
-    // Empty rather than the event's own name: a query filtering on `boundary` is
-    // asking about the DECLARED set, and widening it to every diagnostic in the
-    // codebase would make the filter meaningless.
+    // Empty: a `boundary` filter asks about the declared set only.
     expect(boundaryOf('something.undeclared')).toBe('');
   });
 
@@ -391,14 +299,7 @@ describe('the registry is read at runtime, not only by this gate', () => {
   });
 });
 
-/**
- * The declared event name against the one the adapter actually writes.
- *
- * This is what stops the AST half from being a proof about strings. A boundary
- * whose declaration and whose emitted row disagree is worse than an undeclared
- * one: the gate above passes, the dataset fills, and the id in the `boundary`
- * column matches nothing anyone declared.
- */
+/** Stops the AST half from being a proof about strings. */
 describe('a writer boundary emits the event and boundary it declares', () => {
   const eventSlot = AGENT_METRICS_SCHEMA.blobs.findIndex((slot) => slot.name === 'event');
   const boundarySlot = AGENT_METRICS_SCHEMA.blobs.findIndex((slot) => slot.name === 'boundary');
@@ -466,23 +367,13 @@ describe('a writer boundary emits the event and boundary it declares', () => {
       actor: 'u', operation: 'transition', reason: 'merged', target: 'c',
       outcome: 'ok', code: '',
     });
-    // The audit dataset has no `event` slot: a control-plane row is identified by
-    // its operation, which is the dimension an audit is grouped by.
+    // The audit dataset has no `event` slot; its rows are identified by operation.
     expect(captured.agent).toHaveLength(0);
     expect(captured.ops[0].blobs?.[opsOperationSlot]).toBe('release_transition');
   });
 });
 
-/**
- * The gate's own red direction.
- *
- * A gate that cannot be made to fail is a gate nobody can trust, and this
- * repository has already found several that ran after everything they could catch
- * was deleted. These two prove the presence checks discriminate: a boundary
- * naming an emitter nothing calls, and one naming an event nothing emits, are
- * both caught — so the passing result above is a measurement rather than a
- * vacuity.
- */
+/** The gate's own red direction: proves the presence checks discriminate. */
 describe('the gate fails when an instrument is missing', () => {
   test('an emitter with no call site at its file is caught', () => {
     const invented = {
@@ -502,14 +393,12 @@ describe('the gate fails when an instrument is missing', () => {
 
     const emitted = sitesOf(invented.site).some((site) => site.firstString === invented.event);
     expect(emitted).toBe(false);
-    // And the real one IS found at that same file, so the predicate is reading
-    // the file rather than answering false for everything.
+    // The real one is found, so the predicate is not answering false for everything.
     expect(sitesOf(invented.site).some((site) => site.firstString === 'provider.error')).toBe(true);
   });
 
   test('a name mentioned only in a comment or a string is not a call site', () => {
-    // `boundaries.ts` names every emitter as DATA. If the predicate were a text
-    // search it would report all of them as wired from this file alone.
+    // `boundaries.ts` names every emitter as data; a text search would report them all wired.
     const sites = sitesOf('packages/core/src/obs/analytics/boundaries.ts');
 
     for (const boundary of FLEET_BOUNDARIES) {

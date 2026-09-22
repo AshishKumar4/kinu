@@ -1,12 +1,4 @@
-/**
- * The workspace bar's two promises: the altitude tabs name VIEWS (Work reads
- * the current task and its record, Supervise reads what the agent learned),
- * and the old live pill is two indicators — the socket state and the task
- * state, each dot plus words, never hue alone.
- *
- * Rendered through `renderToStaticMarkup`: labels, titles, and indicator
- * words are all derived from props, with no effects needed.
- */
+/** Altitude tabs name views; the live pill is two indicators (socket, task), each dot plus words, never hue alone. */
 import './helpers/ui-module-globals';
 import { describe, expect, test } from 'bun:test';
 import { createElement } from 'react';
@@ -15,8 +7,6 @@ import { workspaceDisplayTitle } from '@kinu.run/core';
 import { WorkspaceBar, type Altitude, type WorkspaceBarProps } from '../src/components/WorkspaceBar';
 import type { ConnectionStatus } from '../src/hooks/use-kinu';
 
-/** The bar at one title moment: the caller resolves through the read model,
- *  the bar renders what it is handed, so both moments pin rendered output. */
 function markupForTitle(title: string): string {
   return renderToStaticMarkup(createElement(WorkspaceBar, {
     title,

@@ -1,13 +1,6 @@
-// The PLATFORM gateway provider rides the Workers AI binding, not HTTPS
-// (src/providers/gateway-binding-fetch.ts). What these tests defend:
-//   - the AI SDK's request reaches the binding as the universal request the
-//     gateway actually accepts (verified live: provider `workers-ai`, endpoint
-//     `v1/chat/completions`, no auth header → 200 + an OpenAI-shaped completion)
-//   - no auth header is ever forwarded — a supplied one overrides the binding's
-//     in-account pre-authentication and the gateway answers 401 (also measured)
-//   - the USER-billed providers stay on the credential path, so a user's model
-//     spend cannot silently move onto the platform account
-//   - unavailability is honest and specific, upstream of any request
+// The platform gateway rides the Workers AI binding (src/providers/gateway-binding-fetch.ts).
+// No auth header is forwarded (it overrides in-account pre-auth: 401); user-billed providers
+// stay on the credential path.
 import { describe, expect, test } from 'bun:test';
 import { generateText, streamText } from 'ai';
 import { createOpenAICompatible } from '@ai-sdk/openai-compatible';
@@ -29,8 +22,7 @@ const providerDeps = (env: Parameters<typeof resolvePlatformGateway>[0]) => ({
   hasCredential: async () => false,
 });
 
-/** The target every transport test posts through, parsed the way the provider
- *  parses it — not hand-built, so a parser change cannot pass unnoticed. */
+/** Parsed the way the provider parses it, so a parser change cannot pass unnoticed. */
 function testTarget(): GatewayTarget {
   const target = parseGatewayTarget(TEST_GATEWAY_URL);
 
@@ -55,8 +47,7 @@ describe('parseGatewayTarget', () => {
   });
 
   test('a non-gateway URL reports why rather than reporting absence', () => {
-    // A sentinel `undefined` here would make "not configured" and "configured
-    // wrong" indistinguishable, which is how a misconfigured deploy goes quiet.
+    // A sentinel `undefined` would make "not configured" and "configured wrong" indistinguishable.
     expect(parseGatewayTarget('https://gw')).toEqual({
       reason: 'AI_GATEWAY_URL is not an AI Gateway URL (expected '
         + '{origin}/v1/{account}/{gateway}/{provider}/...), got "https://gw".',
@@ -142,7 +133,6 @@ describe('gateway binding transport', () => {
     // Gateway control headers that are NOT credentials must still get through.
     expect(headers['cf-aig-cache-ttl']).toBe('3600');
     expect(headers['content-type']).toBe('application/json');
-    // Derived headers the binding would re-send wrongly.
     expect(headers).not.toHaveProperty('content-length');
   });
 
@@ -204,8 +194,8 @@ describe('gateway binding transport', () => {
     expect(await res.json()).toMatchObject({ internalCode: 2008 });
   });
 
-  // Silently forwarding an out-of-prefix URL is the failure that matters: it
-  // would send this gateway's traffic — and any header on it — to another host.
+  // Forwarding an out-of-prefix URL would send this gateway's traffic, headers included, to another
+  // host.
   test.each([
     ['another gateway in another account', `https://gateway.ai.cloudflare.com/v1/other/other-gw/workers-ai/v1/chat/completions`, 'POST'],
     ['another origin entirely', 'https://evil.example/v1/testaccount0000000000000000000/test-gateway/workers-ai/v1/chat/completions', 'POST'],
@@ -278,11 +268,8 @@ describe('platform gateway availability', () => {
   });
 });
 
-// The billing property this whole design turns on. The platform gateway is
-// in-account, so a binding call bills us and that is correct. workers-ai and
-// my-gateway carry the logged-in user's Cloudflare OAuth credential precisely so
-// their usage bills the USER; routing either over the binding would move every
-// user's model spend onto the platform account without any visible change.
+// workers-ai and my-gateway carry the user's Cloudflare OAuth credential so usage bills the user;
+// routing either over the binding would silently move user spend onto the platform account.
 describe('user-billed providers stay off the platform binding', () => {
   const userAuth = {
     headers: { authorization: 'Bearer user-oauth-token' },
@@ -298,8 +285,8 @@ describe('user-billed providers stay off the platform binding', () => {
         env, getAuth: async () => null, hasCredential: async () => false,
       });
 
-      // No user credential ⇒ the credential path answers 401. It must NOT take a
-      // free ride on the platform binding sitting right there in the same env.
+      // No user credential: the credential path answers 401, never falls back to the platform
+      // binding.
       await expect(generateText({ model, prompt: 'hi' })).rejects.toThrow();
       expect(stub.runs).toHaveLength(0);
     }
@@ -331,7 +318,6 @@ describe('user-billed providers stay off the platform binding', () => {
       expect(call.authorization).toBe('Bearer user-oauth-token');
     }
 
-    // The platform binding was available the whole time and was never called.
     expect(stub.runs).toHaveLength(0);
   });
 });

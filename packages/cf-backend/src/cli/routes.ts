@@ -123,7 +123,7 @@ export async function handleCliRequest<Id>(
   }
 
   // AI proxies are CLI-bearer-authenticated, so their gate lives here despite the /api/user/… path;
-    // both spend the owner's inference credentials and share the ai.proxy scope.
+  // both spend the owner's inference credentials and share the ai.proxy scope.
   const aiProxy = url.pathname.startsWith(`${USER_AI_PROXY_PATH}/`);
   const providerProxy = url.pathname.startsWith(`${USER_AI_PROXY_FORWARD_PREFIX}/`);
 
@@ -172,7 +172,7 @@ export async function handleCliRequest<Id>(
   }
 
   // Deliberately no JSON approval route: this module runs before server.ts's CSRF gate, so a
-    // cookie-only JSON POST would let any same-site page mint a CLI token. Use the form flow only.
+  // cookie-only JSON POST would let any same-site page mint a CLI token. Use the form flow only.
 
   const cli = await authenticateCli(request, env);
 
@@ -206,7 +206,7 @@ export async function handleCliRequest<Id>(
   }
 
   // Session inventory: lets a re-authenticated owner find and end bearers only stored as hashes.
-    // Interactive sessions only.
+  // Interactive sessions only.
   if (path === '/sessions' && method === 'GET') {
     return json({ body: { sessions: await cli.userDO.listCliTokens(await ownerCaller(env)) } });
   }
@@ -393,7 +393,7 @@ export async function handleCliRequest<Id>(
   }
 
   // Interactive sessions only: a CI token writing a provider key could swap the account's inference
-    // credentials. Secrets are never readable back.
+  // credentials. Secrets are never readable back.
   if (path === '/credentials' && method === 'GET') {
     return json({ body: await cli.userDO.listCredentials(await ownerCaller(env)) });
   }

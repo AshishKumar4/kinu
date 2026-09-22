@@ -1,22 +1,7 @@
 /**
- * The workspace spend total, summed by the platform rather than by us.
- *
- * WHAT WE HAD BEFORE THIS FILE. The producer totals were folded in TypeScript
- * over a bounded recent-rows read, so nothing about them depended on the
- * database beyond `SELECT payload`. They are now one SQL aggregate — `WITH`
- * CTEs over `json_extract(payload, …)` — because a total that is folded a window
- * at a time is a floor, and the panel that rendered it said so only in small
- * text beside a figure the owner decides on.
- *
- * That trade moved the risk. Every other test of this read runs under
- * `bun test`, against `bun:sqlite`, and a JSON1 function present there says
- * nothing about workerd. If the Durable Object's SQLite answered
- * `no such function: json_extract`, the cost panel would throw on its first
- * render in production with the whole bun suite green — the shape of every
- * runtime defect this project has shipped.
- *
- * So this asserts the platform, not our arithmetic: the production recorder,
- * the production DDL, the production query, over `ctx.storage.sql`.
+ * Defends: the spend aggregate's `json_extract`/`SUM` semantics on the Durable
+ * Object's SQLite (bun:sqlite says nothing about workerd), via the production
+ * recorder, DDL and query over `ctx.storage.sql`.
  */
 import { env } from 'cloudflare:workers';
 import { describe, expect, it } from 'vitest';
@@ -32,10 +17,7 @@ describe('the workspace spend aggregate on Durable Object SQLite', () => {
   it('sums the complete log across producers without a recent-row window', async () => {
     const subject = open('over-window');
 
-    // The fixture contains 2600 agent calls, 600 judge calls and 40 platform
-    // calls, so it exceeds 200-, 400- and 2000-row read windows. A fold capped
-    // at 2000 agent rows reports only 2000 calls; the workspace aggregate must
-    // report all 2600.
+    // Exceeds every bounded read window: the aggregate must count all rows.
     const rows = await subject.measure(2600, 600, 40);
     expect(await subject.rows()).toBe(3240);
 
@@ -47,8 +29,7 @@ describe('the workspace spend aggregate on Durable Object SQLite', () => {
     expect(spend.agent?.usd).toBeCloseTo(2600 * 0.002, 6);
     expect(spend.judge).toMatchObject({ calls: 600, unpricedCalls: 600 });
     expect(spend.judge?.usage).toEqual({ input: 600 * 900, output: 600 * 60 });
-    // A silent provider: 40 calls, no tokens, and `{}` rather than a zero — the
-    // absence `SUM` over a NULL column has to survive on this database too.
+    // No tokens reports `{}`, not zero: `SUM` over NULL must stay absent here too.
     expect(spend.platform).toMatchObject({ calls: 40, callsWithoutUsage: 40 });
     expect(spend.platform?.usage).toEqual({});
     expect(spend.platform?.usd).toBeNull();
@@ -57,19 +38,14 @@ describe('the workspace spend aggregate on Durable Object SQLite', () => {
   it('a field no call reported is absent from the sum, not summed to zero', async () => {
     const subject = open('absence');
 
-    // Nothing written here reports `cacheWrite` or `reasoning`. On this database
-    // `SUM` of an all-NULL column must come back NULL, which is what keeps
-    // "nobody mentioned caching" distinguishable from "every call read nothing
-    // from cache". A platform that returned 0 instead would print a measurement
-    // where there is none.
+    // `SUM` of an all-NULL column must be NULL, not 0: unreported is not zero.
     const spend = bySource(await subject.measure(3, 0, 0));
     expect(Object.keys(spend.agent?.usage ?? {}).sort())
       .toEqual(['cacheRead', 'input', 'neurons', 'output']);
   });
 
   it('an empty log has no producers, rather than failing the read', async () => {
-    // The first render of a fresh workspace. The DDL has to exist and the
-    // aggregate has to answer over zero rows.
+    // Fresh workspace: the aggregate answers over zero rows.
     expect(await open('fresh').measure(0, 0, 0)).toEqual([]);
   });
 });

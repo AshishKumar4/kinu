@@ -74,10 +74,8 @@ describe('installed Nimbus dependency integrity', () => {
     db.close();
   });
 
-  // These two read the INSTALLED dependency, not a patch file beside it: the
-  // Nimbus packages are consumed from the registry with the whole patch set
-  // upstreamed. The assertion follows the property rather than the mechanism —
-  // what matters is that the installed dependency has it, whoever put it there.
+  // These read the installed dependency, not a patch file: Nimbus packages come from the registry with the
+  // patch set upstreamed, so assert the property, whoever put it there.
   test('the installed core and worker preserve the owner-only file boundary', () => {
     const coreInstalled = readFileSync(join(
       repositoryRoot,
@@ -97,13 +95,8 @@ describe('installed Nimbus dependency integrity', () => {
   });
 
   test('the installed packages carry capability WebSocket routing', () => {
-    // The routing is spread across three packages by dependency direction, and
-    // each file below is the one that measurably carries its share: fabric holds
-    // `process-host` and mints the capability, because fabric depends on core
-    // while worker depends on fabric, so the header constant belongs on the lower
-    // layer; the worker's session router reads the request header; and its rpc and
-    // routes compare and dispatch. Reading the worker's own `loaders/process-host`
-    // would pass over a file that carries none of this and assert nothing.
+    // Routing spans three packages by dependency direction: fabric holds `process-host` and the header constant,
+    // the worker's session router reads the header, its rpc and routes dispatch. `loaders/process-host` carries none of it.
     const installed = [
       'node_modules/@nimbus-sh/fabric/dist/process-host.js',
       'node_modules/@nimbus-sh/worker/dist/_shared/session-router.js',
@@ -111,9 +104,7 @@ describe('installed Nimbus dependency integrity', () => {
       'node_modules/@nimbus-sh/worker/dist/session/rpc.js',
     ].map((path) => readFileSync(join(repositoryRoot, path), 'utf8')).join('\n');
 
-    // Upstream names the header rather than inlining it. Both halves are
-    // asserted so neither can drift alone: the constant must still hold the
-    // wire name, and the route must still read it.
+    // Both halves, so neither drifts alone: the constant holds the wire name and the route reads it.
     expect(installed).toContain("PREVIEW_CAPABILITY_HEADER = 'x-nimbus-preview-capability'");
     expect(installed).toContain('request.headers.get(PREVIEW_CAPABILITY_HEADER)');
     expect(installed).toContain('routeHostedWebSocket');

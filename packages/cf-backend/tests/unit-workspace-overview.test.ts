@@ -1,17 +1,6 @@
 /**
- * `OrchestratorAgent.getWorkspaceOverview` over the real object: the fold the
- * home card reads, driven against real stores rather than described.
- *
- * Two properties only this altitude can state:
- *
- *   1. THE READ STARTS NOTHING. `actorHost().list`/`hosted` are the only
- *      actors the method may look at; an `acquire` here would turn opening the
- *      home page into running work. The counter is armed on the live host, so
- *      a quiet call is the assertion, not the setup.
- *   2. ACTIVITY IS THREE FACTS, NOT A FLAG. A live turn on the root or a
- *      hosted child reads 'working'; durable unfinished work with nothing
- *      running reads 'unfinished' — the card must not paint an orphan run
- *      "active".
+ * `getWorkspaceOverview` over real stores: the read never `acquire`s an actor,
+ * and unfinished work with nothing running reads 'unfinished', not 'working'.
  */
 import { describe, expect, test } from 'bun:test';
 import { RunEventRecorder, WORKSPACE_RUN_ID, DeferredApprovalStore, formatApproval } from '@kinu.run/core';
@@ -94,8 +83,6 @@ describe('getWorkspaceOverview', () => {
     });
 
     const acquisitionsAfterSetup = acquired;
-    // The child's own session is the in-flight fact the overview must see —
-    // no root turn, no model.
     const lease = actor.session.beginTurn({ runId: 'child-run', turnId: 'child-turn' }, 'build', Date.now());
 
     try {
@@ -116,8 +103,7 @@ describe('getWorkspaceOverview', () => {
     recorder.emit('run-older', { type: 'run_end', reason: 'completed' });
     recorder.emit('run-newer', { type: 'run_start', agentId: 'main', userMessage: 'latest task' });
     recorder.emit('run-newer', { type: 'run_end', reason: 'error' });
-    // Between-run model calls file under the reserved aggregate; it is not a
-    // run and must never lead the card.
+    // The reserved between-run aggregate is not a run and must never lead the card.
     recorder.emit(WORKSPACE_RUN_ID, { type: 'model_call', source: 'agent' });
 
     const overview = await agent.getWorkspaceOverview();
@@ -131,9 +117,7 @@ describe('getWorkspaceOverview', () => {
 
     recorder.emit('run-1', { type: 'run_start', agentId: 'main', userMessage: 'done' });
     recorder.emit('run-1', { type: 'run_end', reason: 'completed' });
-    // A live turn IS a run in the ledger — opened, not yet sealed — so the run
-    // line is that run, with no status yet, and the card's lead is the
-    // activity, which is what a reader of a working workspace is told first.
+    // A live turn is an open, unsealed run in the ledger: no status yet.
     await agent.declareTurnInFlight(true);
 
     const overview = await agent.getWorkspaceOverview();

@@ -27,17 +27,14 @@ it('a public share serves the slate, admits the granted member, refuses the rest
 
   expect(created.url).toBe(`https://${handle}.share.test/`);
 
-  // The plain GET reaches the authored fetch through the port hop.
   expect(await probe.viewerFetch(handle, CLAIM)).toEqual({ status: 200, body: 'share-ok' });
 
-  // The batch arm: probe() reads the granted member; mutate() is refused at
-  // the grant, before the member runs.
+  // probe() reads the granted member; mutate() is refused at the grant, before the member runs.
   const batch = await probe.viewerBatch(handle, CLAIM);
   expect(batch.probe).toBe('fixture-bytes');
   expect(batch.mutateError).toContain('does not grant');
 
-  // The socket arm: the same calls over the session the upgrade opens, and
-  // its invocation retires on close — a replay of it refuses 'not running'.
+  // The invocation retires on socket close; a replay refuses 'not running'.
   const socket = await probe.viewerSocket(handle, CLAIM);
   expect(socket.probe).toBe('fixture-bytes');
   expect(socket.mutateError).toContain('does not grant');
@@ -76,9 +73,7 @@ it('a revoked share refuses the route and stops the process it carried', async (
 
 
 it('a shared slate still serves after the object that ran it is evicted', async () => {
-  // S6's durability leg: the share row and the slate's source live in the
-  // object's own storage, so a cold request re-reads both and re-boots the
-  // slate rather than answering 404.
+  // S6 durability: share row and source live in object storage, so a cold request re-boots the slate.
   const probe = () => subject('live-evict');
   await probe().start();
   const created = v.parse(ShareCreated, v.parse(v.object({ ok: v.literal(true), value: v.unknown() }), await probe().share()).value);

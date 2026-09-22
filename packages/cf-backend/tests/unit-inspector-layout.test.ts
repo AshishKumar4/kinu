@@ -1,13 +1,6 @@
 /**
- * The inspector layout policy, read through the hook's pure half: the stored
- * width, the stored open/close choice, the first-visit decision, and the
- * key vocabulary the separator marks as input.
- *
- * React is never mocked here — a module-scope `mock.module('react')` is
- * process-global under Bun and leaks onto every later file in the run. The
- * layout effects that turn these reads into writes and imperative calls are
- * covered where they can only be true: against the real component in the
- * Chrome suite (scripts/chat-and-files-ux.test.ts).
+ * Inspector layout policy through the hook's pure half. React is never mocked: `mock.module('react')`
+ * is process-global under Bun; the effects are covered in scripts/chat-and-files-ux.test.ts.
  */
 import { afterEach, describe, expect, test } from 'bun:test';
 
@@ -16,13 +9,9 @@ import {
   decideInspector, isInspectorInputKey, readStoredInspector, type InspectorAccount,
 } from '@kinu.run/core/web/inspector-layout';
 
-/** A signed-in profile, the one account that keys storage. */
 const known = (email: string): InspectorAccount => ({ kind: 'known', email });
 
-/* `window` and `localStorage` arrive as REAL globals: another cf-backend unit
- * file installs a read-only `localStorage`, so a bare assignment would throw
- * whenever this file runs after it. Define it configurable per test and hand
- * the previous descriptor back afterward. */
+/* Another unit file installs a read-only `localStorage`, so define it configurable per test and restore it. */
 
 let store: Record<string, string> = {};
 
@@ -57,8 +46,6 @@ describe('the persisted layout, through the decision', () => {
   test('an account with nothing stored reads as absent, never a default', () => {
     installStore();
 
-    // The decision is the only read an account can never hide behind: no
-    // stored width, no stored choice — the policy's own answer, not a value.
     expect(readStoredInspector(known('a@b'), 'ws-1')?.choice).toBeNull();
     expect(decideInspector(readStoredInspector(known('a@b'), 'ws-1'), false).widthPx).toBe(INSPECTOR_DEFAULT_PX);
   });
@@ -67,9 +54,7 @@ describe('the persisted layout, through the decision', () => {
     installStore();
     store['kinu.inspector.a@b'] = '340:0';
 
-    // The legacy `<width>:<collapsed>` form is one such value: under the
-    // reset it is invalid, never migrated to its width half — the decision
-    // falls back to the default rather than adopting 340.
+    // Legacy `<width>:<collapsed>` is invalid after the reset, never migrated to its width.
     expect(decideInspector(readStoredInspector(known('a@b'), 'ws-1'), false).widthPx).toBe(INSPECTOR_DEFAULT_PX);
   });
 
@@ -105,8 +90,7 @@ describe('the persisted layout, through the decision', () => {
 
     expect(decideInspector(readStoredInspector(known('other@b'), 'ws-1'), false).widthPx).toBe(INSPECTOR_DEFAULT_PX);
     expect(readStoredInspector(known('other@b'), 'ws-1')?.choice).toBeNull();
-    // And a choice is the WORKSPACE's: the same account's other workspace
-    // sees no trace of it either.
+    // A choice is per workspace, even within one account.
     expect(readStoredInspector(known('a@b'), 'ws-2')?.choice).toBeNull();
   });
 });
@@ -147,9 +131,7 @@ describe('the decided layout', () => {
 
   test('a session resolved to no account decides by signal alone: nothing is read, nothing keys', () => {
     installStore();
-    // The keys exist for an account that isn't this session's — a session
-    // with no account must not see them, and must still be decided. (`null`,
-    // the account not yet resolved, parks instead; that pair is pinned in
+    // A session with no account must not see another account's keys. (`null` parks instead: pinned in
     // packages/core/tests/unit-inspector-layout.test.ts.)
     store['kinu.inspector.a@b'] = '300';
     store['kinu.inspector.open.a@b.ws-1'] = '0';

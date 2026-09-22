@@ -133,18 +133,14 @@ describe("the corpse detector", () => {
 describe("redial spacing", () => {
   test("a still-dead origin is re-probed at growing intervals, not hammered", () => {
     const h = harness({ minRedialIntervalMs: BASE_INTERVAL_MS, maxRedialIntervalMs: CAP_INTERVAL_MS });
-    // First condemnation.
     h.failTimeout(); h.failTimeout(); h.failTimeout();
     expect(h.redials()).toBe(1);
 
-    // Immediately after: nine more timeouts inside the minimum spacing → no second dial yet.
     for (let i = 0; i < 9; i += 1) h.failTimeout();
     expect(h.redials()).toBe(1);
-    // Past the doubled interval, the next condemnation dials again.
     h.advance(BASE_INTERVAL_MS * 2);
     h.failTimeout(); h.failTimeout(); h.failTimeout();
     expect(h.redials()).toBe(2);
-    // Growth caps at the fixture cap even as outages persist.
     h.advance(CAP_INTERVAL_MS + 1);
     h.failTimeout(); h.failTimeout(); h.failTimeout();
     expect(h.redials()).toBe(3);
@@ -195,8 +191,6 @@ describe("refetch on reconnect", () => {
     expect(h.refetches()).toBe(1);
   });
 });
-
-/* ── version-skew signal ────────────────────────────────────────────────────── */
 
 const realFetch = globalThis.fetch;
 

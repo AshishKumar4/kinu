@@ -1,12 +1,6 @@
 /**
- * The public webhook rail, at the gates it spends once the URL's route
- * capability has been verified and before the trigger's own HMAC/Bearer/mTLS
- * check has been. Reaching this far proves only that this deployment minted the
- * URL, not who is holding it, so what this file governs is cost: a body a
- * caller chose the size of, and a knock rate a caller chose.
- *
- * Whether an unminted URL can get here at all is
- * `unit-webhook-route.test.ts`'s subject.
+ * The public webhook rail after route-capability verification and before the trigger's own auth: the caller
+ * is unknown, so this governs cost (body size, knock rate). Unminted URLs: `unit-webhook-route.test.ts`.
  */
 import { describe, expect, test } from 'bun:test';
 import { Database } from 'bun:sqlite';
@@ -24,16 +18,13 @@ import type {
   WebhookDeliveryEnv, WebhookDeliveryResolver, WebhookDeliveryTarget,
 } from '../src/events/routes';
 
-// The route's module graph reaches `cloudflare:email` through `agents`, so the
-// stub has to be installed before it loads — one shared mock, then the dynamic
-// import, the ordering every cf-backend route test uses.
+// The route's module graph reaches `cloudflare:email` through `agents`, so the stub is installed before the dynamic import.
 mockAgentsSdk();
 
 const { handleWebhookDeliveryRequest } = await import('../src/events/routes');
 
 const { webhookRoutePath } = await import('@kinu.run/core');
 
-/** The one route secret this suite mints and verifies under. */
 const ROUTE_SECRET = 'test-webhook-route-secret-0123456789';
 
 function sqlFor(db: Database): SqlExec {
@@ -46,11 +37,8 @@ const WORKSPACE = 'kinu-main';
 const TRIGGER = '01HZY6QK9N4T7M2P8V3XABCDEF';
 
 interface DeliveryProbe {
-  /** Names the route resolved an orchestrator stub for. Empty is the contract
-   *  for every refusal below: a workspace object woken to be told no is the
-   *  cost this rail exists to bound. */
+  /** Empty for every refusal: waking a workspace object to say no is the cost this rail bounds. */
   readonly woken: string[];
-  /** The body text the ingress was handed, if it got that far. */
   bodyText: string | undefined;
 }
 
@@ -82,8 +70,6 @@ function harness(): Harness {
   };
 }
 
-/** A delivery on a URL the server minted, which is the only kind that reaches
- *  the gates this suite is about. */
 async function delivery(
   body: BodyInit,
   init: { headers?: HeadersInit } = {},
@@ -144,7 +130,6 @@ describe('what a signed webhook delivery may cost', () => {
     }
 
     expect(refused?.status).toBe(429);
-    // 60 admitted knocks, and the 61st woke nothing.
     expect(probe.woken.length).toBe(60);
   });
 });

@@ -1,12 +1,6 @@
 /**
- * The Drive on the user's own Durable Object, through the RPC surface.
- *
- * What only this boundary can say: that the TENANT is derived from the
- * signed-in profile and never from a caller — two objects, two emails, two
- * tenants, and the same path on the second object reaches nothing the first
- * wrote; that a workspace token is refused before any tenant is touched; and
- * that bytes cross as the bounded chunks the route sends, with an out-of-order
- * chunk refused rather than appended.
+ * The Drive on the user's own Durable Object via RPC: the tenant derives from the signed-in profile, never a caller;
+ * a workspace token is refused before any tenant is touched; an out-of-order chunk is refused, not appended.
  */
 import { describe, expect, test } from 'bun:test';
 import {
@@ -45,9 +39,8 @@ async function upload(harness: TestUserDO, owner: UserCaller, path: string, part
 }
 
 describe('the Drive\'s bindings', () => {
-  // Measured on the deployed build 2026-09-21: both objects bound, no secret,
-  // every listing answered 500 from inside the tenant object. A Drive that
-  // cannot list is stated as absent at the seam, not met on a route.
+  // Measured on the deployed build 2026-09-21: both objects bound, no secret, every listing answered 500
+  // from the tenant object. A Drive that cannot list is absent at the seam, not met on a route.
   test('two objects without the signing secret are no Drive', () => {
     const refusing = (binding: string): MossaicObject => ({
       idFromName: (name) => { throw new Error(`${binding}.idFromName(${name}): not reachable in this test`); },
@@ -80,12 +73,10 @@ describe('the Drive on the UserDO', () => {
       ['blueprints', 'folder'], ['projects', 'folder'], ['skills', 'folder'], ['notes.txt', 'file'],
     ]);
 
-    // The store the bytes landed in is keyed by the id the edge derives from
-    // the email — the same derivation, so the workspace mount reads it too.
+    // Keyed by the id the edge derives from the email, so the workspace mount reads the same store.
     expect([...mossaic.stores.keys()]).toEqual([await deriveUserId('alice@example.com')]);
     expect(mossaic.stores.get(await deriveUserId('alice@example.com'))?.size).toBe(1);
 
-    // Bob addresses the identical strings and reaches his own, empty tenant.
     const bobs = await bob.userDO.drive_list(owner, '/');
 
     expect([...mossaic.stores.keys()]).toEqual([await deriveUserId('alice@example.com'), await deriveUserId('bob@example.com')]);
@@ -96,7 +87,6 @@ describe('the Drive on the UserDO', () => {
     expect(await bob.userDO.drive_rename(owner, '/projects', '/mine')).toMatchObject({ ok: false, code: 'missing' });
     expect(await bob.userDO.drive_markAsSkill(owner, '/projects')).toMatchObject({ ok: false, code: 'bad_input' });
 
-    // And nothing bob did touched alice.
     const again = await alice.userDO.drive_list(owner, '/');
 
     expect(again.ok && again.value.entries.map((entry) => entry.name)).toEqual(['blueprints', 'projects', 'skills', 'notes.txt']);

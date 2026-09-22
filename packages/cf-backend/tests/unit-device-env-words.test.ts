@@ -1,14 +1,4 @@
-/**
- * The one word the Env view puts beside a machine, as the owner reads it.
- *
- * The defect this file pins: a connected device the workspace holds no grant
- * on rendered as "active", so the row promised exactly what the agent could
- * not do. The row's own claim — is the machine THERE — is not in question;
- * the question is which single word tells the owner why an agent that sees
- * the machine cannot use it yet. That word is not a label on the grant model:
- * it is the row the same grid renders for every other executor, compared in
- * every direction a reader could mistake for it.
- */
+/** Defends: a connected device with no workspace grant rendered as "active" in the Env view. */
 import './helpers/ui-module-globals';
 import { describe, expect, test } from 'bun:test';
 import { statusOf } from '../src/components/surfaces/EnvironmentSurface';
@@ -41,26 +31,19 @@ describe('the environment row says needs approval only where approval is the que
   });
 
   test('offline: the offline word — a stale grant answer is not reach', () => {
-    // `granted` is only answered for a CONNECTED machine, so this pairing is a
-    // stale row at worst; the machine the owner sees is not there, and the
-    // word must say so. The device's own branch in the hub never answers it.
+    // `granted` is only answered for a connected machine; this pairing is a stale row.
     expect(statusOf(OFFLINE, exec({ granted: false }))).toMatchObject({ word: 'offline' });
     expect(statusOf(OFFLINE, exec({ granted: true }))).toMatchObject({ word: 'offline' });
   });
 
   test('no grant answer to read: every executor keeps its own word', () => {
-    // `granted` absent is every environment that has no consent gate — the
-    // sandbox, the workspace, and a device row whose snapshot predates the
-    // field. None of them may read as needing approval.
+    // `granted` absent means no consent gate; it must not read as needing approval.
     expect(statusOf(LIVE, exec({}))).toMatchObject({ word: 'active' });
     expect(statusOf(LIVE, exec({ status: 'idle', active: false }))).toMatchObject({ word: 'idle' });
     expect(statusOf(LIVE, exec({ status: 'error', active: false }))).toMatchObject({ word: 'error' });
   });
 
   test('another executor that answers granted stays on its own words', () => {
-    // Only a future executor with a grant of its own could reach this; today
-    // the field is the device's. The guard is the same either way: the word is
-    // the device row's answer to one question, not a style applied by field.
     const sandbox: MountInfo = {
       name: 'sandbox', prefix: 'sandbox.*', live: true,
       policy: { readOnly: false, consistency: 'ephemeral' }, reason: null,
