@@ -158,9 +158,14 @@ export class SlateDurabilityProbeRoot extends Agent<ProbeEnv> {
    *  chunk route: a single offset-0 final chunk, which (re)starts and
    *  completes the transfer in one call. */
   private async writeSlateFile(target: SlateTarget, path: string, content: string): Promise<void> {
-    const written = await target.writeExecutorFileChunk(
-      'workspace', path, crypto.randomUUID(), 0, new TextEncoder().encode(content), true,
-    );
+    const written = await target.writeExecutorFileChunk({
+      executorId: 'workspace',
+      path,
+      transferId: crypto.randomUUID(),
+      offset: 0,
+      chunk: new TextEncoder().encode(content),
+      final: true,
+    });
 
     if ('ok' in written) return;
 

@@ -169,7 +169,11 @@ const GATED_CALLS: GatedCall[] = [
   { capability: 'release', name: 'transitionReleaseChange', run: (u, c) => u.transitionReleaseChange(c, 'pc_1', 'planning') },
   { capability: 'release', name: 'recordReleaseCheck', run: (u, c) => u.recordReleaseCheck(c, 'pc_1', { name: 'test', status: 'passed' }) },
   { capability: 'release', name: 'requestReleaseApproval', run: (u, c) => u.requestReleaseApproval(c, 'pc_1', 'deploy_production') },
-  { capability: 'release', name: 'decideReleaseApproval', run: (u, c) => u.decideReleaseApproval(c, 'ap_1', 'approved', USER_ID) },
+  {
+    capability: 'release',
+    name: 'decideReleaseApproval',
+    run: (u, c) => u.decideReleaseApproval(c, { approvalId: 'ap_1', decision: 'approved', approvedBy: USER_ID }),
+  },
   { capability: 'release', name: 'recordReleaseDeployment', run: (u, c) => u.recordReleaseDeployment(c, 'pc_1', { environment: 'production' }) },
   { capability: 'release', name: 'getReleaseBoard', run: (u, c) => u.getReleaseBoard(c, WORKSPACE) },
   { capability: 'release', name: 'getReleaseDetail', run: (u, c) => u.getReleaseDetail(c, 'pc_1') },
@@ -326,7 +330,13 @@ const OWNER_ONLY_CALLS: OwnerOnlyCall[] = [
   { capability: 'drive', name: 'drive_delete', run: (u, c) => u.drive_delete(c, '/x') },
   { capability: 'drive', name: 'drive_markAsSkill', run: (u, c) => u.drive_markAsSkill(c, '/x') },
   { capability: 'drive', name: 'drive_addSkill', run: (u, c) => u.drive_addSkill(c, '') },
-  { capability: 'drive', name: 'drive_writeChunk', run: (u, c) => u.drive_writeChunk(c, { kind: 'file', path: '/x' }, 't', 0, new Uint8Array(0), true) },
+  {
+    capability: 'drive',
+    name: 'drive_writeChunk',
+    run: (u, c) => u.drive_writeChunk(c, {
+      target: { kind: 'file', path: '/x' }, transferId: 't', offset: 0, chunk: new Uint8Array(0), final: true,
+    }),
+  },
   { capability: 'drive', name: 'drive_abortUpload', run: (u, c) => u.drive_abortUpload(c, 't') },
   { capability: 'drive', name: 'drive_startDownload', run: (u, c) => u.drive_startDownload(c, '/x', 't') },
   { capability: 'drive', name: 'drive_readChunk', run: (u, c) => u.drive_readChunk(c, 't', 0, 1) },

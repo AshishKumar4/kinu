@@ -105,7 +105,13 @@ async function makeBranch(answer = 'Parse the grammar with a Pratt parser.'): Pr
   });
 
   return {
-    explore: () => branch.explore([{ role: 'user', content: 'ship a parser' }], [], ['javascript'], 'plan', []),
+    explore: () => branch.explore({
+      priorHistory: [{ role: 'user', content: 'ship a parser' }],
+      craftedTools: [],
+      languages: ['javascript'],
+      mode: 'plan',
+      siblings: [],
+    }),
     reflect: () => branch.generateReflection('ship a parser', 'the fixture corpus still fails'),
     specs,
   };
@@ -184,6 +190,12 @@ describe('the seat files nothing; the usage it returns is what the engine files'
     // A 400, not a 500: a 5xx is a transient the provider layer retries with
     // backoff, which would measure the retry policy rather than this
     // propagation.
-    await expect(branch.explore([{ role: 'user', content: 'ship a parser' }], [], ['javascript'], 'plan', [])).rejects.toThrow(APICallError);
+    await expect(branch.explore({
+      priorHistory: [{ role: 'user', content: 'ship a parser' }],
+      craftedTools: [],
+      languages: ['javascript'],
+      mode: 'plan',
+      siblings: [],
+    })).rejects.toThrow(APICallError);
   });
 });

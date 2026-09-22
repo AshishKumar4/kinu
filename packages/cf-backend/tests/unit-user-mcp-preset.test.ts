@@ -374,11 +374,14 @@ describe('the registered-app provider against the real SDK auth flow', () => {
     // stub above, which ignores its storage argument entirely — the value is
     // only the type the constructor names, and the flow under test reads
     // nothing off it.
-    const provider = new RegisteredAppOAuthClientProvider(
-      {} as DurableObjectStorage,
-      'test-client', 'https://kinu.example/api/user/mcp/callback',
-      'test-github-client-id', 'test-github-client-secret', 'repo read:user',
-    );
+    const provider = new RegisteredAppOAuthClientProvider({
+      storage: {} as DurableObjectStorage,
+      clientName: 'test-client',
+      baseRedirectUrl: 'https://kinu.example/api/user/mcp/callback',
+      clientId: 'test-github-client-id',
+      clientSecret: 'test-github-client-secret',
+      scope: 'repo read:user',
+    });
 
     provider.serverId = 'srv';
 

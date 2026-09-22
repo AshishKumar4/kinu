@@ -299,9 +299,12 @@ describe('exploration actors write the workspace journal and acquire only their 
       },
     });
 
-    const answer = await branch.explore(
-      [{ role: 'user', content: 'probe the parser' }], [], ['typescript'], 'build',
-    );
+    const answer = await branch.explore({
+      priorHistory: [{ role: 'user', content: 'probe the parser' }],
+      craftedTools: [],
+      languages: ['typescript'],
+      mode: 'build',
+    });
 
     // It REASONED: the answer came back through the only seam it has.
     expect(answer.text).toBe('the parser branch looks promising');
