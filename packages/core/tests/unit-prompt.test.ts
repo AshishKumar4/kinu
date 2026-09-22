@@ -1480,7 +1480,7 @@ describe('buildSystemPromptSync', () => {
       //   aggregate; no text changed but the name, so the ceiling tracks
       //   the rename, not a new sentence.
       // 2026-09-16 → 3555, exact measured: one new sentence, the reference
-      //   grammar (docs/CODEMODE-SURFACE.md, "References in content") —
+      //   grammar (packages/core/src/vfs/references.ts) —
       //   paths in commands, `root://path` in anything a person reads —
       //   beside the mount sentence rewritten to `/pc/<name>` the same day.
       'Execution environments': 3555,
