@@ -23,7 +23,7 @@ const MODELS_DEV = {
   },
 };
 
-interface Recorded { url: string; headers: Headers; body: string }
+interface Recorded { url: string; headers: Headers }
 
 function completion(content: string, promptTokens: number): Response {
   return Response.json({
@@ -58,9 +58,10 @@ function networkFetch(opts: {
   };
 
   return asFetchFunction(async (input: RequestInfo | URL, init?: RequestInit) => {
-    const url = String(input);
+    const url = input instanceof Request ? input.url : input.toString();
     const headers = new Headers(init?.headers);
-    opts.recorded?.push({ url, headers, body: String(init?.body ?? '') });
+
+    opts.recorded?.push({ url, headers });
 
     if (url === `${ORIGIN}/api/user/ai/proxy/credentials`) {
       if (opts.credentialsStatus) return new Response('nope', { status: opts.credentialsStatus });

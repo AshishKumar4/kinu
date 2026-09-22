@@ -43,6 +43,7 @@ import {
 } from '@kinu.run/compaction';
 import { createCLIRuntime, makeWorkspaceSchemaSql } from '../src/runtime';
 import { scratchPath } from '@kinu.run/test-utils';
+import * as v from 'valibot';
 
 const SESSION = 'kinu-itest:default';
 
@@ -123,9 +124,10 @@ function messageText(m: PromptMessage): string {
 
 function ephemeralBlocks(prompt: PromptMessage[]): number[] {
   const indices: number[] = [];
-  prompt.forEach((m, i) => {
+
+  for (const [i, m] of prompt.entries()) {
     if (m.role === 'user' && messageText(m).startsWith('<dynamic_context fingerprint="')) indices.push(i);
-  });
+  }
 
   return indices;
 }
@@ -246,9 +248,10 @@ describe('default compaction over the real storage plane', () => {
     const workspace = rt.executionRouter?.getProvider('workspace');
 
     if (!workspace) throw new Error('expected the workspace executor');
-    const readBack = await workspace.tools.readFile.execute(snapshot.transcriptRelativePath);
-    expect(String(readBack)).toContain('output-0 ');
-    expect(String(readBack)).toContain('Task 0: please run step 0');
+    const readBack = v.parse(v.string(), await workspace.tools.readFile.execute(snapshot.transcriptRelativePath));
+
+    expect(readBack).toContain('output-0 ');
+    expect(readBack).toContain('Task 0: please run step 0');
 
     // ── Ledger ordering: reset fired BEFORE the weave, so exactly ONE fresh
     // block exists and it sits at the compacted tail (a stale frozen block
