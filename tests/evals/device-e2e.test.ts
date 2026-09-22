@@ -47,7 +47,7 @@ import {
  *  run into every credential-free tier's log. */
 const PROBE_SUITE = 'Device Gate Probe';
 
-const STAGING = 'https://staging.kinu.run';
+const DEPLOYMENT = 'https://kinu.run';
 
 /** A resolution with no plan, as the arm sees one. The remedy text is the
  *  session resolver's; this file asserts what the ARM does with it. */
@@ -101,7 +101,7 @@ describe('the device arm runs on the cloud backend and nowhere else', () => {
       plan: {
         describe: 'probe',
         llm: UNCONFIGURED_LLM,
-        origin: STAGING,
+        origin: DEPLOYMENT,
         identity: { kind: 'secret', secret: 'probe' },
         open: () => { throw new Error('the gate never opens a session'); },
       },
@@ -203,16 +203,16 @@ describe('a refusal is not output', () => {
 
 describe('a failed route says something a reader can act on', () => {
   test('an edge error page is reduced to its title and points at the Worker log', () => {
-    // Measured against staging on 2026-09-01: `GET /api/cli/devices` answered
+    // Measured against the then-staging deployment on 2026-09-01: `GET /api/cli/devices` answered
     // 500 and the body was this page. Four kilobytes of markup whose only fact
     // is that the Worker threw — the SQL error behind it (`no such column:
     // last_ip at offset 85: SQLITE_ERROR`) reached the Worker log alone.
     const page = '<!DOCTYPE html>\n<html>\n<head>\n'
-      + '<title>Worker threw exception | staging.kinu.run | Cloudflare</title>\n'
+      + '<title>Worker threw exception | kinu.run | Cloudflare</title>\n'
       + '</head><body>error code: 1101</body></html>';
 
     const summary = summarizeRouteBody(page);
-    expect(summary).toContain('Worker threw exception | staging.kinu.run | Cloudflare');
+    expect(summary).toContain('Worker threw exception | kinu.run | Cloudflare');
     expect(summary).toContain('wrangler tail');
     expect(summary).not.toContain('<html');
   });

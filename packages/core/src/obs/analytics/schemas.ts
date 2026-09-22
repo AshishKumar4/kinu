@@ -73,10 +73,9 @@ export interface IndexSlot {
 
 export interface AnalyticsSchema {
   readonly binding: AnalyticsBindingName;
-  /** The PRODUCTION dataset name, and the base every other deployment's name is
-   *  derived from — see `analyticsDataset`. Writers never read it: they write
-   *  through `binding`, which wrangler already points at the right dataset for
-   *  the environment being deployed. Only the SQL read path names a dataset. */
+  /** The dataset name. Writers never read it: they write through `binding`,
+   *  which wrangler points at the dataset. Only the SQL read path names one, and
+   *  `scripts/analytics-datasets.test.ts` holds the two equal. */
   readonly dataset: string;
   readonly index: IndexSlot;
   /** Slot order IS `blob1..blobN`. */
@@ -171,37 +170,6 @@ export function doubleColumn<S extends AnalyticsSchema>(schema: S, name: DoubleN
  *  ever admits a second index. */
 export function indexColumn(_schema: AnalyticsSchema): string {
   return 'index1';
-}
-
-/**
- * A dataset-name suffix: empty for production, `_staging` and its like
- * elsewhere. Bounded and lowercase because the value is interpolated into SQL
- * and comes from a deployment var — narrow input, but a var is still a string
- * somebody edits.
- */
-const DATASET_SUFFIX = /^(?:|_[a-z][a-z0-9_]{0,23})$/;
-
-/**
- * The dataset a READER must name for this deployment.
- *
- * ONE PLACE, because the name is declared twice and nothing held the two equal:
- * `wrangler.jsonc` binds `AGENT_METRICS` to `kinu_agent_metrics_staging` under
- * `env.staging` while the query builder spelled the production name, and staging
- * shares production's account — so staging wrote rows no reader named and its
- * admin panels would have presented production's numbers as its own.
- * `scripts/analytics-datasets.test.ts` asserts, per environment, that every
- * wrangler binding's dataset equals the schema's base plus that suffix.
- *
- * A malformed suffix THROWS rather than falling back to '': falling back is
- * exactly the defect — reading production from staging — and the value is our
- * own deployment config, held correct by the gate.
- */
-export function analyticsDataset(schema: AnalyticsSchema, suffix: string): string {
-  if (!DATASET_SUFFIX.test(suffix)) {
-    throw new RangeError(`"${suffix}" is not an analytics dataset suffix`);
-  }
-
-  return schema.dataset + suffix;
 }
 
 /**

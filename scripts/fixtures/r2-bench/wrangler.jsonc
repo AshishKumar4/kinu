@@ -86,7 +86,7 @@
   // refuses to run against a non-empty pre-existing one. Bound as
   // BACKUP_BUCKET because that is the binding name the driver passes to
   // mountBucket, and the egress handler resolves the bucket out of the Worker
-  // env by that name. NOT the staging backup bucket: benchmark traffic does not
+  // env by that name. NOT the backup bucket: benchmark traffic does not
   // belong in a keyspace holding real archives, and an ephemeral bucket makes
   // "leaves no resources" a property of teardown rather than of prefix
   // arithmetic.

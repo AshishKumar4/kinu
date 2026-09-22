@@ -1047,7 +1047,7 @@ describe('every aggregate is weighted, because the dataset is sampled', () => {
     // Read off the panels that select each one, aliased, so the assertion pins
     // both the expression and the column it is reported under.
     const { turns, tokens, firstToken } =
-      controlPlaneMetricsQueries({ sinceHours: 24, datasetSuffix: '' });
+      controlPlaneMetricsQueries({ sinceHours: 24 });
 
     // A weighted count: the sample interval IS the count, one surviving row
     // standing for `_sample_interval` originals.
@@ -1062,7 +1062,7 @@ describe('every aggregate is weighted, because the dataset is sampled', () => {
   test('a ratio divides by a measured denominator, not by the row count', () => {
     // `usd` is 0 for an unpriced call as well as a free one, so the denominator
     // has to be the calls that carried a rate — `priced`, not the row count.
-    const { tokens } = controlPlaneMetricsQueries({ sinceHours: 24, datasetSuffix: '' });
+    const { tokens } = controlPlaneMetricsQueries({ sinceHours: 24 });
     expect(tokens).toContain(
       'SUM(_sample_interval * double12) / SUM(_sample_interval * double13) AS usdPerPricedCall',
     );
@@ -1079,7 +1079,7 @@ describe('every aggregate is weighted, because the dataset is sampled', () => {
   });
 
   test('a built query names the dataset, bounds the window, and aliases by slot name', () => {
-    const sql = controlPlaneMetricsQueries({ sinceHours: 24, datasetSuffix: '' }).latency;
+    const sql = controlPlaneMetricsQueries({ sinceHours: 24 }).latency;
     expect(sql).toContain('FROM kinu_agent_metrics');
     expect(sql).toContain('blob9 AS model');
     expect(sql).toContain("WHERE timestamp > NOW() - INTERVAL '24' HOUR");
@@ -1094,7 +1094,7 @@ describe('every aggregate is weighted, because the dataset is sampled', () => {
     // included — one row per distinct value, and nothing caps the count. The
     // surface renders every row it is handed with no cursor, so the bound is the
     // panel's own top-N, and each of these already orders by volume descending.
-    const built = controlPlaneMetricsQueries({ sinceHours: 24, datasetSuffix: '' });
+    const built = controlPlaneMetricsQueries({ sinceHours: 24 });
 
     for (const name of ['latency', 'tokens', 'toolFailures', 'firstToken'] as const) {
       expect(built[name]).toContain('LIMIT 50');
@@ -1109,33 +1109,8 @@ describe('every aggregate is weighted, because the dataset is sampled', () => {
     }
   });
 
-  test('a suffixed deployment reads only its own datasets', () => {
-    // Staging binds `*_staging` and shares production's account, so a reader that
-    // named the unsuffixed dataset would answer a staging panel with production's
-    // rows — a wrong number under the right heading.
-    const queries = controlPlaneMetricsQueries({ sinceHours: 24, datasetSuffix: '_staging' });
-
-    // Every FROM in every panel, extracted rather than spot-checked: the defect
-    // shape is one builder out of six naming the unsuffixed dataset.
-    const named = Object.values(queries).flatMap((sql) => [...sql.matchAll(/FROM (\S+)/gu)]
-      .map((match) => match[1]));
-
-    expect(named).toHaveLength(6);
-    expect(named.every((dataset) => dataset.endsWith('_staging'))).toBe(true);
-    expect(new Set(named)).toEqual(new Set([
-      'kinu_agent_metrics_staging', 'kinu_control_plane_ops_staging',
-    ]));
-  });
-
-  test('a suffix that is not a dataset suffix is refused rather than interpolated', () => {
-    // The suffix reaches SQL as text. Falling back to '' would be the defect
-    // itself: a misconfigured staging silently reading production.
-    expect(() => controlPlaneMetricsQueries({ sinceHours: 24, datasetSuffix: "'; DROP" }))
-      .toThrow(RangeError);
-  });
-
   test('no shipped query uses an unweighted aggregate', () => {
-    const queries = Object.values(controlPlaneMetricsQueries({ sinceHours: 24, datasetSuffix: '' }));
+    const queries = Object.values(controlPlaneMetricsQueries({ sinceHours: 24 }));
 
     for (const sql of queries) {
       // The bare forms an unsampled dataset would allow. `SUM(` is legal only in
@@ -1150,7 +1125,7 @@ describe('every aggregate is weighted, because the dataset is sampled', () => {
   });
 
   test('the control plane gets exactly the panels it is promised', () => {
-    const queries = controlPlaneMetricsQueries({ sinceHours: 24, datasetSuffix: '' });
+    const queries = controlPlaneMetricsQueries({ sinceHours: 24 });
     expect(Object.keys(queries).sort())
       .toEqual(['adminOps', 'firstToken', 'latency', 'tokens', 'toolFailures', 'turns']);
     expect(queries.firstToken).toContain("blob1 = 'ttft'");
@@ -1166,7 +1141,7 @@ describe('every aggregate is weighted, because the dataset is sampled', () => {
     const digest = analyticsDigest('my-workspace');
 
     const queries = controlPlaneMetricsQueries({
-      sinceHours: 6, datasetSuffix: '', workspaceDigest: digest,
+      sinceHours: 6, workspaceDigest: digest,
     });
 
     expect(queries.turns).toContain(`index1 = '${digest}'`);
@@ -1179,7 +1154,7 @@ describe('every aggregate is weighted, because the dataset is sampled', () => {
 
   test('the lookback is a whole positive number of hours whatever the caller passes', () => {
     const hours = (sinceHours: number): string =>
-      controlPlaneMetricsQueries({ sinceHours, datasetSuffix: '' }).turns;
+      controlPlaneMetricsQueries({ sinceHours }).turns;
 
     expect(hours(0)).toContain("INTERVAL '1' HOUR");
     expect(hours(-5)).toContain("INTERVAL '1' HOUR");
@@ -1191,7 +1166,7 @@ describe('every aggregate is weighted, because the dataset is sampled', () => {
     // and must be able to render it with no secret and no binding present. The
     // rendered panel is the proof: a builder that needed an environment would
     // throw before returning one.
-    const queries = controlPlaneMetricsQueries({ sinceHours: 1, datasetSuffix: '' });
+    const queries = controlPlaneMetricsQueries({ sinceHours: 1 });
     expect(queries.turns).toContain("INTERVAL '1' HOUR");
   });
 });

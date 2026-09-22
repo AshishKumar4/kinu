@@ -47,7 +47,7 @@ const DEPLOYMENT_ORIGIN = ((): string => {
 /** A deployment that is NOT ours, for the refused direction. A real hostname
  *  shape rather than `example.com`, so the refusal is exercised on the kind of
  *  origin a mistake would actually produce. */
-const FOREIGN_ORIGIN = 'https://staging.kinu.run';
+const FOREIGN_ORIGIN = 'https://preview.kinu.run';
 
 describe('the eval target allowlist — one deployment, or a loopback, nothing else', () => {
   test('the origin wrangler declares is the eval target, with and without a trailing slash', () => {
@@ -70,7 +70,6 @@ describe('the eval target allowlist — one deployment, or a loopback, nothing e
     'https://kinu.run.evil.example',
     'https://evil.kinu.run',
     'https://kinu.run:8443',
-    'https://staging.kinu.run',
     'https://kinu.ashishkmr472.workers.dev',
   ])('%s is not the deployment', (origin) => {
     const verdict = evalTargetVerdict(origin);
@@ -177,7 +176,7 @@ describe('a model endpoint carrying a deployment gets target-checked', () => {
     'https://gateway.ai.cloudflare.com/v1/acct-id/gw-name/workers-ai/v1',
     'https://api.openai.com/v1',
     'https://api.anthropic.com/v1',
-    'staging.kinu.run',
+    'preview.kinu.run',
   ])('%s fronts a model, not a deployment', (baseUrl) => {
     expect(evalModelEndpointVerdict(baseUrl)).toEqual({ kind: 'gateway' });
   });
