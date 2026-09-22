@@ -30,9 +30,9 @@ export interface DeviceConnectPrompt {
   /** Offer the prompt when no device is connected (at most once per CLI
    *  invocation); resolves when the prompt closes — or immediately when
    *  there is nothing to ask. */
-  offerIfUnconnected(): Promise<void>;
+  offerIfUnconnected: () => Promise<void>;
   /** Open unconditionally with current device status (the /connect command). */
-  open(): Promise<void>;
+  open: () => Promise<void>;
   /** Route a key press; true when the prompt consumed it. */
   handleKey(key: TuiKeyEvent): boolean;
 }

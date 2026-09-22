@@ -100,7 +100,7 @@ export interface TuiAgentRoster {
   readonly page: TuiAgentPage;
   readonly loading: boolean;
   readonly error: string | null;
-  reload(): Promise<void>;
+  reload: () => Promise<void>;
   /** Fire-and-forget by contract: a failure lands in `error` (with its whole
    *  cause chain) and the paging row stays, so paging is retryable and a failed
    *  page can never read as the end of the list. Implementations never reject. */
@@ -214,7 +214,7 @@ export interface TuiRuntimeOptions {
 interface TuiProductContextValue {
   readonly preferences: TuiPreferences;
   readonly keybindings: KeybindingRegistry;
-  updatePreferences(update: (current: TuiPreferences) => TuiPreferences): void;
+  updatePreferences: (update: (current: TuiPreferences) => TuiPreferences) => void;
 }
 
 const TuiProductContext = createContext<TuiProductContextValue | null>(null);
@@ -272,7 +272,7 @@ export function useTuiProduct(): TuiProductContextValue {
 }
 
 export interface ScrollAnchorController {
-  remember(): void;
+  remember: () => void;
 }
 
 export function usePreservedScrollAnchor(

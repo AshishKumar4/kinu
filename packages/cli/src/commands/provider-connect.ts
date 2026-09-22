@@ -416,7 +416,7 @@ interface ApiKeyProvider {
   readonly model: string | undefined;
   readonly local: boolean;
   store(key: string, spec: string): void;
-  clear(): void;
+  clear: () => void;
 }
 
 async function connectApiKeyProvider(port: ProviderConnectPort, provider: ApiKeyProvider): Promise<ProviderConnectOutcome> {

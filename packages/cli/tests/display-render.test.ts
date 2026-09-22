@@ -74,7 +74,7 @@ describe('createTurnStatus', () => {
   /** Terminal writes while `shell` executes, in call order. */
   function captureWrites(run: () => void): string[] {
     const writes: string[] = [];
-    const original = process.stdout.write;
+    const original = process.stdout.write.bind(process.stdout);
     /* SAFETY: Bun's stdout `write` overloads are all
        `(chunk: string | Uint8Array, encoding?, cb?) => boolean` with the last
        two parameters optional, so a function fixing only `chunk` satisfies the
@@ -84,7 +84,7 @@ describe('createTurnStatus', () => {
       writes.push(String(chunk));
 
       return true;
-    } as typeof process.stdout.write;
+    };
 
     try {
       run();

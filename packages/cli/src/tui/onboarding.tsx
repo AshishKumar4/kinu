@@ -54,7 +54,7 @@ export interface TuiOnboardingOperations {
   /** Runs the provider's own credential flow against the step's port: the
    *  step reports its progress and answers its questions. */
   connectProvider(id: ProviderConnectId, port: ProviderConnectPort): Promise<ProviderConnectOutcome>;
-  configureTiers(): void | Promise<void>;
+  configureTiers: () => void | Promise<void>;
   selectTheme(selection: ThemeSelection): void | Promise<void>;
   selectKeymap(presetId: KeymapPresetId): void | Promise<void>;
   createWorkspace(input: OnboardingWorkspaceInput): void | Promise<void>;

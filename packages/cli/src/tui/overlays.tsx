@@ -667,7 +667,7 @@ interface DeviceConsentOverlayProps {
 export function PromptHistoryOverlay({ entries, terminal, onSelect }: {
   entries: readonly string[];
   terminal: OverlayGeometry;
-  onSelect(text: string): void;
+  onSelect: (text: string) => void;
 }) {
   const { colors } = useTuiTheme();
   const [filter, setFilter] = useState('');
