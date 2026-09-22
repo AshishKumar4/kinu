@@ -266,7 +266,7 @@ try {
       'box',
       { style: { width: '100%', height: '100%' } },
       React.createElement(CommandHintOverlay, {
-        commands: commandsForClient({ localControls: null, consents: null, checkpoints: null }),
+        commands: commandsForClient({ localControls: null, consents: null, checkpoints: null, plans: null }),
         terminal: { width: 80, height: 24 },
       }),
     ),
