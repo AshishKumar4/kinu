@@ -40,7 +40,7 @@ import { contextWindowForModel } from '../context-window';
 import { acceptedMediaForModel, type MediaModality } from '../prompting/attachment-sanitizer';
 import type { ModelInfo, ModelPricing } from '../providers/types';
 import type { PromptModelContext } from '../prompting/model-profile';
-import type { ResolvedModelWindow } from '../prompting/step-prune';
+import type { ModelWindow, ResolvedModelWindow } from '../prompting/step-prune';
 import { classifyErrorCode, diagnostics, renderThrownChain, toKinuError } from '../obs/index';
 
 /**
@@ -164,6 +164,11 @@ export class ModelCatalogSession {
    */
   modelOutputLimit(): number | null {
     return this.info()?.modelOutputLimit ?? null;
+  }
+
+  /** The window pair every producer divides (`stepContextLimit`), read now. */
+  window(): ModelWindow {
+    return { contextWindow: this.contextWindow(), modelOutputLimit: this.modelOutputLimit() };
   }
 
   /** What the resolved model charges, or null when the catalog has not landed
