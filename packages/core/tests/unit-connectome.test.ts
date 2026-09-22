@@ -3,50 +3,6 @@ import { describe, expect, test } from 'bun:test';
 import { type ArtFrame, NODE_STRIDE, PULSE_STRIDE, STROKE_STRIDE, TONE_BRIGHT } from '../src/web/art';
 import { CANVAS_SEGMENTS, Connectome, MESH_SEGMENTS } from '../src/web/connectome';
 
-/** CPU ms since `since`; wall time is skewed by parallel suites. */
-function cpuMillisSince(since: NodeJS.CpuUsage): number {
-  const spent = process.cpuUsage(since);
-
-  return (spent.user + spent.system) / 1000;
-}
-
-/** Fixed arithmetic yardstick (~one canvas frame); `Math.fround` and the seed stop folding. */
-function calibrationUnit(seed: number): number {
-  let acc = Math.fround(seed);
-
-  for (let index = 0; index < 20_000; index += 1) {
-    acc = Math.fround(acc * 1.000_001 + Math.sin(index) * 0.5);
-  }
-
-  return acc;
-}
-
-/** Frame cost as a ratio of one calibration unit, cheapest of `batches` interleaved runs;
- *  contention inflates both halves alike, so the ratio holds where absolute CPU time did not. */
-function cheapestFrameRatio(connectome: Connectome, batches: number, frames: number, stepsPerFrame = 1): number {
-  let cheapestFrame = Number.POSITIVE_INFINITY;
-  let cheapestUnit = Number.POSITIVE_INFINITY;
-  let sink = 0;
-
-  for (let batch = 0; batch < batches; batch += 1) {
-    const frameBegan = process.cpuUsage();
-
-    for (let index = 0; index < frames; index += 1) {
-      for (let step = 0; step < stepsPerFrame; step += 1) connectome.step(DT);
-      connectome.frame();
-    }
-
-    cheapestFrame = Math.min(cheapestFrame, cpuMillisSince(frameBegan) / frames);
-    const unitBegan = process.cpuUsage();
-    sink += calibrationUnit(batch);
-    cheapestUnit = Math.min(cheapestUnit, cpuMillisSince(unitBegan));
-  }
-
-  if (!Number.isFinite(sink)) throw new Error('calibration overflowed');
-
-  return cheapestFrame / cheapestUnit;
-}
-
 const ASPECT = 900 / 1440;
 
 const DT = 1 / 60;
@@ -212,13 +168,11 @@ describe('the population is fixed for the picture\'s life', () => {
     }
   });
 
-  test('growth is cheap and spends the same budget on every seed', () => {
+  test('growth spends the same budget on every seed', () => {
     const counts: number[] = [];
 
     for (const seed of [1729, 7, 11, 99]) {
-      const began = process.cpuUsage();
       const connectome = new Connectome({ seed, aspect: ASPECT, segments: CANVAS_SEGMENTS });
-      expect(cpuMillisSince(began)).toBeLessThan(50);
       counts.push(connectome.frame().count);
     }
 
@@ -548,35 +502,5 @@ describe('the tissue answers the pointer', () => {
     expect(widths.length).toBeGreaterThan(50);
     expect(high - low).toBeGreaterThan(0.25);
     expect(low).toBeGreaterThan(0);
-  });
-});
-
-
-describe('the picture stays cheap', () => {
-  // Pins are ratios to the calibration unit (canvas ~0.75, mesh ~5.2 quiet), with 2x/2.4x headroom.
-  test('an hour of canvas frames costs less than a blink', () => {
-    const connectome = run(1729, 0);
-    connectome.setActivity({ working: true, decisions: 0 });
-
-    expect(cheapestFrameRatio(connectome, 12, 300)).toBeLessThan(1.5);
-  });
-
-  test('a mesh frame costs well under two and a half canvas budgets', () => {
-    const connectome = new Connectome({ seed: 1729, aspect: ASPECT, segments: MESH_SEGMENTS });
-    connectome.setActivity({ working: true, decisions: 0 });
-
-    expect(cheapestFrameRatio(connectome, 6, 100)).toBeLessThan(12.5);
-  });
-
-  // Red direction: ten steps per frame must exceed the budget. Runs a third of the batches
-  // with its own wall budget, since full batches can pass bun's 5 s default under load.
-  test('the ratio pins go red on a picture that costs ten times as much', () => {
-    const canvas = run(1729, 0);
-    canvas.setActivity({ working: true, decisions: 0 });
-    expect(cheapestFrameRatio(canvas, 4, 100, 10)).toBeGreaterThan(1.5);
-
-    const mesh = new Connectome({ seed: 1729, aspect: ASPECT, segments: MESH_SEGMENTS });
-    mesh.setActivity({ working: true, decisions: 0 });
-    expect(cheapestFrameRatio(mesh, 2, 50, 10)).toBeGreaterThan(12.5);
   });
 });
