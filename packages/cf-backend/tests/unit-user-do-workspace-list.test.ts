@@ -10,7 +10,8 @@ import {
   TEST_CREDENTIAL_ENCRYPTION_KEY,
   createTestUserDO, createdWorkspace, testOwner, type TestUserDO, type TestUserDOOptions,
 } from './helpers/user-do';
-import { handleUserRequest } from '../src/user/routes';
+import { handleUserRequest, type UserRoutesEnv } from '../src/user/routes';
+import { unreachableNamespace, userAccount } from './helpers/bindings';
 import type { AuthIdentity } from '../src/auth/session';
 import { orchestratorHarness } from './helpers/actor-harness';
 
@@ -431,7 +432,7 @@ describe('malformed paging over HTTP', () => {
     const listed: unknown[] = [];
     const inner = harness.userDO;
 
-    const stub = {
+    const stub = userAccount({
       async ensureProfile(...args: Parameters<TestUserDO['userDO']['ensureProfile']>) {
         return inner.ensureProfile(...args);
       },
@@ -440,17 +441,14 @@ describe('malformed paging over HTTP', () => {
 
         return inner.listWorkspaces(...args);
       },
-    };
-
-    const partialEnv: Partial<Env> = {};
-    Object.assign(partialEnv, {
-      UserDO: { idFromName: (name: string) => name, get: () => stub },
-      CREDENTIAL_ENCRYPTION_KEY: TEST_CREDENTIAL_ENCRYPTION_KEY,
     });
-    // SAFETY: The roster route reads exactly the constructed UserDO namespace
-    // plus credential key. Every typed binding reachable in this test is
-    // present.
-    const env = partialEnv as Env;
+
+    const env: UserRoutesEnv<string> = {
+      UserDO: { idFromName: (name) => name, get: () => stub },
+      CREDENTIAL_ENCRYPTION_KEY: TEST_CREDENTIAL_ENCRYPTION_KEY,
+      // A roster page fans nothing out.
+      OrchestratorAgent: unreachableNamespace('OrchestratorAgent'),
+    };
 
     const call = async (query: string): Promise<Response> => {
       const response = await handleUserRequest(

@@ -2,33 +2,14 @@ import { TEST_CREDENTIAL_ENCRYPTION_KEY } from './helpers/user-do';
 import { describe, expect, setSystemTime, test } from 'bun:test';
 import {
   consumeOAuthState, createOAuthState, createSession, deriveUserId, revokeSession, verifySession,
-  type OAuthProfile, type OAuthStateInput,
+  type AuthStoreEnv, type OAuthProfile, type OAuthStateInput, type SessionAuthority,
 } from '../src/auth/store';
+import { bootstrappedProfile } from './helpers/bindings';
 import { AuthError, authenticateRequest, type AuthIdentity } from '../src/auth/session';
 import { makeKv, type FakeKv } from './helpers/kv';
 import { sha256Hex } from '@kinu.run/core';
 import type { BrowserSessionIdentity } from '../src/user/user-do';
 import type { UserCaller } from '@kinu.run/core';
-
-interface TestNamespace<Stub> {
-  idFromName(name: string): string;
-  get(): Stub;
-}
-
-interface AuthStoreTestBindings<Stub> {
-  AUTH_KV: FakeKv;
-  UserDO: TestNamespace<Stub>;
-  CREDENTIAL_ENCRYPTION_KEY: string;
-}
-
-function testEnv<Stub>(bindings: AuthStoreTestBindings<Stub>): Env {
-  const env: Partial<Env> = {};
-  Object.assign(env, bindings);
-
-  // SAFETY: createSession and verifySession read exactly the constructed KV
-  // namespace, UserDO namespace, and credential key; every reachable binding is present.
-  return env as Env;
-}
 
 function setupEnv() {
   const kv = makeKv();
@@ -37,11 +18,11 @@ function setupEnv() {
   // exercised against the real UserDO in unit-auth-session-revocation.
   const rows = new Map<string, { expiresAt: number; identity: BrowserSessionIdentity }>();
 
-  const userDO = {
+  const userDO: SessionAuthority = {
     async ensureProfile(_caller: UserCaller, email: string, displayName?: string) {
       ensuredProfiles.push(`${email}:${displayName ?? ''}`);
 
-      return { email, displayName: displayName ?? null, createdAt: 1, lastSeenAt: 1 };
+      return bootstrappedProfile(email, displayName ?? null);
     },
     async registerBrowserSession(
       _caller: UserCaller, tokenHash: string, expiresAt: number, identity: BrowserSessionIdentity,
@@ -63,12 +44,11 @@ function setupEnv() {
     kv,
     ensuredProfiles,
     liveSessions: () => [...rows.keys()],
-    env: testEnv({
+    env: {
       AUTH_KV: kv,
-      UserDO: {
-        idFromName(name: string) { return name; },
-        get() { return userDO; },
-      }, CREDENTIAL_ENCRYPTION_KEY: TEST_CREDENTIAL_ENCRYPTION_KEY }),
+      UserDO: { idFromName: (name) => name, get: () => userDO },
+      CREDENTIAL_ENCRYPTION_KEY: TEST_CREDENTIAL_ENCRYPTION_KEY,
+    } satisfies AuthStoreEnv<string>,
   };
 }
 

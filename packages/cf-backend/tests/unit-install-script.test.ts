@@ -24,6 +24,7 @@ import { describe, expect, test } from 'bun:test';
 import { tolerate } from '@kinu.run/core/obs';
 import * as v from 'valibot';
 import { handleCliRequest } from '../src/cli/routes';
+import { staticRouteCliEnv } from './helpers/bindings';
 import { buildCliInstallCommand } from '@kinu.run/core';
 import { bunResolutionShell } from '@kinu.run/core';
 import { CLI_DIST_PATHS, RELEASE_SIGNING_PUBLIC_KEY, generateReleaseSigningKey, signRelease } from '@kinu.run/core';
@@ -59,11 +60,7 @@ const PtyResultSchema = v.object({
 
 /** The text the origin serves at one of its two script paths. */
 async function servedScript(path: string): Promise<string> {
-  const partialEnv: Partial<Env> = {};
-  // SAFETY: handleCliRequest returns from its /install.sh and /downloads/kinu
-  // branches before reading env, and every call here fixes one of those pathnames.
-  const env = partialEnv as Env;
-  const response = await handleCliRequest(new Request(`${ORIGIN}${path}`), env);
+  const response = await handleCliRequest(new Request(`${ORIGIN}${path}`), staticRouteCliEnv());
 
   if (!response) throw new Error(`${path} was not handled`);
   expect(response.status).toBe(200);

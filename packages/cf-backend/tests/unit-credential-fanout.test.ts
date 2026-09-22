@@ -3,7 +3,9 @@
 // hook nothing invokes leaves every live agent on a stale catalog.
 import { TEST_CREDENTIAL_ENCRYPTION_KEY } from './helpers/user-do';
 import { describe, test, expect } from 'bun:test';
-import { handleUserRequest } from '../src/user/routes';
+import { handleUserRequest, type UserRoutesEnv } from '../src/user/routes';
+import { bootstrappedProfile, userAccount, workspaceObject } from './helpers/bindings';
+import type { UserCaller } from '@kinu.run/core';
 import type { AuthIdentity } from '../src/auth/session';
 import type { JsonValue } from '@kinu.run/core';
 
@@ -18,8 +20,8 @@ const IDENTITY: AuthIdentity = {
 function setup() {
   const notified: string[] = [];
 
-  const stub = {
-    async ensureProfile() {},
+  const stub = userAccount({
+    async ensureProfile(_caller: UserCaller, email: string) { return bootstrappedProfile(email); },
     async userMcp_warmConnections() { return { servers: 0 }; },
     async setCredential() {},
     async deleteCredential() {},
@@ -27,44 +29,38 @@ function setup() {
     async pollCodexDeviceFlow() { return { connected: true, accountId: 'acc' }; },
     async listActiveWorkspaces() {
       return [
-        { name: 'jarvis', displayName: 'Jarvis' },
-        { name: 'old-bot', displayName: 'Old' },
+        { name: 'jarvis', displayName: 'Jarvis', createdAt: 1, nameOrigin: 'user' as const },
+        { name: 'old-bot', displayName: 'Old', createdAt: 2, nameOrigin: 'user' as const },
       ];
     },
-  };
-
-  const pending: Promise<unknown>[] = [];
-  const partialCtx: Partial<ExecutionContext> = {};
-  Object.assign(partialCtx, {
-    waitUntil(promise: Promise<unknown>) { pending.push(promise); },
   });
-  // SAFETY: The constructed context provides the waitUntil method used here,
-  // and that method is constructed immediately above with the tested queue.
-  const ctx = partialCtx as ExecutionContext;
-  const partialEnv: Partial<Env> = {};
-  Object.assign(partialEnv, {
-    UserDO: { idFromName: (n: string) => n, get: () => stub },
-    OrchestratorAgent: {
-      idFromName: (n: string) => n,
-      get: (id: string) => ({ async onCredentialsChanged() {
-        notified.push(id);
 
-        return { ok: true };
-      } }),
+  // The route hands the fan-out to `waitUntil` and calls nothing else on the
+  // context, so the suite holds the promises and joins them at the assertion.
+  const pending: Promise<unknown>[] = [];
+  const ctx = { waitUntil(promise: Promise<unknown>) { pending.push(promise); } };
+
+  const env: UserRoutesEnv<string> = {
+    UserDO: { idFromName: (n) => n, get: () => stub },
+    OrchestratorAgent: {
+      idFromName: (n) => n,
+      get: (id) => workspaceObject({
+        async onCredentialsChanged() {
+          notified.push(id);
+
+          return { ok: true as const };
+        },
+      }),
     },
     CREDENTIAL_ENCRYPTION_KEY: TEST_CREDENTIAL_ENCRYPTION_KEY,
-  });
-  // SAFETY: The constructed environment provides the two locally owned
-  // constructed namespaces and encryption key above; no other Env binding is
-  // reachable in the fanout behavior exercised here.
-  const env = partialEnv as Env;
+  };
 
   return { env, ctx, notified, pending };
 }
 
 interface UserApiCall {
-  readonly env: Env;
-  readonly ctx: ExecutionContext;
+  readonly env: UserRoutesEnv<string>;
+  readonly ctx: Pick<ExecutionContext, 'waitUntil'>;
   readonly path: string;
   readonly method: string;
   readonly body?: JsonValue;

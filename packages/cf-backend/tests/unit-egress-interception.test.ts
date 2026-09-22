@@ -22,7 +22,7 @@ import { kinuEgressParams } from '../src/egress/configure';
 import { adaptCloudflareSandbox } from '../src/sandbox-exec-lane';
 import type { EgressInjectionResult } from '@kinu.run/core';
 import type { OutboundHandlerContext } from '@cloudflare/containers';
-import type { KinuEgressParams } from '../src/egress/outbound';
+import type { ContainerEgressEnv, ContainerEventResolver, KinuEgressParams } from '../src/egress/outbound';
 import { mockAgentsSdk } from './helpers/agents-sdk';
 import { jsrpcStub } from './helpers/jsrpc-stub';
 import {
@@ -82,26 +82,20 @@ const PARAMS: KinuEgressParams = {
   workspaceName: 'kinu-main', ownerUserId: 'user-1', bindings: [BINDING],
 };
 
-/** An `Env` whose UserDO answers the one vault call, and nothing else.
+/** The two bindings an intercepted request reads: the owner's vault object,
+ *  and the root secret the owner capability derives from.
  *
  *  `get` returns a `jsrpcStub`, not an object literal: the real binding returns a
  *  Proxy whose methods are not own enumerable properties, and a literal double
  *  hid a production TypeError in this exact handler behind a passing test. */
-function fakeEnv(resolve: () => EgressInjectionResult): Env {
-  const view: Partial<Env> = {};
-  Object.assign(view, {
+function fakeEnv(resolve: () => EgressInjectionResult): ContainerEgressEnv<string> {
+  return {
     UserDO: {
       idFromName: (name: string) => name,
       get: () => jsrpcStub({ resolveEgressInjection: async () => resolve() }),
     },
     CREDENTIAL_ENCRYPTION_KEY: 'a-test-credential-encryption-key-0123456789',
-  });
-
-  // SAFETY: every member the handler reads is constructed by the Object.assign
-  // above — `UserDO.idFromName`, `UserDO.get` and `CREDENTIAL_ENCRYPTION_KEY` are
-  // the complete set `handleContainerEgress` touches, which its body declares
-  // directly, so no unassigned binding is reachable at runtime.
-  return view as Env;
+  };
 }
 
 interface FetchCapture {
@@ -454,40 +448,22 @@ async function recordDiagnostics(body: () => Promise<void>): Promise<readonly Re
   return logger.emitted;
 }
 
-/** An `Env` whose vault call throws, the way a Durable Object under load or
- *  mid-eviction answers a cross-object RPC. */
-function throwingVaultEnv(thrown: { cause: unknown }): Env {
-  const view: Partial<Env> = {};
-  Object.assign(view, {
+/** The same two bindings, with the vault call throwing the way a Durable Object
+ *  under load or mid-eviction answers a cross-object RPC. */
+function throwingVaultEnv(thrown: { cause: unknown }): ContainerEgressEnv<string> {
+  return {
     UserDO: {
       idFromName: (name: string) => name,
       get: () => jsrpcStub({ resolveEgressInjection: async () => { throw thrown.cause; } }),
     },
     CREDENTIAL_ENCRYPTION_KEY: 'a-test-credential-encryption-key-0123456789',
-  });
-
-  /* SAFETY: as `fakeEnv` above — `UserDO.idFromName`, `UserDO.get` and
-     `CREDENTIAL_ENCRYPTION_KEY` are the complete set the handler reads, and
-     every one of them is constructed by the Object.assign above. */
-  return view as Env;
+  };
 }
 
-/** An `Env` whose workspace object refuses the event RPC. `getAgentByName` is
- *  mocked to `namespace.get(namespace.idFromName(name))`, so the namespace
- *  double is the whole seam. */
-function throwingEventEnv(thrown: { cause: unknown }): Env {
-  const view: Partial<Env> = {};
-  Object.assign(view, {
-    OrchestratorAgent: {
-      idFromName: (name: string) => name,
-      get: () => jsrpcStub({ acceptContainerEvent: async () => { throw thrown.cause; } }),
-    },
-  });
-
-  /* SAFETY: `OrchestratorAgent.idFromName` and `.get` are the complete set
-     `handleContainerEvent` reaches before the RPC it is here to fail, and both
-     are constructed by the Object.assign above. */
-  return view as Env;
+/** A resolver whose workspace object refuses the event RPC — the one call the
+ *  channel makes before the RPC this case is here to fail. */
+function throwingEventResolver(thrown: { cause: unknown }): ContainerEventResolver {
+  return async () => jsrpcStub({ acceptContainerEvent: async () => { throw thrown.cause; } });
 }
 
 // KINU-055. Every request leaving a container says Kinu, and says it FIRST.
@@ -685,7 +661,7 @@ describe('a throw at the boundary becomes a classified answer', () => {
         new Request(`https://${CONTAINER_EVENT_HOST}/v1/events`, {
           method: 'POST', body: JSON.stringify({ kind: 'note' }),
         }),
-        throwingEventEnv({ cause: new Error('object evicted mid-write') }),
+        throwingEventResolver({ cause: new Error('object evicted mid-write') }),
         PARAMS,
       );
     });

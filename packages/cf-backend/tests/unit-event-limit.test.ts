@@ -24,7 +24,7 @@ const DEFAULT_PAGE = boundEventQuery().limit;
 const UNTRUSTED_CEILING = boundEventQuery({ limit: Number.MAX_SAFE_INTEGER }).limit;
 
 import { orchestratorHarness } from './helpers/actor-harness';
-import { TEST_CREDENTIAL_ENCRYPTION_KEY } from './helpers/user-do';
+import type { HubEnv, HubResolver } from '../src/events/routes';
 
 // Dynamic on purpose: the route module resolves the Agent SDK at import time,
 // so it may only load AFTER `actor-harness` installs the stand-in. The static
@@ -46,8 +46,8 @@ function chatDescriptor(text: string): IngressDescriptor {
   };
 }
 
-/** A real workspace object, seeded past the ceiling, behind a namespace double
- *  the route resolves through exactly the way production does. */
+/** A real workspace object, seeded past the ceiling, behind the resolver the
+ *  route reaches it through. */
 function seededWorkspace() {
   const harness = orchestratorHarness();
 
@@ -55,26 +55,21 @@ function seededWorkspace() {
     harness.agent.publishHarnessEvent(chatDescriptor(`event ${i}`), 1000 + i);
   }
 
-  const partialEnv: Partial<Env> = {};
-  Object.assign(partialEnv, {
-    OrchestratorAgent: {
-      idFromName: (name: string) => name,
-      get: () => harness.agent,
-    },
-    CREDENTIAL_ENCRYPTION_KEY: TEST_CREDENTIAL_ENCRYPTION_KEY,
-  });
-  // SAFETY: this suite reaches only the locally constructed orchestrator
-  // namespace and credential secret.
-  const env = partialEnv as Env;
-
-  return { env, harness };
+  return { resolveAgent: () => Promise.resolve(harness.agent), harness };
 }
 
-async function eventsVia(env: Env, query: string): Promise<{ status: number; count: number }> {
+/** The events path reads no binding at all: the route secret is reached only
+ *  when a trigger is created, and an absent one refuses with a 503 there. */
+const NO_BINDING_READ: HubEnv = {};
+
+async function eventsVia(
+  resolveAgent: HubResolver, query: string,
+): Promise<{ status: number; count: number }> {
   const res = await handleHubRequest(
     new Request(`https://kinu.example.com/api/workspaces/${WORKSPACE}/events${query}`),
-    env,
+    NO_BINDING_READ,
     WORKSPACE,
+    resolveAgent,
   );
 
   if (!res) throw new Error('the route did not claim the request');
@@ -83,63 +78,34 @@ async function eventsVia(env: Env, query: string): Promise<{ status: number; cou
   return { status: res.status, count: Array.isArray(body) ? body.length : -1 };
 }
 
+/** Every query string the route must close, and the number of events it may
+ *  answer with. One row is one test, so a failure still names its own case. */
+const BOUNDED_QUERIES: readonly { readonly name: string; readonly query: string; readonly count: number }[] = [
+  { name: 'a negative limit returns the default page, not the table', query: '?limit=-1', count: 1 },
+  { name: 'a far more negative limit is bounded the same way', query: '?limit=-999999', count: 1 },
+  { name: 'a negative limit stays bounded with a variant filter as well', query: '?limit=-1&variant=chat', count: 1 },
+  { name: 'zero returns a row rather than reporting the log as empty', query: '?limit=0', count: 1 },
+  // Not a 400. The run-event route already settled this question: absent and
+  // unreadable are the same statement, and the route does not have to decide
+  // what a garbage query string meant. Forwarded raw, each of these is a 500
+  // from SQLite's datatype mismatch.
+  { name: 'unparseable limit text means unstated and answers 200 with the default', query: '?limit=abc', count: DEFAULT_PAGE },
+  { name: 'a literal NaN means unstated too', query: '?limit=NaN', count: DEFAULT_PAGE },
+  { name: 'a literal Infinity means unstated too', query: '?limit=Infinity', count: DEFAULT_PAGE },
+  { name: 'an absurdly large limit clamps to the untrusted ceiling', query: '?limit=1000000000', count: UNTRUSTED_CEILING },
+  { name: 'the largest safe integer clamps there too', query: `?limit=${Number.MAX_SAFE_INTEGER}`, count: UNTRUSTED_CEILING },
+  { name: 'a fractional limit truncates instead of failing the query', query: '?limit=2.7', count: 2 },
+  { name: 'a legitimate limit is still honoured exactly', query: '?limit=37', count: 37 },
+  { name: 'no limit at all takes the default page', query: '', count: DEFAULT_PAGE },
+  { name: 'an unparseable since reads from the start of the log', query: '?since=abc&limit=3', count: 3 },
+  { name: 'a negative since reads from the start of the log', query: '?since=-5&limit=3', count: 3 },
+];
+
 describe('the events route closes `limit` before it can reach SQL', () => {
-  /** Every `limit` and `since` the route is asked for, and the page each one
-   *  must answer with. The status is 200 throughout: a value the route cannot
-   *  read is a value that was not stated, never a failed query. */
-  const asked = [
-    {
-      name: 'a negative limit returns the default page, not the table',
-      pages: [{ query: '?limit=-1', count: 1 }, { query: '?limit=-999999', count: 1 }],
-    },
-    {
-      name: 'a negative limit stays bounded with a variant filter as well',
-      pages: [{ query: '?limit=-1&variant=chat', count: 1 }],
-    },
-    {
-      name: 'zero returns a row rather than reporting the log as empty',
-      pages: [{ query: '?limit=0', count: 1 }],
-    },
-    {
-      // Not a 400. The run-event route already settled this question: absent and
-      // unreadable are the same statement, and the route does not have to decide
-      // what a garbage query string meant. Forwarded raw, each of these is a 500
-      // from SQLite's datatype mismatch.
-      name: 'unparseable limit text means unstated and answers 200 with the default',
-      pages: [
-        { query: '?limit=abc', count: DEFAULT_PAGE },
-        { query: '?limit=NaN', count: DEFAULT_PAGE },
-        { query: '?limit=Infinity', count: DEFAULT_PAGE },
-      ],
-    },
-    {
-      name: 'an absurdly large limit clamps to the untrusted ceiling',
-      pages: [
-        { query: '?limit=1000000000', count: UNTRUSTED_CEILING },
-        { query: `?limit=${Number.MAX_SAFE_INTEGER}`, count: UNTRUSTED_CEILING },
-      ],
-    },
-    {
-      name: 'a fractional limit truncates instead of failing the query',
-      pages: [{ query: '?limit=2.7', count: 2 }],
-    },
-    {
-      name: 'a legitimate limit is still honoured exactly, and absence takes the default',
-      pages: [{ query: '?limit=37', count: 37 }, { query: '', count: DEFAULT_PAGE }],
-    },
-    {
-      name: 'an unparseable or negative since reads from the start of the log',
-      pages: [{ query: '?since=abc&limit=3', count: 3 }, { query: '?since=-5&limit=3', count: 3 }],
-    },
-  ];
-
-  for (const { name, pages } of asked) {
-    test(name, async () => {
-      const { env } = seededWorkspace();
-
-      for (const { query, count } of pages) {
-        expect(await eventsVia(env, query)).toEqual({ status: 200, count });
-      }
+  for (const bound of BOUNDED_QUERIES) {
+    test(bound.name, async () => {
+      const { resolveAgent } = seededWorkspace();
+      expect(await eventsVia(resolveAgent, bound.query)).toEqual({ status: 200, count: bound.count });
     });
   }
 });

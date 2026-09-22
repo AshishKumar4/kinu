@@ -26,22 +26,13 @@ import {
   createRecordingLogger, setDiagnosticsSink, type RecordingLogger,
 } from '@kinu.run/core/obs';
 import { CodemodeEgress, EGRESS_FAILURE_HEADER } from '../src/codemode-egress';
+import { workerContext } from './helpers/bindings';
 
 /** The loopback entrypoint under test, outside workerd. Its fetch override
  *  reads no instance state, so an empty env and a bare execution context are
- *  the whole construction. */
-const partialContext: Partial<ExecutionContext> = {
-  waitUntil: () => {},
-  passThroughOnException: () => {},
-  props: {},
-};
-
-// SAFETY: the fetch override reads exactly the three members constructed
-// above; `tracing` (required since workers-types 4.20260702.1) is never
-// reached by the code under test.
-const entryContext = partialContext as ExecutionContext;
-
-const entry = new CodemodeEgress(entryContext, {});
+ *  the whole construction — the platform handle in full, because
+ *  `WorkerEntrypoint`'s own constructor takes it whole. */
+const entry = new CodemodeEgress(workerContext(), {});
 
 const egressFetch = (url: string, init?: RequestInit): Promise<Response> =>
   entry.fetch(new Request(url, init));

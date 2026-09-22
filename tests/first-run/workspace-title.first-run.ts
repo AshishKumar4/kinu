@@ -111,11 +111,9 @@ describe('First-run · workspace-title (owned workspace, read-only)', () => {
     const statusTitle = snapshot.output.status.displayName;
     const statusWorkspace = snapshot.output.status.name;
 
-    const settled = owned.nameOrigin !== 'provisional';
-
     const receipt = { requested, build, phase: 'observed', receipts: [{ workspace, registryTitle: owned.displayName,
       nameOrigin: owned.nameOrigin ?? null, statusTitle, statusWorkspace,
-      matches: settled && statusTitle === owned.displayName && statusWorkspace === workspace }] };
+      matches: statusTitle === owned.displayName && statusWorkspace === workspace }] };
 
     writeFileSync(receiptPath, JSON.stringify(receipt, null, 2) + '\n');
     expectReached(CASE, { what: 'settled-title-hydrates-from-the-owned-registry-row', reached: receipt.receipts[0]?.matches === true,

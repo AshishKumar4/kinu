@@ -1,7 +1,7 @@
 // Regression test: the run-events SSE stream must stop polling the agent DO
 // as soon as the client goes away (request abort or stream cancellation)
 // instead of polling every 500ms for up to 5 minutes.
-import { TEST_CREDENTIAL_ENCRYPTION_KEY } from './helpers/user-do';
+import type { RunEventsTarget } from '../src/run-events-routes';
 import { describe, test, expect } from 'bun:test';
 import { mockAgentsSdk } from './helpers/agents-sdk';
 import { AwaitedList, handClock } from '@kinu.run/test-utils';
@@ -10,11 +10,12 @@ mockAgentsSdk();
 
 const { handleRunEventsRequest } = await import('../src/run-events-routes');
 
-function sseEnv(wire: (read: number) => string = () => '[]') {
+function sseStream(wire: (read: number) => string = () => '[]') {
   // Every DO read the stream makes, as an event the test can await.
   const polled = new AwaitedList<number>();
 
-  const stub = {
+  const stub: RunEventsTarget = {
+    listRuns: () => { throw new Error('OrchestratorAgent.listRuns: not reachable in this test'); },
     async getRunEventsWire() {
       polled.push(polled.items.length + 1);
 
@@ -22,18 +23,11 @@ function sseEnv(wire: (read: number) => string = () => '[]') {
     },
   };
 
-  const bindings = {
-    OrchestratorAgent: { idFromName: (n: string) => n, get: () => stub },
-    CREDENTIAL_ENCRYPTION_KEY: TEST_CREDENTIAL_ENCRYPTION_KEY,
+  return {
+    resolveAgent: () => Promise.resolve(stub),
+    pollCount: () => polled.items.length,
+    polled: (count: number) => polled.until((items) => items.length >= count),
   };
-
-  const partialEnv: Partial<Env> = {};
-  Object.assign(partialEnv, bindings);
-  // SAFETY: the SSE route only reaches the locally constructed orchestrator
-  // namespace and credential secret in this suite.
-  const env = partialEnv as Env;
-
-  return { env, pollCount: () => polled.items.length, polled: (count: number) => polled.until((items) => items.length >= count) };
 }
 
 describe('run-events SSE client disconnect', () => {
@@ -41,7 +35,7 @@ describe('run-events SSE client disconnect', () => {
     // The fourth DO read — the one only a loop that missed the abort makes —
     // answers run_end, so a missed abort ENDS the stream with one extra read
     // and a run_end in the body instead of hanging: both are red below.
-    const { env, pollCount, polled } = sseEnv((read) => read < 4 ? '[]' : JSON.stringify([{
+    const { resolveAgent, pollCount, polled } = sseStream((read) => read < 4 ? '[]' : JSON.stringify([{
       eventIndex: 3, runId: 'run-1', type: 'run_end', timestamp: new Date(0).toISOString(),
     }]));
 
@@ -51,7 +45,7 @@ describe('run-events SSE client disconnect', () => {
     const res = await handleRunEventsRequest(new Request(
       'https://kinu.example.com/api/workspaces/jarvis/runs/run-1/stream',
       { signal: aborter.signal },
-    ), env, clock);
+    ), resolveAgent, clock);
 
     expect(res?.status).toBe(200);
     expect(res?.headers.get('content-type')).toContain('text/event-stream');
@@ -93,12 +87,12 @@ describe('run-events SSE client disconnect', () => {
   });
 
   test('cancelling the response stream stops the DO poll loop', async () => {
-    const { env, pollCount, polled } = sseEnv();
+    const { resolveAgent, pollCount, polled } = sseStream();
     const clock = handClock();
 
     const res = await handleRunEventsRequest(new Request(
       'https://kinu.example.com/api/workspaces/jarvis/runs/run-1/stream',
-    ), env, clock);
+    ), resolveAgent, clock);
 
     if (!res?.body) throw new Error('Expected an SSE response body');
     const reader = res.body.getReader();
@@ -123,7 +117,7 @@ describe('run-events SSE client disconnect', () => {
     // The poll loop tests only batches it fetched itself, so a run_end in the
     // initial replay misses that test: without the close below, a finished run
     // holds the stream open and polls the DO every 500 ms until the timeout.
-    const { env, pollCount } = sseEnv(() => JSON.stringify([{
+    const { resolveAgent, pollCount } = sseStream(() => JSON.stringify([{
       eventIndex: 3, runId: 'run-1', type: 'run_end', timestamp: new Date(0).toISOString(),
     }]));
 
@@ -133,7 +127,7 @@ describe('run-events SSE client disconnect', () => {
     // the stream.
     const res = await handleRunEventsRequest(new Request(
       'https://kinu.example.com/api/workspaces/jarvis/runs/run-1/stream',
-    ), env, handClock());
+    ), resolveAgent, handClock());
 
     if (!res?.body) throw new Error('Expected an SSE response body');
     const reader = res.body.getReader();

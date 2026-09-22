@@ -38,7 +38,7 @@ import { getSandbox, type PtyOptions } from "@cloudflare/sandbox";
 import { getAgentByName } from "agents";
 import { diagnostics, renderCauseChain, toKinuError } from "@kinu.run/core/obs";
 import type { OrchestratorAgent } from "./orchestrator";
-import type { KinuSandbox } from "./kinu-sandbox";
+
 import { err, json } from "@kinu.run/core";
 import { DEVICE_PTY_MAX_AXIS, DEVICE_TERMINAL_PATH } from "@kinu.run/core";
 import { terminalLane } from "@kinu.run/core";
@@ -83,6 +83,59 @@ const DEFAULT_WINDOW = { cols: 80, rows: 24 } as const;
 interface DeviceHolderNamespace {
   idFromName(name: string): DurableObjectId;
   get(id: DurableObjectId): { fetch(request: Request): Promise<Response> };
+}
+
+/** Every call this route makes on the workspace object it addresses. */
+export type TerminalWorkspace = Pick<OrchestratorAgent, 'prepareTerminal' | 'openDeviceTerminal' | 'fetch'>;
+
+/**
+ * Every call this route makes on the container client: the lease beat, the
+ * shell reset, and the PTY session an attach opens.
+ *
+ * `noteTerminalActivity` is `KinuSandbox`'s own and `deleteSession` the
+ * SDK class's, both reached through the proxy's fall-through to the stub —
+ * the same way `runtime.ts` calls `configureEgress`. Only `getSession` is the
+ * proxy's addition, and it stays optional for the reason above.
+ */
+export interface TerminalSandbox extends SandboxPty {
+  noteTerminalActivity(): Promise<void>;
+  deleteSession(sessionId: string): Promise<{ success: boolean }>;
+}
+
+/**
+ * What this route is handed instead of the Worker's whole Env.
+ *
+ * The two resolutions are SEAMS rather than bindings because neither is a
+ * `namespace.get(namespace.idFromName(name))`: `getAgentByName` also waits on
+ * the object's lifecycle startup and retries the platform's own transient
+ * failures, and `getSandbox` answers the SDK's client proxy, which is where
+ * the PTY surface lives. Re-deriving either here would be a second, unmeasured
+ * copy of vendor behaviour, so the entry binds them ({@link terminalRouteDeps})
+ * and the lanes below only call them.
+ */
+export interface TerminalRouteDeps {
+  /** The workspace object this request addresses, past its lifecycle startup. */
+  resolveWorkspace(name: string): Promise<TerminalWorkspace>;
+  /** The container client for this workspace, or null when the deployment
+   *  binds no Sandbox. Called on the container lane only, so a device or a
+   *  workspace terminal mints no container stub. */
+  resolveSandbox(name: string): TerminalSandbox | null;
+  readonly UserDO: DeviceHolderNamespace;
+}
+
+/** The deps as the Worker entry binds them, off its own Env. */
+export function terminalRouteDeps(env: Env): TerminalRouteDeps {
+  return {
+    resolveWorkspace: (name) => getAgentByName<Env, OrchestratorAgent>(env.OrchestratorAgent, name),
+    // {@link SANDBOX_TRANSPORT}, the one value every Kinu getSandbox call site
+    // passes. The SDK drops in-flight requests when transport changes mid-life
+    // for an id, and it persists the value, so every call site for one sandbox
+    // passes the same options.
+    resolveSandbox: (name) => env.Sandbox === undefined
+      ? null
+      : getSandbox(env.Sandbox, sandboxIdForWorkspace(name), { normalizeId: true, transport: SANDBOX_TRANSPORT }),
+    UserDO: env.UserDO,
+  };
 }
 
 /**
@@ -185,7 +238,7 @@ function terminalVerb(pathname: string, agentName: string): "attach" | "keepaliv
 interface TerminalCall {
   readonly request: Request;
   readonly url: URL;
-  readonly env: Env;
+  readonly deps: TerminalRouteDeps;
   readonly agentName: string;
   readonly executor: string;
   readonly verb: "attach" | "keepalive" | "reset";
@@ -213,7 +266,7 @@ function notAnUpgrade(request: Request): Response | null {
  * here opens a port on that machine or dials into it.
  */
 async function deviceTerminal(call: TerminalCall): Promise<Response> {
-  const { request, url, env, agentName, executor, scope } = call;
+  const { request, url, deps, agentName, executor, scope } = call;
 
   // These two verbs are GUARDS, not features. The device pane calls neither
   // — it has no lease to renew and it restarts by opening a new session —
@@ -236,7 +289,7 @@ async function deviceTerminal(call: TerminalCall): Promise<Response> {
   let opened: { session: string; user: string } | { error: string };
 
   try {
-    const agent = await getAgentByName<Env, OrchestratorAgent>(env.OrchestratorAgent, agentName);
+    const agent = await deps.resolveWorkspace(agentName);
     const ready = await agent.prepareTerminal(executor);
 
     if ("error" in ready) {
@@ -285,7 +338,7 @@ async function deviceTerminal(call: TerminalCall): Promise<Response> {
   const socketUrl = new URL(request.url);
   socketUrl.pathname = DEVICE_TERMINAL_PATH;
   socketUrl.search = `?session=${encodeURIComponent(opened.session)}`;
-  const namespace: DeviceHolderNamespace = env.UserDO;
+  const namespace = deps.UserDO;
 
   return namespace.get(namespace.idFromName(opened.user)).fetch(new Request(socketUrl, request));
 }
@@ -298,7 +351,7 @@ async function deviceTerminal(call: TerminalCall): Promise<Response> {
  * container path must not be reached for a shell it does not run.
  */
 async function workspaceTerminal(call: TerminalCall): Promise<Response> {
-  const { request, env, agentName, executor, scope } = call;
+  const { request, deps, agentName, executor, scope } = call;
 
   if (call.verb !== "attach") {
     if (request.method !== "POST") return err(405, "use POST");
@@ -311,7 +364,7 @@ async function workspaceTerminal(call: TerminalCall): Promise<Response> {
   if (refused !== null) return refused;
 
   try {
-    const agent = await getAgentByName<Env, OrchestratorAgent>(env.OrchestratorAgent, agentName);
+    const agent = await deps.resolveWorkspace(agentName);
     const ready = await agent.prepareTerminal(executor);
 
     if ("error" in ready) {
@@ -354,7 +407,7 @@ async function workspaceTerminal(call: TerminalCall): Promise<Response> {
  * stop under a user who is typing. The client sends it while a terminal is
  * attached, which is the only evidence that anybody is.
  */
-async function sandboxKeepalive(sandbox: KinuSandbox, call: TerminalCall): Promise<Response> {
+async function sandboxKeepalive(sandbox: TerminalSandbox, call: TerminalCall): Promise<Response> {
   if (call.request.method !== "POST") return err(405, "use POST");
 
   try {
@@ -390,7 +443,7 @@ async function sandboxKeepalive(sandbox: KinuSandbox, call: TerminalCall): Promi
  * `session.destroy()` does), and the next attach opens a fresh one. This is
  * the only way back that does not recycle the whole container.
  */
-async function sandboxReset(sandbox: KinuSandbox, call: TerminalCall): Promise<Response> {
+async function sandboxReset(sandbox: TerminalSandbox, call: TerminalCall): Promise<Response> {
   if (call.request.method !== "POST") return err(405, "use POST");
 
   try {
@@ -453,10 +506,10 @@ function ptySize(url: URL): PtyOptions {
  * attach's own, under the attach's own cancellation fence.
  */
 async function sandboxPreflight(call: TerminalCall): Promise<Response | null> {
-  const { env, agentName, executor, scope } = call;
+  const { deps, agentName, executor, scope } = call;
 
   try {
-    const agent = await getAgentByName<Env, OrchestratorAgent>(env.OrchestratorAgent, agentName);
+    const agent = await deps.resolveWorkspace(agentName);
     const ready = await agent.prepareTerminal(executor);
 
     if ("error" in ready) {
@@ -499,7 +552,7 @@ async function sandboxPreflight(call: TerminalCall): Promise<Response | null> {
  * the Durable Object's to start, that start is shared and idempotent, and
  * cancelling it would abandon work another attach is already waiting on.
  */
-async function sandboxAttach(sandbox: KinuSandbox & SandboxPty, call: TerminalCall, ctx: Pick<ExecutionContext, 'waitUntil'>): Promise<Response> {
+async function sandboxAttach(sandbox: TerminalSandbox, call: TerminalCall, ctx: Pick<ExecutionContext, 'waitUntil'>): Promise<Response> {
   const { request, scope } = call;
 
   if (request.signal.aborted) return abandonedAttach();
@@ -567,23 +620,13 @@ async function sandboxAttach(sandbox: KinuSandbox & SandboxPty, call: TerminalCa
 
 /** THE CONTAINER'S LANE: the lease beat, the shell reset, and the attach behind its preflight. */
 async function sandboxTerminal(call: TerminalCall, ctx: Pick<ExecutionContext, 'waitUntil'>): Promise<Response> {
-  const { env, agentName } = call;
-
-  if (!env.Sandbox) return err(503, "no Sandbox binding is configured on this deployment");
-
-  // {@link SANDBOX_TRANSPORT}, the one value every Kinu getSandbox call site
-  // passes. The SDK drops in-flight requests when transport changes mid-life
-  // for an id, and it persists the value, so every call site for one sandbox
-  // passes the same options.
-  //
   // `deleteSession` is the class's own and `noteTerminalActivity` is KinuSandbox's,
   // reached through the same proxy's fall-through to the stub — which is how
   // `runtime.ts` already calls `configureEgress`. Only {@link SandboxPty} is the
   // proxy's addition, and `sandboxAttach` reads it before it opens a shell.
-  const sandbox: KinuSandbox & SandboxPty = getSandbox(env.Sandbox, sandboxIdForWorkspace(agentName), {
-    normalizeId: true,
-    transport: SANDBOX_TRANSPORT,
-  });
+  const sandbox = call.deps.resolveSandbox(call.agentName);
+
+  if (sandbox === null) return err(503, "no Sandbox binding is configured on this deployment");
 
   if (call.verb === "keepalive") return sandboxKeepalive(sandbox, call);
 
@@ -604,7 +647,7 @@ async function sandboxTerminal(call: TerminalCall, ctx: Pick<ExecutionContext, '
  */
 export async function handleTerminalRequest(
   request: Request,
-  env: Env,
+  deps: TerminalRouteDeps,
   agentName: string,
   ctx: Pick<ExecutionContext, 'waitUntil'>,
 ): Promise<Response | null> {
@@ -634,7 +677,7 @@ export async function handleTerminalRequest(
     return json({ body: { error: `${executor} has no terminal`, lane: "line" } }, { status: 409 });
   }
 
-  const call: TerminalCall = { request, url, env, agentName, executor, verb, scope };
+  const call: TerminalCall = { request, url, deps, agentName, executor, verb, scope };
 
   if (executor === DEVICE_EXECUTOR) return deviceTerminal(call);
 

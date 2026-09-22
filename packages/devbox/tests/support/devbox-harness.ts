@@ -248,6 +248,19 @@ export function scheduleTableOf(
   return fresh;
 }
 
+/**
+ * A platform member no devbox method reaches.
+ *
+ * The runtime's handles declare far more than this package uses — hibernation,
+ * facets, alarms, bookmarks, the container control plane. None of it can be
+ * exercised from a devbox line, so none of it is modelled, and each one names
+ * itself when called: a stand-in that answered would answer wrongly, and one
+ * that was simply absent would surface somewhere else as a missing property.
+ */
+function unreached(member: string): never {
+  throw new Error(`the devbox platform stand-in does not implement ${member}`);
+}
+
 export interface FakeStorage {
   readonly rows: Map<string, StoredValue>;
   readonly handle: DurableObjectStorage;
@@ -1679,19 +1692,57 @@ export interface BoxStateParts {
   readonly blockConcurrencyWhile: <T>(closure: () => Promise<T>) => Promise<T>;
 }
 
-/** The platform handle a test box is constructed with. */
+/**
+ * The platform handle a test box is constructed with.
+ *
+ * The WHOLE `DurableObjectState`, not a view of it: the class reaches its
+ * container by EXTENDING the SDK's `Sandbox`, whose own constructor takes the
+ * platform handle in full, so nothing this fixture declares can make the
+ * argument smaller. The four members the class reads are supplied; every other
+ * one refuses by name rather than standing in quietly.
+ */
 export function boxState(parts: BoxStateParts): BoxState {
-  // SAFETY: `DurableObjectState` declares the platform handle a Durable Object
-  // is constructed with. The class under test reads `storage`, `container`,
-  // `id` and `blockConcurrencyWhile` off it and nothing else — the remaining
-  // members are WebSocket hibernation, facets and SQL, which no method under
-  // test reaches — and all four are provided here.
   return {
+    id: { toString: () => parts.id, equals: () => unreached('state.id.equals') },
     storage: parts.storage,
-    id: { toString: () => parts.id },
-    container: parts.container,
+    container: parts.container === undefined ? undefined : containerHandle(parts.container),
     blockConcurrencyWhile: parts.blockConcurrencyWhile,
-  } as BoxState;
+    props: {},
+    waitUntil: () => unreached('state.waitUntil'),
+    get facets(): DurableObjectFacets { return unreached('state.facets'); },
+    acceptWebSocket: () => unreached('state.acceptWebSocket'),
+    getWebSockets: () => unreached('state.getWebSockets'),
+    setWebSocketAutoResponse: () => unreached('state.setWebSocketAutoResponse'),
+    getWebSocketAutoResponse: () => unreached('state.getWebSocketAutoResponse'),
+    getWebSocketAutoResponseTimestamp: () => unreached('state.getWebSocketAutoResponseTimestamp'),
+    setHibernatableWebSocketEventTimeout: () => unreached('state.setHibernatableWebSocketEventTimeout'),
+    getHibernatableWebSocketEventTimeout: () => unreached('state.getHibernatableWebSocketEventTimeout'),
+    getTags: () => unreached('state.getTags'),
+    abort: () => unreached('state.abort'),
+  };
+}
+
+/**
+ * The container as the platform hands it to the object: the one live `running`
+ * flag the fake owns and flips, and refusals for the control plane the class
+ * reaches through the SDK rather than through `ctx.container`.
+ */
+export function containerHandle(flag: { running: boolean }): Container {
+  return {
+    get running(): boolean { return flag.running; },
+    start: () => unreached('container.start'),
+    monitor: () => unreached('container.monitor'),
+    destroy: () => unreached('container.destroy'),
+    signal: () => unreached('container.signal'),
+    getTcpPort: () => unreached('container.getTcpPort'),
+    setInactivityTimeout: () => unreached('container.setInactivityTimeout'),
+    interceptOutboundHttp: () => unreached('container.interceptOutboundHttp'),
+    interceptAllOutboundHttp: () => unreached('container.interceptAllOutboundHttp'),
+    interceptOutboundHttps: () => unreached('container.interceptOutboundHttps'),
+    snapshotDirectory: () => unreached('container.snapshotDirectory'),
+    snapshotContainer: () => unreached('container.snapshotContainer'),
+    exec: () => unreached('container.exec'),
+  };
 }
 
 /** The env a test box is constructed with: no bindings at all, which is what an
@@ -1756,9 +1807,9 @@ export function harness<Box>(
     throw new Error('the substituted Sandbox base class did not run its constructor');
   }
 
-  // Defined after construction because the class reads `ctx.container` only at
-  // call time, and the fake owns the handle it flips on stop and destroy.
-  Object.defineProperty(state, 'container', { value: container.running, configurable: true });
+  // Set after construction because the class reads `ctx.container` only at call
+  // time, and the fake owns the flag it flips on stop and destroy.
+  state.container = containerHandle(container.running);
 
   container.running.running = false;
 

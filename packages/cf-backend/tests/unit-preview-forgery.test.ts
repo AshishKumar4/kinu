@@ -31,6 +31,7 @@ import { afterAll, describe, expect, setSystemTime, test } from 'bun:test';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { makeKv, type FakeKv } from './helpers/kv';
+import { workerContext } from './helpers/bindings';
 import { TEST_CREDENTIAL_ENCRYPTION_KEY } from './helpers/user-do';
 import { sandboxPreviewExposures } from '@kinu.run/core';
 
@@ -103,8 +104,6 @@ function probe(): SandboxProbe {
       }),
     },
   });
-  const partialCtx: Partial<ExecutionContext> = {};
-  Object.assign(partialCtx, { waitUntil() {}, passThroughOnException() {} });
 
   return {
     resolved,
@@ -115,8 +114,7 @@ function probe(): SandboxProbe {
     // Sandbox namespace and the SPA fallback the rail never reaches. The rail
     // is step 1 of the route table, so nothing unassigned is reachable.
     env: view as Env,
-    // SAFETY: both members of the entry's ExecutionContext contract.
-    ctx: partialCtx as ExecutionContext,
+    ctx: workerContext(),
   };
 }
 

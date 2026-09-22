@@ -16,9 +16,15 @@
 import { renderThrownChain, diagnostics, toKinuError } from '@kinu.run/core/obs';
 import type { FeedbackRecord } from '@kinu.run/core';
 import { controlPlaneStub, hasControlPlane, type ControlPlaneEnv } from './stub';
+import type { ControlPlaneDO } from './control-plane-do';
 import { internalCaller } from './admin-caller';
 
-export type { ControlPlaneEnv } from './stub';
+/** The one row this ingest writes on the fleet index. */
+export type FeedbackSink = Pick<ControlPlaneDO, 'recordFeedback'>;
+
+/** Optional destination, as the index feed's is: the absence is reported to
+ *  the reporter rather than counted as a refused write. */
+export type FeedbackIngestEnv<Id> = Partial<ControlPlaneEnv<Id, FeedbackSink>>;
 
 export type FeedbackIngestOutcome = { id: string } | { error: string };
 
@@ -28,8 +34,8 @@ export type FeedbackIngestOutcome = { id: string } | { error: string };
  * The screenshot bytes are already in R2 and are not touched here: this row
  * carries `objectKey` and the store never holds an image.
  */
-export async function recordFeedback(
-  env: ControlPlaneEnv,
+export async function recordFeedback<Id>(
+  env: FeedbackIngestEnv<Id>,
   row: FeedbackRecord,
 ): Promise<FeedbackIngestOutcome> {
   // Feedback is the one path where an absent binding IS a lost report: the

@@ -20,6 +20,9 @@ import { sqlExec } from './helpers/user-do';
 import { mockAgentsSdk } from './helpers/agents-sdk';
 import { makeKv } from './helpers/kv';
 import { jsrpcStub } from './helpers/jsrpc-stub';
+import type {
+  WebhookDeliveryEnv, WebhookDeliveryResolver, WebhookDeliveryTarget,
+} from '../src/events/routes';
 
 // The route's module graph reaches `cloudflare:email` through `agents`, so the
 // stub has to be installed before it loads — one shared mock, then the dynamic
@@ -52,46 +55,31 @@ interface DeliveryProbe {
 }
 
 interface Harness {
-  readonly env: Env;
+  readonly env: WebhookDeliveryEnv;
+  readonly resolveAgent: WebhookDeliveryResolver;
   readonly probe: DeliveryProbe;
 }
 
 function harness(): Harness {
   const probe: DeliveryProbe = { woken: [], bodyText: undefined };
 
-  const agent = jsrpcStub({
-    acceptWebhookDelivery: async (opts: { body_text: string }) => {
+  const agent = jsrpcStub<WebhookDeliveryTarget>({
+    acceptWebhookDelivery: async (opts) => {
       probe.bodyText = opts.body_text;
 
-      return { status: 'accepted' as const, event_id: 'evt_1', admitted: true };
+      return { status: 'admitted', event_id: 'evt_1', admitted: true };
     },
   });
 
-  // The doubles are deliberately NOT typed as the bindings they stand in for:
-  // a fake `idFromName` returning the name can never satisfy `DurableObjectId`,
-  // and `jsrpcStub`'s prototype-bound methods can never satisfy
-  // `DurableObjectStub`. `Object.assign` is what lets the members land without
-  // the type system adjudicating the fakes.
-  const view: Partial<Env> = {};
-  Object.assign(view, {
-    AUTH_KV: makeKv(),
-    OrchestratorAgent: {
-      idFromName: (name: string) => name,
-      get: (name: string) => {
-        probe.woken.push(name);
+  return {
+    env: { AUTH_KV: makeKv(), WEBHOOK_ROUTE_SECRET: ROUTE_SECRET },
+    resolveAgent: (name) => {
+      probe.woken.push(name);
 
-        return agent;
-      },
+      return Promise.resolve(agent);
     },
-    WEBHOOK_ROUTE_SECRET: ROUTE_SECRET,
-  });
-
-  // SAFETY: the three members the route reads are constructed by the
-  // Object.assign above — `AUTH_KV` (the knock budget), `WEBHOOK_ROUTE_SECRET`
-  // (the route capability) and `OrchestratorAgent.get` (the ingress double) are
-  // the complete set the delivery path touches, verified against its body.
-  // Nothing unassigned is reachable through this cast.
-  return { env: view as Env, probe };
+    probe,
+  };
 }
 
 /** A delivery on a URL the server minted, which is the only kind that reaches
@@ -111,18 +99,18 @@ async function delivery(
 
 describe('what a signed webhook delivery may cost', () => {
   test('a body within the ceiling reaches the ingress byte for byte', async () => {
-    const { env, probe } = harness();
+    const { env, probe, resolveAgent } = harness();
     const body = JSON.stringify({ note: 'x'.repeat(4096) });
-    const response = await handleWebhookDeliveryRequest(await delivery(body), env);
+    const response = await handleWebhookDeliveryRequest(await delivery(body), env, resolveAgent);
 
     expect(response?.status).toBe(202);
     expect(probe.bodyText).toBe(body);
   });
 
   test('a body over the ceiling is refused, and no workspace object is woken', async () => {
-    const { env, probe } = harness();
+    const { env, probe, resolveAgent } = harness();
     const request = await delivery('x'.repeat(1024 * 1024 + 17));
-    const response = await handleWebhookDeliveryRequest(request, env);
+    const response = await handleWebhookDeliveryRequest(request, env, resolveAgent);
 
     expect(response?.status).toBe(413);
     expect(probe.woken).toEqual([]);
@@ -130,26 +118,26 @@ describe('what a signed webhook delivery may cost', () => {
   });
 
   test('an announced length over the ceiling is refused before the body is read', async () => {
-    const { env, probe } = harness();
+    const { env, probe, resolveAgent } = harness();
 
     const request = await delivery('{}', {
       headers: { 'content-length': String(8 * 1024 * 1024) },
     });
 
-    const response = await handleWebhookDeliveryRequest(request, env);
+    const response = await handleWebhookDeliveryRequest(request, env, resolveAgent);
 
     expect(response?.status).toBe(413);
     expect(probe.woken).toEqual([]);
   });
 
   test('one source cannot knock without bound', async () => {
-    const { env, probe } = harness();
+    const { env, probe, resolveAgent } = harness();
     const headers = { 'cf-connecting-ip': '203.0.113.7' };
     let refused: Response | null = null;
 
     for (let attempt = 0; attempt < 61 && !refused; attempt += 1) {
       const response = await handleWebhookDeliveryRequest(
-        await delivery('{}', { headers }), env,
+        await delivery('{}', { headers }), env, resolveAgent,
       );
 
       if (response?.status === 429) refused = response;

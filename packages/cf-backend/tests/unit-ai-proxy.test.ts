@@ -10,14 +10,15 @@
 //   - GET /models lists the proxy-served wire ids in OpenAI list shape
 import { TEST_CREDENTIAL_ENCRYPTION_KEY } from './helpers/user-do';
 import { afterEach, describe, expect, test } from 'bun:test';
-import { handleCliRequest } from '../src/cli/routes';
+import { handleCliRequest, type CliRoutesEnv } from '../src/cli/routes';
+import { cliAccount, unreachableAssets, unreachableKv, unreachableNamespace } from './helpers/bindings';
 import {
   asFetchFunction,
   parseJsonObject,
   type JsonObject,
   type JsonValue,
 } from '@kinu.run/core';
-import type { UserCaller } from '@kinu.run/core';
+import type { AccessTokenScope, UserCaller } from '@kinu.run/core';
 import * as v from 'valibot';
 import { requestBodyText, requestUrl } from './helpers/fetch-input';
 
@@ -31,7 +32,7 @@ const READ_TOKEN = `pta_${USER_ID}_${'r'.repeat(44)}`;
 
 /** The scopes each access token in this suite carries. A bearer that is not one
  *  of these is not a token at all. */
-function scopesFor(bearer: string): string[] | null {
+function scopesFor(bearer: string): AccessTokenScope[] | null {
   if (bearer === AI_TOKEN) return ['ai.proxy'];
 
   if (bearer === READ_TOKEN) return ['workspace.read'];
@@ -81,7 +82,7 @@ function setupEnv(opts: {
   const gatewayId = opts.gatewayId === undefined ? 'my-gw' : opts.gatewayId;
   const token = opts.token ?? 'cf-user';
 
-  const userDO = {
+  const userDO = cliAccount({
     async verifyCliToken(_caller: UserCaller, bearer: string) {
       return {
         ok: bearer === SESSION_TOKEN,
@@ -101,7 +102,9 @@ function setupEnv(opts: {
         user: { id: USER_ID, email: 'ashish@example.com', displayName: 'Ashish' },
       };
     },
-    async getAuthHeaders(_caller: UserCaller, key: string, o?: { forceRefresh?: boolean }) {
+    async getAuthHeaders(
+      _caller: UserCaller, key: string, o?: { forceRefresh?: boolean },
+    ): Promise<Record<string, string> | null> {
       const bearer = o?.forceRefresh ? (opts.freshToken ?? token) : token;
 
       if (key === 'cloudflare.oauth') return { authorization: `Bearer ${bearer}` };
@@ -116,19 +119,29 @@ function setupEnv(opts: {
       return (key === 'cloudflare.oauth' || key === 'cloudflare.ai-gateway') ? AI_BASE_URL : null;
     },
     async listCredentials(_caller: UserCaller) {
-      return [{ key: 'cloudflare.oauth', kind: 'oauth', createdAt: 0, updatedAt: 0 }];
+      return [{ key: 'cloudflare.oauth', kind: 'oauth' as const, createdAt: 0, updatedAt: 0 }];
     },
-  };
-
-  const directRuns: Array<{ model: string; inputs: JsonObject }> = [];
-  const partialEnv: Partial<Env> = {};
-  Object.assign(partialEnv, {
-    UserDO: { idFromName: (name: string) => name, get: () => userDO },
-    CREDENTIAL_ENCRYPTION_KEY: TEST_CREDENTIAL_ENCRYPTION_KEY,
   });
 
+  const directRuns: Array<{ model: string; inputs: JsonObject }> = [];
+
+  const env: CliRoutesEnv<string> = {
+    UserDO: { idFromName: (name) => name, get: () => userDO },
+    CREDENTIAL_ENCRYPTION_KEY: TEST_CREDENTIAL_ENCRYPTION_KEY,
+    // A proxied completion never reaches a workspace object, the device-code
+    // KV or the published assets.
+    OrchestratorAgent: unreachableNamespace('OrchestratorAgent'),
+    AUTH_KV: unreachableKv('AUTH_KV'),
+    ASSETS: unreachableAssets(),
+  };
+
   if (opts.evalService) {
-    const ai = {
+    // The eval identity's direct path calls `run` on the binding and reads no
+    // other member of it; the gateway half is the same binding's `gateway`.
+    env.DEV_USER_EMAIL = 'eval-service@kinu.run';
+
+    env.AI = {
+      gateway: () => ({ run: () => { throw new Error('AI.gateway: not reachable in this test'); } }),
       async run(model: string, inputs: JsonObject) {
         directRuns.push({ model, inputs });
 
@@ -146,18 +159,7 @@ function setupEnv(opts: {
         });
       },
     };
-
-    Object.assign(partialEnv, {
-      DEV_USER_EMAIL: 'eval-service@kinu.run',
-      // SAFETY: this constructed fixture implements `Ai.run`. The
-      // `DEV_USER_EMAIL` proxy branch reads no other member of `env.AI`.
-      AI: ai as Ai,
-    });
   }
-
-  // SAFETY: AI proxy tests reach only the constructed UserDO namespace and
-  // credential key; every binding they access is present above.
-  const env = partialEnv as Env;
 
   return { env, directRuns };
 }

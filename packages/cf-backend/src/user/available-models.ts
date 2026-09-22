@@ -8,7 +8,9 @@ import {
   catalogCredKey, listModelsDevProviders, modelsDevCompatBaseURL,
   type ModelsDevProviderInfo, type ProviderFailure, type ReasoningEffort,
 } from '@kinu.run/core';
-import { createAgentProviderRegistry } from '../providers/agent-registry';
+import { createAgentProviderRegistry, type UserCredentialClient } from '../providers/agent-registry';
+import type { ObjectNamespace } from '../bindings';
+import type { ProviderEnv } from '@kinu.run/core';
 import { retryTransientDO } from '@kinu.run/core';
 import type { UserCaller } from '@kinu.run/core';
 
@@ -36,7 +38,15 @@ export interface ModelMenuResponse {
   failures: ProviderFailure[];
 }
 
-export async function listAvailableModels(env: Env, userId: string, caller: UserCaller): Promise<ModelMenuResponse> {
+/** What a model listing reads: the provider seam the registry runs on, and
+ *  the user object that holds the credentials it lists. */
+export interface AvailableModelsEnv<Id> extends ProviderEnv {
+  UserDO: ObjectNamespace<Id, UserCredentialClient>;
+}
+
+export async function listAvailableModels<Id>(
+  env: AvailableModelsEnv<Id>, userId: string, caller: UserCaller,
+): Promise<ModelMenuResponse> {
   // The UserDO namespace binding declares UserDO as its stub contract.
   const stub = env.UserDO.get(env.UserDO.idFromName(userId));
 
@@ -117,7 +127,9 @@ function buildProviderCatalog(
     .sort((a, b) => Number(b.connected) - Number(a.connected) || a.name.localeCompare(b.name));
 }
 
-export async function listProviderCatalog(env: Env, userId: string, caller: UserCaller): Promise<ProviderCatalogEntry[]> {
+export async function listProviderCatalog<Id>(
+  env: AvailableModelsEnv<Id>, userId: string, caller: UserCaller,
+): Promise<ProviderCatalogEntry[]> {
   // The UserDO namespace binding declares UserDO as its stub contract.
   const stub = env.UserDO.get(env.UserDO.idFromName(userId));
   const { registry } = createAgentProviderRegistry({ env, userDO: { stub, caller }, fetch });

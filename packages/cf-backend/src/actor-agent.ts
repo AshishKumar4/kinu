@@ -2633,7 +2633,7 @@ export abstract class ActorAgent extends Agent<Env> {
    * The base hosts no workspace, so the answer here is always null; the root
    * answers with its hosted runtime for a socket tagged as its terminal.
    */
-  protected terminalFor(_connection: Connection): Promise<WorkspaceTerminal | null> {
+  protected terminalFor(_connection: Pick<Connection, 'tags'>): Promise<WorkspaceTerminal | null> {
     return Promise.resolve(null);
   }
 
@@ -2643,7 +2643,7 @@ export abstract class ActorAgent extends Agent<Env> {
    * frame of its own shape; a socket that sends anything else is closed with
    * the reason, since the pane and the route ship together.
    */
-  private async forwardTerminalFrame(terminal: WorkspaceTerminal, connection: Connection, message: WSMessage): Promise<void> {
+  private async forwardTerminalFrame(terminal: WorkspaceTerminal, connection: Pick<Connection, 'send' | 'close'>, message: WSMessage): Promise<void> {
     const frame = v.is(v.string(), message)
       ? v.safeParse(WorkspaceTerminalInputSchema, tolerate(() => JSON.parse(message), 'malformed-input'))
       : null;

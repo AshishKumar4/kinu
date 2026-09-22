@@ -11,7 +11,7 @@ import { deflateSync } from 'node:zlib';
 import { createRecordingLogger, setDiagnosticsSink, type RecordedLog } from '@kinu.run/core/obs';
 import type { AuthIdentity } from '../src/auth/session';
 import { routeFeedback, type FeedbackDeps } from '../src/feedback/submit';
-import { handleFeedbackRequest, type FeedbackEnv } from '../src/feedback/routes';
+import { handleFeedbackRequest, type FeedbackEnv, type FeedbackRegistry } from '../src/feedback/routes';
 import type { UserCaller } from '@kinu.run/core';
 import type { FeedbackMarker } from '@kinu.run/core/analytics';
 import {
@@ -909,15 +909,11 @@ describe('the workspace a report claims to be about', () => {
  * so an accepted attribution ends at the row write — which is exactly how this
  * suite tells "got past the gate" from "was refused by it".
  */
-interface RegistryStub {
-  hasWorkspace(caller: UserCaller, name: string): Promise<boolean>;
-}
-
 function registryEnv(options: { owns?: readonly string[]; throws?: string; secret?: boolean }) {
   const asked: { caller: UserCaller; workspace: string }[] = [];
   const ids: string[] = [];
 
-  const stub: RegistryStub = {
+  const stub: FeedbackRegistry = {
     hasWorkspace: async (caller, name) => {
       asked.push({ caller, workspace: name });
       await Promise.resolve();
@@ -928,8 +924,10 @@ function registryEnv(options: { owns?: readonly string[]; throws?: string; secre
     },
   };
 
-  const env: Partial<FeedbackEnv> = {};
-  Object.assign(env, {
+  // No bucket, no analytics dataset and no control plane: a note-only
+  // deployment, which is what makes `hasControlPlane` refuse the row write the
+  // assertions below read as "got past the gate".
+  const env: FeedbackEnv<string> = {
     UserDO: {
       idFromName(name: string) {
         ids.push(name);
@@ -938,23 +936,16 @@ function registryEnv(options: { owns?: readonly string[]; throws?: string; secre
       },
       get() { return stub; },
     },
-  });
+  };
 
   // A deployment without the root secret is a real state, and the one that
   // proves an unanswerable question is answered as an outage.
   if (options.secret !== false) env.CREDENTIAL_ENCRYPTION_KEY = 'test-root-secret';
 
-  // SAFETY: this function CONSTRUCTED every member the endpoint reads.
-  // `UserDO.idFromName` and `get().hasWorkspace` are the stub above;
-  // `CREDENTIAL_ENCRYPTION_KEY` is set on the line above unless the test is
-  // about its absence. `FEEDBACK_BUCKET` and `FEEDBACK_MARKERS` are optional and
-  // absent by construction — a note-only, analytics-free deployment — and the
-  // control-plane binding is absent by construction too, which is what makes
-  // `hasControlPlane` refuse the row write the assertions below rely on.
-  return { env: env as FeedbackEnv, asked, ids };
+  return { env, asked, ids };
 }
 
-async function fileAgainst(env: FeedbackEnv, workspace: string): Promise<Response> {
+async function fileAgainst(env: FeedbackEnv<string>, workspace: string): Promise<Response> {
   const response = await handleFeedbackRequest(
     submit({ note: 'x', route: `/workspace/${workspace}`, workspace }), env, ME);
 

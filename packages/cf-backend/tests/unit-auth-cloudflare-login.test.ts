@@ -5,40 +5,18 @@
 // against the real KV auth store, faking only the network seams.
 import { TEST_CREDENTIAL_ENCRYPTION_KEY } from './helpers/user-do';
 import { describe, expect, setSystemTime, test } from 'bun:test';
-import { handleAuthRequest } from '../src/auth/routes';
+import { handleAuthRequest, type AuthRoutesAuthority, type AuthRoutesEnv } from '../src/auth/routes';
+import { bootstrappedProfile } from './helpers/bindings';
 import { OAUTH_STATE_COOKIE_NAME, SESSION_COOKIE_NAME } from '../src/auth/session';
 import { calculatePKCECodeChallenge } from 'oauth4webapi';
 import { CLOUDFLARE_WORKERS_AI_SCOPES } from '@kinu.run/core';
 import { asFetchFunction, type OAuthCredential } from '@kinu.run/core';
-import { makeKv, type FakeKv } from './helpers/kv';
+import { makeKv } from './helpers/kv';
 import type { BrowserSessionIdentity } from '../src/user/user-do';
 import type { UserCaller } from '@kinu.run/core';
 import { requestBodyText } from './helpers/fetch-input';
 
 const ORIGIN = 'https://kinu.example.com';
-
-interface TestNamespace<Stub> {
-  idFromName(name: string): string;
-  get(): Stub;
-}
-
-interface CloudflareLoginTestBindings<UserStub, AgentStub> {
-  AUTH_KV: FakeKv;
-  UserDO: TestNamespace<UserStub>;
-  OrchestratorAgent: TestNamespace<AgentStub>;
-  CLOUDFLARE_OAUTH_CLIENT_ID: string;
-  CLOUDFLARE_OAUTH_CLIENT_SECRET: string;
-  CREDENTIAL_ENCRYPTION_KEY: string;
-}
-
-function testEnv<UserStub, AgentStub>(bindings: CloudflareLoginTestBindings<UserStub, AgentStub>): Env {
-  const env: Partial<Env> = {};
-  Object.assign(env, bindings);
-
-  // SAFETY: The callback reads exactly the constructed KV namespace, namespaces,
-  // OAuth client values, and credential key; every reachable binding is present above.
-  return env as Env;
-}
 
 function setupEnv() {
   const kv = makeKv();
@@ -48,8 +26,8 @@ function setupEnv() {
    *  step-up compares against. */
   const sessions = new Map<string, { expiresAt: number; identity: BrowserSessionIdentity }>();
 
-  const userDO = {
-    async ensureProfile(_caller: UserCaller) {},
+  const userDO: AuthRoutesAuthority = {
+    async ensureProfile(_caller: UserCaller, email: string) { return bootstrappedProfile(email); },
     async registerBrowserSession(
       _caller: UserCaller, tokenHash: string, expiresAt: number, identity: BrowserSessionIdentity,
     ) { sessions.set(tokenHash, { expiresAt, identity }); },
@@ -65,14 +43,17 @@ function setupEnv() {
     async listActiveWorkspaces(_caller: UserCaller) { return []; },
   };
 
-  const env = testEnv({
+  const env: AuthRoutesEnv<string> = {
     AUTH_KV: kv,
-    UserDO: { idFromName: (name: string) => name, get: () => userDO },
-    OrchestratorAgent: { idFromName: (name: string) => name, get: () => ({ async onCredentialsChanged() {} }) },
+    UserDO: { idFromName: (name) => name, get: () => userDO },
+    OrchestratorAgent: {
+      idFromName: (name) => name,
+      get: () => ({ onCredentialsChanged: async () => ({ ok: true as const }) }),
+    },
     CLOUDFLARE_OAUTH_CLIENT_ID: 'cf-client-id',
     CLOUDFLARE_OAUTH_CLIENT_SECRET: 'cf-client-secret',
     CREDENTIAL_ENCRYPTION_KEY: TEST_CREDENTIAL_ENCRYPTION_KEY,
-  });
+  };
 
   return { env, kv, credentials, sessions };
 }
@@ -136,7 +117,7 @@ interface CloudflareHandoff {
   authorizeUrl: string;
 }
 
-async function startCloudflareLogin(env: Env, prompt?: 'login'): Promise<CloudflareHandoff> {
+async function startCloudflareLogin(env: AuthRoutesEnv<string>, prompt?: 'login'): Promise<CloudflareHandoff> {
   const start = new URL(`${ORIGIN}/auth/cloudflare/start`);
 
   if (prompt) start.searchParams.set('prompt', prompt);
@@ -163,7 +144,7 @@ async function startCloudflareLogin(env: Env, prompt?: 'login'): Promise<Cloudfl
 /** The provider's callback, as the browser carrying `setCookie` makes it —
  *  or as one carrying none does, which is what a planted callback link is. */
 async function completeCloudflareLogin(
-  env: Env,
+  env: AuthRoutesEnv<string>,
   handoff: { state: string; setCookie?: string },
 ): Promise<Response> {
   const callback = new URL(`${ORIGIN}/auth/cloudflare/callback`);

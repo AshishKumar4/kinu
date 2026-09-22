@@ -34,8 +34,8 @@ import {
   sessionBearerFromTags,
 } from '../src/cli/rpc-gate';
 import { sha256Hex } from '@kinu.run/core';
-import type { Connection } from 'agents';
 import { requestUrl } from './helpers/fetch-input';
+import { socketConnection } from './helpers/bindings';
 
 const USER_ID = '0123456789abcdef0123456789abcdef';
 
@@ -428,23 +428,18 @@ describe('one browser approval mints one CLI token', () => {
 interface FakeConnection {
   tags: string[];
   sent: string[];
-  closed: Array<{ code: number; reason: string }>;
+  closed: Array<{ code?: number; reason?: string }>;
 }
 
 function connection(tags: string[]) {
   const fake: FakeConnection = { tags, sent: [], closed: [] };
-  const partial: Partial<Connection> = {};
-  Object.assign(partial, {
+
+  const wire = socketConnection({
     id: 'conn-1',
     tags,
     send: (data: string) => { fake.sent.push(data); },
-    close: (code: number, reason: string) => { fake.closed.push({ code, reason }); },
+    close: (code?: number, reason?: string) => { fake.closed.push({ code, reason }); },
   });
-  // SAFETY: every member the frame gate touches is constructed above — the
-  // platform's contract for a hibernated connection carries its tags and its
-  // wire and nothing else, so no other part of Connection is reachable from
-  // the code under test.
-  const wire = partial as Connection;
 
   return { fake, wire };
 }

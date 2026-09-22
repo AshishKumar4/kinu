@@ -71,7 +71,7 @@ function releaseMatch(reported: string | undefined, current: string | undefined)
  */
 async function handleClientErrorReport(
   request: Request,
-  env: Env,
+  env: ClientErrorEnv,
   identity: AuthIdentity | null,
 ): Promise<Response> {
   if (identity === null) return err(401, 'sign in to report a render failure');
@@ -126,9 +126,13 @@ async function handleClientErrorReport(
 }
 
 /** Path and method routing only; the policy is `handleClientErrorReport`. */
+/** The one binding this route reads: the published build stamp a report is
+ *  matched against. */
+export type ClientErrorEnv = Parameters<typeof readBuildStamp>[0];
+
 export async function handleClientErrorRequest(
   request: Request,
-  env: Env,
+  env: ClientErrorEnv,
   identity: AuthIdentity | null,
 ): Promise<Response | null> {
   if (new URL(request.url).pathname !== CLIENT_ERROR_ENDPOINT) return null;

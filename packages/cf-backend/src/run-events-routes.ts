@@ -62,16 +62,25 @@ const ALLOWED_TYPES = [
   'turn_end', 'run_end',
 ] as const satisfies readonly RunEventType[];
 
-async function resolveAgent(env: Env, agentName: string) {
-  // routeAgentRequest expects /agents/<class>/<name>; we use getAgentByName.
-  // Class name is hardcoded to "OrchestratorAgent" (only one Think class).
-  const stub = await getAgentByName<Env, OrchestratorAgent>(
-    env.OrchestratorAgent,
-    agentName,
-  );
+/** Every call a run-event route makes on the workspace object it addresses. */
+export type RunEventsTarget = Pick<OrchestratorAgent, 'listRuns' | 'getRunEventsWire'>;
 
-  return stub;
-}
+/**
+ * How a run-event route reaches that object.
+ *
+ * A function rather than the namespace binding, because resolving one is not
+ * `get(idFromName(name))`: the deployment binds the Agents SDK's own
+ * `getAgentByName` (agents@0.22.0, `dist/agent-routing.js:176-183`, read
+ * 2026-09-22), which resolves the stub and then awaits
+ * `__unsafe_ensureInitialized` on it — the lifecycle gate that runs `onStart`
+ * before the first RPC — under the SDK's own retry. Injecting the resolver
+ * leaves all of that to the vendor and lets a test hand over its own object.
+ */
+export type RunEventsResolver = (name: string) => Promise<RunEventsTarget>;
+
+/** The deployment's resolver: the SDK's own, over this Worker's binding. */
+export const runEventsResolver = (env: Env): RunEventsResolver =>
+  (name) => getAgentByName<Env, OrchestratorAgent>(env.OrchestratorAgent, name);
 
 function parseTypesParam(s: string | null): RunEventType[] | undefined {
   if (!s) return undefined;
@@ -83,7 +92,11 @@ function parseTypesParam(s: string | null): RunEventType[] | undefined {
   return valid.length > 0 ? valid : undefined;
 }
 
-export async function handleRunEventsRequest(request: Request, env: Env, clock: Clock): Promise<Response | null> {
+export async function handleRunEventsRequest(
+  request: Request,
+  resolveAgent: RunEventsResolver,
+  clock: Clock,
+): Promise<Response | null> {
   const url = new URL(request.url);
   const path = url.pathname;
 
@@ -110,7 +123,7 @@ export async function handleRunEventsRequest(request: Request, env: Env, clock: 
     const after = url.searchParams.get('after');
 
     try {
-      const stub = await resolveAgent(env, agentName);
+      const stub = await resolveAgent(agentName);
 
       return Response.json(await stub.listRuns({ limit, cursor: after ? { after } : undefined }));
     } catch (cause) {
@@ -135,7 +148,7 @@ export async function handleRunEventsRequest(request: Request, env: Env, clock: 
     });
 
     try {
-      const stub = await resolveAgent(env, agentName);
+      const stub = await resolveAgent(agentName);
       const events = decodeRunEventWire(await stub.getRunEventsWire(runId, opts));
 
       return Response.json(events);
@@ -152,7 +165,7 @@ export async function handleRunEventsRequest(request: Request, env: Env, clock: 
     const lastEventId = request.headers.get('Last-Event-ID') ?? request.headers.get('last-event-id');
 
     return streamRunEvents({
-      env, agentName, runId,
+      resolveAgent, agentName, runId,
       sinceIndex: resumeIndexFromLastEventId(lastEventId),
       signal: request.signal,
       clock,
@@ -165,7 +178,7 @@ export async function handleRunEventsRequest(request: Request, env: Env, clock: 
 
 /** One SSE subscription to a run's durable event log. */
 export interface RunEventStreamOptions {
-  readonly env: Env;
+  readonly resolveAgent: RunEventsResolver;
   readonly agentName: string;
   readonly runId: string;
   readonly sinceIndex: number;
@@ -176,7 +189,7 @@ export interface RunEventStreamOptions {
 }
 
 function streamRunEvents(options: RunEventStreamOptions): Response {
-  const { env, agentName, runId, sinceIndex, signal, clock } = options;
+  const { resolveAgent, agentName, runId, sinceIndex, signal, clock } = options;
   const encoder = new TextEncoder();
   // Stop polling the DO the moment the client goes away — via stream
   // cancel() (reader released) or the request abort signal — instead of
@@ -194,7 +207,7 @@ function streamRunEvents(options: RunEventStreamOptions): Response {
       let heartbeatAt = clock.now();
       signal.addEventListener('abort', () => { closed = true; }, { once: true });
 
-      const stub = await resolveAgent(env, agentName);
+      const stub = await resolveAgent(agentName);
       const resolvedAt = clock.now();
 
       // First byte, measured once. What a reader of this stream actually waits

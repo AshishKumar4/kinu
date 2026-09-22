@@ -38,7 +38,7 @@ import {
 import type { UserDO } from './user-do';
 import { errorResponse } from '@kinu.run/core';
 import { json } from '@kinu.run/core';
-import { ownerCaller, type UserCaller } from '@kinu.run/core';
+import { ownerCaller, type OwnerCapabilityEnv, type UserCaller } from '@kinu.run/core';
 import { validateCredentialKey } from '@kinu.run/core';
 import { renderCauseChain } from '@kinu.run/core/obs';
 
@@ -66,10 +66,13 @@ const STRIPPED_REQUEST_HEADERS: readonly string[] = [
   'x-forwarded-for', 'x-forwarded-proto', 'x-forwarded-host', 'x-real-ip',
 ];
 
+/** The credential calls this proxy makes on the user's own object. */
+export type ProxyCredentialSource = Pick<UserDO, 'listCredentials' | 'getCredentialBaseURL' | 'getAuthHeaders'>;
+
 export async function handleUserProviderProxyRequest(
   request: Request,
-  env: Env,
-  cli: { userDO: DurableObjectStub<UserDO> },
+  env: OwnerCapabilityEnv,
+  cli: { userDO: ProxyCredentialSource },
 ): Promise<Response> {
   const path = new URL(request.url).pathname.slice(USER_AI_PROXY_FORWARD_PREFIX.length);
   const owner = await ownerCaller(env);
@@ -93,7 +96,7 @@ export async function handleUserProviderProxyRequest(
  * advertised and then refused at send time.
  */
 async function listProxyableCredentials(
-  userDO: DurableObjectStub<UserDO>,
+  userDO: ProxyCredentialSource,
   owner: UserCaller,
 ): Promise<ProxyableCredential[]> {
   const stored = await userDO.listCredentials(owner);
@@ -120,7 +123,7 @@ async function listProxyableCredentials(
 
 async function forwardUpstream(
   request: Request,
-  userDO: DurableObjectStub<UserDO>,
+  userDO: ProxyCredentialSource,
   owner: UserCaller,
 ): Promise<Response> {
   const credKey = request.headers.get(PROXY_CRED_HEADER)?.trim();

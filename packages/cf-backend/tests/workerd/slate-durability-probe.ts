@@ -38,8 +38,8 @@ import { listPortReservations } from '@nimbus-sh/worker/port-capability';
 import { ROOT_SLATE_CALLER } from '../../src/slates/bindings';
 import { renderThrownChain } from '@kinu.run/core/obs';
 import { ownerCaller } from '@kinu.run/core';
+import { workspaceOwner } from '../../src/workspace-owner-rpc';
 import type { JsonValue } from '@kinu.run/core';
-import type { UserDO } from '../../src/user/user-do';
 import type {
   DurabilityReservation,
   PreviewAnswer,
@@ -95,8 +95,21 @@ export { ObservedOrchestrator as OrchestratorAgent };
 // `ctx.exports` carries none, and every facet reaches its host through it.
 export { SupervisorRPC } from '@nimbus-sh/worker/workspace-host';
 
+/** Every call the probe makes on the workspace object's own stub.
+ *  `slateAs` is absent on purpose: its `SlateCallResult` carries the recursive
+ *  `JsonValue`, and mapping `Rpc.Result` over it is the TS2589 that
+ *  `workspace-owner-rpc.ts` exists to avoid — the probe reaches that operation
+ *  through `workspaceOwner()`, the same port production's actor uses. */
 type SlateTarget = Pick<Fetcher, 'fetch'> & Pick<ProductionOrchestrator,
-  'claimOwner' | 'slateAs' | 'writeExecutorFileChunk' | 'executeInExecutor'> & Pick<ObservedOrchestrator, 'portReservations'>;
+  'claimOwner' | 'writeExecutorFileChunk' | 'executeInExecutor'> & Pick<ObservedOrchestrator, 'portReservations'>;
+
+/** The probe worker's own bindings. `durableObjects` installs
+ *  `ObservedOrchestrator` under the `OrchestratorAgent` name (the re-export
+ *  above), which the production `Env` declares by its base class, so every
+ *  stub the namespace returns carries the fixture read. */
+interface ProbeRootEnv extends Omit<ProbeEnv, 'OrchestratorAgent'> {
+  readonly OrchestratorAgent: DurableObjectNamespace<ObservedOrchestrator>;
+}
 
 const PreviewValueSchema = v.object({ url: v.string(), port: v.number() });
 
@@ -114,25 +127,9 @@ const RemovedValueSchema = v.object({
  * `abortAllDurableObjects()` between calls is exactly what it measures —
  * nothing the test holds is pinned by this object.
  */
-export class SlateDurabilityProbeRoot extends Agent<ProbeEnv> {
-  private async workspaceTarget(workspace: string): Promise<SlateTarget> {
-    // SAFETY: the durableObjects binding declares ObservedOrchestrator under
-    // the OrchestratorAgent name (the re-export above), and that class
-    // extends ProductionOrchestrator and adds portReservations, so every stub
-    // the namespace returns carries the member the production declaration
-    // does not name. The static type goes through a plain fetch pick first —
-    // the SDK's stub mapping over the production class exceeds TypeScript's
-    // instantiation depth (TS2589), the same narrowing slate-actor-probe
-    // applies to `exercise`.
-    const raw: Pick<Fetcher, 'fetch'> = await getAgentByName<ProbeEnv, ObservedOrchestrator>(
-      this.env.OrchestratorAgent as DurableObjectNamespace<ObservedOrchestrator>,
-      workspace,
-    );
-
-    // SAFETY: `raw` is the stub getAgentByName returns for the bound
-    // ObservedOrchestrator class, which declares every member SlateTarget
-    // names, so the assertion only re-arms what the binding constructed.
-    return raw as SlateTarget;
+export class SlateDurabilityProbeRoot extends Agent<ProbeRootEnv> {
+  private workspaceTarget(workspace: string): Promise<SlateTarget> {
+    return getAgentByName<ProbeEnv, ObservedOrchestrator>(this.env.OrchestratorAgent, workspace);
   }
 
   /** The production workspace-create sequence, exactly as
@@ -141,12 +138,7 @@ export class SlateDurabilityProbeRoot extends Agent<ProbeEnv> {
    *  capability token the workspace's privileged reads present. */
   private async claimWorkspace(target: SlateTarget, workspace: string, owner: string): Promise<void> {
     const caller = await ownerCaller(this.env);
-    // SAFETY: `env.UserDO` declares the real `UserDO` class in this worker's
-    // durableObjects, so the stub carries the registry methods the owner
-    // caller tier admits.
-
-    const userDO = this.env.UserDO.get(this.env.UserDO.idFromName(owner)) as
-      DurableObjectStub & Pick<UserDO, 'registerWorkspace' | 'ensureWorkspaceCapability'>;
+    const userDO = this.env.UserDO.get(this.env.UserDO.idFromName(owner));
 
     await userDO.registerWorkspace(caller, workspace, 'Durability Probe');
     const claim = await target.claimOwner(owner);
@@ -206,7 +198,7 @@ export class SlateDurabilityProbeRoot extends Agent<ProbeEnv> {
       '}',
     ].join('\n'));
 
-    const preview = await target.slateAs(ROOT_SLATE_CALLER, { op: 'preview', id: input.id });
+    const preview = await workspaceOwner(this.env, input.workspace).slateAs(ROOT_SLATE_CALLER, { op: 'preview', id: input.id });
 
     if (!preview.ok) throw new Error(`slate preview refused: ${preview.reason}: ${preview.error}`);
     const value = v.parse(PreviewValueSchema, preview.value);
@@ -280,8 +272,7 @@ export class SlateDurabilityProbeRoot extends Agent<ProbeEnv> {
   /** The root removing a slate, through the same operation the owner's
    *  browser sends. */
   async removeSlate(workspace: string, id: string): Promise<RemovedSlate> {
-    const removed = await (await this.workspaceTarget(workspace))
-      .slateAs(ROOT_SLATE_CALLER, { op: 'remove', id });
+    const removed = await workspaceOwner(this.env, workspace).slateAs(ROOT_SLATE_CALLER, { op: 'remove', id });
 
     if (!removed.ok) return { ok: false, reason: removed.reason, error: removed.error };
     const value = v.parse(RemovedValueSchema, removed.value);

@@ -1,9 +1,13 @@
 import { TEST_CREDENTIAL_ENCRYPTION_KEY } from './helpers/user-do';
 import { describe, expect, test } from 'bun:test';
-import { handleCliRequest } from '../src/cli/routes';
+import {
+  handleCliRequest, type CliAgentTarget, type CliRoutesAuthority, type CliRoutesEnv,
+} from '../src/cli/routes';
+import { cliAccount, workspaceObject, unreachableAssets, unreachableKv } from './helpers/bindings';
+import type { ObjectNamespace } from '../src/bindings';
 import { PRIVATE_NO_STORE } from '@kinu.run/core';
 import { JsonValueSchema, type JsonObject, type JsonValue } from '@kinu.run/core';
-import type { UserCaller } from '@kinu.run/core';
+import type { ReasoningEffort, UserCaller } from '@kinu.run/core';
 import * as v from 'valibot';
 
 const USER_ID = '0123456789abcdef0123456789abcdef';
@@ -18,27 +22,22 @@ const ErrorResponseSchema = v.object({ error: v.string() });
 
 const RpcResponseSchema = v.object({ result: JsonValueSchema });
 
-interface TestNamespace<Stub> {
-  idFromName(name: string): string;
-  get(): Stub;
-}
-
-interface ControlRouteTestBindings<UserStub, AgentStub> {
-  UserDO: TestNamespace<UserStub>;
-  OrchestratorAgent: TestNamespace<AgentStub>;
-  CREDENTIAL_ENCRYPTION_KEY: string;
-  /** The CLI webhook route refuses without it: an unsignable delivery URL is a
-   *  trigger nobody can deliver to (events/webhook-route.ts). */
-  WEBHOOK_ROUTE_SECRET: string;
-}
-
-function testEnv<UserStub, AgentStub>(bindings: ControlRouteTestBindings<UserStub, AgentStub>): Env {
-  const env: Partial<Env> = {};
-  Object.assign(env, bindings);
-
-  // SAFETY: The control routes reach only the two constructed namespaces and
-  // credential key; every typed binding reachable in these tests is present.
-  return env as Env;
+/** The plane's env around one pair of namespaces. Device-code sign-in and the
+ *  published downloads are other suites' surfaces; no case here reaches
+ *  either, and the webhook route secret is present because the CLI webhook
+ *  route refuses without it (events/webhook-route.ts). */
+function testEnv(
+  UserDO: ObjectNamespace<string, CliRoutesAuthority>,
+  OrchestratorAgent: ObjectNamespace<string, CliAgentTarget>,
+): CliRoutesEnv<string> {
+  return {
+    UserDO,
+    OrchestratorAgent,
+    CREDENTIAL_ENCRYPTION_KEY: TEST_CREDENTIAL_ENCRYPTION_KEY,
+    WEBHOOK_ROUTE_SECRET: 'test-webhook-route-secret-0123456789',
+    AUTH_KV: unreachableKv('AUTH_KV'),
+    ASSETS: unreachableAssets(),
+  };
 }
 
 function handled(response: Response | null): Response {
@@ -54,7 +53,7 @@ async function errorBody(response: Response | null) {
 function setupEnv(opts: { tokenMintedAt?: number } = {}) {
   const calls: string[] = [];
 
-  const userDO = {
+  const userDO = cliAccount({
     async verifyCliToken(_caller: UserCaller, token: string) {
       return {
         ok: token === TOKEN,
@@ -83,9 +82,9 @@ function setupEnv(opts: { tokenMintedAt?: number } = {}) {
 
       return { ok: true, ticket: `pat_${USER_ID}_ticket`, expiresAt: 1234 };
     },
-  };
+  });
 
-  const agent = {
+  const agent = workspaceObject({
     async claimOwner(userId: string) {
       calls.push(`claim:${userId}`);
 
@@ -132,10 +131,10 @@ function setupEnv(opts: { tokenMintedAt?: number } = {}) {
 
       return { effort: 'medium' };
     },
-    async setReasoningEffort(effort: string) {
+    async setReasoningEffort(effort: ReasoningEffort) {
       calls.push(`effort:set:${effort}`);
 
-      return { ok: true, effort };
+      return { ok: true as const, effort };
     },
     async createTimerTrigger(trigger: JsonObject) {
       calls.push(`triggers:create:${JSON.stringify(trigger)}`);
@@ -167,13 +166,14 @@ function setupEnv(opts: { tokenMintedAt?: number } = {}) {
 
       return { stdout: 'ok', exitCode: 0 };
     },
-    async createDurableWebhook(webhook: JsonObject) {
+    async createDurableWebhook(webhook: { label: string; auth_mode: 'hmac' | 'bearer' | 'mtls' }) {
       calls.push(`triggers:webhook:${JSON.stringify(webhook)}`);
 
       return {
         trigger_id: '01HZY6QK9N4T7M2P8V3XABCDEF',
         url: '/api/workspaces/jarvis/webhook/01HZY6QK9N4T7M2P8V3XABCDEF/v1-'
           + 'a1b2c3d4e5f60718293a4b5c6d7e8f90',
+        auth_mode: webhook.auth_mode,
         secret: 'secret',
       };
     },
@@ -188,37 +188,28 @@ function setupEnv(opts: { tokenMintedAt?: number } = {}) {
 
       return null;
     },
-  };
-
-  const env = testEnv({
-    UserDO: {
-      idFromName(name: string) { return name; },
-      get() { return userDO; },
-    },
-    OrchestratorAgent: {
-      idFromName(name: string) { return name; },
-      get() { return agent; },
-    },
-    CREDENTIAL_ENCRYPTION_KEY: TEST_CREDENTIAL_ENCRYPTION_KEY,
-    WEBHOOK_ROUTE_SECRET: 'test-webhook-route-secret-0123456789',
   });
+
+  const env = testEnv(
+    { idFromName: (name) => name, get: () => userDO },
+    { idFromName: (name) => name, get: () => agent },
+  );
 
   return { env, calls };
 }
 
 /** A user object that accepts THIS suite's token and owns every workspace asked
  *  about, so a case below can put its whole subject in the agent namespace. */
-function tokenHolderUserDO() {
-  return {
-    idFromName: (n: string) => n,
-    get: () => ({
-      async verifyCliToken(_caller: UserCaller, token: string) {
-        return { ok: token === TOKEN, tokenHash: 'hash', user: { id: USER_ID, email: 'a@example.com', displayName: null } };
-      },
-      async hasWorkspace(_caller: UserCaller) { return true; },
-      async ensureWorkspaceCapability() {},
-    }),
-  };
+function tokenHolderUserDO(): ObjectNamespace<string, CliRoutesAuthority> {
+  const account = cliAccount({
+    async verifyCliToken(_caller: UserCaller, token: string) {
+      return { ok: token === TOKEN, tokenHash: 'hash', user: { id: USER_ID, email: 'a@example.com', displayName: null } };
+    },
+    async hasWorkspace(_caller: UserCaller) { return true; },
+    async ensureWorkspaceCapability() {},
+  });
+
+  return { idFromName: (n) => n, get: () => account };
 }
 
 function cliRequest(path: string, init: RequestInit = {}) {
@@ -237,7 +228,7 @@ function rpcRequest(method: string, args: JsonValue[] = [], agent = 'jarvis') {
   });
 }
 
-async function rpcResult(env: Env, method: string, args: JsonValue[] = []): Promise<JsonValue> {
+async function rpcResult(env: CliRoutesEnv<string>, method: string, args: JsonValue[] = []): Promise<JsonValue> {
   const res = await handleCliRequest(rpcRequest(method, args), env);
   expect(`${method}:${res?.status}`).toBe(`${method}:200`);
 
@@ -356,18 +347,12 @@ describe('CLI control routes', () => {
   });
 
   test('a throwing method surfaces as a 400 with its message', async () => {
-    const env = testEnv({
-      UserDO: tokenHolderUserDO(),
-      OrchestratorAgent: {
-        idFromName: (n: string) => n,
-        get: () => ({
-          async claimOwner() { return { owner: USER_ID, capabilityHash: 'sha-existing' }; },
-          async createTimerTrigger() { throw new Error('Timer trigger requires cron or atMs'); },
-        }),
-      },
-      CREDENTIAL_ENCRYPTION_KEY: TEST_CREDENTIAL_ENCRYPTION_KEY,
-      WEBHOOK_ROUTE_SECRET: 'test-webhook-route-secret-0123456789',
+    const workspace = workspaceObject({
+      async claimOwner() { return { owner: USER_ID, capabilityHash: 'sha-existing' }; },
+      async createTimerTrigger() { throw new Error('Timer trigger requires cron or atMs'); },
     });
+
+    const env = testEnv(tokenHolderUserDO(), { idFromName: (n) => n, get: () => workspace });
 
     const thrown = await handleCliRequest(rpcRequest('createTimerTrigger', [{}]), env);
     expect(thrown?.status).toBe(400);
@@ -377,15 +362,9 @@ describe('CLI control routes', () => {
 
 describe('shared ownership claim status mapping', () => {
   function envWithClaimFailure(message: string) {
-    return testEnv({
-      UserDO: tokenHolderUserDO(),
-      OrchestratorAgent: {
-        idFromName: (n: string) => n,
-        get: () => ({ async claimOwner() { throw new Error(message); } }),
-      },
-      CREDENTIAL_ENCRYPTION_KEY: TEST_CREDENTIAL_ENCRYPTION_KEY,
-      WEBHOOK_ROUTE_SECRET: 'test-webhook-route-secret-0123456789',
-    });
+    const workspace = workspaceObject({ claimOwner: () => { throw new Error(message); } });
+
+    return testEnv(tokenHolderUserDO(), { idFromName: (n) => n, get: () => workspace });
   }
 
   // A collision is the caller's and a schema fault is ours; the claim throws

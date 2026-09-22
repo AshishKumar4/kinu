@@ -17,8 +17,7 @@ import { fakeMossaic, type FakeMossaic } from '@kinu.run/test-utils';
 import { deriveUserId } from '../src/auth/store';
 import { USER_DO_RPC_SURFACE } from '../src/rpc-surface';
 import { createTestUserDO, provisionTestWorkspace, testOwner, type TestUserDO } from './helpers/user-do';
-import { driveBound, tenantDrive } from '../src/drive/tenant';
-import type { MossaicShardDO, MossaicUserDO } from '../src/server';
+import { driveBound, tenantDrive, type MossaicObject } from '../src/drive/tenant';
 
 const SKILL = (name: string): string => `---\nname: ${name}\ndescription: ${name} does things\n---\nSteps.`;
 
@@ -50,11 +49,12 @@ describe('the Drive\'s bindings', () => {
   // every listing answered 500 from inside the tenant object. A Drive that
   // cannot list is stated as absent at the seam, not met on a route.
   test('two objects without the signing secret are no Drive', () => {
-    // SAFETY: checked at the seam under test — `driveBound` compares both
-    // namespaces against undefined and `tenantDrive` returns before
-    // `createVFS` when the secret is absent, so no namespace method runs.
-    const namespace = {} as DurableObjectNamespace<MossaicUserDO> & DurableObjectNamespace<MossaicShardDO>;
-    const objects = { MOSSAIC_USER: namespace, MOSSAIC_SHARD: namespace };
+    const refusing = (binding: string): MossaicObject => ({
+      idFromName: (name) => { throw new Error(`${binding}.idFromName(${name}): not reachable in this test`); },
+      get: (id) => { throw new Error(`${binding}.get(${id.toString()}): not reachable in this test`); },
+    });
+
+    const objects = { MOSSAIC_USER: refusing('MOSSAIC_USER'), MOSSAIC_SHARD: refusing('MOSSAIC_SHARD') };
 
     expect(driveBound(objects)).toBe(false);
     expect(driveBound({ ...objects, JWT_SECRET: '' })).toBe(false);

@@ -49,22 +49,24 @@ import { ownerCaller } from '@kinu.run/core';
 import { MONITOR_SINGLETON, type MonitorDO } from '../monitor/monitor-do';
 import {
   actorDigest, adminCaller, adminDenialMessage, adminDenialStatus, authorizeAdmin,
-  reportAdminDenial, type AuthorizedAdmin, type ControlCaller,
+  reportAdminDenial, type AdminGateEnv, type AuthorizedAdmin, type ControlCaller,
 } from './admin-caller';
 import { isControlPlaneApiPath, type AccessIdentity } from './access-gate';
 import { controlPlaneStub } from './stub';
 import {
   ControlActionSchema, describeAction, runControlAction, UserIdSchema,
-  type ActionEnv, type ActionIdentity,
+  type ActionEnv, type ActionIdentity, type ActionRegistry, type ActionTarget,
 } from './actions';
 import { controlPlaneMetrics } from '@kinu.run/core/control-plane';
-import type { MetricsRequest } from '@kinu.run/core/control-plane';
+import type { AnalyticsSqlEnv, MetricsRequest } from '@kinu.run/core/control-plane';
 import type {
-  AuditOutcome, AuditSettlement, ControlAuditRow, OperationMarker,
+  AuditOutcome, AuditSettlement, ControlAuditRow, ControlPlaneDO, OperationMarker,
 } from './control-plane-do';
 import type {
   AuditDraft, RosterWorkspace, WorkspaceFilter,
 } from '@kinu.run/core/control-plane';
+import type { IndexFeedSink } from './index-feed';
+import type { ObjectNamespace } from '../bindings';
 
 /** Bound on the per-workspace detail reads. Each is a separate Durable Object
  *  query and the panel shows a recent window, not a history — the history has
@@ -75,12 +77,45 @@ const DETAIL_WINDOW = 25;
  *  rather than a page size. */
 const INCIDENT_MAX = 100;
 
-export type ControlEnv = ActionEnv & {
-  CONTROL_PLANE_ADMINS?: string;
-  CLOUDFLARE_ACCOUNT_ID?: string;
-  ANALYTICS_SQL_API_TOKEN?: string;
-  MonitorDO: DurableObjectNamespace<MonitorDO>;
-};
+/** Every call these routes make on the control plane: the panels' reads, the
+ *  roster reconcile, the two audit writes — and the index feed's own sink,
+ *  which the removal action writes a tombstone through. */
+type ControlPlaneReach = IndexFeedSink & Pick<ControlPlaneDO,
+  | 'overview'
+  | 'listUsers'
+  | 'getUser'
+  | 'listWorkspaces'
+  | 'listFeedback'
+  | 'listAudit'
+  | 'replaceUserWorkspaces'
+  | 'recordAudit'
+  | 'settleAudit'
+>;
+
+/** The workspace object as this plane reaches it: everything an action does to
+ *  one, plus the panels the drilldown reads. */
+type ControlTarget = ActionTarget & Pick<OrchestratorAgent,
+  | 'getRunSummaries'
+  | 'getActivitySnapshot'
+  | 'listBackgroundJobs'
+  | 'listDeferredApprovals'
+  | 'listPendingConsents'
+  | 'getExecutors'
+>;
+
+/** The account object as this plane reaches it: everything an action does to
+ *  one, plus the roster walk the reconcile reads. */
+type ControlRegistry = ActionRegistry & Pick<UserDO, 'listWorkspaces'>;
+
+/** Every binding these routes read: the gate's allowlist and root secret, the
+ *  analytics settings the metrics view reports on, the three objects an admin
+ *  request can reach, and the monitor's incident ledger. */
+export interface ControlEnv<Id> extends ActionEnv<Id>, AdminGateEnv, AnalyticsSqlEnv {
+  ControlPlaneDO: ObjectNamespace<Id, ControlPlaneReach>;
+  OrchestratorAgent: ObjectNamespace<Id, ControlTarget>;
+  UserDO: ObjectNamespace<Id, ControlRegistry>;
+  MonitorDO: ObjectNamespace<Id, Pick<MonitorDO, 'listIncidents'>>;
+}
 
 /**
  * Route an admin request, or decline the path.
@@ -96,9 +131,9 @@ export type ControlEnv = ActionEnv & {
  * the outer gate protects have to be the same set — a route answered here and not
  * gated there is exactly the hole this whole change closes.
  */
-export async function handleControlRequest(
+export async function handleControlRequest<Id>(
   request: Request,
-  env: ControlEnv,
+  env: ControlEnv<Id>,
   identity: AuthIdentity,
   access: AccessIdentity,
 ): Promise<Response | null> {
@@ -138,13 +173,13 @@ export async function handleControlRequest(
 
 /** The three things every control-plane handler needs: the bindings, who is
  *  asking, and the capability their answer is read with. */
-interface ControlContext {
-  env: ControlEnv;
+interface ControlContext<Id> {
+  env: ControlEnv<Id>;
   admin: AuthorizedAdmin;
   caller: ControlCaller;
 }
 
-async function dispatch(request: Request, url: URL, control: ControlContext): Promise<Response> {
+async function dispatch<Id>(request: Request, url: URL, control: ControlContext<Id>): Promise<Response> {
   const { env, admin, caller } = control;
 
   const segments = url.pathname.replace(/^\/api\/control\/?/, '').split('/').filter(Boolean);
@@ -257,9 +292,9 @@ async function dispatch(request: Request, url: URL, control: ControlContext): Pr
  * caller who never got past `admin()` produces no row, and that one is not an
  * operator action at all — it is reported as `control_plane.denied` instead.
  */
-async function handleAction(
+async function handleAction<Id>(
   request: Request,
-  env: ControlEnv,
+  env: ControlEnv<Id>,
   admin: AuthorizedAdmin,
   caller: ControlCaller,
 ): Promise<Response> {
@@ -352,8 +387,8 @@ const AUDIT_UNSETTLED =
  * fail-closed — an operator told "refused" by a plane that recorded nothing has
  * been told half the truth.
  */
-async function refuse(
-  control: ControlContext,
+async function refuse<Id>(
+  control: ControlContext<Id>,
   identity: ActionIdentity,
   refusal: { status: number; message: string; detail: string; reason: string },
 ): Promise<Response> {
@@ -385,8 +420,8 @@ interface AuditSettlementRequest extends OperationMarker {
   detail: string;
 }
 
-async function appendAudit(
-  env: ControlEnv,
+async function appendAudit<Id>(
+  env: ControlEnv<Id>,
   admin: AuthorizedAdmin,
   caller: ControlCaller,
   entry: ActionIdentity & { outcome: AuditOutcome; detail: string; reason?: string },
@@ -435,7 +470,7 @@ function reportAuditFailure(
  * workspaces leaves every row past 200 unreachable while the page's own copy
  * says the table was reconciled.
  */
-async function handleUserDetail(control: ControlContext, userId: string, url: URL): Promise<Response> {
+async function handleUserDetail<Id>(control: ControlContext<Id>, userId: string, url: URL): Promise<Response> {
   const { env, admin, caller } = control;
 
   // A UserDO name. The action schema demands the same shape, so the drilldown
@@ -466,8 +501,8 @@ export type ReconcileReport =
 
 const CONTINUATION = 'this walk reconciled on its first page; these rows are from that same read';
 
-async function reconcileRoster(
-  env: ControlEnv,
+async function reconcileRoster<Id>(
+  env: ControlEnv<Id>,
   caller: ControlCaller,
   userId: string,
   firstPage: boolean,
@@ -500,12 +535,12 @@ type RosterRead =
  * caps at its own maximum anyway, so the roster's own default is the right page
  * size and this caller has no business naming one.
  */
-async function readRoster(env: ControlEnv, userId: string): Promise<RosterRead> {
+async function readRoster<Id>(env: ControlEnv<Id>, userId: string): Promise<RosterRead> {
   const MAX_PAGES = 25;
 
   try {
     const owner = await ownerCaller(env);
-    const user: DurableObjectStub<UserDO> = env.UserDO.get(env.UserDO.idFromName(userId));
+    const user = env.UserDO.get(env.UserDO.idFromName(userId));
     const workspaces: RosterWorkspace[] = [];
     let cursor: string | null = null;
 
@@ -552,8 +587,8 @@ async function readRoster(env: ControlEnv, userId: string): Promise<RosterRead> 
  * page — a workspace whose sandbox is down still has runs, jobs and approvals
  * worth reading, and that is exactly the workspace an operator is looking at.
  */
-async function handleWorkspaceDetail(
-  env: ControlEnv, userId: string, workspace: string,
+async function handleWorkspaceDetail<Id>(
+  env: ControlEnv<Id>, userId: string, workspace: string,
 ): Promise<Response> {
   const owned = await claimOwnedWorkspace(env, userId, workspace);
 

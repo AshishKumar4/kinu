@@ -20,6 +20,7 @@ import {
   type ActorHarness, type HarnessOrchestratorAgent,
 } from './helpers/actor-harness';
 import { joinHarnessFibers } from './helpers/agents-sdk';
+import { socketConnection } from './helpers/bindings';
 
 const EMPTY = { upserts: [], decay: [] };
 
@@ -39,16 +40,12 @@ function facts(harness: ActorHarness<HarnessOrchestratorAgent>): { key: string; 
   ).all();
 }
 
-/** A tab's socket, as the actor's own hooks see one: an id and no actor tag. */
+/** A tab's socket, as the actor's own hooks see one: an id, no actor tag, and
+ *  a wire that swallows the transcript seed a connect sends — the cadence is
+ *  what these cases measure, not the frames. Every other member refuses, so a
+ *  hook that reached past those would name the member it wanted. */
 function tab(id: string): Connection {
-  const partial: Partial<Connection> = {};
-  Object.assign(partial, { id, tags: [], send: () => {}, close: () => {} });
-
-  // SAFETY: every member the connect and close hooks touch is constructed
-  // above — the platform contract for a hibernated connection carries its tags
-  // and its wire and nothing else, so the checked members above exhaust what
-  // the code under test can reach.
-  return partial as Connection;
+  return socketConnection({ id, send: () => {} });
 }
 
 afterEach(() => { setSystemTime(); });

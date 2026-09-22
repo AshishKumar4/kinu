@@ -63,7 +63,8 @@ import {
   type ScrubReplacement,
 } from '@kinu.run/core';
 import type { OrchestratorAgent } from '../orchestrator';
-import { ownerCaller, type UserCaller } from '@kinu.run/core';
+import type { ObjectNamespace } from '../bindings';
+import { ownerCaller, type OwnerCapabilityEnv, type UserCaller } from '@kinu.run/core';
 import type { EgressInjection, EgressInjectionResult } from '@kinu.run/core';
 import { kinuUserAgent, reoriginateRequest } from '@kinu.run/core';
 import {
@@ -151,6 +152,29 @@ interface ContainerEventClient {
   acceptContainerEvent(body: JsonValue): Promise<ContainerEventResult>;
 }
 
+/** Every binding an intercepted request reads: the owner's vault object, and
+ *  — through `ownerCaller` — the root secret the owner capability derives from. */
+export interface ContainerEgressEnv<Id> extends OwnerCapabilityEnv {
+  UserDO: ObjectNamespace<Id, EgressVaultClient>;
+}
+
+/**
+ * How the event channel reaches the workspace object it posts into.
+ *
+ * A function rather than the namespace, because production resolves one
+ * through the SDK: `getAgentByName` (agents@0.22.0,
+ * node_modules/agents/dist/agent-routing.js:176-183, read 2026-09-22) resolves
+ * the stub AND awaits `__unsafe_ensureInitialized` under its own retry, and
+ * neither half is something this tree should re-derive. The production binding
+ * is `containerEventResolver` below; a caller that has no SDK supplies its own.
+ */
+export type ContainerEventResolver = (workspaceName: string) => Promise<ContainerEventClient>;
+
+export const containerEventResolver = (env: Env): ContainerEventResolver =>
+  async (workspaceName) => await getAgentByName<Env, OrchestratorAgent>(
+    env.OrchestratorAgent, workspaceName,
+  );
+
 /**
  * Catch-all: every request to every host except the event channel.
  *
@@ -158,9 +182,9 @@ interface ContainerEventClient {
  * allocation-light scan and no scrub machinery on the way back. Only a request
  * that actually carries a placeholder pays for substitution.
  */
-export async function handleContainerEgress(
+export async function handleContainerEgress<Id>(
   request: Request,
-  env: Env,
+  env: ContainerEgressEnv<Id>,
   params: KinuEgressParams | undefined,
 ): Promise<Response> {
   if (!params) {
@@ -350,7 +374,7 @@ function upstreamFailure(
  */
 export async function handleContainerEvent(
   request: Request,
-  env: Env,
+  resolveAgent: ContainerEventResolver,
   params: KinuEgressParams | undefined,
 ): Promise<Response> {
   if (!params) return refusal(503, 'The event channel is not configured for this container yet.');
@@ -383,9 +407,7 @@ export async function handleContainerEvent(
   let result: ContainerEventResult;
 
   try {
-    const agent: ContainerEventClient = await getAgentByName<Env, OrchestratorAgent>(
-      env.OrchestratorAgent, params.workspaceName,
-    );
+    const agent = await resolveAgent(params.workspaceName);
 
     result = await agent.acceptContainerEvent(body);
   } catch (cause) {

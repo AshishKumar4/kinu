@@ -13,6 +13,7 @@
  */
 import * as v from 'valibot';
 import type { ControlPlaneDO } from './control-plane-do';
+import type { ObjectNamespace } from '../bindings';
 
 /** One instance, by name. Fleet state is not per-user or per-workspace, and this
  *  is the only place the name is spelled — a second literal is how two callers
@@ -22,13 +23,15 @@ import type { ControlPlaneDO } from './control-plane-do';
 const CONTROL_PLANE_SINGLETON = 'site';
 
 /** The bindings a control-plane caller needs, stated structurally so a module can
- *  type its own env against it without editing the generated `Env`. */
-export interface ControlPlaneEnv {
-  ControlPlaneDO: DurableObjectNamespace<ControlPlaneDO>;
+ *  type its own env against it without editing the generated `Env`. `Stub` is
+ *  each feed's own projection of the object — a feed that records one fact
+ *  names one method. */
+export interface ControlPlaneEnv<Id = DurableObjectId, Stub = DurableObjectStub<ControlPlaneDO>> {
+  ControlPlaneDO: ObjectNamespace<Id, Stub>;
   CREDENTIAL_ENCRYPTION_KEY?: string;
 }
 
-export function controlPlaneStub(env: ControlPlaneEnv): DurableObjectStub<ControlPlaneDO> {
+export function controlPlaneStub<Id, Stub>(env: ControlPlaneEnv<Id, Stub>): Stub {
   return env.ControlPlaneDO.get(env.ControlPlaneDO.idFromName(CONTROL_PLANE_SINGLETON));
 }
 
@@ -43,7 +46,9 @@ export function controlPlaneStub(env: ControlPlaneEnv): DurableObjectStub<Contro
  * and every local run against one — reports a lost index write on each workspace
  * it creates, which is noise that trains a reader to ignore the real one.
  */
-export function hasControlPlane(env: Partial<ControlPlaneEnv>): env is ControlPlaneEnv {
+export function hasControlPlane<Id, Stub>(
+  env: Partial<ControlPlaneEnv<Id, Stub>>,
+): env is ControlPlaneEnv<Id, Stub> {
   // Parsed, not `typeof`-narrowed: what makes this a namespace is that it
   // ADDRESSES objects, so the check is for the two methods every caller here
   // uses. A structural parse states that; a `typeof binding === 'object'` would

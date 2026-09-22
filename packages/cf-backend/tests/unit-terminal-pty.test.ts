@@ -14,7 +14,7 @@
  * the container may stop.
  */
 
-import { afterAll, describe, expect, test } from 'bun:test';
+import { describe, expect, test } from 'bun:test';
 import {
   createRecordingLogger, setDiagnosticsSink, type RecordedLog,
 } from '@kinu.run/core/obs';
@@ -23,20 +23,13 @@ import { LINE_MODE_LABEL, LineTerminalState, terminalLane } from '@kinu.run/core
 import { WORKSPACE_TERMINAL_PATH } from '@kinu.run/core';
 import { mockAgentsSdk } from './helpers/agents-sdk';
 import { jsrpcStub } from './helpers/jsrpc-stub';
-import { installSandboxSdkMock, setSandboxSdk } from './helpers/sandbox-sdk';
+import { installSandboxSdkMock } from './helpers/sandbox-sdk';
 
-// `getSandbox` resolves through whatever `env.Sandbox` binding each test
-// installs, exactly like the SDK's own resolution. The shared stand-in owns
-// the module; this file only points it. Reset in `afterAll`, so a later file
-// meets the real SDK.
+// The route's module graph reaches the Sandbox SDK at import. No case here
+// resolves a container through it any more — the route is handed its
+// resolutions — so the shared stand-in is installed for the import alone and
+// no suite-local double is pointed at it.
 await installSandboxSdkMock();
-
-setSandboxSdk({
-  getSandbox: (namespace: NonNullable<Env['Sandbox']>, name: string) =>
-    namespace.get(namespace.idFromName(name)),
-});
-
-afterAll(() => { setSandboxSdk(null); });
 
 // The route imports `getAgentByName` from `agents`, whose module graph reaches
 // `cloudflare:email`. One shared mock, then the dynamic import — the ordering
@@ -44,6 +37,8 @@ afterAll(() => { setSandboxSdk(null); });
 mockAgentsSdk();
 
 const { handleTerminalRequest } = await import('../src/terminal-route');
+
+import type { TerminalRouteDeps, TerminalWorkspace } from '../src/terminal-route';
 
 /** The vocabulary a person is never shown: our primitives, our transports, our
  *  missing methods. Read by the label case and by the route's refusal body. */
@@ -53,6 +48,10 @@ interface PtySize { cols?: number; rows?: number; shell?: string }
 
 interface TerminalDouble {
   noteTerminalActivity(): Promise<void>;
+  /** The container's shell restart. No case here drives it: the reset verb
+   *  this suite exercises is the workspace lane's guard, which answers before
+   *  a container is reached. */
+  deleteSession(sessionId: string): Promise<{ success: boolean }>;
   getSession(sessionId: string): Promise<{ terminal(request: Request, options?: PtySize): Promise<Response> }>;
 }
 
@@ -75,7 +74,7 @@ interface Trace {
 }
 
 interface Harness {
-  readonly env: Env;
+  readonly deps: TerminalRouteDeps;
   readonly trace: Trace;
 }
 
@@ -100,6 +99,7 @@ function harness(opts: {
 
       if (opts.lease) await opts.lease();
     },
+    deleteSession: () => { throw new Error('deleteSession: no case here restarts the container shell'); },
     getSession: async (sessionId) => {
       trace.calls.push('getSession');
       trace.session = sessionId;
@@ -124,7 +124,7 @@ function harness(opts: {
   // `getAgentByName` resolves through the namespace binding, so the workspace
   // double is reached exactly the way production reaches it — through a stub
   // whose methods are not own enumerable properties.
-  const agent = jsrpcStub({
+  const agent = jsrpcStub<TerminalWorkspace>({
     prepareTerminal: async (executorId: string) => {
       trace.calls.push(`prepareTerminal:${executorId}`);
 
@@ -136,31 +136,31 @@ function harness(opts: {
 
       return new Response('workspace-socket', { status: 200 });
     },
+    /** The machine's own shell. The device lane is not driven by this suite,
+     *  and a container case that reached it would be addressing the wrong
+     *  executor. */
+    openDeviceTerminal: () => { throw new Error('openDeviceTerminal: the device lane is not driven by this suite'); },
   });
 
-  // The doubles are deliberately NOT typed as the bindings they stand in for:
-  // a fake `idFromName` returning the name can never satisfy `DurableObjectId`,
-  // and `jsrpcStub`'s prototype-bound methods can never satisfy
-  // `DurableObjectStub` — that mismatch IS the double. `Object.assign` is what
-  // lets the members land without the type system adjudicating the fakes.
-  const view: Partial<Env> = {};
-  Object.assign(view, {
-    OrchestratorAgent: { idFromName: (name: string) => name, get: () => agent },
-  });
-
-  if (opts.sandboxBound !== false) {
-    Object.assign(view, {
-      Sandbox: { idFromName: (name: string) => name, get: () => container },
-    });
-  }
-
-  // SAFETY: both members the route reads are constructed by the Object.assigns
-  // above — `OrchestratorAgent.get` (returning the `prepareTerminal` double)
-  // and `Sandbox.get` (returning the container double) are the complete set
-  // `handleTerminalRequest` touches, verified against its body. The
-  // `sandboxBound: false` arm omits `Sandbox` deliberately and pins the 503
-  // that omission produces. Nothing unassigned is reachable through this cast.
-  return { env: view as Env, trace };
+  // The doubles are deliberately NOT the bindings they stand in for: a fake
+  // `idFromName` returning the name can never satisfy `DurableObjectId`, and
+  // `jsrpcStub`'s prototype-bound methods can never satisfy
+  // `DurableObjectStub`. The route asks for the two RESOLUTIONS instead, which
+  // is what a test can answer — the SDK calls behind them are the entry's
+  // (`terminalRouteDeps`) and are not this suite's to restate.
+  return {
+    deps: {
+      resolveWorkspace: async () => agent,
+      // The `sandboxBound: false` arm omits the container deliberately and
+      // pins the 503 that omission produces.
+      resolveSandbox: () => opts.sandboxBound === false ? null : container,
+      UserDO: {
+        idFromName: () => { throw new Error('UserDO.idFromName: the device lane is not driven by this suite'); },
+        get: () => { throw new Error('UserDO.get: the device lane is not driven by this suite'); },
+      },
+    },
+    trace,
+  };
 }
 
 const WORKSPACE = 'kinu-main';
@@ -173,10 +173,10 @@ function executionContext(): Pick<ExecutionContext, 'waitUntil'> {
 
 function terminalRequest(
   request: Request,
-  env: Env,
+  deps: TerminalRouteDeps,
   ctx: Pick<ExecutionContext, 'waitUntil'> = executionContext(),
 ): Promise<Response | null> {
-  return handleTerminalRequest(request, env, WORKSPACE, ctx);
+  return handleTerminalRequest(request, deps, WORKSPACE, ctx);
 }
 
 function attachRequest(query: string, init: RequestInit = {}): Request {
@@ -210,20 +210,6 @@ async function recorded<T>(run: () => Promise<T>): Promise<{
   } finally {
     restore();
   }
-}
-
-/** A plain GET at `suffix` under this workspace's terminal path: the status the
- *  route answers it with, and what the route reached for on the way. */
-async function refusedWithoutTouching(suffix: string, status: number): Promise<void> {
-  const { env, trace } = harness();
-
-  const response = await terminalRequest(
-    new Request(`https://app.example/api/workspaces/${WORKSPACE}/terminal${suffix}`), env,
-  );
-
-  expect(response?.status).toBe(status);
-  // Not merely a refusal: a plain GET must not start a container.
-  expect(trace.calls).toEqual([]);
 }
 
 describe('which environments can have a terminal', () => {
@@ -263,18 +249,18 @@ describe('which environments can have a terminal', () => {
 
 describe('attaching a terminal', () => {
   test('another path under the same workspace is left to the next handler', async () => {
-    const { env } = harness();
+    const { deps } = harness();
 
     const response = await terminalRequest(
-      new Request(`https://app.example/api/workspaces/${WORKSPACE}/files?path=/x`), env,
+      new Request(`https://app.example/api/workspaces/${WORKSPACE}/files?path=/x`), deps,
     );
 
     expect(response).toBeNull();
   });
 
   test('the container is prepared before the shell opens onto it', async () => {
-    const { env, trace } = harness();
-    const response = await terminalRequest(attachRequest('executor=sandbox&cols=120&rows=40'), env);
+    const { deps, trace } = harness();
+    const response = await terminalRequest(attachRequest('executor=sandbox&cols=120&rows=40'), deps);
     expect(response?.status).toBe(200);
     expect(await response?.text()).toBe('pty-socket');
     // prepareTerminal is the sandbox lane's own preflight (egress installed
@@ -285,8 +271,8 @@ describe('attaching a terminal', () => {
   });
 
   test('the shell is the user\'s own session, not the one the agent execs in', async () => {
-    const { env, trace } = harness();
-    await terminalRequest(attachRequest('executor=sandbox'), env);
+    const { deps, trace } = harness();
+    await terminalRequest(attachRequest('executor=sandbox'), deps);
     // A named session, and a STABLE one: a reload has to land on the shell that
     // is already running so the container replays its buffer into it. The SDK's
     // default session (`sandbox-<id>`) is the agent's exec lane and must not be
@@ -297,22 +283,22 @@ describe('attaching a terminal', () => {
   });
 
   test('two attaches land in the same session, so a reload reattaches', async () => {
-    const { env, trace } = harness();
-    await terminalRequest(attachRequest('executor=sandbox'), env);
+    const { deps, trace } = harness();
+    await terminalRequest(attachRequest('executor=sandbox'), deps);
     const first = trace.session;
-    await terminalRequest(attachRequest('executor=sandbox'), env);
+    await terminalRequest(attachRequest('executor=sandbox'), deps);
     expect(trace.session).toBe(first);
   });
 
   test('the geometry the client asks for reaches the terminal', async () => {
-    const { env, trace } = harness();
-    await terminalRequest(attachRequest('executor=sandbox&cols=120&rows=40'), env);
+    const { deps, trace } = harness();
+    await terminalRequest(attachRequest('executor=sandbox&cols=120&rows=40'), deps);
     expect(trace.options).toEqual({ cols: 120, rows: 40 });
   });
 
   test('a shell is never named: the container picks it, and TERM with it', async () => {
-    const { env, trace } = harness();
-    await terminalRequest(attachRequest('executor=sandbox'), env);
+    const { deps, trace } = harness();
+    await terminalRequest(attachRequest('executor=sandbox'), deps);
     // No `shell` key at all. `PtyOptions.shell` is spawned as one argv token,
     // so `bash -l` would be an ENOENT rather than a login shell; the container's
     // own default is bash and it sets TERM=xterm-256color regardless.
@@ -327,13 +313,13 @@ describe('attaching a terminal', () => {
     ['cols=80.5&rows=24', { rows: 24 }],
     ['cols=-80&rows=24', { rows: 24 }],
   ])('geometry from a query string is bounded (%s)', async (query, expected) => {
-    const { env, trace } = harness();
-    await terminalRequest(attachRequest(`executor=sandbox&${query}`), env);
+    const { deps, trace } = harness();
+    await terminalRequest(attachRequest(`executor=sandbox&${query}`), deps);
     expect(trace.options).toEqual(expected);
   });
 
   test('the upgrade the SDK proxies is the same request, minus the caller\'s credentials', async () => {
-    const { env, trace } = harness();
+    const { deps, trace } = harness();
 
     const request = attachRequest('executor=sandbox', {
       headers: {
@@ -352,7 +338,7 @@ describe('attaching a terminal', () => {
       },
     });
 
-    await terminalRequest(request, env);
+    await terminalRequest(request, deps);
     const forwarded = trace.request;
 
     if (!forwarded) throw new Error('the SDK was never handed an upgrade');
@@ -362,13 +348,28 @@ describe('attaching a terminal', () => {
     ]);
   });
 
-  test('a request that is not an upgrade touches nothing', async () => {
-    await refusedWithoutTouching('?executor=sandbox', 400);
+  // One contract in three places, so it is stated once: a GET where the verb
+  // wants something else is refused before anything is touched. An attach
+  // wants an upgrade (400) and a beat wants a POST (405); neither may start a
+  // container on its way to saying so, whichever lane the executor names.
+  test.each([
+    { path: 'terminal?executor=sandbox', status: 400 },
+    { path: 'terminal?executor=workspace', status: 400 },
+    { path: 'terminal/keepalive?executor=sandbox', status: 405 },
+  ])('GET /$path is refused and touches nothing', async ({ path, status }) => {
+    const { deps, trace } = harness();
+
+    const response = await terminalRequest(
+      new Request(`https://app.example/api/workspaces/${WORKSPACE}/${path}`), deps,
+    );
+
+    expect(response?.status).toBe(status);
+    expect(trace.calls).toEqual([]);
   });
 
   test('an executor with no terminal is refused as line mode, carrying no implementation detail', async () => {
-    const { env, trace } = harness();
-    const response = await terminalRequest(attachRequest('executor=parent'), env);
+    const { deps, trace } = harness();
+    const response = await terminalRequest(attachRequest('executor=parent'), deps);
     expect(response?.status).toBe(409);
     const payload = await body(response);
     expect(payload.lane).toBe('line');
@@ -378,25 +379,25 @@ describe('attaching a terminal', () => {
   });
 
   test('no executor is named', async () => {
-    const { env } = harness();
-    const response = await terminalRequest(attachRequest(''), env);
+    const { deps } = harness();
+    const response = await terminalRequest(attachRequest(''), deps);
     expect(response?.status).toBe(400);
     expect(String((await body(response)).error)).toContain('executor');
   });
 
   test('a deployment with no container binding says so', async () => {
-    const { env } = harness({ sandboxBound: false });
-    const response = await terminalRequest(attachRequest('executor=sandbox'), env);
+    const { deps } = harness({ sandboxBound: false });
+    const response = await terminalRequest(attachRequest('executor=sandbox'), deps);
     expect(response?.status).toBe(503);
     expect(String((await body(response)).error)).toContain('Sandbox binding');
   });
 
   test('a workspace that cannot attach its disk gets the reason, not a shell', async () => {
-    const { env, trace } = harness({
+    const { deps, trace } = harness({
       prepare: async () => ({ error: 'attach overran its budget; a retry is scheduled' }),
     });
 
-    const response = await terminalRequest(attachRequest('executor=sandbox'), env);
+    const response = await terminalRequest(attachRequest('executor=sandbox'), deps);
     expect(response?.status).toBe(503);
     expect(String((await body(response)).error)).toContain('attach overran');
     // The whole point: no PTY onto a container whose /workspace is not there.
@@ -404,8 +405,8 @@ describe('attaching a terminal', () => {
   });
 
   test('a container that fails the attach reports it rather than hanging', async () => {
-    const { env } = harness({ attach: async () => { throw new Error('container is not listening on 3000'); } });
-    const response = await terminalRequest(attachRequest('executor=sandbox'), env);
+    const { deps } = harness({ attach: async () => { throw new Error('container is not listening on 3000'); } });
+    const response = await terminalRequest(attachRequest('executor=sandbox'), deps);
     expect(response?.status).toBe(503);
     expect(String((await body(response)).error)).toContain('not listening');
   });
@@ -435,12 +436,12 @@ describe('a terminal failure names the workspace and the executor', () => {
   const scope = { workspace: WORKSPACE, executor: 'sandbox' };
 
   test('a readiness refusal is a fleet row, and still the same answer to the client', async () => {
-    const { env, trace } = harness({
+    const { deps, trace } = harness({
       prepare: async () => ({ error: 'attach overran its budget; a retry is scheduled' }),
     });
 
     const { value: response, logs } = await recorded(
-      async () => await terminalRequest(attachRequest('executor=sandbox'), env),
+      async () => await terminalRequest(attachRequest('executor=sandbox'), deps),
     );
 
     // Unchanged: the pane shows what it always showed.
@@ -458,12 +459,12 @@ describe('a terminal failure names the workspace and the executor', () => {
   });
 
   test('a workspace that cannot be reached is reported, not escaped', async () => {
-    const { env, trace } = harness({
+    const { deps, trace } = harness({
       prepare: async () => { throw new Error('the workspace object is not answering'); },
     });
 
     const { value: response, logs } = await recorded(
-      async () => await terminalRequest(attachRequest('executor=sandbox'), env),
+      async () => await terminalRequest(attachRequest('executor=sandbox'), deps),
     );
 
     // An answer rather than a throw out of the handler, with the whole chain.
@@ -478,12 +479,12 @@ describe('a terminal failure names the workspace and the executor', () => {
   });
 
   test('the attach carries the SAME two tags, which is what makes it one scope', async () => {
-    const { env } = harness({
+    const { deps } = harness({
       attach: async () => { throw new Error('container is not listening on 3000'); },
     });
 
     const { logs } = await recorded(
-      async () => await terminalRequest(attachRequest('executor=sandbox'), env),
+      async () => await terminalRequest(attachRequest('executor=sandbox'), deps),
     );
 
     // The parity assertion. Before this change the preflight and the attach
@@ -495,10 +496,10 @@ describe('a terminal failure names the workspace and the executor', () => {
   });
 
   test('a line-mode executor is a labelled mode, not a failure row', async () => {
-    const { env } = harness();
+    const { deps } = harness();
 
     const { logs } = await recorded(
-      async () => await terminalRequest(attachRequest('executor=parent'), env),
+      async () => await terminalRequest(attachRequest('executor=parent'), deps),
     );
 
     // The negative control, and a deliberate boundary: routing to line mode is a
@@ -536,7 +537,7 @@ describe('an attached terminal and a container that wants to sleep', () => {
   // operation on the object. So the pane's beat is the ONLY thing that keeps a
   // container awake for a user who is reading rather than typing.
   test('each beat renews the lease', async () => {
-    const { env, trace } = harness();
+    const { deps, trace } = harness();
 
     const beat = new Request(
       `https://app.example/api/workspaces/${WORKSPACE}/terminal/keepalive?executor=sandbox`,
@@ -544,7 +545,7 @@ describe('an attached terminal and a container that wants to sleep', () => {
     );
 
     for (let i = 0; i < 3; i++) {
-      const response = await terminalRequest(beat, env);
+      const response = await terminalRequest(beat, deps);
       expect(response?.status).toBe(200);
       expect((await body(response)).ok).toBe(true);
     }
@@ -553,24 +554,20 @@ describe('an attached terminal and a container that wants to sleep', () => {
   });
 
   test('a beat never starts a shell', async () => {
-    const { env, trace } = harness();
+    const { deps, trace } = harness();
     await terminalRequest(
       new Request(`https://app.example/api/workspaces/${WORKSPACE}/terminal/keepalive?executor=sandbox`,
-        { method: 'POST' }), env,
+        { method: 'POST' }), deps,
     );
     expect(trace.calls).not.toContain('terminal');
   });
 
-  test('a beat is a POST', async () => {
-    await refusedWithoutTouching('/keepalive?executor=sandbox', 405);
-  });
-
   test('a container that has gone away answers the beat with why', async () => {
-    const { env } = harness({ lease: async () => { throw new Error('attach failed: snapshot not found'); } });
+    const { deps } = harness({ lease: async () => { throw new Error('attach failed: snapshot not found'); } });
 
     const response = await terminalRequest(
       new Request(`https://app.example/api/workspaces/${WORKSPACE}/terminal/keepalive?executor=sandbox`,
-        { method: 'POST' }), env,
+        { method: 'POST' }), deps,
     );
 
     expect(response?.status).toBe(503);
@@ -578,11 +575,11 @@ describe('an attached terminal and a container that wants to sleep', () => {
   });
 
   test('a beat for a lane that has no terminal is refused like an attach', async () => {
-    const { env, trace } = harness();
+    const { deps, trace } = harness();
 
     const response = await terminalRequest(
       new Request(`https://app.example/api/workspaces/${WORKSPACE}/terminal/keepalive?executor=parent`,
-        { method: 'POST' }), env,
+        { method: 'POST' }), deps,
     );
 
     expect(response?.status).toBe(409);
@@ -592,11 +589,11 @@ describe('an attached terminal and a container that wants to sleep', () => {
 
 describe('the workspace shell', () => {
   test('the upgrade is forwarded into the workspace object once its runtime is composed', async () => {
-    const { env, trace } = harness();
+    const { deps, trace } = harness();
 
     const response = await terminalRequest(attachRequest('executor=workspace&cols=100&rows=30', {
       headers: { upgrade: 'websocket', 'x-kinu-probe': 'rides-along' },
-    }), env);
+    }), deps);
 
     // The object's answer is the route's answer, and the container was never
     // touched: the shell is the runtime's, not a PTY in a container.
@@ -610,10 +607,10 @@ describe('the workspace shell', () => {
   });
 
   test('a runtime that cannot compose is the reason the pane sees, and a fleet row', async () => {
-    const { env, trace } = harness({ prepare: async () => ({ error: 'the workspace database is read-only' }) });
+    const { deps, trace } = harness({ prepare: async () => ({ error: 'the workspace database is read-only' }) });
 
     const { value: response, logs } = await recorded(
-      async () => await terminalRequest(attachRequest('executor=workspace'), env),
+      async () => await terminalRequest(attachRequest('executor=workspace'), deps),
     );
 
     expect(response?.status).toBe(503);
@@ -622,20 +619,16 @@ describe('the workspace shell', () => {
     expect(logs.map((log) => log.event)).toEqual(['terminal.workspace_not_ready']);
   });
 
-  test('a request that is not an upgrade touches nothing', async () => {
-    await refusedWithoutTouching('?executor=workspace', 400);
-  });
-
   test('the beat and the reset are guards: a POST is acknowledged, nothing else is reached', async () => {
-    const { env, trace } = harness();
+    const { deps, trace } = harness();
 
     for (const verb of ['keepalive', 'reset']) {
       const acknowledged = await terminalRequest(
-        new Request(`https://app.example/api/workspaces/${WORKSPACE}/terminal/${verb}?executor=workspace`, { method: 'POST' }), env,
+        new Request(`https://app.example/api/workspaces/${WORKSPACE}/terminal/${verb}?executor=workspace`, { method: 'POST' }), deps,
       );
 
       const refused = await terminalRequest(
-        new Request(`https://app.example/api/workspaces/${WORKSPACE}/terminal/${verb}?executor=workspace`), env,
+        new Request(`https://app.example/api/workspaces/${WORKSPACE}/terminal/${verb}?executor=workspace`), deps,
       );
 
       expect(await body(acknowledged)).toEqual({ ok: true });
@@ -656,12 +649,12 @@ describe('the workspace shell', () => {
 // one number.
 describe('who owns a terminal attach', () => {
   test('a client already gone opens no session and beats no lease', async () => {
-    const { env, trace } = harness();
+    const { deps, trace } = harness();
     const controller = new AbortController();
     controller.abort();
 
     const response = await terminalRequest(
-      attachRequest('executor=sandbox', { signal: controller.signal }), env,
+      attachRequest('executor=sandbox', { signal: controller.signal }), deps,
     );
 
     expect(response?.status).toBe(503);
@@ -682,7 +675,7 @@ describe('who owns a terminal attach', () => {
     const closed = Promise.withResolvers<void>();
     const events: string[] = [];
 
-    const { env, trace } = harness({
+    const { deps, trace } = harness({
       attach: () => {
         entered.resolve();
 
@@ -698,7 +691,7 @@ describe('who owns a terminal attach', () => {
     };
 
     const pending = terminalRequest(
-      attachRequest('executor=sandbox', { signal: controller.signal }), env, context,
+      attachRequest('executor=sandbox', { signal: controller.signal }), deps, context,
     );
 
     await entered.promise;
@@ -734,11 +727,11 @@ describe('who owns a terminal attach', () => {
   });
 
   test('a client that stays gets the SDK response unchanged', async () => {
-    const { env } = harness();
+    const { deps } = harness();
     const controller = new AbortController();
 
     const response = await terminalRequest(
-      attachRequest('executor=sandbox', { signal: controller.signal }), env,
+      attachRequest('executor=sandbox', { signal: controller.signal }), deps,
     );
 
     expect(response?.status).toBe(200);

@@ -18,7 +18,7 @@
 
 import { Database, type SQLQueryBindings } from 'bun:sqlite';
 import type { NimbusWorkspace } from '@nimbus-sh/core/workspace';
-import type { SqlDatabase, SqlRow, SqlValue } from '@nimbus-sh/core/runtime/os-contracts.js';
+import type { SqlValue } from '@nimbus-sh/core/runtime/os-contracts.js';
 import { PortRegistry } from '@nimbus-sh/core/runtime/port-registry.js';
 import type { SessionProcessSupervisor } from '@nimbus-sh/core/runtime/session-process-supervisor.js';
 import { composeFabric } from '@nimbus-sh/fabric/composition.js';
@@ -44,25 +44,32 @@ export interface TestDurableStorage extends DurableTransaction {
 }
 
 export function durableStorage(durable: DurableState): TestDurableStorage {
-  const list = async <T,>(options: { prefix: string }): Promise<Map<string, T>> => {
+  const list = async (options: { prefix: string }): Promise<Map<string, unknown>> => {
     const entries = new Map<string, unknown>();
 
     for (const [key, value] of durable) {
       if (key.startsWith(options.prefix)) entries.set(key, value);
     }
 
-    // SAFETY: the storage list contract types each row by the caller's T,
-    // which the untyped stand-in rows cannot name; `never` keeps the Map
-    // assignable to every T.
-    return entries as Map<string, never>;
+    return entries;
   };
 
-  const transactionView: DurableTransaction = {
+  // The platform's `list` is generic in the type its CALLER names, and rows a
+  // stand-in holds under one untyped map cannot name it. Assigning the reader
+  // over a refusing declaration leaves the platform's signature on the type —
+  // where every reader validates what it asked for — and this reader at
+  // runtime; a literal would have to claim one type for every row.
+  const reads: Omit<DurableTransaction, 'list'> = {
     get: async (key) => durable.get(key),
     put: async (key, value) => { durable.set(key, value); },
     delete: async (key) => durable.delete(key),
-    list,
   };
+
+  const transactionView: DurableTransaction = Object.assign(
+    { list: refusing('DurableObjectStorage')('list') },
+    reads,
+    { list },
+  );
 
   return {
     ...transactionView,
@@ -106,22 +113,191 @@ function sqlBinding(value: SqlValue): SQLQueryBindings {
   return v.parse(v.union([v.string(), v.number(), v.bigint(), v.null()]), value);
 }
 
-/** The object's own SQLite, where the runtime persists process logs and shell
- *  state: a fresh in-memory database per host, as a fresh object's would be. */
-function durableSql(): SqlDatabase {
-  const database = new Database(':memory:');
+/**
+ * Name a member of a platform object this stand-in does not answer.
+ *
+ * A Durable Object's `ctx` is thirty-odd members and a suite drives five. The
+ * rest refusing by name is what keeps "the host read only these" a checked
+ * claim rather than a stand-in quietly answering for one.
+ */
+function refusing(object: string) {
+  return (member: string) => (): never => {
+    throw new Error(`${object}.${member}: this test's Durable Object does not answer it`);
+  };
+}
+
+type SqlStorageRow = Record<string, SqlStorageValue>;
+
+/**
+ * The rows one `exec` answered, in the cursor's shape.
+ *
+ * Nimbus reads a cursor by spreading it (`[...sql.exec(…)]`, worker
+ * dist/session/hibernation.js:94 and its neighbours), so iteration is the one
+ * member that has to be real. The accounting three refuse: bun:sqlite reports
+ * no row counts and a number invented here would be read as one.
+ */
+class DurableSqlRows<T extends SqlStorageRow> {
+  private taken = 0;
+  constructor(private readonly rows: readonly T[] = []) {}
+
+  *[Symbol.iterator](): IterableIterator<T> {
+    yield* this.rows;
+  }
+
+  toArray(): T[] {
+    return [...this.rows];
+  }
+
+  next(): { done?: false; value: T } | { done: true; value?: never } {
+    const value = this.rows[this.taken];
+
+    if (value === undefined) return { done: true };
+    this.taken += 1;
+
+    return { value };
+  }
+
+  one(): T {
+    const [only] = this.rows;
+
+    if (only === undefined || this.rows.length !== 1) {
+      throw new Error(`SqlStorageCursor.one: the query answered ${String(this.rows.length)} rows`);
+    }
+
+    return only;
+  }
+
+  raw<U extends SqlStorageValue[]>(): IterableIterator<U> {
+    return refusing('SqlStorageCursor')('raw')();
+  }
+
+  get columnNames(): string[] {
+    return refusing('SqlStorageCursor')('columnNames')();
+  }
+
+  get rowsRead(): number {
+    return refusing('SqlStorageCursor')('rowsRead')();
+  }
+
+  get rowsWritten(): number {
+    return refusing('SqlStorageCursor')('rowsWritten')();
+  }
+}
+
+/** The prepared-statement slot of `SqlStorage`. Nothing constructs one: the
+ *  platform exposes the class, and `exec` is the whole of what is driven. */
+class DurableSqlStatement {}
+
+/**
+ * One Durable Object's SQLite over a bun database — the storage half the
+ * workspace's filesystem, process logs and shell state all live in.
+ */
+export function durableSqlStorage(database: Database): SqlStorage {
+  const refuse = refusing('SqlStorage');
 
   return {
-    exec(query: string, ...bindings: SqlValue[]) {
-      const statement = database.prepare<SqlRow, SQLQueryBindings[]>(query);
+    exec<T extends SqlStorageRow>(query: string, ...bindings: SqlValue[]): SqlStorageCursor<T> {
+      const statement = database.prepare<T, SQLQueryBindings[]>(query);
       const bound = bindings.map(sqlBinding);
 
-      if (/^\s*(SELECT|WITH|PRAGMA)/i.test(query)) return statement.all(...bound);
+      if (/^\s*(SELECT|WITH|PRAGMA)/i.test(query)) return new DurableSqlRows(statement.all(...bound));
       statement.run(...bound);
 
-      return [];
+      return new DurableSqlRows();
     },
+    get databaseSize(): number {
+      return refuse('databaseSize')();
+    },
+    Cursor: DurableSqlRows,
+    Statement: DurableSqlStatement,
   };
+}
+
+/**
+ * What a suite may hand a platform stand-in for one of its members: the
+ * platform's own type, or the call this suite answers it with. The second arm
+ * exists because `get`, `put`, `delete` and `list` are generic in the type
+ * their CALLER names, and rows held in one untyped map cannot restate it.
+ */
+type StandInFor<Platform> = {
+  [Member in keyof Platform]?: Platform[Member] | ((...args: never[]) => object);
+};
+
+/**
+ * A Durable Object's storage as the platform declares it, with every member
+ * this suite did not build refusing by name.
+ *
+ * `Object.assign` rather than a spread: the result has to BE a
+ * `DurableObjectStorage`. Assigning over a refusing base keeps both
+ * signatures — the platform's on the type, where every reader validates the
+ * rows it asked for, and this suite's at runtime — while a spread would keep
+ * only the second and stop being the platform's storage at all.
+ */
+export function durableObjectStorage(built: StandInFor<DurableObjectStorage>): DurableObjectStorage {
+  const refuse = refusing('DurableObjectStorage');
+  const kv = refusing('SyncKvStorage');
+
+  return Object.assign({
+    get: refuse('get'),
+    put: refuse('put'),
+    delete: refuse('delete'),
+    deleteAll: refuse('deleteAll'),
+    list: refuse('list'),
+    transaction: refuse('transaction'),
+    transactionSync: refuse('transactionSync'),
+    getAlarm: refuse('getAlarm'),
+    setAlarm: refuse('setAlarm'),
+    deleteAlarm: refuse('deleteAlarm'),
+    sync: refuse('sync'),
+    sql: durableSqlStorage(new Database(':memory:')),
+    kv: { get: kv('get'), list: kv('list'), put: kv('put'), delete: kv('delete') },
+    getCurrentBookmark: refuse('getCurrentBookmark'),
+    getBookmarkForTime: refuse('getBookmarkForTime'),
+    onNextSessionRestoreBookmark: refuse('onNextSessionRestoreBookmark'),
+  }, built);
+}
+
+/**
+ * The bag workerd hangs on a Durable Object's `ctx`, reduced to what a
+ * workspace host reads off it: the composed supervisor entrypoint the fabric
+ * mints every facet's `env.SUPERVISOR` binding from. Not a member of
+ * `DurableObjectState` in workers-types, and absent on an object that exports
+ * none — which is the state a host refuses to compose over.
+ */
+export interface ActorObjectState<Exports = unknown> extends DurableObjectState {
+  readonly exports?: Exports;
+}
+
+/**
+ * One Durable Object's `ctx` as the platform gives it, with every member this
+ * suite did not build refusing by name. Same assignment rule as
+ * {@link durableObjectStorage}, for the same reason.
+ */
+export function actorObjectState(built: StandInFor<ActorObjectState>): ActorObjectState {
+  const refuse = refusing('DurableObjectState');
+  const facet = refusing('DurableObjectFacets');
+
+  return Object.assign({
+    // Two members a bare object genuinely has none of: no startup props were
+    // bound, and no container is attached. Both are `undefined` on the
+    // platform too, so neither is a stand-in for something.
+    props: undefined,
+    container: undefined,
+    id: { toString: refuse('id.toString'), equals: refuse('id.equals') },
+    storage: durableObjectStorage({}),
+    facets: { get: facet('get'), abort: facet('abort'), delete: facet('delete'), clone: facet('clone') },
+    waitUntil: refuse('waitUntil'),
+    blockConcurrencyWhile: refuse('blockConcurrencyWhile'),
+    acceptWebSocket: refuse('acceptWebSocket'),
+    getWebSockets: refuse('getWebSockets'),
+    setWebSocketAutoResponse: refuse('setWebSocketAutoResponse'),
+    getWebSocketAutoResponse: refuse('getWebSocketAutoResponse'),
+    getWebSocketAutoResponseTimestamp: refuse('getWebSocketAutoResponseTimestamp'),
+    setHibernatableWebSocketEventTimeout: refuse('setHibernatableWebSocketEventTimeout'),
+    getHibernatableWebSocketEventTimeout: refuse('getHibernatableWebSocketEventTimeout'),
+    getTags: refuse('getTags'),
+    abort: refuse('abort'),
+  }, built);
 }
 
 /** The loader binding the runtime's manager reads at composition. No suite
@@ -146,19 +322,13 @@ export function programmaticHostOver(workspace: NimbusWorkspace, seams: Programm
     fabricComposed = true;
   }
 
-  const context = {
-    id: { toString: () => 'programmatic-host-test', name: 'programmatic-host-test' },
-    storage: { ...durableStorage(durable), sql: durableSql() },
+  const ctx = actorObjectState({
+    id: { toString: () => 'programmatic-host-test', equals: () => false, name: 'programmatic-host-test' },
+    storage: durableObjectStorage({ ...durableStorage(durable), sql: durableSqlStorage(new Database(':memory:')) }),
     waitUntil: (promise: Promise<unknown>) => void promise,
     getWebSockets: () => [],
     exports: { SupervisorRPC },
-  };
-
-  // Unchecked and named: `DurableObjectState` is a workerd type with no
-  // constructible form; the runtime reads `id`, `storage`, `waitUntil`,
-  // `getWebSockets` and `exports` — all present above — while `facets` is
-  // only touched by a spawn no suite over this host performs.
-  const ctx: DurableObjectState = Object.create(context);
+  });
 
   const portRegistry = new PortRegistry();
 

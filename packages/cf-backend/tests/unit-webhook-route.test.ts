@@ -9,7 +9,7 @@
  * NOT happen: no object addressed, no budget spent, no body read, unless the URL
  * carries a capability this deployment minted.
  *
- * `activations` records every `idFromName`/`get` — exactly what `getAgentByName`
+ * `activations` records every resolve — exactly what the production resolver
  * does to reach an object, so an empty list is proof none was touched. `AUTH_KV`
  * is a real KV double for the same reason: a refusal that spends a KV write has
  * still spent something a caller chose to make us spend.
@@ -17,7 +17,10 @@
 import { describe, expect, test } from 'bun:test';
 import { mockAgentsSdk } from './helpers/agents-sdk';
 import { makeKv, type FakeKv } from './helpers/kv';
+import type { HubResolver, HubTarget, WebhookDeliveryEnv, WebhookDeliveryResolver, WebhookDeliveryTarget } from '../src/events/routes';
+import type { WebhookDelivery, WebhookDeliveryResult } from '@kinu.run/core';
 import { jsrpcStub } from './helpers/jsrpc-stub';
+import { workerContext } from './helpers/bindings';
 import {
   matchWebhookDeliveryPath, verifyWebhookRoute, webhookRoutePath,
 } from '@kinu.run/core';
@@ -53,7 +56,9 @@ interface DeliveryProbe {
 }
 
 interface Harness {
-  readonly env: Env;
+  readonly env: WebhookDeliveryEnv;
+  readonly resolveAgent: WebhookDeliveryResolver;
+  readonly resolveHubAgent: HubResolver;
   readonly probe: DeliveryProbe;
   /** The knock budget's store, so a refusal that SPENT budget is visible: an
    *  empty key set is proof the ingress budget was never consulted. */
@@ -63,47 +68,59 @@ interface Harness {
 function harness(options: { secret?: string | null; reject?: boolean } = {}): Harness {
   const probe: DeliveryProbe = { activations: [], deliveries: [], bodyText: undefined };
 
-  const agent = jsrpcStub({
-    acceptWebhookDelivery: async (opts: { trigger_id: string; body_text: string }) => {
+  const agent = jsrpcStub<WebhookDeliveryTarget>({
+    acceptWebhookDelivery: async (opts: WebhookDelivery): Promise<WebhookDeliveryResult> => {
       probe.deliveries.push(opts.trigger_id);
       probe.bodyText = opts.body_text;
 
       return options.reject === true
-        ? { status: 'rejected' as const, http_status: 401, reason: 'signature mismatch' }
-        : { status: 'accepted' as const, event_id: 'evt_1', admitted: true };
+        ? { status: 'rejected', http_status: 401, reason: 'signature mismatch' }
+        : { status: 'admitted', event_id: 'evt_1', admitted: true };
     },
   });
 
   const kv = makeKv();
-  // The doubles are deliberately NOT typed as the bindings they stand in for: a
-  // fake `idFromName` returning the name can never satisfy `DurableObjectId`,
-  // and `jsrpcStub`'s prototype-bound methods can never satisfy
-  // `DurableObjectStub`. `Object.assign` is what lets the members land without
-  // the type system adjudicating the fakes.
-  const view: Partial<Env> = {};
-  Object.assign(view, {
+
+  const env: WebhookDeliveryEnv = {
     AUTH_KV: kv,
-    OrchestratorAgent: {
-      idFromName: (name: string) => {
-        probe.activations.push(`idFromName:${name}`);
-
-        return name;
-      },
-      get: (name: string) => {
-        probe.activations.push(`get:${name}`);
-
-        return agent;
-      },
-    },
     WEBHOOK_ROUTE_SECRET: options.secret === undefined ? ROUTE_SECRET : options.secret ?? undefined,
-  });
+  };
 
-  // SAFETY: the delivery route reads exactly the three members constructed by
-  // the `Object.assign` above — the knock budget's KV, the Orchestrator
-  // namespace and the route secret — verified against the bodies of
-  // `handleWebhookDeliveryRequest` and `handleWebhookDelivery`. Nothing
-  // unassigned is reachable through this cast.
-  return { env: view as Env, probe, kv };
+  const resolveAgent: WebhookDeliveryResolver = async (name) => {
+    probe.activations.push(`resolve:${name}`);
+
+    return agent;
+  };
+
+  // The hub's own routes reach a different set of methods on the same object,
+  // and no case in this file drives one to the point of calling any of them:
+  // what they prove is that the hub refuses the delivery path outright.
+  const resolveHubAgent: HubResolver = async (name) => {
+    probe.activations.push(`resolve:${name}`);
+
+    return hubObject();
+  };
+
+  return { env, resolveAgent, resolveHubAgent, probe, kv };
+}
+
+/** The hub half of the same object, refusing: this file drives the delivery
+ *  endpoint, and a hub route that reached a trigger call here would be the
+ *  refusal under test failing to refuse. */
+function hubObject(): HubTarget {
+  const refuse = (member: string) => (): never => {
+    throw new Error(`OrchestratorAgent.${member}: not reachable in this test`);
+  };
+
+  return {
+    listTriggersWire: refuse('listTriggersWire'),
+    createDurableWebhook: refuse('createDurableWebhook'),
+    cancelTrigger: refuse('cancelTrigger'),
+    listRecentEventsWire: refuse('listRecentEventsWire'),
+    getEmailIngress: refuse('getEmailIngress'),
+    setEmailAllowlist: refuse('setEmailAllowlist'),
+    setEmailNotifications: refuse('setEmailNotifications'),
+  };
 }
 
 function delivery(path: string, init: { method?: string; body?: BodyInit } = {}): Request {
@@ -122,13 +139,13 @@ function mintedPath(
 
 describe('a minted route reaches the workspace', () => {
   test('delivery is accepted, and carries the trigger and body the URL brought', async () => {
-    const { env, probe, kv } = harness();
+    const { env, resolveAgent, probe, kv } = harness();
     const body = JSON.stringify({ note: 'a build finished' });
     const request = delivery(await mintedPath(), { body });
-    const response = await handleWebhookDeliveryRequest(request, env);
+    const response = await handleWebhookDeliveryRequest(request, env, resolveAgent);
 
     expect(response?.status).toBe(202);
-    expect(probe.activations).toEqual([`idFromName:${WORKSPACE}`, `get:${WORKSPACE}`]);
+    expect(probe.activations).toEqual([`resolve:${WORKSPACE}`]);
     expect(probe.deliveries).toEqual([TRIGGER]);
     expect(probe.bodyText).toBe(body);
     // The two witnesses every refusal below asserts the ABSENCE of. Read here on
@@ -140,8 +157,8 @@ describe('a minted route reaches the workspace', () => {
   });
 
   test('the route capability is not payload auth: the per-trigger gate still refuses', async () => {
-    const { env, probe } = harness({ reject: true });
-    const response = await handleWebhookDeliveryRequest(delivery(await mintedPath()), env);
+    const { env, resolveAgent, probe } = harness({ reject: true });
+    const response = await handleWebhookDeliveryRequest(delivery(await mintedPath()), env, resolveAgent);
 
     expect(response?.status).toBe(401);
     expect(probe.deliveries).toEqual([TRIGGER]);
@@ -150,8 +167,8 @@ describe('a minted route reaches the workspace', () => {
 
 describe('no unminted route reaches a Durable Object', () => {
   /** Every refusal below must be this answer, and must cost nothing. */
-  async function expectRefused(request: Request, { env, probe, kv }: Harness): Promise<void> {
-    const response = await handleWebhookDeliveryRequest(request, env);
+  async function expectRefused(request: Request, { env, resolveAgent, probe, kv }: Harness): Promise<void> {
+    const response = await handleWebhookDeliveryRequest(request, env, resolveAgent);
 
     expect(response?.status).toBe(404);
     expect(response?.headers.get('cache-control')).toBe('no-store');
@@ -223,9 +240,9 @@ describe('no unminted route reaches a Durable Object', () => {
     };
 
     for (const [what, path] of Object.entries(rewrites)) {
-      const { env, probe } = harness();
+      const { env, resolveAgent, probe } = harness();
       const request = delivery(path);
-      const response = await handleWebhookDeliveryRequest(request, env);
+      const response = await handleWebhookDeliveryRequest(request, env, resolveAgent);
       expect(response?.status, what).toBe(404);
       expect(probe.activations, what).toEqual([]);
       expect(request.bodyUsed, what).toBe(false);
@@ -243,9 +260,9 @@ describe('no unminted route reaches a Durable Object', () => {
 
 describe('the delivery route claims exactly its own paths', () => {
   test('a wrong method is refused without addressing the workspace', async () => {
-    const { env, probe } = harness();
+    const { env, resolveAgent, probe } = harness();
     const request = delivery(await mintedPath(), { method: 'PUT' });
-    const response = await handleWebhookDeliveryRequest(request, env);
+    const response = await handleWebhookDeliveryRequest(request, env, resolveAgent);
 
     expect(response?.status).toBe(405);
     expect(probe.activations).toEqual([]);
@@ -253,7 +270,7 @@ describe('the delivery route claims exactly its own paths', () => {
   });
 
   test('a non-delivery path is left to the rest of the route table', async () => {
-    const { env } = harness();
+    const { env, resolveAgent } = harness();
 
     for (const path of [
       `/api/workspaces/${WORKSPACE}/triggers`,
@@ -261,16 +278,16 @@ describe('the delivery route claims exactly its own paths', () => {
       '/api/health',
       '/webhook/anything',
     ]) {
-      expect(await handleWebhookDeliveryRequest(delivery(path), env)).toBeNull();
+      expect(await handleWebhookDeliveryRequest(delivery(path), env, resolveAgent)).toBeNull();
     }
   });
 
   test('the authenticated hub router does not serve delivery at all', async () => {
-    const { env, probe } = harness();
+    const { env, resolveHubAgent, probe } = harness();
 
-    expect(await handleHubRequest(delivery(await mintedPath()), env, WORKSPACE)).toBeNull();
+    expect(await handleHubRequest(delivery(await mintedPath()), env, WORKSPACE, resolveHubAgent)).toBeNull();
     expect(await handleHubRequest(
-      delivery(`/api/workspaces/${WORKSPACE}/webhook/${TRIGGER}`), env, WORKSPACE,
+      delivery(`/api/workspaces/${WORKSPACE}/webhook/${TRIGGER}`), env, WORKSPACE, resolveHubAgent,
     )).toBeNull();
     expect(probe.activations).toEqual([]);
   });
@@ -286,8 +303,8 @@ describe('trigger management reports what delivery hides', () => {
   }
 
   test('no route secret: creation reports the deployment, and registers nothing', async () => {
-    const { env, probe } = harness({ secret: null });
-    const response = await handleHubRequest(createRequest(), env, WORKSPACE);
+    const { env, resolveHubAgent, probe } = harness({ secret: null });
+    const response = await handleHubRequest(createRequest(), env, WORKSPACE, resolveHubAgent);
 
     expect(response?.status).toBe(503);
     expect(await response?.json()).toMatchObject({
@@ -297,8 +314,8 @@ describe('trigger management reports what delivery hides', () => {
   });
 
   test('with a route secret the same request is not refused as unconfigured', async () => {
-    const { env } = harness();
-    const response = await handleHubRequest(createRequest(), env, WORKSPACE);
+    const { env, resolveHubAgent } = harness();
+    const response = await handleHubRequest(createRequest(), env, WORKSPACE, resolveHubAgent);
 
     expect(response?.status).not.toBe(503);
   });
@@ -379,19 +396,43 @@ describe('the Worker entry serves delivery before the auth gate', () => {
     const partialEnv: Partial<Env> = {};
     Object.assign(partialEnv, env, {
       CLI_PUBLIC_ORIGIN: ORIGIN,
+      // The entry binds its own resolver off this namespace, so the recording
+      // one lives here rather than on the harness: what the block proves is
+      // that the capability, not a session, is what reaches the object.
+      OrchestratorAgent: {
+        idFromName: (name: string) => name,
+        get: (name: string) => {
+          probe.activations.push(`resolve:${name}`);
+
+          return jsrpcStub<WebhookDeliveryTarget>({
+            acceptWebhookDelivery: async (opts: WebhookDelivery): Promise<WebhookDeliveryResult> => {
+              probe.deliveries.push(opts.trigger_id);
+              probe.bodyText = opts.body_text;
+
+              return { status: 'admitted', event_id: 'evt_1', admitted: true };
+            },
+          });
+        },
+      },
       ASSETS: {
         fetch: async () => new Response('<!doctype html>', {
           headers: { 'content-type': 'text/html' },
         }),
       },
     });
-    const partialCtx: Partial<ExecutionContext> = {};
-    Object.assign(partialCtx, { waitUntil() {}, passThroughOnException() {} });
 
-    // SAFETY: both members are constructed by the `Object.assign` above, and the
-    // entry's own contract declares them — verified against `server.ts`'s route
-    // table, which returns at step 7b for every request in this block.
-    return { env: partialEnv as Env, ctx: partialCtx as ExecutionContext, probe };
+    // SAFETY: the `Object.assign` above constructs every binding the route table
+    // reads on its way to step 7b — the knock budget's KV and the
+    // route secret from `harness()`, the published origin, the SPA fallback and
+    // the Orchestrator namespace — and nothing past step 7b is reached, because
+    // each case asserts the answer the delivery endpoint itself returns. The
+    // assertion stands rather than the value being typed because the entry
+    // takes the deployment's whole `Env`: a recording namespace cannot satisfy
+    // `DurableObjectNamespace<OrchestratorAgent>` (its stub names 380+ required
+    // members), and the binding cannot be narrowed either, because `route()`
+    // binds its resolvers through the SDK's `getAgentByName`, which takes the
+    // platform namespace. Measured on this tree 2026-09-22.
+    return { env: partialEnv as Env, ctx: workerContext(), probe };
   }
 
   test('a signed delivery is accepted with no session at all', async () => {

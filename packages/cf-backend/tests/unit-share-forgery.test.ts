@@ -15,6 +15,7 @@
 import { describe, expect, test } from 'bun:test';
 import { labelSigner } from '@kinu.run/core';
 import { makeKv } from './helpers/kv';
+import { workerContext } from './helpers/bindings';
 import { TEST_CREDENTIAL_ENCRYPTION_KEY } from './helpers/user-do';
 import type { ShareViewerClaim } from '@kinu.run/core';
 
@@ -97,13 +98,11 @@ function probe(): ShareProbe {
       }),
     },
   });
-  const partialCtx: Partial<ExecutionContext> = {};
-  Object.assign(partialCtx, { waitUntil() {}, passThroughOnException() {} });
 
   // SAFETY: every member the share rail reads is constructed above — the host
   // suffix, the signing secret and the OrchestratorAgent namespace. The rail is
   // step 1 of the route table, so nothing unassigned is reachable.
-  return { resolved, routed, forwarded, env: view as Env, ctx: partialCtx as ExecutionContext };
+  return { resolved, routed, forwarded, env: view as Env, ctx: workerContext() };
 }
 
 describe('a share hostname nobody minted', () => {

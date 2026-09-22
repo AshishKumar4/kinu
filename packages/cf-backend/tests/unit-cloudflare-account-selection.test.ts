@@ -15,7 +15,8 @@ import { describe, expect, test } from 'bun:test';
 import { asFetchFunction, type OAuthCredential } from '@kinu.run/core';
 import { TEST_CREDENTIAL_ENCRYPTION_KEY, createTestUserDO, testOwner } from './helpers/user-do';
 import { CLOUDFLARE_OAUTH_CRED_KEY } from '@kinu.run/core';
-import { handleUserRequest } from '../src/user/routes';
+import { handleUserRequest, type UserRoutesEnv } from '../src/user/routes';
+import { bootstrappedProfile, userAccount, workspaceObject } from './helpers/bindings';
 import type { AuthIdentity } from '../src/auth/session';
 import type { UserCaller } from '@kinu.run/core';
 import * as v from 'valibot';
@@ -164,11 +165,11 @@ function routeHarness(selectFails = false) {
   const notified: string[] = [];
   const selected: string[] = [];
 
-  const stub = {
-    async ensureProfile() {},
+  const stub = userAccount({
+    async ensureProfile(_caller: UserCaller, email: string) { return bootstrappedProfile(email); },
     async userMcp_warmConnections() { return { servers: 0 }; },
     async listActiveWorkspaces() {
-      return [{ name: 'jarvis', displayName: 'Jarvis' }];
+      return [{ name: 'jarvis', displayName: 'Jarvis', createdAt: 1, nameOrigin: 'user' as const }];
     },
     async listCloudflareAccounts() {
       return { connected: true, selectedId: PERSONAL.id, accounts: [PERSONAL, EMPLOYER] };
@@ -177,31 +178,26 @@ function routeHarness(selectFails = false) {
       if (selectFails) throw new Error('That Cloudflare account is not one this login can see.');
       selected.push(id);
     },
-  };
+  });
 
+  // These two handlers call `waitUntil` on the context and nothing else.
   const pending: Promise<unknown>[] = [];
-  const partialCtx: Partial<ExecutionContext> = {};
-  Object.assign(partialCtx, { waitUntil(promise: Promise<unknown>) { pending.push(promise); } });
-  // SAFETY: The constructed context provides waitUntil, the only
-  // ExecutionContext member these two handlers reach, assigned immediately above.
-  const ctx = partialCtx as ExecutionContext;
-  const partialEnv: Partial<Env> = {};
-  Object.assign(partialEnv, {
-    UserDO: { idFromName: (name: string) => name, get: () => stub },
-    OrchestratorAgent: {
-      idFromName: (name: string) => name,
-      get: (id: string) => ({ async onCredentialsChanged() {
-        notified.push(id);
+  const ctx = { waitUntil(promise: Promise<unknown>) { pending.push(promise); } };
 
-        return { ok: true };
-      } }),
+  const env: UserRoutesEnv<string> = {
+    UserDO: { idFromName: (name) => name, get: () => stub },
+    OrchestratorAgent: {
+      idFromName: (name) => name,
+      get: (id) => workspaceObject({
+        async onCredentialsChanged() {
+          notified.push(id);
+
+          return { ok: true as const };
+        },
+      }),
     },
     CREDENTIAL_ENCRYPTION_KEY: TEST_CREDENTIAL_ENCRYPTION_KEY,
-  });
-  // SAFETY: The constructed environment provides the two locally owned
-  // namespaces the handlers reach plus the encryption key ownerCaller reads;
-  // no other Env binding is reachable in the account routes exercised here.
-  const env = partialEnv as Env;
+  };
 
   const call = (path: string, method: string, body?: { id: string }) =>
     handleUserRequest(new Request(`https://kinu.example.com/api/user${path}`, {

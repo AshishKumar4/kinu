@@ -36,6 +36,17 @@ import { diagnostics, toKinuError } from '@kinu.run/core/obs';
 import type { AuthIdentity } from '../auth/session';
 import { internalCaller } from './admin-caller';
 import { controlPlaneStub, hasControlPlane, type ControlPlaneEnv } from './stub';
+import type { ControlPlaneDO } from './control-plane-do';
+
+/** The four rows this feed writes on the fleet index. */
+export type IndexFeedSink = Pick<
+  ControlPlaneDO, 'observeUser' | 'observeWorkspace' | 'touchWorkspace' | 'forgetWorkspace'
+>;
+
+/** The feed's env. The destination is OPTIONAL on purpose: "this deployment
+ *  has no control plane" is a first-class state here, not a lost write, and
+ *  `hasControlPlane` is what tells the two apart. */
+export type IndexFeedEnv<Id> = Partial<ControlPlaneEnv<Id, IndexFeedSink>>;
 
 /**
  * How long one isolate trusts its own observation before re-writing it.
@@ -82,8 +93,8 @@ export interface RetainWork {
  * reported, as a classified diagnostics failure, and only its effect on the
  * request is discarded.
  */
-export function observeIdentity(
-  env: ControlPlaneEnv,
+export function observeIdentity<Id>(
+  env: IndexFeedEnv<Id>,
   identity: AuthIdentity,
   options: { retain: RetainWork; now?: number },
 ): void {
@@ -111,8 +122,8 @@ export function observeIdentity(
  * earlier, any signed-in user grows this index by inventing names, and the
  * operator's cross-account list fills with rows for workspaces nobody owns.
  */
-export function observeWorkspaceUse(
-  env: ControlPlaneEnv,
+export function observeWorkspaceUse<Id>(
+  env: IndexFeedEnv<Id>,
   identity: AuthIdentity,
   workspace: string,
   options: { retain: RetainWork; now?: number },
@@ -163,8 +174,8 @@ async function retained(key: string, hasWorkspace: boolean, write: () => Promise
  * appear. A failure is still reported and still not fatal — the registry row is
  * the truth and this one is a copy.
  */
-export async function indexNewWorkspace(
-  env: ControlPlaneEnv,
+export async function indexNewWorkspace<Id>(
+  env: IndexFeedEnv<Id>,
   target: { userId: string; name: string; displayName: string; createdAt: number },
 ): Promise<void> {
   // No destination is not a lost write — see `hasControlPlane`.
@@ -195,8 +206,8 @@ export async function indexNewWorkspace(
  * leaves the registry row in place on purpose, and an index that had already
  * marked it removed would tell an operator the opposite of the truth.
  */
-export async function unindexWorkspace(
-  env: ControlPlaneEnv,
+export async function unindexWorkspace<Id>(
+  env: IndexFeedEnv<Id>,
   target: { userId: string; name: string },
 ): Promise<void> {
   if (!hasControlPlane(env)) return;

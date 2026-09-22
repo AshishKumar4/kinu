@@ -11,7 +11,9 @@
 // opts out, so the default is the safe direction.
 import { describe, expect, test } from 'bun:test';
 import { TEST_CREDENTIAL_ENCRYPTION_KEY } from './helpers/user-do';
-import { handleUserRequest } from '../src/user/routes';
+import { handleUserRequest, type UserRoutesEnv } from '../src/user/routes';
+import { bootstrappedProfile, unreachableNamespace, userAccount } from './helpers/bindings';
+import type { UserCaller } from '@kinu.run/core';
 import { handleHealthRequest } from '@kinu.run/core';
 import { PRIVATE_NO_STORE } from '@kinu.run/core';
 import { err, json } from '@kinu.run/core';
@@ -25,23 +27,19 @@ const IDENTITY: AuthIdentity = {
   authTime: Date.now(),
 };
 
-function userEnv(): Env {
-  const stub = {
-    async ensureProfile() {},
+function userEnv(): UserRoutesEnv<string> {
+  const stub = userAccount({
+    async ensureProfile(_caller: UserCaller, email: string) { return bootstrappedProfile(email); },
     async userMcp_warmConnections() { return { servers: 0 }; },
     async listCredentials() { return []; },
-  };
-
-  const partialEnv: Partial<Env> = {};
-  Object.assign(partialEnv, {
-    UserDO: { idFromName: (name: string) => name, get: () => stub },
-    CREDENTIAL_ENCRYPTION_KEY: TEST_CREDENTIAL_ENCRYPTION_KEY,
   });
 
-  // SAFETY: the constructed environment provides the one namespace and the
-  // encryption key the credential-summary read reaches; no other binding is on
-  // that path.
-  return partialEnv as Env;
+  return {
+    UserDO: { idFromName: (name) => name, get: () => stub },
+    CREDENTIAL_ENCRYPTION_KEY: TEST_CREDENTIAL_ENCRYPTION_KEY,
+    // A credential-summary read fans nothing out.
+    OrchestratorAgent: unreachableNamespace('OrchestratorAgent'),
+  };
 }
 
 describe('authenticated JSON is private and never stored', () => {
@@ -66,12 +64,9 @@ describe('authenticated JSON is private and never stored', () => {
 
 describe('a route that names its own policy keeps it', () => {
   test('the public health stamp stays revalidatable', async () => {
-    const partialEnv: Partial<Env> = {};
-    Object.assign(partialEnv, { ASSETS: { fetch: async () => new Response('', { status: 404 }) } });
-
-    // SAFETY: the health route reads only the assets binding constructed here.
     const response = await handleHealthRequest(
-      new Request('https://kinu.example.com/api/health'), partialEnv as Env,
+      new Request('https://kinu.example.com/api/health'),
+      { ASSETS: { fetch: async () => new Response('', { status: 404 }) } },
     );
 
     expect(response?.headers.get('cache-control')).toBe('no-cache');

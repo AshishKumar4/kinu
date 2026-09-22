@@ -15,7 +15,9 @@ import {
 import {
   AuthError, SESSION_COOKIE_NAME, authenticateRequest, type AuthEnv,
 } from '../src/auth/session';
-import { handleAuthRequest } from '../src/auth/routes';
+import { handleAuthRequest, type AuthRoutesAuthority, type AuthRoutesEnv } from '../src/auth/routes';
+import { unreachableNamespace } from './helpers/bindings';
+import type { ObjectNamespace } from '../src/bindings';
 import type { KvStore } from '@kinu.run/agent-utils';
 import { OwnerCapabilityUnavailableError } from '@kinu.run/core';
 import { sha256Hex } from '@kinu.run/core';
@@ -110,11 +112,7 @@ type SessionMethod = 'registerBrowserSession' | 'verifyBrowserSession' | 'revoke
 
 /** A namespace binding as this suite supplies it: the two members the auth
  *  store calls on one, handing back a stub-shaped double of a real UserDO. */
-interface TestNamespace {
-  idFromName(name: string): string;
-  get(id: string): Pick<UserDO,
-    'ensureProfile' | 'registerBrowserSession' | 'verifyBrowserSession' | 'revokeBrowserSession'>;
-}
+type TestNamespace = ObjectNamespace<string, AuthRoutesAuthority>;
 
 interface Fleet {
   namespace: TestNamespace;
@@ -151,7 +149,11 @@ function fleet(): Fleet {
 
       // A double with a stub's shape: methods on the prototype, so the
       // delegation cannot be flattened away by a copy.
+      // The sign-in path's other two calls: no case here signs in with
+      // Cloudflare, so reaching either names itself rather than answering.
       return jsrpcStub({
+        setCredential: (): never => { throw new Error('setCredential: not reachable in this test'); },
+        listActiveWorkspaces: (): never => { throw new Error('listActiveWorkspaces: not reachable in this test'); },
         ensureProfile: (...args: Parameters<UserDO['ensureProfile']>) => real.ensureProfile(...args),
         registerBrowserSession: (...args: Parameters<UserDO['registerBrowserSession']>) =>
           refuse('registerBrowserSession') ?? real.registerBrowserSession(...args),
@@ -175,18 +177,15 @@ function envWith(
   kv: KvStore,
   namespace: TestNamespace,
   credentialEncryptionKey = TEST_CREDENTIAL_ENCRYPTION_KEY,
-): Env {
-  const partial: Partial<Env> = {};
-  Object.assign(partial, {
+): AuthRoutesEnv<string> {
+  return {
     AUTH_KV: kv,
     UserDO: namespace,
     CREDENTIAL_ENCRYPTION_KEY: credentialEncryptionKey,
-  });
-
-  // SAFETY: sign-in, verification and logout read exactly the constructed KV
-  // namespace, UserDO namespace and credential key; every reachable binding is
-  // present above.
-  return partial as Env;
+    // Only the Cloudflare callback fans a credential change out, and no case
+    // here signs in.
+    OrchestratorAgent: unreachableNamespace('OrchestratorAgent'),
+  };
 }
 
 function profile(email: string, sub = 'cf-1'): OAuthProfile {
@@ -202,7 +201,7 @@ function liveSessions(harness: TestUserDO): string[] {
 }
 
 /** The `AuthError` a cookie was refused with, as a value to assert against. */
-async function refusalFor(token: string, env: AuthEnv): Promise<AuthError> {
+async function refusalFor(token: string, env: AuthEnv<string>): Promise<AuthError> {
   const request = new Request('https://kinu.example.com/api/workspaces', {
     headers: { cookie: `${SESSION_COOKIE_NAME}=${encodeURIComponent(token)}` },
   });

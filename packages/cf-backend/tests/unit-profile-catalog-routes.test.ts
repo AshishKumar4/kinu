@@ -14,8 +14,9 @@ import {
   type ProfileCatalog,
 } from '@kinu.run/core';
 import type { AuthIdentity } from '../src/auth/session';
-import { handleCliRequest } from '../src/cli/routes';
-import { handleUserRequest } from '../src/user/routes';
+import { handleCliRequest, type CliRoutesEnv } from '../src/cli/routes';
+import { handleUserRequest, type UserRoutesEnv } from '../src/user/routes';
+import { unreachableAssets, unreachableKv, unreachableNamespace } from './helpers/bindings';
 import {
   TEST_CREDENTIAL_ENCRYPTION_KEY,
   createTestUserDO,
@@ -61,26 +62,17 @@ interface ProfileCatalogWriteRequest {
   expectedVersion: number;
 }
 
-interface ProfileCatalogRouteBindings {
-  CREDENTIAL_ENCRYPTION_KEY: string;
-  UserDO: {
-    idFromName(name: string): string;
-    get(): TestUserDO['userDO'];
-  };
-}
-
-function routeEnv(userDO: TestUserDO['userDO']): Env {
-  const bindings: ProfileCatalogRouteBindings = {
+/** The catalog is read and written from both planes, so the env satisfies
+ *  both. Neither route reaches a workspace object, the device-code KV or the
+ *  published assets. */
+function routeEnv(userDO: TestUserDO['userDO']): UserRoutesEnv<string> & CliRoutesEnv<string> {
+  return {
     CREDENTIAL_ENCRYPTION_KEY: TEST_CREDENTIAL_ENCRYPTION_KEY,
-    UserDO: { idFromName: (name: string) => name, get: () => userDO },
+    UserDO: { idFromName: (name) => name, get: () => userDO },
+    OrchestratorAgent: unreachableNamespace('OrchestratorAgent'),
+    AUTH_KV: unreachableKv('AUTH_KV'),
+    ASSETS: unreachableAssets(),
   };
-
-  const env: Partial<Env> = {};
-  Object.assign(env, bindings);
-
-  // SAFETY: Profile catalog handlers read exactly the constructed UserDO
-  // namespace and credential key; every reachable binding is present.
-  return env as Env;
 }
 
 async function setup() {

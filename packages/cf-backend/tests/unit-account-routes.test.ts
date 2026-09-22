@@ -4,7 +4,9 @@
 // any other failure still reaches the caller.
 import { describe, expect, test } from 'bun:test';
 import * as v from 'valibot';
-import { handleAccountRequest } from '../src/user/account-routes';
+import { handleAccountRequest, type AccountRoutesEnv } from '../src/user/account-routes';
+import { unreachableNamespace } from './helpers/bindings';
+import type { ObjectNamespace } from '../src/bindings';
 import { TEST_CREDENTIAL_ENCRYPTION_KEY } from './helpers/user-do';
 import type { AuthIdentity } from '../src/auth/session';
 import type { UserCaller } from '@kinu.run/core';
@@ -17,27 +19,34 @@ const DeletedSchema = v.object({ deleted: v.literal(true) });
 
 const ErrorSchema = v.object({ error: v.string() });
 
-interface TestNamespace<Stub> {
-  idFromName(name: string): string;
-  get(id: string): Stub;
-}
-
 /** The two UserDO calls the delete route makes, recorded in order, plus the
  *  roster read `forgetSharesGiven` walks — empty here, because the recipients
  *  half is a walk over workspace objects this test does not build. */
 function setup(deleteOutcome: 'ok' | 'destroyed' | 'io') {
   const calls: string[] = [];
 
-  const userDO = {
+  const refuse = (member: string) => (): never => {
+    throw new Error(`UserDO.${member}: not reachable in this test`);
+  };
+
+  const userDO: AccountRoutesEnv<string>['UserDO'] extends ObjectNamespace<string, infer Stub>
+    ? Stub : never = {
+    // The account routes the delete path does not take.
+    completeOnboarding: refuse('completeOnboarding'),
+    setDisplayName: refuse('setDisplayName'),
+    // The ownership gate's two, reached only for a workspace the roster names.
+    hasWorkspace: refuse('hasWorkspace'),
+    ensureWorkspaceCapability: refuse('ensureWorkspaceCapability'),
+    sharesReceived_forget: refuse('sharesReceived_forget'),
+    async searchExperienceWire(_caller: UserCaller, options: { kind?: string; limit?: number } = {}) {
+      calls.push(`experience:${options.kind ?? '-'}:${String(options.limit)}`);
+
+      return JSON.stringify([]);
+    },
     async listActiveWorkspaces(_caller: UserCaller) {
       calls.push('workspaces:list');
 
       return [];
-    },
-    async searchExperienceWire(_caller: UserCaller, options: { kind?: string; limit?: number }) {
-      calls.push(`experience:${options.kind ?? '-'}:${String(options.limit)}`);
-
-      return '[]';
     },
     async deleteAccount(_caller: UserCaller, ownerUserId: string) {
       calls.push(`account:delete:${ownerUserId}`);
@@ -50,15 +59,15 @@ function setup(deleteOutcome: 'ok' | 'destroyed' | 'io') {
     },
   };
 
-  const namespace: TestNamespace<typeof userDO> = { idFromName: (name) => name, get: () => userDO };
+  const env: AccountRoutesEnv<string> = {
+    UserDO: { idFromName: (name) => name, get: () => userDO },
+    CREDENTIAL_ENCRYPTION_KEY: TEST_CREDENTIAL_ENCRYPTION_KEY,
+    // The share sweep addresses a workspace object only for a roster row, and
+    // the roster is empty in every case here.
+    OrchestratorAgent: unreachableNamespace('OrchestratorAgent'),
+  };
 
-  const env: Partial<Env> = {};
-  Object.assign(env, { UserDO: namespace, CREDENTIAL_ENCRYPTION_KEY: TEST_CREDENTIAL_ENCRYPTION_KEY });
-
-  // SAFETY: The account routes reach only the two constructed bindings, the
-  // UserDO namespace and the credential key; every typed binding reachable in
-  // these tests is present.
-  return { env: env as Env, calls };
+  return { env, calls };
 }
 
 function request(body: string): Request {

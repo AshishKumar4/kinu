@@ -21,7 +21,8 @@ import { programmaticHostOver } from './helpers/programmatic-host';
 import { orchestratorHarness } from './helpers/actor-harness';
 import { ActorAgent } from '../src/actor-agent';
 import { WORKSPACE_TERMINAL_TAG, WorkspaceTerminalOutputSchema } from '@kinu.run/core';
-import type { WorkspaceTerminal } from '../src/workspace-host';
+import type { TerminalSocket, WorkspaceTerminal } from '../src/workspace-host';
+import { socketConnection } from './helpers/bindings';
 
 const databases: Database[] = [];
 
@@ -64,7 +65,7 @@ async function openRuntimeTerminal(): Promise<WorkspaceTerminal> {
 }
 
 interface PaneSocket {
-  readonly ws: WebSocket;
+  readonly ws: TerminalSocket;
   /** Every frame the runtime wrote, as the pane would parse it. */
   readonly frames: Array<v.InferOutput<typeof WorkspaceTerminalOutputSchema>>;
   /** Resolves once the painted output holds `text`. */
@@ -77,21 +78,15 @@ function paneSocket(): PaneSocket {
   const raw = new AwaitedList<string>();
   const frames: PaneSocket['frames'] = [];
   const output = () => frames.flatMap((frame) => frame.type === 'output' ? [frame.data] : []).join('');
-  const partial: Partial<WebSocket> = {};
-  Object.assign(partial, {
+
+  const ws: TerminalSocket = {
     send: (data: string) => {
       const parsed = v.safeParse(WorkspaceTerminalOutputSchema, JSON.parse(data));
 
       if (parsed.success) frames.push(parsed.output);
       raw.push(data);
     },
-    close: () => {},
-  });
-
-  // SAFETY: the runtime's terminal reaches `send` and nothing else of a
-  // socket it was attached to — the members constructed above exhaust what
-  // the code under test can touch.
-  const ws = partial as WebSocket;
+  };
 
   return { ws, frames, output, painted: (text) => raw.until(() => output().includes(text)) };
 }
@@ -136,7 +131,7 @@ function recordedTerminal(): RecordedTerminal {
   };
 }
 
-function socketId(ws: WebSocket): string {
+function socketId(ws: TerminalSocket): string {
   return v.parse(v.object({ id: v.string() }), ws).id;
 }
 
@@ -149,17 +144,16 @@ interface FakeConnection {
 function connection(id: string, tags: string[]): FakeConnection {
   const sent: string[] = [];
   const closed: FakeConnection['closed'] = [];
-  const partial: Partial<Connection> = {};
-  Object.assign(partial, {
-    id, tags,
-    send: (data: string) => { sent.push(data); },
-    close: (code: number, reason: string) => { closed.push({ code, reason }); },
-  });
 
-  // SAFETY: every member the socket handlers read is constructed above (`id`,
-  // `tags`, `send`, `close`); the platform contract for a hibernated
-  // connection carries its tags and its wire and nothing else.
-  return { wire: partial as Connection, sent, closed };
+  return {
+    wire: socketConnection({
+      id, tags,
+      send: (data) => { sent.push(v.parse(v.string(), data)); },
+      close: (code, reason) => { closed.push({ code: v.parse(v.number(), code), reason: v.parse(v.string(), reason) }); },
+    }),
+    sent,
+    closed,
+  };
 }
 
 describe('the actor hands a terminal socket to the runtime shell', () => {

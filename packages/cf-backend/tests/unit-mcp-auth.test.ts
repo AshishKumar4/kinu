@@ -7,7 +7,8 @@
 import { TEST_CREDENTIAL_ENCRYPTION_KEY } from './helpers/user-do';
 import { describe, test, expect } from 'bun:test';
 import { mockAgentsSdk } from './helpers/agents-sdk';
-import type { UserCaller } from '@kinu.run/core';
+import { mcpAccount, unreachableKv } from './helpers/bindings';
+import type { McpAgentClient, McpEnv } from '../src/mcp-server';
 
 mockAgentsSdk();
 
@@ -17,43 +18,18 @@ const USER_ID = '0123456789abcdef0123456789abcdef';
 
 const TOKEN = `ptc_${USER_ID}_abcdefghijklmnopqrstuvwxyz`;
 
-interface TestNamespace<Stub> {
-  idFromName(name: string): string;
-  get(): Stub;
-}
-
-interface UnusedAuthStore {
-  readonly unused?: never;
-}
-
-interface McpTestBindings<UserStub, AgentStub> {
-  AUTH_KV: UnusedAuthStore;
-  UserDO: TestNamespace<UserStub>;
-  OrchestratorAgent: TestNamespace<AgentStub>;
-  CREDENTIAL_ENCRYPTION_KEY: string;
-}
-
-function testEnv<UserStub, AgentStub>(bindings: McpTestBindings<UserStub, AgentStub>): Env {
-  const env: Partial<Env> = {};
-  Object.assign(env, bindings);
-
-  // SAFETY: Bearer-authenticated MCP requests read exactly the two constructed
-  // namespaces and credential key; AUTH_KV is present but unreachable without a cookie.
-  return env as Env;
-}
-
-function mcpEnv() {
+function mcpWorkspace() {
   const calls: string[] = [];
 
-  const userDO = {
-    async verifyCliToken(_caller: UserCaller, token: string) {
+  const userDO = mcpAccount({
+    async verifyCliToken(_caller, token: string) {
       return token === TOKEN
         ? { ok: true, tokenHash: 'hash', user: { id: USER_ID, email: 'a@example.com', displayName: null } }
         : { ok: false, error: 'invalid token' };
     },
-    async hasWorkspace(_caller: UserCaller, name: string) { return name === 'jarvis'; },
+    async hasWorkspace(_caller, name: string) { return name === 'jarvis'; },
     async ensureWorkspaceCapability() {},
-  };
+  });
 
   const agent = {
     async claimOwner(userId: string) {
@@ -63,16 +39,23 @@ function mcpEnv() {
     },
   };
 
-  const env = testEnv({
-    // Present but never reached in these tests (no session cookie is sent);
-    // its presence makes the unauthenticated path a clean AuthError 401.
-    AUTH_KV: {},
-    UserDO: { idFromName: (n: string) => n, get: () => userDO },
-    OrchestratorAgent: { idFromName: (n: string) => n, get: () => agent },
+  const env: McpEnv<string> = {
+    // Read on the cookie path only, and no case here sends a cookie — but
+    // its PRESENCE is what makes an unauthenticated request a 401 rather than
+    // the 500 an unconfigured deployment answers with.
+    AUTH_KV: unreachableKv('AUTH_KV'),
+    UserDO: { idFromName: (n) => n, get: () => userDO },
+    OrchestratorAgent: { idFromName: (n) => n, get: () => agent },
     CREDENTIAL_ENCRYPTION_KEY: TEST_CREDENTIAL_ENCRYPTION_KEY,
-  });
+  };
 
-  return { env, calls };
+  // The tool surface is never driven here — every case stops at the gate —
+  // so resolving one is itself the failure this suite would want named.
+  const resolveAgent = (name: string): Promise<McpAgentClient> => {
+    throw new Error(`OrchestratorAgent.${name}: the MCP tool surface is not reachable in this test`);
+  };
+
+  return { env, calls, resolveAgent };
 }
 
 function initializeRequest(agentName: string, token?: string) {
@@ -101,35 +84,39 @@ function initializeRequest(agentName: string, token?: string) {
 
 describe('MCP server auth gate', () => {
   test('valid CLI bearer token + owned agent → MCP initialize succeeds', async () => {
-    const { env, calls } = mcpEnv();
-    const res = await handleMcpRequest(initializeRequest('jarvis', TOKEN), env);
+    const { env, calls, resolveAgent } = mcpWorkspace();
+    const res = await handleMcpRequest(initializeRequest('jarvis', TOKEN), env, resolveAgent);
     expect(res?.status).toBe(200);
     expect(calls).toContain(`claim:${USER_ID}`);
     expect(await res?.text()).toContain('"serverInfo"');
   });
 
   test('no credentials at all → 401', async () => {
-    const { env } = mcpEnv();
-    const res = await handleMcpRequest(initializeRequest('jarvis'), env);
+    const { env, resolveAgent } = mcpWorkspace();
+    const res = await handleMcpRequest(initializeRequest('jarvis'), env, resolveAgent);
     expect(res?.status).toBe(401);
   });
 
   test('invalid bearer token → 401', async () => {
-    const { env, calls } = mcpEnv();
-    const res = await handleMcpRequest(initializeRequest('jarvis', `ptc_${USER_ID}_zzzzzzzzzzzzzzzzzzzzzzzzzz`), env);
+    const { env, calls, resolveAgent } = mcpWorkspace();
+
+    const res = await handleMcpRequest(
+      initializeRequest('jarvis', `ptc_${USER_ID}_zzzzzzzzzzzzzzzzzzzzzzzzzz`), env, resolveAgent,
+    );
+
     expect(res?.status).toBe(401);
     expect(calls).toHaveLength(0);
   });
 
   test('valid token but agent not in caller registry → 404', async () => {
-    const { env } = mcpEnv();
-    const res = await handleMcpRequest(initializeRequest('not-mine', TOKEN), env);
+    const { env, resolveAgent } = mcpWorkspace();
+    const res = await handleMcpRequest(initializeRequest('not-mine', TOKEN), env, resolveAgent);
     expect(res?.status).toBe(404);
   });
 
   test('non-MCP paths are ignored', async () => {
-    const { env } = mcpEnv();
-    const res = await handleMcpRequest(new Request('https://kinu.example.com/api/health'), env);
+    const { env, resolveAgent } = mcpWorkspace();
+    const res = await handleMcpRequest(new Request('https://kinu.example.com/api/health'), env, resolveAgent);
     expect(res).toBeNull();
   });
 });

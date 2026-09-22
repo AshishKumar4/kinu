@@ -11,7 +11,9 @@
 //     the owner just connected invisible to every live workspace
 import { TEST_CREDENTIAL_ENCRYPTION_KEY } from './helpers/user-do';
 import { describe, expect, test } from 'bun:test';
-import { handleCliRequest } from '../src/cli/routes';
+import { handleCliRequest, type CliRoutesEnv } from '../src/cli/routes';
+import type { CredentialSummary } from '../src/user/user-do';
+import { cliAccount, workspaceObject, unreachableAssets, unreachableKv } from './helpers/bindings';
 import type { JsonValue } from '@kinu.run/core';
 import type { UserCaller } from '@kinu.run/core';
 import * as v from 'valibot';
@@ -24,25 +26,11 @@ const CI_TOKEN = `pta_${USER_ID}_${'c'.repeat(44)}`;
 
 const CredentialListSchema = v.array(v.object({ key: v.string(), kind: v.string() }));
 
-interface TestNamespace<Stub> {
-  idFromName(name: string): string;
-  get(): Stub;
-}
-
-interface CredentialRouteTestBindings<Stub, AgentStub> {
-  UserDO: TestNamespace<Stub>;
-  OrchestratorAgent: { idFromName(name: string): string; get(name: string): AgentStub };
-  CREDENTIAL_ENCRYPTION_KEY: string;
-}
-
-function testEnv<Stub, AgentStub>(bindings: CredentialRouteTestBindings<Stub, AgentStub>): Env {
-  const env: Partial<Env> = {};
-  Object.assign(env, bindings);
-
-  // SAFETY: CLI credential handlers read exactly the constructed UserDO
-  // namespace and credential key; every reachable binding is present.
-  return env as Env;
-}
+/** What a stored credential carries that the summary reads back: its kind, in
+ *  the one vocabulary `CredentialSummary` names. */
+const StoredCredentialSchema = v.object({
+  kind: v.optional(v.picklist(['bearer', 'oauth', 'openai-compat'])),
+});
 
 function handled(response: Response | null): Response {
   if (!response) throw new Error('credential route did not handle the request');
@@ -51,13 +39,13 @@ function handled(response: Response | null): Response {
 }
 
 function setupEnv() {
-  const stored = new Map<string, { kind: string; value: { kind?: string } }>();
+  const stored = new Map<string, { kind: CredentialSummary['kind']; value: { kind?: string } }>();
   /** Workspaces told to drop their cached provider state, in fan-out order. */
   const notified: string[] = [];
 
-  const userDO = {
+  const userDO = cliAccount({
     async listActiveWorkspaces(_caller: UserCaller) {
-      return [{ name: 'jarvis', displayName: 'Jarvis', createdAt: 1 }];
+      return [{ name: 'jarvis', displayName: 'Jarvis', createdAt: 1, nameOrigin: 'user' as const }];
     },
     async verifyCliToken(_caller: UserCaller, token: string) {
       return {
@@ -79,18 +67,19 @@ function setupEnv() {
     async listCredentials(_caller: UserCaller) {
       return [...stored.entries()].map(([key, record]) => ({ key, kind: record.kind, createdAt: 1, updatedAt: 2 }));
     },
-    async setCredential(_caller: UserCaller, key: string, credential: { kind?: string }) {
+    async setCredential(_caller: UserCaller, key: string, credential: JsonValue) {
       if (key === 'cloudflare.ai-gateway') throw new Error('cloudflare.ai-gateway is derived from your Cloudflare login and cannot be stored directly.');
-      stored.set(key, { kind: credential.kind ?? 'bearer', value: credential });
+      const record = v.parse(StoredCredentialSchema, credential);
+      stored.set(key, { kind: record.kind ?? 'bearer', value: record });
     },
     async deleteCredential(_caller: UserCaller, key: string) { stored.delete(key); },
-  };
+  });
 
-  const env = testEnv({
-    UserDO: { idFromName: (n: string) => n, get: () => userDO },
+  const env: CliRoutesEnv<string> = {
+    UserDO: { idFromName: (n) => n, get: () => userDO },
     OrchestratorAgent: {
-      idFromName: (n: string) => n,
-      get: (name: string) => ({
+      idFromName: (n) => n,
+      get: (name) => workspaceObject({
         async onCredentialsChanged() {
           notified.push(name);
 
@@ -99,16 +88,17 @@ function setupEnv() {
       }),
     },
     CREDENTIAL_ENCRYPTION_KEY: TEST_CREDENTIAL_ENCRYPTION_KEY,
-  });
+    // Device-code sign-in and the published downloads are other suites';
+    // a credential route reaches neither.
+    AUTH_KV: unreachableKv('AUTH_KV'),
+    ASSETS: unreachableAssets(),
+  };
 
   // The request's own ExecutionContext owns the fan-out, so the suite holds the
-  // promises it hands over and joins them where the assertion is.
+  // promises it hands over and joins them where the assertion is. The fan-out
+  // calls `waitUntil` and nothing else on it.
   const pending: Promise<unknown>[] = [];
-  const partialCtx: Partial<ExecutionContext> = {};
-  Object.assign(partialCtx, { waitUntil(promise: Promise<unknown>) { pending.push(promise); } });
-  // SAFETY: the credential fan-out reads exactly the `waitUntil` constructed
-  // above; no other ExecutionContext member is reachable from these routes.
-  const ctx = partialCtx as ExecutionContext;
+  const ctx = { waitUntil(promise: Promise<unknown>) { pending.push(promise); } };
 
   return { env, stored, ctx, notified, settled: () => Promise.all(pending) };
 }

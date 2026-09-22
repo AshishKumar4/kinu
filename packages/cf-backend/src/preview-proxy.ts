@@ -25,13 +25,15 @@
  * question is asked at all.
  */
 
-import { getSandbox, proxyToSandbox } from "@cloudflare/sandbox";
+import { getSandbox, proxyToSandbox, type SandboxEnv } from "@cloudflare/sandbox";
 import { diagnostics, toKinuError } from "@kinu.run/core/obs";
 import { escapeHtml } from "@kinu.run/core";
 import { containPreviewResponse, sandboxPreviewLabelOf } from "@kinu.run/core";
 import { isKinuSandboxId } from "@kinu.run/core";
-import { sandboxPreviewExposed } from "@kinu.run/core";
+import { sandboxPreviewExposed, type PreviewHostEnv } from "@kinu.run/core";
+import type { KvStore } from "@kinu.run/agent-utils";
 import { sanitizePreviewRequestHeaders } from "./lib/preview-request";
+import type { KinuSandbox } from "./kinu-sandbox";
 import { SANDBOX_TRANSPORT } from "./sandbox-exec-lane";
 
 /**
@@ -74,11 +76,30 @@ function refusePreview(code: string, error: string, status: number): Response {
 }
 
 /**
+ * Every binding the preview host reads: the suffix a label is parsed against,
+ * the projection a published label is proven against, and the container
+ * namespace the SDK forwards and repairs through.
+ *
+ * `Sandbox` keeps the platform namespace type rather than a `Pick`, because
+ * both `proxyToSandbox` and `getSandbox` take it: the SDK's own env contract is
+ * `{ Sandbox: DurableObjectNamespace<Sandbox> }` and nothing narrower satisfies
+ * it (@cloudflare/sandbox dist/index.d.ts:237, read 2026-09-22). It is OPTIONAL
+ * here, and required there, because a deployment can omit the binding —
+ * `repairStalePreview` below, `terminal-route.ts`, `orchestrator.ts` and
+ * `runtime.ts` all state that already, and this module used to hand the SDK an
+ * `undefined` namespace to resolve rather than saying so.
+ */
+export interface SandboxPreviewEnv extends PreviewHostEnv {
+  Sandbox?: DurableObjectNamespace<KinuSandbox>;
+  AUTH_KV?: KvStore;
+}
+
+/**
  * Serve a request that arrived on the preview host. Always answers: a hostname
  * this deployment did not publish as an exposed port gets a 404, never the app,
  * and never a Durable Object.
  */
-export async function servePreviewRequest(request: Request, env: Env): Promise<Response> {
+export async function servePreviewRequest(request: Request, env: SandboxPreviewEnv): Promise<Response> {
   const url = new URL(request.url);
   const label = sandboxPreviewLabelOf(url, env);
 
@@ -89,11 +110,13 @@ export async function servePreviewRequest(request: Request, env: Env): Promise<R
     return refusePreview('NOT_A_PREVIEW', 'This host serves sandbox previews only.', 404);
   }
 
-  // Fail closed. Without the projection there is nothing to prove the label
-  // against, and an unprovable label is exactly what must not reach the SDK.
-  if (!env.AUTH_KV) {
+  // Fail closed, on either half of what proving a label takes: the projection
+  // it is proven against, and the container namespace it would be served from.
+  if (!env.AUTH_KV || !env.Sandbox) {
     return refusePreview('PREVIEW_UNAVAILABLE', 'Preview routing is unavailable.', 503);
   }
+
+  const containers: SandboxEnv<KinuSandbox> = { Sandbox: env.Sandbox };
 
   if (!(await sandboxPreviewExposed(env.AUTH_KV, label))) {
     diagnostics.event('preview.unpublished_label', { sandboxId: label.sandboxId, port: label.port });
@@ -107,7 +130,7 @@ export async function servePreviewRequest(request: Request, env: Env): Promise<R
 
   const forward = (): Promise<Response | null> => proxyToSandbox(new Request(request, {
     headers: sanitizePreviewRequestHeaders(request.headers),
-  }), env);
+  }), containers);
 
   let response = await forward();
 
@@ -125,7 +148,7 @@ export async function servePreviewRequest(request: Request, env: Env): Promise<R
   // (a server that no longer listens on the port is the usual reason), which is
   // the box's problem to report and not something more attempts reach.
   if (request.method === 'GET' && await isStalePreview(response)) {
-    await repairStalePreview(label.sandboxId, env);
+    await repairStalePreview(label.sandboxId, containers);
     const reissued = await forward();
 
     if (reissued !== null) response = reissued;
@@ -160,9 +183,7 @@ async function isStalePreview(response: Response): Promise<boolean> {
  * answer this visitor gets is the stale 410 either way. Turning a stale preview
  * into a 500 would lose the classification the caller needs.
  */
-async function repairStalePreview(sandboxId: string, env: Env): Promise<void> {
-  if (!env.Sandbox) return;
-
+async function repairStalePreview(sandboxId: string, env: SandboxEnv<KinuSandbox>): Promise<void> {
   try {
     // {@link SANDBOX_TRANSPORT}, the one value every Kinu getSandbox call site
     // passes: the SDK persists the transport and drops in-flight requests when

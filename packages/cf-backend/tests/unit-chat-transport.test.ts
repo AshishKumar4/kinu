@@ -19,6 +19,7 @@ import { INTERRUPTED_TURN, type SendLanding, type SessionEvent } from '@kinu.run
 import { KinuError } from '@kinu.run/core/obs';
 import type { Connection } from 'agents';
 import { ChatWireTransport, type ChatWire } from '../src/chat-transport';
+import { socketConnection } from './helpers/bindings';
 
 const FrameSchema = v.looseObject({ type: v.string(), id: v.optional(v.string()), body: v.optional(v.string()), done: v.optional(v.boolean()), landed: v.optional(v.string()), replay: v.optional(v.boolean()) });
 
@@ -49,16 +50,13 @@ function harness(landing: HarnessLanding = 'turn', loadHistory?: () => Promise<U
   const connections = new Map<string, Connection>();
   const frames = new Map<string, string[]>();
 
-  /** A socket the SDK's protocol helpers can drive. */
+  /** A socket the SDK's protocol helpers can drive: the id they address it by
+   *  and the wire they write to. Every other member of a platform socket
+   *  refuses, so a reach past those two names itself. */
   const connection = (id: string): Connection => {
     const socketFrames: string[] = [];
     frames.set(id, socketFrames);
-
-    const partialSocket: Pick<Connection, 'id' | 'send'> = { id, send: (frame: string) => { socketFrames.push(frame); } };
-    // SAFETY: this constructed fixture implements `id` and `send`. The SDK
-    // helpers the transport composes (`sendIfOpen`, the resume handshake) read
-    // no other member of a connection.
-    const socket = partialSocket as Connection;
+    const socket = socketConnection({ id, send: (frame: string) => { socketFrames.push(frame); } });
     connections.set(id, socket);
 
     return socket;

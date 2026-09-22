@@ -3,10 +3,11 @@
 // interactive-session-only, and minting is step-up gated.
 import { TEST_CREDENTIAL_ENCRYPTION_KEY } from './helpers/user-do';
 import { describe, expect, test } from 'bun:test';
-import { handleCliRequest } from '../src/cli/routes';
+import { handleCliRequest, type CliRoutesEnv } from '../src/cli/routes';
+import { cliAccount, workspaceObject, unreachableAssets, unreachableKv } from './helpers/bindings';
 import { PRIVATE_NO_STORE } from '@kinu.run/core';
 import type { JsonValue } from '@kinu.run/core';
-import type { UserCaller } from '@kinu.run/core';
+import type { AccessTokenScope, UserCaller } from '@kinu.run/core';
 import * as v from 'valibot';
 
 const USER_ID = '0123456789abcdef0123456789abcdef';
@@ -21,7 +22,7 @@ const BOTH_TOKEN = `pta_${USER_ID}_${'b'.repeat(44)}`;
 
 const PROXY_TOKEN = `pta_${USER_ID}_${'p'.repeat(44)}`;
 
-const ACCESS_TOKENS = new Map([
+const ACCESS_TOKENS = new Map<string, { hash: string; scopes: AccessTokenScope[] }>([
   [EXEC_TOKEN, { hash: 'exec-hash', scopes: ['workspace.exec'] }],
   [READ_TOKEN, { hash: 'read-hash', scopes: ['workspace.read'] }],
   [BOTH_TOKEN, { hash: 'both-hash', scopes: ['workspace.read', 'workspace.exec'] }],
@@ -56,26 +57,6 @@ const TokenListSchema = v.object({
   })),
 });
 
-interface TestNamespace<Stub> {
-  idFromName(name: string): string;
-  get(): Stub;
-}
-
-interface AccessTokenTestBindings<UserStub, AgentStub> {
-  UserDO: TestNamespace<UserStub>;
-  OrchestratorAgent: TestNamespace<AgentStub>;
-  CREDENTIAL_ENCRYPTION_KEY: string;
-}
-
-function testEnv<UserStub, AgentStub>(bindings: AccessTokenTestBindings<UserStub, AgentStub>): Env {
-  const env: Partial<Env> = {};
-  Object.assign(env, bindings);
-
-  // SAFETY: The scoped-token paths reach only the two constructed namespaces
-  // and credential key; every typed binding reachable in these tests is present.
-  return env as Env;
-}
-
 function handled(response: Response | null): Response {
   if (!response) throw new Error('CLI route did not handle the request');
 
@@ -89,7 +70,7 @@ async function errorBody(response: Response | null) {
 function setupEnv(opts: { sessionMintedAt?: number } = {}) {
   const calls: string[] = [];
 
-  const userDO = {
+  const userDO = cliAccount({
     async verifyCliToken(_caller: UserCaller, token: string) {
       return {
         ok: token === SESSION_TOKEN,
@@ -118,7 +99,7 @@ function setupEnv(opts: { sessionMintedAt?: number } = {}) {
         lastUsedAt: null,
       }];
     },
-    async mintAccessToken(_caller: UserCaller, userId: string, name: string, scopes: string[]) {
+    async mintAccessToken(_caller: UserCaller, userId: string, name: string, scopes: readonly AccessTokenScope[]) {
       calls.push(`tokens:mint:${userId}:${name}:${scopes.join('+')}`);
 
       if (name === 'dup') return { ok: false as const, error: 'An active access token named "dup" already exists.' };
@@ -126,7 +107,7 @@ function setupEnv(opts: { sessionMintedAt?: number } = {}) {
       return {
         ok: true as const,
         token: `pta_${userId}_${'n'.repeat(44)}`,
-        record: { tokenHash: 'new-hash', name, scopes, createdAt: 123, lastUsedAt: null },
+        record: { tokenHash: 'new-hash', name, scopes: [...scopes], createdAt: 123, lastUsedAt: null },
       };
     },
     async listAccessTokens(_caller: UserCaller) {
@@ -158,9 +139,9 @@ function setupEnv(opts: { sessionMintedAt?: number } = {}) {
 
       return { deviceId: 'dev_1', token: 'raw-device-token' };
     },
-  };
+  });
 
-  const agent = {
+  const agent = workspaceObject({
     async claimOwner(userId: string) {
       return { owner: userId, capabilityHash: 'sha-existing' };
     },
@@ -199,18 +180,27 @@ function setupEnv(opts: { sessionMintedAt?: number } = {}) {
 
       return { id: 'trg_1', kind: 'timer_oneshot', nextFireAt: 1 };
     },
-    async createDurableWebhook() {
-      calls.push('triggers:webhook');
+    async createDurableWebhook(opts: { label: string; auth_mode: 'hmac' | 'bearer' | 'mtls' }) {
+      calls.push(`triggers:webhook:${opts.label}`);
 
-      return { trigger_id: 'trg_webhook' };
+      return {
+        trigger_id: 'trg_webhook',
+        url: 'https://kinu.example.com/hooks/trg_webhook',
+        auth_mode: opts.auth_mode,
+        secret: 'webhook-secret',
+      };
     },
-  };
-
-  const env = testEnv({
-    UserDO: { idFromName: (n: string) => n, get: () => userDO },
-    OrchestratorAgent: { idFromName: (n: string) => n, get: () => agent },
-    CREDENTIAL_ENCRYPTION_KEY: TEST_CREDENTIAL_ENCRYPTION_KEY,
   });
+
+  const env: CliRoutesEnv<string> = {
+    UserDO: { idFromName: (n) => n, get: () => userDO },
+    OrchestratorAgent: { idFromName: (n) => n, get: () => agent },
+    CREDENTIAL_ENCRYPTION_KEY: TEST_CREDENTIAL_ENCRYPTION_KEY,
+    // Device-code sign-in and the published downloads are other suites'
+    // surfaces; a scoped token never reaches either.
+    AUTH_KV: unreachableKv('AUTH_KV'),
+    ASSETS: unreachableAssets(),
+  };
 
   return { env, calls };
 }

@@ -1,4 +1,4 @@
-import { TEST_CREDENTIAL_ENCRYPTION_KEY, createTestUserDO } from './helpers/user-do';
+import { createTestUserDO } from './helpers/user-do';
 import { afterEach, describe, expect, test } from 'bun:test';
 import * as v from 'valibot';
 import { testOwner } from './helpers/user-do';
@@ -6,7 +6,7 @@ import { generateText } from 'ai';
 import { createMockFetch } from '@kinu.run/test-utils';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { OwnedModelServices } from '../src/owned-model-services';
+import { OwnedModelServices, type OwnedModelEnv } from '../src/owned-model-services';
 import {
   BUILTIN_PROFILE_CATALOG, DEFAULT_WORKERS_AI_MODEL_SPEC, asFetchFunction, profileCatalogDigest,
   resolveTurnProfile,
@@ -42,22 +42,14 @@ function fakeUserDO(credentials: Readonly<Record<string, CredentialHeaders>> = {
   };
 }
 
-function fakeEnv(stub: FakeUserDO = fakeUserDO(), extra: Partial<ProviderEnv> = {}): Env {
-  const bindings = {
+function fakeEnv(stub: FakeUserDO = fakeUserDO(), extra: Partial<ProviderEnv> = {}): OwnedModelEnv<string> {
+  return {
     UserDO: {
-      idFromName: (name: string) => name,
+      idFromName: (name) => name,
       get: () => stub,
     },
-    CREDENTIAL_ENCRYPTION_KEY: TEST_CREDENTIAL_ENCRYPTION_KEY,
+    ...extra,
   };
-
-  const env: Partial<Env> = {};
-  Object.assign(env, bindings, extra);
-
-  // SAFETY: OwnedModelServices only reads the constructed UserDO namespace, the
-  // credential secret, and whatever `extra` supplies in these tests; every
-  // reachable stub method exists.
-  return env as Env;
 }
 
 const realFetch = globalThis.fetch;
@@ -231,7 +223,7 @@ function snapshotServices(
    *  constant is a world where nothing changed; a reader that moves is a
    *  mutation the fan-out may or may not have delivered. */
   getCredentialsRevision: () => Promise<number> = async () => 0,
-): OwnedModelServices {
+): OwnedModelServices<string> {
   return new OwnedModelServices({
     env: fakeEnv(fakeUserDO(credentials), platformGatewayEnv()),
     agentName: () => 'snapshot',
@@ -247,7 +239,7 @@ function snapshotServices(
  *  needs models.dev, so a 503 there is a listing that genuinely FAILED. Without
  *  the credential there is nothing to enumerate and the same 503 is only a
  *  metadata fallback — which is exactly the clean case beside it. */
-function degradedServices(): OwnedModelServices {
+function degradedServices(): OwnedModelServices<string> {
   return snapshotServices('owner-1', { 'groq.bearer': { Authorization: 'Bearer gsk' } });
 }
 

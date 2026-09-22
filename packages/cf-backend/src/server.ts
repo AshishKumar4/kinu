@@ -52,9 +52,9 @@ import {
 } from "@kinu.run/core";
 import { firstResponse, handlePcRequest } from "@kinu.run/core";
 import { servePreviewRequest } from "./preview-proxy";
-import { handleRunEventsRequest, handleWorkspaceOverviewRequest } from "./run-events-routes";
+import { handleRunEventsRequest, handleWorkspaceOverviewRequest, runEventsResolver } from "./run-events-routes";
 import { handleEvalAbortRequest } from "./eval/abort-route";
-import { handleMcpRequest } from "./mcp-server";
+import { handleMcpRequest, mcpAgentResolver } from "./mcp-server";
 import { handleHealthRequest } from "@kinu.run/core";
 import { handleClientErrorRequest } from "./client-error/route";
 import { handleUserRequest } from "./user/routes";
@@ -67,9 +67,11 @@ import { handleAuthRequest } from "./auth/routes";
 import { handleLandingRequest } from "./landing-route";
 import { handleSharedPublicRequest, handleSharedRequest } from "./shared/routes";
 import { handleDriveRequest } from "./drive/routes";
-import { handleHubRequest, handleWebhookDeliveryRequest } from "./events/routes";
+import {
+  handleHubRequest, handleWebhookDeliveryRequest, hubAgentResolver, webhookDeliveryResolver,
+} from "./events/routes";
 import { handleFilesRequest } from "./files-routes";
-import { handleTerminalRequest } from "./terminal-route";
+import { handleTerminalRequest, terminalRouteDeps } from "./terminal-route";
 import { handleInboundEmail } from "./email/handler";
 import { MONITOR_SINGLETON } from "./monitor/monitor-do";
 import { handleSlateShareHostRequest } from "./slate-share-route";
@@ -622,7 +624,7 @@ async function route(request: Request, env: Env, ctx: ExecutionContext, url: URL
   //     clients, which can never pass the browser-session gate below;
   //     session/dev identity otherwise) + per-agent ownership inside.
   if (url.pathname.startsWith("/mcp/v1/")) {
-    const mcpResp = await handleMcpRequest(request, env);
+    const mcpResp = await handleMcpRequest(request, env, mcpAgentResolver(env));
 
     if (mcpResp) return mcpResp;
   }
@@ -643,7 +645,7 @@ async function route(request: Request, env: Env, ctx: ExecutionContext, url: URL
   //     its URL carries. Verified before the ingress budget, the body and any
   //     workspace object; the per-trigger HMAC / Bearer / mTLS check then
   //     authenticates the payload inside the workspace.
-  const webhookResp = await handleWebhookDeliveryRequest(request, env);
+  const webhookResp = await handleWebhookDeliveryRequest(request, env, webhookDeliveryResolver(env));
 
   if (webhookResp) return webhookResp;
 
@@ -775,14 +777,14 @@ async function route(request: Request, env: Env, ctx: ExecutionContext, url: URL
 
     const eventsResp = await firstResponse(reqWithId, [
       (req) => handleWorkspaceOverviewRequest(req, () => agent.getWorkspaceOverview()),
-      (req) => handleRunEventsRequest(req, env, REAL_CLOCK),
+      (req) => handleRunEventsRequest(req, runEventsResolver(env), REAL_CLOCK),
       // Eval-only: ends the activation; every other identity is answered 404.
       (req) => handleEvalAbortRequest(req, identity, () => agent.evalAbortActivation()),
     ]);
 
     if (eventsResp) return eventsResp;
     // EventsHub authenticated routes: /triggers, /events
-    const hubResp = await handleHubRequest(reqWithId, env, agentName);
+    const hubResp = await handleHubRequest(reqWithId, env, agentName, hubAgentResolver(env));
 
     if (hubResp) return hubResp;
     // File uploads: HTTP rather than an agent RPC, because the RPC transport
@@ -793,7 +795,7 @@ async function route(request: Request, env: Env, ctx: ExecutionContext, url: URL
     // The interactive terminal's own WebSocket. Same reason files are HTTP: the
     // agents SDK's RPC rail is the chat socket, which carries JSON text under a
     // 1 MiB frame ceiling, and PTY bytes are neither.
-    const terminalResp = await handleTerminalRequest(reqWithId, env, agentName, ctx);
+    const terminalResp = await handleTerminalRequest(reqWithId, terminalRouteDeps(env), agentName, ctx);
 
     if (terminalResp) return terminalResp;
     // A hosted actor's chat is checked here and routed UNCHANGED: the target is

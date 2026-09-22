@@ -10,7 +10,10 @@
 import { describe, test, expect } from 'bun:test';
 import { PLATFORM_CATALOG } from '@kinu.run/core';
 import { retryTransientDO, classifyTransientDO } from '@kinu.run/core';
-import { claimOwnedWorkspace } from '../src/user/workspace-ownership';
+import {
+  claimOwnedWorkspace,
+  type OwnedWorkspaceResult, type WorkspaceOwnerClaim, type WorkspaceOwnershipEnv, type WorkspaceRegistry,
+} from '../src/user/workspace-ownership';
 
 const USER = '0123456789abcdef0123456789abcdef';
 
@@ -156,50 +159,49 @@ describe('claimOwnedWorkspace — the gate on every authenticated workspace requ
      *  removal that lands between requests. Default 0: always throws. */
     capabilitySucceeds?: number;
     claims?: string[];
-  }): Env {
+  }): WorkspaceOwnershipEnv<string, WorkspaceOwnerClaim> {
     const membership = opts.membershipAnswers
       ? answers(...opts.membershipAnswers)
       : flaky(opts.dropHasWorkspace ?? 0, new Error(CONNECTION_LOST), true);
 
     let reconciles = 0;
-    const partial: Partial<Env> = {};
-    Object.assign(partial, {
+
+    const registry: WorkspaceRegistry = {
+      async hasWorkspace(_owner, name) {
+        opts.registryReads?.push(name);
+
+        return await membership.call();
+      },
+      async ensureWorkspaceCapability() {
+        reconciles += 1;
+
+        if (opts.capabilityError && reconciles > (opts.capabilitySucceeds ?? 0)) {
+          throw opts.capabilityError;
+        }
+      },
+    };
+
+    const workspace: WorkspaceOwnerClaim = {
+      async claimOwner(userId) {
+        opts.claims?.push(userId);
+
+        if (opts.claimError) throw opts.claimError;
+
+        return await Promise.resolve({ owner: USER, capabilityHash: 'h' });
+      },
+    };
+
+    return {
       CREDENTIAL_ENCRYPTION_KEY: 'test-owner-secret',
-      UserDO: {
-        idFromName: (name: string) => name,
-        get: () => ({
-          async hasWorkspace(_owner: string, name: string) {
-            opts.registryReads?.push(name);
+      UserDO: { idFromName: (name) => name, get: () => registry },
+      OrchestratorAgent: { idFromName: (name) => name, get: () => workspace },
+    };
+  }
 
-            return membership.call();
-          },
-          async ensureWorkspaceCapability() {
-            reconciles += 1;
-
-            if (opts.capabilityError && reconciles > (opts.capabilitySucceeds ?? 0)) {
-              throw opts.capabilityError;
-            }
-          },
-        }),
-      },
-      OrchestratorAgent: {
-        idFromName: (name: string) => name,
-        get: () => ({
-          async claimOwner(userId: string) {
-            opts.claims?.push(userId);
-
-            if (opts.claimError) throw opts.claimError;
-
-            return { owner: USER, capabilityHash: 'h' };
-          },
-        }),
-      },
-    });
-
-    // SAFETY: this harness constructs the whole Env it returns, and
-    // claimOwnedWorkspace reads only the owner secret and the two namespace
-    // bindings built above, calling only the three RPCs stubbed on them.
-    return partial as Env;
+  /** The gate's answer when the claim throws: every case below reads the
+   *  status it decided off the same call. */
+  async function claimFailure(workspace: string, message: string): Promise<OwnedWorkspaceResult<WorkspaceOwnerClaim>> {
+    return await claimOwnedWorkspace(envWith({ claimError: new Error(message) }), USER, workspace);
   }
 
   test('one dropped membership read does not fail the request', async () => {
@@ -207,29 +209,19 @@ describe('claimOwnedWorkspace — the gate on every authenticated workspace requ
     expect(result.ok).toBe(true);
   });
 
-  const claimFailures = [
-    {
-      name: 'a platform failure that persists reports 503, not 500',
-      message: CONNECTION_LOST, workspace: 'persist-503', status: 503,
-    },
-    {
-      name: 'a genuine ownership collision still reports 403',
-      message: 'collision-403 is owned by a different user', workspace: 'collision-403', status: 403,
-    },
-    {
-      name: 'an application failure is still ours to own, at 500',
-      message: 'no such table: workspace_identity', workspace: 'schema-fault', status: 500,
-    },
-  ] as const;
+  test('a platform failure that persists reports 503, not 500', async () => {
+    expect(await claimFailure('persist-503', CONNECTION_LOST)).toMatchObject({ ok: false, status: 503 });
+  });
 
-  for (const { name, message, workspace, status } of claimFailures) {
-    test(name, async () => {
-      const result = await claimOwnedWorkspace(
-        envWith({ claimError: new Error(message) }), USER, workspace);
+  test('a genuine ownership collision still reports 403', async () => {
+    expect(await claimFailure('collision-403', 'collision-403 is owned by a different user'))
+      .toMatchObject({ ok: false, status: 403 });
+  });
 
-      expect(result).toMatchObject({ ok: false, status });
-    });
-  }
+  test('an application failure is still ours to own, at 500', async () => {
+    expect(await claimFailure('schema-fault', 'no such table: workspace_identity'))
+      .toMatchObject({ ok: false, status: 500 });
+  });
 
   test('a dropped capability reconcile reports 503, a schema fault 500', async () => {
     await expect(claimOwnedWorkspace(

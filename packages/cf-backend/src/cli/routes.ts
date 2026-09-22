@@ -1,32 +1,41 @@
 import {
   JsonValueSchema, ORCHESTRATOR_AGENT_SLUG, RELEASE_SIGNING_PUBLIC_KEY, USER_AI_PROXY_PATH, timingSafeEqual,
-  type JsonValue,
 } from '@kinu.run/core';
 import type { AuthIdentity } from '../auth/session';
 import {
   AuthError, CLI_APPROVAL_CSRF_COOKIE_NAME, authenticateRequest, isFreshAuthTime, readCookie,
+  type AuthEnv,
 } from '../auth/session';
 import { publicHtmlHeaders } from '@kinu.run/core';
 import { approvalDocument, installDocument } from '@kinu.run/core';
 import {
-  CLI_DIST_PATHS, CLI_RUNTIME_PATH, CLI_VERSION_PATH, fetchDeployedAsset,
+  CLI_DIST_PATHS, CLI_RUNTIME_PATH, CLI_VERSION_PATH, fetchDeployedAsset, type AssetFetcher,
 } from '@kinu.run/core';
 import { RELEASE_ARTIFACT_ROUTE, RELEASE_MANIFEST_PATH } from '@kinu.run/core/deploy';
 import { err, escapeHtml, json, safeJson } from '@kinu.run/core';
 import { randomToken } from '@kinu.run/core';
 import type { OrchestratorAgent } from '../orchestrator';
-import { webhookRouteSecret, WEBHOOK_ROUTE_UNAVAILABLE } from '@kinu.run/core';
+import { webhookRouteSecret, WEBHOOK_ROUTE_UNAVAILABLE, type WebhookRouteEnv } from '@kinu.run/core';
 import {
   CliAuthCodeError, RateLimitError, approveCliAuth, authenticateCliToken,
-  inspectCliAuth, pollCliAuth, startCliAuth, tokenAllows, type CliTokenIdentity,
+  inspectCliAuth, pollCliAuth, startCliAuth, tokenAllows,
+  type CliAuthAuthority, type CliTokenIdentity,
 } from './auth-store';
 import { ACCESS_TOKEN_SCOPES, type AccessTokenScope } from '@kinu.run/core';
-import { isAgentRpcMethod, requiredRpcAccess, rpcAccessScope } from './rpc-gate';
+import {
+  isAgentRpcMethod, requiredRpcAccess, rpcAccessScope, type AgentRpcDispatch,
+} from './rpc-gate';
 import { buildCliInstallCommand } from '@kinu.run/core';
 import { bunResolutionShell, cliPlatformShell } from '@kinu.run/core';
 import { listAvailableModels } from '../user/available-models';
+import type { CloudWorkspaceBirth, CloudWorkspaceRegistry } from '../user/workspace-create';
+import type { CreateWorkspaceEnv, CredentialFanoutTarget } from '../user/workspace-access';
+import type { SessionAuthority } from '../auth/store';
+import type { ObjectNamespace } from '../bindings';
+import type { KvStore } from '@kinu.run/agent-utils';
+import type { UserDO } from '../user/user-do';
 import { handleCreateWorkspaceRequest, notifyWorkspacesCredentialsChanged } from '../user/workspace-access';
-import { handleUserAIProxyRequest } from '../user/ai-proxy';
+import { handleUserAIProxyRequest, type UserAIProxyEnv } from '../user/ai-proxy';
 import { claimOwnedWorkspace } from '../user/workspace-ownership';
 import { USER_AI_PROXY_FORWARD_PREFIX, handleUserProviderProxyRequest } from '../user/provider-proxy';
 import { OwnerCapabilityUnavailableError, ownerCaller } from '@kinu.run/core';
@@ -61,7 +70,40 @@ function publishedDownloadType(pathname: string): string | null {
   return CLI_DIST_PATHS.includes(artifact) || RELEASE_ARTIFACT_ROUTE.test(artifact) ? 'text/plain; charset=utf-8' : null;
 }
 
-export async function handleCliRequest(request: Request, env: Env, ctx?: ExecutionContext): Promise<Response | null> {
+/** Every call the CLI plane makes on the signing-in account's own object. */
+export type CliRoutesAuthority = CliAuthAuthority & SessionAuthority & CloudWorkspaceRegistry & Pick<
+  UserDO,
+  'revokeCliTokenHash' | 'listCliTokens' | 'revokeAllCliTokens'
+  | 'listAccessTokens' | 'mintAccessToken' | 'revokeAccessToken'
+  | 'issueCliAgentConnectTicket' | 'registerDevice'
+  | 'hasWorkspace' | 'listDevices' | 'listActiveWorkspaces'
+  | 'getProfileCatalog' | 'putProfileCatalog'
+  | 'listCredentials' | 'setCredential' | 'deleteCredential'
+>;
+
+/** The workspace object as the CLI plane reaches it: the birth sequence a
+ *  create runs, the credential notice, the webhook row a trigger creates, and
+ *  the method-shaped transport's own dispatch surface. */
+export type CliAgentTarget = CloudWorkspaceBirth & CredentialFanoutTarget
+  & Pick<OrchestratorAgent, 'createDurableWebhook'> & AgentRpcDispatch;
+
+/** Every binding the CLI plane reads: the user plane's whole reach, the CLI
+ *  auth store's KV and objects, the published assets a download is served
+ *  from, the webhook route secret a trigger checks, and the approval origin the
+ *  browser hand-off is rendered against. */
+export interface CliRoutesEnv<Id>
+  extends CreateWorkspaceEnv<Id>, UserAIProxyEnv<Id>, AuthEnv<Id>, WebhookRouteEnv {
+  AUTH_KV: KvStore;
+  ASSETS: AssetFetcher;
+  UserDO: ObjectNamespace<Id, CliRoutesAuthority>;
+  OrchestratorAgent: ObjectNamespace<Id, CliAgentTarget>;
+  AI?: UserAIProxyEnv<Id>['AI'];
+  CLI_APPROVAL_ORIGIN?: string;
+}
+
+export async function handleCliRequest<Id>(
+  request: Request, env: CliRoutesEnv<Id>, ctx?: Pick<ExecutionContext, 'waitUntil'>,
+): Promise<Response | null> {
   const url = new URL(request.url);
   const method = request.method;
 
@@ -427,7 +469,9 @@ export async function handleCliRequest(request: Request, env: Env, ctx?: Executi
   return err(404, `No such CLI route: ${method} ${path}`);
 }
 
-async function cliAgent(env: Env, cli: CliTokenIdentity, name: string): Promise<DurableObjectStub<OrchestratorAgent> | Response> {
+async function cliAgent<Id>(
+  env: CliRoutesEnv<Id>, cli: CliTokenIdentity<CliRoutesAuthority>, name: string,
+): Promise<CliAgentTarget | Response> {
   const result = await claimOwnedWorkspace(env, cli.userId, name);
 
   if (!result.ok) return err(result.status, result.error);
@@ -442,7 +486,9 @@ async function cliAgent(env: Env, cli: CliTokenIdentity, name: string): Promise<
  * frame gate). Table membership is the dispatch allowlist — an off-table
  * method name is never invoked.
  */
-async function handleAgentRpc(request: Request, env: Env, cli: CliTokenIdentity, name: string): Promise<Response> {
+async function handleAgentRpc<Id>(
+  request: Request, env: CliRoutesEnv<Id>, cli: CliTokenIdentity<CliRoutesAuthority>, name: string,
+): Promise<Response> {
   const body = await safeJson(request, v.object({
     method: v.string(),
     args: v.optional(v.array(JsonValueSchema)),
@@ -480,11 +526,13 @@ async function handleAgentRpc(request: Request, env: Env, cli: CliTokenIdentity,
   // anything else on the DO. Args are the method's own responsibility to
   // validate — the same contract as the websocket rpc dispatcher.
   try {
-    // SAFETY: The allowlist proves the method exists, and the request schema established JSON arguments.
-    const invoke = agent[rpcMethod] as (...values: JsonValue[]) => Promise<JsonValue | undefined>;
+    // The table proved the name is a real method; its ARGUMENTS are the
+    // caller's JSON and each method validates its own, exactly as the
+    // websocket dispatcher states.
+    const invoke = v.parse(v.function(), agent[rpcMethod]);
     const result = await invoke(...args);
 
-    return json({ body: { result: result === undefined ? null : result } });
+    return json({ body: { result: result ?? null } });
   } catch (e) {
     // Same contract as a websocket rpc-error frame: the thrown message goes
     // back to the caller as a request-level failure.
@@ -495,7 +543,9 @@ async function handleAgentRpc(request: Request, env: Env, cli: CliTokenIdentity,
 /** The CLI's interactive-auth timestamp: the session token's mint time
  *  (minting requires a live browser approval). Step-up gated routes compare
  *  it against the fresh-auth window; access tokens never qualify. */
-async function sessionTokenMintedAt(env: Env, cli: CliTokenIdentity): Promise<number | null> {
+async function sessionTokenMintedAt<Id>(
+  env: CliRoutesEnv<Id>, cli: CliTokenIdentity<CliRoutesAuthority>,
+): Promise<number | null> {
   if (cli.kind !== 'session') return null;
   const tokens = await cli.userDO.listCliTokens(await ownerCaller(env));
 
@@ -509,7 +559,9 @@ async function sessionTokenMintedAt(env: Env, cli: CliTokenIdentity): Promise<nu
  *  everything else — webhook creation, device registration, agent creation,
  *  token management — stays interactive-session-only. Routes added in the
  *  future are interactive-only until listed here. */
-function accessTokenDenial(cli: CliTokenIdentity, method: string, path: string): Response | null {
+function accessTokenDenial(
+  cli: Pick<CliTokenIdentity, 'kind' | 'scopes'>, method: string, path: string,
+): Response | null {
   if (cli.kind !== 'access') return null;
 
   if (path === '/me' && method === 'GET') return null; // identity introspection works for any valid bearer
@@ -534,7 +586,7 @@ function requiredAccessScope(method: string, path: string): AccessTokenScope | n
   return null;
 }
 
-function approvalOrigin(env: Env, url: URL): string {
+function approvalOrigin<Id>(env: CliRoutesEnv<Id>, url: URL): string {
   const configured = env.CLI_APPROVAL_ORIGIN ?? '';
 
   return (configured === '' ? url.origin : configured).replace(/\/+$/, '');
@@ -546,7 +598,9 @@ function clientKey(request: Request): string {
     ?? 'unknown';
 }
 
-async function authenticateCli(request: Request, env: Env): Promise<CliTokenIdentity | Response> {
+async function authenticateCli<Id>(
+  request: Request, env: CliRoutesEnv<Id>,
+): Promise<CliTokenIdentity<CliRoutesAuthority> | Response> {
   try {
     const result = await authenticateCliToken(request, env);
 
@@ -559,7 +613,7 @@ async function authenticateCli(request: Request, env: Env): Promise<CliTokenIden
   }
 }
 
-async function renderBrowserApproval(request: Request, env: Env): Promise<Response> {
+async function renderBrowserApproval<Id>(request: Request, env: CliRoutesEnv<Id>): Promise<Response> {
   let identity: AuthIdentity;
 
   try { identity = await authenticateRequest(request, env); }
@@ -608,7 +662,7 @@ async function renderBrowserApproval(request: Request, env: Env): Promise<Respon
   });
 }
 
-async function approveFromBrowser(request: Request, env: Env): Promise<Response> {
+async function approveFromBrowser<Id>(request: Request, env: CliRoutesEnv<Id>): Promise<Response> {
   let identity: AuthIdentity;
 
   try { identity = await authenticateRequest(request, env); }
@@ -893,7 +947,7 @@ fi
  *  every install would fail with an unexplained mismatch. */
 interface CliAssetRequest {
   request: Request;
-  env: Env;
+  env: { readonly ASSETS: AssetFetcher };
   pathname: string;
   contentType: string;
   head: boolean;

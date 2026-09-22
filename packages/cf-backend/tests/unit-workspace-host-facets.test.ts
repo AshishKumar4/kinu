@@ -24,17 +24,16 @@
  * exports bag; move it after and the red direction cannot fire.
  */
 import { afterEach, describe, expect, test } from 'bun:test';
-import { Database, type SQLQueryBindings } from 'bun:sqlite';
+import { Database } from 'bun:sqlite';
 import { writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import * as v from 'valibot';
 import { scratchDir } from '@kinu.run/test-utils';
-import { createHostedWorkspace, type HostedWorkspace } from '../src/workspace-host';
-import { durableStorage } from './helpers/programmatic-host';
-import type { SupervisorOpResult } from '@kinu.run/core/workspace';
-import { CRED_SESSION_USER, type SqlRow, type SqlValue } from '@nimbus-sh/core/runtime/os-contracts.js';
-import type { SupervisorOpEnvelope, SupervisorOpName } from '@nimbus-sh/core/workspace/supervisor-op.js';
+import { createHostedWorkspace, type HostedWorkspace, type HostedWorkspaceEnv } from '../src/workspace-host';
+import { actorObjectState, durableObjectStorage, durableSqlStorage, durableStorage } from './helpers/programmatic-host';
+import { workerContext } from './helpers/bindings';
+import { CRED_SESSION_USER } from '@nimbus-sh/core/runtime/os-contracts.js';
 import { SupervisorRPC } from '@nimbus-sh/worker/workspace-host';
 import { mockAgentsSdk } from './helpers/agents-sdk';
 
@@ -55,19 +54,9 @@ interface ActorExports {
   readonly SupervisorRPC: (binding: { readonly props: SupervisorProps }) => SupervisorBinding;
 }
 
-/** The namespace the supervisor entrypoint resolves its host in. Its objects
- *  mount the one method production mounts. */
-interface WorkspaceHostNamespace {
-  idFromName(name: string): string;
-  idFromString(id: string): string;
-  get(id: string): { supervisorOp(envelope: SupervisorOpEnvelope): Promise<SupervisorOpResult> };
-}
-
-/** The two bindings a hosted workspace and its supervisor entrypoint read. */
-interface ActorBindings {
-  readonly LOADER: WorkerLoader;
-  readonly OrchestratorAgent: WorkspaceHostNamespace;
-}
+/** The two bindings a hosted workspace and its supervisor entrypoint read,
+ *  with the host namespace minting the string ids this suite addresses by. */
+type ActorBindings = HostedWorkspaceEnv<string>;
 
 /** What the fabric hands a facet as its env: the supervisor binding it minted,
  *  beside whatever else the assembled boot carries. */
@@ -91,56 +80,32 @@ afterEach(() => {
   for (const database of databases.splice(0)) database.close();
 });
 
-/** The filesystem binds BLOBs as ArrayBuffer; bun:sqlite binds only TypedArrays. */
-function sqlBinding(value: SqlValue): SQLQueryBindings {
-  if (value instanceof ArrayBuffer) return new Uint8Array(value);
-
-  if (ArrayBuffer.isView(value)) return new Uint8Array(value.buffer, value.byteOffset, value.byteLength);
-
-  return v.parse(v.union([v.string(), v.number(), v.bigint(), v.null()]), value);
-}
-
 /**
- * One Durable Object's storage, as the platform gives it: a real SQLite
- * database with a real `transactionSync`. `exports` is the bag workerd hangs
- * on `ctx` — present for the actor under test, absent for the red direction.
+ * One Durable Object as the platform gives it: a real SQLite database with a
+ * real `transactionSync`, its key-value half over a fresh map, and every other
+ * member refusing by name. `exports` is the bag workerd hangs on `ctx` —
+ * present for the actor under test, absent for the red direction.
  */
 function actorCtx(exports?: ActorExports): DurableObjectState {
   const database = new Database(':memory:');
   databases.push(database);
 
-  const storage = {
-    sql: {
-      exec(query: string, ...bindings: SqlValue[]) {
-        const statement = database.prepare<SqlRow, SQLQueryBindings[]>(query);
-        const bound = bindings.map(sqlBinding);
-
-        if (/^\s*(SELECT|WITH|PRAGMA)/i.test(query)) return statement.all(...bound);
-        statement.run(...bound);
-
-        return [];
-      },
-    },
+  const storage = durableObjectStorage({
+    sql: durableSqlStorage(database),
     transactionSync: <T,>(closure: () => T): T => database.transaction(closure)(),
     // The facet manager's launch journal and port reservations live in the
     // object's key-value storage; a fresh map per actor, as a fresh object.
     ...durableStorage(new Map()),
-  };
+  });
 
-  const context = {
+  const base = {
     storage,
-    id: { toString: () => ACTOR_ID, name: ACTOR_ID },
+    id: { toString: () => ACTOR_ID, equals: () => false, name: ACTOR_ID },
     waitUntil: () => {},
     getWebSockets: () => [],
   };
 
-  // Unchecked and named: the members above are exactly what
-  // `createHostedWorkspace` reads, and any other access throws by name.
-  const ctx: DurableObjectState = Object.create(context);
-
-  if (exports !== undefined) Object.assign(ctx, { exports });
-
-  return ctx;
+  return exports === undefined ? actorObjectState(base) : actorObjectState({ ...base, exports });
 }
 
 interface Actor {
@@ -224,17 +189,16 @@ function hostActor(): Actor {
     SupervisorRPC: ({ props }: { props: SupervisorProps }) => {
       supervisorBindings.push(props);
 
-      const partialCtx: Partial<ExecutionContext<SupervisorProps>> = {
+      // The supervisor reads the `props` the fabric minted this binding with,
+      // and the two throwing members say what this suite claims: it schedules
+      // no background work and swallows no exception.
+      const bindingCtx: ExecutionContext<SupervisorProps> = Object.assign(workerContext(), {
         props,
         waitUntil: () => { throw new Error('unexpected supervisor background work'); },
         passThroughOnException: () => { throw new Error('unexpected supervisor pass-through'); },
-      };
+      });
 
-      // SAFETY: the supervisor reads exactly the `props` constructed above, and
-      // the two throwing members constructed with it prove it schedules no
-      // background work; `tracing` (required since workers-types
-      // 4.20260702.1) is never reached by the code under test.
-      return new SupervisorRPC(partialCtx as ExecutionContext<SupervisorProps>, actorEnv);
+      return new SupervisorRPC(bindingCtx, actorEnv);
     },
   };
 
@@ -243,41 +207,14 @@ function hostActor(): Actor {
   // reads it off `transactions`.
   hosted = createHostedWorkspace({
     ctx: actorCtx(exports),
-    env: strictEnv(actorEnv),
+    env: actorEnv,
     previewUrl: async () => ({ unavailable: 'no preview host in this test' }),
   });
 
   return { hosted, facetLoads, supervisorBindings, dispatched };
 }
 
-/**
- * An Env that answers only what it was told to, and names anything else. A
- * hosted workspace that reaches for a session binding finds a throw carrying
- * the property name, not a fake it could pass against.
- */
-function strictEnv(bindings: ActorBindings): Env {
-  // The runtime catalogue binding is optional and read on every boot; the
-  // facet manager reads its four optional knobs once when it is composed.
-  const served = new Map<string, WorkerLoader | WorkspaceHostNamespace | undefined>([
-    ['LOADER', bindings.LOADER],
-    ['OrchestratorAgent', bindings.OrchestratorAgent],
-    ['NIMBUS_RUNTIME_CACHE', undefined],
-    ['ASSETS', undefined],
-    ['NIMBUS_DEBUG', undefined],
-    ['NIMBUS_LAUNCH_CHUNK_BYTES', undefined],
-    ['NIMBUS_PROCESS_HOST', undefined],
-  ]);
 
-  const target: Env = Object.create(null);
-
-  return new Proxy(target, {
-    get(_target, property: string) {
-      if (served.has(property)) return served.get(property);
-      throw new Error('the hosted workspace read env.' + property + ', which this deployment does not bind');
-    },
-    has: (_target, property: string) => served.has(property),
-  });
-}
 
 /**
  * The git bundle the facet imports. Deterministic stand-in for
@@ -315,16 +252,14 @@ export const git = {
 
 /** Bindings for the red direction: nothing may spawn and nothing may reach a host. */
 function refusingBindings(): ActorBindings {
-  const loader = {
-    load() { throw new Error('no facet may spawn'); },
-    get() { throw new Error('no facet may spawn'); },
-  };
-
-  // Unchecked and named: see `hostActor`.
-  const LOADER: WorkerLoader = Object.create(loader);
+  const spawned = (): never => { throw new Error('no facet may spawn'); };
 
   return {
-    LOADER,
+    NIMBUS_RUNTIME_CACHE: undefined,
+    ASSETS: undefined,
+    // `load` is the member the facet manager checks for beside `get`, which
+    // the platform's own `WorkerLoader` declaration omits.
+    LOADER: Object.assign({ get: spawned }, { load: spawned }),
     OrchestratorAgent: {
       idFromName: (name) => name,
       idFromString: (id) => id,
@@ -337,7 +272,7 @@ describe('hosted workspace facets', () => {
   test('a ctx without exports composes no runtime: the first command names the missing entrypoint', async () => {
     const hosted = createHostedWorkspace({
       ctx: actorCtx(),
-      env: strictEnv(refusingBindings()),
+      env: refusingBindings(),
       previewUrl: async () => ({ unavailable: 'no preview host in this test' }),
     });
 
@@ -381,15 +316,13 @@ describe('hosted workspace facets', () => {
     const writeOp = actor.dispatched.find((call) => call.op === 'writeBatchStream');
     expect(writeOp?.mutationOwner).toBeString();
 
-    // An operation this host does not serve does not exist.
-    await expect(actor.hosted.supervisorOp({
-      // SAFETY: the supervisor RPC contract receives the envelope as untyped
-      // wire data, so the host must refuse a name outside the union at runtime
-      // — this call fabricates exactly that shape.
-      op: 'somethingElse' as SupervisorOpName,
-      args: [],
-    }))
-      .rejects.toThrow('is not served by this host');
+    // An operation this host does not serve does not exist. `SUPERVISOR_OPS`
+    // is the table `SupervisorOpName` is derived from, and every one of its
+    // names is served, so the only name that can reach this refusal is one
+    // that arrived as wire data and was never in the type.
+    const unserved = actor.hosted.supervisorOp({ op: 'somethingElse', args: [] });
+    await expect(unserved).rejects.toThrow("supervisor op: 'somethingElse' names no operation this host serves");
+    await expect(unserved).rejects.toMatchObject({ code: 'bad_input' });
 
     // The bytes landed in the actor's OWN filesystem.
     const session = await actor.hosted.bundle.session();

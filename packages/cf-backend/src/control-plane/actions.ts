@@ -36,8 +36,9 @@ import type { OrchestratorAgent } from '../orchestrator';
 import type { UserDO } from '../user/user-do';
 import { ownerCaller } from '@kinu.run/core';
 import { claimOwnedWorkspace } from '../user/workspace-ownership';
-import { unindexWorkspace } from './index-feed';
+import { unindexWorkspace, type IndexFeedSink } from './index-feed';
 import type { ControlPlaneEnv } from './stub';
+import type { ObjectNamespace } from '../bindings';
 
 /** The account an action is bound to. A UserDO name, which is what makes the
  *  workspace name beside it an address rather than a guess. Exported because
@@ -186,9 +187,31 @@ export function describeAction(action: ControlAction): ActionIdentity {
   }
 }
 
-export interface ActionEnv extends ControlPlaneEnv {
-  OrchestratorAgent: DurableObjectNamespace<OrchestratorAgent>;
-  UserDO: DurableObjectNamespace<UserDO>;
+/** Every call an action makes on the workspace object it acts on. `claimOwner`
+ *  is part of it because the object is resolved by proving ownership first. */
+export type ActionTarget = Pick<OrchestratorAgent,
+  | 'claimOwner'
+  | 'cancelBackgroundJob'
+  | 'retryBackgroundJob'
+  | 'dismissBackgroundJob'
+  | 'clearBackgroundJobs'
+  | 'decideDeferredApprovals'
+  | 'getShellApprovalGrants'
+  | 'revokeShellApprovalGrants'
+>;
+
+/** Every call an action makes on the account object that owns the workspace:
+ *  the two the ownership gate asks, and the removal one arm performs. */
+export type ActionRegistry = Pick<UserDO,
+  'hasWorkspace' | 'ensureWorkspaceCapability' | 'removeWorkspace'
+>;
+
+/** The bindings an action reads. The control-plane destination is the index
+ *  feed's own sink: the only thing an action writes there is the tombstone a
+ *  removal leaves. */
+export interface ActionEnv<Id> extends ControlPlaneEnv<Id, IndexFeedSink> {
+  OrchestratorAgent: ObjectNamespace<Id, ActionTarget>;
+  UserDO: ObjectNamespace<Id, ActionRegistry>;
 }
 
 /**
@@ -207,8 +230,8 @@ export interface ActionEnv extends ControlPlaneEnv {
  * `routeAgentRequest` performs for the owner's chat — so the admin path reaches
  * the same Durable Object instance rather than a second one that shares a name.
  */
-export async function runControlAction(
-  env: ActionEnv,
+export async function runControlAction<Id>(
+  env: ActionEnv<Id>,
   action: ControlAction,
 ): Promise<ActionOutcome> {
   try {

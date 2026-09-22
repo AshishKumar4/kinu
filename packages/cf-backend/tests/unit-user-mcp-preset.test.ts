@@ -15,6 +15,7 @@ import {
 } from './helpers/agents-sdk';
 import { auth } from '@modelcontextprotocol/sdk/client/auth.js';
 import { requestBodyText } from './helpers/fetch-input';
+import { durableObjectStorage } from './helpers/programmatic-host';
 
 // Imported AFTER the helper's mock registration (see `mockAgentsSdk`): mcp.ts
 // binds the provider class at load, so a static import here would hold the
@@ -370,12 +371,8 @@ describe('the registered-app provider against the real SDK auth flow', () => {
       return new Response('not found', { status: 404 });
     };
 
-    // SAFETY: the registered provider is constructed against the provider
-    // stub above, which ignores its storage argument entirely — the value is
-    // only the type the constructor names, and the flow under test reads
-    // nothing off it.
     const provider = new RegisteredAppOAuthClientProvider({
-      storage: {} as DurableObjectStorage,
+      storage: durableObjectStorage({}),
       clientName: 'test-client',
       baseRedirectUrl: 'https://kinu.example/api/user/mcp/callback',
       clientId: 'test-github-client-id',

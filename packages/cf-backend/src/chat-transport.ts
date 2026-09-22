@@ -61,6 +61,12 @@ import {
 } from '@kinu.run/core';
 import { diagnostics, KinuError, refusalOf, toKinuError } from '@kinu.run/core/obs';
 
+/** A socket as a chat room reads one outside the SDK's own handshake: the id
+ *  its frames are answered under, and nothing else. The frame paths below
+ *  still take the whole `Connection`, because the SDK's `ResumeHandshake`
+ *  declares it and is handed the socket unchanged. */
+export type ChatSocket = Pick<Connection, 'id'>;
+
 /** What the transport asks of the actor: the connection set, and the loop.
  *  A connection is the SDK's: its resume handshake takes the full type. */
 export interface ChatWire {
@@ -68,7 +74,9 @@ export interface ChatWire {
    *  only (the header says why a hosted actor's is). */
   readonly sql: SqlExecutor | null;
   broadcast(message: string, exclude?: string[]): void;
-  getConnection(id: string): Connection | undefined;
+  /** Whether the socket that owns an interrupted stream is still here: the
+   *  handshake asks by id before it replays to a replacement. */
+  getConnection(id: string): ChatSocket | undefined;
   /** The transcript as the client should see it, oldest first — the SDK
    *  session's own rows, which the SDK's clients render as UI messages. */
   history(): Promise<UIMessage[]>;
@@ -89,7 +97,7 @@ export interface ChatWire {
  *  {@link ActorChatRooms} is what picks between them. */
 export interface ChatRoom {
   onConnect(connection: Connection): Promise<void>;
-  onClose(connection: Connection): void;
+  onClose(connection: ChatSocket): void;
   /** Handle one socket frame if it is chat protocol; false when it is not. */
   onMessage(connection: Connection, raw: string): Promise<boolean>;
 }
@@ -300,7 +308,7 @@ export class ChatWireTransport implements ChatTransport, ChatRoom {
     sendIfOpen(connection, transcriptFrame(history));
   }
 
-  onClose(connection: Connection): void {
+  onClose(connection: ChatSocket): void {
     this.pendingResume.delete(connection.id);
     this.continuation.releaseConnection(connection.id);
   }

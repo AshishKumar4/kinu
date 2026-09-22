@@ -56,7 +56,7 @@ const PREVIEW_SANDBOX_TOKENS = [
  */
 export const PREVIEW_SANDBOX = [...PREVIEW_SANDBOX_TOKENS, 'allow-same-origin'].join(' ');
 
-interface PreviewHostEnv {
+export interface PreviewHostEnv {
   PREVIEW_HOST_SUFFIX?: string;
   CLI_PUBLIC_ORIGIN?: string;
 }

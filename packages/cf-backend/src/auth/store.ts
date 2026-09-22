@@ -37,6 +37,7 @@
 import type { AuthIdentity } from './session';
 import type { OAuthProviderId } from './providers';
 import type { BrowserSessionIdentity, LiveBrowserSession, UserDO } from '../user/user-do';
+import type { ObjectNamespace } from '../bindings';
 import { randomToken, sha256Hex } from '@kinu.run/core';
 import { readKvJson, writeKvJson, type KvStore } from '@kinu.run/agent-utils';
 import { ownerCaller, type OwnerCapabilityEnv } from '@kinu.run/core';
@@ -80,9 +81,17 @@ export interface BrowserSession {
   identity: AuthIdentity;
 }
 
-export interface AuthStoreEnv extends OwnerCapabilityEnv {
+/** The four calls this store makes on a signing-in user's own object. Named
+ *  as a projection of the class so a stand-in keeps the object's real
+ *  contract, and so the store states its reach instead of taking the whole
+ *  account. */
+export type SessionAuthority = Pick<
+  UserDO, 'ensureProfile' | 'registerBrowserSession' | 'verifyBrowserSession' | 'revokeBrowserSession'
+>;
+
+export interface AuthStoreEnv<Id = DurableObjectId> extends OwnerCapabilityEnv {
   AUTH_KV: KvStore;
-  UserDO: DurableObjectNamespace<UserDO>;
+  UserDO: ObjectNamespace<Id, SessionAuthority>;
 }
 
 const OAuthStateSchema = v.object({
@@ -190,7 +199,7 @@ function parseSessionTokenUserId(token: string): string | null {
   return match?.[1] ?? null;
 }
 
-export async function createSession(env: AuthStoreEnv, profile: OAuthProfile): Promise<BrowserSession> {
+export async function createSession<Id>(env: AuthStoreEnv<Id>, profile: OAuthProfile): Promise<BrowserSession> {
   const now = Date.now();
   const identity = await resolveIdentity(env, profile, now);
   const token = `ps_${identity.userId}_${randomToken(48)}`;
@@ -270,7 +279,7 @@ export class SessionAuthorityUnavailableError extends Error {
  *  redirect can get. Both copies were written from one value, so neither can
  *  contradict the other, and neither can revive a revoked session: revocation
  *  deletes the row, and the row is what is read here. */
-export async function verifySession(env: AuthStoreEnv, token: string): Promise<AuthIdentity | null> {
+export async function verifySession<Id>(env: AuthStoreEnv<Id>, token: string): Promise<AuthIdentity | null> {
   const userId = parseSessionTokenUserId(token);
 
   if (!userId) return null;
@@ -372,8 +381,8 @@ function isMalformedRecord(failure: { cause: unknown }): boolean {
  * deployment missing its secret cannot clean up, and must still let the browser
  * sign in again.
  */
-async function discardCorruptSession(
-  env: AuthStoreEnv,
+async function discardCorruptSession<Id>(
+  env: AuthStoreEnv<Id>,
   userId: string,
   tokenHash: string,
   fault: KinuError,
@@ -411,7 +420,7 @@ async function discardCorruptSession(
  *  would expire on its own TTL anyway. A cleanup that fails is recorded, never
  *  raised — raising it would report a revocation that landed as one that did
  *  not, and would cost the browser the cookie it could retry with. */
-export async function revokeSession(env: AuthStoreEnv, token: string): Promise<void> {
+export async function revokeSession<Id>(env: AuthStoreEnv<Id>, token: string): Promise<void> {
   const userId = parseSessionTokenUserId(token);
 
   if (!userId) return;
@@ -436,11 +445,11 @@ function sessionKey(tokenHash: string): string {
 
 /** The user's own Durable Object, which is the one authority on which of their
  *  sessions are live and the durable half of their identity. */
-function sessionAuthority(env: AuthStoreEnv, userId: string): DurableObjectStub<UserDO> {
+function sessionAuthority<Id>(env: AuthStoreEnv<Id>, userId: string): SessionAuthority {
   return env.UserDO.get(env.UserDO.idFromName(userId));
 }
 
-async function resolveIdentity(env: AuthStoreEnv, profile: OAuthProfile, now: number): Promise<AuthIdentity> {
+async function resolveIdentity<Id>(env: AuthStoreEnv<Id>, profile: OAuthProfile, now: number): Promise<AuthIdentity> {
   const email = profile.email.trim().toLowerCase();
 
   if (!email) throw new Error('OAuth provider did not return an email address.');

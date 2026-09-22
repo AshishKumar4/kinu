@@ -66,7 +66,7 @@ export class HireOrchestrator extends ProductionOrchestrator {
   /** The workspace's own top-level actor, read from the directory rather than
    *  assumed: every child-scoped count is "not this id", and a literal guessed
    *  here would silently count the root's rows as a child's. */
-  rootActorId(): string {
+  async rootActorId(): Promise<string> {
     const rows = this.probeState.storage.sql.exec<{ actor_id: string }>(
       `SELECT actor_id FROM workspace_actors WHERE kind = 'main' LIMIT 1`).toArray();
 
@@ -74,7 +74,7 @@ export class HireOrchestrator extends ProductionOrchestrator {
   }
 
   /** Every roster row in this object, dismissed rows included. */
-  rosterRows(): RosterRow[] {
+  async rosterRows(): Promise<RosterRow[]> {
     const rows = this.probeState.storage.sql.exec<{
       actor_id: string; name: string; lifetime: string; status: string; task_event_id: string | null;
     }>(`SELECT actor_id, name, lifetime, status, task_event_id
@@ -90,7 +90,7 @@ export class HireOrchestrator extends ProductionOrchestrator {
    *  and the directory are two different tables and a settled task hire moves
    *  only the second, so an assertion that reads a child's rows states which
    *  plane it is reading. */
-  actorRows(): ActorRow[] {
+  async actorRows(): Promise<ActorRow[]> {
     const rows = this.probeState.storage.sql.exec<{
       actor_id: string; name: string; kind: string; retiring_at: number | null; deleted_at: number | null;
     }>(`SELECT actor_id, name, kind, retiring_at, deleted_at
@@ -104,7 +104,7 @@ export class HireOrchestrator extends ProductionOrchestrator {
 
   /** Delegation rows across every actor's log: the admission ledger a bounded
    *  assertion counts, plus the reports that came back. */
-  logRows(): LogRow[] {
+  async logRows(): Promise<LogRow[]> {
     const rows = this.probeState.storage.sql.exec<{
       actor_id: string; id: string; variant: string; turn_id: string | null;
       consumed_at: number | null; payload: string;
@@ -122,9 +122,11 @@ export class HireOrchestrator extends ProductionOrchestrator {
         JSON.parse(row.payload),
       );
 
-      const kind = record.kind ?? row.variant;
-      // An assignment carries its text as `body`, a report as `content`.
-      const body = record.body ?? record.content ?? '';
+      const kind = v.is(v.string(), record.kind) ? record.kind : row.variant;
+
+      const authored = v.is(v.string(), record.body) ? record.body : null;
+      const rendered = v.is(v.string(), record.content) ? record.content : null;
+      const body = authored ?? rendered ?? '';
 
       return {
         actorId: row.actor_id, id: row.id, variant: row.variant,
@@ -135,7 +137,7 @@ export class HireOrchestrator extends ProductionOrchestrator {
   }
 
   /** Turns per actor, from the run ledger the product writes. */
-  turnCounts(): TurnCount[] {
+  async turnCounts(): Promise<TurnCount[]> {
     const rows = this.probeState.storage.sql.exec<{ actor_id: string; runs: number }>(
       `SELECT actor_id, COUNT(DISTINCT run_id) AS runs FROM run_events
        WHERE type = 'run_start' GROUP BY actor_id`).toArray();
@@ -152,7 +154,7 @@ export class HireOrchestrator extends ProductionOrchestrator {
    *  that store is written by the conversational path a delegated turn never
    *  enters. Read here rather than over RPC so the assertion sees what the
    *  child's turn actually persisted, not a projection built for a pane. */
-  childTranscript(name: string): string[] {
+  async childTranscript(name: string): Promise<string[]> {
     const rows = this.probeState.storage.sql.exec<{ run_id: string; type: string; payload: string }>(
       `SELECT e.run_id AS run_id, e.type AS type, e.payload AS payload
        FROM run_events e
@@ -292,26 +294,25 @@ type HireTarget = Pick<ProductionOrchestrator, 'claimOwner' | 'setModel' | 'setS
   & Pick<HireOrchestrator,
     'rosterRows' | 'actorRows' | 'logRows' | 'turnCounts' | 'driveOwedWork' | 'rootActorId' | 'childTranscript'>;
 
+/** The probe worker's own bindings. `durableObjects` installs `HireOrchestrator`
+ *  under the `OrchestratorAgent` name (the re-export above), which the
+ *  production `Env` declares by its base class, so every stub the namespace
+ *  returns carries the fixture reads. */
+interface ProbeRootEnv extends Omit<ProbeEnv, 'OrchestratorAgent'> {
+  readonly OrchestratorAgent: DurableObjectNamespace<HireOrchestrator>;
+}
+
 type OwnerTarget = Pick<UserDO,
   'registerWorkspace' | 'ensureWorkspaceCapability' | 'setCredential' | 'getProfileCatalog' | 'putProfileCatalog'>;
 
-export class HireProbeRoot extends Agent<ProbeEnv> {
+export class HireProbeRoot extends Agent<ProbeRootEnv> {
   /** Settles when the durable lane's `msg` call was authored. */
   async msgSent(): Promise<void> {
     await fetch('http://hire-control.invalid/hire/msg-sent');
   }
 
-  private async target(workspace: string): Promise<HireTarget> {
-    const raw: Pick<Fetcher, 'fetch'> = await getAgentByName<ProbeEnv, ProductionOrchestrator>(
-      this.env.OrchestratorAgent, workspace,
-    );
-
-    // SAFETY: `getAgentByName` constructed the stub over the `OrchestratorAgent`
-    // namespace this worker binds to `HireOrchestrator`, so every member named
-    // in `HireTarget` is on the object the stub reaches. Narrowed to a `Pick`
-    // for the reason the two-turn probe narrows its own target: the full stub
-    // type instantiates too deeply for tsc.
-    return raw as Pick<Fetcher, 'fetch'> & HireTarget;
+  private target(workspace: string): Promise<HireTarget> {
+    return getAgentByName<ProbeEnv, HireOrchestrator>(this.env.OrchestratorAgent, workspace);
   }
 
   private owner(name: string): OwnerTarget {

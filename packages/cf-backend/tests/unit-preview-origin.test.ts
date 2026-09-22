@@ -33,8 +33,10 @@ import {
 import { TEST_CREDENTIAL_ENCRYPTION_KEY } from './helpers/user-do';
 import { makeKv } from './helpers/kv';
 import { sandboxPreviewExposures } from '@kinu.run/core';
-import type { KvStore } from '@kinu.run/agent-utils';
 import { installSandboxSdkMock, setSandboxSdk } from './helpers/sandbox-sdk';
+import { unreachableNamespace, unreachableObjects } from './helpers/bindings';
+import type { NimbusPreviewEnv, WorkspacePreviewHost } from '../src/nimbus-route';
+import type { SandboxPreviewEnv } from '../src/preview-proxy';
 import type { SandboxOptions } from '@cloudflare/sandbox';
 import { present } from '@kinu.run/test-utils';
 
@@ -135,50 +137,44 @@ const ENV = {
   CREDENTIAL_ENCRYPTION_KEY: TEST_CREDENTIAL_ENCRYPTION_KEY,
 };
 
-interface PreviewNimbusStub {
-  fetch?(request: Request): Promise<Response>;
-  routeWorkspacePreview?(
-    port: number,
-    handle: string,
-    request: Request,
-    pathname: string,
-  ): Promise<Response>;
-}
+/** Every binding the workspace-preview rail reads, across the deployment shapes
+ *  this suite drives: with and without the preview host, with and without a
+ *  signing secret, with and without a rotation's retired secrets. */
+type NimbusTestEnv = NimbusPreviewEnv<string>;
 
-interface PreviewTestBindings {
-  /** Where the published exposures live. Absent in the one case that proves the
-   *  rail fails closed without it. */
-  AUTH_KV?: KvStore;
-  CLI_PUBLIC_ORIGIN?: string;
-  PREVIEW_HOST_SUFFIX?: string;
-  CREDENTIAL_ENCRYPTION_KEY?: string;
-  /** The retired secrets a rotation keeps readable, comma-separated. */
-  CREDENTIAL_ENCRYPTION_KEY_PREVIOUS?: string;
-  /** Present only where a repair is expected to be possible: without the
-   *  binding there is no container to re-drive, and the stale answer stands. */
-  Sandbox?: object;
-  OrchestratorAgent?: {
-    idFromName(name: string): string;
-    get(id: string): PreviewNimbusStub;
+/** The workspace object a preview is served from, with the call this case did
+ *  not build refusing: a preview that took the socket path must not also be
+ *  able to answer over RPC. */
+function previewHost(built: Partial<WorkspacePreviewHost>): WorkspacePreviewHost {
+  return {
+    fetch: () => { throw new Error('OrchestratorAgent.fetch: not reachable in this test'); },
+    routeWorkspacePreview: () => {
+      throw new Error('OrchestratorAgent.routeWorkspacePreview: not reachable in this test');
+    },
+    ...built,
   };
 }
 
-function testEnv(bindings: PreviewTestBindings): Env {
-  const env: Partial<Env> = {};
-  Object.assign(env, bindings);
-
-  // SAFETY: Preview tests construct every preview binding their selected route
-  // reads; the Sandbox SDK is mocked above and no other Env member is reached.
-  return env as Env;
+/** The nimbus rail's env, with the workspace object refusing unless a case
+ *  builds one: most of these cases are refused before any object is addressed. */
+function testEnv(bindings: Omit<NimbusTestEnv, 'OrchestratorAgent'> & {
+  OrchestratorAgent?: NimbusTestEnv['OrchestratorAgent'];
+}): NimbusTestEnv {
+  return { OrchestratorAgent: unreachableNamespace('OrchestratorAgent'), ...bindings };
 }
 
 const NIMBUS_CAPABILITY = '0123456789abcdef01234567';
 
-const configuredNimbusUrl = (await nimbusPreviewUrl(testEnv(ENV), 'hello', 4321, NIMBUS_CAPABILITY)).url;
+const configuredNimbusUrl = (await nimbusPreviewUrl(ENV, 'hello', 4321, NIMBUS_CAPABILITY)).url;
 
 if (!configuredNimbusUrl) throw new Error('Nimbus preview test URL is not configured');
 
 const NIMBUS_URL = configuredNimbusUrl;
+
+/** The container namespace a deployment that HAS one carries. The SDK is
+ *  mocked in this file, so nothing resolves through it: what it stands for is
+ *  the binding being PRESENT, which is what the rail checks. */
+const CONTAINERS: SandboxPreviewEnv = { ...ENV, Sandbox: unreachableObjects('Sandbox') };
 
 async function serve(url: string, response: Response | null): Promise<Response> {
   sdkResponse = response;
@@ -188,7 +184,7 @@ async function serve(url: string, response: Response | null): Promise<Response> 
   repairs = [];
   repairFailure = null;
 
-  return servePreviewRequest(new Request(url), testEnv(ENV));
+  return servePreviewRequest(new Request(url), CONTAINERS);
 }
 
 /** One request against a deployment that HAS a container, with successive SDK
@@ -205,7 +201,7 @@ async function serveWithRepair(
   repairs = [];
   repairFailure = failure;
 
-  return servePreviewRequest(request, testEnv({ ...ENV, Sandbox: {} }));
+  return servePreviewRequest(request, CONTAINERS);
 }
 
 function stalePreview(): Response {
@@ -220,17 +216,19 @@ function stalePreview(): Response {
 /** The OrchestratorAgent binding a Nimbus routing case hands its request to:
  *  `record` receives what the workspace preview RPC was forwarded, and the
  *  stub answers 204. */
-function recordingOrchestrator(record: (request: Request) => void) {
+/** The workspace namespace whose one object records the preview request it
+ *  was handed and answers 204. */
+function recordingOrchestrator(record: (request: Request) => void): NimbusTestEnv['OrchestratorAgent'] {
   return {
     idFromName(name: string) { return name; },
     get() {
-      return {
+      return previewHost({
         async routeWorkspacePreview(_port: number, _handle: string, request: Request) {
           record(request);
 
           return new Response(null, { status: 204 });
         },
-      };
+      });
     },
   };
 }
@@ -420,7 +418,7 @@ describe('serving the preview host', () => {
         'x-kinu-internal-ticket': 'secret',
         'x-guest-header': 'kept',
       },
-    }), testEnv(ENV));
+    }), CONTAINERS);
 
     if (!sdkRequest) throw new Error('Sandbox preview request was not forwarded');
     expect(res.status).toBe(204);
@@ -439,7 +437,7 @@ describe('serving the preview host', () => {
     sdkRequest = null;
     await servePreviewRequest(new Request(PREVIEW_URL, {
       headers: { authorization: 'Bearer guest-token' },
-    }), testEnv(ENV));
+    }), CONTAINERS);
 
     if (!sdkRequest) throw new Error('Sandbox preview request was not forwarded');
     const forwarded: Request = sdkRequest;
@@ -589,10 +587,19 @@ describe('repairing a stale preview', () => {
     expect(repairs).toEqual([]);
   });
 
-  test('a deployment with no container binding cannot repair, and says nothing else', async () => {
-    const res = await serve(PREVIEW_URL, stalePreview());
+  test('a deployment with no container binding serves no preview at all', async () => {
+    // Nothing to forward to and nothing to re-drive. The rail says so, the same
+    // way it does with no exposure store, instead of handing the SDK an
+    // `undefined` namespace to resolve a container out of.
+    sdkResponse = stalePreview();
+    sdkQueue = [];
+    sdkForwards = 0;
+    repairs = [];
+    const res = await servePreviewRequest(new Request(PREVIEW_URL), ENV);
 
-    expect(res.status).toBe(410);
+    expect(res.status).toBe(503);
+    expect(await res.json()).toMatchObject({ code: 'PREVIEW_UNAVAILABLE' });
+    expect(sdkForwards).toBe(0);
     expect(repairs).toEqual([]);
   });
 
@@ -627,7 +634,7 @@ describe('serving a Nimbus preview host', () => {
           return name;
         },
         get() {
-          return {
+          return previewHost({
             async routeWorkspacePreview(port: number, handle: string, request: Request, pathname: string) {
               routedPort = port;
               routedCapability = handle;
@@ -638,7 +645,7 @@ describe('serving a Nimbus preview host', () => {
                 headers: { 'content-type': 'application/json' },
               });
             },
-          };
+          });
         },
       },
     });
@@ -779,7 +786,7 @@ describe('serving a Nimbus preview host', () => {
         get() {
           touched = true;
 
-          return {};
+          return previewHost({});
         },
       },
     });
@@ -802,7 +809,7 @@ describe('serving a Nimbus preview host', () => {
   const RAW_KEY_V4_TOKEN = '446kx4mrl653aua';
 
   /** An env whose Durable Object namespace records whether it was touched. */
-  function untouchableEnv(bindings: PreviewTestBindings) {
+  function untouchableEnv(bindings: Omit<NimbusTestEnv, 'OrchestratorAgent'>) {
     let touched = false;
 
     const env = testEnv({
@@ -816,7 +823,7 @@ describe('serving a Nimbus preview host', () => {
         get() {
           touched = true;
 
-          return {};
+          return previewHost({});
         },
       },
     });
@@ -859,11 +866,11 @@ describe('serving a Nimbus preview host', () => {
       OrchestratorAgent: {
         idFromName(name: string) { return name; },
         get() {
-          return { async routeWorkspacePreview() {
+          return previewHost({ async routeWorkspacePreview() {
             routed += 1;
 
             return new Response(null, { status: 204 });
-          } };
+          } });
         },
       },
     });

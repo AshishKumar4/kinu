@@ -23,7 +23,8 @@
 import * as v from 'valibot';
 import type { AuthIdentity } from '../auth/session';
 import type { UserDO } from './user-do';
-import { forgetSharesGiven } from './shares-given';
+import { forgetSharesGiven, type ShareRosterAuthority, type SharesGivenEnv } from './shares-given';
+import type { ObjectNamespace } from '../bindings';
 import {
   confirmsAccountDelete,
   decodeJsonWire,
@@ -42,7 +43,21 @@ const ExperienceQuery = v.object({
   limit: v.pipe(v.number(), v.integer(), v.minValue(1), v.maxValue(100)),
 });
 
-export async function handleAccountRequest(request: Request, env: Env, identity: AuthIdentity): Promise<Response | null> {
+/** The four account-authority calls these routes make on the account's own
+ *  object, beside the share sweep's own reach. */
+export type AccountAuthority = Pick<
+  UserDO, 'completeOnboarding' | 'searchExperienceWire' | 'deleteAccount' | 'setDisplayName'
+>;
+
+/** Every binding the account routes read: the share sweep's, widened by the
+ *  four calls above on the same object. */
+export interface AccountRoutesEnv<Id> extends SharesGivenEnv<Id> {
+  UserDO: ObjectNamespace<Id, ShareRosterAuthority & AccountAuthority>;
+}
+
+export async function handleAccountRequest<Id>(
+  request: Request, env: AccountRoutesEnv<Id>, identity: AuthIdentity,
+): Promise<Response | null> {
   const url = new URL(request.url);
 
   if (!url.pathname.startsWith('/api/user')) return null;
@@ -62,7 +77,7 @@ export async function handleAccountRequest(request: Request, env: Env, identity:
     throw cause;
   }
 
-  const stub: DurableObjectStub<UserDO> = env.UserDO.get(env.UserDO.idFromName(identity.userId));
+  const stub = env.UserDO.get(env.UserDO.idFromName(identity.userId));
 
   if (path === '/onboarding/complete' && request.method === 'POST') {
     return json({ body: await stub.completeOnboarding(owner) });

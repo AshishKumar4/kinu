@@ -20,13 +20,13 @@
  * Streaming responses pass through without buffering. Production failures use
  * the same actionable mapping as the cloud providers.
  */
-import type { UserDO } from './user-do';
+import { createUserDOAuthResolver, type UserCredentialClient } from '../providers/agent-registry';
+import type { OwnerCapabilityEnv, ProviderEnv } from '@kinu.run/core';
 import { CLOUDFLARE_AI_GATEWAY_CRED_KEY, CLOUDFLARE_OAUTH_CRED_KEY } from '@kinu.run/core';
 import { createCloudflareAIFetch, errorResponse, mapGatewayError } from '@kinu.run/core';
-import { createUserDOAuthResolver } from '../providers/agent-registry';
 import { MY_GATEWAY_PROVIDER_ID } from '@kinu.run/core';
 import { createDirectWorkersAIFetch } from '@kinu.run/core';
-import { listAvailableModels } from './available-models';
+import { listAvailableModels, type AvailableModelsEnv } from './available-models';
 import { json } from '@kinu.run/core';
 import { ownerCaller } from '@kinu.run/core';
 import { JsonObjectSchema, USER_AI_PROXY_PATH, type JsonObject } from '@kinu.run/core';
@@ -39,10 +39,17 @@ const ChatCompletionRouteSchema = v.object({
   model: v.pipe(v.string(), v.trim(), v.minLength(1)),
 });
 
-export async function handleUserAIProxyRequest(
+/** Every binding the AI proxy reads: the model listing's, plus the eval
+ *  identity's direct transport, which calls `run` on the same binding the
+ *  gateway path reaches through `ProviderEnv`. */
+export interface UserAIProxyEnv<Id> extends AvailableModelsEnv<Id>, OwnerCapabilityEnv {
+  AI?: NonNullable<ProviderEnv['AI']> & NonNullable<Parameters<typeof createDirectWorkersAIFetch>[0]>;
+}
+
+export async function handleUserAIProxyRequest<Id>(
   request: Request,
-  env: Env,
-  cli: { userId: string; userDO: DurableObjectStub<UserDO> },
+  env: UserAIProxyEnv<Id>,
+  cli: { userId: string; userDO: UserCredentialClient },
 ): Promise<Response> {
   const url = new URL(request.url);
   const path = url.pathname.slice(USER_AI_PROXY_PATH.length);
@@ -67,7 +74,9 @@ export async function handleUserAIProxyRequest(
   return errorResponse(404, `No such AI proxy route: ${request.method} ${path}`);
 }
 
-async function proxyChatCompletion(request: Request, env: Env, userDO: DurableObjectStub<UserDO>): Promise<Response> {
+async function proxyChatCompletion<Id>(
+  request: Request, env: UserAIProxyEnv<Id>, userDO: UserCredentialClient,
+): Promise<Response> {
   const body = await request.text();
   let bodyValue: JsonObject;
   let model: string;

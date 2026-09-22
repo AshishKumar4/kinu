@@ -9,6 +9,7 @@
 
 import type { AuthIdentity } from '../auth/session';
 import type { UserDO } from '../user/user-do';
+import type { ObjectNamespace } from '../bindings';
 import { randomToken, sha256Hex } from '@kinu.run/core';
 import { readKvJson, writeKvJson, type KvStore } from '@kinu.run/agent-utils';
 import { renderThrownChain } from '@kinu.run/core/obs';
@@ -97,12 +98,17 @@ const CodePointerSchema = v.object({ deviceHash: v.string() });
 
 const RateBucketSchema = v.object({ count: v.number(), resetAt: v.number() });
 
-type CliAuthEnv = OwnerCapabilityEnv & {
+/** The four calls the CLI auth store makes on a user's own object. */
+export type CliAuthAuthority = Pick<
+  UserDO, 'ensureProfile' | 'mintCliToken' | 'verifyCliToken' | 'verifyAccessToken'
+>;
+
+export type CliAuthEnv<Id = DurableObjectId> = OwnerCapabilityEnv & {
   AUTH_KV: KvStore;
-  UserDO: DurableObjectNamespace<UserDO>;
+  UserDO: ObjectNamespace<Id, CliAuthAuthority>;
 };
 
-export interface CliTokenIdentity {
+export interface CliTokenIdentity<Authority = DurableObjectStub<UserDO>> {
   userId: string;
   email: string;
   displayName: string | null;
@@ -111,15 +117,15 @@ export interface CliTokenIdentity {
    *  `access` = long-lived `pta_…` CI token restricted to `scopes`. */
   kind: 'session' | 'access';
   scopes: 'all' | AccessTokenScope[];
-  userDO: DurableObjectStub<UserDO>;
+  userDO: Authority;
 }
 
 export function tokenAllows(identity: Pick<CliTokenIdentity, 'scopes'>, scope: AccessTokenScope): boolean {
   return identity.scopes === 'all' || identity.scopes.includes(scope);
 }
 
-export type CliTokenAuth =
-  | { ok: true; identity: CliTokenIdentity }
+export type CliTokenAuth<Authority = DurableObjectStub<UserDO>> =
+  | { ok: true; identity: CliTokenIdentity<Authority> }
   | { ok: false; error: string };
 
 /** The token a request presents as a bearer, or null when it presents none.
@@ -171,10 +177,10 @@ export function parseCliBearer(token: string): { userId: string; kind: 'session'
  *  to the UserDO embedded in the token, verifies the stored hash. Shared by
  *  the CLI HTTP API and the MCP server (external MCP clients can't do browser
  *  OAuth; the CLI token is their per-user credential). */
-export async function authenticateCliToken(
+export async function authenticateCliToken<Id, Authority extends CliAuthAuthority>(
   request: Request,
-  env: Pick<CliAuthEnv, 'UserDO' | 'CREDENTIAL_ENCRYPTION_KEY'>,
-): Promise<CliTokenAuth> {
+  env: Pick<CliAuthEnv<Id>, 'CREDENTIAL_ENCRYPTION_KEY'> & { UserDO: ObjectNamespace<Id, Authority> },
+): Promise<CliTokenAuth<Authority>> {
   const token = readBearer(request);
 
   if (!token) return { ok: false, error: 'Missing Authorization: Bearer <token>' };
@@ -212,7 +218,7 @@ export interface CliAuthRequest {
   clientKey?: string;
 }
 
-export async function startCliAuth(env: CliAuthEnv, request: CliAuthRequest): Promise<CliAuthStartResult> {
+export async function startCliAuth<Id>(env: CliAuthEnv<Id>, request: CliAuthRequest): Promise<CliAuthStartResult> {
   const { origin, approvalOrigin, deviceName, clientKey } = request;
   const now = Date.now();
   await rateLimit(env.AUTH_KV, `start:${cleanRateKey(clientKey)}`, 20, now);
@@ -274,7 +280,9 @@ export async function inspectCliAuth(kv: KvStore, userCode: string): Promise<Cli
   };
 }
 
-export async function pollCliAuth(env: CliAuthEnv, deviceToken: string, clientKey?: string): Promise<CliAuthPollResult> {
+export async function pollCliAuth<Id>(
+  env: CliAuthEnv<Id>, deviceToken: string, clientKey?: string,
+): Promise<CliAuthPollResult> {
   const now = Date.now();
   await rateLimit(env.AUTH_KV, `poll-ip:${cleanRateKey(clientKey)}`, 300, now);
 
@@ -336,8 +344,8 @@ export async function pollCliAuth(env: CliAuthEnv, deviceToken: string, clientKe
   };
 }
 
-export async function approveCliAuth(
-  env: CliAuthEnv,
+export async function approveCliAuth<Id>(
+  env: CliAuthEnv<Id>,
   userCode: string,
   identity: AuthIdentity,
   clientKey?: string,

@@ -10,9 +10,10 @@
 //   - the Cloudflare login is never attached to a client-chosen URL
 import { TEST_CREDENTIAL_ENCRYPTION_KEY } from './helpers/user-do';
 import { afterEach, describe, expect, test } from 'bun:test';
-import { handleCliRequest } from '../src/cli/routes';
+import { handleCliRequest, type CliRoutesEnv } from '../src/cli/routes';
+import { cliAccount, unreachableAssets, unreachableKv, unreachableNamespace } from './helpers/bindings';
 import { asFetchFunction } from '@kinu.run/core';
-import type { UserCaller } from '@kinu.run/core';
+import type { AccessTokenScope, UserCaller } from '@kinu.run/core';
 import * as v from 'valibot';
 import { requestBodyText, requestUrl } from './helpers/fetch-input';
 
@@ -26,7 +27,7 @@ const READ_TOKEN = `pta_${USER_ID}_${'r'.repeat(44)}`;
 
 /** The scopes each access token in this suite carries. A bearer that is not one
  *  of these is not a token at all. */
-function scopesFor(bearer: string): string[] | null {
+function scopesFor(bearer: string): AccessTokenScope[] | null {
   if (bearer === AI_TOKEN) return ['ai.proxy'];
 
   if (bearer === READ_TOKEN) return ['workspace.read'];
@@ -58,7 +59,7 @@ interface StoredCredential { key: string; baseURL?: string; headers?: Record<str
 function setupEnv(stored: StoredCredential[]) {
   const byKey = new Map(stored.map((c) => [c.key, c]));
 
-  const userDO = {
+  const userDO = cliAccount({
     async verifyCliToken(_caller: UserCaller, bearer: string) {
       return {
         ok: bearer === SESSION_TOKEN,
@@ -79,7 +80,7 @@ function setupEnv(stored: StoredCredential[]) {
       };
     },
     async listCredentials(_caller: UserCaller) {
-      return stored.map((c) => ({ key: c.key, kind: 'bearer', createdAt: 0, updatedAt: 0 }));
+      return stored.map((c) => ({ key: c.key, kind: 'bearer' as const, createdAt: 0, updatedAt: 0 }));
     },
     async getCredentialBaseURL(_caller: UserCaller, key: string) {
       return byKey.get(key)?.baseURL ?? null;
@@ -87,17 +88,19 @@ function setupEnv(stored: StoredCredential[]) {
     async getAuthHeaders(_caller: UserCaller, key: string) {
       return byKey.get(key)?.headers ?? null;
     },
-  };
-
-  const env: Partial<Env> = {};
-  Object.assign(env, {
-    UserDO: { idFromName: (name: string) => name, get: () => userDO },
-    CREDENTIAL_ENCRYPTION_KEY: TEST_CREDENTIAL_ENCRYPTION_KEY,
   });
 
-  // SAFETY: Provider proxy tests reach only the constructed UserDO namespace
-  // and credential key; both bindings are exact and present above.
-  return env as Env;
+  const env: CliRoutesEnv<string> = {
+    UserDO: { idFromName: (name) => name, get: () => userDO },
+    CREDENTIAL_ENCRYPTION_KEY: TEST_CREDENTIAL_ENCRYPTION_KEY,
+    // A proxied credential never touches a workspace object, the device-code
+    // KV or the published assets.
+    OrchestratorAgent: unreachableNamespace('OrchestratorAgent'),
+    AUTH_KV: unreachableKv('AUTH_KV'),
+    ASSETS: unreachableAssets(),
+  };
+
+  return env;
 }
 
 function forwardRequest(opts: {

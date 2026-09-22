@@ -67,8 +67,11 @@ import type {
 import { RELEASE_STATUSES, isEngineOwnedTransitionTarget, RUN_EVENT_LIMIT_MAX } from "@kinu.run/core";
 import type { OrchestratorAgent } from "./orchestrator";
 import { AuthError, authenticateRequest } from "./auth/session";
-import { authenticateCliToken, readBearer } from "./cli/auth-store";
-import { claimOwnedWorkspace } from "./user/workspace-ownership";
+import { authenticateCliToken, readBearer, type CliAuthAuthority } from "./cli/auth-store";
+import { claimOwnedWorkspace, type WorkspaceOwnerClaim, type WorkspaceRegistry } from "./user/workspace-ownership";
+import type { SessionAuthority } from "./auth/store";
+import type { ObjectNamespace } from "./bindings";
+import type { KvStore } from '@kinu.run/agent-utils';
 import { decodeRunEventWire, decodeScaffoldRunWire } from '@kinu.run/core';
 import { renderThrownChain } from '@kinu.run/core/obs';
 
@@ -83,10 +86,27 @@ const corsHeaders = {
 
 interface PeerMessageInput { agent: string; message: string; topic?: string }
 
+/**
+ * How the MCP surface reaches the workspace object it addresses.
+ *
+ * A function rather than the namespace binding, because resolving one is not
+ * `get(idFromName(name))`: the deployment binds the Agents SDK's own
+ * `getAgentByName` (agents@0.22.0, `dist/agent-routing.js:176-183`, read
+ * 2026-09-22), which resolves the stub and then awaits
+ * `__unsafe_ensureInitialized` on it — the lifecycle gate that runs `onStart`
+ * before the first RPC — under the SDK's own retry. Injecting the resolver
+ * leaves all of that to the vendor and lets a test hand over its own object.
+ */
+export type McpResolver = (name: string) => Promise<McpAgentClient>;
+
+/** The deployment's resolver: the SDK's own, over this Worker's binding. */
+export const mcpAgentResolver = (env: Env): McpResolver =>
+  (name) => getAgentByName<Env, OrchestratorAgent>(env.OrchestratorAgent, name);
+
 /** The callable surface this HTTP adapter uses. Keeping the boundary explicit
  * avoids asking the Agents SDK to recursively serialize the entire agent class
  * (including recursive run-event JSON) at each method access. */
-interface McpAgentClient {
+export interface McpAgentClient {
   searchMemoryHybrid(query: string, limit: number): Promise<HybridHit[]>;
   saveNoteFromMcp(content: string): Promise<{ ok: true }>;
   getToolList(): Promise<{ builtIn: string[]; crafted: ToolListEntry[] }>;
@@ -116,8 +136,9 @@ function withCors(response: Response): Response {
   return response;
 }
 
-async function resolveAgent(env: Env, agentName: string): Promise<McpAgentClient> {
-  const stub = await getAgentByName<Env, OrchestratorAgent>(env.OrchestratorAgent, agentName);
+/** The property-access boundary above, over the resolved object. */
+async function mcpClient(resolveAgent: McpResolver, agentName: string): Promise<McpAgentClient> {
+  const stub = await resolveAgent(agentName);
 
   return {
     searchMemoryHybrid: (query, limit) => stub.searchMemoryHybrid(query, limit),
@@ -137,7 +158,7 @@ async function resolveAgent(env: Env, agentName: string): Promise<McpAgentClient
   };
 }
 
-function buildServer(env: Env, agentName: string): McpServer {
+function buildServer(resolveAgent: McpResolver, agentName: string): McpServer {
   const server = new McpServer({
     name: `kinu-${agentName}`,
     version: "1.0.0",
@@ -159,7 +180,7 @@ function buildServer(env: Env, agentName: string): McpServer {
     },
     async ({ query, limit }) => {
       try {
-        const agent = await resolveAgent(env, agentName);
+        const agent = await mcpClient(resolveAgent, agentName);
         const hits = await agent.searchMemoryHybrid(query, limit ?? 10);
 
         const text = hits.length === 0
@@ -184,7 +205,7 @@ function buildServer(env: Env, agentName: string): McpServer {
     },
     async ({ content }) => {
       try {
-        const agent = await resolveAgent(env, agentName);
+        const agent = await mcpClient(resolveAgent, agentName);
         await agent.saveNoteFromMcp(content);
 
         return { content: [{ type: "text", text: "Note saved." }] };
@@ -202,7 +223,7 @@ function buildServer(env: Env, agentName: string): McpServer {
     },
     async () => {
       try {
-        const agent = await resolveAgent(env, agentName);
+        const agent = await mcpClient(resolveAgent, agentName);
         const out = await agent.getToolList();
         const lines: string[] = [];
         lines.push(`## Built-in (${out.builtIn.length})`);
@@ -233,7 +254,7 @@ function buildServer(env: Env, agentName: string): McpServer {
     },
     async ({ task, useShadowOverride }) => {
       try {
-        const agent = await resolveAgent(env, agentName);
+        const agent = await mcpClient(resolveAgent, agentName);
 
         // The agents-SDK stub doesn't resolve the @callable's return type, so
         // annotate from the source-of-truth ScaffoldRunResult shape.
@@ -266,7 +287,7 @@ function buildServer(env: Env, agentName: string): McpServer {
     },
     async () => {
       try {
-        const agent = await resolveAgent(env, agentName);
+        const agent = await mcpClient(resolveAgent, agentName);
         const status = await agent.getShadowStatus();
 
         return { content: [{ type: "text", text: JSON.stringify(status, null, 2) }] };
@@ -288,7 +309,7 @@ function buildServer(env: Env, agentName: string): McpServer {
     },
     async ({ limit, after }) => {
       try {
-        const agent = await resolveAgent(env, agentName);
+        const agent = await mcpClient(resolveAgent, agentName);
         const page = await agent.listRuns({ limit: limit ?? 20, cursor: after ? { after } : undefined });
         const lines = page.items.map((r) => `- ${r.runId} — ${r.eventCount} events @ ${r.lastTs}`);
 
@@ -318,7 +339,7 @@ function buildServer(env: Env, agentName: string): McpServer {
     },
     async ({ runId, since, limit }) => {
       try {
-        const agent = await resolveAgent(env, agentName);
+        const agent = await mcpClient(resolveAgent, agentName);
 
         const events = decodeRunEventWire(
           await agent.getRunEventsWire(runId, { since, limit: limit ?? 100 }),
@@ -353,7 +374,7 @@ function buildServer(env: Env, agentName: string): McpServer {
     },
     async ({ text }) => {
       try {
-        const agent = await resolveAgent(env, agentName);
+        const agent = await mcpClient(resolveAgent, agentName);
         const result: EnqueueTurnResult = await agent.runTaskFromMcp(text);
 
         const msg = result.status === "queued"
@@ -381,7 +402,7 @@ function buildServer(env: Env, agentName: string): McpServer {
     },
     async ({ agent: peer, message, topic }) => {
       try {
-        const agent = await resolveAgent(env, agentName);
+        const agent = await mcpClient(resolveAgent, agentName);
         const peerMessage: PeerMessageInput = { agent: peer, message };
 
         if (topic) peerMessage.topic = topic;
@@ -406,7 +427,7 @@ function buildServer(env: Env, agentName: string): McpServer {
     },
     async () => {
       try {
-        const agent = await resolveAgent(env, agentName);
+        const agent = await mcpClient(resolveAgent, agentName);
         const peers = await agent.listPeersFromMcp();
 
         const text = peers.length === 0
@@ -438,7 +459,7 @@ function buildServer(env: Env, agentName: string): McpServer {
     },
     async ({ action, bindingId, prompt, plan, changeId, status }) => {
       try {
-        const agent = await resolveAgent(env, agentName);
+        const agent = await mcpClient(resolveAgent, agentName);
 
         if (action === "list") {
           const board: ReleaseBoard = await agent.getReleaseBoard(20);
@@ -497,7 +518,7 @@ function buildServer(env: Env, agentName: string): McpServer {
     },
     async (uri) => {
       try {
-        const agent = await resolveAgent(env, agentName);
+        const agent = await mcpClient(resolveAgent, agentName);
         const content = await agent.getMemoryContent();
 
         return { contents: [{ uri: uri.href, text: content, mimeType: "text/markdown" }] };
@@ -510,9 +531,32 @@ function buildServer(env: Env, agentName: string): McpServer {
   return server;
 }
 
+/**
+ * Every call the MCP surface makes on the asking user's own object: the CLI
+ * bearer check on the external-client path, the browser session check on the
+ * other, and the registry half of the ownership gate.
+ */
+export type McpAuthority = CliAuthAuthority & SessionAuthority & WorkspaceRegistry;
+
+/** Every binding the MCP surface reads. */
+export interface McpEnv<Id> extends
+  Pick<Env, 'CREDENTIAL_ENCRYPTION_KEY' | 'DEV_USER_EMAIL' | 'DEV_IDENTITY_SECRET'> {
+  /** Read on the cookie path — where the browser session lives — and read
+   *  again as the bindings check that turns "no session" into a 401 rather
+   *  than a 500. Never read on the bearer path. */
+  AUTH_KV: KvStore;
+  UserDO: ObjectNamespace<Id, McpAuthority>;
+  /** The ownership gate's own `get(idFromName)`, not the tool surface's: the
+   *  claim runs before any resolver does. */
+  OrchestratorAgent: ObjectNamespace<Id, WorkspaceOwnerClaim>;
+}
+
 /** Resolve the calling user: CLI bearer token first (the external-client
  *  path), then browser session / DEV_USER_EMAIL. */
-async function authenticateMcpCaller(request: Request, env: Env): Promise<{ userId: string } | Response> {
+async function authenticateMcpCaller<Id>(
+  request: Request,
+  env: McpEnv<Id>,
+): Promise<{ userId: string } | Response> {
   if (readBearer(request)) {
     const result = await authenticateCliToken(request, env);
 
@@ -537,7 +581,11 @@ async function authenticateMcpCaller(request: Request, env: Env): Promise<{ user
   }
 }
 
-export async function handleMcpRequest(request: Request, env: Env): Promise<Response | null> {
+export async function handleMcpRequest<Id>(
+  request: Request,
+  env: McpEnv<Id>,
+  resolveAgent: McpResolver,
+): Promise<Response | null> {
   const url = new URL(request.url);
 
   if (!url.pathname.startsWith("/mcp/v1/")) return null;
@@ -568,7 +616,7 @@ export async function handleMcpRequest(request: Request, env: Env): Promise<Resp
 
   try {
     const transport = new WebStandardStreamableHTTPServerTransport();
-    const server = buildServer(env, agentName);
+    const server = buildServer(resolveAgent, agentName);
     await server.connect(transport);
     const resp = await transport.handleRequest(request);
 
