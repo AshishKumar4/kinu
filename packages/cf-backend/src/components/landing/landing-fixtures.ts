@@ -56,8 +56,8 @@ export const LANDING_WORKSPACE = 'checkout-fixes';
 export const LANDING_TAB_PRESENCE: TabPresence = { releases: false, explorations: false, work: true };
 
 export const LANDING_SUBORDINATES: readonly SubordinateRosterEntry[] = [
-  { name: 'coupon-tester', displayName: 'Coupon tester', role: 'QA', createdBy: 'orchestrator', status: 'working', currentTask: 'Running the checkout regression suite', createdAt: NOW - 36e5, dismissedAt: null },
-  { name: 'migration-review', displayName: 'Migration review', role: 'Reviewer', createdBy: 'orchestrator', status: 'awaiting_input', currentTask: 'Needs a call on the backfill order', createdAt: NOW - 72e5, dismissedAt: null },
+  { name: 'coupon-tester', actorId: 'actor-coupon-tester', displayName: 'Coupon tester', role: 'QA', createdBy: 'orchestrator', status: 'working', currentTask: 'Running the checkout regression suite', createdAt: NOW - 36e5, dismissedAt: null },
+  { name: 'migration-review', actorId: 'actor-migration-review', displayName: 'Migration review', role: 'Reviewer', createdBy: 'orchestrator', status: 'awaiting_input', currentTask: 'Needs a call on the backfill order', createdAt: NOW - 72e5, dismissedAt: null },
 ];
 
 /**

@@ -37,6 +37,7 @@ import { ConversationStartBoundary, HistoryBoundary } from "@/components/surface
 import { KinuMark } from "@/components/ui/KinuLogo";
 import { SupervisePage } from "./SupervisePage";
 import { SubordinateTabs, agentTitle } from "@/components/SubordinateTabs";
+import { KeptChatColumn } from "@/components/KeptChatColumn";
 import { WorkspaceBar, type Altitude } from "@/components/WorkspaceBar";
 import { Composer, workspaceLoadNotice, type ComposerNotice } from "@/components/Composer";
 import { workspaceDisplayTitle, workspaceTitleDraft, type PendingConsent, type SubordinateActivityEvent } from "@kinu.run/core";
@@ -1075,6 +1076,15 @@ export default function WorkspacePage() {
               // so the header reads it too; a deep link that lands before the
               // roster row arrives shows the address until it does.
               const rosterEntry = state.subordinates.find((entry) => entry.name === subName);
+
+              // A dismissed agent no longer runs, so it has no socket to open:
+              // its kept chat is paged over this workspace's own.
+              if (rosterEntry?.status === "dismissed") {
+                return (
+                  <KeptChatColumn key={subName} workspace={agentId} subName={subName}
+                    title={agentTitle(rosterEntry)} rpc={state.rpc} actorId={rosterEntry.actorId} />
+                );
+              }
 
               return (
                 <SubordinateChatColumn
