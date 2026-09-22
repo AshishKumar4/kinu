@@ -7,6 +7,7 @@ import { useState } from 'react';
 
 import { MessageList } from '../src/tui/messages';
 import { BUILTIN_TUI_THEMES, TuiThemeProvider } from '../src/tui/theme';
+import { present } from '@kinu.run/test-utils';
 
 const TEST_TUI_BACKGROUND = BUILTIN_TUI_THEMES[0].colors.background.overlay;
 
@@ -184,7 +185,7 @@ describe('TUI transcript rendering', () => {
   // (`useCodeWellRenderer` in src/tui/messages.tsx).
   test('a fenced code block sits on the dark well; the prose around it does not', async () => {
     for (const themeId of ['kinu-light', 'kinu-dark']) {
-      const theme = BUILTIN_TUI_THEMES.find((candidate) => candidate.id === themeId)!;
+      const theme = present(BUILTIN_TUI_THEMES.find((candidate) => candidate.id === themeId), 'the theme theme');
       const { renderer, renderOnce, captureSpans } = await createTestRenderer({ width: 80, height: 20, useThread: false, maxFps: Number.POSITIVE_INFINITY });
       const root = createRoot(renderer);
 
@@ -203,9 +204,9 @@ describe('TUI transcript rendering', () => {
           ['PROSELINE', 'const FENCED'].every((text) => frame.some((span) => span.text.includes(text)))
         ));
 
-        const fenced = spans.find((span) => span.text.includes('const FENCED'))!;
-        const prose = spans.find((span) => span.text.includes('PROSELINE'))!;
-        const rail = spans.find((span) => span.text.includes('│'))!;
+        const fenced = present(spans.find((span) => span.text.includes('const FENCED')), 'the fenced span');
+        const prose = present(spans.find((span) => span.text.includes('PROSELINE')), 'the prose span');
+        const rail = present(spans.find((span) => span.text.includes('│')), 'the rail span');
         expect(hex(fenced.bg)).toBe(theme.colors.well.fill);
         expect(hex(fenced.fg)).toBe(theme.colors.well.code);
         // A single rail keeps the well's grouping without framing prose in chrome.
@@ -225,7 +226,7 @@ describe('TUI transcript rendering', () => {
     // The owner's transcript showed `**Build something**` and `- ` verbatim:
     // the syntax styles were keyed by marked's token names, which opentui's
     // tree-sitter captures never match, so every span fell to the flat ink.
-    const theme = BUILTIN_TUI_THEMES.find((candidate) => candidate.id === 'kinu-dark')!;
+    const theme = present(BUILTIN_TUI_THEMES.find((candidate) => candidate.id === 'kinu-dark'), 'the kinu-dark theme');
     const { renderer, renderOnce, captureSpans } = await createTestRenderer({ width: 80, height: 20, useThread: false, maxFps: Number.POSITIVE_INFINITY });
     const root = createRoot(renderer);
 
@@ -253,18 +254,18 @@ describe('TUI transcript rendering', () => {
       expect(text).toContain('2. second');
       expect(text).not.toMatch(/^- /m);
 
-      const strong = spans.find((span) => span.text.includes('what works'))!;
-      const plain = spans.find((span) => span.text.includes('Here is'))!;
+      const strong = present(spans.find((span) => span.text.includes('what works')), 'the strong span');
+      const plain = present(spans.find((span) => span.text.includes('Here is')), 'the plain span');
       expect(strong.attributes & TextAttributes.BOLD).not.toBe(0);
       expect(plain.attributes & TextAttributes.BOLD).toBe(0);
 
-      const gpu = spans.find((span) => span.text.includes('GPU'))!;
+      const gpu = present(spans.find((span) => span.text.includes('GPU')), 'the gpu span');
       expect(gpu.attributes & TextAttributes.BOLD).not.toBe(0);
 
-      const codespan = spans.find((span) => span.text.includes('git'))!;
+      const codespan = present(spans.find((span) => span.text.includes('git')), 'the codespan span');
       expect(hex(codespan.fg)).toBe(theme.colors.intent.accentStrong);
 
-      const bullet = spans.find((span) => span.text.startsWith('•'))!;
+      const bullet = present(spans.find((span) => span.text.startsWith('•')), 'the bullet span');
       expect(hex(bullet.fg)).toBe(theme.colors.intent.accent);
     } finally {
       flushSync(() => { root.unmount(); });
@@ -278,7 +279,7 @@ describe('TUI transcript rendering', () => {
   // construction. The well still has to follow the theme in force. (Re-rendering
   // the root instead would rebuild the renderable and prove nothing.)
   test('the code well follows a live theme switch', async () => {
-    const contrast = BUILTIN_TUI_THEMES.find((candidate) => candidate.id === 'high-contrast')!;
+    const contrast = present(BUILTIN_TUI_THEMES.find((candidate) => candidate.id === 'high-contrast'), 'the high-contrast theme');
     const { renderer, renderOnce, captureSpans } = await createTestRenderer({ width: 80, height: 16, useThread: false, maxFps: Number.POSITIVE_INFINITY });
     const root = createRoot(renderer);
     let pick: (themeId: string) => void = () => undefined;
@@ -305,7 +306,7 @@ describe('TUI transcript rendering', () => {
         frame.some((span) => span.text.includes('const FENCED') && hex(span.bg) === contrast.colors.well.fill)
       ));
 
-      const fenced = spans.find((span) => span.text.includes('const FENCED'))!;
+      const fenced = present(spans.find((span) => span.text.includes('const FENCED')), 'the fenced span');
       expect(hex(fenced.bg)).toBe(contrast.colors.well.fill);
       expect(hex(fenced.fg)).toBe(contrast.colors.well.code);
     } finally {
