@@ -662,13 +662,25 @@ async function api(url: URL, request: Request): Promise<Response> {
 
   if (path.endsWith('/subdomain')) return envelope({ enabled: true });
 
+  const scripted = workerScriptApi(path, request, named, () => v.parse(DeployedVersionsSchema, body.versions));
+
+  if (scripted !== undefined) return scripted;
+
+  throw new Error(`the deploy fake has no answer for ${request.method} ${path}`);
+}
+
+/** The Worker script's own routes: versions deployed, secrets, settings and the asset session. */
+function workerScriptApi(
+  path: string, request: Request, named: (key: string) => string,
+  deployed: () => v.InferOutput<typeof DeployedVersionsSchema>,
+): Response | undefined {
   if (path.endsWith('/deployments') && request.method === 'GET') {
     // Newest first: the reference lists the deployment serving traffic first.
     return envelope({ deployments: [...held.deployments].reverse().map((versions) => ({ versions: versions.map((entry) => ({ ...entry })) })) });
   }
 
   if (path.endsWith('/deployments')) {
-    const versions = v.parse(DeployedVersionsSchema, body.versions);
+    const versions = deployed();
     const unknown = versions.find((entry) => !held.versions.has(entry.version_id));
 
     // The reference types `version_id` as the id of a version the Worker holds.
@@ -712,7 +724,7 @@ async function api(url: URL, request: Request): Promise<Response> {
     return envelope({ jwt: 'session-token', buckets: [wanted] });
   }
 
-  throw new Error(`the deploy fake has no answer for ${request.method} ${path}`);
+  return undefined;
 }
 
 /** Version uploads are counted: "the run uploaded twice" is the failure a resumed run must not have. */
