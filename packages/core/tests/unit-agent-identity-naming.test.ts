@@ -5,7 +5,7 @@ import {
   applyWorkspaceTitle,
   fallbackWorkspaceIdentity,
   parseWorkspaceTitle,
-  planWorkspaceTitle, autoTitleMayReplace, persistAutoTitle, codenameFor,
+  planWorkspaceTitle, autoTitleMayReplace, nameOriginOf, persistAutoTitle, codenameFor,
   renderSoulMarkdown,
   summarizeSoul,
   mintSubordinateName,
@@ -142,21 +142,27 @@ describe('automatic workspace titling — the decision', () => {
     expect(autoTitleMayReplace(null)).toBe(false);
     expect(autoTitleMayReplace('user')).toBe(false);
     expect(autoTitleMayReplace('auto')).toBe(true);
-    expect(autoTitleMayReplace('provisional')).toBe(true);
   });
 
-  test('a title the policy DERIVED stays replaceable, however un-placeholder it reads', () => {
-    // #18: the deterministic title is the first line of the person's prompt.
-    // Stored the way a generated title is, it read as "already named" and the
-    // model's suggestion never got to replace it — so every workspace and every
-    // hired agent kept the truncated prompt as its permanent name.
-    const derived: WorkspaceTitleState = {
-      ...slugNamed, displayName: 'Audit the OAuth callback flow', nameOrigin: 'provisional',
-    };
+  test('a stored origin is the owner\'s only when it says so', () => {
+    // Storage an earlier build wrote can hold an origin no writer produces now
+    // ('provisional', 2026-09-22). That title was the system's stand-in, so it
+    // reads as 'auto' rather than freezing as the owner's.
+    expect(nameOriginOf('user')).toBe('user');
+    expect(nameOriginOf('auto')).toBe('auto');
+    expect(nameOriginOf('provisional')).toBe('auto');
+  });
 
-    expect(planWorkspaceTitle(derived)?.mission).toBe(MISSION);
-    // The same title, once a model has answered for it, is the answer.
-    expect(planWorkspaceTitle({ ...derived, nameOrigin: 'auto' })).toBe(null);
+  test('a stand-in is replaced only by the pass its caller names as its naming', () => {
+    // #18: the stand-in is the first line of the person's prompt, stored 'auto'
+    // exactly as a model's name is. The genesis turn (or a hosted actor's run
+    // of the message it came from) says it is a stand-in; every other pass
+    // reads it as named, which is what keeps a model's name from churning.
+    const standIn: WorkspaceTitleState = { ...slugNamed, displayName: 'Audit the OAuth callback flow' };
+
+    expect(planWorkspaceTitle({ ...standIn, standIn: true })).toEqual({ provisional: null, mission: MISSION });
+    expect(planWorkspaceTitle(standIn)).toBe(null);
+    expect(planWorkspaceTitle({ ...standIn, standIn: true, nameOrigin: 'user' })).toBe(null);
   });
 
   test('persistAutoTitle is the race check and the write: the owner\'s rename wins', () => {
@@ -169,14 +175,11 @@ describe('automatic workspace titling — the decision', () => {
       setDisplayNameOrigin: (name: string, origin: NameOrigin) => { stored.name = name; stored.origin = origin; },
     };
 
-    expect(persistAutoTitle(config, 'Audit the OAuth callback flow', 'provisional')).toBe(true);
-    expect(stored).toEqual({ name: 'Audit the OAuth callback flow', origin: 'provisional' });
-    // A stand-in is still the system's, so the generated title replaces it.
-    expect(persistAutoTitle(config, 'OAuth Callback Audit', 'auto')).toBe(true);
-    expect(stored).toEqual({ name: 'OAuth Callback Audit', origin: 'auto' });
+    expect(persistAutoTitle(config, 'Audit the OAuth callback flow')).toBe(true);
+    expect(stored).toEqual({ name: 'Audit the OAuth callback flow', origin: 'auto' });
     stored.name = 'Keys Rotation';
     stored.origin = 'user';
-    expect(persistAutoTitle(config, 'Something Else', 'auto')).toBe(false);
+    expect(persistAutoTitle(config, 'OAuth Callback Audit')).toBe(false);
     expect(stored).toEqual({ name: 'Keys Rotation', origin: 'user' });
   });
 
@@ -196,8 +199,7 @@ describe('automatic workspace titling — the decision', () => {
 });
 
 describe('automatic workspace titling — applying it', () => {
-  /** A backend's persistence: the display name and the origin it was written
-   *  under, which is what distinguishes a stand-in from an answer. */
+  /** A backend's persistence: display name plus the 'auto' origin mark. */
   function workspace(state: Partial<WorkspaceTitleState> = {}) {
     const stored: WorkspaceTitleState = {
       slug: 'workspace-1a4e20',
@@ -207,12 +209,12 @@ describe('automatic workspace titling — applying it', () => {
       ...state,
     };
 
-    const persisted: Array<[string, NameOrigin]> = [];
+    const persisted: string[] = [];
 
-    const persist = (title: string, origin: NameOrigin) => {
-      persisted.push([title, origin]);
+    const persist = (title: string) => {
+      persisted.push(title);
       stored.displayName = title;
-      stored.nameOrigin = origin;
+      stored.nameOrigin = 'auto';
     };
 
     return { stored, persisted, persist };
@@ -223,40 +225,46 @@ describe('automatic workspace titling — applying it', () => {
     const suggest = async () => 'OAuth Callback Audit';
 
     expect(await applyWorkspaceTitle(stored, { persist, suggest })).toBe('OAuth Callback Audit');
-    expect(persisted).toEqual([
-      ['Audit the OAuth callback flow', 'provisional'],
-      ['OAuth Callback Audit', 'auto'],
-    ]);
+    expect(persisted).toEqual(['Audit the OAuth callback flow', 'OAuth Callback Audit']);
     expect(stored).toMatchObject({ displayName: 'OAuth Callback Audit', nameOrigin: 'auto' });
 
     expect(await applyWorkspaceTitle(stored, { persist, suggest })).toBe(null);
     expect(persisted).toHaveLength(2);
   });
 
-  test('a generation that failed leaves the stand-in STILL owed its upgrade', async () => {
+  test('a failed generation leaves the stand-in, and only the pass that owes the naming asks again', async () => {
     const { stored, persisted, persist } = workspace();
+    let suggested = 0;
 
-    // The failure reaches the caller — cf's maybeAutoTitle and the CLI's
-    // autoTitleLocalWorkspace both log it. Absorbed here, a dead review model
-    // and a refused `persist` would both report "titled".
+    const suggest = async () => {
+      suggested += 1;
+
+      return 'OAuth Callback Audit';
+    };
+
+    // The failure reaches the caller: on cf it keeps the genesis row owed, and
+    // the CLI logs it. Absorbed here, a dead review model and a refused
+    // `persist` would both report "titled".
     await expect(applyWorkspaceTitle(stored, {
       persist,
       suggest: async () => { throw new Error('no model configured'); },
     })).rejects.toThrow('no model configured');
-    expect(persisted).toEqual([['Audit the OAuth callback flow', 'provisional']]);
-    expect(stored).toMatchObject({ displayName: 'Audit the OAuth callback flow', nameOrigin: 'provisional' });
+    expect(persisted).toEqual(['Audit the OAuth callback flow']);
+    expect(stored).toMatchObject({ displayName: 'Audit the OAuth callback flow', nameOrigin: 'auto' });
 
-    // THE #18 CONTRACT. The stand-in landed, so nothing shows a placeholder —
-    // and the pass that failed is still owed, so the next one (the durable
-    // `auto_title` effect's retry) titles the workspace properly.
-    expect(planWorkspaceTitle(stored)).not.toBe(null);
-    expect(await applyWorkspaceTitle(stored, { persist, suggest: async () => 'OAuth Callback Audit' }))
-      .toBe('OAuth Callback Audit');
-    expect(stored).toMatchObject({ displayName: 'OAuth Callback Audit', nameOrigin: 'auto' });
+    // A later pass reads the stand-in as named and asks no model.
+    expect(await applyWorkspaceTitle(stored, { persist, suggest })).toBe(null);
+    expect(suggested).toBe(0);
+
+    // The pass the naming is owed by (the genesis row's retry) replaces it,
+    // and writes only the model's name.
+    expect(await applyWorkspaceTitle({ ...stored, standIn: true }, { persist, suggest })).toBe('OAuth Callback Audit');
+    expect(persisted).toEqual(['Audit the OAuth callback flow', 'OAuth Callback Audit']);
+    expect(suggested).toBe(1);
   });
 
-  test('a name the operator chose is never overwritten, and no model is called', async () => {
-    const { stored, persisted, persist } = workspace({ nameOrigin: 'user' });
+  test('a name the operator chose is never overwritten, even by the naming it was owed, and no model is called', async () => {
+    const { stored, persisted, persist } = workspace({ displayName: 'Jarvis', nameOrigin: 'user', standIn: true });
     let suggested = 0;
 
     expect(await applyWorkspaceTitle(stored, {
@@ -269,7 +277,7 @@ describe('automatic workspace titling — applying it', () => {
     })).toBe(null);
     expect(persisted).toEqual([]);
     expect(suggested).toBe(0);
-    expect(stored.displayName).toBe('workspace-1a4e20');
+    expect(stored.displayName).toBe('Jarvis');
   });
 
   test('a manual rename that lands during title generation rejects the stale suggestion', async () => {
@@ -278,9 +286,9 @@ describe('automatic workspace titling — applying it', () => {
     const suggestion = new Promise<string>((resolve) => { resolveSuggestion = resolve; });
 
     const pending = applyWorkspaceTitle(stored, {
-      persist: (title, origin) => {
+      persist: (title) => {
         if (stored.nameOrigin === 'user') return false;
-        persist(title, origin);
+        persist(title);
 
         return true;
       },
@@ -295,37 +303,32 @@ describe('automatic workspace titling — applying it', () => {
     resolveSuggestion('OAuth Callback Audit');
 
     expect(await pending).toBe(null);
-    expect(persisted).toEqual([['Audit the OAuth callback flow', 'provisional']]);
+    expect(persisted).toEqual(['Audit the OAuth callback flow']);
     expect(stored).toMatchObject({ displayName: 'Jarvis', nameOrigin: 'user' });
   });
 
-  test('a suggestion that repeats the stand-in still closes the sequence', async () => {
-    // The second write carries the same string and a different ORIGIN, and the
-    // origin is the point: without it the title stays provisional and every
-    // later turn re-plans and pays for another model call to be told the same
-    // thing. An empty suggestion answers nothing, so the stand-in stands and
-    // stays owed.
+  test('a repeated or empty suggestion never writes twice', async () => {
     const { stored, persisted, persist } = workspace();
 
     await applyWorkspaceTitle(stored, { persist, suggest: async () => 'Audit the OAuth callback flow' });
-    expect(persisted).toEqual([
-      ['Audit the OAuth callback flow', 'provisional'],
-      ['Audit the OAuth callback flow', 'auto'],
-    ]);
-    expect(stored.nameOrigin).toBe('auto');
-    expect(planWorkspaceTitle(stored)).toBe(null);
+    expect(persisted).toEqual(['Audit the OAuth callback flow']);
 
     const fresh = workspace();
     await applyWorkspaceTitle(fresh.stored, { persist: fresh.persist, suggest: async () => '  ' });
-    expect(fresh.persisted).toEqual([['Audit the OAuth callback flow', 'provisional']]);
-    expect(planWorkspaceTitle(fresh.stored)).not.toBe(null);
+    expect(fresh.persisted).toEqual(['Audit the OAuth callback flow']);
+
+    // The owed naming over a stand-in the model repeats changes nothing.
+    const named = workspace({ displayName: 'Audit the OAuth callback flow', standIn: true });
+    expect(await applyWorkspaceTitle(named.stored, { persist: named.persist, suggest: async () => 'Audit the OAuth callback flow' }))
+      .toBe(null);
+    expect(named.persisted).toEqual([]);
   });
 
   test('without a titling model the deterministic title is still applied', async () => {
     const { stored, persisted, persist } = workspace();
 
     expect(await applyWorkspaceTitle(stored, { persist })).toBe('Audit the OAuth callback flow');
-    expect(persisted).toEqual([['Audit the OAuth callback flow', 'provisional']]);
+    expect(persisted).toEqual(['Audit the OAuth callback flow']);
   });
 });
 

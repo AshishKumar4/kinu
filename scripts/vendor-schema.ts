@@ -30,7 +30,7 @@ import { Database } from 'bun:sqlite';
 import { readFileSync, readdirSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 import { assertMeasured } from './gate-ratchet';
-import { tablesIn } from './schema-drift';
+import { columnsOf, tablesIn } from './schema-drift';
 import { isParseable, isTestFile, readMatching } from './sources';
 import { parse, walk } from './syntax';
 
@@ -130,7 +130,7 @@ function kinuStandIns(vendor: ReadonlyMap<string, VendorTable>, sources: Readonl
     if (vendor.has(table.table)) continue;
     const known = columns.get(table.table) ?? new Set<string>();
 
-    for (const column of table.columns) known.add(column);
+    for (const column of columnsOf(table.parts)) known.add(column);
     columns.set(table.table, known);
   }
 
