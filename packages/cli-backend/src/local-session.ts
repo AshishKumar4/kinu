@@ -180,7 +180,7 @@ import { TierIdSchema,
   // handoff turn.
   PlanReviewActions, SUBMIT_PLAN_TOOL, planHandoffKey, planHandoffTurn, workModeUnderReview,
   type PlanEdit, type PlanReview, type PlanReviewAnnotation, type PlanReviewDecision,
-  type PlanReviewResult, type PlanReviewStore,
+  type PlanReviewResult,
   // The ONE turn loop, and the transcript store the local backend keeps it over.
   ChatSession, CHAT_SESSION_ID,
   type ChatTurnInput, type PreparedTurn, type OwedTerminalEffectsInput, type SessionEvent,
@@ -201,7 +201,6 @@ import {
   STATIC_MODEL_SPEC, resolverModelPlane, staticModelPlane,
   type LocalProfileAuthority, type ProfileAuthorityRefinement, type ProfileEnvelopeSource,
 } from './profile-authority';
-
 
 /**
  * This session's actor as the ROOT's host bound it.
@@ -867,8 +866,6 @@ export class LocalAgentSession implements BackendHost {
     this.factsStore = stores.facts;
     this.eventRecorder = stores.eventRecorder;
 
-
-
     // The EventsHub substrate (reactor source of truth). A local workspace has
     // two ingresses, a due timer and a settled background job; both publish
     // into the log and drain via AgentOrchestrator. The release board is the
@@ -1497,13 +1494,9 @@ export class LocalAgentSession implements BackendHost {
   // re-implementation. What this session adds is the fan-out (`plan_updated`)
   // and the handoff turn, which is the half that is platform-shaped.
 
-  private get planReviews(): PlanReviewStore {
-    return this.stores.planReviews;
-  }
-
   /** The review as the owner drives it; every change reaches the session's watchers. */
   private get planActions(): PlanReviewActions {
-    this._planActions ??= new PlanReviewActions(this.planReviews, (plan) => this.broadcast({ type: 'plan_updated', plan }));
+    this._planActions ??= new PlanReviewActions(this.stores.planReviews, (plan) => this.broadcast({ type: 'plan_updated', plan }));
 
     return this._planActions;
   }
@@ -1567,7 +1560,7 @@ export class LocalAgentSession implements BackendHost {
       return {
         ok: false,
         error: `${refusal.error}. Decide this plan from the session driving the conversation.`,
-        plan: this.planReviews.get(id, revision),
+        plan: this.stores.planReviews.get(id, revision),
       };
     }
 
@@ -1580,7 +1573,7 @@ export class LocalAgentSession implements BackendHost {
     const { text, metadata } = planHandoffTurn(plan, decision);
 
     try {
-      const attempt = this.planReviews.handoffAttempt(plan.id, plan.revision);
+      const attempt = this.stores.planReviews.handoffAttempt(plan.id, plan.revision);
 
       const handoff = this.enqueueTurn({
         text, metadata, idempotencyKey: planHandoffKey(plan, decision, attempt),
@@ -3520,7 +3513,6 @@ export class LocalAgentSession implements BackendHost {
     return filterToolSetBySkills(this.tools, activeSkills);
   }
 
-
   /**
    * This session's view for the scaffold evolution control plane: the ports a
    * candidate loop runs against, plus the models it needs. The plane itself is
@@ -4049,7 +4041,7 @@ export class LocalAgentSession implements BackendHost {
 
     if (!this.planReviewSurface()) return requested;
 
-    return workModeUnderReview(requested, metadata, this.planReviews.getActive(CHAT_SESSION_ID));
+    return workModeUnderReview(requested, metadata, this.stores.planReviews.getActive(CHAT_SESSION_ID));
   }
 
   private agentsToolDeps(mode: WorkMode): AgentsToolDeps {

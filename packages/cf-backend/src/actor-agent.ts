@@ -164,7 +164,7 @@ import {
   // Heads support (inherited-context digest)
   inheritedContextFromTranscript,
   type ReleaseToolDeps,
-  PlanReviewActions, PlanReviewStore, planHandoffKey, planHandoffTurn,
+  PlanReviewActions, planHandoffKey, planHandoffTurn,
   type PlanEdit, type PlanReview, type PlanReviewAnnotation,
   type PlanReviewDecision, type PlanReviewResult, type SubmitPlanToolDeps,
   isVfsError,
@@ -391,7 +391,6 @@ const CLI_AUTHORITY_REVOKED = 'This CLI authorization is invalid. Sign in again 
 
 const SESSION_AUTHORITY_REVOKED = 'This session has been signed out. Sign in again.';
 
-
 const PlanApprovalMetadataSchema = v.looseObject({
   kinuEvent: v.literal('plan_approved'), planId: v.string(),
   revision: v.pipe(v.number(), v.integer(), v.minValue(1)), decision: v.literal('approve'),
@@ -573,8 +572,6 @@ const CODEMODE_TOOL_TOOL = 'eval' satisfies BuiltinToolName;
  *  callback as `keyof this`, which excludes protected members. */
 export const TERMINAL_RETRY_CALLBACK = '_kinuTerminalRetryTick';
 
-
-
 export interface ActorDynamicContextExtras {
   readonly approvals?: () => ActiveRoster<DynamicApproval>;
   readonly extraMissingCapabilities?: () => readonly MissingCapability[];
@@ -584,8 +581,6 @@ interface WorkspaceTitleInputs {
   readonly displayName: string | null;
   readonly nameOrigin: NameOrigin | null;
 }
-
-
 
 /** The failure classes under which a turn runs on builtins alone because the
  *  owner's MCP catalog could not be reached or finished: a hop that failed, timed
@@ -871,7 +866,7 @@ export abstract class ActorAgent extends Agent<Env> {
     const key = item.idempotencyKey ?? '';
 
     if (!key.startsWith(prefix) || !/^\d+$/.test(key.slice(prefix.length))) return null;
-    const plan = this.planReviews.get(input.planId, input.revision);
+    const plan = this.stores.planReviews.get(input.planId, input.revision);
 
     if (plan?.status === 'approved' && plan.sessionId === 'default') {
       return Object.freeze({ id: plan.id, revision: plan.revision, sessionId: plan.sessionId });
@@ -882,14 +877,9 @@ export abstract class ActorAgent extends Agent<Env> {
 
   private _planActions: PlanReviewActions | null = null;
 
-  /** One SQL-backed review stream, local to this actor's durable storage. */
-  protected get planReviews(): PlanReviewStore {
-    return this.stores.planReviews;
-  }
-
   /** The review as the owner drives it; every change reaches the clients. */
   private get planActions(): PlanReviewActions {
-    this._planActions ??= new PlanReviewActions(this.planReviews, (plan) => this.host.broadcast({ type: 'plan_updated', plan }));
+    this._planActions ??= new PlanReviewActions(this.stores.planReviews, (plan) => this.host.broadcast({ type: 'plan_updated', plan }));
 
     return this._planActions;
   }
@@ -944,7 +934,7 @@ export abstract class ActorAgent extends Agent<Env> {
     });
 
     try {
-      let attempt = this.planReviews.handoffAttempt(plan.id, plan.revision);
+      let attempt = this.stores.planReviews.handoffAttempt(plan.id, plan.revision);
       let queued = await enqueue(attempt);
 
       if (queued.status === 'skipped'
@@ -953,7 +943,7 @@ export abstract class ActorAgent extends Agent<Env> {
         && (queued.durable.status === 'aborted'
           || queued.durable.status === 'skipped'
           || queued.durable.status === 'error')) {
-        attempt = this.planReviews.advanceHandoffAttempt(plan.id, plan.revision, attempt);
+        attempt = this.stores.planReviews.advanceHandoffAttempt(plan.id, plan.revision, attempt);
         queued = await enqueue(attempt);
       }
 
@@ -975,7 +965,6 @@ export abstract class ActorAgent extends Agent<Env> {
       };
     }
   }
-
 
   // ── The subordinate tree ────────────────────────────────────────────
   // Hoisted here from the orchestrator when `hire` became recursive: an actor
@@ -1472,7 +1461,6 @@ export abstract class ActorAgent extends Agent<Env> {
     // The client seeds each room from its durable transcript.
     const dispatchRequest = this.onRequest.bind(this);
 
-
     this.onRequest = async (request) => {
       const url = new URL(request.url);
 
@@ -1518,7 +1506,6 @@ export abstract class ActorAgent extends Agent<Env> {
     return this.chatLoop;
   }
 
-
   /** The reconnect snapshot reads SQL, not the RAM drain: RAM vanishes on an
    *  eviction while these rows are the acknowledged steers still awaiting a
    *  step boundary. A STEER is a row bound to a turn — accepted mid-turn, or
@@ -1531,7 +1518,6 @@ export abstract class ActorAgent extends Agent<Env> {
       .filter((row) => row.turnId !== null)
       .map((row) => ({ id: row.id, text: row.text, state: 'queued' as const, atStep: null }));
   }
-
 
   // ── The terminal transition ───────────────────────────────────────────
   //
@@ -1560,7 +1546,6 @@ export abstract class ActorAgent extends Agent<Env> {
   // recognisably-identical message rather than a second one. The claim below
   // decides whether the sequence is re-entered; the key decides what a
   // re-entered send means.
-
 
   /**
    * The effect bodies EVERY actor here shares.
@@ -1741,7 +1726,6 @@ export abstract class ActorAgent extends Agent<Env> {
     // never mistaken for one still running.
     return this.eventRecorder.openTurn()?.turn.turnId === turnId;
   }
-
 
   /**
    * Idempotent soonest-wins arm of ONE durable wake row for `callback`.
@@ -1935,7 +1919,6 @@ export abstract class ActorAgent extends Agent<Env> {
     await this.terminal.replayOwedAndRearm();
   }
 
-
   /** Whether anything anywhere still owes this actor a wake: untimed work,
    *  or a timed obligation with an instant. The activation asks this to arm
    *  at all; the tick asks the two halves separately, because they decide
@@ -1982,7 +1965,6 @@ export abstract class ActorAgent extends Agent<Env> {
    */
   protected _terminalClockSkewMs = 0;
 
-
   /** The durable identity of the turn now settling — the id of the message it
    *  opened on. Read at the START of a terminal sequence and carried through
    *  it, because the loop's live turn is the NEXT one as soon as it opens, and
@@ -1998,9 +1980,6 @@ export abstract class ActorAgent extends Agent<Env> {
     // with a sibling actor's turn the way the old single `id = 1` row could.
     return this.stores.claims.unsettled(1)[0]?.turnId ?? null;
   }
-
-
-
 
   /**
    * The installed build this host publishes for its BUILTIN loop.
@@ -2094,7 +2073,6 @@ export abstract class ActorAgent extends Agent<Env> {
     owner.promise = task;
     this._terminalReported = task;
   }
-
 
   /**
    * The provider and model dimensions of a fleet row, for the actor's own model.
@@ -3372,7 +3350,6 @@ export abstract class ActorAgent extends Agent<Env> {
     return this._mcpToolsCache;
   }
 
-
   // The eval factory is built once per DO lifetime. Its sandbox
   // reads craftStore.list() on every execute call, so newly-saved tools appear
   // on the next eval invocation without any registry or cache
@@ -4090,7 +4067,6 @@ export abstract class ActorAgent extends Agent<Env> {
     return this._instructionTrust;
   }
 
-
   /** The workspace root's authoritative approval rows. Facets fetch this before
    * each turn; they never consult their private actor SQL for shared files. */
   @callable()
@@ -4281,7 +4257,6 @@ export abstract class ActorAgent extends Agent<Env> {
   protected get chatTranscript(): SessionTranscript {
     return this._chatTranscript ??= this.stores.history.transcript(CHAT_SESSION_ID);
   }
-
 
   /** Persisted once per activation. Both tracing and live MCTS frames consume
    * this getter, so observing one cannot advance the other into a new isolate. */
@@ -5405,7 +5380,6 @@ export abstract class ActorAgent extends Agent<Env> {
    */
   protected abstract promptIdentity(): Promise<PromptIdentity>;
 
-
   /**
    * The shared naming round-trip: the same prompt and parser the create path
    * uses.
@@ -5466,7 +5440,6 @@ export abstract class ActorAgent extends Agent<Env> {
       return result.text;
     }, mission);
   }
-
 
   /**
    * Compute a lightweight cache key from CraftStore + quality state. Quality
@@ -5662,7 +5635,6 @@ export abstract class ActorAgent extends Agent<Env> {
    * search deps are shallow-copied per child, and sharing one seat would give
    * a whole wave one claim ledger and one loop pointer.
    */
-
 
   /**
    * ONE actor's recent conversation, handed to each spawned head so it sees the
@@ -6245,7 +6217,6 @@ export abstract class ActorAgent extends Agent<Env> {
     const systemOverride = buildSystemPromptSync(this.rt, promptOptions);
     this.recordSystemPromptHash(systemOverride);
 
-
     const languageModel = this.turnModel(profile.tier.model);
 
     // The measured compaction trigger, read from the durable state by core in
@@ -6295,14 +6266,12 @@ export abstract class ActorAgent extends Agent<Env> {
       return entry === undefined ? [] : [[name, entry]];
     }));
 
-
     const countInputTokens = (request: CountableRequest): Promise<InputTokenCount> => countRequestInputTokens(
       providers.registry.get(tierModel.provider), tierModel.modelId, providers.deps, request,
     );
 
     const taskPlan: TaskPlanContext = Object.freeze({ sql: Object.freeze([this.boundSql, this.rt.storage.sql]), plan: this.approvedTaskPlan() });
     const tools = withOperationProfile(withTaskPlan(toolsForInvocation(workMode, { ...modeTools, ...effectiveTools }), taskPlan), operation);
-
 
     // uses (prompting/cache-breakpoints.ts `promptCachePlan`), so a change to
     // strategy resolution, system eligibility or routing reaches both loops.
@@ -6333,12 +6302,10 @@ export abstract class ActorAgent extends Agent<Env> {
     };
   }
 
-
   /** The in-flight turn's resolved context window — set in beforeTurn, read
    *  by beforeStep's prune budget every step. */
   protected _turnContextWindow = 0;
   private _turnOriginContext: readonly ModelMessage[] = [];
-
 
   /**
    * The planes only a subclass's own stores can answer, as typed source

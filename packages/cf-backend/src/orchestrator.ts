@@ -1235,7 +1235,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   }
 
   protected override workModeForMetadata(metadata: JsonObject | undefined): WorkMode {
-    return workModeUnderReview(super.workModeForMetadata(metadata), metadata, this.planReviews.getActive(CHAT_SESSION_ID));
+    return workModeUnderReview(super.workModeForMetadata(metadata), metadata, this.stores.planReviews.getActive(CHAT_SESSION_ID));
   }
 
 
