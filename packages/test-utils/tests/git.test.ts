@@ -14,11 +14,7 @@ const repo = (): string => {
 };
 
 describe('the git test fixture', () => {
-  /* The defect this exists for, exactly: a git hook exports GIT_DIR, git obeys
-     it over `cwd`, and a fixture that spelled its target as `cwd` committed into
-     the developer's checkout instead — four failed pushes, four junk commits.
-     These tests run WITH that environment set, because a fixture proven only in
-     a clean shell proves nothing about the case that broke. */
+  /* A git hook exports GIT_DIR, which git obeys over `cwd`; these tests run with it set. */
   const underHook = <T>(elsewhere: string, run: () => T): T => {
     const saved = { dir: process.env.GIT_DIR, work: process.env.GIT_WORK_TREE };
     process.env.GIT_DIR = join(elsewhere, '.git');

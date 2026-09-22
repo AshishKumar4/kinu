@@ -1,13 +1,6 @@
 /**
- * The strip that keeps a signed-in shell out of the suites, and the wiring that
- * makes it actually happen.
- *
- * Both halves are here on purpose. The rule itself is pure and cheap to assert;
- * the part that broke was never the rule, it was that no rule existed and the
- * per-file blanks each covered a different subset. So the last two cases run the
- * preload module for real, with the credentials exported, and read back what a
- * test process would see — the same shape of proof as asserting a bunfig
- * pattern rather than trusting it.
+ * The last cases run the preload for real with credentials exported and read back what a
+ * test process sees.
  */
 
 import { describe, expect, test } from 'bun:test';
@@ -50,9 +43,8 @@ const SIGNED_IN_SHELL = {
 
 describe('the rule', () => {
   test('every target the live-model resolver reads is a target the strip removes', () => {
-    // Derived from one declaration rather than listed twice: a resolver taught a
-    // new spelling gains the strip on the same commit. Cross-checked against
-    // both halves so a flatten that silently dropped the arrays would fail.
+    // Derived from one declaration; cross-checked against both halves so a flatten that
+    // dropped the arrays fails.
     expect(AMBIENT_CREDENTIAL_ENV).toContain(LIVE_MODEL_ENV.origin);
     expect(AMBIENT_CREDENTIAL_ENV).toContain(LIVE_MODEL_ENV.token);
 
@@ -60,8 +52,7 @@ describe('the rule', () => {
       for (const name of names) expect(AMBIENT_CREDENTIAL_ENV).toContain(name);
     }
 
-    // Enumerated, not counted: a bare length cannot say which name arrived or
-    // left, and this set is the contract two runners depend on.
+    // Enumerated, not counted: this set is the contract two runners depend on.
     expect([...AMBIENT_CREDENTIAL_ENV].sort()).toEqual([
       'AI_GATEWAY_AUTH', 'AI_GATEWAY_BASE_URL', 'AI_GATEWAY_MODEL',
       'KINU_AUTH', 'KINU_BASE_URL', 'KINU_MODEL', 'KINU_ORIGIN', 'KINU_TOKEN',
@@ -76,10 +67,8 @@ describe('the rule', () => {
   });
 
   test('an exported-but-empty variable is removed, not left as an empty string', () => {
-    // `KINU_BASE_URL=` is what someone trying to CLEAR the variable produces,
-    // and an empty string is not absence: scripts/tbench-arm.sh refuses on
-    // exactly this shape because the adapter resolves the empty value in
-    // preference to its own default. Presence is the test, never truthiness.
+    // An empty string is not absence (`scripts/tbench-arm.sh` refuses it too): presence is the
+    // test, never truthiness.
     const env = { KINU_BASE_URL: '', KINU_AUTH: 'Bearer x' };
     expect([...stripAmbientCredentials(envObject(env))].sort()).toEqual(['KINU_AUTH', 'KINU_BASE_URL']);
     expect(Object.keys(env)).toEqual([]);
@@ -100,15 +89,10 @@ describe('the wiring', () => {
   });
 
   test('a test process started from a signed-in shell sees no credential', () => {
-    // The whole point, proven by running the preload rather than by reading it.
-    // Without the strip this returns the two values it was given.
     const env = envAfterPreload(SIGNED_IN_SHELL);
 
     for (const name of AMBIENT_CREDENTIAL_ENV) expect(env[name]).toBeUndefined();
-    // And the ownership it already had is still in place: the throwaway home
-    // is the `home` child of the process TMPDIR, and TMPDIR itself sits in the
-    // shared `kinu-scratch-` namespace the release owns — not any incidental
-    // prefix spelling.
+    // The throwaway home is `$TMPDIR/home`, and TMPDIR sits in the release-owned `kinu-scratch-` namespace.
     expect(basename(env.KINU_HOME)).toBe('home');
     expect(env.KINU_HOME).toBe(join(env.TMPDIR, 'home'));
     expect(basename(env.TMPDIR)).toStartWith(SCRATCH_ROOT_PREFIX);

@@ -1,33 +1,7 @@
 /**
- * The seam's own tests — the target-agnostic half, which is the half that has to
- * be right for a two-target suite to mean anything.
- *
- * THE CENTRAL CASE is `stepBoundEvidence` over the production signature.
- * `agent://SwarmNoopRootCause` measured four capped runs across two workspaces:
- * exactly ten `step_finish` rows, the last one's reason `tool-calls`, and
- * `run_end: 'completed'`. Nothing in the ledger distinguished that from a turn
- * that genuinely finished, which is why the defect shipped and why every suite
- * over it stayed green. So the reducer is tested BOTH directions on that exact
- * shape: it must flag the capped trail and must not flag the natural one.
- *
- * `ledgerTotalsFromEvents` is tested on the numbers the local harness's walk
- * produces, because the harness delegates to it and a reducer that quietly
- * counted differently would move every denominator in the corpus.
- *
- * The spend recorder is tested on what it COUNTS, because there is nothing left
- * for it to refuse: `workspaceSpend` aggregates over the whole log on both
- * targets, so the read model carries no `complete` and no `windowLimit` and no
- * windowed total can reach it. What it does own is the accounting a reader
- * depends on — an episode that accounted for nothing counts as UNMEASURED
- * rather than as a silent zero, two episodes accumulate into the one meter both
- * arms report through, and calls the provider never measured are counted apart
- * from the tokens.
- *
- * `probeVerifier` is tested BOTH directions on the shape that shipped broken. It
- * is the one instrument the two arms must run identically, which is why it lives
- * in the seam rather than in either target, and the failure it reproduces is a
- * shell that answers the command without printing the marker — exactly what the
- * deployed Nimbus `node` shim does to an `exec-ratio` harness.
+ * `stepBoundEvidence` is tested both ways on the production signature: ten `step_finish` rows,
+ * the last `tool-calls`, and `run_end: 'completed'`. `probeVerifier` is tested both ways on a
+ * shell that answers without printing the marker, as the deployed Nimbus `node` shim does.
  */
 import { describe, expect, test } from 'bun:test';
 import type { RunEvent, VFS, WorkspaceSpend } from '@kinu.run/core';
@@ -49,15 +23,12 @@ const RUN = 'run-test';
 
 let nextIndex = 0;
 
-/** One variant's own fields, the three base fields removed. Distributed over
- *  the union so each variant keeps its own shape. */
+/** Distributed over the union so each variant keeps its own shape. */
 type EventBody<Variant = RunEvent> = Variant extends RunEvent
   ? Omit<Variant, 'runId' | 'eventIndex' | 'timestamp'>
   : never;
 
-/** One stamped event. The union is wide and only a few variants matter here, so
- *  the caller passes the discriminated body and this supplies the base fields
- *  every variant shares. */
+/** Supplies the base fields every variant shares. */
 function event(body: EventBody): RunEvent {
   nextIndex += 1;
 
@@ -69,8 +40,7 @@ function event(body: EventBody): RunEvent {
   };
 }
 
-/** The exact production trail: ten steps, the last still calling tools, and a
- *  run that called itself completed. */
+/** The production trail: ten steps, the last still calling tools, run reported completed. */
 function cappedTrail(): RunEvent[] {
   nextIndex = 0;
   const events: RunEvent[] = [event({ type: 'turn_start', turnIndex: 0 })];
@@ -86,8 +56,7 @@ function cappedTrail(): RunEvent[] {
   return events;
 }
 
-/** The one naturally-finished run the same investigation found: five steps, last
- *  reason `stop`. */
+/** A naturally finished run: five steps, last reason `stop`. */
 function naturalTrail(): RunEvent[] {
   nextIndex = 0;
   const events: RunEvent[] = [event({ type: 'turn_start', turnIndex: 0 })];
@@ -110,16 +79,12 @@ describe('stepBoundEvidence — the divergence probe', () => {
     expect(evidence.steps).toBe(10);
     expect(evidence.lastStepReason).toBe('tool-calls');
     expect(evidence.runEndReasons).toEqual(['completed']);
-    // The pair is the whole finding: `truncated` beside `completed` is a cut the
-    // ledger reported as a completion. Either half alone is unremarkable.
+    // `truncated` beside `completed` is the finding; either alone is unremarkable.
     expect(evidence.truncated).toBe(true);
   });
 
   test('a turn that finished on its own is NOT flagged', () => {
-    // The red direction. A probe that called every run truncated would pass the
-    // case above while proving nothing — precisely how the assertion it replaces
-    // (`UNBOUNDED_STEPS(impossibleInput) === false`) stayed true while
-    // production was capped at ten.
+    // Red direction: a probe calling every run truncated would pass the case above.
     const evidence = stepBoundEvidence(naturalTrail());
     expect(evidence.steps).toBe(5);
     expect(evidence.lastStepReason).toBe('stop');
@@ -161,9 +126,7 @@ describe('ledgerTotalsFromEvents — one reducer, both targets', () => {
       event({ type: 'run_end', reason: 'error', error: 'provider refused' }),
     ]);
 
-    // Named, because "0 tool calls" is equally consistent with a model that
-    // declined to act and a provider that rejected every request, and a
-    // degenerate run that cannot say which is a dead end for whoever reads it.
+    // Named: "0 tool calls" fits both a declining model and a provider rejecting every request.
     expect(totals.failures).toEqual(['shell: exit 127', 'run_end: provider refused']);
   });
 
@@ -178,9 +141,7 @@ describe('ledgerTotalsFromEvents — one reducer, both targets', () => {
   });
 
   test('an empty ledger reports zeroes rather than throwing', () => {
-    // The zero-denominator case. It must be reachable and readable: a suite
-    // decides `inert` from these numbers, and a reducer that threw here would
-    // turn an observation about the agent into a harness fault.
+    // The zero-denominator case must be readable: a suite decides `inert` from these numbers.
     expect(ledgerTotalsFromEvents([])).toEqual({
       turns: 0, toolCalls: 0, toolNames: [], tokensIn: 0, tokensOut: 0,
       reasoningOut: 0, steps: 0, failures: [],
@@ -205,17 +166,14 @@ describe('recordWorkspaceSpend — one meter, two readers', () => {
     recordWorkspaceSpend(spendOf(0));
     const spend = liveModelSpend();
     expect(spend.calls).toBe(0);
-    // An episode that ran and cannot say what it cost is a hole in the
-    // measurement and has to read as one. A zero recorded as a zero would make
-    // "measured nothing" and "cost nothing" the same reading.
+    // An episode that cannot say what it cost reads as unmeasured, not as zero.
     expect(spend.episodesUnmeasured).toBe(1);
     resetLiveModelSpend();
   });
 
   test('an episode declared to drive no model is a measured zero, and one that spent is refused', () => {
-    // The first-run tier has cases that drive no model by design (a file-plane
-    // read, a pty keystroke). Declared, their zero is a measurement rather than
-    // a hole; a declaration the store contradicts is the case's own defect.
+    // Model-free cases declare it, making their zero a measurement; a declaration the store
+    // contradicts is the case's own defect.
     resetLiveModelSpend();
     recordNoModelEpisode(spendOf(0));
     expect(liveModelSpend()).toMatchObject({ calls: 0, episodesUnmeasured: 0, episodesWithoutModel: 1 });
@@ -225,10 +183,7 @@ describe('recordWorkspaceSpend — one meter, two readers', () => {
   });
 
   test('two episodes accumulate into the same meter both arms report through', () => {
-    // The local target computes its own `WorkspaceSpend` from the store it owns;
-    // the cloud target reads one over RPC. This is the accumulator they share,
-    // and sharing it is what stops the cloud arm growing a second definition of
-    // what a workspace spent.
+    // Local and cloud targets share this accumulator: one definition of workspace spend.
     resetLiveModelSpend();
     recordWorkspaceSpend(spendOf(3));
     recordWorkspaceSpend(spendOf(2));
@@ -240,9 +195,7 @@ describe('recordWorkspaceSpend — one meter, two readers', () => {
   });
 
   test('calls the provider never measured are counted apart from the tokens', () => {
-    // `callsWithoutUsage` is why the tier can print "N call(s), usage
-    // unreported" instead of a total that silently omits them. Unmeasured spend
-    // is real spend.
+    // `callsWithoutUsage` lets the tier print "N call(s), usage unreported" instead of omitting them.
     resetLiveModelSpend();
     recordWorkspaceSpend({
       ...spendOf(4),
@@ -271,8 +224,7 @@ describe('resolveEvalBackend — the one knob', () => {
   });
 
   test('a typo is REFUSED, never silently the free arm', () => {
-    // A typo that quietly ran local would report a local measurement under a
-    // cloud arm's banner, which is the class of error this seam removes.
+    // A typo that ran local would report a local measurement under a cloud banner.
     const refused = resolveEvalBackend({ [EVAL_BACKEND_ENV]: 'Cloud' });
     expect(refused.kind).toBe('refused');
 
@@ -283,12 +235,8 @@ describe('resolveEvalBackend — the one knob', () => {
 });
 
 /**
- * A workspace whose shell answers whatever it is told to, and remembers what the
- * probe left behind.
- *
- * Only the members the probe touches are real; the rest throw, so a probe that
- * started reading something else would fail here rather than pass over a silent
- * default.
+ * Only the members the probe touches are real; the rest throw, so a new read fails instead
+ * of passing over a default.
  */
 function fakeWorkspace(reply: { stdout: string; exitCode: number }): FakeWorkspace {
   const written = new Map<string, string>();
@@ -340,21 +288,16 @@ describe('probeVerifier — the one instrument both arms run', () => {
     expect(probe.kind).toBe('runs');
 
     if (probe.kind !== 'runs') throw new Error('unreachable');
-    // The evidence is what the shell SAID, so a reader can see which shell
-    // answered rather than taking the verdict on trust.
+    // The evidence is the shell's output, so a reader sees which shell answered.
     expect(probe.evidence).toBe('KINU_VERIFIER_PROBE_OK');
-    // It writes a module and runs `node` on it, because that is the smallest
-    // instance of what `exec-ratio` does.
+    // `node` on a written module is the smallest instance of `exec-ratio`.
     expect(commands).toEqual(['node _verifier_probe.mjs']);
     expect(written.size, 'the probe module must not outlive the probe').toBe(0);
   });
 
   test('a shell that answers WITHOUT the marker is unavailable, and says what it said', async () => {
-    // THE PRODUCTION SHAPE. The deployed Nimbus `node` shim resolves
-    // `esbuild-wasm` to its Node entrypoint, which rejects the `wasmModule`
-    // option, so the transform fails and no RESULT line is printed. A probe that
-    // asked whether a shell EXISTS answered yes throughout — this one refuses on
-    // the verdict, which is the whole reason it runs the command.
+    // Production shape: the Nimbus `node` shim resolves `esbuild-wasm` to its Node entry, which
+    // rejects `wasmModule`, so no RESULT line prints.
     const { workspace } = fakeWorkspace({
       stdout: 'error: Cannot use "wasmModule" outside a browser\n', exitCode: 1,
     });
@@ -364,15 +307,13 @@ describe('probeVerifier — the one instrument both arms run', () => {
 
     if (probe.kind !== 'unavailable') throw new Error('unreachable');
     expect(probe.reason).toContain('exited 1');
-    // The shell's own words survive: a refusal that hid the cause would trade one
-    // unreadable failure for another.
+    // The shell's own words survive in the refusal.
     expect(probe.reason).toContain('wasmModule');
     expect(probe.reason).toContain("score:'verify'");
   });
 
   test('a shell that refuses the command outright is unavailable, never a throw', async () => {
-    // A throw here would abort the arm before it could report WHY it cannot
-    // measure, and "the verifier is unavailable" with no cause is not a remedy.
+    // No throw: the arm must be able to report why it cannot measure.
     const probe = await probeVerifier({
       vfs: fakeWorkspace({ stdout: '', exitCode: 0 }).workspace.vfs,
       exec: () => Promise.reject(new Error('no executor on this target')),
@@ -394,10 +335,8 @@ describe('RUN_END_FAILURE_PREFIX — one spelling, producer and consumer', () =>
       event({ type: 'run_end', reason: 'error', error: 'Internal Server Error' }),
     ]);
 
-    // A TOOL failure is the agent's episode and carries the tool's name; the
-    // TURN's own provider error carries this prefix, and the eval harness's
-    // infra-vs-behaviour rule matches on it. Two literals would agree until one
-    // of them changed.
+    // Tool failures carry the tool name; the turn's provider error carries this prefix, which the
+    // harness's infra-vs-behaviour rule matches.
     expect(totals.failures).toEqual([
       'shell: exit 1',
       `${RUN_END_FAILURE_PREFIX}Internal Server Error`,

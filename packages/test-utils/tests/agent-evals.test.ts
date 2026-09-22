@@ -1,14 +1,6 @@
 /**
- * The scorers' own tests — the half that makes a green live assertion mean
- * anything.
- *
- * Each scorer gets three cases: a populated store where it reports a non-zero
- * denominator and a pass, a populated store where the specific defect it exists
- * for is present and it reports a FAIL, and an empty store where it reports a
- * ZERO denominator rather than a pass. The third is the important one: this
- * repo's signature defect is a check that reports clean over nothing, and a
- * scorer is only trustworthy if "I looked at nothing" is distinguishable from
- * "I looked and it was fine".
+ * Each scorer: a pass, its defect going red, and an empty store reporting a zero
+ * denominator rather than a pass.
  */
 import { describe, test, expect } from 'bun:test';
 import {
@@ -24,15 +16,8 @@ import {
 } from '../src/agent-evals';
 
 /**
- * Every table the Exploration reader touches, and the actor that owns the
- * actor-private half of them. Note that `initSearchTables` alone is not
- * enough: `queryCompetedRuns` LEFT JOINs `mcts_search_runs`, which a different
- * initialiser owns, so a fixture that seeds only `search_nodes` makes the
- * reader throw rather than return an empty list.
- *
- * The actor is REAL — the head journal is actor-private, so every row seeded
- * below is stamped with this handle's id and every scorer reads as this
- * handle. A literal id would seed rows the scorers' own reads filter out.
+ * `queryCompetedRuns` LEFT JOINs `mcts_search_runs`, so seeding only `search_nodes` throws.
+ * The actor is real: the head journal is actor-private, and scorers read as this handle.
  */
 interface ForkStore extends TestSql {
   readonly actor: ActorHandle;
@@ -48,23 +33,16 @@ function forkStore(): ForkStore {
   return { ...store, actor: createTestActors(store.sql, store.execRaw).main };
 }
 
-/** A branch's status: the winner is terminal, its siblings are pruned, and a
- *  search with no winner leaves every branch open. */
 function branchStatus(terminal: boolean, winner: number | null): string {
   if (terminal) return 'terminal';
 
   return winner === null ? 'open' : 'pruned';
 }
 
-/** A search the way runMCTS writes one: a root, `branches` children, and — when
- *  `winner` is given — that child marked terminal with the rest pruned, plus
- *  the durable take row convergence writes beside it.
- *
- *  Takes the STORE rather than a bare executor because the search ledger is
- *  actor-private: `search_nodes` and `alternate_takes` are both keyed
- *  `(actor_id, id)` and every read in the scorer filters on the handle it was
- *  handed. A fixture that omitted the id would not merely file rows the scorer
- *  cannot see — the column is NOT NULL, so it cannot file them at all. */
+/**
+ * Takes the store: `search_nodes` and `alternate_takes` are keyed `(actor_id, id)` with a
+ * NOT NULL actor, so rows must carry the handle the scorer reads as.
+ */
 function seedSearch(store: ForkStore, opts: {
   root: string; branches: number; winner: number | null; value?: number;
 }): void {
@@ -94,8 +72,6 @@ function seedSearch(store: ForkStore, opts: {
   }
 }
 
-/** A merged fork the way HeadController writes one: a run label plus one
- *  head_journal row per head, both private to the store's own actor. */
 function seedHeads(store: ForkStore, opts: { root: string; heads: number }): void {
   const { sql } = store;
   const actorId = store.actor.actorId;
@@ -129,7 +105,7 @@ describe('scoreExploration — a search tree reached, branched and ranked', () =
   });
 
   test('a search that never converged is counted but reports no ranked winner', () => {
-    // The shipped defect: nodes exist, the run is visible, and nothing ranked.
+    // Defect shape: nodes exist, the run is visible, and nothing ranked.
     const store = forkStore();
     seedSearch(store, { root: 'search-b', branches: 3, winner: null });
 
@@ -163,12 +139,8 @@ describe('scoreExploration — a search tree reached, branched and ranked', () =
   });
 
   test('a journal-only run is not counted as a run with a search tree', () => {
-    // NON-VACUITY: `searchRuns === 0` is also what an EMPTY store reports, and
-    // what a store whose rows were filed under some other actor reports. So the
-    // journalled run is proved visible to the production reader FIRST, and only
-    // then denied a tree. Without that order this case passes over a fixture
-    // that seeded nothing the scorer can see, and the tree/transcript split it
-    // exists to pin goes unmeasured.
+    // `searchRuns === 0` is also what an empty or foreign-actor store reports, so the run is
+    // proved visible to the production reader before being denied a tree.
     const store = forkStore();
     seedHeads(store, { root: 'merge-a', heads: 2 });
 
@@ -201,9 +173,7 @@ describe('scoreSettleVisibility — every half a run writes is where the reader 
   });
 
   test('the reader is asked for more rows than were written, so its window is never the failure', () => {
-    // The reader pages its merged order. With a default window of 20 and 25
-    // journalled runs, a real search would read as invisible — the scorer must not
-    // be able to blame the reader's limit.
+    // The reader's default window is 20; 25 runs keep the scorer from blaming that limit.
     const store = forkStore();
 
     for (let i = 0; i < 25; i++) seedHeads(store, { root: `merge-${String(i)}`, heads: 1 });
@@ -217,10 +187,7 @@ describe('scoreSettleVisibility — every half a run writes is where the reader 
   });
 
   test('NEGATIVE CONTROL: a reader that reads only head_journal loses every search', () => {
-    // The Exploration pane as it shipped the first time. A tree search wrote
-    // search_nodes, the reader read head_journal, and the pane was empty for a run
-    // that had really run. The scorer must call that a failure and say which store
-    // it happened in.
+    // Tree search wrote search_nodes while the reader read head_journal: must fail and name the store.
     const store = forkStore();
     seedSearch(store, { root: 'search-a', branches: 2, winner: 0 });
     seedHeads(store, { root: 'merge-a', heads: 2 });
@@ -241,8 +208,7 @@ describe('scoreSettleVisibility — every half a run writes is where the reader 
   });
 
   test('NEGATIVE CONTROL: a reader that reads only search_nodes loses every journalled run', () => {
-    // The same bug the other way round, which is how it shipped the second
-    // time. Both directions must fail, or the scorer only guards one of them.
+    // The same bug reversed; both directions must fail.
     const store = forkStore();
     seedSearch(store, { root: 'search-a', branches: 2, winner: 0 });
     seedHeads(store, { root: 'merge-a', heads: 2 });
@@ -257,9 +223,7 @@ describe('scoreSettleVisibility — every half a run writes is where the reader 
   });
 
   test('NEGATIVE CONTROL: a writer filling a store no reader reads is invisible', () => {
-    // A run that writes NEITHER store leaves no trace at all. Modelled here as a
-    // root present in a write store that the reader has no query for: the shape any
-    // future third store would take.
+    // A root in a store the reader has no query for: the shape of any future third store.
     const store = forkStore();
     seedHeads(store, { root: 'merge-a', heads: 1 });
     const noReader = () => [];
@@ -271,12 +235,8 @@ describe('scoreSettleVisibility — every half a run writes is where the reader 
   });
 
   test('steer-branch roots are excluded, so a correct reader does not look broken', () => {
-    // NON-VACUITY: the exclusion is asserted as a DIFFERENCE, not as a zero. A
-    // plain steer-only store reports `rootsWritten === 0` whether the prefix
-    // filter works, whether the fixture wrote nothing, or whether it wrote
-    // under an actor the scorer does not read as — three states one zero cannot
-    // tell apart. A real root beside the steer root separates them: the count
-    // must be exactly the real one.
+    // Asserted as a difference: a lone steer-only store reads 0 whether the prefix filter works,
+    // the fixture wrote nothing, or rows landed under another actor.
     const store = forkStore();
     seedHeads(store, { root: 'merge-a', heads: 1 });
     void store.sql`INSERT INTO head_journal
@@ -301,9 +261,6 @@ describe('scoreSettleVisibility — every half a run writes is where the reader 
   });
 });
 
-/** A run-event store plus the actor its rows belong to. `run_events` is
- *  actor-scoped, so a fixture that writes rows and a scorer that reads them
- *  have to agree on one identity — this is where that identity is minted. */
 /** A run-event store bound to one actor. */
 type EventStore = TestSql & { actor: ActorHandle };
 
@@ -317,15 +274,8 @@ function eventStore(): EventStore {
 let eventIndex = 0;
 
 /**
- * Write one `run_events` row EXACTLY as `RunEventRecorder` does.
- *
- * The payload column holds the whole stamped event — `{...input, eventIndex,
- * runId, timestamp}` (events/recorder.ts:112-113, 179-182) — not just the
- * type-specific fields. A fixture writing only the latter is read happily by
- * every `json_extract`-based scorer and rejected by the canonical parse — the
- * write-path/read-path disagreement this module's own docstring warns about,
- * reproduced inside its tests: a fixture that agrees with the hand-rolled query
- * and not with the real writer certifies nothing.
+ * Payload is the whole stamped event `{...input, eventIndex, runId, timestamp}`, as
+ * `RunEventRecorder` writes it; type fields alone pass `json_extract` but fail the canonical parse.
  */
 function emit(
   store: EventStore, runId: string, type: string, payload: JsonObject,
@@ -341,14 +291,6 @@ function emit(
             ${JSON.stringify(event)}, ${event.timestamp})`;
 }
 
-/**
- * The uniform panel's own tests.
- *
- * Same three cases per scorer as above — a pass, the specific defect it exists
- * for going RED, and an empty store reporting a null rate rather than a pass —
- * because a scorer that has never been shown going red is an assertion nobody
- * has any reason to believe.
- */
 describe('BEHAVIOUR_SCORERS — the panel contract', () => {
   test('every scorer is uniquely named and reports a null rate over an empty store', () => {
     const store = eventStore();
@@ -360,7 +302,7 @@ describe('BEHAVIOUR_SCORERS — the panel contract', () => {
       const score = scorer.score(store.sql, store.actor);
       expect(score.eligible, `${scorer.name} denominator`).toBe(0);
       expect(score.passed, `${scorer.name} numerator`).toBe(0);
-      // The whole point of the panel: absent is not zero.
+      // Absent is not zero.
       expect(score.rate, `${scorer.name} rate`).toBeNull();
       expect(scorer.asserts.length, `${scorer.name} asserts`).toBeGreaterThan(0);
     }
@@ -411,11 +353,8 @@ describe('steeringConversion — every mechanical trigger', () => {
   });
 
   test('a trigger outside the producer picklist THROWS rather than vanishing', () => {
-    // A steer nobody scores is a steer nobody can tell is broken. The canonical
-    // parse is what prevents that: `trigger` is a picklist, so a trigger added
-    // to the producer and not to the schema cannot quietly drop out of this
-    // denominator and read as a steer that never fired. Loud beats silent for a
-    // signal something is being trained against.
+    // `trigger` is a picklist, so a trigger missing from the schema throws instead of silently
+    // dropping out of this denominator.
     const store = eventStore();
     emit(store, 'run-a', 'turn_steering', { trigger: 'some_future_trigger', step: 1, converted: false });
     expect(() => steeringConversion.score(store.sql, store.actor))
@@ -424,9 +363,7 @@ describe('steeringConversion — every mechanical trigger', () => {
   });
 
   test('a malformed row of an UNRELATED type does not break this scorer', () => {
-    // The recorder's own reader parses its whole window before filtering by
-    // type, so one bad row throws for every caller. These scorers narrow in SQL
-    // first, so a corrupt `step_finish` costs one number and not eight.
+    // Scorers narrow by type in SQL first, so a corrupt `step_finish` costs one number, not eight.
     const store = eventStore();
     emit(store, 'run-a', 'turn_steering', { trigger: 'no_progress', step: 2, converted: true });
     void store.sql`INSERT INTO run_events (actor_id, run_id, event_index, type, payload, ts)
@@ -437,7 +374,6 @@ describe('steeringConversion — every mechanical trigger', () => {
 
     expect(score.eligible).toBe(1);
     expect(score.passed).toBe(1);
-    // And the panel's other scorers are equally unaffected.
     expect(toolOutcomes.score(store.sql, store.actor).eligible).toBe(0);
     store.close();
   });
@@ -506,7 +442,6 @@ describe('editLanding — did the edit actually land', () => {
     expect(score.eligible).toBe(5);
     expect(score.passed).toBe(0);
     expect(score.rate).toBe(0);
-    // Ordered by frequency so the reader sees what to fix first.
     expect(score.detail).toContain('stale×3');
     expect(score.detail).toContain('2 paths abandoned');
     store.close();
@@ -527,9 +462,7 @@ describe('recoveryDurability — the recovery that TOOK', () => {
   });
 
   test('RED: the same signature failing again in a LATER turn scores the finding red', () => {
-    // This is the producer's own named falsifier. Without it this scorer is a
-    // tautology: the event only exists when a streak was already broken, so
-    // recoveries-over-recoveries is 1.00 on every run forever.
+    // The producer's named falsifier: without it, recoveries-over-recoveries is 1.00 on every run.
     const store = eventStore();
     emit(store, 'run-a', 'execution_recovery', {
       recoveries: [{ tool: 'shell', failures: 2, failedSignature: 'run:pytest -q' }],
@@ -572,8 +505,7 @@ describe('completionHonesty — polarity is the reverse of every other scorer', 
   });
 
   test('RED: converted=true means it claimed done with work left, and must score red', () => {
-    // Scoring this the obvious way round — converted as the numerator — would
-    // reward a model that habitually declares victory early.
+    // Converted-as-numerator would reward declaring victory early.
     const store = eventStore();
     emit(store, 'run-a', 'completion_gate', { converted: true });
     emit(store, 'run-b', 'completion_gate', { converted: true });
@@ -615,8 +547,7 @@ describe('spillRetrieval — spilled context read back', () => {
   });
 
   test('a spill with no resolvable address is excluded, not charged to the agent', () => {
-    // There was nothing to read back, so this is the harness failing, not the
-    // model. Charging it here would score our own defect against the agent.
+    // Nothing to read back is a harness failure, not the model's.
     const store = eventStore();
     emit(store, 'run-a', 'context_budget', {
       admittedChars: 0, omittedChars: 9_000, trips: { attachment: 1 },

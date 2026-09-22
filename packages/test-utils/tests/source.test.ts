@@ -1,8 +1,4 @@
-// The source-slicing helpers. They exist because three wiring tests were live
-// with a missing anchor, so every assertion in them ran against the rest of the
-// file instead of the member they named — one of them guarding a call that
-// could be deleted outright with the test still green. The property that
-// prevents a repeat is that a missing anchor THROWS, so it is asserted first.
+// A missing anchor must throw; otherwise assertions run against the rest of the file.
 import { describe, expect, test } from 'bun:test';
 import { anchor, between, memberBody } from '../src/index';
 

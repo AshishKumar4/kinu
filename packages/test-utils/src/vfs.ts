@@ -1,6 +1,4 @@
-// Map-backed VFS for tests that exercise a real write → read-back path
-// (spills, transcripts, attachments). `mkdir` surfaces EEXIST on repeat, like
-// the real backends can, so callers' idempotency handling is actually tested.
+// Map-backed VFS; `mkdir` surfaces EEXIST on repeat, like the real backends.
 import type { VFS, VfsNativeReads } from '@kinu.run/core';
 
 export interface MemoryVfs {
@@ -21,13 +19,7 @@ export function createMemoryVfs(): MemoryVfs {
 
       return content instanceof Uint8Array ? content.slice() : content;
     },
-    /**
-     * A real prefix read, because this double stands in for a plane that has
-     * one. Without it every caller of `readBoundedWithVfsOps` measured the
-     * no-ranged-read branch instead — which is a real branch, but not the one a
-     * Map-backed store models, and it silently turned the file viewer's
-     * truncated-preview coverage into refusal coverage.
-     */
+    /** Real prefix read, so callers exercise the ranged-read branch, not the no-ranged-read one. */
     readRange: async (path, offset, length) => {
       const content = files.get(path);
 

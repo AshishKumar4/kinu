@@ -1,12 +1,6 @@
 /**
- * A run record carries the model the ledger observed and refuses a mismatch.
- *
- * The defect this pins: a workspace's pinned model was accepted and never run
- * on, so every record since account profiles named the pinned model while the
- * turns ran on the account default. `modelId` alone cannot disprove that — it
- * is the claim. `modelObserved` is the check, read off the turn loop's own
- * `step_finish` rows, and a record whose check disagrees with its claim is not
- * evidence.
+ * `modelId` is the claim; `modelObserved`, read from `step_finish` rows, is the check. A record
+ * whose check disagrees is not evidence.
  */
 import { describe, expect, test } from 'bun:test';
 import { join } from 'node:path';
@@ -21,13 +15,11 @@ import { scratchDir } from '../src/scratch';
 
 let nextIndex = 0;
 
-/** One variant's own fields, the three base fields removed. Distributed over
- *  the union so each variant keeps its own shape. */
+/** Distributed over the union so each variant keeps its own shape. */
 type EventBody<Variant = RunEvent> = Variant extends RunEvent
   ? Omit<Variant, 'runId' | 'eventIndex' | 'timestamp'>
   : never;
 
-/** One stamped event; the caller passes the discriminated body. */
 function event(body: EventBody): RunEvent {
   nextIndex += 1;
 

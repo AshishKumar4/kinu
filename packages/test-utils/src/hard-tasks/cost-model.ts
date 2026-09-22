@@ -1,25 +1,6 @@
 /**
- * How the hard-task tier SCORES a metered-oracle measurement, and how one task is
- * assembled from its problem content.
- *
- * The measurement itself moved to `@kinu.run/core`'s `strategy/exec-ratio.ts` and this
- * module is now one caller of it. The reason is stated there and it is not a tidiness
- * argument: `VerifierSpec.kind` is closed over a registry the tool surface owns, so the
- * implementation a registered kind resolves to must be reachable from core or the kind
- * is a name with nothing behind it. What stayed here is what belongs to the EVAL LADDER
- * rather than to the instrument — the [0,1] normalisation the ladder's rows carry, and
- * the prompt/seed/verify assembly of one corpus task.
- *
- * WHY LOG SCALE, and it is the same reason `ObjectiveScale` has the value at all:
- * algorithmic improvement is multiplicative, so `n²` to `n^1.5` is real, partial,
- * climbable progress that a linear scale scores as almost nothing.
- *
- * WHY THIS NORMALISES AND THE INSTRUMENT DOES NOT. `MeasuredValue.value` is RAW in the
- * objective's own unit (docs/EXPLORATION.md — "The objective", *Raw units*): the
- * number a search climbs and the number a record keeps are different numbers, and
- * conflating them makes two runs with different baselines incomparable forever. The
- * ladder needs the climbable one, so it is computed here, from quantities that all
- * survive in `measured`.
+ * Scores metered-oracle measurements (from core `strategy/exec-ratio.ts`) on [0,1] for the eval ladder and
+ * assembles tasks. `MeasuredValue.value` stays raw (docs/EXPLORATION.md, *Raw units*); normalisation lives here.
  */
 import {
   REFERENCE_FILE,
@@ -39,18 +20,8 @@ export interface RatioScore {
 }
 
 /**
- * Turn a measurement into a score on [0,1].
- *
- * LOG SCALE, because algorithmic improvement is multiplicative: `n²` to `n^1.5`
- * is real, partial, climbable progress that a linear scale would score as almost
- * nothing. Zero means "no better than the reference you were handed"; one means
- * "reached the stated target".
- *
- * The clamp lives here rather than in `ratioOutcome`, which throws out of range
- * on purpose. Beating the target genuinely saturates — the target is a declared
- * "good enough" — whereas a raw ratio outside [0,1] reaching the row constructor
- * would mean the normalization itself was wrong. Both raw counts survive in
- * `measured`, so the clamp destroys nothing.
+ * Log-scale score on [0,1]: 0 = no better than the reference, 1 = reached the target. Clamped here because
+ * `ratioOutcome` throws out of range; raw counts survive in `measured`.
  */
 export function scoreRatio(m: RatioMeasurement, problem: RatioProblem): RatioScore {
   const measured = {
@@ -110,43 +81,19 @@ export interface SeedFile {
   readonly content: string;
 }
 
-/**
- * One hard task, whole: what the agent is told, what it is given, and how the
- * result is judged.
- *
- * The prompt lives HERE rather than in a corpus file on purpose. Every prompt
- * quotes the reference's cost and the target, and those numbers must be the ones
- * the verifier scores against — split across a `.jsonl` and a `.ts` they would
- * drift, and a prompt promising a target the scorer does not use is a silently
- * mis-stated task. One definition, no drift possible.
- */
+/** One hard task: prompt, seed files and verifier together, so prompt numbers match the scorer. */
 export interface HardTask {
   readonly id: string;
-  /** The instruction the agent receives. */
   readonly prompt: string;
   readonly tags: readonly string[];
-  /** Files placed in the workspace before the turn. */
   readonly seed: readonly SeedFile[];
-  /**
-   * The measurable content, carried on the task rather than closed over.
-   *
-   * The instance parameters, the target and the certificate floor are all facts a
-   * READER of a run record needs — a stored score whose target is invisible is a
-   * score nobody can re-derive — and they are what the calibration suite asserts
-   * the reference's measured cost against.
-   */
+  /** Instance parameters, target and certificate floor, kept so a stored score can be re-derived. */
   readonly problem: RatioProblem;
   /** Ground truth, as code. Pure over `(vfs, exec)`, handed no model. */
   readonly verify: (ctx: VerifierContext) => Promise<RatioScore>;
 }
 
-/**
- * Assemble a measured-ratio task from its problem content.
- *
- * Every task in this tier goes through here, so seeding, the stub the agent
- * starts from, harness generation and scoring are identical across families and a
- * new task declares only what makes it different.
- */
+/** Assemble a measured-ratio task from its problem content. */
 export function ratioTask(spec: {
   readonly id: string;
   readonly tags: readonly string[];

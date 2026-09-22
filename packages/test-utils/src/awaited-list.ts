@@ -1,11 +1,6 @@
 /**
- * A list a test can wait on.
- *
- * The end condition for "the subject produced N of these" is the push that
- * makes it true, so a wait here resolves inside `push` and never polls. A
- * predicate that never becomes true is a wait that never ends — which is the
- * rule: the process's own end (the harness teardown, the ladder's gate
- * deadline) ends it and names the suite, never a clock inside the test.
+ * A list a test can wait on. Waits resolve inside `push` and never poll; a wait that never holds is
+ * ended by the harness teardown or gate deadline, never by a clock inside the test.
  */
 export class AwaitedList<T> {
   readonly items: T[] = [];

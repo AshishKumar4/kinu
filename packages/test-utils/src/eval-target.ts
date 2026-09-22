@@ -1,72 +1,9 @@
 /**
- * WHERE a suite's agent runs — the one seam, and the facts a suite may read
- * through it.
- *
- * Tests and evals are ONE suite. Whether the agent under test is the local
- * `cli-backend` runtime or a workspace on a deployed Worker is CONFIGURATION,
- * not a second harness. This module is that configuration's type.
- *
- * WHY IT EXISTS, measured rather than argued. `agent://SwarmNoopRootCause`
- * established that production turns are capped at ten model steps by
- * `@cloudflare/think` (`stepCountIs(finalMaxSteps)` OR-ed ahead of the caller's
- * condition), that four of four capped runs across two workspaces reported
- * `run_end: 'completed'` with the model still emitting tool calls, and that
- * NOTHING in the tree could see it. The live swarm eval could not: it opens the
- * workspace with `openWorkspaceCLI`, whose turn driver is core `runChat` — the
- * genuinely unbounded loop — so the cap is structurally unreachable from the one
- * suite whose header claims to prove the search works. Two named holes, both of
- * them the same hole:
- *
- *   WRONG LOOP.     `@cloudflare/think` carries the cap. `runChat` does not.
- *                   An eval on the CLI loop cannot speak for the cloud loop.
- *   WRONG EXECUTOR. `ctx.exec` resolves to the CLI's local shell with a real
- *                   `node`. The Nimbus workspace's `node` shim rejects
- *                   esbuild-wasm's `wasmModule` option, so `exec-ratio` — the
- *                   ONLY registered verifier kind — returns `unavailable` in
- *                   the cloud and cannot there. The eval asserted that a
- *                   verifier shell EXISTS, which is a different fact.
- *
- * A suite cannot close a divergence it cannot address. So the target is named,
- * both targets answer the same questions, and a suite states which it ran on.
- *
- * WHAT THIS MODULE MAY DEPEND ON, and why the implementations are not here.
- * `packages/test-utils` imports `@kinu.run/core` and nothing else — deliberately,
- * because `@kinu.run/core` itself devDepends on this package, so a dependency on
- * `@kinu.run/cli` or `@kinu.run/cli-backend` would close a workspace cycle
- * through the very package every other suite's fixtures come from. The seam and
- * every target-agnostic reader therefore live here; the two implementations live
- * beside the suites in `tests/evals/`, which is the layer that already reaches
- * both backends by relative import (`tests/evals/harness.ts` has done so since
- * it was written). The interface is the shared thing; the wiring is not.
- *
- * `probeVerifier` is here for the same reason and it is not an exception to it:
- * it depends on `EvalTargetWorkspace` and core's diagnostics and on nothing
- * either backend owns, and it is the one INSTRUMENT both arms must run
- * identically — so it is shared code rather than a comment in each target
- * claiming the other uses the same module and marker.
- *
- * WHAT A SUITE MAY ASK, and nothing wider. Every member below is here because a
- * shipped assertion reads it. The shape was taken FROM the suites rather than
- * designed for them:
- *
- *   `runEvents`  — `readLedgerTotals`, `scoreTrajectory` and
- *                  `collectRunEventProvenance` all walk the run-event log. It is
- *                  the ledger, so it is the seam's primary read.
- *   `spend`      — `recordLiveModelEpisode` publishes what an episode cost. ONE
- *                  definition (`workspaceSpend`), reported through ONE meter.
- *   `probe`      — `requireSandboxedExecutors` / `requireVerifierShell`, with the
- *                  correction the root cause forces: the verifier probe RUNS the
- *                  instrument instead of asserting a shell exists.
- *   `files`      — `seedHardTask` writes the task tree, `verifyHardTask` reads it
- *                  back and runs the oracle.
- *   `search`     — the swarm arm's proof that a tree was really built.
- *   `roster`     — which agents the workspace holds after a delegating turn.
- *
- * There is no `sql`. A deployed workspace's SQLite lives inside its Durable
- * Object and is reachable only as read models over RPC, and a seam with a
- * member one target cannot honour is a seam that teaches a suite to branch on
- * its target. Every reader a suite needs is expressed over `RunEvent[]` or over
- * a core read-model type, both of which cross the wire intact.
+ * Where a suite's agent runs: local `cli-backend` or a deployed Worker workspace, as configuration rather
+ * than a second harness. `@cloudflare/think` caps cloud turns at ten model steps and core `runChat` does not,
+ * so a suite names its target. Depends only on `@kinu.run/core` (core devDepends on this package); the
+ * target implementations live in `tests/evals/`. No `sql` member: a Durable Object's SQLite is reachable only
+ * as read models over RPC.
  */
 import { classifyToolFailure, listRuns, RunEventRecorder } from '@kinu.run/core';
 import type {
@@ -75,29 +12,13 @@ import type {
 import { diagnostics, renderThrownChain, toKinuError } from '@kinu.run/core/obs';
 import { recordWorkspaceSpend } from './live-model';
 
-/**
- * The two places an agent under test can run.
- *
- * `local` is the in-process `cli-backend` runtime — free, offline-capable, and
- * the loop `packages/core/src/chat.ts` owns. `cloud` is a workspace on a
- * deployed Worker, driven over the product's own client, which is the ONLY way
- * to reach `@cloudflare/think`.
- */
+/** `local`: in-process `cli-backend` (core `chat.ts` loop). `cloud`: a deployed Worker workspace, the only way to reach `@cloudflare/think`. */
 export type EvalBackend = 'local' | 'cloud';
 
-/** The ONE knob. A suite reads it once and reports which target it ran on; it
- *  never branches on a credential to decide where it is. */
+/** Read once and reported; never inferred from credentials. */
 export const EVAL_BACKEND_ENV = 'KINU_EVAL_BACKEND';
 
-/**
- * Which target this process is for.
- *
- * `local` is the default and always will be: the cloud arm spends money against
- * a shared deployment, so it is reached by naming it. An unrecognised value is a
- * refusal rather than a silent fallback — a typo that quietly ran the free arm
- * would report a local measurement under a cloud arm's banner, which is the
- * class of error this whole module exists to remove.
- */
+/** The target for this process; defaults to `local`, and an unrecognised value throws rather than falling back. */
 export type EvalBackendResolution =
   | { readonly kind: 'ready'; readonly backend: EvalBackend }
   | { readonly kind: 'refused'; readonly reason: string };
@@ -119,26 +40,14 @@ export function resolveEvalBackend(
   };
 }
 
-/**
- * Whether the instrument a measured task depends on CAN RUN here.
- *
- * The distinction is the root cause's, not a refinement of it. `exec-ratio` is
- * the only registered verifier kind; the live eval asserted that `rt.shell`
- * exists and the deployed workspace's shell exists and cannot run it. So a
- * probe that answers "a shell is present" answers the question that passed
- * while production failed. This one answers by running the thing.
- */
+/** Whether the verifier instrument can actually run here (a present shell is not enough). */
 export type VerifierProbe =
-  /** The measurement harness executed and returned what it was asked for.
-   *  `evidence` is what it said, so a reader can see WHICH shell answered. */
+  /** `evidence` shows which shell answered. */
   | { readonly kind: 'runs'; readonly evidence: string }
-  /** It did not. `reason` is the executor's own words: an eval that skips here
-   *  must print why, and "the verifier is unavailable" is not a remedy. */
+  /** `reason` is the executor's own words; a skipping eval must print it. */
   | { readonly kind: 'unavailable'; readonly reason: string };
 
-/** One execution plane the agent can reach, as `listExecutors()` reports it.
- *  `kind` is the load-bearing half — a name is a namespace, not a claim about
- *  which machine runs the command. */
+/** One execution plane from `listExecutors()`; `kind`, not the name, says which machine runs commands. */
 export interface EvalExecutor {
   readonly name: string;
   readonly kind: string;
@@ -150,44 +59,18 @@ export interface EvalTargetProbe {
   readonly verifier: VerifierProbe;
 }
 
-/** The workspace filesystem, for seeding a task and reading the outcome back.
- *  `exec` is the oracle's own channel — `verifyHardTask` runs commands through
- *  it — and it is the SAME plane `files` writes to on both targets. */
+/** Workspace filesystem; `exec` runs on the same plane `files` writes to. */
 export interface EvalTargetWorkspace {
   readonly vfs: VFS;
   exec(command: string): Promise<{ readonly stdout: string; readonly exitCode: number }>;
 }
 
-/**
- * The command a verifier probe runs, and why it is this one.
- *
- * `exec-ratio` — the only registered verifier kind — writes a `.mjs` measurement
- * harness into the workspace and runs `node <file>`, expecting a RESULT line on
- * stdout. So the probe is the smallest possible instance of that: write a module,
- * run it with `node`, require the line back. It fails wherever `exec-ratio`
- * fails, including the deployed Nimbus shell whose `node` shim cannot transform
- * `.mjs` (esbuild-wasm rejects its `wasmModule` option outside a browser), and it
- * costs one command rather than a whole baseline measurement.
- */
+/** Smallest `exec-ratio` instance: write a `.mjs`, run `node`, expect the RESULT line; fails where the Nimbus `node` shim does. */
 const PROBE_MODULE = '_verifier_probe.mjs';
 
 const PROBE_MARKER = 'KINU_VERIFIER_PROBE_OK';
 
-/**
- * Run that probe on `workspace`.
- *
- * ONE INSTRUMENT, not two that agree by assertion. Both targets spelled this
- * sequence out — write, run, check the marker, clean up — differing only in
- * whether the cleanup said `vfs.unlink` or `exec('rm -f')`, which on the cloud
- * plane IS `rm -f`. A comment claiming the two arms use the same module and
- * marker is a claim; a shared function is a guarantee, and the instrument the two
- * arms must share is precisely the thing that must not be written twice.
- *
- * It takes an {@link EvalTargetWorkspace} and nothing else, so a caller's own
- * preconditions stay the caller's: the cloud target checks that its workspace
- * executor exists BEFORE calling this, because which planes a deployment offered
- * is the useful half of that answer and this function cannot know it.
- */
+/** Run that probe on `workspace`; one shared instrument for both targets. Callers check their own preconditions first. */
 export async function probeVerifier(workspace: EvalTargetWorkspace): Promise<VerifierProbe> {
   try {
     await workspace.vfs.writeFile(PROBE_MODULE, `console.log('${PROBE_MARKER}');\n`);
@@ -213,10 +96,7 @@ export async function probeVerifier(workspace: EvalTargetWorkspace): Promise<Ver
     try {
       await workspace.vfs.unlink(PROBE_MODULE);
     } catch (error) {
-      // A probe artifact that outlives the probe is untidy, never wrong: the
-      // workspace is a scratch store the target deletes in teardown. Recorded
-      // rather than swallowed, and never rethrown — a cleanup failure must not
-      // mask the probe's own verdict, which is the answer the caller asked for.
+      // Cleanup failure is recorded, never rethrown: it must not mask the probe verdict.
       diagnostics.failure('eval.probe_cleanup_failed', toKinuError({
         doing: 'removing the verifier probe module',
         cause: error,
@@ -226,14 +106,7 @@ export async function probeVerifier(workspace: EvalTargetWorkspace): Promise<Ver
   }
 }
 
-/**
- * Rows that prove a search really happened, rather than that a tool returned.
- *
- * These are the six reads `agent://SwarmNoopRootCause` used to rule out
- * "the swarm started and died silently": every one was empty, which is how it
- * established that no node ever spawned. A suite asserting a tree was built
- * asserts over these, so the same reads answer on both targets.
- */
+/** Rows proving a search really spawned nodes, readable on both targets. */
 export interface EvalSearchLedger {
   readonly searchRuns: number;
   readonly forkRuns: number;
@@ -242,60 +115,36 @@ export interface EvalSearchLedger {
   readonly backgroundJobs: number;
 }
 
-/**
- * The seam. One interface, two implementations, and a suite that names neither.
- *
- * PROVISIONING IS THE CONSTRUCTOR'S JOB, not a member: a target that can be
- * observed before it exists is a target a suite can read a zero from. The
- * factories in `tests/evals/target-*.ts` return an already-provisioned target or
- * throw, and `teardown` is what pairs with construction.
- */
+/** The seam. Factories in `tests/evals/target-*.ts` return a provisioned target or throw; `teardown` pairs with construction. */
 export interface AgentEvalTarget {
   readonly backend: EvalBackend;
-  /** One line naming the target for a banner: which backend, which workspace,
-   *  which origin. Printed before anything is spent. */
+  /** Banner line naming backend, workspace and origin. */
   readonly describe: string;
-  /** The workspace's own name. Cloud targets carry the `eval-` prefix so a row
-   *  left behind on the account is attributable. */
+  /** Cloud targets carry the `eval-` prefix so leftovers are attributable. */
   readonly workspace: string;
-  /** The model config in force. Read off the target rather than re-derived, so
-   *  a record cannot name a model the run did not use. */
+  /** Read off the target so a record cannot name a model the run did not use. */
   readonly llm: LLMProviderConfig;
 
-  /** Submit one user turn and wait for it to SETTLE, including the background
-   *  work it detached. Every row a suite reads is written when a turn closes, so
-   *  a read before settle reports a zero denominator from a turn that was merely
-   *  still running. */
+  /** Submit one user turn and wait until it settles, including detached background work. */
   sendTurn(text: string): Promise<void>;
 
-  /** The whole run-event log, oldest first. A WALK, not a window: this is one
-   *  episode's entire ledger and a truncated read understates the episode's own
-   *  totals. */
+  /** The whole run-event log, oldest first; never windowed. */
   runEvents(): Promise<readonly RunEvent[]>;
 
-  /** What this workspace spent, in the core read model's own shape — the whole
-   *  log on both targets, so there is no window to disclose and no floor to
-   *  refuse. Publish it through `recordWorkspaceSpend`, which is the one
-   *  accumulator. */
+  /** Workspace spend over the whole log; publish via `recordWorkspaceSpend`. */
   spend(): Promise<WorkspaceSpend>;
 
   probe(): Promise<EvalTargetProbe>;
   workspaceFiles(): EvalTargetWorkspace;
   searchLedger(): Promise<EvalSearchLedger>;
 
-  /** Additional agents the workspace holds, by name. Empty on a workspace whose
-   *  turn delegated to nobody. */
   roster(): Promise<readonly string[]>;
 
-  /** Release everything provisioning took. On cloud that DELETES the workspace,
-   *  which is why the callers put it in a `finally`: a run that throws must not
-   *  leave a row on the account. */
+  /** Release provisioning; on cloud this deletes the workspace, so call it in `finally`. */
   teardown(): Promise<void>;
 }
 
-/** What the ledger says one episode did. ONE shape and ONE reduction: the local
- *  harness delegates to {@link ledgerTotalsFromEvents} rather than keeping a
- *  second walk in step with the recorder. */
+/** What the ledger says one episode did; local harness delegates to {@link ledgerTotalsFromEvents}. */
 export interface LedgerTotals {
   turns: number;
   toolCalls: number;
@@ -305,35 +154,14 @@ export interface LedgerTotals {
   reasoningOut: number;
   /** Model steps the episode closed, counted from `step_finish`. */
   steps: number;
-  /** Why a turn produced nothing. A degenerate run that cannot say why is a
-   *  dead end for whoever reads the record: "0 tool calls" is equally
-   *  consistent with a model that declined to act and a provider that rejected
-   *  every request. */
+  /** Why a turn produced nothing; "0 tool calls" alone cannot tell a declining model from a failing provider. */
   failures: string[];
 }
 
-/**
- * How a TURN's own provider error is marked in {@link LedgerTotals.failures}, so
- * a reader can tell it from a tool's.
- *
- * Load-bearing rather than cosmetic: `environmentFailure` in the eval harness
- * classifies only the turn's error, because a tool that failed mid-episode is
- * part of the agent's episode and an outage is not. The producer below and that
- * consumer must spell the prefix the same way, so they share this constant
- * instead of two string literals that agree today.
- */
+/** Prefix marking a turn's own provider error in {@link LedgerTotals.failures}; `environmentFailure` matches on it. */
 export const RUN_END_FAILURE_PREFIX = 'run_end: ';
 
-/**
- * The episode's totals, over events rather than over a store.
- *
- * TARGET-AGNOSTIC BY CONSTRUCTION. The local reader walked a `bun:sqlite`
- * Database through `RunEventRecorder`; a deployed workspace has no such handle.
- * Both, however, produce the same `RunEvent[]` — the canonical union, validated
- * by the recorder on the way out on either side — so the REDUCTION is the only
- * part that was ever backend-specific, and it was not. One function, two
- * targets, no second denominator.
- */
+/** Episode totals reduced from `RunEvent[]`, so both targets share one reduction. */
 export function ledgerTotalsFromEvents(events: readonly RunEvent[]): LedgerTotals {
   let turns = 0, toolCalls = 0, tokensIn = 0, tokensOut = 0, reasoningOut = 0, steps = 0;
   const toolNames: string[] = [];
@@ -363,15 +191,7 @@ export function ledgerTotalsFromEvents(events: readonly RunEvent[]): LedgerTotal
   return { turns, toolCalls, toolNames, tokensIn, tokensOut, reasoningOut, steps, failures };
 }
 
-/**
- * Time order over a whole ledger: timestamp, then run, then the recorder's own
- * index within the run.
- *
- * One comparator, because every reader that assembles a multi-run episode has
- * to sort the same way and three of them (the local provenance collector, the
- * public session, the cloud target) each carried their own copy. A published
- * trail is read in time order; the walk that produced it is per run.
- */
+/** Time order over a ledger: timestamp, run, then the recorder's index within the run. */
 export function compareRunEventOrder(a: RunEvent, b: RunEvent): number {
   return a.timestamp.localeCompare(b.timestamp)
     || a.runId.localeCompare(b.runId)
@@ -380,21 +200,8 @@ export function compareRunEventOrder(a: RunEvent, b: RunEvent): number {
 
 
 /**
- * The run a mid-turn landing is answered by.
- *
- * THE ATTRIBUTION RULE: a prompt whose send reports `landed:'mid-turn'` opens
- * no run of its own — the run whose `run_start` precedes the landing and whose
- * `run_end` has not yet arrived when it lands is the run that absorbs it, and
- * that run's model calls, tool calls and transcript rows are the case's. A
- * suite that scanned `run_start.userMessage` for the prompt's text would find
- * no such row for an absorbed prompt and score it zero — the "every prompt
- * opens its own turn" assumption this helper exists to retire.
- *
- * `landedAt` is the instant the send's done frame arrived, as an ISO string —
- * the same clock domain `timestamp` is written in. Absent a landing (a caller
- * that only knows a marker reached the transcript), omit it and the rule is
- * "the run open NOW": the live run, or the most recently closed one when the
- * last close predates the read.
+ * The run a mid-turn landing is answered by: the run open at `landedAt` (ISO, same clock as `timestamp`).
+ * A mid-turn prompt opens no run of its own. Without `landedAt`, the live run or the most recently closed one.
  */
 export function absorbingRunId(
   events: readonly RunEvent[], landedAt?: string,
@@ -411,8 +218,7 @@ export function absorbingRunId(
   if (starts.size === 0) return null;
 
   if (landedAt !== undefined) {
-    // Open at the landing: started no later, and still running then — no
-    // `run_end`, or one stamped after the landing.
+    // Open at the landing: started no later, and no `run_end` before it.
     const open = [...starts.entries()].filter(([runId, started]) => {
       const ended = ends.get(runId);
 
@@ -425,21 +231,17 @@ export function absorbingRunId(
       return open[open.length - 1][0];
     }
 
-    // The landing closed its run between write and read (clock skew, a
-    // one-step turn): the latest run to end at or after the landing is it.
+    // The run closed between write and read: the latest run ending at or after the landing.
     const closed = [...ends.entries()].filter(([, ended]) => ended >= landedAt)
       .sort((a, b) => b[1].localeCompare(a[1]) || b[0].localeCompare(a[0]));
 
     if (closed.length > 0) return closed[0][0];
 
-    // No run admits the landing. The caller's send frame said it landed
-    // mid-turn, so SOME run answered it — the latest the log holds.
+    // No run admits the landing; the send said mid-turn, so the latest run answered.
     return [...starts.entries()].sort((a, b) =>
       a[1].localeCompare(b[1]) || a[0].localeCompare(b[0]))[starts.size - 1][0];
   }
 
-  // Post-hoc, no landing time: the run open NOW, or — when the last close
-  // predates this read — the most recently closed run.
   const live = [...starts].filter(([runId]) => !ends.has(runId))
     .sort((a, b) => a[1].localeCompare(b[1]) || a[0].localeCompare(b[0]));
 
@@ -452,20 +254,8 @@ export function absorbingRunId(
 }
 
 /**
- * Evidence about the STOP CONDITION, which is the fact the two loops disagree
- * about.
- *
- * This is the probe the whole ticket turns on, so it is stated as data rather
- * than as an assertion: a suite reads it on both targets and compares.
- *
- * WHAT IT CATCHES. `stepCountIs(n)` fires when `steps.length === n`, and the
- * step it stops is one the model had already filled with tool calls — so a
- * capped turn has a LAST `step_finish` whose reason is `tool-calls` and a
- * `run_end` that says `completed`. That pair is the signature: a turn that
- * genuinely finished has a last reason of `stop`. Measured on production at
- * `17abc2980`: four runs at exactly ten steps, every last reason `tool-calls`,
- * every `run_end` `completed`; the one naturally-finished run had `stop` at
- * five. Nothing in the ledger distinguished them, which is why it shipped.
+ * Stop-condition evidence. `stepCountIs(n)` stops a step already filled with tool calls, so a capped turn
+ * ends with last reason `tool-calls` beside `run_end: completed`; a finished turn ends with `stop`.
  */
 export interface StepBoundEvidence {
   /** `step_finish` rows the episode closed. */
@@ -474,14 +264,7 @@ export interface StepBoundEvidence {
   readonly lastStepReason: string | null;
   /** Every `run_end` reason, in order. */
   readonly runEndReasons: readonly string[];
-  /**
-   * The loop stopped while the model was still calling tools.
-   *
-   * TRUE is not by itself a defect — an operator interrupt looks the same from
-   * here — so a suite pairs it with the `run_end` reason: `truncated` beside
-   * `completed` is the invisible cut, and that pair is what no ledger row
-   * distinguished before.
-   */
+  /** The loop stopped while the model was still calling tools; pair with the `run_end` reason (an interrupt looks the same). */
   readonly truncated: boolean;
 }
 
@@ -502,22 +285,7 @@ export function stepBoundEvidence(events: readonly RunEvent[]): StepBoundEvidenc
   return { steps, lastStepReason, runEndReasons, truncated: lastStepReason === 'tool-calls' };
 }
 
-/**
- * Every run event in a workspace store, oldest run first.
- *
- * A WALK, NOT A WINDOW, and the distinction has already cost this tier a
- * corpus: `listRuns`' default page is 50 runs and the recorder's is 200 events,
- * so a windowed read truncates a multi-turn episode into a smaller denominator
- * — which reads as an agent that acted less rather than a reader that stopped
- * looking. It walks to `status: 'end'` instead of guessing a limit high enough,
- * because a guess that it will never be reached is exactly the assumption the
- * page contract exists to remove.
- *
- * Lives here rather than in the harness because BOTH targets need it and the
- * local harness already held two copies of it (`readLedgerTotals` and
- * `collectRunEventProvenance`). A third copy beside a cloud target would be a
- * third thing to keep in step with the recorder.
- */
+/** Every run event in a workspace store, walked to `status: 'end'`; `listRuns` pages 50 runs and the recorder 200 events. */
 export function walkRunEvents(recorder: RunEventRecorder): RunEvent[] {
   const events: RunEvent[] = [];
   let cursor: SeekCursor | null = null;
@@ -534,21 +302,7 @@ export function walkRunEvents(recorder: RunEventRecorder): RunEvent[] {
   return events;
 }
 
-/**
- * Publish what one episode on `target` cost, through the ONE meter.
- *
- * A wrapper rather than a call site convention, because the two targets read the
- * total from different places — the local one from the store it owns, the cloud
- * one from `getActivitySnapshot().spend` over RPC — and both must land in the
- * same accumulator. `recordWorkspaceSpend` is that accumulator, and it is the
- * only place calls, usage and unmeasured episodes are counted.
- *
- * It names no truncation remedy at all: `workspaceSpend` aggregates over the
- * whole log, so neither target reads through a window and no total comes back
- * bounded. A per-backend remedy would leave each target deciding on its own
- * whether a bounded total is refused or published as a floor, which is the one
- * judgement the ONE meter exists to hold.
- */
+/** Publish one episode's spend on `target` through `recordWorkspaceSpend`, the one accumulator. */
 export async function recordTargetEpisodeSpend(target: AgentEvalTarget): Promise<WorkspaceSpend> {
   const spend = await target.spend();
   recordWorkspaceSpend(spend);
