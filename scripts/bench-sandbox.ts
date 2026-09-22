@@ -287,15 +287,12 @@ function runCheck(check: BenchCheck, dir: string, kinuHome: string): Promise<Che
       },
       (err, stdout, stderr) => {
         const combined = `${stdout}${stderr}`;
-        const killed = err?.killed ?? false;
+        // A killed check (its timeout fired) never reported an exit code, and a
+        // failure whose code is not a safe integer counts as a plain failure.
+        let exitCode: number | null = 0;
 
-        const exitCode = killed
-          ? null
-          : err === null
-            ? 0
-            : Number.isSafeInteger(err.code)
-              ? Number(err.code)
-              : 1;
+        if (err?.killed === true) exitCode = null;
+        else if (err !== null) exitCode = Number.isSafeInteger(err.code) ? Number(err.code) : 1;
 
         resolveOutcome({
           id: check.id,

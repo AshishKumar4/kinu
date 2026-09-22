@@ -58,23 +58,24 @@ describe('bench inference proxy', () => {
   test('routes multiple upstreams through one shared meter', async () => {
     const seen: string[] = [];
 
-    const first = Bun.serve({
+    /** An upstream that names itself in `seen` and reports its own usage. */
+    const upstream = (name: string, prompt: number, completion: number) => Bun.serve({
       port: 0,
       fetch(request) {
-        seen.push(`first:${new URL(request.url).pathname}`);
+        seen.push(`${name}:${new URL(request.url).pathname}`);
 
-        return Response.json({ usage: { prompt_tokens: 3, completion_tokens: 2, total_tokens: 5 } });
+        return Response.json({
+          usage: {
+            prompt_tokens: prompt,
+            completion_tokens: completion,
+            total_tokens: prompt + completion,
+          },
+        });
       },
     });
 
-    const second = Bun.serve({
-      port: 0,
-      fetch(request) {
-        seen.push(`second:${new URL(request.url).pathname}`);
-
-        return Response.json({ usage: { prompt_tokens: 7, completion_tokens: 4, total_tokens: 11 } });
-      },
-    });
+    const first = upstream('first', 3, 2);
+    const second = upstream('second', 7, 4);
 
     servers.push(first, second);
     const firstURL = `http://127.0.0.1:${first.port}/v1`;

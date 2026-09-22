@@ -71,8 +71,8 @@ function job(name: string, trials: readonly TrialSpec[]): string {
     const trialDir = join(dir, `${spec.task}__${index}`);
     mkdirSync(trialDir);
 
-    const event = (name: string, count: number) =>
-      Array.from({ length: count }, () => ({ event: name, message: name }));
+    const event = (kind: string, count: number) =>
+      Array.from({ length: count }, () => ({ event: kind, message: kind }));
 
     // Shaped exactly as bench/harbor/kinu_agent.py writes it. `turn_grading`
     // is absent, not zeroed, when the probe reported nothing — which is the
@@ -89,16 +89,18 @@ function job(name: string, trials: readonly TrialSpec[]): string {
       },
     };
 
+    // A trial with no usage at all carries the metadata and nothing else.
+    const tokens = spec.noUsage ? {} : {
+      n_input_tokens: spec.promptTokens ?? 100_000,
+      n_output_tokens: spec.outputTokens ?? 1_000,
+      n_cache_tokens: 0,
+    };
+
     writeFileSync(join(trialDir, 'result.json'), JSON.stringify({
       task_name: `terminal-bench/${spec.task}`,
       task_checksum: spec.checksum ?? `sum-${spec.task}`,
       config: { agent: { model_name: 'flash', kwargs: { evolve: spec.evolve } } },
-      agent_result: spec.noAgentResult ? null : spec.noUsage ? { metadata } : {
-        n_input_tokens: spec.promptTokens ?? 100_000,
-        n_output_tokens: spec.outputTokens ?? 1_000,
-        n_cache_tokens: 0,
-        metadata,
-      },
+      agent_result: spec.noAgentResult ? null : { ...tokens, metadata },
       verifier_result: spec.noVerifierResult ? null : { rewards: { reward: spec.reward } },
       exception_info: null,
     }));

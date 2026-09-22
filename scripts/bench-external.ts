@@ -269,10 +269,10 @@ export function armSpend(arm: ExternalArm): ArmSpend {
     verifiedSuccesses: arm.trials.filter((trial) => trial.passed === true).length,
     verifierFailures: arm.trials.filter((trial) => trial.passed === false).length,
     unscoredTrials: arm.declaredTrials - arm.trials.filter((trial) => trial.reward !== null).length,
-    usage: arm.trials.reduce<Usage>((total, t) => addUsage(total, t.usage), {}),
+    usage: arm.trials.reduce<Usage>((summed, t) => addUsage(summed, t.usage), {}),
     spendUnreported: arm.declaredTrials - billable.filter((tokens) => tokens !== null).length,
     billableTokens: arm.trials.length === arm.declaredTrials && billable.every((tokens) => tokens !== null)
-      ? billable.reduce((total, tokens) => total + tokens, 0)
+      ? billable.reduce((summed, tokens) => summed + tokens, 0)
       : null,
     models: [...new Set(arm.trials.map((t) => t.model ?? 'unknown'))].sort(),
     evolveFlags: [...new Set(arm.trials.map((t) => t.evolve))],
@@ -518,7 +518,7 @@ function retain(
       budget: { wallClockMs: 0, maxTokens: 0 },
       variants: arms.map((arm) => arm.id),
       evolving: arms.some((arm) => arm.trials.some((t) => t.evolve === true)),
-      model: armSpend(arms[0]!).models.join(','),
+      model: armSpend(arms[0]).models.join(','),
       providerHash: null,
       taskIds: paired.map((p) => p.taskId),
     },
@@ -561,6 +561,20 @@ function describeAdmissibility(verdict: Admissibility): void {
   for (const c of verdict.conditions) {
     console.log(`  ${c.met ? 'ok  ' : 'NO  '}${c.name.padEnd(42)} ${c.detail}`);
   }
+}
+
+/** Blank when both arms agreed on pass/fail, `FLIP` when they disagreed, and
+ *  `UNSCORED` when one arm never produced a reward for the task. */
+function describeFlip(pair: PairedTask): string {
+  if (pair.a === null || pair.b === null) return 'UNSCORED';
+
+  return (pair.a >= 1) === (pair.b >= 1) ? '   ' : 'FLIP';
+}
+
+function describeChecksum(sameChecksum: boolean | null): string {
+  if (sameChecksum === null) return 'checksum n/a';
+
+  return sameChecksum ? 'same checksum' : 'checksum differs';
 }
 
 function cmdCompare(args: Map<string, string>): number {
@@ -619,8 +633,9 @@ function cmdCompare(args: Map<string, string>): number {
   console.log('');
 
   for (const p of paired) {
-    const mark = p.a === null || p.b === null ? 'UNSCORED' : (p.a >= 1) === (p.b >= 1) ? '   ' : 'FLIP';
-    const same = p.sameChecksum === null ? 'checksum n/a' : p.sameChecksum ? 'same checksum' : 'checksum differs';
+    const mark = describeFlip(p);
+    const same = describeChecksum(p.sameChecksum);
+
     console.log(`  ${mark} ${p.taskId.padEnd(34)} A=${p.a} B=${p.b}  ${same}`);
   }
 
@@ -722,6 +737,12 @@ Usage:
 A Harbor job directory is the one holding per-trial subdirectories, each with a
 result.json — for example bench-artifacts/tb21-main-374ff97.`;
 
+const COMMANDS = { compare: cmdCompare, gain: cmdGain };
+
+function isCommand(name: string): name is keyof typeof COMMANDS {
+  return Object.hasOwn(COMMANDS, name);
+}
+
 async function main(): Promise<void> {
   const { command, args } = parseArgv(process.argv.slice(2));
 
@@ -731,11 +752,9 @@ async function main(): Promise<void> {
     return;
   }
 
-  const code = command === 'compare' ? cmdCompare(args)
-    : command === 'gain' ? cmdGain(args)
-    : (() => { throw new Error(`unknown command "${command}" (expected compare | gain)`); })();
+  if (!isCommand(command)) throw new Error(`unknown command "${command}" (expected compare | gain)`);
 
-  process.exit(code);
+  process.exit(COMMANDS[command](args));
 }
 
 if (import.meta.main) {

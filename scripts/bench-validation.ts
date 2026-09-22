@@ -188,10 +188,17 @@ export async function runValidation(options: RunValidationOptions): Promise<Vali
   for (const task of dev) {
     const result = await validate(task, 'dev');
     const onlyOnRetry = result.ok && (result.passedOnAttempt ?? 1) > 1;
+    let mark = 'ok  ';
 
-    if (!result.ok) badIds.push(task.id);
-    else if (onlyOnRetry) flakyDev.push(task.id);
-    log(`  ${!result.ok ? 'BAD ' : onlyOnRetry ? 'FLKY' : 'ok  '} ${task.id.padEnd(28)} ${result.detail}`);
+    if (!result.ok) {
+      badIds.push(task.id);
+      mark = 'BAD ';
+    } else if (onlyOnRetry) {
+      flakyDev.push(task.id);
+      mark = 'FLKY';
+    }
+
+    log(`  ${mark} ${task.id.padEnd(28)} ${result.detail}`);
   }
 
   const sealedResult = await options.sealed.validate((task) => validate(task, 'sealed'), options.only);

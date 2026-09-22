@@ -107,12 +107,10 @@ async function main(): Promise<void> {
 
   if (fresh) mkdirSync(dirname(input.dbPath), { recursive: true });
   const db = new Database(input.dbPath);
-  // SAFETY: The CLI backend owns this bun:sqlite adapter boundary; the same Database instance is its production input.
-  const backendDb = db as never;
   db.exec('PRAGMA journal_mode = WAL');
 
   if (fresh) {
-    await createWorkspace(backendDb, {
+    await createWorkspace(db, {
       name: input.workspaceName, purpose: input.purpose, llm: analyst,
     });
     // `initSearchTables` and `initScaffoldTables` seed the search and scaffold
@@ -125,7 +123,7 @@ async function main(): Promise<void> {
     initCraftedToolsTables(sql);
   }
 
-  const rt = createCLIRuntime(backendDb, { dbPath: input.dbPath, llm: analyst });
+  const rt = createCLIRuntime(db, { dbPath: input.dbPath, llm: analyst });
   const governor = new MissionGovernor({ storage: rt.storage, actor: rt.actor });
   const byIndex = new Map(panel.map((config, index) => [forkSpec(index), config]));
 
@@ -157,7 +155,7 @@ async function main(): Promise<void> {
     // capture and hands it down, which is what makes `HeadReport.fileChanges`
     // report the files THIS head changed rather than the empty list a seam that
     // dropped it produced.
-    hostHead: (input, writes) => seating.hostHead(input, writes),
+    hostHead: (head, writes) => seating.hostHead(head, writes),
     model: () => benchChatModel(analyst),
     parentRuntime: rt,
     resolveModel: (spec: string) => {

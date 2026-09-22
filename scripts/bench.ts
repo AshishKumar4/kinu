@@ -474,8 +474,10 @@ async function runAttempt(req: AttemptRequest): Promise<AttemptOutcome> {
   // absence travels on the outcome instead: report.ts folds an unmeasured
   // attempt to a null cost rather than a zero one, the same way it already
   // refuses to render absent model-call evidence as zero.
-  const budgetBreach = budget.timedOut() ? 'wall-clock'
-    : (tokens !== undefined && tokens > common.budget.maxTokens ? 'tokens' : null);
+  let budgetBreach: AttemptOutcome['budgetBreach'] = null;
+
+  if (budget.timedOut()) budgetBreach = 'wall-clock';
+  else if (tokens !== undefined && tokens > common.budget.maxTokens) budgetBreach = 'tokens';
 
   const outcome: AttemptOutcome = {
     taskId: task.id,
@@ -500,17 +502,23 @@ async function runAttempt(req: AttemptRequest): Promise<AttemptOutcome> {
   return outcome;
 }
 
+interface RepeatsRequest {
+  task: BenchTask;
+  solvers: { a: Solver; b: Solver };
+  family: BenchFamily;
+  common: CommonOptions;
+  retention: RunRetention;
+}
+
+interface PairRequest extends RepeatsRequest {
+  repeat: number;
+}
+
 /** Both variants on one task, order randomized from the seed, each in its own
  *  sandbox and its own KINU_HOME — so no memory, CraftStore, or scaffold
  *  state from one variant can reach the next. */
-async function runPair(
-  task: BenchTask,
-  repeat: number,
-  solvers: { a: Solver; b: Solver },
-  family: BenchFamily,
-  common: CommonOptions,
-  retention: RunRetention,
-): Promise<{ a: AttemptOutcome; b: AttemptOutcome }> {
+async function runPair(req: PairRequest): Promise<{ a: AttemptOutcome; b: AttemptOutcome }> {
+  const { task, repeat, solvers, family, common, retention } = req;
   const order = runOrder(task.id, common.seed, repeat);
   const first = order === 'ab' ? 'a' : 'b';
   const second = first === 'a' ? 'b' : 'a';
@@ -528,18 +536,12 @@ async function runPair(
 
 /** Every repeat of one task, both variants. The repeats are attempts at the
  *  SAME task and are aggregated as one pair downstream — see bench/stats.ts. */
-async function runRepeats(
-  task: BenchTask,
-  solvers: { a: Solver; b: Solver },
-  family: BenchFamily,
-  common: CommonOptions,
-  retention: RunRetention,
-): Promise<{ a: AttemptOutcome[]; b: AttemptOutcome[] }> {
+async function runRepeats(req: RepeatsRequest): Promise<{ a: AttemptOutcome[]; b: AttemptOutcome[] }> {
   const a: AttemptOutcome[] = [];
   const b: AttemptOutcome[] = [];
 
-  for (let repeat = 0; repeat < common.repeats; repeat++) {
-    const pair = await runPair(task, repeat, solvers, family, common, retention);
+  for (let repeat = 0; repeat < req.common.repeats; repeat++) {
+    const pair = await runPair({ ...req, repeat });
     a.push(pair.a);
     b.push(pair.b);
   }
@@ -646,17 +648,21 @@ function openRetention(opts: {
   return retention;
 }
 
+interface WellFormedRequest {
+  task: BenchTask;
+  repeat: number;
+  family: BenchFamily;
+  common: CommonOptions;
+  oracle: Solver;
+  retention: RunRetention;
+}
+
 /** One well-formedness check: the task must fail with nothing done and pass
  *  under the oracle. Both directions are machine-run; neither involves a
  *  variant, so this says nothing about anyone's performance. */
-async function runWellFormedAttempt(
-  task: BenchTask,
-  repeat: number,
-  family: BenchFamily,
-  common: CommonOptions,
-  oracle: Solver,
-  retention: RunRetention,
-): Promise<WellFormedAttempt> {
+async function runWellFormedAttempt(req: WellFormedRequest): Promise<WellFormedAttempt> {
+  const { task, repeat, family, common, oracle, retention } = req;
+
   const broken = await runAttempt({
     task, solver: nullSolver, slot: 'a', repeat, family, common, retention,
     attemptId: `validate-broken-${task.id}-${repeat}`,
@@ -710,7 +716,7 @@ async function cmdValidate(args: Map<string, string>, common: CommonOptions): Pr
     diagnosticsDir: retention.dir,
     devTasks,
     sealed: corpus.sealed,
-    runAttempt: (task, repeat) => runWellFormedAttempt(task, repeat, family, common, oracle, retention),
+    runAttempt: (task, repeat) => runWellFormedAttempt({ task, repeat, family, common, oracle, retention }),
   };
 
   if (only !== undefined) options.only = only;
@@ -761,7 +767,7 @@ async function cmdCompare(args: Map<string, string>, common: CommonOptions): Pro
   const devAttempts: AttemptOutcome[] = [];
 
   for (const task of devTasks) {
-    const { a, b } = await runRepeats(task, solvers, family, common, retention);
+    const { a, b } = await runRepeats({ task, solvers, family, common, retention });
     devAttempts.push(...a, ...b);
     console.error(`  ${task.id.padEnd(28)} ${config.variantA}=${tally(a)}  ${config.variantB}=${tally(b)}`);
   }
@@ -772,7 +778,7 @@ async function cmdCompare(args: Map<string, string>, common: CommonOptions): Pro
   if (args.has('sealed')) {
     console.error(`sealed split: ${corpus.sealed.size} tasks × 2 variants × ${common.repeats} repeat(s) (aggregates only)`);
     sealed = await corpus.sealed.evaluate(async (task) => {
-      const { a, b } = await runRepeats(task, solvers, family, common, retention);
+      const { a, b } = await runRepeats({ task, solvers, family, common, retention });
 
       return { a: a.map((o) => o.passed), b: b.map((o) => o.passed) };
     }, { seed: common.seed });
@@ -957,7 +963,7 @@ async function cmdGain(args: Map<string, string>, common: CommonOptions): Promis
     budget: common.budget,
     seed: common.seed,
     variantA: stateless.id,
-    variantB: statefulPasses[0]!.id,
+    variantB: statefulPasses[0].id,
     repeats: common.repeats,
     manifestHash: family.corpus.manifestHash,
   };
@@ -966,15 +972,17 @@ async function cmdGain(args: Map<string, string>, common: CommonOptions): Promis
 
   const retention = openRetention({
     command: 'gain', runId, common, family,
-    variants: [stateless.id, statefulPasses[0]!.id], tasks: sequence,
+    variants: [stateless.id, statefulPasses[0].id], tasks: sequence,
     model: pilot?.model ?? null, providerHash: pilot?.providerHash ?? null,
   });
 
-  const scores = new Map<string, { stateful: number; stateless: number }>();
+  // One score row per position in the sequence: every arm of every pass walks
+  // that sequence in that order, so the position it is on is the row it adds to.
+  const scores = sequence.map(() => ({ stateful: 0, stateless: 0 }));
   const attempts: AttemptOutcome[] = [];
 
   for (let pass = 0; pass < common.repeats; pass++) {
-    const stateful = statefulPasses[pass]!;
+    const stateful = statefulPasses[pass];
 
     // Both arms see the identical sequence in the identical order — that is the
     // whole design. Which arm runs first is randomized from the seed so any host
@@ -995,9 +1003,7 @@ async function cmdGain(args: Map<string, string>, common: CommonOptions): Promis
         });
 
         attempts.push(outcome);
-        const entry = scores.get(task.id) ?? { stateful: 0, stateless: 0 };
-        entry[arm.key] += (outcome.passed ? 1 : 0) / common.repeats;
-        scores.set(task.id, entry);
+        scores[index][arm.key] += (outcome.passed ? 1 : 0) / common.repeats;
         console.error(`  ${String(index).padStart(2)} ${task.id.padEnd(28)} ${outcome.passed ? 'pass' : 'fail'}`);
       }
     }
@@ -1006,8 +1012,8 @@ async function cmdGain(args: Map<string, string>, common: CommonOptions): Promis
   const perTask: GainTaskScore[] = sequence.map((task, index) => ({
     taskId: task.id,
     index,
-    stateful: scores.get(task.id)!.stateful,
-    stateless: scores.get(task.id)!.stateless,
+    stateful: scores[index].stateful,
+    stateless: scores[index].stateless,
   }));
 
   const report = {
@@ -1116,6 +1122,17 @@ export function parseArgv(argv: string[]): ParsedBenchArgv {
   return { command, args };
 }
 
+const COMMANDS = {
+  validate: cmdValidate,
+  pilot: cmdPilot,
+  compare: cmdCompare,
+  gain: cmdGain,
+};
+
+function isCommand(name: string): name is keyof typeof COMMANDS {
+  return Object.hasOwn(COMMANDS, name);
+}
+
 async function main(): Promise<void> {
   const { command, args } = parseArgv(process.argv.slice(2));
 
@@ -1131,15 +1148,11 @@ async function main(): Promise<void> {
     if (!args.has('repeats')) args.set('repeats', String(MIN_PILOT_REPEATS));
   }
 
+  if (!isCommand(command)) throw new Error(`unknown command "${command}"`);
+
   const common = parseCommon(args);
 
-  const code = command === 'validate' ? await cmdValidate(args, common)
-    : command === 'pilot' ? await cmdPilot(args, common)
-    : command === 'compare' ? await cmdCompare(args, common)
-    : command === 'gain' ? await cmdGain(args, common)
-    : (() => { throw new Error(`unknown command "${command}"`); })();
-
-  process.exit(code);
+  process.exit(await COMMANDS[command](args, common));
 }
 
 if (import.meta.main) {
