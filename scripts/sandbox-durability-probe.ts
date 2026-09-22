@@ -583,6 +583,299 @@ async function probeStrategyDecision(origin: string, token: string): Promise<Non
   return { strategy: picked.strategy, durable: true };
 }
 
+/** P1: a base layer large enough that restore has to be lazy, plus the marker
+ *  P3 deletes. */
+async function probeBaseLayer(origin: string, token: string): Promise<NonNullable<ProbeEvidence['P1']>> {
+  const bigId = `big-${Date.now()}.bin`;
+  const chunk = Buffer.alloc(4 * 1024 * 1024, 0x5a);
+
+  for (let i = 0; i < BASE_MIB / 4; i++) {
+    await call(origin, token, "/writeFile", {
+      path: `/workspace/${bigId}`, content: chunk.toString("base64"),
+    });
+  }
+
+  await call(origin, token, "/writeFile",
+    { path: "/workspace/doomed-marker.txt", content: Buffer.from("delete me").toString("base64") });
+  await call(origin, token, "/tick");
+
+  const baseCheckpoint = await request({
+    origin, token, op: "/finalCheckpoint", body: {}, schema: CheckpointResponseSchema,
+  });
+
+  console.log("P1 base layer ok");
+
+  return { bigFile: bigId, baseMib: BASE_MIB, checkpoint: baseCheckpoint };
+}
+
+/** P2 — lazy restore: stop, wake, time it, read ONE slice deep in the file. */
+async function probeLazyRestore(
+  origin: string,
+  token: string,
+  bigFile: string,
+): Promise<NonNullable<ProbeEvidence['P2']>> {
+  await restartVerified(origin, token);
+  const woke = await wake(origin, token, "grep overlay /proc/mounts || echo NO_OVERLAY");
+
+  if (String(woke.stdout ?? "").includes("NO_OVERLAY")) {
+    throw new Error("attach did not land: /workspace is not an overlay after a verified restart");
+  }
+
+  const slice = await call(origin, token, "/exec", {
+    command: `dd if=/workspace/${bigFile} bs=4096 skip=100000 count=1 2>/dev/null | md5sum`,
+    timeoutMs: 30_000,
+  });
+
+  if (woke.stdout === undefined) {
+    throw new Error(`wake did not attach a filesystem: ${JSON.stringify(woke).slice(0, 200)}`);
+  }
+
+  if (String(slice.stdout ?? "").trim().length < 32) throw new Error("deep slice read returned nothing");
+  console.log(`P2 lazy restore ok (wake ${woke.wallMs}ms, deep slice ${slice.wallMs}ms)`);
+
+  return {
+    wakeWallMs: woke.wallMs, sliceWallMs: slice.wallMs,
+    overlay: (woke.stdout ?? '').trim().slice(0, 200), restartVerified: true,
+  };
+}
+
+/** P3 — whiteout: delete the marker, add another file, tick the delta, restart. */
+async function probeWhiteouts(origin: string, token: string): Promise<NonNullable<ProbeEvidence['P3']>> {
+  await call(origin, token, "/exec", { command: "rm /workspace/doomed-marker.txt" });
+  await call(origin, token, "/writeFile",
+    { path: "/workspace/new-after-base.txt", content: Buffer.from("added").toString("base64") });
+
+  // FORCED, not a tick: the base is a minute old and the five-minute interval
+  // gate correctly declines an ordinary tick — measured, first run of this
+  // phase against a real container.
+  const checkpoint = await request({
+    origin, token, op: "/finalCheckpoint", body: {}, schema: CheckpointResponseSchema,
+  });
+
+  const upperBefore = await call(origin, token, "/exec", {
+    command: "ls -la /workspace; echo ---; grep workspace /proc/mounts; echo ---; ls -la /var/tmp/kinu/upper",
+  });
+
+  console.log(`P3 checkpoint=${JSON.stringify(checkpoint)}\n${upperBefore.stdout ?? ""}`);
+  await restartVerified(origin, token);
+
+  const attached = await call(origin, token, "/exec", {
+    command: "grep overlay /proc/mounts || echo NO_OVERLAY; ls -1 /workspace | wc -l",
+  });
+
+  if (String(attached.stdout ?? "").includes("NO_OVERLAY")) {
+    throw new Error(`restore did not attach after a verified restart: ${JSON.stringify(attached).slice(0, 240)}`);
+  }
+
+  const afterState = await call(origin, token, "/exec", {
+    command: "ls -la /workspace; echo ---; grep workspace /proc/mounts; echo ---; ls -la /var/tmp/kinu/upper",
+  });
+
+  console.log(`P3 after wake:\n${afterState.stdout ?? ""}`);
+  const gone = await call(origin, token, "/exec", { command: "test -e /workspace/doomed-marker.txt && echo present || echo absent" });
+  const added = await call(origin, token, "/exec", { command: "cat /workspace/new-after-base.txt" });
+
+  if ((gone.stdout ?? "").includes("present")) throw new Error("DELETION DID NOT SURVIVE RESTORE");
+
+  if (!(added.stdout ?? "").includes("added")) throw new Error("delta content lost across restore");
+  console.log("P3 whiteouts ok");
+
+  return { deletedAbsent: true, additionPresent: true, checkpoint };
+}
+
+/** P7 — lifecycle honesty on a REAL container. The bad process exits on
+ *  restart and the port token persists, so the next restoration has to prove
+ *  a listener that is not there. It must NOT expose a dead URL or report
+ *  ready; it must stay attached so the caller can repair it. */
+async function probeLifecycleHonesty(origin: string, token: string): Promise<NonNullable<ProbeEvidence['P7']>> {
+  const FAILED_PORT = 18_081;
+
+  const failed = await request({
+    origin, token, op: "/startProcess",
+    body: { command: 'node -e "process.exit(1)"', cwd: "/workspace" },
+    schema: ProcessStartResponseSchema,
+  });
+
+  await request({
+    origin, token, op: "/notePortExposed",
+    body: { port: FAILED_PORT, name: "failed-lifecycle-probe" },
+    schema: PortTokenResponseSchema,
+  });
+  await restartVerified(origin, token);
+  const lifecycle = await request({ origin, token, op: "/state", body: {}, schema: LifecycleStateSchema });
+
+  const failedListener = await call(origin, token, "/exec", {
+    command: `curl -sS -o /dev/null -m 2 -w '%{http_code}|%{exitcode}' --connect-timeout 1 http://127.0.0.1:${FAILED_PORT}/ 2>&1 || true`,
+  });
+
+  const specsRetained = lifecycle.supervised.some(row => row.processId === failed.processId)
+    && lifecycle.ports.some(row => row.port === FAILED_PORT);
+
+  const unready = lifecycle.unready;
+
+  if (lifecycle.ready || unready === undefined || unready === null || !unready.includes(failed.processId)
+    || !(failedListener.stdout ?? '').includes('|7') || !specsRetained) {
+    throw new Error(
+      `lifecycle failure was not honest: state=${JSON.stringify(lifecycle)} `
+      + `listener=${String(failedListener.stdout)}`,
+    );
+  }
+
+  console.log("P7 lifecycle honesty ok");
+
+  return {
+    failedProcessId: failed.processId,
+    failedPort: FAILED_PORT,
+    ready: false,
+    unready,
+    listenerAbsent: true,
+    specsRetained: true,
+  };
+}
+
+/** P5 — the hold guarantee, as the platform actually permits it: the heartbeat
+ *  chain never lets the box sleep from OUR inactivity, and if the platform
+ *  replaces the instance anyway (spot reclaim — measured on run
+ *  kinu-dur-probe-c0a7850e: ticks ok through the whole window, /tmp fresh),
+ *  everything durable comes back. Replacement is a MEASUREMENT, not a failure;
+ *  a dead tick chain or lost workspace state is the failure. */
+async function probeIdleHold(origin: string, token: string): Promise<NonNullable<ProbeEvidence['P5']>> {
+  // P5 must not classify a marker absent by construction as a replacement.
+  // Arm AND VERIFY it before idle, then corroborate its fate with Devbox's
+  // durable boot identity. Either signal alone is weaker.
+  const beforeIdle = await request({ origin, token, op: "/state", body: {}, schema: IdleTickSchema });
+
+  if (beforeIdle.bootId === undefined || beforeIdle.bootId === null) {
+    throw new Error("P5 began without a durable boot identity");
+  }
+
+  const idleMarker = `idle-${Date.now()}`;
+  await call(origin, token, "/exec", {
+    command: `printf %s ${idleMarker} > /tmp/idle-probe-marker`,
+  });
+
+  const markerBeforeIdle = await call(origin, token, "/exec", {
+    command: `test "$(cat /tmp/idle-probe-marker)" = ${idleMarker} && echo armed || echo missing`,
+  });
+
+  if (!(markerBeforeIdle.stdout ?? "").includes("armed")) {
+    throw new Error(`P5 marker did not persist before idle: ${markerBeforeIdle.stdout}`);
+  }
+
+  const schedules = await request({
+    origin, token, op: "/heartbeatSchedules", body: {}, schema: ScheduleRowsSchema,
+  });
+
+  if (schedules.length === 0) throw new Error("heartbeat not armed");
+  const idleStartedAt = Date.now();
+  console.log(`P5 idle ${IDLE_MINUTES} min …`);
+  await sleep(IDLE_MINUTES * 60_000);
+  // Read the durable tick trail BEFORE the exec below wakes the box:
+  // /state never touches the container, so this is the post-idle truth.
+  const idleState = await request({ origin, token, op: "/state", body: {}, schema: IdleTickSchema });
+
+  const idleSchedules = await request({
+    origin, token, op: "/heartbeatSchedules", body: {}, schema: ScheduleRowsSchema,
+  });
+
+  const tick = idleState.lastTick ?? undefined;
+  const lastTick = JSON.stringify(tick ?? null);
+  const heartbeatRows = String(idleSchedules.length);
+  // (a) The chain stayed alive through the idle window: the last tick is
+  // recent and armed its successor. A chain that died mid-window shows a
+  // stale `at` — that is the inactivity-sleep failure P5 exists to catch.
+  const tickAgeMs = tick === undefined ? Number.POSITIVE_INFINITY : Date.now() - tick.at;
+
+  if (!(tickAgeMs < 3 * 60_000 && tick?.armedNext === true)) {
+    throw new Error(`heartbeat chain died during idle: lastTick=${lastTick}; heartbeatRows=${heartbeatRows}`);
+  }
+
+  if (Date.now() - idleStartedAt < IDLE_MINUTES * 60_000) throw new Error("idle window did not elapse");
+
+  // (b) Replacement detector: the armed marker and durable boot identity
+  // must agree. A missing marker that was never verified before idle proves
+  // nothing; a boot id alone can be absent while a stamp is still in flight.
+  const marker = await call(origin, token, "/exec", {
+    command: `test "$(cat /tmp/idle-probe-marker 2>/dev/null)" = ${idleMarker} && echo alive || echo fresh-disk`,
+  });
+
+  const replacedByMarker = !(marker.stdout ?? "").includes("alive");
+  const replacedByBoot = idleState.bootId !== beforeIdle.bootId;
+
+  if (replacedByMarker !== replacedByBoot) {
+    throw new Error(
+      `P5 replacement signals disagree: marker=${marker.stdout} before=${beforeIdle.bootId} after=${idleState.bootId}`,
+    );
+  }
+
+  const replaced = replacedByBoot;
+
+  // (c) Continuity: the workspace bytes are back, whether or not the instance
+  // survived. P4 is deliberately after this control, so no stale server claim
+  // can make P5 fail before the supervision phase exists.
+  const wsAfterIdle = await call(origin, token, "/exec", {
+    command: "cat /workspace/new-after-base.txt",
+  });
+
+  if (!(wsAfterIdle.stdout ?? "").includes("added")) throw new Error("workspace lost across the idle window");
+  console.log(`P5 hold ok (chain alive; instance ${replaced ? "REPLACED by platform and healed" : "survived"})`);
+
+  return { idleMinutes: IDLE_MINUTES, chainAlive: true, instanceReplaced: replaced, workspaceIntact: true };
+}
+
+/** P6 — the exact quiesce sequence, then one more wake. */
+async function probeFinalCycle(origin: string, token: string): Promise<NonNullable<ProbeEvidence['P6']>> {
+  await request({ origin, token, op: "/finalCheckpoint", body: {}, schema: CheckpointResponseSchema });
+  await call(origin, token, "/setKeepAlive", { keepAlive: false });
+  await call(origin, token, "/stop");
+  await wake(origin, token);
+  const still = await call(origin, token, "/exec", { command: "cat /workspace/new-after-base.txt" });
+
+  if (!(still.stdout ?? "").includes("added")) throw new Error("workspace lost after final cycle");
+  console.log("P6 final SIGTERM cycle ok");
+
+  return { intactAfterFinalStop: true };
+}
+
+/** P4 — supervision across a stop+wake: a recorded process comes back under
+ *  its same id, and the preview token it was reached through is the same one. */
+async function probeSupervision(origin: string, token: string): Promise<NonNullable<ProbeEvidence['P4']>> {
+  const proc = await request({
+    origin, token, op: "/startProcess",
+    body: { command: 'node -e "setInterval(() => {}, 1000)"', cwd: "/workspace" },
+    schema: ProcessStartResponseSchema,
+  });
+
+  const portBeforeRestart = await request({
+    origin, token, op: "/notePortExposed", body: { port: PORT, name: "probe" }, schema: PortTokenResponseSchema,
+  });
+
+  await call(origin, token, "/stop");
+  await wake(origin, token);
+
+  const procs = await request({
+    origin, token, op: "/listProcesses", body: {}, schema: SupervisedProcessResponsesSchema,
+  });
+
+  const portAfterRestart = await request({
+    origin, token, op: "/notePortExposed", body: { port: PORT, name: "probe" }, schema: PortTokenResponseSchema,
+  });
+
+  if (portBeforeRestart.urlToken !== portAfterRestart.urlToken) {
+    throw new Error(`preview token changed across restart: ${portBeforeRestart.urlToken}/${portAfterRestart.urlToken}`);
+  }
+
+  const restarted = procs.some(process => process.processId === proc.processId && process.restartable);
+
+  if (!restarted) throw new Error(`supervised process did not return: ${JSON.stringify(procs).slice(0, 200)}`);
+  console.log("P4 supervision ok");
+
+  return {
+    processId: proc.processId,
+    urlToken: portAfterRestart.urlToken,
+  };
+}
+
 export async function run(): Promise<DurabilityProbeArtifact> {
   const token = process.env.PROBE_TOKEN ?? randomUUID();
   const runId = randomUUID().slice(0, 8);
@@ -610,273 +903,17 @@ export async function run(): Promise<DurabilityProbeArtifact> {
     evidence.P0 = await probeStrategyDecision(origin, token);
     console.log(`P0 strategy ${evidence.P0.strategy} ok (matches the decided default; durable store bound)`);
 
-    // P1 — base layer.
-    const bigId = `big-${Date.now()}.bin`;
-    const chunk = Buffer.alloc(4 * 1024 * 1024, 0x5a);
-
-    for (let i = 0; i < BASE_MIB / 4; i++) {
-      await call(origin, token, "/writeFile", {
-        path: `/workspace/${bigId}`, content: chunk.toString("base64"),
-      });
-    }
-
-    await call(origin, token, "/writeFile",
-      { path: "/workspace/doomed-marker.txt", content: Buffer.from("delete me").toString("base64") });
-    await call(origin, token, "/tick");
-
-    const baseCheckpoint = await request({
-      origin, token, op: "/finalCheckpoint", body: {}, schema: CheckpointResponseSchema,
-    });
-
-    evidence.P1 = { bigFile: bigId, baseMib: BASE_MIB, checkpoint: baseCheckpoint };
-    console.log("P1 base layer ok");
-
-    // P2 — lazy restore: stop, wake, time it, read ONE slice deep in the file.
-    await restartVerified(origin, token);
-    const woke = await wake(origin, token, "grep overlay /proc/mounts || echo NO_OVERLAY");
-
-    if (String(woke.stdout ?? "").includes("NO_OVERLAY")) {
-      throw new Error("attach did not land: /workspace is not an overlay after a verified restart");
-    }
-
-    const slice = await call(origin, token, "/exec", {
-      command: `dd if=/workspace/${bigId} bs=4096 skip=100000 count=1 2>/dev/null | md5sum`,
-      timeoutMs: 30_000,
-    });
-
-    if (woke.stdout === undefined) {
-      throw new Error(`wake did not attach a filesystem: ${JSON.stringify(woke).slice(0, 200)}`);
-    }
-
-    if (String(slice.stdout ?? "").trim().length < 32) throw new Error("deep slice read returned nothing");
-    evidence.P2 = {
-      wakeWallMs: woke.wallMs, sliceWallMs: slice.wallMs,
-      overlay: (woke.stdout ?? '').trim().slice(0, 200), restartVerified: true,
-    };
-    console.log(`P2 lazy restore ok (wake ${woke.wallMs}ms, deep slice ${slice.wallMs}ms)`);
-
-    // P3 — whiteout: delete the marker, add another file, tick the delta, restart.
-    await call(origin, token, "/exec", { command: "rm /workspace/doomed-marker.txt" });
-    await call(origin, token, "/writeFile",
-      { path: "/workspace/new-after-base.txt", content: Buffer.from("added").toString("base64") });
-
-    // FORCED, not a tick: the base is a minute old and the five-minute interval
-    // gate correctly declines an ordinary tick — measured, first run of this
-    // phase against a real container.
-    const checkpoint = await request({
-      origin, token, op: "/finalCheckpoint", body: {}, schema: CheckpointResponseSchema,
-    });
-
-    const upperBefore = await call(origin, token, "/exec", {
-      command: "ls -la /workspace; echo ---; grep workspace /proc/mounts; echo ---; ls -la /var/tmp/kinu/upper",
-    });
-
-    console.log(`P3 checkpoint=${JSON.stringify(checkpoint)}\n${upperBefore.stdout ?? ""}`);
-    await restartVerified(origin, token);
-
-    const attached = await call(origin, token, "/exec", {
-      command: "grep overlay /proc/mounts || echo NO_OVERLAY; ls -1 /workspace | wc -l",
-    });
-
-    if (String(attached.stdout ?? "").includes("NO_OVERLAY")) {
-      throw new Error(`restore did not attach after a verified restart: ${JSON.stringify(attached).slice(0, 240)}`);
-    }
-
-    const afterState = await call(origin, token, "/exec", {
-      command: "ls -la /workspace; echo ---; grep workspace /proc/mounts; echo ---; ls -la /var/tmp/kinu/upper",
-    });
-
-    console.log(`P3 after wake:\n${afterState.stdout ?? ""}`);
-    const gone = await call(origin, token, "/exec", { command: "test -e /workspace/doomed-marker.txt && echo present || echo absent" });
-    const added = await call(origin, token, "/exec", { command: "cat /workspace/new-after-base.txt" });
-
-    if ((gone.stdout ?? "").includes("present")) throw new Error("DELETION DID NOT SURVIVE RESTORE");
-
-    if (!(added.stdout ?? "").includes("added")) throw new Error("delta content lost across restore");
-    evidence.P3 = { deletedAbsent: true, additionPresent: true, checkpoint };
-    console.log("P3 whiteouts ok");
-
-    // P7 — lifecycle honesty on a REAL container. The bad process exits on
-    // restart and the port token persists, so the next restoration has to prove
-    // a listener that is not there. It must NOT expose a dead URL or report
-    // ready; it must stay attached so the caller can repair it.
-    const FAILED_PORT = 18_081;
-
-    const failed = await request({
-      origin, token, op: "/startProcess",
-      body: { command: 'node -e "process.exit(1)"', cwd: "/workspace" },
-      schema: ProcessStartResponseSchema,
-    });
-
-    await request({
-      origin, token, op: "/notePortExposed",
-      body: { port: FAILED_PORT, name: "failed-lifecycle-probe" },
-      schema: PortTokenResponseSchema,
-    });
-    await restartVerified(origin, token);
-    const lifecycle = await request({ origin, token, op: "/state", body: {}, schema: LifecycleStateSchema });
-
-    const failedListener = await call(origin, token, "/exec", {
-      command: `curl -sS -o /dev/null -m 2 -w '%{http_code}|%{exitcode}' --connect-timeout 1 http://127.0.0.1:${FAILED_PORT}/ 2>&1 || true`,
-    });
-
-    const specsRetained = lifecycle.supervised.some(row => row.processId === failed.processId)
-      && lifecycle.ports.some(row => row.port === FAILED_PORT);
-
-    const unready = lifecycle.unready;
-
-    if (lifecycle.ready || unready === undefined || unready === null || !unready.includes(failed.processId)
-      || !(failedListener.stdout ?? '').includes('|7') || !specsRetained) {
-      throw new Error(
-        `lifecycle failure was not honest: state=${JSON.stringify(lifecycle)} `
-        + `listener=${String(failedListener.stdout)}`,
-      );
-    }
-
-    evidence.P7 = {
-      failedProcessId: failed.processId,
-      failedPort: FAILED_PORT,
-      ready: false,
-      unready,
-      listenerAbsent: true,
-      specsRetained: true,
-    };
-    console.log("P7 lifecycle honesty ok");
-
-    // P5 must not classify a marker absent by construction as a replacement.
-    // Arm AND VERIFY it before idle, then corroborate its fate with Devbox's
-    // durable boot identity. Either signal alone is weaker.
-    const beforeIdle = await request({ origin, token, op: "/state", body: {}, schema: IdleTickSchema });
-
-    if (beforeIdle.bootId === undefined || beforeIdle.bootId === null) {
-      throw new Error("P5 began without a durable boot identity");
-    }
-
-    const idleMarker = `idle-${Date.now()}`;
-    await call(origin, token, "/exec", {
-      command: `printf %s ${idleMarker} > /tmp/idle-probe-marker`,
-    });
-
-    const markerBeforeIdle = await call(origin, token, "/exec", {
-      command: `test "$(cat /tmp/idle-probe-marker)" = ${idleMarker} && echo armed || echo missing`,
-    });
-
-    if (!(markerBeforeIdle.stdout ?? "").includes("armed")) {
-      throw new Error(`P5 marker did not persist before idle: ${markerBeforeIdle.stdout}`);
-    }
-
-    // P5 — the hold guarantee, as the platform actually permits it: the
-    // heartbeat chain never lets the box sleep from OUR inactivity, and if the
-    // platform replaces the instance anyway (spot reclaim — measured on run
-    // kinu-dur-probe-c0a7850e: ticks ok through the whole window, /tmp fresh),
-    // everything durable comes back. Replacement is a MEASUREMENT, not a
-    // failure; a dead tick chain or lost workspace state is the failure.
-    const schedules = await request({
-      origin, token, op: "/heartbeatSchedules", body: {}, schema: ScheduleRowsSchema,
-    });
-
-    if (schedules.length === 0) throw new Error("heartbeat not armed");
-    const idleStartedAt = Date.now();
-    console.log(`P5 idle ${IDLE_MINUTES} min …`);
-    await sleep(IDLE_MINUTES * 60_000);
-    // Read the durable tick trail BEFORE the exec below wakes the box:
-    // /state never touches the container, so this is the post-idle truth.
-    const idleState = await request({ origin, token, op: "/state", body: {}, schema: IdleTickSchema });
-
-    const idleSchedules = await request({
-      origin, token, op: "/heartbeatSchedules", body: {}, schema: ScheduleRowsSchema,
-    });
-
-    const tick = idleState.lastTick ?? undefined;
-    const lastTick = JSON.stringify(tick ?? null);
-    const heartbeatRows = String(idleSchedules.length);
-    // (a) The chain stayed alive through the idle window: the last tick is
-    // recent and armed its successor. A chain that died mid-window shows a
-    // stale `at` — that is the inactivity-sleep failure P5 exists to catch.
-    const tickAgeMs = tick === undefined ? Number.POSITIVE_INFINITY : Date.now() - tick.at;
-
-    if (!(tickAgeMs < 3 * 60_000 && tick?.armedNext === true)) {
-      throw new Error(`heartbeat chain died during idle: lastTick=${lastTick}; heartbeatRows=${heartbeatRows}`);
-    }
-
-    if (Date.now() - idleStartedAt < IDLE_MINUTES * 60_000) throw new Error("idle window did not elapse");
-
-    // (b) Replacement detector: the armed marker and durable boot identity
-    // must agree. A missing marker that was never verified before idle proves
-    // nothing; a boot id alone can be absent while a stamp is still in flight.
-    const marker = await call(origin, token, "/exec", {
-      command: `test "$(cat /tmp/idle-probe-marker 2>/dev/null)" = ${idleMarker} && echo alive || echo fresh-disk`,
-    });
-
-    const replacedByMarker = !(marker.stdout ?? "").includes("alive");
-    const replacedByBoot = idleState.bootId !== beforeIdle.bootId;
-
-    if (replacedByMarker !== replacedByBoot) {
-      throw new Error(
-        `P5 replacement signals disagree: marker=${marker.stdout} before=${beforeIdle.bootId} after=${idleState.bootId}`,
-      );
-    }
-
-    const replaced = replacedByBoot;
-
-    // (c) Continuity: the workspace bytes are back, whether or not the instance
-    // survived. P4 is deliberately after this control, so no stale server claim
-    // can make P5 fail before the supervision phase exists.
-    const wsAfterIdle = await call(origin, token, "/exec", {
-      command: "cat /workspace/new-after-base.txt",
-    });
-
-    if (!(wsAfterIdle.stdout ?? "").includes("added")) throw new Error("workspace lost across the idle window");
-    evidence.P5 = { idleMinutes: IDLE_MINUTES, chainAlive: true, instanceReplaced: replaced, workspaceIntact: true };
-    console.log(`P5 hold ok (chain alive; instance ${replaced ? "REPLACED by platform and healed" : "survived"})`);
-
-    // P6 — the exact quiesce sequence, then one more wake.
-    await request({ origin, token, op: "/finalCheckpoint", body: {}, schema: CheckpointResponseSchema });
-    await call(origin, token, "/setKeepAlive", { keepAlive: false });
-    await call(origin, token, "/stop");
-    await wake(origin, token);
-    const still = await call(origin, token, "/exec", { command: "cat /workspace/new-after-base.txt" });
-
-    if (!(still.stdout ?? "").includes("added")) throw new Error("workspace lost after final cycle");
-    evidence.P6 = { intactAfterFinalStop: true };
-    console.log("P6 final SIGTERM cycle ok");
-
-    // P4 — supervision across a stop+wake. It is deliberately LAST: P2 already
-    // proved a real restart with an ephemeral marker; this phase proves the
-    // distinct durable fact, that a recorded process comes back under its same id.
-    const proc = await request({
-      origin, token, op: "/startProcess",
-      body: { command: 'node -e "setInterval(() => {}, 1000)"', cwd: "/workspace" },
-      schema: ProcessStartResponseSchema,
-    });
-
-    const portBeforeRestart = await request({
-      origin, token, op: "/notePortExposed", body: { port: PORT, name: "probe" }, schema: PortTokenResponseSchema,
-    });
-
-    await call(origin, token, "/stop");
-    await wake(origin, token);
-
-    const procs = await request({
-      origin, token, op: "/listProcesses", body: {}, schema: SupervisedProcessResponsesSchema,
-    });
-
-    const portAfterRestart = await request({
-      origin, token, op: "/notePortExposed", body: { port: PORT, name: "probe" }, schema: PortTokenResponseSchema,
-    });
-
-    if (portBeforeRestart.urlToken !== portAfterRestart.urlToken) {
-      throw new Error(`preview token changed across restart: ${portBeforeRestart.urlToken}/${portAfterRestart.urlToken}`);
-    }
-
-    const restarted = procs.some(process => process.processId === proc.processId && process.restartable);
-
-    if (!restarted) throw new Error(`supervised process did not return: ${JSON.stringify(procs).slice(0, 200)}`);
-    evidence.P4 = {
-      processId: proc.processId,
-      urlToken: portAfterRestart.urlToken,
-    };
-    console.log("P4 supervision ok");
+    const base = await probeBaseLayer(origin, token);
+    evidence.P1 = base;
+    evidence.P2 = await probeLazyRestore(origin, token, base.bigFile);
+    evidence.P3 = await probeWhiteouts(origin, token);
+    evidence.P7 = await probeLifecycleHonesty(origin, token);
+    evidence.P5 = await probeIdleHold(origin, token);
+    evidence.P6 = await probeFinalCycle(origin, token);
+    // P4 is deliberately LAST: P2 already proved a real restart with an
+    // ephemeral marker, and P5's control must run before any supervision claim
+    // can make the hold phase fail.
+    evidence.P4 = await probeSupervision(origin, token);
 
     outcome = 'green';
   } catch (error) {
