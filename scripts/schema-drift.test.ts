@@ -23,7 +23,7 @@ const USER_DEVICES_GENESIS = [
 const DRIFTED_DEVICES: TableDdl = {
   table: 'user_devices',
   file: 'packages/cf-backend/src/user/schema.ts',
-  columns: [...USER_DEVICES_GENESIS, 'prev_token_hash', 'expires_at', 'last_ip', 'last_agent',
+  parts: [...USER_DEVICES_GENESIS, 'prev_token_hash', 'expires_at', 'last_ip', 'last_agent',
     'replaced_at', 'unstopped_at'],
 };
 
@@ -49,8 +49,11 @@ describe('schema-drift DDL census', () => {
     `);
 
     expect(parsed).toEqual([
-      { table: 'flat', file: 'fixture.ts', columns: ['id', 'n'] },
-      { table: 'nested', file: 'fixture.ts', columns: ['id', 'made'] },
+      { table: 'flat', file: 'fixture.ts', parts: ['id TEXT PRIMARY KEY', 'n INTEGER'] },
+      {
+        table: 'nested', file: 'fixture.ts',
+        parts: ['id INTEGER PRIMARY KEY CHECK (id = 1)', 'made INTEGER NOT NULL DEFAULT (unixepoch() * 1000)', 'PRIMARY KEY (id, made)'],
+      },
     ]);
   });
 
@@ -80,8 +83,8 @@ describe('schema-drift DDL census', () => {
     `);
 
     expect(parsed).toEqual([
-      { table: 'journal', file: 'fixture.ts', columns: ['id', 'token_input', 'neurons'] },
-      { table: 'inline', file: 'fixture.ts', columns: ['id', 'token_input', 'neurons', 'tail'] },
+      { table: 'journal', file: 'fixture.ts', parts: ['id TEXT PRIMARY KEY', 'token_input TEXT', 'neurons TEXT'] },
+      { table: 'inline', file: 'fixture.ts', parts: ['id TEXT PRIMARY KEY', 'token_input TEXT', 'neurons TEXT', 'tail TEXT'] },
     ]);
   });
 
@@ -98,7 +101,7 @@ describe('schema-drift DDL census', () => {
     expect(parseTables('fixture.ts', `
       execRaw('CREATE TABLE IF NOT EXISTS both (id TEXT PRIMARY KEY, first INTEGER)');
       execRaw('CREATE TABLE IF NOT EXISTS both (id TEXT PRIMARY KEY, second INTEGER)');
-    `)).toEqual([{ table: 'both', file: 'fixture.ts', columns: ['id', 'first', 'second'] }]);
+    `)).toEqual([{ table: 'both', file: 'fixture.ts', parts: ['id TEXT PRIMARY KEY', 'first INTEGER', 'second INTEGER'] }]);
   });
 });
 
@@ -114,7 +117,7 @@ describe('schema-drift genesis comparison', () => {
   });
 
   test('RED: a column removed after genesis is the other direction of the same drift', () => {
-    const narrowed: TableDdl = { ...DRIFTED_DEVICES, columns: ['id', 'token_hash'] };
+    const narrowed: TableDdl = { ...DRIFTED_DEVICES, parts: ['id', 'token_hash'] };
     const detail = driftViolations([narrowed], DEVICES_LOCK)[0]?.detail ?? '';
 
     expect(detail).toContain('removed after genesis');
@@ -124,7 +127,7 @@ describe('schema-drift genesis comparison', () => {
 
   test('GREEN: a DDL that matches its genesis, in any column order', () => {
     const reordered: TableDdl = {
-      ...DRIFTED_DEVICES, columns: [...USER_DEVICES_GENESIS].reverse(),
+      ...DRIFTED_DEVICES, parts: [...USER_DEVICES_GENESIS].reverse(),
     };
 
     expect(driftViolations([reordered], DEVICES_LOCK)).toEqual([]);
@@ -135,6 +138,26 @@ describe('schema-drift genesis comparison', () => {
 
     expect(violations).toHaveLength(1);
     expect(violations[0]?.detail).toContain('no entry in scripts/schema-genesis.lock.json');
+  });
+
+  test('RED: a changed CHECK on a shipped table is drift, though every column is still there', () => {
+    // 9ae83227f widened `name_origin`'s CHECK. Every column matched its genesis,
+    // so the column-only gate was green, and every account older than the
+    // deploy refused the new value (2026-09-22).
+    const key = lockKey('user_workspaces', 'packages/core/src/state/user-schema.ts');
+    const genesis = ['name TEXT PRIMARY KEY', "name_origin TEXT NOT NULL CHECK (name_origin IN ('auto', 'user'))"];
+
+    const widened: TableDdl = {
+      table: 'user_workspaces', file: 'packages/core/src/state/user-schema.ts',
+      parts: ['name TEXT PRIMARY KEY', "name_origin TEXT NOT NULL CHECK (name_origin IN ('auto', 'provisional', 'user'))"],
+    };
+
+    const detail = driftViolations([widened], { [key]: genesis })[0]?.detail ?? '';
+
+    expect(detail).toContain('a definition changed after genesis');
+    expect(detail).toContain("('auto', 'provisional', 'user')");
+    expect(detail).not.toContain('added after genesis');
+    expect(lockUpdate([widened], { [key]: genesis }, () => widened.parts).refused).toHaveLength(1);
   });
 });
 
@@ -149,7 +172,7 @@ describe('schema-drift genesis lock', () => {
   });
 
   test('RED: refuses to WIDEN an existing entry, which would excuse the added columns', () => {
-    const update = lockUpdate([DRIFTED_DEVICES], DEVICES_LOCK, () => DRIFTED_DEVICES.columns);
+    const update = lockUpdate([DRIFTED_DEVICES], DEVICES_LOCK, () => DRIFTED_DEVICES.parts);
 
     expect(update.added).toEqual([]);
     expect(update.refused).toHaveLength(1);
@@ -171,7 +194,7 @@ describe('schema-drift genesis lock', () => {
     // genesisForNewTable(t, lock))`, and `genesisForNewTable` answers the
     // intersection of the locked namesakes — for a table that HAS an entry,
     // that intersection is the entry's own list. A widen under it must still
-    // be refused against `table.columns`, or `--lock` launders a shipped-table
+    // be refused against `table.parts`, or `--lock` launders a shipped-table
     // change into silence.
     const update = lockUpdate(
       [DRIFTED_DEVICES], DEVICES_LOCK,
@@ -191,7 +214,7 @@ describe('schema-drift genesis lock', () => {
     const moved: TableDdl = {
       table: 'user_devices',
       file: 'packages/cf-backend/src/user/device-schema.ts',
-      columns: DRIFTED_DEVICES.columns,
+      parts: DRIFTED_DEVICES.parts,
     };
 
     expect(genesisForNewTable(moved, DEVICES_LOCK)).toEqual(USER_DEVICES_GENESIS);
@@ -201,7 +224,7 @@ describe('schema-drift genesis lock', () => {
     const fresh: TableDdl = {
       table: 'schema_drift_probe',
       file: 'packages/cf-backend/src/user/absent.ts',
-      columns: ['id', 'made_at'],
+      parts: ['id', 'made_at'],
     };
 
     expect(genesisForNewTable(fresh, DEVICES_LOCK)).toEqual(['id', 'made_at']);
@@ -235,6 +258,23 @@ describe('schema-drift over this tree', () => {
     // with the views DSL (8d6444f4f). A table that leaves lowers this number
     // in the same commit, with its reason here.
     expect(state.tables.length).toBeGreaterThanOrEqual(115);
+  });
+
+  test('RED: a constraint planted on any table of this tree fails the gate for that table alone', () => {
+    // The direction this gate claims, proven on every table it governs rather
+    // than on a fixture: one definition gains a CHECK, and the verdict names it.
+    const state = survey();
+
+    for (const table of state.tables) {
+      const [first, ...rest] = table.parts;
+
+      if (first === undefined) throw new Error(`${table.table} parsed no parts`);
+      const planted: TableDdl = { ...table, parts: [`${first} CHECK (1 = 1)`, ...rest] };
+      const violations = driftViolations([planted], state.lock);
+
+      expect(violations.map(({ key }) => key)).toEqual([lockKey(table.table, table.file)]);
+      expect(violations[0]?.detail).toContain('a definition changed after genesis');
+    }
   });
 
   test('the census reads every CREATE TABLE IF NOT EXISTS the corpus holds', () => {

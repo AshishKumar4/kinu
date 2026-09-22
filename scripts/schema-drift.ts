@@ -11,11 +11,15 @@
  *
  * This repository carries NO column reconcile, no rebuild and no mover. The
  * DDL a reset deployment ships is the shape every row it ever writes has, and
- * `scripts/schema-genesis.lock.json` records that shape per `table@file`. The
- * gate compares today's DDL against the lock in BOTH directions: a column the
- * DDL has and the lock does not never reaches storage created at genesis; a
- * column the lock has and the DDL does not is still in that storage, and a
- * NOT NULL one without a default refuses every insert that omits it.
+ * `scripts/schema-genesis.lock.json` records that shape per `table@file`: every
+ * column definition and table constraint, normalized. The gate compares today's
+ * DDL against the lock in BOTH directions: a column the DDL has and the lock
+ * does not never reaches storage created at genesis; a column the lock has and
+ * the DDL does not is still in that storage, and a NOT NULL one without a
+ * default refuses every insert that omits it. A changed TYPE, CHECK or DEFAULT
+ * is the same drift: storage keeps the constraint it was created with, which is
+ * how a widened `name_origin` CHECK refused every mission-only create on the
+ * accounts that predated it (2026-09-22).
  *
  * WHAT IT MEASURES and WHAT IT GOVERNS are the same set, and that is checked
  * rather than claimed: every `CREATE TABLE IF NOT EXISTS` in the product corpus
@@ -67,13 +71,55 @@ export interface Violation {
   readonly detail: string;
 }
 
-/** One table's DDL as the corpus declares it. `columns` is DDL order. A table
- *  declared twice in one file carries the UNION: both statements reach the same
- *  storage, so a column in either one is a column a reader may name. */
+/** One table's DDL as the corpus declares it: every body part — each column
+ *  definition and table constraint — normalized, in DDL order. A table declared
+ *  twice in one file carries the UNION: both statements reach the same
+ *  storage, and whichever runs first is the shape it has. */
 export interface TableDdl {
   readonly table: string;
   readonly file: string;
-  readonly columns: readonly string[];
+  readonly parts: readonly string[];
+}
+
+/** The columns a table's parts declare, in DDL order: each part's leading
+ *  name, less the parts that open a table constraint. */
+export function columnsOf(parts: readonly string[]): string[] {
+  const columns: string[] = [];
+
+  for (const part of parts) {
+    const word = /^[A-Za-z_][A-Za-z0-9_]*/u.exec(part)?.[0];
+
+    if (word === undefined || Object.hasOwn(CONSTRAINT_KEYWORD, word.toUpperCase())) continue;
+
+    if (!columns.includes(word)) columns.push(word);
+  }
+
+  return columns;
+}
+
+/** One body part as the lock records it: whitespace collapsed outside string
+ *  literals, and none just inside a paren or before a comma. */
+function normalizedPart(part: string): string {
+  let out = '';
+  let quoted = false;
+
+  for (const ch of part.trim()) {
+    if (ch === '\'') quoted = !quoted;
+
+    if (!quoted && /\s/u.test(ch)) {
+      if (!out.endsWith(' ')) out += ' ';
+      continue;
+    }
+
+    out += ch;
+  }
+
+  return out.replace(/\( /gu, '(').replace(/ ([),])/gu, '$1');
+}
+
+/** Whether two part lists declare the same table. Order is not compared. */
+function sameParts(a: readonly string[], b: readonly string[]): boolean {
+  return a.length === b.length && a.every((part) => b.includes(part));
 }
 
 /** The genesis lock's key. Table AND file, because three table names are
@@ -272,8 +318,8 @@ function expandColumnBlocks(body: string, source: string, file: string, table: s
   return out;
 }
 
-function parseColumns(body: string, source: string, file: string, table: string): string[] {
-  // Line comments first: their prose carries commas, and a comma is the column
+function parseParts(body: string, source: string, file: string, table: string): string[] {
+  // Line comments first: their prose carries commas, and a comma is the part
   // separator below.
   const text = expandColumnBlocks(body.replace(/--[^\n]*/g, ''), source, file, table);
   const parts: string[] = [];
@@ -296,27 +342,25 @@ function parseColumns(body: string, source: string, file: string, table: string)
 
   parts.push(current);
 
-  const columns: string[] = [];
+  const normalized: string[] = [];
 
   for (const part of parts) {
     const trimmed = part.trim();
 
     if (trimmed === '') continue;
-    const word = /^[A-Za-z_][A-Za-z0-9_]*/.exec(trimmed)?.[0];
 
-    if (word === undefined) {
+    if (!/^[A-Za-z_]/u.test(trimmed)) {
       throw new Error(
         `schema-drift: ${file}: ${table} has a body part this cannot read: ${trimmed.slice(0, 60)}`,
       );
     }
 
-    if (Object.hasOwn(CONSTRAINT_KEYWORD, word.toUpperCase())) continue;
-    columns.push(word);
+    normalized.push(normalizedPart(trimmed));
   }
 
-  if (columns.length === 0) throw new Error(`schema-drift: ${file}: ${table} parsed no columns`);
+  if (columnsOf(normalized).length === 0) throw new Error(`schema-drift: ${file}: ${table} parsed no columns`);
 
-  return columns;
+  return normalized;
 }
 
 export function parseTables(file: string, source: string): TableDdl[] {
@@ -332,16 +376,16 @@ export function parseTables(file: string, source: string): TableDdl[] {
       ? balancedBody(source, source.indexOf('(', match.index + match[0].length - 1))
       : interpolatedBody(source, file, table, constant);
 
-    const columns = byTable.get(table) ?? [];
+    const parts = byTable.get(table) ?? [];
 
-    for (const column of parseColumns(body, source, file, table)) {
-      if (!columns.includes(column)) columns.push(column);
+    for (const part of parseParts(body, source, file, table)) {
+      if (!parts.includes(part)) parts.push(part);
     }
 
-    byTable.set(table, columns);
+    byTable.set(table, parts);
   }
 
-  return [...byTable].map(([table, columns]) => ({ table, file, columns }));
+  return [...byTable].map(([table, parts]) => ({ table, file, parts }));
 }
 
 export function tablesIn(sources: ReadonlyMap<string, string>): TableDdl[] {
@@ -357,20 +401,42 @@ export function readGenesisLock(path: string = GENESIS_LOCK): GenesisLock {
 }
 
 /** The two fixes every drift has, printed by name. This repository carries no
- *  column reconcile, so a shipped table's shape moves only with its storage. */
-const DRIFT_FIX = 'put the new columns in a table of their own, or reset production and re-lock: '
+ *  reconcile, so a shipped table's shape moves only with its storage: a schema
+ *  change is a reset deployment (AGENTS.md). */
+const DRIFT_FIX = 'put the new shape in a table of its own, or make this a reset deployment and re-lock: '
   + 'delete scripts/schema-genesis.lock.json, run `bun scripts/schema-drift.ts --lock`, '
   + 'and state the reset in the commit body';
 
+/** What moved between a table's genesis and its DDL: columns in either
+ *  direction, then every other definition that is not what storage holds. */
+function driftFound(genesis: readonly string[], parts: readonly string[]): string {
+  const lockedColumns = columnsOf(genesis);
+  const columns = columnsOf(parts);
+  const added = columns.filter((column) => !lockedColumns.includes(column));
+  const removed = lockedColumns.filter((column) => !columns.includes(column));
+  const unreported = (part: string) => !columnsOf([part]).some((column) => added.includes(column) || removed.includes(column));
+  const was = genesis.filter((part) => !parts.includes(part) && unreported(part));
+  const now = parts.filter((part) => !genesis.includes(part) && unreported(part));
+
+  return [
+    added.length > 0 ? `[${added.join(', ')}] added after genesis` : '',
+    removed.length > 0 ? `[${removed.join(', ')}] removed after genesis` : '',
+    was.length + now.length > 0
+      ? `a definition changed after genesis: storage holds [${was.join('; ')}], the DDL now reads [${now.join('; ')}]`
+      : '',
+  ].filter((part) => part !== '').join('; ');
+}
+
 /**
- * Every table whose DDL and genesis disagree, in either direction. An unlocked
- * table is a violation too: a gate that reads "no baseline" as "nothing changed"
- * passes hardest on exactly the tables nobody has looked at.
+ * Every table whose DDL and genesis disagree, in either direction and in any
+ * part: a column, its type, a CHECK, a DEFAULT, a table constraint. An unlocked
+ * table is a violation too: a gate that reads "no baseline" as "nothing
+ * changed" passes hardest on exactly the tables nobody has looked at.
  */
 export function driftViolations(tables: readonly TableDdl[], lock: GenesisLock): Violation[] {
   const violations: Violation[] = [];
 
-  for (const { table, file, columns } of tables) {
+  for (const { table, file, parts } of tables) {
     const key = lockKey(table, file);
     const genesis = lock[key];
 
@@ -378,35 +444,28 @@ export function driftViolations(tables: readonly TableDdl[], lock: GenesisLock):
       violations.push({
         key,
         detail: finding({
-          invariant: 'every table in the corpus has a recorded genesis column set',
+          invariant: 'every table in the corpus has a recorded genesis DDL',
           at: `${file} (${table})`,
           found: 'no entry in scripts/schema-genesis.lock.json',
-          silently: 'the gate compares today against nothing and passes over every column added since',
+          silently: 'the gate compares today against nothing and passes over every change made since',
           fix: 'bun scripts/schema-drift.ts --lock',
         }),
       });
       continue;
     }
 
-    const added = columns.filter((column) => !genesis.includes(column));
-    const removed = genesis.filter((column) => !columns.includes(column));
-
-    if (added.length === 0 && removed.length === 0) continue;
-
-    const found = [
-      added.length > 0 ? `[${added.join(', ')}] added after genesis` : '',
-      removed.length > 0 ? `[${removed.join(', ')}] removed after genesis` : '',
-    ].filter((part) => part !== '').join('; ');
+    if (sameParts(genesis, parts)) continue;
 
     violations.push({
       key,
       detail: finding({
         invariant: 'a shipped table\'s DDL is the genesis its storage was created with',
         at: `${file} (${table})`,
-        found,
-        silently: 'a reader naming an added column answers "no such column" on storage created at '
-          + 'genesis (the shape GET /api/cli/devices returned 500 in production); a removed '
-          + 'NOT NULL column without a default refuses every insert on that storage',
+        found: driftFound(genesis, parts),
+        silently: 'CREATE TABLE IF NOT EXISTS never touches existing storage: a reader naming an added '
+          + 'column answers "no such column" (GET /api/cli/devices, production 500), and a write the '
+          + 'new DDL admits fails the old constraint (the widened name_origin CHECK refused every '
+          + 'mission-only create on older accounts, 2026-09-22)',
         fix: DRIFT_FIX,
       }),
     });
@@ -428,11 +487,11 @@ export function driftViolations(tables: readonly TableDdl[], lock: GenesisLock):
 export function genesisForNewTable(table: TableDdl, lock: GenesisLock): readonly string[] {
   const siblings = Object.entries(lock)
     .filter(([key]) => key.startsWith(`${table.table}@`))
-    .map(([, columns]) => columns);
+    .map(([, parts]) => parts);
 
-  if (siblings.length === 0) return table.columns;
+  if (siblings.length === 0) return table.parts;
 
-  return table.columns.filter((column) => siblings.every((columns) => columns.includes(column)));
+  return table.parts.filter((part) => siblings.every((parts) => parts.includes(part)));
 }
 
 export interface LockUpdate {
@@ -443,9 +502,9 @@ export interface LockUpdate {
 
 /**
  * Add a genesis entry for a table that has none. An existing entry is NEVER
- * rewritten: widening it excuses exactly the columns this gate exists to catch,
- * and narrowing it reports columns the table shipped with. Both directions are
- * refused by the same rule, so the lock cannot be moved by the change it is
+ * rewritten: widening it excuses exactly the change this gate exists to catch,
+ * and narrowing it reports definitions the table shipped with. Both directions
+ * are refused by the same rule, so the lock cannot be moved by the change it is
  * judging. A reset deployment re-locks by deleting the file first.
  */
 export function lockUpdate(
@@ -454,7 +513,7 @@ export function lockUpdate(
   genesis: (table: TableDdl) => readonly string[],
 ): LockUpdate {
   const next: Record<string, string[]> = Object.fromEntries(
-    Object.entries(lock).map(([key, columns]) => [key, [...columns]]),
+    Object.entries(lock).map(([key, parts]) => [key, [...parts]]),
   );
 
   const added: string[] = [];
@@ -470,15 +529,13 @@ export function lockUpdate(
       continue;
     }
 
-    // The verdict on an EXISTING entry is the DDL's own columns — never the
+    // The verdict on an EXISTING entry is the DDL's own parts — never the
     // `genesis` callback. `genesisForNewTable` filters down to the locked
     // namesakes, so asking it about a table that already has an entry returns
-    // that entry's own list and a widened DDL launders to "unchanged".
+    // that entry's own list and a changed DDL launders to "unchanged".
     // `genesis` answers only where to start a table that has none.
-    const now = table.columns;
-
-    if (existing.length === now.length && existing.every((c, i) => c === now[i])) continue;
-    refused.push(`${key}: locked [${existing.join(', ')}], DDL now reads [${now.join(', ')}]`);
+    if (sameParts(existing, table.parts)) continue;
+    refused.push(`${key}: ${driftFound(existing, table.parts)}`);
   }
 
   return {
@@ -535,8 +592,11 @@ export function survey(lock: GenesisLock = readGenesisLock()): Survey {
 export function blindSpots(state: Survey): string[] {
   return [
     'reads DDL text, never a database: nothing here runs a statement or opens storage',
-    'names only. A changed column TYPE, CONSTRAINT or DEFAULT on a shipped table is invisible, '
-      + 'and storage created at genesis keeps the old one',
+    'column ORDER is not compared, and a formatting-only edit to a definition reads as a change',
+    'a column block a template GENERATES is compared by column name only; its types come from '
+      + 'an object this reads the keys of',
+    'an interpolation inside a definition (a CHECK list built from a constant) is compared as its '
+      + 'source text, so a change to the value it names is invisible',
     `${String(state.retired.length)} locked table(s) are no longer in the corpus and stay locked, `
       + 'never re-locked: storage created under that DDL may still exist',
     'a table created outside the product corpus — a test fixture, a statement typed into a shell — '

@@ -306,8 +306,8 @@ export async function admitHostedTask(
     const result = admitSubordinateTask(new EventLog(seams.exec, actor.handle), admission);
 
     // A hosted actor has no chat session, so no `auto_title` effect exists —
-    // the first admitted message lands its PROVISIONAL title here instead, and
-    // a landed title is announced so the parent's roster stops showing the
+    // the first admitted message lands its stand-in title here instead, and a
+    // landed title is announced so the parent's roster stops showing the
     // codename. The model that turns that stand-in into a name runs at the end
     // of the turn this admission hands over (`runHostedTask`): a model call
     // inside the admitting request would delay the handoff it exists to make.
@@ -543,8 +543,8 @@ export async function runHostedTask(
       }),
     });
 
-    // THE HOSTED ACTOR'S TITLE UPGRADE, and the counterpart of the provisional
-    // one `admitHostedTask` landed. The root gets this from its `auto_title`
+    // THE HOSTED ACTOR'S TITLE UPGRADE, and the counterpart of the stand-in
+    // `admitHostedTask` landed. The root gets this from its `auto_title`
     // terminal effect; a hosted actor has no chat session and therefore no such
     // effect, so without this it kept the truncated first line of its brief as
     // its permanent name — half of what #18 reported. Here rather than at
@@ -552,9 +552,9 @@ export async function runHostedTask(
     // rather than before it so the turn the caller is waiting on is never held
     // behind a naming call.
     //
-    // One condition, handled: a titling model that failed. The provisional
-    // title is already shown by then, the next admitted message plans again,
-    // and a hired actor's turn is not failed over its own name.
+    // One condition, handled: a titling model that failed. The stand-in is
+    // already shown by then and stays, and a hired actor's turn is not failed
+    // over its own name.
     try {
       const titled = await titleActorFromMessage(actor.handle, task.body, (brief) => seams.suggestTitle(brief));
 

@@ -93,7 +93,7 @@ import {
   type EgressSecretBinding,
   JsonObjectSchema,
   decodeJsonValue,
-  autoTitleMayReplace,
+  autoTitleMayReplace, nameOriginOf,
   type NameOrigin,
 } from '@kinu.run/core';
 import {
@@ -1172,21 +1172,14 @@ export class UserDO extends Agent<Env> {
    *  invalidation, peer lists, the CLI's config reconcile) where a capped page
    *  would silently drop targets. Identity fields only — the wide wire contract
    *  is listWorkspaces. */
-  async listActiveWorkspaces(
-    caller: UserCaller,
-  ): Promise<Array<Pick<WorkspaceEntry, 'name' | 'displayName' | 'createdAt'> & { nameOrigin: NameOrigin }>> {
+  async listActiveWorkspaces(caller: UserCaller): Promise<Array<Pick<WorkspaceEntry, 'name' | 'displayName' | 'createdAt'>>> {
     await this.requireTier(caller, 'workspaces.read');
 
-    // `name_origin` rides the row because a title's PROVENANCE is what tells a
-    // reader whether naming has finished: a `provisional` entry is showing the
-    // deterministic stand-in the create stored, not a name (identity/naming.ts).
-    return this.sqlx<{ name: string; display_name: string; created_at: number; name_origin: NameOrigin | null }>(
-      `SELECT name, display_name, created_at, name_origin FROM user_workspaces
+    return this.sqlx<{ name: string; display_name: string; created_at: number }>(
+      `SELECT name, display_name, created_at FROM user_workspaces
        WHERE archived_at IS NULL AND delete_pending = 0 AND create_pending = 0
        ORDER BY last_visited DESC`,
-    ).map((r) => ({
-      name: r.name, displayName: r.display_name, createdAt: r.created_at, nameOrigin: r.name_origin ?? 'user',
-    }));
+    ).map((r) => ({ name: r.name, displayName: r.display_name, createdAt: r.created_at }));
   }
 
   /**
@@ -1677,14 +1670,14 @@ export class UserDO extends Agent<Env> {
     // Both pending flags excluded as everywhere else: a workspace being torn
     // down, or one a fork has not committed yet, has no title to commit, so the
     // write reports the not-found answer.
-    const current = this.sqlx<{ name_origin: NameOrigin | null }>(
+    const current = this.sqlx<{ name_origin: string }>(
       `SELECT name_origin FROM user_workspaces
        WHERE name = ? AND delete_pending = 0 AND create_pending = 0`, name,
     )[0];
 
     if (!current) return { applied: false };
 
-    if (origin !== 'user' && !autoTitleMayReplace(current.name_origin)) return { applied: false };
+    if (origin !== 'user' && !autoTitleMayReplace(nameOriginOf(current.name_origin))) return { applied: false };
     this.sqlx(
       `UPDATE user_workspaces SET display_name = ?, name_origin = ? WHERE name = ?`,
       displayName, origin, name,
@@ -1699,14 +1692,14 @@ export class UserDO extends Agent<Env> {
     await this.requireTier(caller, 'workspaces.read');
     validateWorkspaceName(name);
 
-    const row = this.sqlx<{ display_name: string; name_origin: NameOrigin | null }>(
+    const row = this.sqlx<{ display_name: string; name_origin: string }>(
       `SELECT display_name, name_origin FROM user_workspaces
        WHERE name = ? AND delete_pending = 0 AND create_pending = 0`, name,
     )[0];
 
     if (!row) return null;
 
-    return { displayName: row.display_name, nameOrigin: row.name_origin ?? 'user' };
+    return { displayName: row.display_name, nameOrigin: nameOriginOf(row.name_origin) };
   }
 
   async hasWorkspace(caller: UserCaller, name: string): Promise<boolean> {

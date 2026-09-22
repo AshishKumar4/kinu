@@ -218,7 +218,6 @@
   "packages/core/src/identity/fork.ts#snapshotWorkspaceForFork (unreached-export)",
   "packages/core/src/identity/naming.ts#deriveWorkspaceTitle (unreached-export)",
   "packages/core/src/identity/naming.ts#workspaceTitleFromMission (unreached-export)",
-  "packages/core/src/identity/soul.ts#WORKSPACE_CREATED_EVENT (unreached-export)",
   "packages/core/src/jobs/runner.ts#EVICTION_INTERRUPT_ERROR (unreached-export)",
   "packages/core/src/jobs/runner.ts#MAX_CONCURRENT_DETACHED_JOBS (unreached-export)",
   "packages/core/src/jobs/runner.ts#backgroundJobWakeTrigger (unreached-export)",

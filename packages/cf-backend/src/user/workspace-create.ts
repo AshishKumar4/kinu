@@ -145,11 +145,10 @@ export async function createCloudWorkspaceForUser<Id>(
     });
 
     // NO PRE-TURN NAMING CALL. The genesis turn queued above owes a durable
-    // `auto_title` effect, and that effect now upgrades the provisional title
-    // this create stored — which is the one path, retried until it lands, for
-    // every caller. The `waitUntil` variant only ever ran for a create with a
-    // Worker request behind it, so a workspace created any other way was named
-    // by nothing at all.
+    // `auto_title` effect, and that effect replaces the stand-in title this
+    // create stored — the one path, retried until it lands, for every caller.
+    // The `waitUntil` variant only ever ran for a create with a Worker request
+    // behind it, so a workspace created any other way was named by nothing.
 
     return entry;
   } catch (err) {
@@ -282,13 +281,11 @@ function createInitialCloudAgentIdentity(
 
   return {
     name: fallback.name,
-    // PROVISIONAL, not 'auto'. `fallback.displayName` is the mission's first
-    // line — a stand-in for the seconds before the genesis turn's `auto_title`
-    // effect asks a model. Recorded as 'auto' it was indistinguishable from a
-    // generated title, so that effect found the workspace "already named" and
-    // the truncated prompt became the permanent one (#18).
+    // 'auto': `fallback.displayName` is the mission's first line, a stand-in
+    // the genesis turn's `auto_title` effect replaces with a model's name.
+    // Recorded as the owner's, nothing could ever replace it (#18).
     displayName: requestedDisplayName === '' ? fallback.displayName : requestedDisplayName,
-    nameOrigin: requestedDisplayName === '' ? 'provisional' : 'user',
+    nameOrigin: requestedDisplayName === '' ? 'auto' : 'user',
   };
 }
 
