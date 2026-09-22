@@ -1,5 +1,6 @@
 import { describe, expect, test } from 'bun:test';
 import { mockAgentsSdk } from './helpers/agents-sdk';
+import { workerContext, workerEnv } from './helpers/bindings';
 
 /**
  * Transport security at the Worker entry.
@@ -36,28 +37,20 @@ const FOREIGN_HOST = 'unrelated.example.net';
 
 function harness(assetResponse: () => Response) {
   const assetRequests: string[] = [];
-  const partialEnv: Partial<Env> = {};
-  Object.assign(partialEnv, {
+  const env = workerEnv({
     CLI_PUBLIC_ORIGIN: `https://${APP_HOST}`,
     PREVIEW_HOST_SUFFIX: APP_HOST,
     ASSETS: {
-      fetch: async (request: Request) => {
-        assetRequests.push(new URL(request.url).pathname);
+      fetch: async (input) => {
+        assetRequests.push(new URL(input instanceof Request ? input.url : String(input)).pathname);
 
         return assetResponse();
       },
+      connect: () => { throw new Error('ASSETS.connect: not reachable in this test'); },
     },
   });
-  // SAFETY: this fixture constructs ASSETS, the only binding read by the
-  // preview branch and the /assets/ public bypass these requests take.
-  const env = partialEnv as Env;
-  const partialCtx: Partial<ExecutionContext> = {};
-  Object.assign(partialCtx, { waitUntil() {}, passThroughOnException() {} });
-  // SAFETY: constructs both ExecutionContext methods; the routes under test
-  // return before any handler calls either one.
-  const ctx = partialCtx as ExecutionContext;
 
-  return { env, ctx, assetRequests };
+  return { env, ctx: workerContext(), assetRequests };
 }
 
 const script = () => new Response('console.log(1)', {

@@ -30,7 +30,7 @@ import { SANDBOX_LIFECYCLE_ENVELOPE_VERSION } from "./sandbox-lifecycle";
 import type { SandboxLifecycleFailure } from "./sandbox-lifecycle";
 import {
   CONTAINER_EVENT_HOST, EGRESS_HANDLER, EVENT_HANDLER,
-  handleContainerEgress, handleContainerEvent, parseEgressParams,
+  containerEventResolver, handleContainerEgress, handleContainerEvent, parseEgressParams,
   type KinuEgressParams,
 } from "./egress/outbound";
 
@@ -197,6 +197,6 @@ KinuSandbox.outboundHandlers = {
     request, env, parseEgressParams(ctx),
   ),
   [EVENT_HANDLER]: (request, env: Env, ctx) => handleContainerEvent(
-    request, env, parseEgressParams(ctx),
+    request, containerEventResolver(env), parseEgressParams(ctx),
   ),
 };

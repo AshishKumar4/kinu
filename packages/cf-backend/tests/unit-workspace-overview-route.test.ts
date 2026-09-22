@@ -17,6 +17,7 @@ import { WorkspaceOverviewSchema } from '@kinu.run/core';
 import type { PresentedCaller } from '@kinu.run/core/control-plane';
 import { makeEnv } from './helpers/actor-harness';
 import { mockAgentsSdk } from './helpers/agents-sdk';
+import { workerContext } from './helpers/bindings';
 import { createTestUserDO, provisionTestWorkspace, TEST_CREDENTIAL_ENCRYPTION_KEY } from './helpers/user-do';
 
 mockAgentsSdk();
@@ -53,7 +54,7 @@ async function harness(opts: {
   readonly overviewError?: string;
 }) {
   const calls: { method: string; workspace: string; userId?: string }[] = [];
-  const retained: Promise<unknown>[] = [];
+  const ctx = workerContext();
 
   const controlPlane = {
     idFromName: (name: string) => name,
@@ -111,22 +112,11 @@ async function harness(opts: {
     ASSETS: { fetch: async () => new Response('<html></html>', { headers: { 'content-type': 'text/html' } }) },
   });
 
-  const partialCtx: Partial<ExecutionContext> = {
-    props: {},
-    waitUntil(promise: Promise<unknown>) { retained.push(promise); },
-    passThroughOnException() {},
-  };
-
-  // SAFETY: the route reads exactly the `waitUntil` constructed above, whose
-  // retained promises the suite settles; `tracing` (required since
-  // workers-types 4.20260702.1) is never reached by the code under test.
-  const ctx = partialCtx as ExecutionContext;
-
   return {
     env,
     ctx,
     calls,
-    async settle(): Promise<void> { await Promise.allSettled(retained); },
+    async settle(): Promise<void> { await Promise.allSettled(ctx.retained); },
   };
 }
 

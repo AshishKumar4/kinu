@@ -9,6 +9,7 @@
  * of resolving a fake nobody asserted on.
  */
 import type { KvStore } from '@kinu.run/agent-utils';
+import type { Connection } from 'agents';
 import type { UserProfile } from '../../src/user/user-do';
 import type { CliAgentTarget, CliRoutesAuthority, CliRoutesEnv } from '../../src/cli/routes';
 import type { UserRoutesAuthority } from '../../src/user/routes';
@@ -33,6 +34,151 @@ export function unreachableKv(binding: string): KvStore {
 export function unreachableAssets(): AssetFetcher {
   return {
     fetch: (input) => { throw new Error(`ASSETS.fetch(${input.url}): not reachable in this test`); },
+  };
+}
+
+/**
+ * The deployment's whole `Env`, with every binding refusing and naming itself.
+ *
+ * What the Worker ENTRY takes. `route()` is the host-aware table over every
+ * surface this Worker answers, so its env is the whole deployment's and nothing
+ * narrower is honest there. A case hands `reached` the bindings its request
+ * genuinely reads; a binding it leaves out refuses on first touch, so "this
+ * request answered before reaching a binding" is a checked claim instead of an
+ * empty array somebody remembered to assert.
+ */
+export function workerEnv(reached: Partial<Env> = {}): Env {
+  return {
+    LOADER: {
+      get: (name) => { throw new Error(`LOADER.get(${String(name)}): not reachable in this test`); },
+      load: () => { throw new Error('LOADER.load: not reachable in this test'); },
+    },
+    OrchestratorAgent: unreachableObjects('OrchestratorAgent'),
+    UserDO: unreachableObjects('UserDO'),
+    MonitorDO: unreachableObjects('MonitorDO'),
+    ControlPlaneDO: unreachableObjects('ControlPlaneDO'),
+    Sandbox: unreachableObjects('Sandbox'),
+    DeployRunDO: unreachableObjects('DeployRunDO'),
+    AUTH_KV: unreachableKvNamespace('AUTH_KV'),
+    ASSETS: unreachableFetcher('ASSETS'),
+    AI_GATEWAY_URL: 'https://gateway.invalid/unreachable',
+    PREVIEW_HOST_SUFFIX: '',
+    ...reached,
+  };
+}
+
+/** A Durable Object namespace nothing may resolve through: every entry point
+ *  into it refuses and says which binding was reached. */
+function unreachableObjects<T extends Rpc.DurableObjectBranded>(binding: string): DurableObjectNamespace<T> {
+  const refuse = (verb: string, arg: string): never => {
+    throw new Error(`${binding}.${verb}(${arg}): not reachable in this test`);
+  };
+
+  return {
+    idFromName: (name) => refuse('idFromName', name),
+    idFromString: (id) => refuse('idFromString', id),
+    newUniqueId: () => refuse('newUniqueId', ''),
+    jurisdiction: (where) => refuse('jurisdiction', where),
+    get: (id) => refuse('get', id.toString()),
+    getByName: (name) => refuse('getByName', name),
+  };
+}
+
+/** The platform KV binding, refusing. `unreachableKv` above is the narrow
+ *  `KvStore` port our own code reads a store through; this is the whole
+ *  namespace an `Env` member is declared as. */
+function unreachableKvNamespace(binding: string): KVNamespace {
+  const refuse = (verb: string, key: string): never => {
+    throw new Error(`${binding}.${verb}(${key}): not reachable in this test`);
+  };
+
+  return {
+    get: (key: string | string[]) => refuse('get', String(key)),
+    getWithMetadata: (key: string | string[]) => refuse('getWithMetadata', String(key)),
+    put: (key: string) => refuse('put', key),
+    delete: (key: string) => refuse('delete', key),
+    list: () => refuse('list', ''),
+  };
+}
+
+function unreachableFetcher(binding: string): Fetcher {
+  return {
+    fetch: (input) => { throw new Error(`${binding}.fetch(${String(input)}): not reachable in this test`); },
+    connect: (address) => { throw new Error(`${binding}.connect(${String(address)}): not reachable in this test`); },
+  };
+}
+
+/**
+ * The entry's `ExecutionContext`, with the retention hooks recording.
+ *
+ * `waitUntil` is how every retained write leaves a request — the control-plane
+ * observation, the index feed — so a case that asserts one happened reads the
+ * promises back out of `retained`.
+ */
+export function workerContext(): ExecutionContext & { readonly retained: Promise<unknown>[] } {
+  const retained: Promise<unknown>[] = [];
+
+  return {
+    retained,
+    waitUntil(promise: Promise<unknown>) { retained.push(promise); },
+    passThroughOnException() {},
+    props: {},
+    tracing: {
+      enterSpan: (_name, callback, ...args) => callback(new UntracedSpan(), ...args),
+      startActiveSpan: (_name, callback, ...args) => callback(new UntracedSpan(), ...args),
+      Span: UntracedSpan,
+    },
+  };
+}
+
+/** The span a test's request runs under: nothing collects it, and it says so. */
+class UntracedSpan {
+  get isTraced(): boolean { return false; }
+  setAttribute(): void {}
+  end(): void {}
+}
+
+/**
+ * The socket an actor is handed, with every member this case did not build
+ * refusing by name.
+ *
+ * `Connection` is the workers `WebSocket` plus the party's five — 27 members —
+ * and a path under test reads two or three of them. Refusing the rest is what
+ * keeps "this handler only sent on the wire" a checked claim; `readyState` is
+ * OPEN because a closed socket is a state a case asks for deliberately.
+ */
+export function socketConnection(built: Partial<Connection> = {}): Connection {
+  const refuse = (member: string) => unreached('Connection', member);
+
+  return {
+    id: 'test-connection',
+    uri: 'wss://test.invalid/',
+    state: null,
+    tags: [],
+    setState: refuse('setState'),
+    accept: refuse('accept'),
+    send: refuse('send'),
+    close: refuse('close'),
+    serializeAttachment: refuse('serializeAttachment'),
+    deserializeAttachment: refuse('deserializeAttachment'),
+    addEventListener: refuse('addEventListener'),
+    removeEventListener: refuse('removeEventListener'),
+    dispatchEvent: refuse('dispatchEvent'),
+    readyState: WebSocket.OPEN,
+    url: 'wss://test.invalid/',
+    protocol: '',
+    extensions: '',
+    binaryType: 'arraybuffer',
+    bufferedAmount: 0,
+    onclose: null,
+    onerror: null,
+    onmessage: null,
+    onopen: null,
+    CONNECTING: 0,
+    OPEN: 1,
+    CLOSING: 2,
+    CLOSED: 3,
+    ...built,
   };
 }
 
