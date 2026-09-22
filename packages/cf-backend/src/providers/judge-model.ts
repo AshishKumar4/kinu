@@ -1,8 +1,4 @@
-// Cross-family judge selection against a live agent provider registry.
-//
-// The policy AND the candidate list live in core (`selectJudgeModel`,
-// `selectEnsembleJudges`, `availableJudgeSpecs`); this is the adapter that
-// points them at the registry the agent already owns.
+// Cross-family judge selection: policy and candidates live in core; this adapter points them at the agent's registry.
 
 import {
   availableJudgeSpecs, selectEnsembleJudges, selectJudgeModel,
@@ -14,22 +10,8 @@ const candidatesFor = (registry: AgentProviderRegistry) => (): Promise<string[]>
   availableJudgeSpecs(registry.registry, registry.deps);
 
 /**
- * Resolve a REVIEWING producer's model: the owner's pin for that producer when
- * set, else a different-vendor model when one is connected, else the chat model
- * (same-model reviewing — the documented single-vendor fallback). Specs come
- * back normalized and registry-resolvable.
- *
- * Two producers review: `judge` grades the agent's own output, and `advisor`
- * reads a finished turn and may say one thing about it. They share this one
- * resolver because they share the whole reason for the cross-vendor default —
- * assessing your own output has a bias the smaller sibling shares — and a
- * second copy of that policy would be a second place for it to change.
- *
- * The MECHANICAL producers deliberately do NOT come through here. They resolve
- * their model from the account's tier table (`MODEL_ROUTE_POLICY.fast` names the
- * `fast` tier) synchronously at construction time, to decide whether to wire a
- * distinct client at all; this one has to await a live credential listing. One
- * resolver over both would carry a branch neither caller can reach.
+ * Reviewing producer's model (`judge`, `advisor`): owner's pin, else a different-vendor model, else the chat model.
+ * Mechanical producers resolve synchronously from the tier table and deliberately do not come through here.
  */
 export async function resolveReviewingModelSelection(opts: {
   registry: AgentProviderRegistry;
@@ -49,10 +31,8 @@ export async function resolveReviewingModelSelection(opts: {
 }
 
 /**
- * Resolve the panel that re-judges the owner's calibration set: the judges they
- * named, else one model per connected vendor family other than the chat
- * model's. A short list comes back short — core's `selectEnsembleJudges` has no
- * single-vendor fallback, and the caller says so rather than padding it.
+ * Calibration re-judge panel: the owner's named judges, else one model per other connected vendor family.
+ * A short list comes back short: no single-vendor fallback.
  */
 export async function resolveEnsembleJudgeSelection(opts: {
   registry: AgentProviderRegistry;

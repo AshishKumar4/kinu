@@ -1,31 +1,7 @@
 /**
- * What a durable recovery leaves behind, and what an auxiliary log may not cost.
- *
- * ## Why the recovery record is asserted at all
- *
- * A container lifecycle failure is made durable by the box before anyone is
- * told, and the box re-delivers it until this Worker accepts it. That seam owes
- * a fleet signal: without one, an incident the agent acted on and an incident
- * that reached nobody are both silence, and silence is also what a deleted
- * instrument looks like. So every settlement is ONE typed record, and the
- * cases below are the settlements that exist — announced, already announced,
- * undelivered, refused envelope, and a delivery that threw. Each is asserted on
- * the record's own dimensions rather than on whether a row appeared, because
- * "successful recovery" is a VALUE of the outcome dimension and the whole defect
- * was that it had nowhere to be.
- *
- * ## Why the log failure is a negative control and not a unit test
- *
- * `logActivity` is best-effort tracing whose failures must not reach a caller.
- * `Agent.sql` is synchronous — `sql(...): T[]` — so an unwritable activity row
- * is a THROW on the caller's own stack, not a floating rejection, and the
- * lifecycle seam logs before it answers the container. One full or missing table
- * therefore turned an announcement the agent had ALREADY been given into a
- * rejected RPC, and the container then retried an incident that was permanently
- * on record, being refused by a log line every time. The containment is at the
- * sink, where all of its call sites are covered at once, so it is measured
- * through a REAL actor with a real broken table rather than through an injected
- * double that could only prove the double was called.
+ * Every recovery settlement is one typed record asserted on its dimensions. `Agent.sql` is
+ * synchronous, so an unwritable activity row throws on the caller's stack: `logActivity` must
+ * contain it.
  */
 import { describe, expect, test } from 'bun:test';
 import { createTestSql } from '@kinu.run/test-utils';
@@ -43,16 +19,11 @@ import {
 import type { RecoveryRowInput } from '@kinu.run/core/analytics';
 import { orchestratorHarness, type HarnessOrchestratorAgent } from './helpers/actor-harness';
 
-/** The record as the lifecycle module produces it: everything but the caller's
- *  own workspace, which is the one dimension it cannot know. */
+/** Everything but the caller's own workspace, the one dimension the module cannot know. */
 type Settlement = Omit<RecoveryRowInput, 'workspace'>;
 
-/** What one case scripts. Every member is supplied — the defaults are here, not
- *  spread in conditionally — so the deps below are one shape rather than two. */
 interface LedgerScript {
-  /** What the signal seam answers, or throws. */
   readonly deliver: () => Promise<SendOutcome>;
-  /** The auxiliary log. A no-op unless a case is about its failure. */
   readonly logActivity: (event: string, detail?: string) => void;
 }
 
@@ -67,10 +38,7 @@ interface Ledger {
   readonly delivered: readonly AgentSignal[];
 }
 
-/** A real ledger over bun:sqlite, a scripted signal seam, and the recovery sink
- *  as a list. Nothing is mocked that this module owns: the dedupe really reads
- *  and writes SQL, which is what makes the duplicate and re-delivery arms
- *  measurable rather than asserted against a stub's memory. */
+/** A real ledger over bun:sqlite: the dedupe really reads and writes SQL. */
 function ledger(script: Partial<LedgerScript> = {}): Ledger {
   const { deliver, logActivity } = { ...ANNOUNCES, ...script };
   const { sql, execRaw } = createTestSql();
@@ -96,9 +64,7 @@ function ledger(script: Partial<LedgerScript> = {}): Ledger {
   };
 }
 
-/** The envelope shape the container's host sends. A JSON object, because the
- *  seam it crosses IS the parse boundary — the fields are the caller's claim,
- *  not a checked type, which is the whole reason the schema exists. */
+/** A JSON object: the seam is the parse boundary, so the fields are the caller's claim. */
 type Envelope = Readonly<Record<string, JsonValue>>;
 
 const SENT = {
@@ -109,15 +75,10 @@ const SENT = {
   attempts: 1,
 } satisfies Envelope;
 
-/** The envelope with a case's own fields on top, so what each test changes is
- *  the only thing it changes. */
 function envelope(over: Envelope = {}): JsonValue {
   return { ...SENT, ...over };
 }
 
-/** The envelope an older producer sends: the named field is simply not there.
- *  Stated by name rather than destructured off a widened copy, so a reader sees
- *  WHICH field is missing at the call site. */
 function envelopeWithout(field: 'version' | 'attempts'): JsonValue {
   return Object.fromEntries(
     Object.entries(SENT).filter(([key]) => key !== field),
@@ -132,7 +93,6 @@ describe('a durable recovery settlement', () => {
 
     expect(answer).toMatchObject({ status: 'queued', duplicate: false });
     expect(delivered).toHaveLength(1);
-    // The whole finding, in one assertion: recovery that WORKED has dimensions.
     expect(settlements).toEqual([{
       stage: 'checkpoint', outcome: 'ok', code: '', attempts: 1, durationMs: 0,
     }]);
@@ -143,9 +103,7 @@ describe('a durable recovery settlement', () => {
 
     await acceptSandboxLifecycleFailure(deps, envelope(), 1_000);
 
-    // `failed`, and `code` deliberately empty: the signal seam answers with an
-    // OUTCOME and holds no cause, so a classification here would be the one
-    // unmeasured value on the row.
+    // `code` empty: the signal seam answers an outcome and holds no cause.
     expect(settlements).toEqual([{
       stage: 'checkpoint', outcome: 'failed', code: '', attempts: 1, durationMs: 0,
     }]);
@@ -158,9 +116,7 @@ describe('a durable recovery settlement', () => {
     const repeat = await acceptSandboxLifecycleFailure(deps, envelope({ attempts: 2 }), 1_400);
 
     expect(repeat).toMatchObject({ status: 'queued', duplicate: true });
-    // One announcement, two settlements. The repeat is the container's retry loop
-    // being conservative about an answer it may not have received, so it is `ok`:
-    // the agent HAS been told, which is what the seam is for.
+    // The repeat is the container's conservative retry: the agent has been told, so it is `ok`.
     expect(delivered).toHaveLength(1);
     expect(settlements[1]).toEqual({
       stage: 'checkpoint', outcome: 'ok', code: '', attempts: 2, durationMs: 400,
@@ -170,8 +126,6 @@ describe('a durable recovery settlement', () => {
   test('the attempt count is the PRODUCER\'s, transported rather than recounted', async () => {
     const { deps, settlements } = ledger();
 
-    // The box has tried four times; three of those failures never reached this
-    // Worker at all, and an evicted Worker could not have counted them.
     await acceptSandboxLifecycleFailure(deps, envelope({ attempts: 4 }), 1_000);
 
     expect(settlements[0]?.attempts).toBe(4);
@@ -186,10 +140,7 @@ describe('a durable recovery settlement', () => {
 
     await acceptSandboxLifecycleFailure(deps, envelope(), 1_000);
     landed = true;
-    // The same incident, re-delivered much later. `first_seen_at` is written
-    // once and never moved, so this is the span the agent went without being
-    // told rather than the length of the last hop, which is the only version of
-    // the number worth reading.
+    // `first_seen_at` is written once, so this is the span the agent went untold, not the last hop.
     await acceptSandboxLifecycleFailure(deps, envelope({ attempts: 2 }), 9_500);
 
     expect(settlements.map((row) => [row.outcome, row.durationMs]))
@@ -199,19 +150,15 @@ describe('a durable recovery settlement', () => {
   test('a refused envelope claims no dimensions it was not given', async () => {
     const { deps, settlements, delivered } = ledger();
 
-    // The shape a caller reaches for when it wants to pass something the
-    // contract has no field for.
     const answer = await acceptSandboxLifecycleFailure(
       deps, envelope({ r2Key: 'backups/abc/data.sqsh' }), 1_000,
     );
 
     expect(answer.status).toBe('rejected');
     expect(delivered).toEqual([]);
-    // `refused`, not `failed`: `bad_input` IS a refusal in core's own vocabulary,
-    // and a rate that pooled a caller's bad envelope with a delivery that broke
-    // would answer neither question. Stage and attempts are empty because the
-    // envelope named neither, and a fabricated dimension is worse than an absent
-    // one.
+    // `refused`, not `failed`: `bad_input` is a refusal in core's vocabulary. Unnamed dimensions
+    // stay
+    // empty: a fabricated dimension is worse than an absent one.
     expect(settlements).toEqual([{
       stage: '', outcome: 'refused', code: 'bad_input', attempts: 0, durationMs: 0,
     }]);
@@ -224,9 +171,8 @@ describe('a durable recovery settlement', () => {
 
     await expect(acceptSandboxLifecycleFailure(deps, envelope(), 1_000)).rejects.toThrow();
 
-    // The one arm on this path where a cause exists to classify, and the class is
-    // read from the failure rather than defaulted: `timeout` and `io` imply
-    // opposite responses.
+    // The class is read from the failure, not defaulted: `timeout` and `io` imply opposite
+    // responses.
     expect(settlements).toEqual([{
       stage: 'checkpoint', outcome: 'failed', code: 'timeout', attempts: 1, durationMs: 0,
     }]);
@@ -257,9 +203,7 @@ describe('a durable recovery settlement', () => {
     fail = false;
     const retried = await acceptSandboxLifecycleFailure(deps, envelope({ attempts: 2 }), 6_000);
 
-    // NOT a duplicate: nothing had been announced, so the retry is the first
-    // announcement. The row the failed attempt left behind is what makes that
-    // safe, and recording the failure did not consume it.
+    // Not a duplicate: nothing had been announced, so the retry is the first announcement.
     expect(retried).toMatchObject({ status: 'queued', duplicate: false });
     expect(delivered).toHaveLength(2);
     expect(settlements[1]).toEqual({
@@ -286,18 +230,14 @@ describe('the versioned envelope', () => {
 
     expect(answer.status).toBe('rejected');
     expect(delivered).toEqual([]);
-    // The field, not just the values. A version mismatch is the one refusal a
-    // caller most needs to read, and valibot's own message for it is "Expected 2
-    // but received 1" — true, and about nothing in particular. Every issue now
-    // carries its path, which is what this seam has always promised.
+    // Every issue carries its path: valibot's bare version-mismatch message names no field.
     expect(answer.status === 'rejected' ? answer.reason : '').toContain('version');
   });
 
   test('an absent or impossible attempt count is refused, never defaulted', async () => {
     const { deps, delivered } = ledger();
 
-    // A guessed attempt number would put a value in the dataset that nothing
-    // measured, which is the one failure a dataset cannot recover from later.
+    // A guessed attempt number would put an unmeasured value in the dataset.
     expect((await acceptSandboxLifecycleFailure(deps, envelopeWithout('attempts'), 1_000)).status)
       .toBe('rejected');
     expect((await acceptSandboxLifecycleFailure(deps, envelope({ attempts: 0 }), 1_000)).status)
@@ -309,14 +249,8 @@ describe('the versioned envelope', () => {
 });
 
 /**
- * The box's ledger, in memory, with the exact four operations it owns.
- *
- * Real `deliverIncidents` over it, driving the real `acceptSandboxLifecycleFailure`
- * through the same envelope `kinu-sandbox.ts` mints — because the defect this
- * pair exists to pin lived in NEITHER half. Each side was self-consistent: this
- * side kept the row re-deliverable and waited to be asked again, the box wrote
- * the incident off, and the only thing wrong was the word that crossed between
- * them. A test of either half alone reports nothing.
+ * Real `deliverIncidents` driving real `acceptSandboxLifecycleFailure`: the defect lived in the
+ * word crossing between the halves, so a test of either half alone reports nothing.
  */
 function incidentLedger(): IncidentStore & { rows(): readonly IncidentRow[] } {
   const rows = new Map<string, IncidentRow>();
@@ -333,9 +267,7 @@ function incidentLedger(): IncidentStore & { rows(): readonly IncidentRow[] } {
 }
 
 describe('the answer the box acts on', () => {
-  /** One delivery pass, wired the way the container's host wires it: the
-   *  envelope restated field by field, and the host returns the status verbatim
-   *  because both sides speak one disposition vocabulary. */
+  /** The host returns the status verbatim: both sides speak one disposition vocabulary. */
   async function pass(store: IncidentStore, deps: SandboxLifecycleDeps, now: number) {
     return await deliverIncidents(store, async (incident, attempt) => {
       const answer = await acceptSandboxLifecycleFailure(deps, {
@@ -358,26 +290,21 @@ describe('the answer the box acts on', () => {
 
     const firstDelay = await pass(store, deps, 1_000);
 
-    // THE DEFECT, PINNED. The box must not write the incident off: nobody has
-    // been told, so `deliveredAt` stays absent and the schedule is re-armed.
+    // Defends: the box wrote off an undelivered incident. `deliveredAt` stays absent; the schedule
+    // re-arms.
     const pending = store.rows()[0];
     expect(pending?.deliveredAt).toBeUndefined();
     expect(pending?.rejectedAt).toBeUndefined();
     expect(pending?.attempts).toBe(1);
     expect(firstDelay).not.toBeNull();
 
-    // And the retry is what ends the loop, which is the property the whole
-    // re-deliverable ledger exists for.
     landed = true;
     const secondDelay = await pass(store, deps, 4_000);
 
     const settled = store.rows()[0];
     expect(settled?.deliveredAt).toBeDefined();
     expect(settled?.attempts).toBe(2);
-    // Nothing left undelivered, so there is nothing to wake for.
     expect(secondDelay).toBeNull();
-    // Announced exactly once across both passes: the first attempt never
-    // reached the agent, and the second is that first announcement.
     expect(delivered).toHaveLength(2);
   });
 
@@ -386,8 +313,7 @@ describe('the answer the box acts on', () => {
     const store = incidentLedger();
     await recordIncident(store, 'attach', 'archive size 0');
 
-    // A caller defect rather than a transient: retrying the same envelope cannot
-    // change the answer, so this one is stamped and dropped from the schedule.
+    // A caller defect: retrying cannot change the answer, so it is stamped and dropped.
     const delay = await deliverIncidents(store, async () =>
       (await acceptSandboxLifecycleFailure(deps, { nonsense: true }, 1_000)).status);
 
@@ -399,14 +325,7 @@ describe('the answer the box acts on', () => {
   });
 });
 
-/**
- * What `body` returned AND what the diagnostic sink was told while it ran.
- *
- * Both, from one seam, because a test that needs the second almost always needs
- * the first: handing the value back is what keeps a case's own result properly
- * typed instead of assigned out through a widened binding the assertion then has
- * to re-narrow.
- */
+/** What `body` returned and what the diagnostic sink was told while it ran. */
 async function withDiagnostics<T>(body: () => Promise<T>): Promise<{
   readonly value: T;
   readonly logs: readonly RecordedLog[];
@@ -421,12 +340,10 @@ async function withDiagnostics<T>(body: () => Promise<T>): Promise<{
   }
 }
 
-/** Failures the actor's own activity log reported while a case ran. */
 function activityLogFailures(logs: readonly RecordedLog[]): readonly RecordedLog[] {
   return logs.filter((log) => log.event === 'activity_log.write_failed');
 }
 
-/** The signal seam's accept, so an announcement really lands. */
 function acceptSubmissions(agent: HarnessOrchestratorAgent): void {
   Object.defineProperty(agent, 'submitMessages', {
     configurable: true,
@@ -448,9 +365,7 @@ describe('an auxiliary log failure', () => {
   test('cannot reject an announcement the agent has already been given', async () => {
     const { agent, db } = orchestratorHarness();
     acceptSubmissions(agent);
-    // The real failure, not a simulated one: the insert is issued against a
-    // table that is not there, which is what a migration that has not reached
-    // this object looks like from inside `logActivity`.
+    // A real failure: the insert targets a missing table, as an unmigrated object would.
     db.prepare('DROP TABLE activity_log').run();
 
     const { value, logs } = await withDiagnostics(async () => ({
@@ -458,18 +373,15 @@ describe('an auxiliary log failure', () => {
       repeat: await agent.acceptSandboxLifecycleFailure({ ...incident, attempts: 2 }),
     }));
 
-    // The primary result is untouched on BOTH arms. The duplicate arm matters as
-    // much as the first: it logs before it answers too, so an uncontained throw
-    // there is what made the container's retry loop unable to terminate.
+    // The duplicate arm logs before it answers too: an uncontained throw there made the retry loop
+    // endless.
     expect(value.first).toMatchObject({ status: 'queued', duplicate: false });
     expect(value.repeat).toMatchObject({ status: 'queued', duplicate: true });
 
-    // Observed, with a stable name and a cause — never silently swallowed.
     const failures = activityLogFailures(logs);
     expect(failures.length).toBeGreaterThan(0);
-    // The event NAME is published and the DETAIL is not: the name is a closed
-    // word from the actor, the detail is caller prose that can carry workspace
-    // text and an incident reason.
+    // The event name is published, the detail is not: detail is caller prose that can carry
+    // workspace text.
     expect(failures.map((log) => log.fields?.source)).toContain('sandbox_incident_announced');
     const rendered = JSON.stringify(failures);
     expect(rendered).not.toContain('archive size 0');

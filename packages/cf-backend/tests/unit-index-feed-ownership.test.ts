@@ -1,19 +1,7 @@
 /**
- * The control-plane index learns a workspace exists only from an OWNED request.
- *
- * THE DEFECT THIS COVERS. Observing the identity and the workspace together at
- * the auth gate — before `ensureAgentOwnership` — indexes the name in
- * `/api/workspaces/<name>` on the strength of the caller having typed it: any
- * signed-in user grows `ControlPlaneDO`'s SQLite index and pollutes the
- * operator's cross-account workspaces list with names they do not own, one row
- * per invented string, and the 403 they earn changes nothing. A request under
- * that path proves a workspace is live only once the ownership gate has agreed
- * the caller has it.
- *
- * Driven through the real `server.ts` fetch entry, because the ORDER is the
- * substance. Every other way of asserting it — reading the source, calling
- * `observeWorkspaceUse` directly — would still be green if somebody moved the
- * call above the gate.
+ * The control-plane index learns a workspace exists only from an owned request: indexing before
+ * `ensureAgentOwnership` let any signed-in user pollute the operator's workspaces list with invented names.
+ * Driven through the real `server.ts` fetch entry, because the order is the substance.
  */
 import { describe, expect, test } from 'bun:test';
 import { mockAgentsSdk } from './helpers/agents-sdk';
@@ -23,49 +11,32 @@ import type { UserCaller } from '@kinu.run/core';
 
 mockAgentsSdk();
 
-// Dynamic: a static import hoists above mockAgentsSdk(), and the entry's whole
-// DO graph reaches `cloudflare:*` modules that exist only inside workerd.
+// Dynamic: a static import hoists above mockAgentsSdk(), and the entry's DO graph reaches `cloudflare:*`
+// modules that exist only inside workerd.
 const { default: worker } = await import('../src/server');
 
 const APP_HOST = 'app.example.com';
 
-// Not `owner@example.com`: the observe feed memoizes on the derived userId
-// for a quarter of an hour, and every other suite that drives that email
-// through the Worker primes the memo for THIS file's calls — the row the
-// assertion counts simply never arrives. The address is the memo key's own,
-// so this suite names one no neighbor shares.
+// Not `owner@example.com`: the observe feed memoizes on the derived userId, and other suites prime that memo.
 const OWNER_EMAIL = 'index-feed-owner@example.com';
 
 const SECRET = 'index-feed-test-secret-0123456789';
 
-/** What a caller presents to act as `DEV_USER_EMAIL` on a host that is not
- *  localhost. The fixture drives a published host, so it holds the secret the
- *  way the eval harness does. */
+/** Held the way the eval harness does, since the fixture drives a published (non-localhost) host. */
 const DEV_IDENTITY_SECRET = 'index-feed-dev-identity-secret';
 
-/** A signed-in request to the app host, authenticated the one way this
- *  deployment shape allows. */
 function appRequest(path: string): Request {
   return new Request(`https://${APP_HOST}${path}`, {
     headers: { 'x-kinu-dev-identity': DEV_IDENTITY_SECRET },
   });
 }
 
-/** What the control-plane index was told, in order. */
 interface IndexWrites {
   users: string[];
   workspaces: { userId: string; name: string }[];
 }
 
-/**
- * The Worker, with a control plane that records what it is told and a UserDO
- * whose roster decides who owns what.
- *
- * `DEV_USER_EMAIL` names the identity a request authenticates as without a
- * session store, and `DEV_IDENTITY_SECRET` is what a caller on a published host
- * presents to hold it. Every gate after that — CSRF, the index feed, the
- * ownership check — runs exactly as it does in production.
- */
+/** The Worker with a recording control plane; CSRF, the index feed and the ownership check run as in production. */
 function harness(owned: readonly string[]) {
   const index: IndexWrites = { users: [], workspaces: [] };
 
@@ -78,8 +49,6 @@ function harness(owned: readonly string[]) {
       async observeWorkspace(_caller: PresentedCaller, observation: { userId: string; name: string }) {
         index.workspaces.push({ userId: observation.userId, name: observation.name });
       },
-      // The owned-request feed touches activity without claiming the title.
-      // Recorded beside observes. The ownership property is identical.
       async touchWorkspace(_caller: PresentedCaller, observation: { userId: string; name: string }) {
         index.workspaces.push({ userId: observation.userId, name: observation.name });
       },
@@ -123,9 +92,7 @@ function harness(owned: readonly string[]) {
   // ASSETS for the SPA fallback an owned request falls through to.
   const env = partialEnv as Env;
 
-  // Retained rather than dropped: the index feed writes inside `waitUntil`, so
-  // a fixture that discarded the promise would report "no row written" for
-  // every request and pass whatever the ordering was.
+  // Retained: the index feed writes inside `waitUntil`, so dropping the promise would pass any ordering.
   const ctx = workerContext();
 
   return {
@@ -142,11 +109,9 @@ describe('the workspace index feed sits behind the ownership gate', () => {
     const response = await worker.fetch(appRequest('/api/workspaces/not-mine/state'), h.env, h.ctx);
     await h.settle();
 
-    // Refused, and the refusal is the point: the name was never the caller's.
     expect(response.status).toBe(404);
     expect(h.index.workspaces).toEqual([]);
-    // The ACCOUNT half still lands. A signed-in request does prove the account
-    // exists and was here, which is what that feed is for.
+    // The account half still lands: a signed-in request does prove the account exists.
     expect(h.index.users.length).toBe(1);
   });
 
@@ -161,8 +126,7 @@ describe('the workspace index feed sits behind the ownership gate', () => {
   });
 
   test('an invented name in the same session never reaches the index', async () => {
-    // The shape that made this exploitable: one signed-in session, many names.
-    // Each one is a distinct memo key, so each one would be a separate row.
+    // One session, many names: each is a distinct memo key, so each would be a separate row.
     const h = harness(['mine']);
 
     for (const name of ['made-up-1', 'made-up-2', 'made-up-3']) {

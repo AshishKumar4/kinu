@@ -1,14 +1,5 @@
-// KINU-N019: the run-events route clamped only the UPPER bound on `limit`, so a
-// negative value crossed the object boundary and reached SQLite as `LIMIT -1` —
-// which SQLite reads as no limit at all. One request then read, parsed and
-// serialized a whole run's event history.
-//
-// The route is checked against a REAL recorder over real SQLite, not a counting
-// stub, because the defect was in what SQL did with the forwarded value. The
-// stub's `getRunEvents` is the production body of `OrchestratorAgent`'s —
-// `getRunEvents(recorder, runId, opts)` and nothing else — so the direct-RPC
-// cases below exercise the real boundary, which is the bypass a route-only fix
-// leaves open.
+// KINU-N019: a negative `limit` reached SQLite as `LIMIT -1`, which SQLite reads as no limit. Checked against a
+// real recorder over real SQLite; the stub's `getRunEvents` is the production body, so direct RPC is covered too.
 import type { RunEventsResolver, RunEventsTarget } from '../src/run-events-routes';
 import { describe, test, expect } from 'bun:test';
 import { Database } from 'bun:sqlite';
@@ -23,14 +14,12 @@ import { mockAgentsSdk } from './helpers/agents-sdk';
 
 mockAgentsSdk();
 
-// Dynamic on purpose: the route module resolves the Agent SDK at import time, so
-// it may only load AFTER the stub is installed. Same seam as unit-sse-disconnect.
+// Dynamic: the route module resolves the Agent SDK at import time, so it loads after the stub is installed.
 const { handleRunEventsRequest } = await import('../src/run-events-routes');
 
 const SEEDED_EVENTS = 700;
 
-/** A workspace whose `getRunEvents` is the production one: the boundary
- *  read-model over a real recorder, with no validation added by the test. */
+/** The production boundary read-model over a real recorder, with no validation added by the test. */
 function runEventsWorkspace() {
   const db = new Database(':memory:');
   initRunEventTables(makeExecRaw(db));
@@ -54,7 +43,6 @@ function runEventsWorkspace() {
 async function eventsVia(
   resolveAgent: RunEventsResolver, query: string,
 ): Promise<{ status: number; count: number }> {
-  // The list route never polls, so the real pacing is never asked for a wait.
   const res = await handleRunEventsRequest(new Request(
     `https://kinu.example.com/api/workspaces/jarvis/runs/run-1/events${query}`,
   ), resolveAgent, REAL_CLOCK);
@@ -65,15 +53,12 @@ async function eventsVia(
   return { status: res.status, count: Array.isArray(body) ? body.length : -1 };
 }
 
-/** Every query string the route must close, and the number of events it may
- *  answer with. One row is one test, so a failure still names its own case. */
+/** One row per test, so a failure names its own case. */
 const BOUNDED_QUERIES: readonly { readonly name: string; readonly query: string; readonly count: number }[] = [
   { name: 'a negative limit returns one event, not the whole run', query: '?limit=-1', count: 1 },
   { name: 'a far more negative limit is bounded the same way', query: '?limit=-999999', count: 1 },
   { name: 'a negative limit stays bounded with a type filter as well', query: '?limit=-1&types=error', count: 1 },
-  // Not a 400: absent and unreadable are the same statement, so the route
-  // never has to decide what a garbage query string meant. Forwarded raw,
-  // each of these is a 500 from SQLite's datatype mismatch.
+  // Not a 400: absent and unreadable mean the same. Forwarded raw, each is a 500 from SQLite's datatype mismatch.
   { name: 'unparseable limit text means unstated and takes the default', query: '?limit=abc', count: RUN_EVENT_LIMIT_DEFAULT },
   { name: 'a literal NaN means unstated too', query: '?limit=NaN', count: RUN_EVENT_LIMIT_DEFAULT },
   { name: 'a literal Infinity means unstated too', query: '?limit=Infinity', count: RUN_EVENT_LIMIT_DEFAULT },
@@ -100,8 +85,7 @@ describe('a direct RPC cannot ask for more than the route may', () => {
 
     const countOf = async (opts: RunEventQuery): Promise<number> => (await stub.getRunEvents('run-1', opts)).length;
 
-    // No route in this path — the same query strings a caller would smuggle
-    // past it, handed straight to the RPC.
+    // No route: the same query strings handed straight to the RPC.
     expect(await countOf({ limit: -1 })).toBe(1);
     expect(await countOf({ limit: Number.NaN })).toBe(RUN_EVENT_LIMIT_DEFAULT);
     expect(await countOf({ limit: 2.7 })).toBe(2);

@@ -1,48 +1,9 @@
 /**
- * Twin methods — the drift inventory of logic implemented once per backend.
- *
- * A method name that exists on BOTH a cf actor class and the CLI session class
- * with no shared implementation is a drift site: the two bodies start
- * identical — createTimerTrigger and markChangelogSeen were line-for-line
- * copies until they were hoisted — and diverge silently, because nothing ever
- * asserts they agree. Several of the "X never
- * worked on Y backend" defects were exactly a twin whose halves drifted — and
- * the halves need not even disagree loudly: emitHeadPhase fanned the same
- * split out to one place on cf and two on the CLI, where the second reached
- * no reader and duplicated the first in `kinu exec --json`.
- *
- * A shared NAME does not always mean unshared logic, though: once a driver is
- * hoisted, both backends keep the method as a transport over the one core
- * implementation. Those are recorded separately, in SHARED_TRANSPORTS, each
- * naming the core symbol it delegates to — and the gate CHECKS that claim
- * against both bodies, so an entry cannot be moved out of the twin count
- * without the delegation actually existing.
- *
- * Two delegation FORMS are checkable, and an entry declares which one it uses:
- *
- *   'symbol'   a free-function call — a hoisted driver, which is what most
- *              hoists produce.
- *   '.symbol'  a method call on a shared core OBJECT (a store, a session).
- *              Some transports are three lines over one core object rather
- *              than over a free function, and declaring the form makes that
- *              claim machine-checked instead of a comment in KNOWN_TWINS
- *              explaining that an entry is not really a twin. `this.symbol(`
- *              never counts because a method must not prove itself by calling
- *              itself.
- *
- * This gate does not forbid the twins that exist — they are recorded below as
- * the measured baseline. It forbids the inventory from drifting in either
- * direction:
- *
- *   a NEW twin appears      → red. Hoist the logic to core instead, or record
- *                             it — as a twin, or as a transport that names its
- *                             core symbol. Either way, a visible decision.
- *   a recorded twin is gone → red. It was hoisted or renamed — delete its
- *                             entry, so the inventory only ever shrinks by
- *                             real hoists and the list stays the honest
- *                             measure of remaining duplication.
- *
- * Every future hoist's success criterion is an entry leaving KNOWN_TWINS.
+ * Twin methods: a name on both a cf actor class and the CLI session class with no shared
+ * implementation is a drift site (emitHeadPhase once fanned out to two places on the CLI).
+ * KNOWN_TWINS is the measured baseline; SHARED_TRANSPORTS names the core symbol each transport
+ * reaches (`'symbol'` a free call, `'.symbol'` a method on a shared object, never `this.`), and the
+ * gate verifies it. A new twin or a vanished recorded one is red: the inventory only shrinks by hoists.
  */
 
 import { describe, expect, test } from 'bun:test';
@@ -60,87 +21,32 @@ import { declaredClassMembers } from './helpers/declared-members';
 
 const REPO = resolve(import.meta.dir, '../../..');
 
-/**
- * The measured twin inventory at seeding time. Shrink by hoisting.
- *
- * Every entry below was re-verified against BOTH class bodies, one at a time,
- * and every one of them holds: none is a pair of bodies that would move to core
- * unmodified. The reason is written next to each, because an inventory whose
- * entries carry no reason is a list of TODOs rather than a record of decisions.
- * Grouped by that reason rather than alphabetically — the file-checkpoint four
- * share one.
- */
+/** The twin inventory, each entry with its reason for staying per backend. Shrink by hoisting. */
 const KNOWN_TWINS: readonly string[] = [
-  // KINU-021's SANCTIONED adapter surface. Core owns the terminal-transition
-  // vocabulary, declaration, state machine, schema, replay and disposition read
-  // model (orchestrator/terminal-{effects,transition,roster}.ts); what a backend
-  // supplies is exactly two things, and these are them.
-  //
-  // The effect BODIES: what "reply to this delivery" or "title this workspace"
-  // means is the backend's, because the surfaces differ — a device tunnel and an
-  // SMTP channel are not one implementation.
+  // KINU-021's sanctioned adapter surface: core owns the terminal machinery
+  // (orchestrator/terminal-{effects,transition,roster}.ts); backends supply the effect bodies...
   'terminalEffectTable',
-  // The WAKE: a Durable Object writes Agents SDK schedule rows
-  // (`schedule`/`listSchedules`/`cancelSchedule`) its alarm fires; a CLI
-  // process arms `setTimeout(...).unref()` and its durable carrier is the next
-  // start. Neither can be expressed in the other's terms.
+  // ...and the wake: DO schedule rows its alarm fires vs a CLI `setTimeout(...).unref()`.
   'scheduleTerminalRetry',
-  // Not one method under two bodies: cf overrides the Agents SDK's
-  // `Agent.broadcast(message, without)` over `getConnections()` tags, the CLI
-  // emits a typed event to its one frontend listener.
+  // cf overrides `Agent.broadcast` over connection tags; the CLI emits to its one listener.
   'broadcast',
-  // The seam itself, not duplication: each backend describes the inference
-  // surface a candidate scaffold runs on (its ToolSet, its history, its
-  // default loop). Its four ports are already SHARED_TRANSPORTS entries; what
-  // is left here is the struct that packs them. This entry is not expected to
-  // shrink.
+  // The seam itself: each backend packs its scaffold inference surface; the ports are shared.
   'scaffoldControl',
-  // Same shape as scaffoldControl: the seam itself. Each backend packs the
-  // refinement lane's ports from what it alone owns — its SQL executor, its
-  // temporary-agent port, its facts store, its skills VFS — and every port's
-  // POLICY is already core's (evolution/refinement-lane.ts). This entry is not
-  // expected to shrink.
+  // The seam itself: ports from what each backend owns; policy is core's (evolution/refinement-lane.ts).
   'refinementDeps',
-  // WHERE a name is read, which is not one question on the two backends. The cf
-  // workspace root's title lives in the owner's UserDO registry and its
-  // subagent reaches the workspace over a Durable Object hop; a local session
-  // reads its own config row, and a local child is handed its workspace's
-  // reader by the host that holds both. What the answer MEANS — which name
-  // renders, and what an untitled workspace says — is core's
-  // (`PromptIdentity`, prompt.ts renderAgentNames), so neither body decides
-  // anything. Not expected to shrink.
+  // Where the name is read differs (UserDO registry vs local config); what it means is core's
+  // (`PromptIdentity`, prompt.ts renderAgentNames).
   'promptIdentity',
-  // The loop's preparation port — the seam itself, not duplication. Core's
-  // ChatSession asks each backend for one admitted turn's assembly through
-  // `ChatSessionPorts.prepareTurn`, and each answers from what it alone owns:
-  // its reads (MCP tools, device status, the owner's profile inputs), its
-  // tool surface, its prompt, its dynamic context. What the answer MEANS —
-  // the PreparedTurn shape, the profile binding, the step pipeline the
-  // assembly feeds — is core's. Not expected to shrink.
+  // `ChatSessionPorts.prepareTurn`: each answers from what it alone owns; the shape is core's.
   'prepareTurn',
 ];
 
-/**
- * Same name on both backends, one implementation in core: the method is the
- * backend's transport for it. Each entry names the core symbol both bodies
- * must call, and a leading `.` says the call is a method on a shared core
- * object rather than a free function — asserted below either way, so this list
- * cannot launder a real twin.
- */
+/** Same name, one core implementation: each entry names the core symbol both bodies must reach. */
 const SHARED_TRANSPORTS = {
-  // Both construct core's one lifecycle object over their own storage, effect
-  // table, clock and wake. The state machine inside it is shared by definition.
   terminal: 'TerminalTransitions',
-  // The carrier is the platform's — an Agents SDK `runFiber` chain on the DO, a
-  // process-tracked fiber on the CLI; what a rejected close means (release,
-  // record, re-arm) is core's one rule.
+  // The carrier is the platform's (`runFiber` vs a tracked fiber); the close rule is core's.
   holdTerminalClose: '.closeFailed',
-  // Both gather their own readings — an accumulator's takes, a pending branch
-  // list, a scaffold candidate — and hand them to core's ONE declaration, which
-  // owns the order, the lanes, the keys and the gates.
   owedTerminalEffects: 'declareTerminalRoster',
-  // Both resolve the same core naming policy over their own persistence.
-  // Both read the same canonical transcript through core's one digest.
   readInheritedContext: 'inheritedContextFromTranscript',
   applyAutoTitle: 'applyWorkspaceTitle',
   applyScaffoldDecision: 'applyScaffoldDecision',
@@ -152,50 +58,23 @@ const SHARED_TRANSPORTS = {
   cancelTrigger: 'cancelTrigger',
   decideDeferredApprovals: '.decide',
   createTimerTrigger: 'createTimerTrigger',
-  // KINU continual refinement: the whole lane — stage machine, claim fencing,
-  // owner routing, staged-skill promotion — is core's evolution/refinement*.
-  // Each backend method is a transport over one core symbol; what stays per
-  // backend is only its own deps struct (recorded in KNOWN_TWINS) and, on the
-  // CLI, dropping model-bound state after a step lands.
+  // Refinement lane is core's evolution/refinement*; per backend only its deps struct remains.
   decideRefinement: 'decideRefinementRoute',
-  // `agentDynamicContext` owns which planes exist and state/dynamic-context.ts
-  // holds which store feeds each one, so each side passes only what it alone
-  // knows: its turn's memory tail and its own unreachable-MCP roster. Stated
-  // per backend it is the SAME eight-field literal twice.
+  // Each side passes only its memory tail and unreachable-MCP roster.
   dynamicContextSnapshot: 'collectDynamicContext',
-  // The precedence — the live turn's profile when a turn is open, else resolve
-  // one now — is the policy, and MODEL_ROUTE_POLICY is read against whatever it
-  // answers. Two backends that disagreed about WHEN an auxiliary lane inherits
-  // the turn would route the same producer differently while each looked correct
-  // alone. What stays per backend is only where a FRESH resolution comes from:
-  // the actor's own profile inputs, the CLI's local profile authority.
+  // When an auxiliary lane inherits the turn profile is policy; only fresh resolution is per backend.
   routingProfile: 'resolveRoutingProfile',
-  // The walk-back: head, context selection, woven blocks and working history
-  // move together inside core's one ActorSession method, and the refusal that
-  // governs it reads core's own turn queue. Each backend spelled that queue
-  // question for itself until ChatSession.revertTo took it; what is left per
-  // backend is the transport — a cf `@callable`, a local method.
   revertConversation: '.revertTo',
-  // The claimed tier, else the stored spec, through the backend's own
-  // normalizer — ONE spelling, because every model_call row is priced against
-  // it and every analytics row grouped by it. The CLI's copy read its cached
-  // spec and fell to a fabricated static spec in the window between a config
-  // change and the next turn; cf's normalization was the stricter side.
+  // One spelling: every model_call row is priced and grouped by it.
   effectiveModelSpec: 'resolveEffectiveModelSpec',
   getAlwaysActiveSkills: 'getAlwaysActiveSkills',
   getEvolutionChangelog: 'getEvolutionChangelog',
   getReasoningEffort: 'getReasoningEffort',
   getRunEvents: 'getRunEvents',
   getShadowStatus: 'getShadowStatus',
-  // Both are one-line delegations to read-models/config-plane.ts, exactly like
-  // the approval MODE beside them: the logic is in core, the twin is only the
-  // RPC surface each backend has to expose in its own transport.
   getShellApprovalGrants: 'getShellApprovalGrants',
   getShellApprovalMode: 'getShellApprovalMode',
-  // KINU-N028's instruction-trust surface: one core InstructionApprovalDesk
-  // owns the listing, the opening and the digest re-check. Each backend names
-  // only where AGENTS.md is discovered and its transport (a cf `@callable`, a
-  // local method behind LocalSessionControls).
+  // KINU-N028: one core InstructionApprovalDesk; each backend names only where AGENTS.md is found.
   approveInstruction: '.approve',
   revokeInstruction: '.revoke',
   listInstructionApprovals: '.list',
@@ -212,8 +91,6 @@ const SHARED_TRANSPORTS = {
   makeScaffoldHistory: 'createScaffoldHistory',
 
   markChangelogSeen: 'markChangelogSeen',
-  // Plan review: both hold core's PlanReviewActions over their own broadcast
-  // and read the one store; the review's every rule lives in core.
   planActions: 'PlanReviewActions',
   submitPlanEdits: '.submit',
   getActivePlanReview: '.active',
@@ -226,20 +103,12 @@ const SHARED_TRANSPORTS = {
   resumeBackgroundJob: 'resumeBackgroundJob',
   revertChangelogEntry: 'revertChangelogEntryById',
   revokeShellApprovalGrants: 'revokeShellApprovalGrants',
-  // One review, from a snapshot: the body the live lane and its recovery both
-  // run, governed off the TURN's labels. Each backend states only which client
-  // answers, where the governor lives, and whether a completion gate exists at
-  // all (it is the one-shot CLI surface's mechanism, so cf passes `false`).
+  // Each backend states the client, the governor, and whether a completion gate exists (cf: `false`).
   runAdvisorReview: 'reviewRecordedTurn',
-  // The prompt pair and the parse are core's; each body states only which
-  // model answers (its routed 'fast' lane) and its own spend/operation framing.
   suggestTitle: 'suggestWorkspaceTitle',
   showRefinement: 'showRefinementRoute',
   runScaffoldGepaOptimization: 'runScaffoldGepaOptimization',
-  // Both bodies are thin transports over core's Inbox.send — the mid-turn
-  // splice at the next step boundary is core's one rule. What stays per
-  // backend is only how an IDLE backend starts the turn: the DO's
-  // enqueueTurn, the CLI's session-queue pump.
+  // Mid-turn splicing is core's `Inbox.send`; per backend only how an idle backend starts the turn.
   send: '.send',
   setAlwaysActiveSkills: 'setAlwaysActiveSkills',
   setModel: 'setModel',
@@ -249,7 +118,6 @@ const SHARED_TRANSPORTS = {
   wrapToolsForBackground: 'wrapToolsForBackground',
 } satisfies Readonly<Record<string, string>>;
 
-/** The class bodies that constitute each backend's composition surface. */
 const CF_CLASSES = [
   ['packages/cf-backend/src/actor-agent.ts', 'ActorAgent'],
   ['packages/cf-backend/src/orchestrator.ts', 'OrchestratorAgent'],
@@ -286,15 +154,11 @@ function scanTwins(): TwinScan {
   return { cf, cli, twins: [...cf].filter((name) => cli.has(name)).sort(), cfBodies, cliBody };
 }
 
-/** A member declaration sits at exactly two spaces of indentation (the same
- *  shape methodNames extracts); anything calling one is deeper than that. */
+/** A member declaration sits at exactly two spaces of indentation; calls are deeper. */
 const DECLARATION_HEAD =
   /^ {2}(?:@[A-Za-z_][A-Za-z0-9_]*\((?:[^()]|\([^()]*\))*\)\s+)?(?:(?:private|protected|public|readonly|override|static|async|get|set)\s+)*$/;
 
-/** Whether `body` contains a call matching `pattern` that is not the method's
- *  own declaration header. Without that exclusion a transport whose name
- *  matches its core symbol would prove itself by existing, which is exactly
- *  the laundering this gate exists to stop. */
+/** A call matching `pattern` other than the method's own declaration header, which would self-prove. */
 function containsCall(body: string, pattern: RegExp): boolean {
   for (const m of body.matchAll(pattern)) {
     const lineStart = body.lastIndexOf('\n', m.index) + 1;
@@ -305,16 +169,7 @@ function containsCall(body: string, pattern: RegExp): boolean {
   return false;
 }
 
-/**
- * Whether `body` delegates to `declared` — a free-function `symbol(` call, or,
- * when the entry is written `.symbol`, a method call on some object OTHER than
- * `this`.
- *
- * The `this` exclusion is what keeps the method form honest: `this.foo(` inside
- * `foo` proves nothing, while `this.store.foo(` reaches a shared object and
- * does. Member chains are fine — the check looks only at what sits immediately
- * before the dot.
- */
+/** A free `symbol(` call, or for `.symbol` a method call on an object other than `this`. */
 function delegatesTo(body: string, declared: string): boolean {
   if (declared.startsWith('.')) {
     const symbol = declared.slice(1);
@@ -330,8 +185,7 @@ describe('backend twin methods', () => {
   const recorded = new Set([...KNOWN_TWINS, ...Object.keys(SHARED_TRANSPORTS)]);
 
   test('the extractor sees real class surfaces (guards the guard)', () => {
-    // A broken extractor returning near-empty sets would make "no new twins"
-    // pass vacuously; these floors pin it to reality.
+    // Floors so a broken extractor cannot pass "no new twins" vacuously.
     expect(cf.size).toBeGreaterThanOrEqual(80);
     expect(cli.size).toBeGreaterThanOrEqual(60);
     expect(twins.length).toBeGreaterThanOrEqual(40);
@@ -351,9 +205,7 @@ describe('backend twin methods', () => {
   });
 
   test('the delegation check cannot be satisfied by a method calling itself', () => {
-    // Guards the guard. Both forms exist to prove a body reaches a SHARED
-    // implementation; a body that only reaches itself proves nothing, and the
-    // method form is the one where that mistake is easy to make.
+    // Guards the guard: self-calls prove nothing, and the method form makes that easy.
     expect(delegatesTo('  armCompactNow(): void {\n    this.armForceCompaction();\n  }', '.armForceCompaction'))
       .toBe(false);
     expect(delegatesTo('  armCompactNow(): void {\n    this.state.armForceCompaction(k);\n  }', '.armForceCompaction'))
@@ -368,16 +220,8 @@ describe('backend twin methods', () => {
   });
 
   test('every declared transport really delegates to its core symbol', () => {
-    // Without this, SHARED_TRANSPORTS would be a way to assert duplication
-    // away. Both sides must actually reach the named core implementation.
-    //
-    // Scope caveat, measured rather than assumed: this searches the whole class
-    // body, not the named method's, so it proves the class reaches the core
-    // symbol somewhere. Narrowing it to the member body needs a real member
-    // extractor — three regex attempts at one were each defeated by a different
-    // TypeScript signature shape (an object parameter, a single-line body, a
-    // generic return type containing an object literal), and a stricter gate
-    // whose extractor silently mis-parses is worse than an honest coarse one.
+    // Coarse by design: searches the whole class body, not the member (regex member extraction
+    // was defeated by several signature shapes).
     const unproven = Object.entries(SHARED_TRANSPORTS)
       .filter(([, symbol]) =>
         !delegatesTo(cliBody, symbol) || !cfBodies.some((b) => delegatesTo(b, symbol)))
@@ -388,32 +232,13 @@ describe('backend twin methods', () => {
 });
 
 /**
- * Start-of-life reconciliation, which is the OTHER half of this file's subject:
- * not logic duplicated across backends, but logic wired into only one of them.
- *
- * Both defect classes have the same cause — nothing asserts the two composition
- * surfaces agree — and both have hit this repo. Twice, now, in the same place.
- *
- * The first: `head_journal.status = 'running'` had a single writer that cleared
- * it (the happy-path report), so an interrupted fork's heads stayed 'running'
- * forever and the dynamic-context block told the model "N of M heads running" on
- * every step for the life of the workspace, while the job registry said
- * `cancelled by operator`.
- *
- * The second: the fix for the first retired those heads, and the RESUME that
- * could have continued them was wired into one backend's start of life and not
- * the other's. The CLI swept its job registry unconditionally; the Durable Object
- * reached that sweep only from `onFiberRecovered` for a surviving `bg:*` fiber,
- * and a fiber row can die with the activation that owned it. So the retirement
- * was guaranteed and the re-entry was conditional, and a live search was recorded
- * `aborted` with "nothing left that could run it".
+ * Logic wired into only one backend: the DO reached the job-registry resume only via a surviving
+ * `bg:*` fiber, so interrupted searches were retired as `aborted` while the CLI resumed them.
  */
 describe('interrupted work is reconciled at start of life on BOTH backends', () => {
   const { cfBodies, cliBody } = scanTwins();
 
-  // The gate is the parity that was missing. Without one the reconciler retires
-  // every interrupted run, which is correct only for a caller with no durable
-  // resume path — and both of these have one.
+  // Without a resume gate the reconciler retires every interrupted run.
   const reached = [
     {
       name: 'each composition surface settles the fork journal through the one core reconciler',
@@ -433,29 +258,17 @@ describe('interrupted work is reconciled at start of life on BOTH backends', () 
   }
 
   test('neither surface sweeps the job registry outside that gate', () => {
-    // The ordering is STRUCTURAL rather than a source-position assertion here:
-    // the reconciler marks the stale rows, calls the gate, and retires what the
-    // gate refused, so the order is one function's control flow and cannot be
-    // got wrong by an edit at a call site.
-    // What a composition surface must NOT do is sweep the registry beside the
-    // gate, because a job re-driven before the marking is a job the gate then has
-    // nothing to report, and the run it was continuing gets retired.
-    //
-    // `onFiberRecovered` is exempt and is why this reads the recovery method
-    // rather than the whole file: that callback delivers a wake only the fiber row
-    // knows was lost, and it is a different entry point from start of life.
+    // The reconciler orders mark, gate, retire; a sweep beside the gate would re-drive jobs before the
+    // marking. `onFiberRecovered` is a different entry point, hence the recovery method only.
     const cliRecovery = methodBody(cliBody, 'recoverBackgroundJobs');
     expect(cliRecovery).not.toBe('');
-    // Inside the gate the sweep is a THUNK the reconciler calls. Awaiting it at
-    // the call site is the shape that runs it beside the marking instead of after
-    // it, and it is the only shape that can get the order wrong.
+    // The sweep must be a thunk the reconciler calls, not awaited at the call site.
     expect(cliRecovery).toContain('jobRedriveResumeGate({');
     expect(cliRecovery).not.toContain('await this.jobRunner.recoverOrphans()');
   });
 });
 
-/** One method's body out of a scanned composition surface, by brace depth.
- *  Empty when the surface declares no such method. */
+/** One method's body by brace depth; empty when absent. */
 function methodBody(body: string, name: string): string {
   const start = body.indexOf(`async ${name}(`);
 
@@ -478,57 +291,24 @@ function methodBody(body: string, name: string): string {
 }
 
 /**
- * THE TWIN DIFFERENTIAL: for each core seam BOTH backends implement, the two
- * halves are held to one observable over one shared fixture, and a failure
- * names the seam.
- *
- * The inventory above answers "is this logic duplicated". It cannot answer the
- * question that actually shipped defects: two halves that BOTH delegate to core
- * and still disagree about what they hand it. `headMergeLLM` is the case in the
- * record — the Cloudflare merge resolved the `judge` route off the turn profile
- * while the local merge passed the SESSION'S CHAT MODEL at a hardcoded `'low'`
- * and filed the result as `judge` spend anyway, so one split was synthesised by
- * the deep tier in the cloud and by whatever `/model` happened to be on a
- * device. Both bodies called into core. Neither was a "twin".
- *
- * WHAT MAKES THIS DIFFERENTIAL RATHER THAN TWO ASSERTIONS. Each seam declares
- * ONE shared fixture and ONE expected observable, and the check requires BOTH
- * backends' suites to pin THAT fixture rather than a local literal. Two suites
- * with two hand-maintained expectations can agree today and drift tomorrow with
- * neither going red; two suites pinned to one exported value cannot. The
- * fixture itself is then EXECUTED here, so the shared expectation cannot rot
- * into something core no longer produces — which is the half a source scan
- * alone can never carry.
- *
- * WHAT THIS CANNOT DO, stated because a limitation nobody wrote down gets
- * trusted: it does not construct the CLI session inside this process. That
- * would mean a cf-backend suite importing the other adapter's composition root,
- * and the two are deliberately separate programs — the cf half is exercised
- * here, the CLI half in its own package's suite, and what this gate holds is
- * that both are measured against the SAME fixture and the same core symbol. A
- * seam whose two suites both pin the fixture and both still call it wrongly is
- * outside it; that residual is why `gate:capability-parity` and the inventory
- * above stay beside this.
+ * The twin differential: halves that both delegate to core can still disagree (the local
+ * `headMergeLLM` passed the chat model at `'low'` and filed it as `judge`). Each seam's suites on
+ * both backends must pin one shared fixture, which is executed here. The CLI session is not built
+ * in-process; `gate:capability-parity` covers the residual.
  */
 
 /** One core seam both backends implement, and how a divergence is observable. */
 interface DifferentialSeam {
-  /** The seam's name — what a failure reports. */
   readonly seam: string;
-  /** The core symbol both backends' halves must reach. */
   readonly coreSymbol: string;
-  /** The shared fixture both suites must pin, as exported from test-utils. */
   readonly fixture: readonly string[];
-  /** The suite on each side that pins it: at least one under `cf-backend`
-   *  and one under `cli-backend` or `cli`, and a seam a third surface
-   *  implements names that surface too. */
+  /** At least one cf-backend and one cli-backend/cli suite, plus any third implementing surface. */
   readonly suites: readonly string[];
 }
 
 const DIFFERENTIAL_SEAMS: readonly DifferentialSeam[] = [
   {
-    // The merge's MODEL, its EFFORT and its SPEND LABEL are one decision in
-    // core; a backend's only say is turning the routed pair into a client.
+    // Model, effort and spend label are one core decision.
     seam: 'head-merge policy',
     coreSymbol: 'headMergeLLM',
     fixture: ['mergePolicyProfile', 'MERGE_POLICY_BINDING'],
@@ -538,17 +318,9 @@ const DIFFERENTIAL_SEAMS: readonly DifferentialSeam[] = [
     ],
   },
   {
-    // Which store answers each live plane of a turn. `state/dynamic-context.ts`
-    // holds the binding ONCE; stated per body it is two eight-field literals
-    // differing only in how each side names its own fields. The fixture is the
-    // assembled snapshot itself.
     seam: 'workspace planes',
     coreSymbol: 'collectDynamicContext',
-    // The pin is the BINDING both composition surfaces must name. There is no
-    // CLI-side plane suite to pin a value in — the CLI half is measured
-    // through its session's own tests — so what is held here is that neither
-    // surface assembles the planes itself, and the assembler's own output is
-    // executed below.
+    // No CLI-side plane suite exists, so the pin is that both surfaces name the core assembler.
     fixture: ['collectDynamicContext'],
     suites: [
       'packages/cf-backend/src/actor-agent.ts',
@@ -556,9 +328,6 @@ const DIFFERENTIAL_SEAMS: readonly DifferentialSeam[] = [
     ],
   },
   {
-    // What a hired helper is called. One minter in core, reached by both
-    // backends' hire paths; a backend that minted its own would produce names
-    // core's own readers parse differently.
     seam: 'name minting',
     coreSymbol: 'mintSubordinateName',
     fixture: ['mintSubordinateName'],
@@ -568,12 +337,7 @@ const DIFFERENTIAL_SEAMS: readonly DifferentialSeam[] = [
     ],
   },
   {
-    // The five effect bodies every actor on both backends owes identically:
-    // the takes claim, the branch settlement, the evolution recording, the
-    // reactor drain and the shadow trial. Each was two near-copies whose
-    // disposition mapping — what is a refusal, what stays owed — drifted a
-    // detail at a time. The fixture is the factories themselves, executed in
-    // core's own suite; both tables must construct through them.
+    // Takes, branches, turn record, event drain, shadow trial: each drifted as two near-copies.
     seam: 'terminal effect bodies',
     coreSymbol: 'takesTerminalEffect',
     fixture: [
@@ -586,10 +350,7 @@ const DIFFERENTIAL_SEAMS: readonly DifferentialSeam[] = [
     ],
   },
   {
-    // Where an actor sits in its subordinate tree. cf walked the directory rows;
-    // the CLI read a number it had written on the child's own config at birth,
-    // so the two answered "how deep is this child" from two stores nothing kept
-    // in step. One walk, off the row that IS the roster.
+    // cf walked directory rows while the CLI read a birth-time config number; one walk now.
     seam: 'delegation depth',
     coreSymbol: 'delegationBudgetOf',
     fixture: ['delegationBudgetOf'],
@@ -599,15 +360,8 @@ const DIFFERENTIAL_SEAMS: readonly DifferentialSeam[] = [
     ],
   },
   {
-    // Whether an automatic title may replace the current one. The cloud
-    // registry refused it over any origin but `auto`; the CLI refused it only
-    // over `user`, so a workspace whose origin nobody recorded was renamed by
-    // one backend and left alone by the other. One predicate now, read by the
-    // plan and by every persist.
+    // cf refused replacement over any non-`auto` origin, the CLI only over `user`; one predicate now.
     seam: 'auto-title replacement',
-    // Both spellings of one rule: the registry-backed root asks the predicate
-    // with the row it read; a config-backed session persists through the
-    // helper that asks it. Each surface names one of the two.
     coreSymbol: 'AutoTitle',
     fixture: ['autoTitleMayReplace', 'persistAutoTitle'],
     suites: [
@@ -622,15 +376,11 @@ describe('the twin differential — one seam, one fixture, both backends', () =>
   const read = (file: string): string => readFileSync(resolve(REPO, file), 'utf8');
 
   test('every declared seam names a real core symbol, reached from BOTH backends', () => {
-    // The denominator. A seam whose symbol no backend reaches is a stale
-    // declaration, and a seam list nobody can fail is the shape this whole file
-    // exists to refuse.
+    // The denominator: a seam no backend reaches is stale.
     expect(DIFFERENTIAL_SEAMS.length).toBeGreaterThan(0);
     const unreached: string[] = [];
 
     for (const entry of DIFFERENTIAL_SEAMS) {
-      // The composition surfaces, plus whichever source files the seam itself
-      // names: a seam a user-plane file implements is reached there.
       const cf = [
         ...CF_CLASSES.map(([file]) => read(file)), read('packages/cf-backend/src/head-runtime.ts'),
         ...entry.suites.filter((file) => file.startsWith('packages/cf-backend/src/')).map(read),
@@ -655,8 +405,7 @@ describe('the twin differential — one seam, one fixture, both backends', () =>
   });
 
   test('both sides of every seam pin the SAME shared fixture, never a local literal', () => {
-    // The differential proper. Two suites maintaining two expectations is how
-    // the merge policy drifted: each looked correct alone.
+    // Two hand-kept expectations is how the merge policy drifted.
     const drifted: string[] = [];
 
     for (const entry of DIFFERENTIAL_SEAMS) {
@@ -677,10 +426,7 @@ describe('the twin differential — one seam, one fixture, both backends', () =>
   });
 
   test('every shared effect body is constructed through its core factory on BOTH backends', () => {
-    // Stricter than the fixture check above, which is satisfied by any one
-    // name: a backend that re-spelled `shadow_trial` inline while still
-    // constructing `takes` through core would pass it. Each of the five is
-    // its own drift site, so each is held separately.
+    // Stricter than the fixture check: each of the five factories is its own drift site.
     const seam = DIFFERENTIAL_SEAMS.find((entry) => entry.seam === 'terminal effect bodies');
 
     if (!seam) throw new Error('the terminal effect bodies seam is not declared');
@@ -696,9 +442,7 @@ describe('the twin differential — one seam, one fixture, both backends', () =>
   });
 
   test('the shared merge fixture still resolves to the policy core produces', async () => {
-    // The half a source scan cannot carry: the pinned value EXECUTED. A fixture
-    // that agreed with neither backend would let both suites pass while the
-    // policy underneath them moved.
+    // Executed, so the shared fixture cannot rot away from what core produces.
     const profile = mergePolicyProfile();
     const asked: { spec: string | null | undefined; effort: string }[] = [];
     const reports: { source: string }[] = [];
@@ -715,17 +459,13 @@ describe('the twin differential — one seam, one fixture, both backends', () =>
 
     const output = await merge('merging two heads', MergeOutputSchema);
 
-    // ONE expectation, exported once, compared here and in both backends'
-    // suites: the deep tier's model AND the deep tier's effort.
     expect(asked).toEqual([MERGE_POLICY_BINDING]);
     expect(reports.map((report) => report.source)).toEqual([MERGE_POLICY_SPEND_SOURCE]);
     expect(output.narrative).toContain('one narrative');
   });
 
   test('the shared plane assembler answers every plane a backend hands it', () => {
-    // The workspace-planes seam, executed over one fixture: a plane a backend
-    // supplies and the assembler drops is invisible to both suites, because
-    // each reads only its own rendering.
+    // A plane the assembler drops is invisible to both backends' suites.
     const block = renderDynamicContextBlock(agentDynamicContext({
       factsBlock: 'FACTS: the parser is sound',
       memoryTail: 'MEMORY: the reader survives a reopen',
@@ -750,8 +490,6 @@ describe('the twin differential — one seam, one fixture, both backends', () =>
   });
 
   test('the shared minter answers one name shape for every role either backend hires', () => {
-    // The name-minting seam over hostile fixtures. Both backends bind this one
-    // function; the shape it produces is what core's own readers parse.
     const roles = ['researcher', 'Data Analyst', '', 'ünïcodé', 'a'.repeat(120), 'with/slash'];
     const minted = roles.map((role) => mintSubordinateName(role));
 
@@ -765,8 +503,7 @@ describe('the twin differential — one seam, one fixture, both backends', () =>
   });
 });
 
-/** The merge model the differential drives: valid `MergeOutputSchema` JSON, so
- *  what is measured is the ROUTE and the SPEND rather than a parse. */
+/** Valid `MergeOutputSchema` JSON, so the route and spend are measured, not a parse. */
 function mergeFixtureModel(): MockLanguageModelV3 {
   return new MockLanguageModelV3({
     doGenerate: async () => ({

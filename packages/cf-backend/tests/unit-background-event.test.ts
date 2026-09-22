@@ -1,6 +1,4 @@
-// A turn the reactor enqueued is not the operator speaking. The classifier
-// decides which messages lose the user bubble, and the parser recovers the
-// events from the prompt the drain wrapped around them.
+// Defends: a turn the reactor enqueued rendering as the operator's own bubble.
 import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { MessageView } from '../src/components/MessageView';
@@ -37,51 +35,36 @@ describe('programmatic turn provenance', () => {
   });
 
   test('the operator\'s own words keep the user bubble', () => {
-    // `mcp` is the operator driving an MCP client, and its producer stamps that
-    // (cf-backend/src/orchestrator.ts runTaskFromMcp).
+    // `mcp` is the operator driving an MCP client (orchestrator.ts runTaskFromMcp).
     expect(classifyProgrammaticTurn({ metadata: { kinuEvent: 'mcp', kinuAuthor: 'operator' } })).toBeNull();
-    // No markers at all, whatever the id: the operator typed it.
     expect(classifyProgrammaticTurn({ metadata: undefined })).toBeNull();
     expect(classifyProgrammaticTurn({ metadata: {} })).toBeNull();
     expect(classifyProgrammaticTurn({ metadata: 'event_drain' })).toBeNull();
     expect(classifyProgrammaticTurn({ metadata: { kinuMode: 'build' }, id: 'XV4blLw0hI10XYRG' })).toBeNull();
-    // A steer re-run as its own turn goes through the programmatic funnel and
-    // gets its id prefix, so the stamp is the only thing keeping it a bubble.
+    // A steer re-run gets the programmatic id prefix; the stamp keeps it a bubble.
     expect(classifyProgrammaticTurn({ metadata: { kinuAuthor: 'operator' }, id: 'programmatic:abc' })).toBeNull();
   });
 
   test('a harness event with no card of its own is still not the owner', () => {
-    // THE REGRESSION. An allowlist of event names lets everything else fall
-    // through to the owner's bubble. Measured 2026-08-20 on the owner's live
-    // workspaces: `fork_interrupted` rows reading "23
-    // head(s) across 6 fork run(s) were still marked running…" in
-    // sunlit-stone-4a20, stone-ash-71f2 and principal-machine-f1296946.
+    // An allowlist let `fork_interrupted` fall through to the owner's bubble (measured 2026-08-20
+    // on the owner's live workspaces).
     expect(classifyProgrammaticTurn({ metadata: { kinuEvent: FORK_INTERRUPTED_SIGNAL, heads: 23 } }))
       .toEqual({ kind: 'system_event', event: 'fork_interrupted' });
-    // The other three the allowlist missed. `take_pick` and `overflow_retry`
-    // were called the operator's own words here and are not: the take
-    // continuation speaks ABOUT the user in the third person
-    // (mcts/takes.ts buildTakeContinuationPrompt) and the overflow retry is
-    // harness prose about a compaction (turn-failure.ts OVERFLOW_RETRY_TEXT).
+    // `take_pick` and `overflow_retry` are harness prose, not the operator's words.
     expect(classifyProgrammaticTurn({ metadata: { kinuEvent: COMPLETION_GATE_EVENT } }))
       .toEqual({ kind: 'system_event', event: 'completion_gate' });
     expect(classifyProgrammaticTurn({ metadata: { kinuEvent: 'take_pick' } }))
       .toEqual({ kind: 'system_event', event: 'take_pick' });
     expect(classifyProgrammaticTurn({ metadata: { kinuEvent: OVERFLOW_RETRY_EVENT } }))
       .toEqual({ kind: 'system_event', event: 'overflow_retry' });
-    // An event name nobody has written yet is covered the day it is added —
-    // that is the whole reason the default is inverted.
+    // Default inverted so a new event name is covered the day it is added.
     expect(classifyProgrammaticTurn({ metadata: { kinuEvent: 'a_kind_invented_tomorrow' } }))
       .toEqual({ kind: 'system_event', event: 'a_kind_invented_tomorrow' });
-    // Stamped harness with no event name at all still loses the bubble.
     expect(classifyProgrammaticTurn({ metadata: { kinuAuthor: 'harness' } }))
       .toEqual({ kind: 'system_event', event: 'system' });
   });
 
-  // Genesis: the card and the signal that produces it must agree on ONE string.
-  // The signal is built in core (identity/soul.ts) and classified here; if they
-  // ever drift, the workspace's first turn silently renders as a message the
-  // owner never typed. So the assertion uses the core constant, not a literal.
+  // Uses core's constant: a drift would render the first turn as a message the owner never typed.
   test('the workspace\'s own first turn is not the owner speaking', () => {
     const genesis = present(workspaceGenesisSignal('Audit the OAuth callback flow.'), 'the workspace genesis signal');
 
@@ -92,9 +75,7 @@ describe('programmatic turn provenance', () => {
 });
 
 describe('genesis in the transcript', () => {
-  // The workspace's opening turn is stored provenance, not something the owner
-  // said — and now not something the chat paints at all. What must remain: the
-  // owner's real first message and every other programmatic card.
+  // The opening turn is stored provenance and not painted at all.
   test('the workspace_created turn renders nothing while real turns render', () => {
     const genesisMessage: UIMessage = {
       id: 'g1', role: 'user',
@@ -135,24 +116,11 @@ describe('genesis in the transcript', () => {
 });
 
 /*
- * The gallery's advisor frame is a THIRD PARTY to the contract above, and it
- * broke first. `AdvisorFrame` photographs the severity ladder off its own
- * metadata literal, and that literal stamped the event under the pre-rename
- * spelling of `kinuEvent` — a key nothing has ever read. `turnAuthor`
- * therefore found no marker at all on an id like `adv-nit`, the classifier
- * answered null, and all three notes rendered in the owner's own bubble: the
- * one frame that exists to prove the advisor card was photographing its
- * absence instead.
- *
- * A fixture cannot be held to this contract by re-reading the constants the
- * product reads — spelling them again is precisely what it got wrong. So the
- * fixture's OWN expression is read out of gallery.tsx and evaluated with the
- * constants it names: the object classified below is the object the frame
- * builds.
+ * The fixture's own `metadata` expression is read from gallery.tsx and evaluated, because a fixture
+ * that respells the constants is exactly what drifted before.
  */
 const GALLERY = join(import.meta.dir, '..', 'src', 'gallery.tsx');
 
-/** The `metadata` expression a named gallery fixture builds, verbatim. */
 function fixtureMetadataSource(file: string, fixture: string): string {
   const text = readFileSync(file, 'utf8');
   let source: string | null = null;
@@ -183,11 +151,7 @@ function fixtureMetadataSource(file: string, fixture: string): string {
 describe("the gallery's advisor fixture", () => {
   const metadataSource = fixtureMetadataSource(GALLERY, 'ADVISOR_MESSAGES');
 
-  /** The fixture's metadata for one rung, with the two core constants it
-   *  closes over bound to what the frame binds them to. Parsed on the way out,
-   *  because a fixture whose metadata is not a JSON object is not a row any
-   *  client could carry; a fixture naming some other constant fails here
-   *  rather than passing on a shape nobody renders. */
+  /** Parsed: metadata that is not a JSON object is not a row any client could carry. */
   const fixtureMetadata = (severity: AdvisorSeverity): JsonObject => {
     const build = new Function(
       'ADVISOR_SIGNAL_KIND', 'ADVISOR_SEVERITY_METADATA_KEY', 'severity',
@@ -202,20 +166,14 @@ describe("the gallery's advisor fixture", () => {
 
   test('every rung the frame photographs classifies as an advisor card', () => {
     for (const severity of ADVISOR_SEVERITIES) {
-      // The id is the frame's own and carries no `programmatic:` prefix, so the
-      // event stamp in the metadata is the only thing between an advisor card
-      // and the owner's bubble — and the severity has to survive the trip, or
-      // the ladder photographs as three copies of one rung.
+      // No `programmatic:` prefix, so the metadata stamp alone keeps this out of the owner's bubble.
       expect(classifyProgrammaticTurn({ metadata: fixtureMetadata(severity), id: `adv-${severity}` }))
         .toEqual({ kind: 'advisor', severity });
     }
   });
 
   test('a metadata event key nothing reads is not a card at all', () => {
-    // Why such a drift is invisible: an unread event key is not a wrong card,
-    // it is NO card, and no card is the owner's own bubble. The key is assembled
-    // from parts, so the retired spelling is a regression case without being a
-    // literal anyone can grep for.
+    // An unread event key is no card, i.e. the owner's bubble. Assembled from parts so it is not greppable.
     const retiredKey = `${['prot', 'eus'].join('')}Event`;
     expect(classifyProgrammaticTurn({
       metadata: { [retiredKey]: ADVISOR_SIGNAL_KIND, [ADVISOR_SEVERITY_METADATA_KEY]: 'blocker' },
@@ -224,8 +182,7 @@ describe("the gallery's advisor fixture", () => {
   });
 });
 
-/* The drain text the UI parses is composed by core's buildDrainBatch — these
-   cases feed real events through it so the parser cannot drift from it. */
+/* Fed through core's buildDrainBatch so the parser cannot drift from it. */
 const EVENT_BASE = {
   trace_id: 'trace-1',
   caused_by: null,
@@ -331,9 +288,7 @@ describe('drained event parsing', () => {
   });
 
   test('a multi-line brief keeps its continuation lines', () => {
-    // A REPORT, because an assignment never reaches a drain: `wakesADrain`
-    // excludes `subordinate_task`, the delegation runner owns it, and a report
-    // up is the multi-line sender-written body the reactor does still render.
+    // A report, because `wakesADrain` excludes `subordinate_task`.
     const batch = present(buildDrainBatch([event({
       ...EVENT_BASE,
       id: 's1', ingress: 'subordinate', variant: 'subordinate_report' as const,
@@ -423,44 +378,28 @@ describe('the card lifecycle', () => {
 
   test('the message a queued signal became names the card it belongs to', () => {
     expect(messageSignalId({ metadata: { kinuEvent: 'event_drain', signalId: 's1' } })).toBe('s1');
-    // A turn the operator typed belongs to no card.
     expect(messageSignalId({ metadata: {} })).toBeNull();
     expect(messageSignalId({ metadata: undefined })).toBeNull();
   });
 });
 
 /**
- * The background threshold is a property of the TURN on this backend.
- *
- * One agent serves both a chat turn a human is watching stream and an
- * email/webhook/timer/peer/MCP drain nobody is waiting on, and the DO's job
- * runner is a per-agent singleton — so the surface has to be resolved at read
- * time, not captured at construction. This regressed silently for the whole
- * life of the one-shot policy: cf passed no policy at all, every turn got the
- * interactive 30s detach, and the measured pathology of that configuration
- * (151 of 202 sandbox scripts becoming `agent.jobResult` polls) is the reason
- * the one-shot policy exists. Nothing observable fails when it goes back to a
- * fixed policy, so it is pinned here against the source.
+ * The DO's job runner is a per-agent singleton, so the background policy must be read per turn.
+ * Nothing observable fails if it reverts to a fixed policy, so it is pinned against source.
  */
 describe('the cloud backend selects its background policy per turn', () => {
   const actor = readFileSync(join(import.meta.dir, '..', 'src', 'actor-agent.ts'), 'utf8');
 
   test('the job runner reads the policy through a thunk, not a captured value', () => {
-    // Still a per-turn read (the runner is cached across turns), and now the
-    // canonical composition: the surface picks the thresholds, this host's
-    // durability answers the wake question once for every surface.
+    // Per-turn read: the runner is cached across turns.
     expect(actor).toContain('policy: () => invocationBackgroundPolicy(this.turnSurface(), true)');
     expect(actor).not.toContain('BACKGROUND_POLICY[this.turnSurface()]');
   });
 
   test('both unwatched populations are one-shot; only real chat is interactive', () => {
     const surface = present(/protected turnSurface\(\): InvocationSurface \{([\s\S]*?)\n  \}/.exec(actor), 'the turnSurface() body');
-    // A CLI one-shot invocation AND a signal-driven autonomous turn both have
-    // nobody watching a stream. Continuity alone misses the whole autonomous
-    // population — the population the one-shot policy was measured on — and
-    // the event metadata alone misses `kinu exec` against a cloud
-    // workspace. The discriminators are the ones every other decision already
-    // reads; there is no third notion of "autonomous".
+    // CLI one-shot and signal-driven autonomous turns both have nobody watching a stream;
+    // continuity alone misses the latter, event metadata alone misses `kinu exec`.
     expect(surface[1]).toContain('turnUserMessageEvent');
     expect(surface[1]).toContain("_turnContinuity === 'independent_task'");
     expect(surface[1]).toContain("'interactive'");

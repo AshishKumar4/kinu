@@ -1,9 +1,6 @@
 /**
- * Mission Inbox — the Worker `email()` entry point. Cloudflare Email Routing
- * (catch-all rule → this Worker) delivers each inbound message here; the
- * routing seam (route.ts) resolves the receiving agent from the recipient
- * address and hands the parsed delivery to the agent DO, where the trust
- * gate + publish run atomically (`acceptEmailDelivery`).
+ * Worker `email()` entry: Cloudflare Email Routing (catch-all → this Worker) delivers here; the agent DO
+ * runs trust gate + publish atomically (`acceptEmailDelivery`).
  */
 
 import { getAgentByName } from 'agents';

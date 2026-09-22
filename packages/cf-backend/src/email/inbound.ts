@@ -1,26 +1,15 @@
 /**
- * Mission Inbox — inbound side. Pure parsing helpers between the Worker's
- * `email()` handler and the agent's `acceptEmailDelivery` RPC:
- *
- *   addressing:  `<agent-name>@<EMAIL_DOMAIN>` — the local part IS the agent
- *                name (agent names are globally unique DO ids), with
- *                `+tag` sub-addressing tolerated and case ignored.
- *   parsing:     raw MIME (postal-mime) → subject / top-of-thread text /
- *                threading headers / attachment metadata. Attachment bytes
- *                never leave this layer.
+ * Mission Inbox inbound parsing. `<agent-name>@<EMAIL_DOMAIN>`: the local part is the agent name
+ * (`+tag` and case ignored). Attachment bytes never leave this layer.
  */
 
 import PostalMime from 'postal-mime';
 import { normalizeEmailAddress, type EmailAttachmentMeta } from '@kinu.run/core';
 
-/** Agent-name charset — mirrors identity/naming.ts slugs (`scout-a1b2c3`). */
+/** Mirrors identity/naming.ts slugs (`scout-a1b2c3`). */
 const AGENT_NAME_RE = /^[a-z0-9][a-z0-9-]{0,63}$/;
 
-/**
- * Resolve the receiving agent from the envelope RCPT TO. Returns null (drop)
- * when the domain doesn't match the configured EMAIL_DOMAIN or the local part
- * isn't a plausible agent name. `+tag` sub-addressing is stripped.
- */
+/** Null (drop) on a foreign domain or implausible agent name; `+tag` is stripped. */
 export function agentNameFromRecipient(to: string, emailDomain: string | undefined): string | null {
   const addr = normalizeEmailAddress(to);
   const at = addr.lastIndexOf('@');
@@ -34,39 +23,29 @@ export function agentNameFromRecipient(to: string, emailDomain: string | undefin
   return AGENT_NAME_RE.test(local) ? local : null;
 }
 
-/** The agent's canonical address on the configured mail domain. */
 export function agentEmailAddress(agentName: string, emailDomain: string): string {
   return `${agentName.toLowerCase()}@${emailDomain.trim().toLowerCase()}`;
 }
 
-/**
- * RFC 3834 auto-reply / bulk-mail detection. Since Kinu auto-replies
- * on-thread, admitting another machine's auto-reply (a vacation responder, or
- * a second agent) would loop the two forever — so these are dropped inbound.
- * Adopted from the Agents SDK's `isAutoReplyEmail`.
- */
+/** RFC 3834: another machine's auto-reply would loop with Kinu's on-thread replies, so these are dropped. */
 export function isAutoReplyEmail(headers: Headers): boolean {
   // RFC 3834: "no" is the only value that marks human-sent mail.
   const autoSubmitted = headers.get('auto-submitted');
 
   if (autoSubmitted && autoSubmitted.trim().toLowerCase() !== 'no') return true;
 
-  // Any value means the sender doesn't want auto-replies.
   if (headers.get('x-auto-response-suppress')) return true;
   const precedence = headers.get('precedence')?.trim().toLowerCase();
 
   if (precedence === 'bulk' || precedence === 'junk' || precedence === 'list') return true;
 
-  // Mailing-list mail carries List-* headers (RFC 2919/2369).
+  // RFC 2919/2369 List-* headers.
   if (headers.has('list-id') || headers.has('list-unsubscribe')) return true;
 
   return false;
 }
 
-// ── Quoted-history stripping ─────────────────────────────────────
-
-/** Markers that begin quoted history / signatures in common mail clients.
- *  The earliest match wins; everything from it onward is dropped. */
+/** The earliest match wins; everything from it onward is dropped. */
 const QUOTE_MARKERS: ReadonlyArray<RegExp> = [
   /^\s*On .{0,200}wrote:\s*$/m,               // Gmail / Apple Mail
   /^\s*-{2,}\s*Original Message\s*-{2,}/im,   // Outlook classic
@@ -77,8 +56,7 @@ const QUOTE_MARKERS: ReadonlyArray<RegExp> = [
   /^\s*--\s*$/m,                              // signature delimiter
 ];
 
-/** Keep the sender's new text; drop quoted history and the signature. Falls
- *  back to the full text when stripping would leave nothing. */
+/** Falls back to the full text when stripping would leave nothing. */
 function stripQuotedReply(text: string): string {
   let cut = text.length;
 
@@ -93,11 +71,8 @@ function stripQuotedReply(text: string): string {
   return stripped.length > 0 ? stripped : text.trim();
 }
 
-// ── MIME extraction ──────────────────────────────────────────────
-
 export interface ParsedInboundEmail {
   subject: string;
-  /** Top-of-thread text, quoted history stripped. */
   body_text: string;
   message_id: string | null;
   in_reply_to: string | null;
@@ -105,7 +80,6 @@ export interface ParsedInboundEmail {
   attachments: EmailAttachmentMeta[];
 }
 
-/** Crude HTML→text for HTML-only mail. Good enough for turn input. */
 function htmlToText(html: string): string {
   return html
     .replace(/<(style|script)[\s\S]*?<\/\1>/gi, ' ')
@@ -123,8 +97,6 @@ function htmlToText(html: string): string {
     .trim();
 }
 
-/** The turn input: the plain part when it carries anything, else the HTML part
- *  rendered down to text. */
 function inboundBody(text: string | undefined, html: string | undefined): string {
   if (text !== undefined && text.trim() !== '') return text;
 
@@ -139,7 +111,6 @@ function attachmentSize(content: ArrayBuffer | Uint8Array | string): number {
     : content.length;
 }
 
-/** Parse a buffered raw MIME message into the turn-input fields. */
 export async function parseInboundMime(raw: ArrayBuffer): Promise<ParsedInboundEmail> {
   const parsed = await PostalMime.parse(raw);
 

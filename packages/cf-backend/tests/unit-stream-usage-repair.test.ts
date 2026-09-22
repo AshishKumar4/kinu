@@ -1,20 +1,6 @@
-// Regression tests for the cached-usage SSE repair (stream-usage-repair.ts).
-//
-// Production-proven bug (2026-07-13): the {account}/ai/v1 chat-completions
-// stream ends with a platform-appended duplicate usage chunk that, for some
-// models (glm-5.2), zeroes prompt_tokens_details.cached_tokens. The AI SDK
-// keeps the LAST usage chunk, so every streamed run reported `cacheRead: 0`
-// while billing showed ~73% of input tokens served from the prefix cache.
-//
-// Second shape, production-proven (2026-08-17, deepseek-v4-pro): the duplicate
-// DROPS prompt_tokens_details entirely rather than zeroing it. The repair's
-// stated rule covered that case in prose and not in code — the schema required
-// the detail object, so a chunk without it failed the parse and passed through
-// unrepaired. Measured cost on one workspace: of 350 retained steps, 38 carried
-// no cache read at all, which the step telemetry rendered as 38 total cache
-// misses and dragged a real ~93.5% mean hit rate down to the 83.5% the owner
-// was reading off the panel.
-//
+// Defends the cached-usage SSE repair. Measured on {account}/ai/v1: the platform-appended
+// duplicate usage chunk zeroes cached_tokens (2026-07-13, glm-5.2) or drops
+// prompt_tokens_details (2026-08-17, deepseek-v4-pro); the SDK keeps the last chunk.
 // Fixtures below are verbatim captures from the live endpoint.
 import { describe, test, expect } from 'bun:test';
 import { userCredentialSource } from './helpers/user-credentials';
@@ -33,18 +19,13 @@ const tailHead = `"id":"${ID}","object":"chat.completion.chunk","created":178394
 
 const DELTA_CHUNK = `data: {${head},"choices":[{"delta":{"content":"ok","reasoning_content":null},"finish_reason":null,"index":0,"logprobs":null,"matched_stop":null}]}`;
 
-// The model runtime's own usage chunk — carries the real cached count.
 const MODEL_USAGE_CHUNK = `data: {${tailHead},"choices":[{"index":0,"delta":{},"finish_reason":"stop"}],"usage":{"completion_tokens":3,"prompt_tokens":14571,"prompt_tokens_details":{"cached_tokens":14528},"total_tokens":14574}}`;
 
-// The platform-appended duplicate — cached_tokens zeroed (the bug).
 const ZEROED_USAGE_CHUNK = `data: {${tailHead},"choices":[{"index":0,"delta":{},"finish_reason":"stop"}],"usage":{"prompt_tokens":14571,"completion_tokens":3,"total_tokens":14574,"prompt_tokens_details":{"cached_tokens":0}}}`;
 
-// The same duplicate as it arrives from deepseek-v4-pro: prompt_tokens_details
-// gone rather than zeroed. The SDK's `cached_tokens ?? 0` then reports 0 AND
-// leaves `raw` without the key, so neither the value nor its absence survives.
+// deepseek-v4-pro shape: prompt_tokens_details gone rather than zeroed.
 const DROPPED_USAGE_CHUNK = `data: {${tailHead},"choices":[{"index":0,"delta":{},"finish_reason":"stop"}],"usage":{"prompt_tokens":14571,"completion_tokens":3,"total_tokens":14574}}`;
 
-// The null variant of the same loss.
 const NULLED_USAGE_CHUNK = `data: {${tailHead},"choices":[{"index":0,"delta":{},"finish_reason":"stop"}],"usage":{"prompt_tokens":14571,"completion_tokens":3,"total_tokens":14574,"prompt_tokens_details":null}}`;
 
 function sse(...lines: string[]): string {
@@ -55,7 +36,6 @@ function sseResponse(body: string): Response {
   return new Response(body, { headers: { 'content-type': 'text/event-stream' } });
 }
 
-/** Deliver `body` in fixed-size byte slices to exercise line reassembly. */
 function chunkedSseResponse(body: string, size: number): Response {
   const bytes = new TextEncoder().encode(body);
 
@@ -80,18 +60,15 @@ describe('repairSseCachedUsage', () => {
     const input = sse(DELTA_CHUNK, MODEL_USAGE_CHUNK, ZEROED_USAGE_CHUNK, 'data: [DONE]');
     const out = await repairSseCachedUsage(sseResponse(input)).text();
     expect(lastCachedTokens(out)).toBe(14528);
-    // Untouched lines survive byte-exactly.
     expect(out).toContain(`${DELTA_CHUNK}\n`);
     expect(out).toContain(`${MODEL_USAGE_CHUNK}\n`);
     expect(out).toContain('data: [DONE]\n');
-    // The repaired duplicate keeps its other usage fields.
     expect(out).toContain('"prompt_tokens":14571,"completion_tokens":3,"total_tokens":14574');
   });
 
   test('a duplicate that DROPS prompt_tokens_details is repaired to the real count', async () => {
     const input = sse(DELTA_CHUNK, MODEL_USAGE_CHUNK, DROPPED_USAGE_CHUNK, 'data: [DONE]');
     const out = await repairSseCachedUsage(sseResponse(input)).text();
-    // The trailing chunk — the only one the SDK keeps — now carries the count.
     expect(out).not.toContain(DROPPED_USAGE_CHUNK);
     expect(out.slice(out.indexOf(MODEL_USAGE_CHUNK) + MODEL_USAGE_CHUNK.length))
       .toContain('"prompt_tokens_details":{"cached_tokens":14528}');
@@ -107,8 +84,7 @@ describe('repairSseCachedUsage', () => {
   });
 
   test('a dropped field with no prior cache read is left alone, never given a zero', async () => {
-    // Nothing reported a cache read, so there is no maximum to restore.
-    // Writing `cached_tokens: 0` here would fabricate a total-miss measurement.
+    // Nothing reported a cache read; writing `cached_tokens: 0` would fabricate a total miss.
     const input = sse(DELTA_CHUNK, DROPPED_USAGE_CHUNK, 'data: [DONE]');
     const out = await repairSseCachedUsage(sseResponse(input)).text();
     expect(out).toBe(input);
@@ -116,7 +92,7 @@ describe('repairSseCachedUsage', () => {
   });
 
   test('consistent duplicates (kimi shape) pass through byte-exactly', async () => {
-    const consistent = MODEL_USAGE_CHUNK; // same cached count in both chunks
+    const consistent = MODEL_USAGE_CHUNK;
     const input = sse(DELTA_CHUNK, consistent, consistent, 'data: [DONE]');
     const out = await repairSseCachedUsage(sseResponse(input)).text();
     expect(out).toBe(input);
@@ -170,9 +146,7 @@ describe('repairSseCachedUsage', () => {
     await out.text();
   });
 
-  // KINU-049. The AI SDK's chunk schema requires `choices`, so a usage-only
-  // frame that omits it cannot be forwarded at all — the repair adds exactly
-  // an empty array, and every other frame passes byte-identical.
+  // KINU-049. The AI SDK's chunk schema requires `choices`: the repair adds an empty array, nothing else.
   test('a usage-only frame without choices gains exactly an empty array', async () => {
     const bare = `data: {${tailHead},"usage":{"prompt_tokens":14571,"completion_tokens":3,"total_tokens":14574}}`;
     const input = sse(DELTA_CHUNK, bare, 'data: [DONE]');
@@ -249,22 +223,16 @@ describe('cached-usage accounting end to end (workers-ai provider)', () => {
     await result.consumeStream();
     const usage = await result.usage;
     expect(usage.cachedInputTokens).toBe(14528);
-    // `raw` is what normalizeUsage witnesses presence off, so the repair has to
-    // restore the KEY as well as the number — otherwise the step reports no
-    // cache read at all and the hit-rate sample is silently dropped.
+    // normalizeUsage witnesses presence off `raw`, so the repair restores the key as well as the number.
     expect(normalizeUsage(usage).cacheRead).toBe(14528);
   });
 });
 
-// The direct binding transport translates every `data:` line itself, so it
-// applies the repair RULE inside that one pass rather than piping its own output
-// through a second line splitter. Same captures, same rule, one pass.
+// The direct binding transport applies the repair rule inside its single translation pass.
 describe('cached-usage repair through the direct binding pass', () => {
   const GLM = '@cf/zai-org/glm-5.2';
   const DIRECT_ENDPOINT = 'https://kinu-direct-workers-ai.invalid/chat/completions';
-  // The duplicate in the shape that carries no live choice: the transport
-  // absorbs it and reports it once, so the repair has to reach the frame it
-  // synthesizes rather than a forwarded line.
+  // No live choice: the transport absorbs the duplicate, so the repair must reach its synthesized frame.
   const USAGE_ONLY_ZEROED = `data: {${tailHead},"choices":[],"usage":{"prompt_tokens":14571,"completion_tokens":3,"total_tokens":14574,"prompt_tokens_details":{"cached_tokens":0}}}`;
 
   function directBindingFetch(body: string): typeof globalThis.fetch {
@@ -275,11 +243,8 @@ describe('cached-usage repair through the direct binding pass', () => {
       },
     };
 
-    // SAFETY: the fixture above declares `shell` with the exact signature
-    // DirectWorkersAIRunner requires, and `createDirectWorkersAIFetch` narrows
-    // its argument to that one member before calling anything — every other
-    // member of `Ai` is unreachable from this transport, so the assertion is
-    // over a surface the callee provably never touches.
+    // SAFETY: `createDirectWorkersAIFetch` narrows its argument to `shell`, which the
+    // fixture declares with the exact signature; no other member of `Ai` is reachable.
     return createDirectWorkersAIFetch(ai);
   }
 

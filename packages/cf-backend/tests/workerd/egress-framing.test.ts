@@ -1,17 +1,7 @@
 /**
- * KINU-017, executed. A body of known length re-originated to an upstream has
- * to arrive with that length; a body of unknown length has to stay chunked.
- *
- * The subject is `reoriginateRequest` — the one builder container egress
- * (`egress/outbound.ts`) and the workspace preview host (`nimbus-route.ts`)
- * both send through. What it must never do is give the runtime a body whose
- * length the runtime cannot see, because an upstream that refuses chunked
- * uploads answers 411 and the agent's request never lands.
- *
- * `SELF` is a real workerd HTTP peer, so `worker.ts`'s handler reports the
- * framing the runtime chose rather than the framing the caller asked for. That
- * distinction is the finding: an author-written `content-length` is DISCARDED
- * here, so the header is not the control and the body is.
+ * KINU-017: `reoriginateRequest` (container egress and preview host) must keep a known-length body
+ * fixed-length, or an upstream refusing chunked uploads answers 411. `SELF` is a real workerd peer:
+ * an author-written `content-length` is discarded there, so the body is the control.
  */
 import { SELF } from 'cloudflare:test';
 import { describe, expect, test } from 'vitest';
@@ -29,8 +19,6 @@ const ArrivedSchema = v.object({
 
 type Arrived = v.InferOutput<typeof ArrivedSchema>;
 
-/** A body whose length nothing knows — what a chunked upload looks like to a
- *  handler after the runtime has parsed it. */
 function unknownLength(text: string): ReadableStream<Uint8Array> {
   return new ReadableStream<Uint8Array>({
     start(controller) {
@@ -81,17 +69,13 @@ describe('re-originated transfer framing', () => {
   });
 
   test('piping the same body through a transform is what loses the length', async () => {
-    // The control group. Identical bytes, identical headers; the only
-    // difference is that the runtime can no longer see how many there are.
+    // Control: identical bytes and headers, but the runtime cannot see the length.
     const source = inbound(PAYLOAD);
 
-    // Proven, not asserted: `inbound` was handed a body, so refusing here turns
-    // a silently-skipped control group into a failure that names itself.
+    // Refusing here makes a silently-skipped control group fail by name.
     if (source.body === null) throw new Error('the control group needs a body to lose the length of');
 
-    // Same declared intersection the production builder uses, stated rather
-    // than asserted past: `duplex` is required by the fetch specification for
-    // a stream body and absent from the Workers `RequestInit` type.
+    // `duplex` is required by the fetch spec for a stream body and absent from Workers' `RequestInit` type.
     const piped: RequestInit & { duplex: 'half' } = {
       method: 'POST',
       body: source.body.pipeThrough(new TransformStream()),
@@ -122,8 +106,7 @@ describe('re-originated transfer framing', () => {
     ));
 
     expect(arrived.userAgent).toBe('Kinu (+https://kinu.run) curl/8.5.0');
-    // Still fixed-length: the identity policy and the framing policy share one
-    // builder and neither may cost the other.
+    // Identity and framing policy share one builder; neither may cost the other.
     expect(arrived.contentLength).toBe(String(PAYLOAD.length));
   });
 });

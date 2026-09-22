@@ -1,10 +1,5 @@
-// The Durable Object alarm chain is a single-slot resource the agents SDK
-// owns, and breaking it fails silently — no error, no log, just scheduled
-// callbacks, fiber recovery and the keepAlive heartbeat quietly never running.
-// That is exactly how OrchestratorAgent.alarm() sat shadowing Agent.alarm()
-// for two months. These are source-shaped guards because the failure lives in
-// the shape of the code, not in any value a behaviour test could observe:
-// a subclass that simply *omits* super.alarm() is a well-formed program.
+// The Durable Object alarm chain is a single slot the agents SDK owns, and breaking it fails silently.
+// Source-shaped guards: a subclass that omits super.alarm() is a well-formed program no behaviour test sees.
 import { describe, expect, test } from 'bun:test';
 import { readFileSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
@@ -24,10 +19,7 @@ function tsSources(dir: string): string[] {
   return out;
 }
 
-/** Declarations named `alarm`, with their bodies — both the method form and
- *  the class-field arrow form, which shadows just as effectively. Matches the
- *  declaration position only, so `this.alarm.scheduleAt(...)` and
- *  `storage.setAlarm(...)` are not mistaken for one. */
+/** `alarm` declarations (method or class-field arrow) in declaration position only, with bodies. */
 function alarmMethods(source: string): string[] {
   const declaration = /^[ \t]*(?:(?:public|protected|private|override|static|readonly|async)[ \t]+)*alarm[ \t]*(?:\([^)]*\)[^{;]*|=[^;{]*)\{/gm;
   const bodies: string[] = [];
@@ -48,8 +40,7 @@ function alarmMethods(source: string): string[] {
   return bodies;
 }
 
-/** Comments and string literals must not satisfy the guard — a body whose only
- *  mention of the call is `// no super.alarm() here` is still a shadow. */
+/** Comments and strings must not satisfy the guard. */
 function stripCommentsAndStrings(body: string): string {
   return body
     .replace(/\/\*[\s\S]*?\*\//g, ' ')
@@ -62,17 +53,8 @@ function stripCommentsAndStrings(body: string): string {
 const sources = tsSources(SRC).map((path) => ({ path, text: readFileSync(path, 'utf8') }));
 
 /**
- * The closure this rule is about: classes the Agents SDK owns the alarm slot
- * of. There `_scheduleNextAlarm()` deletes any alarm it does not recognise, so
- * a shadowed `alarm()` or a direct slot write silently destroys every
- * scheduled callback.
- *
- * A plain `DurableObject` owns its whole slot: no SDK scheduler to collide
- * with, and no `super.alarm()` to chain — `DurableObject` declares none, so
- * chaining would not compile. `DeployRunDO` is the first such object here and
- * its alarm IS its runner (`deploy/deploy-do.ts`). The exemption is pinned by
- * equality below rather than left implicit: an unpinned filter is how this
- * guard would quietly stop governing an Agent.
+ * Classes whose alarm slot the Agents SDK owns: `_scheduleNextAlarm()` deletes alarms it does not recognise.
+ * A plain `DurableObject` (e.g. `DeployRunDO`) owns its slot; the exemption is pinned by equality below.
  */
 const SDK_HOSTED = /\bextends\s+(?:Agent|AIChatAgent|Think|ActorAgent|OrchestratorAgent)\b/u;
 
@@ -109,18 +91,14 @@ describe('DO alarm chain', () => {
     expect(alarmMethods(shadowed)).toHaveLength(1);
     expect(alarmMethods(shadowed)[0]).not.toContain('super.alarm(');
     expect(alarmMethods(chained)[0]).toContain('super.alarm(');
-    // The class-field arrow form shadows just as well, so it counts too.
     const field = `class Bad extends Agent<Env> {\n  alarm = async (): Promise<void> => {\n    doWork();\n  };\n}`;
     expect(alarmMethods(field)).toHaveLength(1);
     expect(alarmMethods(field)[0]).not.toContain('super.alarm(');
-    // Call sites that merely mention "alarm" are not declarations.
     expect(alarmMethods(`this.ctx.storage.setAlarm(ts);\nthis.alarm.scheduleAt(ts);`)).toEqual([]);
   });
 
   test('nothing writes the alarm slot of an object the SDK schedules', () => {
-    // A DO has one alarm slot and _scheduleNextAlarm() deletes any alarm it
-    // does not recognise, so a direct write and the SDK scheduler silently
-    // destroy each other. All Kinu wakes go through cf_agents_schedules.
+    // _scheduleNextAlarm() deletes unrecognised alarms; all Kinu wakes go through cf_agents_schedules.
     const direct = hosted
       .filter(({ text }) => /\.\s*(?:setAlarm|deleteAlarm)\s*\(/u.test(text))
       .map(({ path }) => under(path));
@@ -133,11 +111,7 @@ describe('the Kinu timer rides the SDK scheduler', () => {
   const orchestrator = readFileSync(join(SRC, 'orchestrator.ts'), 'utf8');
 
   test('trigger, peer-outbox and email-outbox wakes all arm the one timer row, awaited', () => {
-    // The three seams hand `armTimer` straight to their consumer, which awaits it.
-    // A void-returning wrapper that handed the promise to `ctx.waitUntil` is the
-    // defect the negative assertions close: `waitUntil` is a no-op in a Durable
-    // Object, so the arm of the object's OWN wake-up could be cancelled by an
-    // eviction and nothing would say so.
+    // `waitUntil` is a no-op in a Durable Object, so a waitUntil-wrapped arm could be lost to eviction silently.
     expect(orchestrator).toContain('scheduleAt: (ts: number) => this.armTimer(ts)');
     expect(orchestrator).toContain('scheduleDispatch: (at) => this.armTimer(at)');
     expect(orchestrator).toContain('new EmailOutbox(this.ctx.storage.sql, (at) => this.armTimer(at))');
@@ -158,20 +132,12 @@ describe('the Kinu timer rides the SDK scheduler', () => {
   });
 
   test('the arm collapses in ONE place, through the shared primitive', () => {
-    // The rounding, the due-row exclusion and the earliest-wins collapse are
-    // pinned behaviourally in unit-alarm-wake-chain.test.ts ('an armed wake is
-    // left alone, however overdue', 'a due row is not counted as armed', 'two
-    // concurrent arms converge on ONE wake row'). What no behaviour test can
-    // see is a second bespoke collapse beside the shared one, so this guard
-    // keeps the orchestrator delegating rather than re-deriving.
+    // Behaviour pinned in unit-alarm-wake-chain.test.ts; this guards against a second bespoke collapse.
     expect(orchestrator).not.toContain('await this.schedule(new Date(');
   });
 
   test('the stale sweep spares recurring rows and exempts the Kinu wake', () => {
-    // The activation half of this contract runs behaviourally in
-    // unit-alarm-wake-chain.test.ts: the backlog drains across maintenance
-    // wakes through activateActor, and a lost wake row comes back through the
-    // same entry point. What remains here is the sweep's own shape.
+    // Activation is behavioural in unit-alarm-wake-chain.test.ts; only the sweep's shape is guarded here.
     const sweep = orchestrator.slice(
       orchestrator.indexOf('private sweepUnrunnableSchedules('),
       orchestrator.indexOf('protected get engine()'),
@@ -179,19 +145,14 @@ describe('the Kinu timer rides the SDK scheduler', () => {
 
     expect(sweep).toContain("type IN ('delayed', 'scheduled')");
     expect(sweep).toContain('STALE_SCHEDULE_HORIZON_MS');
-    // Dropping a row a STATE-driven wake rides stops the work it carries; running
-    // one late costs a single immediate tick (KINU-N027). Two are exempt: the
-    // Kinu timer, and the terminal retry whose obligation is whatever the effect
-    // ledger still holds — which does not expire, and which a root activation
-    // cannot even read when the row belongs to a facet.
+    // Dropping a state-driven wake row stops its work; running one late costs one tick (KINU-N027). Exempt: the
+    // Kinu timer and the terminal retry, whose effect ledger never expires and may belong to a facet.
     expect(sweep).toContain('callback NOT IN (?, ?)');
     expect(sweep).toContain('KINU_TIMER_CALLBACK');
     expect(sweep).toContain('TERMINAL_RETRY_CALLBACK');
   });
 
-  // The first sabotage attempt on this guard passed only because the injected
-  // body carried the comment `// deliberately no super.alarm()`. A mention is
-  // not a call.
+  // A mention is not a call.
   test('a comment or string mentioning super.alarm() does not satisfy the guard', () => {
     const commented = `class Bad extends Agent<Env> {\n  async alarm() {\n    // deliberately no super.alarm()\n    doWork();\n  }\n}`;
     const stringy = `class Bad2 extends Agent<Env> {\n  async alarm() {\n    log("call super.alarm() next time");\n  }\n}`;

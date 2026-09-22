@@ -1,5 +1,4 @@
-// The landing hero's search tree, as a simulation: what the picture claims
-// about search must hold in the numbers before any renderer draws them.
+// The landing hero's search tree as a simulation: its claims about search must hold in the numbers before any renderer draws them.
 import { describe, expect, test } from 'bun:test';
 
 import { type KeepOut, NODE_STRIDE, PULSE_STRIDE, STROKE_STRIDE, TONE_ASH, TONE_BRIGHT, TONE_EMBER } from '@kinu.run/core/web/art';
@@ -69,8 +68,7 @@ describe('the search tree grows deterministically', () => {
   });
 });
 
-/** A branch's world endpoints never move after it spawns, and without a
- *  pointer nothing shifts in y, so a stroke keeps one key across frames. */
+/** Endpoints never move after spawn and nothing shifts in y without a pointer, so a stroke keeps one key across frames. */
 function keyedStrokes(frame: SearchTreeFrame): Map<string, number[]> {
   const rows = new Map<string, number[]>();
 
@@ -108,12 +106,10 @@ describe('the camera follows the frontier smoothly', () => {
       previous = current;
     }
 
-    // The run crossed a restart of every layer and pruned along the way.
     expect(restarts).toBeGreaterThanOrEqual(1);
     expect(tree.frame().pruned).toBeGreaterThan(3);
     // The camera's speed is capped, so in one frame the picture moves at most that far.
     expect(widestShift).toBeLessThanOrEqual(SearchTree.pan.maxSpeed * DT + 1e-6);
-    // A restart or a prune fades a branch; it never cuts it in one frame.
     expect(widestAlphaJump).toBeLessThanOrEqual(0.05);
     expect(widestWidthJump).toBeLessThanOrEqual(0.15);
   });
@@ -137,10 +133,7 @@ describe('the tree keeps out of the headline', () => {
     return x > box.left && x < box.right && y > box.top && y < box.bottom;
   }
 
-  /** Over a run through a restart: how many tips were spawned inside the
-   *  box (a stroke's first frame is its spawn, one frame of pan at most
-   *  behind), how many frames found the best node inside it, and how many
-   *  tips were spawned at all. */
+  /** Tips spawned inside the box (a stroke's first frame is its spawn, at most one pan frame behind), frames with the best node inside, and total tips. */
   function watch(tree: SearchTree, seconds: number, box: KeepOut) {
     let previous = keyedStrokes(tree.frame());
     let spawnedInside = 0;
@@ -188,8 +181,7 @@ describe('the tree keeps out of the headline', () => {
       expect(withBox.bestInside).toBe(0);
     }
 
-    // The red direction: the same seed, unconstrained, grows through both
-    // boxes and parks its frontier in the lower one.
+    // Red direction: the same seed unconstrained parks its frontier in the lower box.
     const throughHeadline = watch(new SearchTree({ seed: 417, aspect: ASPECT }), 45, HEADLINE);
     const throughLower = watch(new SearchTree({ seed: 417, aspect: ASPECT }), 45, LOWER);
 
@@ -223,7 +215,6 @@ describe('the search prunes what scores below the frontier', () => {
     const alive = living.filter((branch) => branch.phase === 'alive' || branch.phase === 'growing');
     const best = Math.max(...alive.map((branch) => branch.value));
 
-    // Nothing alive past its grace period trails the best result by the margin.
     for (const branch of alive) {
       if (branch.phase !== 'alive' || branch.age < 2) continue;
       expect(branch.value).toBeGreaterThanOrEqual(best - 0.4 - 1e-9);
@@ -280,7 +271,6 @@ describe('the best path is the kept lineage', () => {
 
     expect(frame.generation).toBe(1);
 
-    // The kept lineage is still whole the instant everything else goes to ember.
     expect(tree.bestPath()).toEqual(before);
 
     run(417, 6, tree);
@@ -347,7 +337,6 @@ describe('information flows along the tree', () => {
       const current = new Map(pulsesOf(frame).map((row) => [row.id, row]));
 
       for (const [id, row] of current) {
-        // The pulse rides a stroke the frame draws, and never an ember or ash.
         const stroke = strokes.get(`${String(row.layer)}|${String(row.y0)}|${String(row.y1)}`);
 
         expect(stroke).toBeDefined();
@@ -362,7 +351,6 @@ describe('information flows along the tree', () => {
           brightestForward = Math.max(brightestForward, row.alpha);
           expect(row.tone).toBe(TONE_BRIGHT);
           expect(row.tail).toBeLessThanOrEqual(row.head);
-          // Brighter than the branch it rides, at the head.
           expect(row.alpha).toBeGreaterThanOrEqual(stroke?.[10] ?? 1);
         } else {
           back = back.add(id);
@@ -381,7 +369,6 @@ describe('information flows along the tree', () => {
         const sameEdge = before.y0 === row.y0 && before.y1 === row.y1;
 
         if (sameEdge) {
-          // Monotone along the edge, the way the pulse points.
           if (row.direction > 0) expect(row.head).toBeGreaterThanOrEqual(before.head);
           else expect(row.head).toBeLessThanOrEqual(before.head);
         } else {
@@ -404,7 +391,6 @@ describe('information flows along the tree', () => {
 
     expect(handovers).toBeGreaterThan(20);
     expect(Math.max(...edgesRidden.values())).toBeGreaterThanOrEqual(3);
-    // Scores return rarer and dimmer than attempts go out.
     expect(back.size).toBeGreaterThan(0);
     expect(back.size * 3).toBeLessThan(forward.size);
     expect(brightestBack).toBeLessThan(brightestForward);
@@ -442,7 +428,6 @@ describe('the pointer bends the picture without touching the search', () => {
       expect(shift).toBeLessThanOrEqual(SearchTree.pointer.maxBend + 0.03 + 1e-6);
 
       if (shift > 1e-4) moved += 1;
-      // Score, tone, and lifecycle are the search's, not the pointer's.
       expect(b[9]).toBe(a[9] ?? -1);
     }
 

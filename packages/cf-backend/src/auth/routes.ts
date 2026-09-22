@@ -59,15 +59,10 @@ interface MutableTokenEndpointResponse {
   scope?: string;
 }
 
-/** The user-object calls the sign-in path makes: the session store's four, and
- *  the Cloudflare credential attach with the roster read its fanout needs. */
 export type AuthRoutesAuthority = SessionAuthority
   & Pick<UserDO, 'setCredential' | 'listActiveWorkspaces'>;
 
-/** Every binding `handleAuthRequest` and its callees read. Nothing is optional
- *  here that the session port leaves optional: sign-out revokes through
- *  `AUTH_KV` without a guard, and the Cloudflare callback attaches a credential
- *  and fans the change out, each addressing an object by name. */
+/** Nothing optional that the session port leaves optional: sign-out revokes through `AUTH_KV` unguarded. */
 export interface AuthRoutesEnv<Id = DurableObjectId> extends OAuthProviderEnv, OwnerCapabilityEnv {
   AUTH_KV: KvStore;
   UserDO: ObjectNamespace<Id, AuthRoutesAuthority>;
@@ -126,12 +121,8 @@ async function renderLogin<Id>(request: Request, env: AuthRoutesEnv<Id>): Promis
   try {
     await authenticateRequest(request, env);
 
-    // `prompt=login` is the step-up recovery URL — the page a stale session is
-    // SENT to when a mutation refuses its authTime. Answering it with a
-    // redirect back to `return_to` would bounce the operator into the very
-    // 401 that sent them here, so the signed-in caller falls through to the
-    // provider list like an unsigned one, and the provider's own reauth
-    // parameter (startOAuth → addProviderPrompt) forces the interactive login.
+    // `prompt=login` is the step-up recovery URL; redirecting a signed-in caller back to `return_to` would
+    // bounce them into the same 401, so fall through and force interactive reauth (addProviderPrompt).
     if (prompt === null) return redirect(new URL(returnTo, url.origin).toString());
   } catch (e) {
     if (!(e instanceof AuthError) || e.status !== 401) throw e;
@@ -192,22 +183,14 @@ async function startOAuth<Id>(request: Request, env: AuthRoutesEnv<Id>, provider
     addProviderPrompt(authorizationUrl, provider);
   }
 
-  // The binding half of the handoff goes to the browser and nowhere else: the
-  // record in KV holds only its hash, so this cookie is what the callback
-  // proves the sign-in with.
+  // KV holds only the binding's hash; this cookie is what the callback proves the sign-in with.
   const headers = new Headers({ 'cache-control': 'no-store' });
   headers.append('set-cookie', setCookie(OAUTH_STATE_COOKIE_NAME, binding, handoffExpiresAt));
 
   return redirect(authorizationUrl.toString(), { headers });
 }
 
-/**
- * A provider callback, and then the handoff cookie burned whatever the outcome.
- *
- * The state record it pairs with is deleted the moment it is read, so leaving
- * the cookie in the browser would leave one spent half of a one-time pair
- * behind — and a browser that keeps it is a browser that keeps offering it.
- */
+/** Burns the handoff cookie whatever the outcome; its state record is already spent. */
 async function finishOAuth<Id>(
   request: Request, env: AuthRoutesEnv<Id>, ctx: Pick<ExecutionContext, 'waitUntil'> | undefined, providerId: string,
 ): Promise<Response> {
@@ -289,15 +272,8 @@ async function completeOAuth<Id>(
   }
 }
 
-/**
- * Attach the Workers AI credential to a Cloudflare sign-in.
- *
- * Runs after the session exists, and never throws: the operator is already
- * signed in by this point, and a billing lookup must not be able to undo that.
- * A token that sees no account, or a Cloudflare API that is down, leaves the
- * credential unusable, which the "Connect Cloudflare Workers AI" notice
- * already reports on its own.
- */
+/** Never throws: the operator is already signed in, and a billing lookup must not undo that. An unusable
+ *  credential is reported by the "Connect Cloudflare Workers AI" notice. */
 async function attachCloudflareWorkersAI<Id>(
   env: AuthRoutesEnv<Id>,
   ctx: Pick<ExecutionContext, 'waitUntil'> | undefined,
@@ -308,8 +284,7 @@ async function attachCloudflareWorkersAI<Id>(
     const credential = await cloudflareTokenToCredential(tokens);
     const userDO = env.UserDO.get(env.UserDO.idFromName(userId));
     await userDO.setCredential(await ownerCaller(env), CLOUDFLARE_OAUTH_CRED_KEY, credential);
-    // No model seeding: the profile catalog's built-in default tier already
-    // names the native Workers AI model, and a new workspace reads that tier.
+    // No model seeding: the built-in default tier already names the native Workers AI model.
     notifyWorkspacesCredentialsChanged(env, userDO, ctx);
   } catch (e) {
     const failure = summarizeOAuthFailure({ cause: e });
@@ -346,16 +321,8 @@ async function processOAuthTokenResponse(
   return oauth.processGenericTokenEndpointResponse(as, client, response);
 }
 
-/**
- * Sign out of THIS session.
- *
- * The revocation is what ends a session, so the cookie is cleared only after
- * one lands. A failed revocation KEEPS the cookie. That cookie is the only
- * handle that can still revoke this exact session, and clearing it would leave
- * the session live with nothing able to reach it. The answer is then a 503 that
- * says the session is still signed in, and a retry that can end it. Nothing
- * here touches the user's other sessions.
- */
+/** The cookie is cleared only after revocation lands: a failed revocation keeps it (503) because it is
+ *  the only handle that can still revoke this session. Other sessions are untouched. */
 async function logout<Id>(request: Request, env: AuthRoutesEnv<Id>): Promise<Response> {
   const url = new URL(request.url);
   const returnTo = sanitizeReturnTo(url.searchParams.get('return_to') ?? '/');
@@ -698,8 +665,7 @@ function redirect(location: string, init: ResponseInit = {}): Response {
   });
 }
 
-/** The failure pages the OAuth flow can land on. Sign-in itself renders
- *  through `loginDocument`; this is the same card with prose in it. */
+/** Same card as `loginDocument`, with failure prose. */
 function html(title: string, body: string, init: ResponseInit = {}): Response {
   const headers = new Headers(init.headers);
 

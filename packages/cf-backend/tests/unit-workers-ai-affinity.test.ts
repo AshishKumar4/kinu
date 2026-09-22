@@ -1,10 +1,5 @@
-// Regression test for Workers AI session affinity (prefix-cache pinning).
-//
-// The x-session-affinity header was deliberately wired in the 2026-06-02
-// caching session and silently dropped by the OAuth/REST provider rewrite
-// (`_opts` unused). This test drives a real generateText call through the
-// provider's customFetch and asserts the header reaches the wire, so the
-// option can never become decorative again.
+// Defends: the x-session-affinity header (prefix-cache pinning) must reach the wire through the
+// provider's customFetch; a provider rewrite once dropped it silently.
 import { describe, test, expect } from 'bun:test';
 import { userCredentialSource } from './helpers/user-credentials';
 import { generateText } from 'ai';
@@ -68,7 +63,6 @@ describe('Workers AI session affinity (REST path)', () => {
   test('sessionAffinity option is emitted as the x-session-affinity header', async () => {
     const req = await captureWorkersAIRequest({ sessionAffinity: agentAffinityKey('jarvis') });
     expect(req.headers.get('x-session-affinity')).toBe('kinu-jarvis');
-    // Credential headers and the account-scoped base URL still apply.
     expect(req.headers.get('authorization')).toBe('Bearer cf-user-token');
     expect(req.url.startsWith(`${ACCOUNT_BASE_URL}/`)).toBe(true);
   });

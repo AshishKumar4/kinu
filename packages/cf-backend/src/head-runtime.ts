@@ -1,27 +1,6 @@
 /**
- * The one `HeadRuntime` — where a child head comes from, and what model merges
- * the children once they report.
- *
- * There were two of these, and neither difference was policy: the orchestrator's
- * built its own provider registry, config store and effort derivation, while the
- * recursive split inlined a second one over the `OwnedModelServices` the facet
- * already held. The drift was measurable — the root's merge synthesis reported
- * its cost NOWHERE while a facet's reported it to the workspace event log, and
- * the root carried a second `AgentProviderRegistry` for the life of the DO.
- * `head_merge_results.cost_total_tokens` sums the HEADS, not the call that merged
- * them, so `reportModelCall` is the only record of what a merge cost.
- *
- * What genuinely differs is a PARAMETER, visible at each call site: `grounding`,
- * and where the spend is filed (a root writes its own log; a facet's SQLite is one
- * Durable Object away from the total, so it reports over RPC).
- *
- * The merge MODEL, EFFORT and SPEND LABEL are parameters this backend does not
- * decide. `headMergeLLM` in core owns them, so this backend and the local one
- * resolve one policy rather than two agreeing by inspection: the local merge ran
- * the session's chat model at a hardcoded effort and filed it as `judge` anyway.
- * All that is left on this side is `bindMergeModel`, which turns the routed (spec, effort) pair into a
- * client through the owner's provider registry, because normalising a spec
- * against that registry is genuinely this backend's job and nothing else here is.
+ * The one `HeadRuntime`. Merge model, effort and spend label are owned by core's `headMergeLLM`;
+ * `reportModelCall` is the only record of a merge's cost (`head_merge_results` sums the heads).
  */
 
 import {
@@ -36,39 +15,16 @@ import { hostHead, type ExplorationHostSeams } from "./exploration-hosting";
 import type { OwnedModelServices } from "./owned-model-services";
 
 interface HeadRuntimeDeps {
-  /**
-   * The exploration substrate children are acquired from: the workspace's ONE
-   * actor host, whether the splitter is the main actor or a head splitting
-   * further.
-   *
-   * Seams alone, with no `identity()` thunk carrying the owner, the capability
-   * token and the ROOT workspace name down to each child. A hosted child is a
-   * row in the workspace it already belongs to: the owner, the token and the
-   * workspace are the root's own, read from the seams, so there is nothing to
-   * propagate and nothing that can disagree. That is what stops an intermediate
-   * head from ever becoming its subtree's workspace — not a rule about passing
-   * a value unchanged, but the absence of a second value.
-   */
+  /** The workspace's one actor host. Children read owner, token and workspace from the seams, so an
+     *  intermediate head can never become its subtree's workspace. */
   readonly host: ExplorationHostSeams;
-  /** The owner-scoped model services this actor already owns. Never a second
-   *  registry — a second one is the duplication. The merge's only use of them
-   *  is binding the route core resolved. */
+  /** Never a second registry. */
   readonly models: Pick<OwnedModelServices, 'resolveModelWithEffort'>;
-  /** The profile the merge's `judge` route resolves against.
-   *
-   *  A profile rather than a spec, because the merge is not free to pick a
-   *  model: it files its spend as `judge`, and `MODEL_ROUTE_POLICY.judge` is
-   *  the account-wide `deep` tier. The caller's stored chat model — the actor's
-   *  at the root, the parent head's in a recursive split — is whatever the
-   *  conversation happens to be set to, so it cannot stand behind spend filed
-   *  as deep-tier grading. */
+  /** A profile, not a spec: the merge files spend as `judge` (deep tier), which the caller's chat model
+     *  cannot stand behind. */
   readonly profile: () => Promise<ResolvedTurnProfile>;
-  /** Where the merge call's cost is filed. */
   readonly reportModelCall: ModelCallSink;
-  /** Where the merge call's operation lifecycle — its start/end rows — is
-   *  filed. Rides `spend` beside the cost sink inside the policy: two facts
-   *  about ONE call, and a caller that wired them separately could report a
-   *  cost for an operation it never opened. */
+  /** Rides beside the cost sink so a cost is never reported for an operation never opened. */
   readonly operations?: ModelOperationSink;
   /** Omit ⇒ n=1 merge and empty head scores (`HeadRuntime.grounding`). */
   readonly grounding?: HeadGrounding;
@@ -79,12 +35,7 @@ export function createHeadRuntime(deps: HeadRuntimeDeps): HeadRuntime {
     spawnHead: (input) => hostHead(deps.host, input),
     mergeLLM: headMergeLLM({
       profile: deps.profile,
-      // The one backend-local decision: a spec is normalised against the
-      // OWNER's provider registry before its family decides the provider
-      // options, which is why core hands the route over instead of resolving
-      // the client itself. Effort included, from the same resolution — the tier
-      // that chose the model chose how hard to run it, and a constant here was a
-      // second decision nobody made.
+      // Specs are normalised against the owner's provider registry, so core hands the route over.
       bindMergeModel: (route) => deps.models.resolveModelWithEffort(
         route.model, route.reasoningEffort,
       ),

@@ -1,10 +1,5 @@
-// The Codex credential's revocation path on the hosted backend.
-//
-// A revoked ChatGPT login must not sit in the store: a logged refresh failure
-// with the credential left in place keeps the provider advertising itself while
-// every model call 401s. `codex.oauth` has the same honest shape the Cloudflare
-// OAuth credential does — invalid_grant strips the dead token, the connect CTA
-// resurfaces — and these tests pin it.
+// Defends: a revoked Codex login left in the store keeps the provider advertised while every call 401s;
+// invalid_grant must strip the token, as for the Cloudflare OAuth credential.
 import { describe, test, expect } from 'bun:test';
 import { createTestUserDO, testOwner } from './helpers/user-do';
 import { asFetchFunction } from '@kinu.run/core';
@@ -36,8 +31,6 @@ describe('UserDO Codex credential revocation', () => {
       });
       expect(await harness.userDO.listCredentials(owner)).toHaveLength(1);
 
-      // The forced refresh hits the revoked grant: no headers, and the row is
-      // gone so the provider stops advertising itself.
       await expect(harness.userDO.getAuthHeaders(owner, 'codex.oauth', { forceRefresh: true }))
         .resolves.toBeNull();
       expect(await harness.userDO.listCredentials(owner)).toHaveLength(0);

@@ -1,13 +1,6 @@
 /**
- * The workspace shell, at its two seams.
- *
- * The runtime half is measured over the real hosted runtime: the frames it
- * writes are the ones the pane parses, a typed line runs, and a reattach
- * replays what was painted. The actor half is measured through the production
- * socket handlers: a socket tagged as the terminal reaches the shell and
- * nothing else, a frame of the wrong shape closes it, and the object's fan-out
- * never lands on it. The tag is what ties the two halves together, and the
- * workerd tier (slate-durability.test.ts) drives one real socket through both.
+ * The workspace shell at its runtime and actor seams, tied by the terminal socket tag.
+ * The workerd tier (slate-durability.test.ts) drives one real socket through both.
  */
 import { afterEach, describe, expect, spyOn, test } from 'bun:test';
 import { Database, type SQLQueryBindings } from 'bun:sqlite';
@@ -66,14 +59,11 @@ async function openRuntimeTerminal(): Promise<WorkspaceTerminal> {
 
 interface PaneSocket {
   readonly ws: TerminalSocket;
-  /** Every frame the runtime wrote, as the pane would parse it. */
   readonly frames: Array<v.InferOutput<typeof WorkspaceTerminalOutputSchema>>;
-  /** Resolves once the painted output holds `text`. */
   readonly painted: (text: string) => Promise<void>;
   readonly output: () => string;
 }
 
-/** The pane's end of the wire: a socket that keeps what the runtime sent. */
 function paneSocket(): PaneSocket {
   const raw = new AwaitedList<string>();
   const frames: PaneSocket['frames'] = [];
@@ -104,8 +94,6 @@ describe('the runtime terminal speaks the frames the pane paints', () => {
     await first.painted('shell-23');
     terminal.terminalClose(first.ws);
 
-    // The next socket lands on the same screen: the runtime replays what the
-    // first one was painted, before it says ready.
     const second = paneSocket();
     await terminal.attachTerminal(second.ws);
     expect(second.output()).toContain('shell-23');
@@ -158,13 +146,10 @@ function connection(id: string, tags: string[]): FakeConnection {
 
 describe('the actor hands a terminal socket to the runtime shell', () => {
   async function activated() {
-    // Instantiation runs the activation, and with it the socket gate — once.
     const agent = orchestratorHarness().agent;
     const recorded = recordedTerminal();
 
-    // The root's own answer composes the hosted runtime, which bun cannot host;
-    // the seam is answered by a recording shell so the dispatch is what is
-    // measured. `terminalFor` is a protected member, hence the property write.
+    // bun cannot host the hosted runtime, so a recording shell answers; `terminalFor` is protected, hence the property write.
     Object.defineProperty(agent, 'terminalFor', {
       configurable: true,
       value: (wire: Connection) => Promise.resolve(wire.tags.includes(WORKSPACE_TERMINAL_TAG) ? recorded.terminal : null),
@@ -182,8 +167,6 @@ describe('the actor hands a terminal socket to the runtime shell', () => {
     await gate(pane.wire, JSON.stringify({ type: 'resize', cols: 120, rows: 40, extra: 'dropped' }));
     await agent.onClose(pane.wire, 1000, 'tab closed', true);
 
-    // The frame the shell receives is the parsed one: what the schema admits,
-    // and nothing a client appended.
     expect(recorded.calls).toEqual([
       'attach:pane',
       'frame:pane:{"type":"input","data":"ls\\r"}',
@@ -224,7 +207,6 @@ describe('the actor hands a terminal socket to the runtime shell', () => {
     const fanout = spyOn(base, 'broadcast');
 
     try {
-      // The mocked base holds no sockets; these two are what the object sees.
       Object.defineProperty(agent, 'getConnections', {
         configurable: true,
         value: function* () { yield pane.wire; yield chat.wire; },

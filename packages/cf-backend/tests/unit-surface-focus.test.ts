@@ -1,9 +1,5 @@
 /**
- * The surface strip's focus policy, exercised through the hook the strip
- * mounts: a passive previewFocus arrival raises the ready chip where the
- * reader is, an explicit navigate consumes it only when it lands on the
- * surface the arrival named, and a dismissal survives until a different
- * arrival. The strip chrome is covered by the browser rows in
+ * The surface strip's focus policy through `useSurfaceFocus`. Strip chrome is covered in
  * scripts/chat-and-files-ux.test.ts and scripts/slate-preview-ux.test.ts.
  */
 import { describe, expect, test } from 'bun:test';
@@ -19,22 +15,17 @@ const slate = (id: string, title: string): SlateSummary => ({ id, title, binding
 const port = (executor: string, portNumber: number, name: string): PinnedPort =>
   ({ executor, port: portNumber, url: `http://localhost:${String(portNumber)}`, name });
 
-/** What one render pass leaves behind: the data attributes that pass put on
- *  the strip element, and the hook's own return for a step to call into. */
 interface Pass {
   readonly attrs: string;
   readonly focus: SurfaceFocus;
 }
 
-/** The props the page would hand down on the next pass — the surface the
- *  reader is on, and the latest arrival. */
 interface StripProps {
   surface: SurfaceKind;
   previewFocus: string | null;
 }
 
 interface Controls {
-  /** The page re-rendered: hand the hook new props. */
   setProps(next: Partial<StripProps>): void;
 }
 
@@ -43,14 +34,7 @@ interface Mounted {
   readonly html: string;
 }
 
-/** The strip as the hook hands it over, rendered through the real hook.
- *  `renderToStaticMarkup` runs `useState`, `useMemo` and every dependency the
- *  strip passes; it skips effects, and `useSurfaceFocus` holds none. Each
- *  step in `steps` runs once per render pass — one `navigate`/`dismissChip`
- *  call is a same-component state update, and `controls.setProps` is the
- *  parent re-render, so a step sequence plays back the same event order the
- *  strip would see. The hook's return is what the strip element carries as
- *  data-* attributes. */
+/** `renderToStaticMarkup` skips effects, and `useSurfaceFocus` holds none; each step runs once per render pass. */
 function mount(input: {
   surface: SurfaceKind;
   previewFocus?: string | null;
@@ -106,7 +90,6 @@ describe('a passive arrival, through the strip', () => {
       .toContain('data-chip-surface="slate:abc"');
     expect(mount({ surface: 'Work', previewFocus: 'preview:workspace:3000' }).html)
       .toContain('data-chip-surface="preview:workspace:3000"');
-    // Nothing arrived, and an arrival in no shape the strip speaks: no chip.
     expect(mount({ surface: 'Work' }).html).toContain('data-chip-surface=""');
     expect(mount({ surface: 'Work', previewFocus: 'something-else' }).html)
       .toContain('data-chip-surface=""');
@@ -125,7 +108,6 @@ describe('a passive arrival, through the strip', () => {
       .toContain('data-chip-title="Dashboard"');
     expect(mount({ surface: 'Work', previewFocus: 'preview:workspace:3000', pinnedPorts: ports }).html)
       .toContain('data-chip-title="Arrived app"');
-    // An arrival nobody listed still gets its id tail, not a blank chip.
     expect(mount({ surface: 'Work', previewFocus: 'slate:xyz', slates }).html)
       .toContain('data-chip-title="xyz"');
   });
@@ -148,8 +130,6 @@ describe('dismissal, through the strip', () => {
   });
 
   test('a dismissed arrival stays down; a different arrival raises it again', () => {
-    // The dismissal is keyed to the arrival value: 'slate:abc' stays down
-    // across a parent re-render, and a 'slate:def' arrival chips.
     const { passes } = mount({
       surface: 'Work',
       previewFocus: 'slate:abc',
@@ -213,8 +193,6 @@ describe('navigating consumes the arrival, through the strip', () => {
   });
 
   test('an earlier dismissal is untouched by unrelated navigation', () => {
-    // Dismiss 'slate:abc', navigate elsewhere while a different arrival is
-    // live, then come back to the first arrival: it stays down.
     const { passes } = mount({
       surface: 'Work',
       previewFocus: 'slate:abc',

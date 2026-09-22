@@ -1,13 +1,6 @@
 /**
- * The runtime's device file-consent adapters — the two reads that decide what
- * a device file operation may reach — over the production seam.
- *
- * The harness's default owner plane REFUSES every RPC a suite did not declare,
- * which is exactly a hub that cannot be reached. What that failure turns into
- * is the whole contract here: the operation fails CLOSED either way, and the
- * reason must be the truth (the hub could not be asked) rather than the
- * absent-directory refusal, which would send the owner to reconnect a machine
- * that is fine.
+ * With the hub unreachable, device file operations fail closed and the reason must say so, not the
+ * absent-directory refusal that would send the owner to reconnect a healthy machine.
  */
 import { describe, expect, test } from 'bun:test';
 import { KinuError } from '@kinu.run/core/obs';
@@ -22,7 +15,6 @@ function deviceFiles() {
   return provider.files;
 }
 
-/** The result is discarded by contract: the operation is expected to fail. */
 async function closedWith<Result>(work: () => Promise<Result>): Promise<KinuError> {
   try {
     await work();
@@ -39,14 +31,11 @@ describe('a device file operation whose hub read fails', () => {
     const files = deviceFiles();
     const caught = await closedWith(() => files.readFile('/home/me/proj/notes.md'));
 
-    // The truth, with the chain intact: the hub could not answer the file-view
-    // question, and the harness says so by name underneath.
     expect(caught.code).toBe('unavailable');
     expect(caught.message).toBe("reading the device's file-view scope");
     expect(caught.cause).toBeInstanceOf(Error);
     expect(caught.cause instanceof Error ? caught.cause.message : '')
       .toContain('getDeviceFileView is not reachable');
-    // And NOT the lie a swallowed read tells.
     expect(caught.message).not.toContain('no consented directory');
   });
 

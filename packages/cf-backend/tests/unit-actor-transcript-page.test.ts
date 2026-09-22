@@ -1,26 +1,13 @@
 /**
- * A chat is a chat, so its history is reachable wherever the chat is.
- *
- * A hosted subordinate keeps its conversation in the workspace's ONE database,
- * scoped by its own `actor_id` — not in a database of its own. The root answers
- * through its public `getChatHistoryPage` RPC; a hosted child has no Think chat
- * RPC of its own, so its page is read through the same production read model
- * over the handle the directory issued. Either way, the rows, the cursor, and
- * the refusal below are production behavior, not fixture behavior.
- *
- * The read model itself is one function in core and is tested there over a real
- * store, cursor semantics included. What is asserted here is the thing core
- * cannot see: that the ROOT's page and a hosted SUBORDINATE's page read
- * different `actor_id` partitions of one table, and that pages of a transcript
- * longer than one window join up without dropping or repeating a message.
+ * The root's and a hosted subordinate's history pages read different `actor_id` partitions of one table,
+ * and multi-window pages join without dropping or repeating a message. Cursor semantics are tested in core.
  */
 
 import { describe, expect, test } from 'bun:test';
 import { getChatHistoryPage, CHAT_SESSION_ID, type ActorHandle, type SessionHistory, type ChatHistoryEntry, type Page } from '@kinu.run/core';
 import { hostedExplorationHarness, hostedSubordinateHarness, orchestratorHarness } from './helpers/actor-harness';
 
-/** A transcript reader: the root's public RPC, or the production read model
- * over a hosted child's directory-issued handle. */
+/** The root's public RPC, or the production read model over a hosted child's handle. */
 interface Root {
   page(request?: { limit?: number; cursor?: { after: string }; actor?: string }): Promise<Page<ChatHistoryEntry>> | Page<ChatHistoryEntry>;
 }
@@ -40,9 +27,7 @@ async function seed(actor: ActorHandle, history: SessionHistory, n: number, pref
   return ids;
 }
 
-/** Every page, oldest first — the walk the column performs. Returns the ids in
- * presentation order plus how many requests it took, so a walk that never
- * advances is a hang rather than a silently short answer. */
+/** Every page, oldest first, with the request count, so a walk that never advances is a hang. */
 async function walk(root: Root, limit: number): Promise<{ ids: string[]; pages: number }> {
   const ids: string[] = [];
   let cursor: { after: string } | undefined;
@@ -63,16 +48,13 @@ describe('a transcript longer than one window is reachable page by page', () => 
     const root = orchestratorHarness();
 
     await root.agent.activateActor();
-    // The ROOT's conversation is the pane store its transcript writes.
     const actor = root.agent.observeRuntime().actor;
     const seeded = await seed(actor, root.agent.observeActorHost().bindStores(actor).stores.history, 25);
 
     const walked = await walk({ page: (request) => root.agent.getChatHistoryPage(request) }, 10);
 
     expect(walked.ids).toEqual(seeded);
-    // 25 over pages of 10: three requests, the last of which ran off the end.
-    // Asserted because "it returned everything" is also true of one unbounded
-    // read, and an unbounded read is the defect the contract replaced.
+    // 25 over pages of 10: three requests, so an unbounded single read fails.
     expect(walked.pages).toBe(3);
   });
 
@@ -93,12 +75,7 @@ describe('a transcript longer than one window is reachable page by page', () => 
     expect(walked.pages).toBe(3);
   });
 
-  /**
-   * The two partitions are separate. Parent and child share one table, so a
-   * missing predicate would read the parent's conversation in the child's chat
-   * — the "delegation transcript leaked into the helper's chat" defect — and
-   * reading nothing would be the one this ticket closes.
-   */
+  /** Parent and child share one table; a missing predicate leaks the parent's conversation. */
   test('the actors do not read each other', async () => {
     const parent = orchestratorHarness();
 
@@ -120,11 +97,7 @@ describe('a transcript longer than one window is reachable page by page', () => 
     }, 10)).ids).toEqual([]);
   });
 
-  /**
-   * An empty transcript is a STATEMENT, not a failure. The subordinate column
-   * renders "this subordinate's conversation starts here" from it, and that is
-   * only honest if the store said so.
-   */
+  /** An empty transcript is a statement the subordinate column renders, not a failure. */
   test('an empty conversation ends the walk instead of failing it', async () => {
     const workspace = orchestratorHarness();
 
@@ -141,9 +114,7 @@ describe('a transcript longer than one window is reachable page by page', () => 
     expect(page.items).toEqual([]);
   });
 
-  /** A cursor naming a row this partition never had is refused, not answered with
-   * the newest page — which would silently re-deliver history the caller
-   * already holds and read as an exhausted conversation on the next page. */
+  /** An unknown cursor is refused, not answered with the newest page (which re-delivers history). */
   test('a cursor from another conversation is refused rather than answered', async () => {
     const workspace = orchestratorHarness();
     const actor = workspace.agent.observeRuntime().actor;
@@ -156,15 +127,8 @@ describe('a transcript longer than one window is reachable page by page', () => 
   });
 
   /**
-   * A PANE's walk, over the one surface a pane has: the RPC.
-   *
-   * An actor pane holds its own actor id — the directory issued it on the
-   * snapshot the tab already fetches — and names it on every page request. The
-   * root's pane names none. Read through the RPC rather than the read model
-   * because the read model was never the defect: the RPC answered every caller
-   * from the root's handle, so an actor pane's scroll-up walked the
-   * WORKSPACE's conversation. The id spaces are disjoint here, so the leak is
-   * the assertion's own message rather than a count.
+   * A pane's walk through the RPC: an actor pane names its own actor id; the root's pane names none.
+   * Id spaces are disjoint, so a leak shows in the assertion's message.
    */
   test("an actor pane's walk reads its own actor, addressed by the id its snapshot carries", async () => {
     const workspace = orchestratorHarness();
@@ -189,8 +153,7 @@ describe('a transcript longer than one window is reachable page by page', () => 
     expect(walked.pages).toBe(3);
   });
 
-  /** An id this workspace does not host is refused. Answering the root's page
-   * for it is the defect above with a stranger's id instead of a child's. */
+  /** An id this workspace does not host is refused, not answered with the root's page. */
   test('an actor id this workspace does not host is refused', async () => {
     const workspace = orchestratorHarness();
     await workspace.agent.activateActor();
@@ -199,10 +162,7 @@ describe('a transcript longer than one window is reachable page by page', () => 
       .rejects.toThrow(/not registered in this workspace/);
   });
 
-  /** An exploration head is hosted by this workspace and is not a chat. Its
-   * run transcript lives in the head journal, so a pane request naming one is
-   * a request for a conversation that does not exist — refused, not answered
-   * with whatever rows share its actor id. */
+  /** An exploration head is not a chat (its transcript is the head journal): refused. */
   test('a hosted actor with no chat pane is refused', async () => {
     const workspace = orchestratorHarness();
     await workspace.agent.activateActor();

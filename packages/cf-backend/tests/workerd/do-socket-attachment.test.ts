@@ -1,38 +1,15 @@
 /**
- * Hibernatable sockets, executed. The device plane keeps its whole
- * per-connection record in the socket ATTACHMENT and looks connections up by
- * TAG, and neither of those is a thing `bun test` has.
- *
- * WHAT WE HAD BEFORE THIS FILE. Nothing that runs any of it. The fake socket the
- * bun suites and the gallery share makes `serializeAttachment` a no-op and
- * answers `deserializeAttachment()` with `null` unconditionally
- * (`gallery.tsx:315-317`). Every bun test over `DeviceSocketHub` therefore
- * observes a device plane where `probeRecord` is permanently null, so
- * `toolchain()` permanently answers "this machine has not told us"
- * (`device-hub.ts:132-136`) and `deviceIdFromSocket` permanently answers null
- * (`device-hub.ts:90-93`). Those are the failure states, passing as green.
- *
- * WHY IT CANNOT BE FIXED WITH A BETTER FAKE. The attachment is held by the
- * runtime OUTSIDE the isolate's heap, and being outside the heap is the entire
- * property production is buying: it is what lets a hibernated connection keep
- * its identity when the isolate holding it is gone. A fake that stored the
- * attachment in a JS field would be asserting the opposite of the thing under
- * test.
+ * Hibernatable sockets, executed: the device plane keeps its per-connection record in the socket attachment and finds
+ * connections by tag. The bun fake's `deserializeAttachment()` always answers null, and no better fake can exist: the
+ * runtime holds the attachment outside the isolate heap, which is what survives hibernation.
  */
 import { env } from 'cloudflare:workers';
 import { abortAllDurableObjects } from 'cloudflare:test';
 import { describe, expect, it } from 'vitest';
 import type { SocketDO } from './worker';
 
-/** The upgrade `DeviceSocketHub.accept` answers (`device-hub.ts:106-113`). One
- *  per device, on whichever object the test is addressing.
- *
- *  The client half is kept on a module-level set: a WebSocketPair's client end
- *  is a GC-managed I/O object, and workerd closes the connection — server side
- *  included, attachment with it — when the unreferenced client is collected.
- *  Nothing here holds a reference after `connect` returns, so under load the
- *  desktop socket could vanish between `recordProbe` and `probeRecord`, which
- *  is exactly the null this file shipped as a deploy flake. */
+/** The client half is kept on a module-level set: workerd closes the connection (attachment included) when an
+ *  unreferenced client end is collected, which shipped as a deploy flake. */
 const clients = new Set<WebSocket>();
 
 const connect = async (object: DurableObjectStub<SocketDO>, device: string) => {
@@ -53,10 +30,7 @@ describe('hibernatable socket attachments', () => {
     const userDo = open('reads-back');
     await connect(userDo, 'device');
 
-    // Two separate invocations: `recordProbe` writes, `probeRecord` re-finds the
-    // socket by tag and parses. Production splits them exactly this way — the
-    // probe is recorded on the turn that asked, and read on every later turn
-    // that renders the capability row.
+    // Two invocations, as production splits them: recorded on the asking turn, re-found by tag on every later one.
     await userDo.recordProbe('device', false);
 
     expect(await userDo.probeRecord('device')).toEqual({
@@ -71,22 +45,14 @@ describe('hibernatable socket attachments', () => {
 
     await userDo.recordProbe('device', true);
 
-    // An attachment is structured-cloned, not JSON-encoded, so the Set is still a
-    // Set on the way back and `v.array(v.string())` rejects it. The connection is
-    // UP and its own record reads as never-asked — so `toolchain()` answers null
-    // (`device-hub.ts:132-136`), the capability row silently omits this machine
-    // forever, and no error is raised anywhere. That is what the explicit
-    // `[...probe.present]` at `device-hub.ts:199` is buying, and it is a
-    // one-character edit away.
+    // An attachment is structured-cloned, not JSON-encoded, so a Set stays a Set and `v.array(v.string())` rejects it,
+    // silently dropping the machine from the capability row. That is what `[...probe.present]` at `device-hub.ts:199` buys.
     expect(await userDo.isConnected('device')).toBe(true);
     expect(await userDo.probeRecord('device')).toBeNull();
   });
 
   it('each tag resolves to its own device, never a neighbour on the same object', async () => {
-    // One UserDO owns every device an owner has attached, so the tag is the only
-    // thing separating them. `connectedDeviceId` walks ALL of them
-    // (`device-hub.ts:208-213`), which is why a mis-scoped tag would not fail —
-    // it would answer with somebody else's machine.
+    // One UserDO owns all an owner's devices and `connectedDeviceId` walks them all: a mis-scoped tag answers with another machine.
     const userDo = open('two-devices');
     await connect(userDo, 'device');
     await connect(userDo, 'desktop');
@@ -107,11 +73,8 @@ describe('hibernatable socket attachments', () => {
     await abortAllDurableObjects();
     await scheduler.wait(150);
 
-    // The platform shape behind what production stores where:
-    // `DeviceConsentRegistry` keeps the request as a SQL row and its resolvers
-    // in a field (`safety/device-consent.ts` — `inflight`), so a reset drops
-    // exactly the subscribers and keeps the card. This probe's `waiting` map
-    // is that field's stand-in: storage survives the abort, the map does not.
+    // `DeviceConsentRegistry` keeps the request as a SQL row and its resolvers in a field, so a reset drops the
+    // subscribers and keeps the card; `waiting` stands in for that field.
     expect(await open('reset').settled('consent-1')).toEqual({
       inMemory: false,
       inStorage: true,

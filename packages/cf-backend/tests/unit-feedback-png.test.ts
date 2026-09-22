@@ -1,11 +1,5 @@
-// The screenshot trust boundary: bytes a browser claims are a PNG, checked and
-// stripped without a decoder.
-//
-// The CRC here is computed by this file rather than imported from the module
-// under test. That is deliberate duplication: a checksum verified with the same
-// function that produced it verifies nothing, so the fixtures are built against
-// an independent implementation and a broken CRC in `png.ts` shows up as a
-// rejected valid image.
+// The screenshot trust boundary: claimed PNG bytes checked and stripped without a decoder.
+// The CRC is deliberately independent of `png.ts`: a checksum verified by its own producer verifies nothing.
 import { describe, test, expect } from 'bun:test';
 import { deflateSync } from 'node:zlib';
 import { sanitizePng, type SanitizedPng } from '@kinu.run/core';
@@ -30,7 +24,6 @@ function be32(value: number): number[] {
   return [(value >>> 24) & 0xff, (value >>> 16) & 0xff, (value >>> 8) & 0xff, value & 0xff];
 }
 
-/** One well-formed chunk: length, type, data, CRC over type+data. */
 function chunk(type: string, data: readonly number[] = []): number[] {
   const typed = [...new TextEncoder().encode(type)];
   const crc = crc32(new Uint8Array([...typed, ...data]));
@@ -38,7 +31,6 @@ function chunk(type: string, data: readonly number[] = []): number[] {
   return [...be32(data.length), ...typed, ...data, ...be32(crc)];
 }
 
-/** IHDR body: 8-bit RGBA, no interlace. */
 function ihdr(width: number, height: number): number[] {
   return [...be32(width), ...be32(height), 8, 6, 0, 0, 0];
 }
@@ -48,15 +40,11 @@ function png(...chunks: number[][]): Uint8Array {
 }
 
 test('the fixture checksum answers the published CRC-32 check value', () => {
-  // Anchors this file's independent implementation to an external answer, so
-  // a matching bug on both sides cannot mask a broken product checksum.
-  // Computed apart from this file: printf '123456789' | python3 -c
-  // 'import binascii,sys; print(binascii.crc32(sys.stdin.buffer.read()))'.
+  // Anchors the independent CRC to an external answer (python3 binascii.crc32 of '123456789').
   expect(crc32(new TextEncoder().encode('123456789'))).toBe(0xCBF43926);
 });
 
-/** IDAT bytes are never decoded by the sanitiser — it rewrites the chunk stream
- *  — so an opaque payload is exactly what the unit under test sees. */
+/** The sanitiser never decodes IDAT, so an opaque payload is what it sees. */
 const PIXELS = chunk('IDAT', [0x78, 0x9c, 0x01, 0x02, 0x03]);
 
 function accepted(result: SanitizedPng | { fault: string }): SanitizedPng {
@@ -71,15 +59,11 @@ describe('sanitizePng — what it accepts', () => {
     expect(out.width).toBe(4);
     expect(out.height).toBe(3);
     expect(out.stripped).toEqual([]);
-    // Nothing was dropped, so the copy is byte-identical to the input.
     expect(out.bytes).toEqual(png(chunk('IHDR', ihdr(4, 3)), PIXELS, chunk('IEND')));
   });
 
   test('a spec-valid image with a real compressed pixel stream is accepted', () => {
-    // Built rather than pasted: 2x2 RGBA is four scanlines-worth of raw bytes
-    // (one filter byte + 4 bytes per pixel per row) put through real zlib, so
-    // this fixture is a decodable PNG by construction instead of a base64
-    // string someone remembered.
+    // Built, not pasted: 2x2 RGBA scanlines through real zlib, decodable by construction.
     const raw: number[] = [];
 
     for (let y = 0; y < 2; y += 1) {
@@ -125,13 +109,11 @@ describe('sanitizePng — metadata never survives', () => {
 
     expect(out.stripped).toEqual(['tEXt', 'eXIf', 'tIME', 'pHYs', 'iTXt']);
     expect(out.bytes).toEqual(png(chunk('IHDR', ihdr(2, 2)), PIXELS, chunk('IEND')));
-    // The strongest form of the claim: the bytes are gone, not merely unread.
     expect(Buffer.from(out.bytes).includes(Buffer.from(secret))).toBe(false);
   });
 
   test('an unknown chunk type is dropped by default, without naming it here', () => {
-    // Default-deny is the property: a metadata chunk invented after this code
-    // was written must not survive just because nobody added it to a deny-list.
+    // Default-deny: a metadata chunk invented later must not survive by missing a deny-list.
     const out = accepted(sanitizePng(png(
       chunk('IHDR', ihdr(1, 1)), chunk('zzZz', [1, 2, 3]), PIXELS, chunk('IEND'),
     )));
@@ -147,19 +129,14 @@ describe('sanitizePng — what it refuses', () => {
   });
 
   test('a PNG signature over filler bytes — the shape a forged upload takes', () => {
-    // 0x41 filler reads as a chunk called AAAA whose declared length is 1.09
-    // billion bytes, so the walk refuses it on the length rather than on the
-    // checksum. Either way it is a 400 — what matters is that a valid
-    // signature buys nothing on its own.
+    // 0x41 filler declares a ~1.09 billion byte chunk: a valid signature alone buys nothing.
     const forged = new Uint8Array([...SIGNATURE, ...Array.from({ length: 32 }, () => 0x41)]);
     expect(sanitizePng(forged)).toMatchObject({ fault: 'truncated' });
   });
 
   test('a corrupted chunk body — the CRC is what catches it', () => {
     const bytes = png(chunk('IHDR', ihdr(4, 3)), PIXELS, chunk('IEND'));
-    // First byte of IDAT's data: signature(8) + whole IHDR chunk(25) + IDAT's
-    // own length+type(8). Every declared length and the signature stay valid,
-    // so nothing but the checksum can notice.
+    // First byte of IDAT data (8 + 25 + 8); lengths and signature stay valid, so only the CRC can notice.
     const at = 8 + 25 + 8;
     bytes[at] = bytes[at] ^ 0xff;
     expect(sanitizePng(bytes)).toMatchObject({ fault: 'bad-crc' });
@@ -197,8 +174,7 @@ describe('sanitizePng — what it refuses', () => {
 
   const dimensionCases = [
     { name: 'a zero dimension', width: 0, height: 4, fault: 'bad-structure' },
-    // 30,000 x 30,000 is 900 megapixels — 3.6 GB of RGBA out of a few hundred
-    // bytes on the wire. Refused on the header, before anything decodes it.
+    // 900 megapixels from a few hundred wire bytes, refused on the header before anything decodes.
     {
       name: 'a decompression bomb: small bytes declaring an enormous frame',
       width: 30_000, height: 30_000, fault: 'dimensions',

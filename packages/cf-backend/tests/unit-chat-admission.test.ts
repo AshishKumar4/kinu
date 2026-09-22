@@ -1,15 +1,6 @@
 /**
- * The admission seam, through the real chat transport over the real loop.
- *
- * Main's ruling for this seam: the transport writes no row. The loop decides
- * where a message lands before anything of it is durable — a message that
- * opens a turn IS that turn's opening row, written by the loop when the turn
- * starts; a message spliced into a running turn is written by the drain that
- * lands it, with the stamps that say which step it took; a message the loop
- * refuses leaves nothing behind. A test that only calls `loop.send` cannot
- * tell the seam from the loop; every case here enters through the gate — the
- * production `onMessage` with the hook's own frame — and reads the durable
- * rows back.
+ * The admission seam through the production `onMessage` over the real loop.
+ * Defends: the transport writes no row; the loop's turn start or drain writes it, and a refusal leaves nothing.
  */
 import { describe, expect, test } from 'bun:test';
 import type { Connection } from 'agents';
@@ -21,9 +12,6 @@ import { fleetEnvForTest } from './helpers/analytics-plane';
 import { makeEnv, orchestratorHarness, reactivateOrchestratorHarness, chatSessionTurns } from './helpers/actor-harness';
 import { socketConnection } from './helpers/bindings';
 
-/** A turn the suite runs end to end answers one scripted line: no provider,
- *  no harness UserDO credential, so the admission is what the test measures
- *  rather than the platform behind it. */
 function scriptedAnswer(text: string): LanguageModel {
   return scriptedTurnModel({ doGenerate: () => ({
     content: [{ type: 'text', text }], finishReason: { unified: 'stop', raw: undefined },
@@ -35,7 +23,6 @@ function scriptedAnswer(text: string): LanguageModel {
 interface AdmissionSocket {
   readonly wire: Connection;
   readonly sent: string[];
-  /** Resolves once a frame `holds` accepts has been sent: the send is the signal. */
   readonly frame: (holds: (sent: readonly string[]) => boolean) => Promise<void>;
 }
 
@@ -48,15 +35,9 @@ function connection(agent: { broadcast: (message: string, exclude?: string[]) =>
     send: (data: string) => { frames.push(data); },
   });
 
-  // The actor broadcasts over its connection set, which is empty in this
-  // harness; route its fan-out to this socket too, so the test reads the
-  // frames a connected tab would. The sender's own hook already holds the
-  // chat-request it sent, so nothing here double-delivers.
+  // The harness connection set is empty: route the actor's fan-out to this socket, as a connected tab reads it.
   const fanout = agent.broadcast.bind(agent);
 
-  // The mocked Agent base declares broadcast over the same (message,
-  // exclude) pair the override below keeps, so rebinding it to fan out to
-  // this socket preserves the checked signature while the test observes it.
   Object.defineProperty(agent, 'broadcast', {
     configurable: true,
     value: (message: string, exclude?: string[]) => {
@@ -68,9 +49,7 @@ function connection(agent: { broadcast: (message: string, exclude?: string[]) =>
   return { wire, sent, frame: (holds) => frames.until(holds) };
 }
 
-/** The wire's own word that the loop took a message into the running turn:
- *  its `queued` steer_status. The request itself is answered only when the
- *  words land, so a test that drives the step must wait for this, not that. */
+/** The request is answered only when the words land, so a step driver waits for `queued` instead. */
 function queuedOnWire(steerId: string): (frames: readonly string[]) => boolean {
   const queued = v.object({ type: v.literal('steer_status'), status: v.literal('queued'), steerId: v.literal(steerId) });
 
@@ -101,8 +80,7 @@ function doneFrames(sent: readonly string[]): Array<{ id: string; error?: string
   });
 }
 
-/** The kind each fleet row was written under: `turn` for the loop's own
- *  seal, anything else for the harness plane's own notices. */
+/** `turn` for the loop's own seal; anything else is the harness plane's notices. */
 function fleetRowKinds(agent: { harnessFleetTurnRows(): object[] }): string[] {
   return agent.harnessFleetTurnRows().flatMap((row) => {
     const parsed = v.safeParse(v.object({ blobs: v.array(v.string()) }), row);
@@ -128,16 +106,12 @@ describe('a chat request through the production gate', () => {
 
     await gate(wire, chatRequest('req-idle', 'hello'));
 
-    // The gate returns when the loop ADMITTED the send; the turn runs on the
-    // pump behind it, and the request closes at the turn's own turn-end — so
-    // the test waits for the client's own evidence: the done frame's send.
+    // The gate returns on admission; the request closes at turn-end, so wait for the done frame.
     await frame((frames) => doneFrames(frames).length > 0);
 
     expect((await userRows(agent))).toEqual(['input-req-idle']);
     expect(doneFrames(sent)).toEqual([{ id: 'req-idle' }]);
-    // The row above and the loop's own send ledger are the whole durable
-    // record of an admission: neither Think's submission ledger nor an input
-    // receipt table exists for the loop to write, or a reset to read.
+    // No submission ledger or input receipt table exists for the loop to write.
     expect(tableNames()).not.toContain('cf_think_submissions');
     expect(tableNames()).not.toContain('actor_turn_inputs');
   });
@@ -147,17 +121,11 @@ describe('a chat request through the production gate', () => {
     const { wire, sent, frame } = connection(agent);
     await agent.activateActor();
     const gate = agent.harnessChatGate();
-    // Production opens a turn through prepare; driving the same entry point
-    // gives the step the prepared snapshot it refuses without, and the inbox
-    // reads busy off this open turn — so the splice below takes the mid-turn
-    // arm exactly as a message typed while the agent works does. Nothing of
-    // the live turn itself runs here: its text is the step's input below.
+    // Prepare opens the turn production-style, so the inbox reads busy and the splice takes the mid-turn arm.
     await chatSessionTurns(agent).prepare({ messages: [{ role: 'user', content: 'the long job' }] });
     const [liveRow] = (await userRows(agent));
 
-    // Admit the splice first, then drive the step it lands in: the drain
-    // at the step boundary commits the row the assertions read back, and
-    // that landing is what answers the request — not the admission.
+    // The drain at the step boundary commits the row and answers the request, not the admission.
     const request = gate(wire, chatRequest('req-steer', 'check staging'));
     await frame(queuedOnWire('input-req-steer'));
     const stepped = await agent.harnessStepInto(0, [{ role: 'user', content: 'the long job' }]);
@@ -177,11 +145,7 @@ describe('a chat request through the production gate', () => {
     await agent.activateActor();
     const gate = agent.harnessChatGate();
 
-    // A turn the session opened but the loop never ran — the inbox reads
-    // busy off it, so the send takes the mid-turn arm. The loop's own terms
-    // for a message typed while the agent works, without spending a turn.
-    // The first request stays open until the words land; the replay finds
-    // them held and is spent at once, asking for nothing.
+    // The replay finds the words held and is spent at once, asking for nothing.
     await chatSessionTurns(agent).prepare({ messages: [{ role: 'user', content: 'the long job' }] });
     const request = gate(wire, chatRequest('req-steer', 'check staging'));
     await frame(queuedOnWire('input-req-steer'));
@@ -191,7 +155,6 @@ describe('a chat request through the production gate', () => {
     const bodies = agent.harnessEnqueued.map((turn) => turn.text);
     expect(bodies.filter((text) => text.includes('check staging'))).toHaveLength(0);
 
-    // The step that takes the words is what answers the first request.
     await agent.harnessStepInto(0, [{ role: 'user', content: 'the long job' }]);
     await request;
     expect(doneFrames(sent)).toEqual([{ id: 'req-steer' }, { id: 'req-steer', landed: 'mid-turn' }]);
@@ -203,11 +166,7 @@ describe('a chat request through the production gate', () => {
     await agent.activateActor();
     const gate = agent.harnessChatGate();
 
-    // Production opens a turn through prepare; driving the same entry point
-    // gives the step the prepared snapshot it refuses without, and the inbox
-    // reads busy off this open turn. The LIVE text is the step's input; the
-    // gold is what the SECOND socket sees while the turn is still running —
-    // and the request is still open, as one to a running turn is.
+    // The request stays open, as one to a running turn is; the second socket is what is measured.
     await chatSessionTurns(agent).prepare({ messages: [{ role: 'user', content: 'the long job' }] });
     const request = gate(wire, chatRequest('req-live', 'the long job'));
     await frame(queuedOnWire('input-req-live'));
@@ -217,16 +176,13 @@ describe('a chat request through the production gate', () => {
     await agent.onConnect(second.wire, { request: new Request('https://agent/connect') });
     const frames = second.sent.map((raw) => v.parse(v.looseObject({ type: v.string(), messages: v.optional(v.array(v.object({ id: v.string() }))) }), JSON.parse(raw)));
 
-    // Resuming first — the tab replays the stream it is still owed — then
-    // the transcript as it is NOW, the live turn's opening row included.
+    // Resuming first, then the current transcript including the live turn's row.
     expect(frames[0]?.type).toBe('cf_agent_stream_resuming');
     const seed = frames.find((sentFrame) => sentFrame.type === 'cf_agent_chat_messages');
     expect(seed?.messages?.map((m) => m.id)).toContain(liveRow);
 
-    // And the close half of the same wiring: a resuming socket that goes
-    // away releases the resume the handshake held for it.
+    // A resuming socket that closes releases the resume the handshake held.
     await agent.onClose(second.wire, 1000, 'gone', true);
-    // The request is answered by the step that takes its words.
     await agent.harnessStepInto(0, [{ role: 'user', content: 'the long job' }]);
     await request;
   });
@@ -240,14 +196,9 @@ describe('a chat request through the production gate', () => {
     const gate = agent.harnessChatGate();
     const { wire } = connection(agent);
     await gate(wire, chatRequest('req-fleet', 'hello'));
-    // The turn's row is written from the pump behind the gate; its write is
-    // the signal.
     await agent.harnessFleetRowWritten();
 
-    // The turn's own row, and only one of it — the positive half of the
-    // gate below, so a future change that drops ALL rows reds here rather
-    // than passing vacuously beside it. The sink's own install notice is the
-    // harness's, not the turn's.
+    // The positive half of the next test, so dropping all rows fails here instead of passing vacuously.
     expect(fleetRowKinds(agent).filter((kind) => kind === 'turn')).toHaveLength(1);
   });
 
@@ -256,27 +207,18 @@ describe('a chat request through the production gate', () => {
     const dead = orchestratorHarness(undefined, undefined, env);
     await dead.agent.activateActor();
 
-    // A run some earlier activation opened and never closed — a run_start
-    // with no run_end and no turn identity, so the loop the wake builds has
-    // nothing to continue and the reconcile is what seals it. Written by the
-    // activation that dies, since the reconcile seals only what predates the
-    // activation that runs it.
+    // A run_start with no run_end from the dying activation; the reconcile on wake seals it.
     dead.agent.harnessEventRecorder.emit('run-dead-activation', {
       type: 'run_start', agentId: 'harness-actor', caused_by: 'chat',
       userMessage: 'the turn the last process died inside',
     });
-    // Written by an EARLIER activation means stamped before this one's cutoff,
-    // and both stamps are millisecond clocks: the row is backdated a minute
-    // so that ordering is a fact of the row rather than of how long the
-    // machine took between two lines.
+    // Backdated a minute so predating the new activation's millisecond cutoff is a fact of the row.
     dead.db.run(
       'UPDATE run_events SET ts = ? WHERE run_id = ?',
       [new Date(Date.now() - 60_000).toISOString(), 'run-dead-activation'],
     );
 
-    // The eviction, then the wake itself on the fresh activation: it builds
-    // the loop (which subscribes the observer) and then seals what the dead
-    // activation left. The seal is not a turn the loop ran, so no turn row.
+    // The seal is not a turn the loop ran, so no turn row.
     const { agent } = await reactivateOrchestratorHarness(dead.db, undefined, { env });
     await agent.activateActor();
     agent.harnessOpenFleetWindow();

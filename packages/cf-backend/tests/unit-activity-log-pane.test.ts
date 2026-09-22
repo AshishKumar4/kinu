@@ -1,17 +1,6 @@
 /**
- * The Activity panel reads the `log` its own snapshot fetches.
- *
- * THE FAILURE THIS LOCKS DOWN SHIPPED. `getActivitySnapshot` returns `log` — up
- * to 200 `activity_log` rows — and the panel's closing block was cut on the
- * argument that a person can read the same thing in chat. Nothing stopped
- * fetching it, so every revalidation (1.5s while a turn streams) pulled those
- * rows across the wire and dropped them. Either the payload goes or a reader
- * does; the owner asked for the reader.
- *
- * `renderToStaticMarkup` runs the block for real and returns what a reader would
- * see. No effects run and none are needed: the block is derived from its props,
- * which is also why it adds no fetch and no second cadence of its own — it
- * renders whatever the surface above already loaded.
+ * The Activity panel reads the `log` its own snapshot already fetches, rather than dropping it on every
+ * revalidation. Derived from props, so it adds no fetch or cadence of its own.
  */
 import { describe, expect, test } from 'bun:test';
 import { createElement } from 'react';
@@ -21,8 +10,7 @@ import { LogBlock } from '../src/components/surfaces/ActivitySurface';
 
 const AT = Date.UTC(2026, 7, 30, 12, 0, 0);
 
-/** One turn's worth of real `logActivity` names, oldest first — the order
- *  `readActivityLog` returns. */
+/** Real `logActivity` names, oldest first (the order `readActivityLog` returns). */
 const LOG: readonly ActivityLogEntry[] = [
   { event: 'getmodel', detail: null, elapsedMs: 0, createdAt: AT },
   { event: 'beforeturn', detail: 'streamText() called next', elapsedMs: 4, createdAt: AT + 1_000 },
@@ -54,9 +42,7 @@ describe('the Activity log pane renders the rows the snapshot already carried', 
   });
 
   test('an elapsed of 0 reads as an em dash, never as a 0 ms measurement', () => {
-    // `logActivity` writes 0 when no turn was in flight (`_turnT0 > 0 ? … : 0`),
-    // so 0 means "outside a turn" and not "took no time". Printing `0 ms` would
-    // be the plausible-zero this whole panel refuses.
+    // `logActivity` writes 0 outside a turn (`_turnT0 > 0 ? … : 0`), so 0 must not render as a duration.
     const html = render([LOG[0]]);
     expect(html).toContain('—');
     expect(html).not.toContain('0 ms');
@@ -72,8 +58,6 @@ describe('the Activity log pane renders the rows the snapshot already carried', 
   test('an empty log says nothing has been logged, not that the read failed', () => {
     const html = render([]);
     expect(html).toContain('Nothing has been logged');
-    // The row count note is absent rather than "0 rows": there is no window to
-    // report when the table is empty.
     expect(html).not.toContain('0 rows');
   });
 

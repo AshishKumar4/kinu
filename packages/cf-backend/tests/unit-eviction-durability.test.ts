@@ -1,19 +1,6 @@
 /**
- * Eviction durability — what survives an activation this Durable Object never
- * chose to end, and what it does on the next one.
- *
- * Every case below drives a REAL `OrchestratorAgent` (tests/helpers/actor-harness)
- * through the entry points the platform uses: a durable fiber runs and its row
- * is left behind, then the alarm's housekeeping pass — the path that runs with
- * no request and no socket — hands that row to `onFiberRecovered`. Nothing here
- * calls the hook and asserts a decision without also asserting what happened to
- * the row, because the row IS the difference between recovery that converges and
- * recovery that re-enters on every boot until an age bound discards it.
- *
- * The vendor half — that an accepted submission and an interrupted chat turn
- * really do survive a reset, and that the alarm really does fire with nobody
- * connected — is `tests/workerd/do-eviction-recovery.test.ts`. That semantic
- * does not exist under bun, so this file does not pretend to measure it.
+ * Eviction recovery through a real `OrchestratorAgent`: the alarm's housekeeping pass hands a left-behind fiber row to `onFiberRecovered`.
+ * Defends: recovery that never releases its row and re-enters on every boot. Vendor half: `tests/workerd/do-eviction-recovery.test.ts`.
  */
 import { describe, expect, test } from 'bun:test';
 import {
@@ -26,15 +13,9 @@ import { makeSql } from '../../core/tests/helpers';
 import {
   SANDBOX_LIFECYCLE_ENVELOPE_VERSION,
 } from '../src/sandbox-lifecycle';
-// The PRODUCER's own stage list, by relative path rather than through
-// `@kinu.run/devbox`: the barrel exports the Devbox class, which imports the
-// Sandbox runtime and therefore `cloudflare:workers`, which does not exist
-// under bun. Same reason the devbox package's own decision tests avoid it.
+// Relative path, not `@kinu.run/devbox`: the barrel reaches `cloudflare:workers`, which does not exist under bun.
 import { INCIDENT_STAGES } from '../../devbox/src/lifecycle';
 
-/** The recovery context the SDK builds for an unmanaged row it found
- *  interrupted. Only `name` and `snapshot` are decisions here; the rest is the
- *  shape the hook is handed. */
 function interrupted(
   name: string, snapshot: JsonValue | AdvisorRecoverySnapshot,
 ): FiberRecoveryContext {
@@ -47,9 +28,7 @@ function interrupted(
   };
 }
 
-/** A recovery result, refused when the hook returned nothing — which is the
- *  regression this file exists to catch: `void` leaves a managed row
- *  `interrupted` forever and tells a reader nothing about what was decided. */
+/** Refuses a `void` hook result: it leaves a managed row `interrupted` forever. */
 async function recover(
   agent: HarnessOrchestratorAgent, ctx: FiberRecoveryContext,
 ): Promise<FiberRecoveryResult> {
@@ -60,13 +39,10 @@ async function recover(
   return result;
 }
 
-/** Every programmatic turn the loop admitted, by the producer's own name for
- *  the fact it announces (its idempotency key) — recorded at the one seam the
- *  host's `enqueueTurn` reaches, and called through, so the turn still runs. */
+/** Recorded at the seam `enqueueTurn` reaches, and called through so the turn still runs. */
 function recordAdmissions(agent: HarnessOrchestratorAgent): string[] {
   const seen: string[] = [];
   const loop = agent.harnessChatLoop;
-  // The loop's OWN admission, whatever a case installed on the instance before.
   const admit = ChatSession.prototype.enqueueTurn.bind(loop);
 
   Object.defineProperty(loop, 'enqueueTurn', {
@@ -81,11 +57,9 @@ function recordAdmissions(agent: HarnessOrchestratorAgent): string[] {
   return seen;
 }
 
-/** The texts the loop was asked to open programmatic turns for. */
 function recordAdmittedTexts(agent: HarnessOrchestratorAgent): string[] {
   const texts: string[] = [];
   const loop = agent.harnessChatLoop;
-  // The loop's OWN admission, whatever a case installed on the instance before.
   const admit = ChatSession.prototype.enqueueTurn.bind(loop);
 
   Object.defineProperty(loop, 'enqueueTurn', {
@@ -100,9 +74,6 @@ function recordAdmittedTexts(agent: HarnessOrchestratorAgent): string[] {
   return texts;
 }
 
-/** The snapshot an interrupted advisor lane stashed — the complete turn plus
- *  the three decisions taken at turn end, which is the whole of what a re-drive
- *  needs. Minimal but COMPLETE: every field the lane's deps require. */
 function advisorSnapshot(turnId: string): AdvisorRecoverySnapshot {
   return {
     turn: {
@@ -124,24 +95,11 @@ function advisorSnapshot(turnId: string): AdvisorRecoverySnapshot {
 interface AdvisorObservation {
   readonly notes: string[];
   readonly signals: AgentSignal[];
-  /** Settles when the review reaches the provider — the real event a case about
-   *  ORDERING waits on, instead of a guessed number of ticks. */
   readonly entered: Promise<void>;
-  /** Let the parked model answer. Called up front by the cases that are about
-   *  the outcome rather than the ordering. */
   readonly release: () => void;
 }
 
-/**
- * The advisor lane's two outputs, captured at the seams the lane itself uses: a
- * reviewer model that answers one note, the real note store (so the durable row
- * a recovery guards on is really written), and the signal seam.
- *
- * The model is PARKED until `release`, which is what makes "the re-drive is
- * detached" assertable rather than raced: a review that cannot finish is exactly
- * the state the old in-gate arm held the whole object in, so a hook that answers
- * while this is parked answered without its lane.
- */
+/** The model is parked until `release`, so "the re-drive is detached" is assertable rather than raced. */
 function observeAdvisor(agent: HarnessOrchestratorAgent): AdvisorObservation {
   const notes: string[] = [];
   const signals: AgentSignal[] = [];
@@ -181,13 +139,9 @@ function observeAdvisor(agent: HarnessOrchestratorAgent): AdvisorObservation {
   return { notes, signals, entered: arrived.promise, release: () => { held.resolve(); } };
 }
 
-/** One recovery hook call, with its ANSWER observable separately from the lane
- *  it classified. */
 interface Recovering {
   readonly result: Promise<FiberRecoveryResult>;
-  /** Whether the hook's promise has already resolved — flipped in the promise's
-   *  own continuation, so a case can ask "had the hook returned by the time the
-   *  lane reached its provider?" without a clock. */
+  /** Flipped in the promise's own continuation, so ordering against the lane needs no clock. */
   readonly answered: () => boolean;
 }
 
@@ -214,8 +168,6 @@ describe('a background job whose executor died', () => {
       input: JSON.stringify({ task: 'keep going' }), now: Date.now(), label: 'keep going',
     });
 
-    // What the dead activation left: a `running` row nothing in this isolate
-    // owns, and a fiber row whose stash names the job it was driving.
     expect(agent.harnessJobs().get('bgjob-evicted')?.status).toBe('running');
 
     const result = await recover(agent, interrupted(
@@ -223,33 +175,17 @@ describe('a background job whose executor died', () => {
       { phase: 'running', jobId: 'bgjob-evicted', kind: 'search' },
     ));
 
-    // `completed` is the mark that moves a managed row off `interrupted`, and it
-    // means "this row's obligation has a carrier", not "the job ran": a settled
-    // job's re-drive delivers a WAKE, and a wake resolves only when the turn it
-    // queues ends, so no classification can wait for it.
+    // `completed` means the obligation has a carrier, not that the job ran: a wake resolves only when its queued turn ends.
     expect(result.status).toBe('completed');
     expect(result).toMatchObject({ snapshot: { lane: 'bg:search', redrive: 'background-job' } });
-    // The carrier itself, durable and visible: a fresh `cf_agents_runs` row under
-    // the same lane name, holding the same checkpoint, so an interruption of the
-    // re-drive re-enters this same arm. `toContain` rather than an equality:
-    // re-driving a RUNNING job opens the job lane's own fiber beside it, which is
-    // the registry doing its normal work.
+    // `toContain`: re-driving a running job also opens the job lane's own fiber.
     expect(agent.harnessOpenFiberRows().map((row) => row.name)).toContain('bg:search');
 
     await agent.harnessJoinDetachedFibers();
     expect(agent.harnessOpenFiberRows()).toEqual([]);
   });
 
-  /**
-   * The turn-awaiting half of the P0 defect, in one case.
-   *
-   * A job whose outcome landed but whose WAKE did not is re-driven by delivering
-   * that wake, and `signals.deliver` on an idle agent queues a turn and resolves
-   * only when the turn ENDS. Awaiting that from the recovery hook awaits a whole
-   * agent turn inside `blockConcurrencyWhile`. So the delivery is parked here and
-   * the hook must answer anyway — with the in-gate arm, `answered()` is false at
-   * the assertion below, because the hook is still inside the queued turn.
-   */
+  /** A wake delivered on an idle agent resolves only when its turn ends; the hook must answer without awaiting it inside `blockConcurrencyWhile`. */
   test("a settled job's wake is delivered DETACHED, not awaited by the hook", async () => {
     const { agent } = orchestratorHarness();
     const jobs = agent.harnessJobs();
@@ -257,8 +193,6 @@ describe('a background job whose executor died', () => {
       id: 'bgjob-settled', kind: 'search', workMode: 'build',
       input: JSON.stringify({ task: 'done already' }), now: Date.now(), label: 'done already',
     });
-    // The outcome landed and the wake did not — the one case a fiber row knows
-    // about and the registry does not.
     jobs.settle('bgjob-settled', jobs.epochOf('bgjob-settled') ?? 0, '"answer"', Date.now());
     const queued = Promise.withResolvers<void>();
     const arrived = Promise.withResolvers<void>();
@@ -274,8 +208,6 @@ describe('a background job whose executor died', () => {
       { phase: 'running', jobId: 'bgjob-settled', kind: 'search' },
     ));
 
-    // The real event, awaited rather than approximated: the wake has reached the
-    // delivery seam and is parked inside it.
     await arrived.promise;
     expect(recovery.answered()).toBe(true);
     expect(await recovery.result).toMatchObject({
@@ -284,8 +216,6 @@ describe('a background job whose executor died', () => {
 
     queued.resolve();
     await agent.harnessJoinDetachedFibers();
-    // The recorded outcome is untouched: recovery re-delivers the wake, it does
-    // not re-run work that already answered.
     expect(jobs.get('bgjob-settled')?.status).toBe('completed');
   });
 });
@@ -295,19 +225,13 @@ describe('the post-turn lanes', () => {
     const { agent } = orchestratorHarness();
 
     agent.harnessSettleEvolution();
-    // The row is written by `runFiber` BEFORE the body runs, which is the whole
-    // difference from a bare `keepAliveWhile`: that leaves nothing behind for a
-    // later activation to find.
+    // `runFiber` writes the row before the body runs; a bare `keepAliveWhile` leaves nothing for a later activation.
     expect(agent.harnessOpenFiberRows().map((row) => row.name)).toContain('evolution:settle');
 
     const result = await recover(agent, interrupted('evolution:settle', { lane: 'evolution:settle' }));
 
-    // Re-entry is the DURABLE half only: the session pass, which claims and
-    // settles its own window and drains its own trial queue. `settleEvolution`
-    // joins promises this activation never dispatched, so it is deliberately
-    // absent from the recovery path. It re-enters through a carrier rather than
-    // here: the pass spends model calls and real tool loops, and this hook is
-    // awaited inside the init gate.
+    // Only the durable half re-enters here: `settleEvolution` joins promises this activation never dispatched,
+    // and the session pass spends model calls, too heavy for a hook awaited inside the init gate.
     expect(result).toEqual({
       status: 'completed',
       snapshot: { lane: 'evolution:settle', redrive: 'session-evolution' },
@@ -315,32 +239,18 @@ describe('the post-turn lanes', () => {
     await agent.harnessJoinDetachedFibers();
   });
 
-  /**
-   * The advisor arm, and the P0 property: the review is a MODEL CALL, so the
-   * hook classifies and the carrier reviews.
-   *
-   * The model is parked, so "the hook answered while the lane had not" is a fact
-   * about two observations rather than about a clock. With the in-gate arm
-   * `answered()` is false here — the hook is inside the provider call — which is
-   * precisely the state in which every `fetch`, websocket frame and alarm on the
-   * object was queued behind `blockConcurrencyWhile`.
-   */
+  /** The review is a model call, so the hook classifies and the carrier reviews; an in-gate review queues every fetch behind `blockConcurrencyWhile`. */
   test('the advisor review runs DETACHED and still lands exactly one note', async () => {
     const harness = orchestratorHarness();
     const agent = harness.agent;
     const advisor = observeAdvisor(agent);
 
-    // Exactly what the interrupted lane stashed: the complete turn plus the
-    // three decisions taken at turn end. Nothing is re-derived on recovery, so
-    // the review runs against the world the turn ran in.
     const recovery = recovering(agent, interrupted('advisor:review', advisorSnapshot('turn-42')));
 
     await advisor.entered;
     expect(recovery.answered()).toBe(true);
     expect(agent.harnessNotesForTurn('turn-42')).toBe(0);
-    // Completed, NOT a terminal error: the review is work, and the eviction was
-    // not a verdict on it. The carrier holds the checkpoint the review needs, so
-    // an interruption of the re-drive is offered this arm again.
+    // Completed, not a terminal error: the eviction was not a verdict on the review.
     expect(await recovery.result).toMatchObject({
       status: 'completed',
       snapshot: { turnId: 'turn-42', redrive: 'advisor-review' },
@@ -350,13 +260,11 @@ describe('the post-turn lanes', () => {
     advisor.release();
     await agent.harnessJoinDetachedFibers();
 
-    // One note on the audit stream, one signal spoken, and the signal is keyed
-    // on the turn so a re-delivery collapses onto the row it already opened.
+    // The signal is keyed on the turn so a re-delivery collapses onto the row it already opened.
     expect(advisor.notes).toHaveLength(1);
     expect(advisor.signals).toHaveLength(1);
     expect(advisor.signals[0]).toMatchObject({ idempotencyKey: 'advisor:turn-42' });
     expect(agent.harnessNotesForTurn('turn-42')).toBe(1);
-    // And the carrier retired with its work: nothing left for the next scan.
     expect(agent.harnessOpenFiberRows()).toEqual([]);
   });
 
@@ -366,10 +274,7 @@ describe('the post-turn lanes', () => {
     const advisor = observeAdvisor(agent);
     advisor.release();
 
-    // The other side of the one durable write: the lane recorded its note and
-    // was evicted before the fiber row was released, so recovery is offered the
-    // same work again. Re-running here is what would write a second note about
-    // one turn and speak it twice.
+    // The note was recorded before eviction; re-running would write a second note and speak it twice.
     await recover(agent, interrupted('advisor:review', advisorSnapshot('turn-42')));
     await agent.harnessJoinDetachedFibers();
     const again = await recover(agent, interrupted('advisor:review', advisorSnapshot('turn-42')));
@@ -378,11 +283,8 @@ describe('the post-turn lanes', () => {
       status: 'completed',
       snapshot: { turnId: 'turn-42', redrive: null, alreadyRecorded: true },
     });
-    // The guard is SYNCHRONOUS and runs before anything is handed to a carrier,
-    // so the refused re-drive leaves no second fiber row either — a detach-first
-    // arm would have opened one and then discovered the note.
+    // The guard is synchronous and runs before any carrier, so the refused re-drive leaves no second fiber row.
     expect(agent.harnessOpenFiberRows()).toEqual([]);
-    // Still one, after two recoveries of the same lane.
     expect(advisor.notes).toHaveLength(1);
     expect(advisor.signals).toHaveLength(1);
     expect(agent.harnessNotesForTurn('turn-42')).toBe(1);
@@ -391,8 +293,6 @@ describe('the post-turn lanes', () => {
   test('a snapshot that will not parse is terminal, because there is no turn to review', async () => {
     const { agent } = orchestratorHarness();
 
-    // The pre-change stash shape: a pointer, not the review. Nothing a further
-    // attempt could do differently, so this one really is terminal.
     const result = await recover(agent, interrupted('advisor:review', {
       lane: 'advisor:review', turnId: 'turn-42',
     }));
@@ -411,14 +311,8 @@ describe('the post-turn lanes', () => {
       status: 'completed', snapshot: { lane: 'mcts', recorded: true, redrive: 'memory-note' },
     });
 
-    // The agent's own record of the interruption: a future turn that finds a
-    // half-expanded tree can see why. The search itself is NOT re-driven here —
-    // its tree is durable and, when the call was detached, its job row is what
-    // re-drives it.
-    //
-    // The audit row lands in the classification because it is this object's own
-    // SQLite; the MEMORY.md line goes through the workspace filesystem, which is
-    // another Durable Object for a hosted workspace, so it rides the carrier.
+    // The audit row lands in this object's SQLite; the MEMORY.md line goes through the workspace filesystem
+    // (another Durable Object when hosted), so it rides the carrier.
     const events = harness.db.prepare<{ type: string; message: string }, []>(
       "SELECT type, message FROM evolution_events WHERE type = 'fiber_recovered'",
     ).all();
@@ -438,10 +332,8 @@ describe('a fiber nobody defined a recovery for', () => {
 
     const result = await recover(agent, interrupted('some:future-lane', { anything: true }));
 
-    // The SDK releases an interrupted row when this hook RETURNS and retains it
-    // when it THROWS — a retained row is re-offered on every activation for 24
-    // hours and keeps the object warm the whole time. So the terminal error is
-    // the mechanism, not just the wording.
+    // The SDK releases an interrupted row when this hook returns and retains it when it throws,
+    // so the terminal error is the mechanism, not just the wording.
     expect(result.status).toBe('error');
     expect(String(result.status === 'error' ? result.error : '')).toContain('some:future-lane');
   });
@@ -449,24 +341,17 @@ describe('a fiber nobody defined a recovery for', () => {
   test('the scan releases the row it recovered, and the carrier retires its own', async () => {
     const { agent } = orchestratorHarness();
 
-    // Exactly what a dead activation leaves: the row `runFiber` wrote, with no
-    // live body behind it. Seeded rather than run, because a fiber running in
-    // THIS process deletes its own row on the way out.
+    // Seeded rather than run: a fiber running in this process deletes its own row on the way out.
     agent.harnessSeedOrphanFiber('evolution:settle', { lane: 'evolution:settle' });
     expect(agent.harnessOpenFiberRows()).toHaveLength(1);
 
-    // The alarm's housekeeping pass — no request, no socket, no client.
     await agent.harnessAlarmHousekeeping();
 
-    // The recovered row is released, and what stands in its place is the
-    // CARRIER's row: the re-drive is durable work of its own, so the scan's
-    // convergence is a claim about two rows now, not one. A hook that threw would
-    // leave the ORIGINAL row here and be re-offered every boot for 24h.
+    // The recovered row is released and the carrier's row stands in its place.
     expect(agent.harnessOpenFiberRows().map((row) => row.name)).toEqual(['evolution:settle']);
     await agent.harnessJoinDetachedFibers();
     expect(agent.harnessOpenFiberRows()).toEqual([]);
 
-    // And a second pass has nothing to do, which is what "converges" means.
     await agent.harnessAlarmHousekeeping();
     expect(agent.harnessOpenFiberRows()).toEqual([]);
   });
@@ -492,17 +377,12 @@ describe('a sandbox lifecycle failure', () => {
     expect(first).toMatchObject({ status: 'queued', incidentId: 'inc-1', duplicate: false });
     expect(second).toMatchObject({ status: 'queued', duplicate: true });
     expect(third).toMatchObject({ status: 'queued', duplicate: true });
-    // One admitted turn, and it carries the incident id — so even a delivery
-    // the ledger did not collapse would land on the row the first one wrote.
     expect(submitted).toHaveLength(1);
     expect(submitted[0]).toContain('inc-1');
   });
 
   test('a delivery that never landed is re-deliverable, which is what ends the retry loop', async () => {
     const { agent } = orchestratorHarness();
-    // The seam's `undelivered` outcome: the loop pre-empted the turn — its
-    // admission answered 'skipped', which is what another driver holding the
-    // lease answers.
     const loop = agent.harnessChatLoop;
     Object.defineProperty(loop, 'enqueueTurn', {
       configurable: true,
@@ -510,17 +390,12 @@ describe('a sandbox lifecycle failure', () => {
     });
 
     const refused = await agent.acceptSandboxLifecycleFailure(incident);
-    // `undelivered`, NOT `queued`. The box maps `queued` to `deliveredAt` and
-    // stops offering the row, so answering it here for an announcement nobody
-    // received is how an incident went permanently unseen while this side's
-    // ledger still held it as re-deliverable.
+    // `undelivered`, not `queued`: the box maps `queued` to `deliveredAt` and stops offering the row.
     expect(refused).toMatchObject({ status: 'undelivered', duplicate: false });
 
     const submitted = recordAdmissions(agent);
     const retried = await agent.acceptSandboxLifecycleFailure(incident);
 
-    // NOT reported as a duplicate: nothing had been announced, so the retry is
-    // the first announcement and the caller can stop retrying now.
     expect(retried).toMatchObject({ status: 'queued', duplicate: false });
     expect(submitted).toHaveLength(1);
   });
@@ -539,7 +414,6 @@ describe('a sandbox lifecycle failure', () => {
 
     expect(texts).toHaveLength(1);
     const text = texts[0];
-    // The consequence the agent has to act on, then the evidence.
     expect(text).toContain('attach stage');
     expect(text).toContain('Verify the workspace contents');
     expect(text).toContain('archive size 0 did not match the declared 918_224');
@@ -550,9 +424,7 @@ describe('a sandbox lifecycle failure', () => {
     const { agent } = orchestratorHarness();
     const submitted = recordAdmissions(agent);
 
-    // The shape a caller reaches for when it wants to pass something the
-    // contract has no field for. Stripping it would let the caller believe the
-    // agent had read it.
+    // Stripping it would let the caller believe the agent had read it.
     const rejected = await agent.acceptSandboxLifecycleFailure({
       ...incident,
       incidentId: 'inc-3',
@@ -564,12 +436,7 @@ describe('a sandbox lifecycle failure', () => {
   });
 
   test('every stage the CONTAINER can emit is queued, not rejected', async () => {
-    // Driven from the PRODUCER's list, which is the whole point. Two separate
-    // lists let the sides drift — Devbox emits `attach` and `checkpoint`, and a
-    // schema admitting neither answers `rejected` to both classes of failure
-    // the seam exists for, freezing them in the container's ledger as a caller
-    // defect, never retried and never seen by the agent. A test that iterated
-    // the CONSUMER's list would agree with itself and see none of it.
+    // Driven from the producer's list: iterating the consumer's list would agree with itself when Devbox adds a stage.
     const { agent } = orchestratorHarness();
     const texts = recordAdmittedTexts(agent);
 
@@ -582,8 +449,7 @@ describe('a sandbox lifecycle failure', () => {
       expect({ stage, status: answer.status }).toEqual({ stage, status: 'queued' });
     }
 
-    // The denominator: a stage admitted by the schema with no consequence
-    // written for it would render as `undefined` in the agent's own turn.
+    // A stage with no consequence written for it would render as `undefined` in the agent's turn.
     expect(texts).toHaveLength(INCIDENT_STAGES.length);
 
     for (const text of texts) expect(text).not.toContain('undefined');

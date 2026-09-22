@@ -1,14 +1,6 @@
 /**
- * The static-asset bundle is served with `not_found_handling:
- * "single-page-application"`, so an asset that was never published comes back
- * as 200 + the SPA shell. Production once shipped that way: the CLI tarball,
- * its checksum, and the version JSON all served index.html under their
- * configured content-types, and every fresh install died on an unexplained
- * checksum mismatch while the site looked healthy.
- *
- * So the download routes must hard-404 anything that is not the asset, and
- * /api/health must report the deployed build stamp — one GET that says whether
- * the asset half of a deploy landed.
+ * ASSETS serves `not_found_handling: "single-page-application"`, so an unpublished asset is 200 + the SPA shell;
+ * defends fresh installs dying on a checksum of index.html: downloads hard-404, /api/health reports the build stamp.
  */
 import { TEST_CREDENTIAL_ENCRYPTION_KEY } from './helpers/user-do';
 import { describe, expect, test } from 'bun:test';
@@ -50,8 +42,7 @@ function requiredResponse(response: Response | null): Response {
   return response;
 }
 
-/** The CLI plane around one published-asset store. A download answers from
- *  ASSETS alone, so the objects and the device-code KV are refusals here. */
+/** A download answers from ASSETS alone; the objects and device-code KV are refusals here. */
 function testEnv(ASSETS: AssetFetcher): CliRoutesEnv<string> {
   return {
     ASSETS,
@@ -62,8 +53,7 @@ function testEnv(ASSETS: AssetFetcher): CliRoutesEnv<string> {
   };
 }
 
-/** An ASSETS binding that publishes `files` and answers everything else the
- *  way the real single-page-application fallback does. */
+/** Answers unpublished paths as the real single-page-application fallback does. */
 function envWithAssets(files: ReadonlyMap<string, PublishedAsset>): CliRoutesEnv<string> {
   return testEnv({
     async fetch(request: Request): Promise<Response> {
@@ -85,8 +75,7 @@ const PUBLISHED = new Map<string, PublishedAsset>([
     [`${path}.sha256`, { body: `deadbeef  ${path.split('/').pop() ?? ''}\n`, contentType: 'text/plain' }],
   ]),
   ['/downloads/kinu-version.json', { body: JSON.stringify(STAMP), contentType: 'application/json' }],
-  // The small half of a worker release rides the same band: a deployment
-  // updating itself reads them with no session (the tarball comes from R2).
+  // A self-updating deployment reads these with no session (the tarball comes from R2).
   ['/downloads/release.json', { body: '{"version":"0.2.0+abc"}', contentType: 'application/json' }],
   ['/downloads/kinu-worker-0.2.0+abc.tar.gz.sha256', { body: 'cafebabe  kinu-worker-0.2.0+abc.tar.gz\n', contentType: 'text/plain' }],
 ]);
@@ -192,9 +181,7 @@ describe('GET /api/health build stamp', () => {
   test('the feature counts are read out of the registries, not declared by hand', async () => {
     const response = requiredResponse(await handleHealthRequest(new Request(`${ORIGIN}/api/health`), envWithAssets(PUBLISHED)));
     const body = v.parse(HealthResponseSchema, await response.json());
-    // Compared against the registries themselves: a hand-listed number passes
-    // today and lies at the next registry edit, so the endpoint is held to the
-    // same source the compiler holds BUILTIN_TOOLS to.
+    // Held to the registries themselves: a hand-listed number lies at the next registry edit.
     expect(body.features).toEqual({
       builtinTools: BUILTIN_TOOLS.length,
       swarmPresets: SWARM_PRESETS.length,

@@ -1,6 +1,4 @@
-// Workspace capability tokens — store-level behavior: hashed at rest, identity
-// separate from admission, fail closed on every unknown. Run against real
-// SQLite through the same SqlExec seam the UserDO provides.
+// Workspace capability tokens: hashed at rest, identity separate from admission, fail closed on every unknown.
 import { describe, expect, test } from 'bun:test';
 import { Database } from 'bun:sqlite';
 import * as v from 'valibot';
@@ -26,10 +24,7 @@ function setup() {
   return { db, sql };
 }
 
-/** The two phases the UserDO drives, composed. These tests are about what the
- *  store holds; the fence the UserDO puts BETWEEN them — its re-check that the
- *  workspace is still mintable — is exercised where that fence lives, in
- *  unit-user-authority-races.test.ts. */
+/** The UserDO fence between the phases is exercised in unit-user-authority-races.test.ts. */
 async function mintWorkspaceCapability(
   sql: SqlExec, workspaceName: string,
 ): Promise<{ token: string; tokenHash: string }> {
@@ -39,9 +34,7 @@ async function mintWorkspaceCapability(
   return fresh;
 }
 
-/** One capability per floor, by public name. The gate holds no per-capability
- *  logic beyond the floor, so representatives carry the behavior and no test
- *  duplicates the matrix. */
+/** One representative per floor: the gate holds no per-capability logic beyond it. */
 const WORKSPACE_CAPABILITIES: WorkspaceCapability[] = [
   'credentials.model', 'device.rpc', 'workspaces.rename_self',
 ];
@@ -87,7 +80,6 @@ describe('capability token mint', () => {
     expect(await requireTier(sql, TEST_USER_ENV, { caller: { workspaceToken: second.token } }, 'credentials.model'))
       .toEqual({ kind: 'workspace', workspace: 'workspace-a' });
 
-    // The superseded token is dead; only one identity row per workspace exists.
     await expect(requireTier(sql, TEST_USER_ENV, { caller: { workspaceToken: first.token } }, 'credentials.model')).rejects.toThrow(CapabilityDeniedError);
 
     const count = v.parse(
@@ -125,14 +117,12 @@ describe('requireTier fails closed', () => {
     const owner = await testOwner();
     expect(await requireTier(sql, TEST_USER_ENV, { caller: owner }, 'credentials.other')).toEqual({ kind: 'owner_session' });
 
-    // The sentinel this replaced, and a guess at the token itself.
     for (const bogus of ['owner_session', { ownerToken: 'owner_session' }, { ownerToken: 'a'.repeat(64) }]) {
       await expect(requireTier(sql, TEST_USER_ENV, { caller: bogus }, 'credentials.other'))
         .rejects.toThrow(CapabilityDeniedError);
     }
 
-    // A deployment holding a different secret derives a different capability,
-    // so an owner token cannot be lifted from one deployment to another.
+    // A different secret derives a different capability, so owner tokens do not cross deployments.
     const foreign = await ownerCaller({ CREDENTIAL_ENCRYPTION_KEY: 'a-completely-different-root-secret-value' });
     await expect(requireTier(sql, TEST_USER_ENV, { caller: foreign }, 'credentials.other'))
       .rejects.toThrow(/Unrecognized owner capability/);

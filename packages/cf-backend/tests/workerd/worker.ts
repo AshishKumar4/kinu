@@ -1,17 +1,6 @@
 /**
- * The subject of the workerd layer: Durable Object shapes reduced to the one
- * platform behaviour each historical defect turned on.
- *
- * These are NOT copies of production classes. Every guard we already ship for
- * these defects is either a source-text assertion
- * (`unit-alarm-chain-contract.test.ts:103-113` greps orchestrator.ts for the
- * absence of `this.ctx.waitUntil(`), an AST walk (`scripts/do-init-gate.ts`), or
- * a reflection (`unit-do-init-gate.test.ts` reads `onStart.constructor.name`).
- * All three assert the SHAPE. Not one of them executes the SEMANTIC the shape
- * is rejected for, and `bun test` cannot: it has no output gate, no
- * `blockConcurrencyWhile` input gate, and no actor-shutdown cancellation. So
- * the classes here are the smallest thing that makes the semantic observable —
- * a control group for a rule, not a second copy of the rule's subject.
+ * Durable Object shapes reduced to the platform behaviour each defect turned on:
+ * `bun test` has no output gate, input gate, or actor-shutdown cancellation.
  */
 import { DurableObject } from 'cloudflare:workers';
 
@@ -19,40 +8,25 @@ export { EvictionProbeDO, WitnessDO } from './eviction-probe';
 
 export { FiberRecoveryProbeAgent } from './agent-fiber-recovery-probe';
 
-// The spend aggregate — the same charter exception, for the one production read
-// whose method is platform SQLite features (`WITH`, `json_extract`).
 export { SpendProbeDO } from './spend-probe';
 
 export { ForkSourceProbeDO, ForkTargetProbeDO } from './fork-probe';
 
-// The durable device-command ledger — the same charter exception, for a
-// precedence protocol whose whole subject is surviving an activation reset.
 export { DeviceLedgerProbeDO } from './device-inflight-probe';
 
-// The terminal-effect ledger — the same charter exception, for what one settled
-// turn still owes after the isolate running its effects dies.
 export { TerminalEffectProbeDO } from './terminal-effect-probe';
 
-// The `db` capability — the same charter exception, for two mechanisms only the
-// platform provides: `ctx.storage.transactionSync` (which is the whole of the
-// all-or-nothing batch and of evidence rolling back with its mutation) and
-// `… RETURNING` (which is how a row count crosses the SqlExecutor seam).
+// Needs `ctx.storage.transactionSync` and `… RETURNING`, which only the platform provides.
 export { DbCapabilityProbeDO } from './db-capability-probe';
 
-// The Files-tab EIO probe — the same charter exception: the real workspace
-// file plane under the runtime whose CSP is the defect.
 export { FilesEioProbeDO } from './files-eio-probe';
 
 export { SlateProcessProbeDO, SlateChainProbe } from './slate-process-probe';
 
-// The production sandbox egress entrypoint, exported here exactly as
-// `src/server.ts` exports it, so `codemode-sandbox.test.ts` can prove the
-// `exports` loopback resolves it under the compatibility date we deploy.
+// Exported exactly as `src/server.ts` does, for the `exports` loopback under our compatibility date.
 export { CodemodeEgress } from '../../src/codemode-egress';
 
-// The devbox readiness refusal as DATA: the probe answers `resolveReadiness`
-// with both halves of `RestoreReadiness`, plus the thrown control that proves
-// why the refusal cannot ride an error class over RPC.
+// Readiness refusal as data: it cannot ride an error class over RPC.
 export { DevboxNotReadyProbeDO } from './devbox-not-ready-probe';
 
 import * as v from 'valibot';
@@ -62,23 +36,16 @@ import {
 } from '@kinu.run/core';
 import { KinuError, renderThrownChain } from '@kinu.run/core/obs';
 
-/** The two fields the warm assertion reads off the replay the lane sent.
- *  Parsed rather than probed, so the probe reports the request's own values or
- *  fails on a body that is not a replay at all. */
+/** Parsed, not probed: fails on a body that is not a replay. */
 const ReplayBodySchema = v.looseObject({ max_tokens: v.number(), stream: v.optional(v.boolean()) });
 
-/** The DO's positional SQL as the tagged-template primitive core's stores take.
- *  The pool's probes hold `ctx.storage.sql` directly rather than an Agents-SDK
- *  `Agent`, so `bindAgentSql` (which binds THAT protocol) does not fit. */
+/** Probes hold `ctx.storage.sql` rather than an Agents-SDK `Agent`, so `bindAgentSql` does not fit. */
 function doSqlExecutor(sql: SqlStorage): SqlExecutor {
   return <Row,>(strings: TemplateStringsArray, ...values: SqlValue[]): Row[] =>
     sql.exec<Row & Record<string, SqlStorageValue>>(strings.join('?'), ...values).toArray();
 }
 
-/**
- * Cap'n Web owns a transferred writable stream after the RPC invocation that
- * returned it. The close and abort callbacks make that lifetime durable.
- */
+/** Cap'n Web owns a transferred writable stream after the RPC that returned it. */
 export class StreamLifecycleDO extends DurableObject<Cloudflare.Env> {
   private static readonly WRITE_CLOSED = 'write-closed';
   private static readonly WRITE_ABORTED = 'write-aborted';
@@ -98,62 +65,37 @@ export class StreamLifecycleDO extends DurableObject<Cloudflare.Env> {
   }
 }
 
-/** The storage key `armTimer` commits. Named after the real one so a reader of
- *  orchestrator.ts:542 recognises what is being lost. */
+/** Same key as `armTimer` in orchestrator.ts. */
 const ARMED = 'kinu_timer_armed_at';
 
 /**
- * The historical retention claim from `5183d69d:orchestrator.ts:518-529`,
- * isolated in a module-level function that takes the state as a parameter.
- *
- * This is deliberately NOT `this.ctx.waitUntil(...)` inside the class:
- * `anti-slop/no-wait-until-in-durable-object` rejects that receiver, and the
- * rule is not being dodged here — its own valid-case list
- * (`rules/no-wait-until-in-durable-object.test.ts:18-19`) blesses exactly this
- * shape as "an injected seam; the caller decides what retention means". The
- * rule governs production intent. This function IS the experiment the rule's
- * rationale rests on, and if workerd ever changed the semantic, the rule's
- * stated reason would be false and only this file would notice.
- *
- * Detached controls report unexpected rejections without claiming retention.
- * On actor shutdown, however, workerd's `IncomingRequest::drain()` ends
- * `result = result.catch_([](kj::Exception&&) {})`, which cancels the task
- * before its handler runs — the finding that makes
- * `anti-slop/no-sentinel-catch` right to reject a silent handler.
+ * Module-level so `anti-slop/no-wait-until-in-durable-object` blesses it as an injected seam;
+ * this is the experiment that rule's rationale rests on.
  */
 function retainViaWaitUntil(state: DurableObjectState, work: Promise<void>): void {
   state.waitUntil(work);
 }
 
 /**
- * Defect 1 — `do.wait_until.no_op` / `do.background_task.cancelled_on_reset`.
- *
- * Three retention arms over one identical write. Under `bun test` all three are
- * indistinguishable; under workerd the awaited arm is held by the output gate
- * and the other two are cancelled by actor shutdown with the exception
- * swallowed (`io-context.c++` `drain()` ends `result.catch_([](kj::Exception&&) {})`).
+ * `do.wait_until.no_op` / `do.background_task.cancelled_on_reset`: under workerd only the
+ * awaited arm survives; the others are cancelled by actor shutdown with the exception swallowed.
  */
 export class RetentionDO extends DurableObject<Cloudflare.Env> {
-  /** The work every arm below performs. Mirrors `OrchestratorAgent.armTimer`:
-   *  a storage write that Kinu's own wake-up depends on. */
   private async armTimer(delayMs: number): Promise<void> {
     await scheduler.wait(delayMs);
     await this.ctx.storage.put(ARMED, Date.now());
   }
 
-  /** The shipped shape (`orchestrator.ts:542`). Awaited inside the invocation,
-   *  so the output gate holds the response until the row commits. */
+  /** Shipped shape: the output gate holds the response until the row commits. */
   async scheduleAwaited(delayMs: number): Promise<void> {
     await this.armTimer(delayMs);
   }
 
-  /** The pre-fix shape. Returns immediately and claims the write "lands even if
-   *  the caller's invocation ends first". */
+  /** Pre-fix shape. */
   scheduleViaWaitUntil(delayMs: number): void {
     retainViaWaitUntil(this.ctx, this.armTimer(delayMs));
   }
 
-  /** Completion is returned to the caller instead of leaving the timer detached. */
   async scheduleFloating(delayMs: number): Promise<void> {
     try {
       await this.armTimer(delayMs);
@@ -167,31 +109,16 @@ export class RetentionDO extends DurableObject<Cloudflare.Env> {
   }
 }
 
-/**
- * Defect 2, second half — the neighbour Durable Object the proven chain ended
- * in (`onStart` -> `ensureOwnedScaffold` -> `rt.identity.scaffold.exists` ->
- * `env.NIMBUS_SESSION.get(...)`).
- */
+/** The neighbour DO the `onStart` -> `ensureOwnedScaffold` chain ended in. */
 export class NeighbourDO extends DurableObject<Cloudflare.Env> {
-  /** Occupies this object for `ms`, exactly as a busy filesystem DO did when
-   *  the 2303 / 10215 / 25212 ms rows in `platform-catalog.ts:465` were taken. */
   async beBusy(ms: number): Promise<void> {
     await scheduler.wait(ms);
   }
 }
 
 /**
- * Defect 2 — `do.block_concurrency.cancel_ms` / `do.init_gate.awaited_by`.
- *
- * partyserver runs `onStart()` inside `ctx.blockConcurrencyWhile()`
- * (`#ensureInitialized`), and `fetch`, `webSocketMessage`, `webSocketClose` and
- * `alarm` all await that same gate. The constructor here opens the same gate
- * directly, which is what partyserver does on our behalf.
- *
- * How long init stalls is read from the object's own name (`stall:<ms>`) so one
- * class covers both polarities: `stall:0` is the shipped `onStart(): void`,
- * `stall:N` is the pre-fix `async onStart()` that awaited a second Durable
- * Object. A test names the object it wants; nothing is mocked.
+ * `do.block_concurrency.cancel_ms` / `do.init_gate.awaited_by`: partyserver runs `onStart()`
+ * inside `blockConcurrencyWhile`. Name `stall:<ms>` picks the stall; `stall:0` is the shipped shape.
  */
 export class GatedDO extends DurableObject<Cloudflare.Env> {
   constructor(ctx: DurableObjectState, env: Cloudflare.Env) {
@@ -208,40 +135,17 @@ export class GatedDO extends DurableObject<Cloudflare.Env> {
     }));
   }
 
-  /** A pure read with no I/O of its own — the `@callable` SELECT that answered
-   *  in 25,212 ms. Whatever this costs is the gate, not the query. */
+  /** No I/O of its own: whatever this costs is the gate. */
   ping(): number {
     return this.ctx.storage.sql.exec<{ v: number }>('SELECT 1 AS v').one().v;
   }
 }
 
 /**
- * Defect surface 3 — `ctx.storage.transactionSync` atomicity.
- *
- * WHAT PRODUCTION STAKES ON IT. Core declares a `transaction` seam and states
- * what it is for — "Run the admit + roster write atomically"
- * (`events/ingress/subordinate.ts:45-46`). `receiveSubordinateEvent` puts the
- * event-log insert and the roster update inside it
- * (`events/ingress/subordinate.ts:71-85`), and the CF backend satisfies it with
- * `(body) => this.ctx.storage.transactionSync(body)` (`actor-agent.ts:765`).
- * `writeForkSnapshot` shares the same primitive for a whole workspace snapshot
- * (`orchestrator.ts:3280`, `identity/fork.ts:211-213`).
- *
- * The second write throws on a LIVE path, which is what makes this load-bearing
- * rather than theoretical: `SubordinateRosterStore.applyReport` opens with
- * `requireActive(name)` (`subordinates/support.ts:393-394`), and by then the
- * event row is already inserted.
- *
- * WHY `bun test` CANNOT HOST IT. Core's seam comment gives the non-CF fallback
- * in its own words — "a backend without one runs the body directly"
- * (`events/ingress/subordinate.ts:7-8`) — and `identity/fork.ts:212-213` says
- * the bun path execs each statement separately, "where per-statement failure is
- * acceptable". The bun arm is therefore not a weaker transaction but NO
- * transaction, so every assertion here about a write failing to land is false
- * there. `runDirectly` below is that exact arm, kept as the control group.
+ * `ctx.storage.transactionSync` atomicity, which `receiveSubordinateEvent` and `writeForkSnapshot`
+ * rely on. The bun arm runs the body directly with no atomicity; `runDirectly` is that control.
  */
 export class TransactionDO extends DurableObject<Cloudflare.Env> {
-  /** Named after the two tables the production body writes. */
   private ensureSchema(): void {
     this.ctx.storage.sql.exec('CREATE TABLE IF NOT EXISTS event_log (id TEXT PRIMARY KEY)');
     this.ctx.storage.sql.exec(
@@ -254,15 +158,7 @@ export class TransactionDO extends DurableObject<Cloudflare.Env> {
     );
   }
 
-  /**
-   * The write set that must be all-or-nothing, in production's order: publish
-   * the event the parent will drain, then advance the roster that says the
-   * subordinate reported.
-   *
-   * `failRoster` models `requireActive` throwing at the top of `applyReport` —
-   * after the event row has landed, which is the only ordering that can leave
-   * an orphan.
-   */
+  /** `failRoster` throws after the event row lands, the only order that can orphan it. */
   private admitBody(id: string, failRoster: boolean): void {
     this.ctx.storage.sql.exec('INSERT INTO event_log (id) VALUES (?)', id);
 
@@ -272,25 +168,21 @@ export class TransactionDO extends DurableObject<Cloudflare.Env> {
     );
   }
 
-  /** The shipped shape (`actor-agent.ts:765`). */
+  /** Shipped shape. */
   admitAtomically(id: string, failRoster: boolean): void {
     this.ensureSchema();
     this.ctx.storage.transactionSync(() => { this.admitBody(id, failRoster); });
   }
 
-  /** The seam core runs on a backend that has no transaction — the bun arm,
-   *  verbatim. Same body, same failure, no atomicity. */
+  /** The bun arm: same body, same failure, no atomicity. */
   runDirectly(id: string, failRoster: boolean): void {
     this.ensureSchema();
     this.admitBody(id, failRoster);
   }
 
   /**
-   * Why the seam's type is `transaction<T>(body: () => T): T` and not a
-   * promise-returning one. `transactionSync` runs its callback to completion
-   * SYNCHRONOUSLY and commits when it returns; an `async` callback returns at
-   * its first `await`, so the commit happens while the body is still running and
-   * a later throw has nothing left to roll back.
+   * Why the seam is `transaction<T>(body: () => T): T`: `transactionSync` commits when the callback
+   * returns, so an `async` body commits at its first `await` and a later throw rolls nothing back.
    */
   async admitViaAsyncBody(id: string): Promise<void> {
     this.ensureSchema();
@@ -301,7 +193,6 @@ export class TransactionDO extends DurableObject<Cloudflare.Env> {
     });
   }
 
-  /** What a parent would drain, and what its roster would say. */
   async admitted(): Promise<{ events: number; rosterStatus: string }> {
     this.ensureSchema();
 
@@ -316,13 +207,7 @@ export class TransactionDO extends DurableObject<Cloudflare.Env> {
   }
 }
 
-/**
- * The read-back contract, identical in shape to production's
- * `DeviceAttachmentSchema` (`device-hub.ts:54-72`). It is a schema and not a type
- * because that is the point: an attachment survives a code deploy, so what a
- * previous version wrote is untrusted input, and whether the parse SUCCEEDS is
- * what decides if a device is recorded as having answered.
- */
+/** A schema, not a type: an attachment outlives the code that wrote it, so it is untrusted input. */
 const DeviceAttachmentSchema = v.object({
   device: v.string(),
   probe: v.optional(v.object({
@@ -334,39 +219,13 @@ const DeviceAttachmentSchema = v.object({
 type DeviceAttachment = v.InferOutput<typeof DeviceAttachmentSchema>;
 
 /**
- * Defect surface 4 — what a hibernatable socket keeps, and what an isolate reset
- * takes away.
- *
- * WHAT PRODUCTION STAKES ON IT. Every Agent-class Durable Object here hibernates:
- * `Agent.options = { hibernate: true }` in the installed SDK is never overridden
- * in `packages/cf-backend/src`, so partyserver picks its
- * `HibernatingConnectionManager` for every chat and CLI socket. `UserDO` then
- * hand-rolls a SECOND hibernatable socket type for device daemons
- * (`user-do.ts:849-857` -> `device-hub.ts:106-113`), and that one keeps its
- * entire per-connection record in the socket ATTACHMENT rather than in a field:
- * `accept` writes `{ device }` (`device-hub.ts:112`), `recordProbe` rewrites it
- * with the toolchain answer (`device-hub.ts:191-201`), and `probeRecord`,
- * `liveSocket`, `isConnected` and `connectedDeviceId` all read it back through
- * `ctx.getWebSockets(tag)` (`device-hub.ts:116-121, 184-189, 203-213`).
- *
- * WHY `bun test` CANNOT HOST IT. The fake socket the gallery and the bun suites
- * use makes `serializeAttachment` a no-op and answers `deserializeAttachment()`
- * with `null` unconditionally (`gallery.tsx:315-317`). So under bun EVERY socket
- * reads as "not a device socket": `deviceIdFromSocket` is always null and
- * `probeRecord` is always null. There is no fake that could fix this and still
- * be a fake — the attachment is held by the runtime outside the isolate's heap,
- * which is the entire property being relied on.
+ * Hibernatable socket attachments survive an isolate reset; in-memory fields do not.
+ * The bun fake makes `serializeAttachment` a no-op, so only workerd can host this.
  */
 export class SocketDO extends DurableObject<Cloudflare.Env> {
-  /** In-memory per-instance state, the shape production still keeps in fields:
-   *  `DeviceConsentRegistry.inflight` (`safety/device-consent.ts`) holds
-   *  `settle` closures that no attachment could carry. The card itself is a
-   *  row there, so what a reset takes is exactly these subscribers. */
+  /** What a reset takes: in-memory state like `DeviceConsentRegistry.inflight`. */
   private readonly waiting = new Map<string, string>();
 
-  /** The upgrade path, reduced to `DeviceSocketHub.accept`
-   *  (`device-hub.ts:106-113`): tag the socket with the device it belongs to and
-   *  write the device id into the attachment. */
   override async fetch(request: Request): Promise<Response> {
     const deviceId = new URL(request.url).searchParams.get('device') ?? 'unknown';
     const pair = new WebSocketPair();
@@ -377,13 +236,8 @@ export class SocketDO extends DurableObject<Cloudflare.Env> {
   }
 
   /**
-   * `recordProbe` (`device-hub.ts:191-201`), both polarities.
-   *
-   * `asSet` is the trap the shipped line guards against: production spells the
-   * answer out as `{ present: [...probe.present], asked: [...probe.asked] }`
-   * because `DeviceAttachmentSchema` reads it back as `v.array(v.string())`.
-   * An attachment is structured-cloned, not JSON-encoded, so a `Set` handed
-   * here survives AS a `Set` and the schema then rejects the record it wrote.
+   * An attachment is structured-cloned, not JSON-encoded: a `Set` survives as a `Set`
+   * and `DeviceAttachmentSchema` then rejects it. `asSet` is that trap.
    */
   recordProbe(deviceId: string, asSet: boolean): void {
     const socket = this.liveSocket(deviceId);
@@ -396,10 +250,7 @@ export class SocketDO extends DurableObject<Cloudflare.Env> {
     });
   }
 
-  /** `DeviceSocketHub.probeRecord` (`device-hub.ts:184-189`): find the socket by
-   *  tag, parse its attachment, and answer null when the parse fails. The parse
-   *  is the whole decision — an attachment is untrusted input on the way back,
-   *  because it outlives the code that wrote it. */
+  /** Null when the parse fails: the attachment is untrusted on the way back. */
   probeRecord(deviceId: string): DeviceAttachment | null {
     const socket = this.liveSocket(deviceId);
 
@@ -409,14 +260,10 @@ export class SocketDO extends DurableObject<Cloudflare.Env> {
     return parsed.success ? parsed.output : null;
   }
 
-  /** `DeviceSocketHub.isConnected` (`device-hub.ts:203-205`) — a live socket for
-   *  this device, whatever its record parses to. */
   isConnected(deviceId: string): boolean {
     return this.liveSocket(deviceId) !== null;
   }
 
-  /** `DeviceSocketHub.liveSocket` (`device-hub.ts:116-121`) — the tag lookup the
-   *  hub has instead of a connection registry. */
   private liveSocket(deviceId: string): WebSocket | null {
     for (const ws of this.ctx.getWebSockets(`device:${deviceId}`)) {
       if (ws.readyState === WebSocket.OPEN) return ws;
@@ -425,16 +272,12 @@ export class SocketDO extends DurableObject<Cloudflare.Env> {
     return null;
   }
 
-  /** One prompt raised in a field and the same fact committed to storage, so a
-   *  reset can be observed to take exactly one of them. */
+  /** Same fact in a field and in storage, so a reset takes exactly one. */
   async raise(consentId: string): Promise<void> {
     this.waiting.set(consentId, 'pending');
     await this.ctx.storage.put(`consent:${consentId}`, 'pending');
   }
 
-  /** `DeviceConsentRegistry.resolve` answers false for an id it cannot find —
-   *  "already settled, or from a previous instance of this host"
-   *  (`safety/device-consent.ts:162-163`). */
   async settled(consentId: string): Promise<{ inMemory: boolean; inStorage: boolean }> {
     return {
       inMemory: this.waiting.has(consentId),
@@ -443,62 +286,29 @@ export class SocketDO extends DurableObject<Cloudflare.Env> {
   }
 }
 
-/** What one object's alarm slot has done so far. Named here, at the object that
- *  owns it, so the test reads the contract rather than deriving it. */
 export interface AlarmReport {
-  /** Deliveries of `alarm()` counted by the handler itself. */
   readonly fires: number;
-  /** The handler reached its end without throwing at least once. */
   readonly completed: boolean;
-  /** The pending alarm time, or null when the runtime has cleared the slot. */
   readonly next: number | null;
 }
 
 /**
- * Defect surface 5 — the Durable Object alarm, actually fired.
- *
- * WHAT PRODUCTION STAKES ON IT. Kinu owns no `alarm()` of its own: there are
- * zero `setAlarm`/`deleteAlarm` calls and zero `alarm()` overrides in
- * `packages/cf-backend/src`. Every wake rides the installed SDK's
- * `cf_agents_schedules` table through `this.schedule(...)`, and `armTimer`
- * collapses them onto ONE row with a soonest-wins dedup, because the object has
- * exactly one alarm slot and the SDK owns it — `_scheduleNextAlarm` deletes any
- * alarm it does not recognise, "so this must never call `setAlarm` itself"
- * (`orchestrator.ts:484-485`). That dedup is only correct if a second
- * `setAlarm` REPLACES the first rather than queueing beside it.
- *
- * The SDK also leans on the platform's retry: `_executeScheduleCallback` retries
- * in-process, and on a code-update reset, a transient platform error or a memory
- * kill it deliberately RETHROWS so the schedule row survives and the runtime's
- * own alarm retry picks it up on the next invocation. That backstop is a
- * platform behaviour, not a library one.
- *
- * WHY `bun test` CANNOT HOST IT. Nothing outside workerd invokes `alarm()` at
- * all. The bun fake for the Agent SDK has no reference to alarm, schedule or
- * setAlarm, and `unit-alarm-tracing.test.ts` reaches the tick by calling
- * `_kinuTimerTick()` directly — which is the body, never the dispatch. The
- * two guards over the dispatch itself are a regex for a shadowed `alarm()`
- * missing `super.alarm()` and an AST walk; both read TEXT. Until this file
- * nothing in CI had ever observed an alarm fire.
+ * `armTimer`'s soonest-wins dedup is only correct if a second `setAlarm` replaces the first,
+ * and the SDK rethrows transient failures to rely on the runtime's alarm retry.
  */
 export class AlarmDO extends DurableObject<Cloudflare.Env> {
-  /** Arm once. `armTimer`'s single durable wake, reduced to the platform call
-   *  the SDK makes on its behalf. */
   async arm(delayMs: number): Promise<void> {
     await this.ctx.storage.put('fires', 0);
     await this.ctx.storage.setAlarm(Date.now() + delayMs);
   }
 
-  /** Arm twice, later first, so a slot that QUEUED would fire twice and a slot
-   *  that REPLACES fires once. Mirrors two schedules colliding on one object. */
+  /** Later first: a queuing slot fires twice, a replacing slot once. */
   async armTwice(firstDelayMs: number, secondDelayMs: number): Promise<void> {
     await this.ctx.storage.put('fires', 0);
     await this.ctx.storage.setAlarm(Date.now() + firstDelayMs);
     await this.ctx.storage.setAlarm(Date.now() + secondDelayMs);
   }
 
-  /** Fail the first `failTimes` deliveries, then succeed — a transient failure,
-   *  which is the only kind the SDK rethrows to the platform for. */
   async armFlaky(delayMs: number, failTimes: number): Promise<void> {
     await this.ctx.storage.put('fires', 0);
     await this.ctx.storage.put('failuresLeft', failTimes);
@@ -512,16 +322,13 @@ export class AlarmDO extends DurableObject<Cloudflare.Env> {
 
     if (failuresLeft > 0) {
       await this.ctx.storage.put('failuresLeft', failuresLeft - 1);
-      // Uncaught out of `alarm()` is the whole point: it is what hands the retry
-      // decision to the runtime instead of keeping it in the library.
+      // Uncaught on purpose: hands the retry decision to the runtime.
       throw new Error('alarm-body-failed');
     }
 
     await this.ctx.storage.put('completedAt', Date.now());
   }
 
-  /** `fires` counts deliveries; `next` is the slot itself, which the runtime
-   *  clears on a delivery it considers final. */
   async report(): Promise<AlarmReport> {
     return {
       fires: (await this.ctx.storage.get<number>('fires')) ?? 0,
@@ -532,22 +339,8 @@ export class AlarmDO extends DurableObject<Cloudflare.Env> {
 }
 
 /**
- * Defect 6 — transfer framing across a re-origination.
- *
- * The pool requires a default export from `main`, and it is the one thing here
- * that is a plain handler rather than a Durable Object: reached over `SELF`, it
- * is a real workerd HTTP peer, so what it reports is what the runtime actually
- * put on the wire.
- *
- * WHY `bun test` CANNOT HOST IT. Bun's `Request` sets no `content-length` at
- * all when a body is attached, so the difference between a fixed-length send
- * and a chunked one is invisible there by construction — a re-origination that
- * silently turned every upload chunked would pass every bun assertion. workerd
- * derives the framing from the body it is handed and DISCARDS an author-set
- * `content-length`, which is the semantic `egress-framing.test.ts` pins.
- *
- * The body is drained rather than ignored so `bytes` proves the payload
- * survived whichever framing was chosen.
+ * Reached over `SELF`, a real workerd HTTP peer: workerd derives framing from the body and
+ * discards an author-set `content-length`; bun's `Request` sets none at all.
  */
 export default {
   async fetch(request: Request): Promise<Response> {
@@ -562,41 +355,20 @@ export default {
   },
 } satisfies ExportedHandler<Cloudflare.Env>;
 
-/** What the cache-warm probe has observed. */
 export interface CacheWarmReport {
-  /** The `max_tokens` of every replay the provider seam was handed, in order. */
   readonly sentMaxTokens: readonly number[];
   /** Whether any replay dropped the streaming flag the real request carried. */
   readonly sentStreaming: boolean;
-  /** Spend rows the lane reported, by producer. */
   readonly spendSources: readonly string[];
-  /** The instants the lane asked for a wake. */
   readonly wakes: readonly number[];
-  /** The obligation still owed, as the durable row answers it. */
   readonly nextWarmAt: number | null;
-  /** The message of a refused replay, once one has been refused. */
   readonly refused: string | null;
-  /** Alarm deliveries this object has taken. */
   readonly fires: number;
 }
 
 /**
- * The prompt-cache warm, on the platform it has to survive.
- *
- * WHY WORKERD AND NOT `bun test`. Three of the four things this proves are
- * platform behaviour, not policy: the obligation is an UPSERT into Durable
- * Object SQLite (`ON CONFLICT` under the DO's own SQLite build), the wake is a
- * real `setAlarm` delivery into a real `alarm()` frame, and the counter that
- * suppresses a warm has to be read back from storage in the frame the platform
- * woke — not from a field the arming activation happened to still hold. The
- * policy itself is proved in `packages/core/tests/unit-cache-warming.test.ts`.
- *
- * The production classes do the work: `CacheWarmStore` over `this.ctx.storage`,
- * `CacheWarmingLane` over the real policy. The four seams are the probe's —
- * the wake is armed the way the orchestrator arms it (one `setAlarm`, soonest
- * wins), and `send` records the replay the way the pool's fake provider does,
- * so the assertion reads the request's own `max_tokens` rather than a claim
- * about it.
+ * Cache warm on workerd: the obligation is a DO SQLite UPSERT, the wake a real `alarm()` frame,
+ * and the suppression counter must be read from storage in the woken frame, not a field.
  */
 export class CacheWarmProbeDO extends DurableObject<Cloudflare.Env> {
   private readonly sentMaxTokens: number[] = [];
@@ -605,11 +377,7 @@ export class CacheWarmProbeDO extends DurableObject<Cloudflare.Env> {
   private sentStreaming = false;
   private fires = 0;
   private armed: Promise<void> = Promise.resolve();
-  /** Callers waiting for an alarm frame to finish, resolved at the end of the
-   *  one the platform delivers. */
   private readonly woken: (() => void)[] = [];
-  /** Armed by `refuseNextSend`: the next replay is refused the way a rotated
-   *  key refuses one, so the row's fate after a failure is observable. */
   private refuseNext = false;
   private refused: string | null = null;
   private lane: CacheWarmingLane | undefined;
@@ -630,11 +398,7 @@ export class CacheWarmProbeDO extends DurableObject<Cloudflare.Env> {
         wake: (at) => {
           this.wakes.push(at);
 
-          // Soonest-wins, exactly as `armTimer` collapses onto one row: the
-          // object has ONE alarm slot and the warm shares it with everything
-          // else the workspace owes. Retained rather than dropped, and awaited
-          // by whatever RPC armed it, so the arm is durable before the caller
-          // is answered.
+          // Soonest-wins on the object's one alarm slot, awaited by the arming RPC so it is durable.
           this.armed = this.ctx.storage.setAlarm(Math.max(at, Date.now()));
         },
         send: async ({ modelSpec, body }) => {
@@ -661,10 +425,7 @@ export class CacheWarmProbeDO extends DurableObject<Cloudflare.Env> {
     return this.lane;
   }
 
-  /** One finished turn, as the session hands it over: the frozen request, when
-   *  it was sent, and what its answer reported. `sentAtOffsetMs` moves the send
-   *  instant into the past so the TTL-minus-lead point is reachable in a test
-   *  without waiting five minutes for a platform clock nobody can advance. */
+  /** `sentAtOffsetMs` backdates the send so the TTL-minus-lead point is reachable. */
   async armFromTurn(input: {
     provider: string;
     retention: 'none' | 'short' | 'long';
@@ -691,40 +452,28 @@ export class CacheWarmProbeDO extends DurableObject<Cloudflare.Env> {
     return at;
   }
 
-  /** The next replay is refused once, as a 401 from a rotated key would. */
   async refuseNextSend(): Promise<void> {
     this.refuseNext = true;
   }
 
-  /** A real provider request starting — the counter bump the session makes. */
   async noteRealRequest(): Promise<void> {
     this.warming.noteRequest();
   }
 
-  /** The tick's `alarm.cache_warm` phase, in the frame the platform woke. */
   override async alarm(): Promise<void> {
     this.fires += 1;
 
-    // The tick's `alarm.cache_warm` phase catches, diagnoses and continues; the
-    // probe does the same so a refused warm is observable as state rather than
-    // as an unhandled alarm.
+    // Like the tick's `alarm.cache_warm` phase: catch and continue, so a refused warm is state.
     try {
       await this.warming.runDue(Date.now());
     } catch (cause) {
-      // The CHAIN, not the wrapper's own line: `toKinuError` puts the doing on
-      // the message and the provider's refusal underneath it.
       this.refused = renderThrownChain({ cause }).slice(0, 120);
     }
 
-    // The frame is over and its state is written: whoever is waiting for this
-    // delivery reads it now.
     for (const resolve of this.woken.splice(0)) resolve();
   }
 
-  /** The report of the alarm frame the platform delivers, awaited rather than
-   *  polled: a caller hands the wait to the probe and the frame ends it. A
-   *  frame already taken answers at once, so the wait is on the STATE the
-   *  delivery leaves rather than on catching it live. */
+  /** Waits on the state the delivery leaves: a frame already taken answers at once. */
   async reportAfterWake(): Promise<CacheWarmReport> {
     if (this.fires === 0) await new Promise<void>((resolve) => { this.woken.push(resolve); });
 

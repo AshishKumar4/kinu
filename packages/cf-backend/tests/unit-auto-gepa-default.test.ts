@@ -1,12 +1,5 @@
-// Auto-GEPA autonomous-default honesty: pre-flip explicit disables DELETED
-// the config row, so an absent row is indistinguishable from never-configured
-// and the default supersedes both. The first default-driven tick must pin the
-// default explicitly and document the activation in the evolution stream —
-// never silently re-enable.
-//
-// Driven on a real OrchestratorAgent (tests/helpers/actor-harness.ts): the tick
-// is the one a completed turn makes, and every assertion below reads the rows
-// it actually left in the agent's own storage.
+// Pre-flip explicit disables deleted the config row, so an absent row is ambiguous: the first default-driven tick
+// must pin the default explicitly and note the activation in the evolution stream, never silently re-enable.
 import { describe, expect, test } from 'bun:test';
 import type { Database } from 'bun:sqlite';
 import { AGENT_CONFIG_KEYS, DEFAULT_AUTO_GEPA_EVERY_N_TURNS } from '@kinu.run/core';
@@ -25,24 +18,21 @@ describe('auto-GEPA default activation', () => {
   test('the tick pins an absent cadence row and records the override note', async () => {
     const { agent, db } = orchestratorHarness();
 
-    // The ambiguity the pin exists to remove: nothing is stored, yet the
-    // cadence already reads as enabled.
+    // Nothing stored, yet the cadence already reads as enabled: the ambiguity the pin removes.
     expect(storedCadence(db)).toBeNull();
     expect(agent.observeAutoGepaCadence()).toBe(DEFAULT_AUTO_GEPA_EVERY_N_TURNS);
     expect(evolutionNotes(db)).toEqual([]);
 
     await agent.tickAutoGepa();
 
-    // Pinned explicitly, at the value that was already in force — the tick
-    // documents the state, it does not change the cadence.
+    // Pinned at the value already in force: documents the state, does not change the cadence.
     expect(storedCadence(db)).toBe(String(DEFAULT_AUTO_GEPA_EVERY_N_TURNS));
     expect(agent.observeAutoGepaCadence()).toBe(DEFAULT_AUTO_GEPA_EVERY_N_TURNS);
 
     const notes = evolutionNotes(db);
     expect(notes).toHaveLength(1);
     expect(notes[0].type).toBe('reflection');
-    // The note has to name the override and the way back out, or it documents
-    // nothing a reader of the evolution stream could act on.
+    // Must name the override and the way back out to be actionable.
     expect(notes[0].message).toContain(`every ${DEFAULT_AUTO_GEPA_EVERY_N_TURNS} turns`);
     expect(notes[0].message).toContain('superseded by this default');
     expect(notes[0].message).toContain('setAutoGepa(0)');
@@ -53,14 +43,12 @@ describe('auto-GEPA default activation', () => {
     await agent.tickAutoGepa();
     await agent.tickAutoGepa();
     await agent.tickAutoGepa();
-    // The row is now present, so the activation is no longer news. An
-    // evolution stream that reprinted it every turn would bury everything else.
+    // Present now, so not reprinted every turn.
     expect(evolutionNotes(db)).toHaveLength(1);
     expect(storedCadence(db)).toBe(String(DEFAULT_AUTO_GEPA_EVERY_N_TURNS));
   });
 
-  // A stored 0 is a decision, not an absence: the default must not reach it,
-  // any more than it reaches a cadence the owner picked.
+  // A stored 0 is a decision, not an absence: the default must not reach it.
   const chosen = [
     { name: 'a deliberate disable survives the tick and is not documented as an override', cadence: 0 },
     { name: 'a cadence the owner chose is left alone', cadence: 7 },

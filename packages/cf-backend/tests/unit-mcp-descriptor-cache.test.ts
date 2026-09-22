@@ -1,11 +1,6 @@
 /**
- * The orchestrator's per-activation MCP tool cache is keyed by the HASH OF THE
- * DESCRIPTOR CONTENT, never by a mutation watermark. A watermark reset to zero
- * on every cold start while durable server rows survived, and its "zero means
- * never configured" reader silently stripped every MCP tool after an eviction.
- * Content hashing has neither failure mode: cold reconstruction, update,
- * deletion and OAuth completion each invalidate exactly when the durable
- * surface differs from the cached one.
+ * The per-activation MCP tool cache is keyed by a hash of the descriptor content, never a mutation
+ * watermark: a watermark resets on cold start while durable server rows survive.
  */
 import { describe, expect, test } from 'bun:test';
 import * as v from 'valibot';
@@ -41,10 +36,7 @@ function harness() {
 
   return {
     cache, builds, serve, failNext,
-    // A window big enough that admission is never the thing under test here;
-    // the budget has its own tests in unit-user-mcp.test.ts.
-    // The output allowance is fixed here: the cache's contract is about the
-    // KEY moving, and the budget's own arithmetic is proven in unit-user-mcp.
+    // A window big enough that admission is never under test; the budget is proven in unit-user-mcp.test.ts.
     refresh: (contextWindow = 200_000, nativeToolTokens = 0) =>
       cache.refresh(async () => next, { contextWindow, modelOutputLimit: 4_000, nativeToolTokens }),
     unavailable: () => cache.unavailable,
@@ -65,18 +57,14 @@ describe('McpToolSurfaceCache — keyed by descriptor content', () => {
 
     expect(await h.refresh()).toEqual({ keys: [] });
     expect(h.builds).toEqual([[]]);
-    // Served from the cache the second time: empty is a STATE the durable rows
-    // reported, not a read that failed to happen.
+    // Empty is a state the durable rows reported, not a read that failed to happen.
     expect(await h.refresh()).toEqual({ keys: [] });
     expect(h.builds).toHaveLength(1);
     expect(h.unavailable()).toHaveLength(0);
   });
 
   test('an empty surface never reads as "never configured"', async () => {
-    // The watermark bug this cache replaced: `_userMcpUpdatedAt` reset to zero
-    // on every cold start while the durable server rows survived, and a reader
-    // that treated zero as "no MCP configured" stripped every tool after an
-    // eviction. Empty is just empty here, and the next non-empty read installs.
+    // Empty is just empty after a cold start; the next non-empty read installs.
     const h = harness();
     h.serve(surface([]));
     await h.refresh();
@@ -87,9 +75,7 @@ describe('McpToolSurfaceCache — keyed by descriptor content', () => {
   });
 
   test('a surface that goes empty again is honoured, not ignored', async () => {
-    // The other direction of the same rule: the user deleted their last server,
-    // and the tool must go. A cache that only ever grew would keep dispatching
-    // to a row that no longer exists.
+    // A cache that only grew would keep dispatching to a deleted row.
     const h = harness();
     h.serve(surface([{ toolKey: 'a', name: 'a' }]));
     await h.refresh();
@@ -165,7 +151,6 @@ describe('McpToolSurfaceCache — keyed by descriptor content', () => {
     const h = harness();
     h.serve(surface([{ toolKey: 'a', name: 'a' }, { toolKey: 'b', name: 'b' }]));
     await h.refresh();
-    // Same surface bytes again — no rebuild.
     h.serve(surface([{ toolKey: 'a', name: 'a' }, { toolKey: 'b', name: 'b' }]));
     await h.refresh();
     expect(h.builds).toHaveLength(1);
@@ -177,8 +162,7 @@ describe('McpToolSurfaceCache — keyed by descriptor content', () => {
     await h.refresh(200_000);
     await h.refresh(200_000);
     expect(h.builds).toHaveLength(1);
-    // Same rows, a model with a tenth of the room. Serving the larger model's
-    // surface here is what an unkeyed cache would do.
+    // Same rows, a smaller model: an unkeyed cache would serve the larger model's surface.
     await h.refresh(20_000);
     expect(h.builds).toHaveLength(2);
   });
@@ -189,9 +173,7 @@ describe('McpToolSurfaceCache — keyed by descriptor content', () => {
     await h.refresh(200_000, 4_000);
     await h.refresh(200_000, 4_000);
     expect(h.builds).toHaveLength(1);
-    // Same rows, same model, but the actor took on more of its own tools — a
-    // narrowed role or a new skill set. The remainder MCP is admitted against
-    // moved, so the cached division no longer holds.
+    // The actor's own tools grew, so the remainder MCP is admitted against moved.
     await h.refresh(200_000, 60_000);
     expect(h.builds).toHaveLength(2);
   });

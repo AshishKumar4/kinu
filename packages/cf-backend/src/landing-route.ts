@@ -1,10 +1,4 @@
-/**
- * `/` for a visitor with no session.
- *
- * The signed-out landing is a dedicated React entry. The Worker chooses who
- * sees it and streams the built asset. The browser derives its install command
- * from the request origin.
- */
+/** `/` for a visitor with no session: streams the built landing asset. */
 
 import { AuthError, authenticateRequest } from './auth/session';
 import { publicHtmlHeaders } from '@kinu.run/core';
@@ -15,8 +9,6 @@ export async function handleLandingRequest(request: Request, env: Env): Promise<
 
   if (request.method !== 'GET' && request.method !== 'HEAD') return null;
 
-  // The favicon is generated from the same MARK_BODIES the pages render, so
-  // the served icon cannot drift from the mark the code declares.
   if (url.pathname === '/assets/kinu-icon.svg') {
     return new Response(markDocument(), {
       headers: { 'content-type': 'image/svg+xml', 'cache-control': 'public, max-age=3600, must-revalidate' },

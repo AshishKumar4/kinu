@@ -1,13 +1,7 @@
 /**
- * How the Shared page's "Public" list learns a share exists: the owner's
- * `/api/shared/live` write indexes it on the control plane, and a revoke
- * forgets it. Both are AWAITED inside the owner's own request (a share that
- * returns before it is listed is a share the owner cannot find on the page)
- * and neither is fatal: the share row in the workspace object is the truth,
- * the index is a copy every reader verifies against that object.
- *
- * Worker code, never Durable Object code: it mints the internal caller and
- * addresses the singleton, both of which belong to the Worker's plane.
+ * Owner's `/api/shared/live` write indexes a share on the control plane; revoke forgets it.
+ * Both are awaited in the owner's request, never fatal: the workspace share row is the truth.
+ * Worker code only: it mints the internal caller and addresses the singleton.
  */
 import { diagnostics, toKinuError } from '@kinu.run/core/obs';
 import type { PublicShareKey, PublicShareRow } from '@kinu.run/core/control-plane';

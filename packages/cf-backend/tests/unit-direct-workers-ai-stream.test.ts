@@ -1,16 +1,6 @@
-// The direct Workers AI binding transport (src/providers/direct-workers-ai-fetch.ts).
-//
-// The suite below pins the streaming contract and the three properties a
-// non-streaming call replayed as one synthetic SSE frame would hide — starting
-// with a streamed turn producing no byte until the answer is complete:
-//
-//   * bytes leave for the caller while the upstream stream is still open;
-//   * two turns in flight on ONE binding instance do not read each other's
-//     frames, headers or return shape (workerd's `Ai.run` keeps its options on
-//     the binding and re-reads them after awaiting, so the shape a call gets
-//     back is decided by whichever call wrote last);
-//   * a model that will not stream is refused by name instead of being served
-//     from a buffer.
+// Direct Workers AI binding transport (src/providers/direct-workers-ai-fetch.ts): bytes stream before completion,
+// concurrent turns on one binding stay isolated (workerd's `Ai.run` re-reads binding options after awaiting),
+// and a model that will not stream is refused by name.
 import { describe, test, expect, afterEach } from 'bun:test';
 import { generateText, streamText, tool, jsonSchema, type ModelMessage } from 'ai';
 import { createOpenAICompatible } from '@ai-sdk/openai-compatible';
@@ -26,13 +16,11 @@ const ENDPOINT = 'https://kinu-direct-workers-ai.invalid/chat/completions';
 
 const PROMPT = 'the exact words the person typed';
 
-/** Model output a refusal must not replay back to the caller. */
 const WITHHELD = 'the completion a buffered replay would hand back';
 
 const DONE = 'data: [DONE]\n\n';
 
-/** Everything workerd's `Ai.run` can hand back, which is what the adapter has
- *  to accept because a concurrent call decides which one arrives. */
+/** Every shape workerd's `Ai.run` can return; a concurrent call decides which arrives. */
 type BindingAnswer = Response | ReadableStream<Uint8Array> | JsonObject;
 
 const UsageSchema = v.record(v.string(), v.number());
@@ -97,9 +85,7 @@ interface RecordedRun {
   options: RunOptions | undefined;
 }
 
-/** A binding whose only member is `shell`, answering with whatever the test
- *  returns. Any other member the adapter reached for would fail loudly here
- *  rather than becoming a silent undefined. */
+/** Any binding member the adapter reached for beyond the fixture fails loudly. */
 function directFetch(answer: (run: RecordedRun) => BindingAnswer, retry: RateLimitRetryOptions = {}) {
   const runs: RecordedRun[] = [];
 
@@ -112,8 +98,7 @@ function directFetch(answer: (run: RecordedRun) => BindingAnswer, retry: RateLim
     },
   };
 
-  // SAFETY: this constructed fixture provides `Ai.run`, and the adapter under
-  // test calls no other member of the binding.
+  // SAFETY: the fixture provides `Ai.run`, the only member the adapter calls.
   return { fetch: createDirectWorkersAIFetch(ai, retry), runs };
 }
 
@@ -121,8 +106,7 @@ function chatBody(extra: JsonObject = {}): string {
   return JSON.stringify({ model: MODEL, messages: [{ role: 'user', content: PROMPT }], ...extra });
 }
 
-/** An upstream body the test drives frame by frame, so "before the completion
- *  exists" is a state the test can be in rather than a race it hopes for. */
+/** An upstream body driven frame by frame, so "before the completion exists" is a state, not a race. */
 function manualStream() {
   const encoder = new TextEncoder();
   let sink: ReadableStreamDefaultController<Uint8Array> | undefined;
@@ -161,7 +145,6 @@ function eventStream(body: ReadableStream<Uint8Array>): Response {
   return new Response(body, { headers: { 'content-type': 'text/event-stream' } });
 }
 
-/** A body whose bytes are already known, as the upstream would deliver them. */
 function eventStreamOf(text: string): Response {
   const body = new Response(text).body;
 
@@ -170,9 +153,7 @@ function eventStreamOf(text: string): Response {
   return eventStream(body);
 }
 
-/** The native shape the platform streams: two content frames, then a frame that
- *  carries only usage, then [DONE]. A fresh body per call, since a Response body
- *  reads once. */
+/** Content frames, a usage-only frame, then [DONE]; fresh body per call. */
 function textThenUsage(first: string, second: string, usage: JsonObject): () => Response {
   return () => eventStreamOf([
     sse({ response: first }),
@@ -182,8 +163,6 @@ function textThenUsage(first: string, second: string, usage: JsonObject): () => 
   ].join(''));
 }
 
-/** One emitted SSE frame at a time, so a test can read the head of a stream
- *  without draining it. */
 function frames(body: ReadableStream<Uint8Array> | null) {
   if (!body) throw new Error('response carried no body');
   const reader = body.getReader();
@@ -225,17 +204,13 @@ function frames(body: ReadableStream<Uint8Array> | null) {
 
 type Chunk = v.InferOutput<typeof ChunkSchema>;
 
-/** Every emitted frame parsed as the chunk shape the AI SDK requires, so a
- *  malformed frame fails here instead of reading as a missing field. */
 function chunks(payloads: readonly string[]): Chunk[] {
   return payloads
     .filter((payload) => payload !== '[DONE]')
     .map((payload) => v.parse(ChunkSchema, JSON.parse(payload)));
 }
 
-/** One streamed response, drained. Every frame of one response carries the SAME
- *  id, and that id is the response-unique half of a synthesized tool-call id.
- *  Holding it here makes that property true of every test that reads a call. */
+/** Every frame of one response carries the same id, the response-unique half of a synthesized tool-call id. */
 async function drainStreamed(direct: typeof globalThis.fetch) {
   const emitted = chunks(await frames((await direct(ENDPOINT, {
     method: 'POST',
@@ -277,12 +252,8 @@ afterEach(() => {
 });
 
 describe('direct Workers AI binding — a rate limit is waited out, never surrendered', () => {
-  // Measured on staging 2026-09-06 (workspace eval-first-run-enter-sends-enter-8ext33):
-  // the binding answered `3021: rate limiting: inference request per min rate
-  // reached` and the turn ended `Failed after 3 attempts`, the SDK's own two
-  // retries. The OAuth path wraps its fetch in withRateLimitRetry; the binding
-  // path did not, so the doctrine (a rate limit is capacity to wait for, until
-  // cancellation) held for one path and not the other.
+  // Measured on staging 2026-09-06: binding answered `3021: rate limiting` and the turn failed after the SDK retries;
+  // the binding path must wrap withRateLimitRetry like the OAuth path.
   test('a 429 envelope from the binding is retried until the completion arrives', async () => {
     const waits: number[] = [];
     let attempt = 0;
@@ -296,7 +267,6 @@ describe('direct Workers AI binding — a rate limit is waited out, never surren
         });
       }
 
-      // A whole completion, the shape the binding answers an unstreamed request with.
       return { response: 'OK', usage: { prompt_tokens: 3, completion_tokens: 1, total_tokens: 4 } };
     }, {
       sleep: async (ms) => { waits.push(ms); },
@@ -324,8 +294,7 @@ describe('direct Workers AI binding — incremental streaming', () => {
     expect(response.headers.get('content-type')).toBe('text/event-stream');
 
     const reader = frames(response.body);
-    // The proof: a decoded chunk is in the caller's hands and the upstream has
-    // neither closed nor sent a finish frame. A buffered adapter cannot be here.
+    // A decoded chunk is delivered while upstream is still open; a buffered adapter cannot be here.
     expect(deltaOf(await reader.next())).toEqual({ role: 'assistant', content: 'first' });
     expect(upstream.closed()).toBe(false);
 
@@ -336,14 +305,11 @@ describe('direct Workers AI binding — incremental streaming', () => {
     upstream.close();
     expect((await reader.rest()).at(-1)).toBe('[DONE]');
 
-    // The binding was asked to stream, and asked for usage it would otherwise
-    // not report.
     expect(runs).toHaveLength(1);
     expect(runs[0]?.inputs.stream).toBe(true);
     expect(runs[0]?.inputs.stream_options).toEqual({ include_usage: true });
     expect(runs[0]?.options?.returnRawResponse).toBe(true);
 
-    // First-byte evidence, carrying no prompt and no credential.
     const ttft = logger.emitted.filter((line) => line.event === 'workers_ai.direct_stream_first_byte');
     expect(ttft).toHaveLength(1);
     expect(Object.keys(ttft[0].fields).sort()).toEqual(['bytes', 'model', 'ms']);
@@ -367,10 +333,6 @@ describe('direct Workers AI binding — incremental streaming', () => {
         return response;
       });
 
-    // Nothing has been pushed, so no first byte exists. The adapter cannot have
-    // answered, and the assertion holds however many microtasks have run: it is
-    // a statement about the upstream having produced nothing, not about elapsed
-    // time.
     await Promise.resolve();
     expect(settled).toBe(false);
     expect(logger.emitted).toHaveLength(0);
@@ -388,9 +350,7 @@ describe('direct Workers AI binding — incremental streaming', () => {
     const alpha = manualStream();
     const beta = manualStream();
 
-    // Different return shapes on purpose: `Ai.run` re-reads
-    // `options.returnRawResponse` off the binding AFTER awaiting upstream, so a
-    // concurrent call can hand this adapter the shape it did not ask for.
+    // Different return shapes on purpose: `Ai.run` re-reads `options.returnRawResponse` after awaiting upstream.
     const { fetch: direct, runs } = directFetch((run) =>
       run.options?.extraHeaders?.['x-session-affinity'] === 'kinu-alpha'
         ? eventStream(alpha.stream)
@@ -408,16 +368,13 @@ describe('direct Workers AI binding — incremental streaming', () => {
       headers: { 'x-session-affinity': 'kinu-beta' },
     });
 
-    // Sentinels carry a non-hex letter ON PURPOSE: the adapter mints random
-    // chunk ids (`chatcmpl-<uuid>`), and a hex uuid can spell any [0-9a-f]
-    // run — the hammer caught `chatcmpl-4faaa370…` satisfying a bare 'aaa'.
+    // Sentinels carry a non-hex letter: random `chatcmpl-<uuid>` ids can contain any hex run.
     alpha.push(sse({ response: 'AXAXA' }));
     beta.push(sse({ response: 'BXBXB' }));
 
     const alphaFrames = frames((await alphaPending).body);
     const betaFrames = frames((await betaPending).body);
 
-    // Interleave the reads, which is what two turns in one isolate really do.
     expect(deltaOf(await alphaFrames.next())?.content).toBe('AXAXA');
     expect(deltaOf(await betaFrames.next())?.content).toBe('BXBXB');
     alpha.push(sse({ response: 'axaxa' }));
@@ -453,21 +410,14 @@ describe('direct Workers AI binding — incremental streaming', () => {
     const reader = frames((await pending).body);
     await reader.next();
 
-    // The binding holds the caller's own signal, so the upstream request is
-    // cancellable at the source.
     expect(runs[0]?.options?.signal).toBe(controller.signal);
     expect(upstream.cancelled()).toBe(false);
 
-    // Cancelling the delivered body is what the AI SDK does on abort, and it
-    // has to reach the upstream reader or the model keeps generating.
+    // Cancelling the delivered body must reach the upstream reader or the model keeps generating.
     controller.abort();
     await reader.cancel();
 
-    // Cancellation propagates backward through the pipe in microtasks, and
-    // the async translation adds hops to that chain, so yield until it lands
-    // (bounded — a break in the chain fails here instead of hanging the
-    // file). The contract is eventual arrival, not hop count: abort-to-stop
-    // latency stays within the same task cluster either way.
+    // Cancellation propagates in microtasks; bounded so a broken chain fails instead of hanging.
     for (let i = 0; i < 100 && !upstream.cancelled(); i++) await Promise.resolve();
 
     expect(upstream.cancelled()).toBe(true);
@@ -525,13 +475,7 @@ describe('direct Workers AI binding — usage and finish frames', () => {
 
     const streamed = await drainStreamed(direct);
 
-    // The index keeps counting across frames, so a synthesized id is stable and
-    // unique within the response however the upstream split its deltas. The
-    // other half is the response id `drainStreamed` held to one value, so the
-    // name is unique across responses too. A usable upstream id stays readable
-    // INSIDE the key rather than being replaced by a position, and it is scoped
-    // like every other one: an upstream id can itself be a per-response counter
-    // that repeats on the next response.
+    // Synthesized ids are unique within the response (index) and across responses (response id); upstream ids stay scoped.
     expect(streamed.toolCalls).toEqual([
       {
         index: 0, id: `call-${streamed.responseId}-i-1`, type: 'function',
@@ -554,11 +498,7 @@ describe('direct Workers AI binding — usage and finish frames', () => {
   });
 
   test('two streamed responses in one turn cannot produce the same tool-call id', async () => {
-    // KINU-N002: the fallback was `call-${index + 1}`, so a turn whose second
-    // step also opened with an unnamed tool call produced a second `call-1`.
-    // Every consumer keys on that string: the durable transcript pairs a result
-    // with a call by it, and the surface renders a row by it — so the second
-    // step's result could land against the first step's call.
+    // KINU-N002: a `call-${index + 1}` fallback repeated `call-1` across steps, pairing results with the wrong call.
     const { fetch: direct } = directFetch(() => eventStreamOf([
       sse({ tool_calls: [{ name: 'shell', arguments: { cmd: 'ls' } }] }),
       DONE,
@@ -567,18 +507,13 @@ describe('direct Workers AI binding — usage and finish frames', () => {
     const first = await drainStreamed(direct);
     const second = await drainStreamed(direct);
 
-    // Same tool, same arguments, same index — and still two distinct names,
-    // because the response is half of the identity.
     expect(first.responseId).not.toBe(second.responseId);
     expect(first.toolCalls[0]?.id).toBe(`call-${first.responseId}-i-1`);
     expect(second.toolCalls[0]?.id).toBe(`call-${second.responseId}-i-1`);
   });
 
   test('two responses whose native tool-call ids are both "0" cannot produce the same id', async () => {
-    // A native id is not an identity on its own. A provider that numbers calls
-    // per RESPONSE hands back `"0"` again on the next response of the same
-    // turn, so forwarding it verbatim reproduced exactly the collision the
-    // position had — and `??` never fired, because the id was present.
+    // A native id may be per-response (`"0"` again next response), so it is scoped too.
     const { fetch: direct } = directFetch(() => eventStreamOf([
       sse({ tool_calls: [{ id: '0', name: 'shell', arguments: { cmd: 'ls' } }] }),
       DONE,
@@ -588,16 +523,12 @@ describe('direct Workers AI binding — usage and finish frames', () => {
     const second = await drainStreamed(direct);
 
     expect(first.toolCalls[0]?.id).not.toBe(second.toolCalls[0]?.id);
-    // The provider's own name for the call survives inside each key.
     expect(first.toolCalls[0]?.id).toBe(`call-${first.responseId}-n-0`);
     expect(second.toolCalls[0]?.id).toBe(`call-${second.responseId}-n-0`);
   });
 
   test('an empty or unusable native tool-call id never becomes the pairing key', async () => {
-    // An empty id pairs with every other empty id, so an empty id is the worst
-    // case of all: it pairs everything with everything. A space or a `/` is not
-    // a character every family's JSON id field round-trips. Both degrade to the
-    // position, which is unique within the response.
+    // Empty ids, spaces or `/` do not round-trip as ids; they degrade to the position.
     const { fetch: direct } = directFetch(() => eventStreamOf([
       sse({ tool_calls: [
         { id: '', name: 'shell', arguments: { cmd: 'ls' } },
@@ -637,11 +568,7 @@ describe('direct Workers AI binding — usage and finish frames', () => {
   });
 
   test('a usage-only frame that omits choices still reports its usage after an upstream finish', async () => {
-    // KINU-049: a usage report can arrive as a frame of its own with no
-    // `choices` at all, which parses in neither chunk shape. It was recorded
-    // and then dropped, because the synthesized frame that carried the recorded
-    // usage was emitted only when NO finish reason had gone out — and an
-    // OpenAI-shaped stream sends one. The turn then reported no tokens.
+    // KINU-049: a usage-only frame without `choices` must still be reported after an OpenAI finish reason.
     const finishChunk = '{"id":"chatcmpl-upstream","object":"chat.completion.chunk","created":7,"model":"m",'
       + '"choices":[{"index":0,"delta":{"role":"assistant","content":"hi"},"finish_reason":"stop"}]}';
 
@@ -655,7 +582,6 @@ describe('direct Workers AI binding — usage and finish frames', () => {
     })).body).rest();
 
     const emitted = chunks(payloads);
-    // One finish state on the wire, and the usage reported exactly once.
     expect(emitted.filter((chunk) => (chunk.choices[0]?.finish_reason ?? null) !== null)).toHaveLength(1);
     const reported = emitted.filter((chunk) => chunk.usage !== undefined);
     expect(reported).toHaveLength(1);
@@ -664,9 +590,7 @@ describe('direct Workers AI binding — usage and finish frames', () => {
   });
 
   test('a usage-only frame with empty choices does not put two terminal frames on the wire', async () => {
-    // The same report in the shape that DOES parse as an OpenAI chunk. Forwarded
-    // verbatim it marked no finish, so the synthesized finish frame followed it
-    // and one response ended twice.
+    // The same report shaped as an OpenAI chunk must not produce a second finish.
     const head = '{"id":"chatcmpl-upstream","object":"chat.completion.chunk","created":7,"model":"m"';
     const delta = `${head},"choices":[{"index":0,"delta":{"role":"assistant","content":"hi"}}]}`;
     const usageOnly = `${head},"choices":[],"usage":{"prompt_tokens":8,"completion_tokens":2,"total_tokens":10}}`;
@@ -692,9 +616,7 @@ describe('direct Workers AI binding — usage and finish frames', () => {
     expect(payloads.filter((payload) => payload === '[DONE]')).toHaveLength(1);
   });
 
-  // A frame this adapter cannot translate cannot be forwarded either, and
-  // dropping it would lose whatever it said while the turn still reported
-  // success. Ending the stream is the only honest answer.
+  // An untranslatable frame ends the stream; dropping it would lose content while reporting success.
   test.each([
     ['is not JSON at all', 'data: {oops\n\n', `Workers AI ${MODEL} streamed a data frame that is not a JSON object`],
     ['is JSON but not an object', 'data: 3\n\n', `Workers AI ${MODEL} streamed a data frame that is not a JSON object`],
@@ -722,9 +644,7 @@ describe('direct Workers AI binding — refusals', () => {
       JSON.stringify({ response: WITHHELD }),
     )],
     ['an event stream that carries nothing', (): BindingAnswer => eventStreamOf('')],
-    // A body the JSON sniff cannot recognise, so only the content type says it
-    // is not an event stream. Without that check it would be streamed as a
-    // stream of nothing.
+    // Only the content type says this is not an event stream.
     ['a body under some other content type', (): BindingAnswer => new Response('pong', {
       headers: { 'content-type': 'text/plain' },
     })],
@@ -739,15 +659,12 @@ describe('direct Workers AI binding — refusals', () => {
     const message = v.parse(MessageErrorSchema, JSON.parse(await response.text())).error.message;
     expect(message).toContain(MODEL);
     expect(message).toContain('did not stream over the direct binding');
-    // A refusal that leaked the completion would serve the model's output from
-    // a buffer by another route.
     expect(message).not.toContain(WITHHELD);
     expect(logger.emitted.map((line) => line.event)).toContain('workers_ai.direct_stream_unsupported');
   });
 
   test('an upstream failure keeps its status and carries its own message', async () => {
-    // A 502, because a 429 is not a failure this adapter surfaces: it is waited
-    // out (see the rate-limit case above).
+    // A 502, because a 429 is waited out, not surfaced.
     const { fetch: direct } = directFetch(() => new Response(
       JSON.stringify({ errors: [{ code: 3040, message: 'Upstream unavailable' }] }),
       { status: 502, headers: { 'content-type': 'application/json' } },
@@ -817,8 +734,6 @@ describe('direct Workers AI binding — whole completions', () => {
     expect(completion.choices[0]?.finish_reason).toBe('tool_calls');
     expect(completion.usage).toEqual({ prompt_tokens: 11, completion_tokens: 3, total_tokens: 14 });
 
-    // A request for one whole answer never asks for stream usage, and the model
-    // travels as the binding's own argument rather than inside the inputs.
     expect(runs[0]?.inputs).toEqual({
       messages: [{ role: 'user', content: PROMPT }],
       stream: false,
@@ -836,9 +751,7 @@ describe('direct Workers AI binding — whole completions', () => {
 
     const response = await direct(ENDPOINT, { method: 'POST', body: chatBody() });
 
-    // The response half is the completion's OWN id, which is minted once and
-    // carried on the wire — so the persisted id is the id the caller read, and
-    // replay reproduces it rather than minting a new one.
+    // The response half is the completion's own id, so replay reproduces the id the caller read.
     const completion = v.parse(CompletionSchema, await response.json());
     expect(completion.choices[0]?.message.tool_calls?.map((call) => call.id)).toEqual([
       `call-${completion.id}-i-1`,
@@ -885,9 +798,7 @@ describe('direct Workers AI binding — whole completions', () => {
   });
 
   test('a raw body under a charset-bearing JSON content type is still one completion', async () => {
-    // `Ai.run` compares the content type for EQUALITY with `application/json`,
-    // so `application/json; charset=utf-8` makes it hand back the raw body for a
-    // request that asked for a whole answer.
+    // `Ai.run` compares content type for equality with `application/json`, so a charset suffix yields the raw body.
     const { fetch: direct } = directFetch(() => {
       const body = new Response(JSON.stringify({ response: 'raw body' })).body;
 
@@ -940,10 +851,7 @@ describe('direct Workers AI binding — the AI SDK consumes it', () => {
   });
 
   test('streamText reports the tokens of a usage-only frame that follows the finish', async () => {
-    // The end of KINU-049: an OpenAI-shaped stream announces its finish reason
-    // on a content frame and the platform reports usage on a frame of its own.
-    // The recorded usage reached no frame at all, so the SDK saw none and the
-    // whole turn was accounted at zero tokens.
+    // KINU-049: usage on its own frame after a content-frame finish reason must reach the SDK.
     const finishChunk = '{"id":"chatcmpl-upstream","object":"chat.completion.chunk","created":7,"model":"m",'
       + '"choices":[{"index":0,"delta":{"role":"assistant","content":"counted"},"finish_reason":"stop"}]}';
 
@@ -970,10 +878,7 @@ describe('direct Workers AI binding — the AI SDK consumes it', () => {
   });
 
   test('a tool result pairs back to its own call across two responses in one turn', async () => {
-    // The id is a PAIRING KEY: a tool result travels as `{ toolCallId, output }`
-    // and the transcript finds the call it answers by that string. Two steps of
-    // one turn that both open with an unnamed tool call must not mint the same
-    // `call-1`, or the second step's result resolves against the first's call.
+    // The id is a pairing key for `{ toolCallId, output }`; two steps must not both mint `call-1`.
     const commands = [{ cmd: 'ls' }, { cmd: 'pwd' }];
     let step = 0;
 
@@ -1006,20 +911,13 @@ describe('direct Workers AI binding — the AI SDK consumes it', () => {
       for (const call of await result.toolCalls) answered.set(call.toolCallId, call.input);
     }
 
-    // Two calls, two keys. A colliding id would leave ONE entry here, and the
-    // second step's result would answer the first step's call.
     expect(answered.size).toBe(2);
     expect([...answered.values()]).toEqual(commands);
   });
 
   test('a replayed assistant turn that only called tools reaches the binding with string content', async () => {
-    // KINU-085, the wire half. An OpenAI chat request spells that turn as
-    // `content: null` beside `tool_calls` and OpenAI's endpoint takes it; the
-    // binding's validator refuses the whole request instead — AiError 5006,
-    // "Type mismatch of '/messages/1/content', 'string' not in 'null'" — on
-    // @cf/qwen/qwen3-30b-a3b-fp8 and @cf/openai/gpt-oss-20b alike (staging,
-    // 2026-09-05), so every replay of a tool-calling turn was refused. The
-    // empty string is the same message in the spelling the schema admits.
+    // KINU-085: the binding validator refuses `content: null` beside `tool_calls` (AiError 5006, staging 2026-09-05);
+    // the empty string is the spelling the schema admits.
     const { fetch: direct, runs } = directFetch(() => ({ response: '999' }));
 
     const model = createOpenAICompatible({

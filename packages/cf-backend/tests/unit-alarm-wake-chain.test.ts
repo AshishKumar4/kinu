@@ -1,18 +1,6 @@
 /**
- * The durable wake chain, as ROWS.
- *
- * A workspace has exactly one Kinu wake — the `_kinuTimerTick` schedule row —
- * and everything asynchronous rides it: timer triggers, peer-outbox retries,
- * outbound-email reconciliation. Losing that row does not fail anything. It
- * stops the workspace, silently, until some unrelated scheduling write happens
- * to re-arm it. Both defects fixed here had exactly that shape.
- *
- * Behavioural, not source-shaped: the schedule registry the production code
- * reads is real SQL over the object's own storage, so the harness Agent keeps
- * that table (tests/helpers/agents-sdk.ts) and these tests assert which rows
- * survive. The ALARM itself is workerd's and is fired for real in
- * tests/workerd/do-alarm.test.ts — including the redelivery-on-throw contract
- * the re-arm now depends on.
+ * The one Kinu wake row (`_kinuTimerTick`) carries every async lane; losing it silently stops the workspace.
+ * The alarm itself is fired for real in tests/workerd/do-alarm.test.ts (redelivery-on-throw).
  */
 import { describe, expect, test } from 'bun:test';
 import type { Database } from 'bun:sqlite';
@@ -21,21 +9,11 @@ import { makeSql } from '../../core/tests/helpers';
 import { hostedSubordinateHarness, orchestratorHarness, chatSessionTurns, type HarnessOrchestratorAgent } from './helpers/actor-harness';
 import { present } from '@kinu.run/test-utils';
 
-/**
- * The actor these rows belong to.
- *
- * The journal, the job registry and the search ledger are actor-private, so a
- * seed the activation is meant to sweep has to carry the owner the AGENT
- * resolves — read back the way that agent resolves it rather than assumed.
- * Every harness database here is a workspace database: a hosted child shares
- * its parent's database and directory, so there is no second arm for a
- * subordinate's own store.
- */
+/** Journal, job registry and search ledger are actor-private: seeds must carry the owner the agent resolves. */
 function harnessActorId(db: Database): string {
   return openWorkspaceMainActor(makeSql(db)).actorId;
 }
 
-/** The single cell a `SELECT COUNT(*) AS held` answers. */
 function held(db: Database, counting: string): number {
   return present(db.query<{ held: number }, []>(counting).get(), `the count from ${counting}`).held;
 }
@@ -44,8 +22,7 @@ const KINU_TIMER_CALLBACK = '_kinuTimerTick';
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
-/** A schedule write that fails — the storage failure that would end the chain,
- *  injected where it happens. */
+/** Injects the schedule-write failure that would end the chain. */
 function breakScheduleWrites(agent: HarnessOrchestratorAgent): void {
   Object.defineProperty(agent, 'schedule', {
     configurable: true,
@@ -55,11 +32,7 @@ function breakScheduleWrites(agent: HarnessOrchestratorAgent): void {
 
 describe('the workspace keeps exactly one wake row', () => {
   test('the stale sweep spares the Kinu wake and still drops a dead continuation', async () => {
-    // KINU-N027: the sweep deleted every overdue `delayed`/`scheduled` row, and
-    // it runs BEFORE the SDK reads the due rows — so an activation whose Kinu
-    // wake was more than a day overdue deleted the very row it was about to
-    // run, and nothing re-armed it. Cron triggers, peer retries and email
-    // reconciliation all stopped together for that workspace.
+    // KINU-N027: the sweep runs before the SDK reads due rows, so it must not delete an overdue Kinu wake.
     const { agent, db } = orchestratorHarness();
     await agent.listSchedules();
     const overdueSec = Math.floor((Date.now() - 2 * DAY_MS) / 1000);
@@ -71,23 +44,14 @@ describe('the workspace keeps exactly one wake row', () => {
     insert.run('kinu-wake', KINU_TIMER_CALLBACK, 'scheduled', overdueSec);
     insert.run('dead-continuation', '_chatRecovery', 'delayed', overdueSec);
 
-    // The ACTOR's activation, not `agent.onStart()`: the vendor chat base
-    // shadows that name, so calling it activates nothing and this assertion
-    // would pass or fail on a sweep that never ran.
+    // The actor's activation, not `agent.onStart()`: the vendor chat base shadows that name.
     await agent.activateActor();
 
     expect((await agent.listSchedules()).map((row) => row.id)).toEqual(['kinu-wake']);
   });
 
   test('a row whose callback names no method on the class is dropped at any age and type', async () => {
-    // PRODUCTION, 2026-09-01: `wrangler tail` reported `Callback
-    // snapshotWorkspaceIfDue not found or is not a function` every few minutes.
-    // The framework's alarm loop logs that and CONTINUES without deleting the
-    // row, so the same row re-reports on every wake for as long as the object
-    // lives. No horizon reaches it either: a recurring row re-dates itself past
-    // any cutoff, and a fresh one is inside it. Nothing on the class answers to
-    // `snapshotWorkspaceIfDue` — the snapshot machinery lives in another
-    // package — so nothing can ever make the row runnable.
+    // The alarm loop logs an unknown callback and keeps the row forever; no horizon reaches a recurring row.
     const { agent, db } = orchestratorHarness();
     await agent.listSchedules();
 
@@ -96,12 +60,10 @@ describe('the workspace keeps exactly one wake row', () => {
     );
 
     const soonSec = Math.floor((Date.now() + 60_000) / 1000);
-    // Every combination the horizon rule cannot see: future, recurring, fresh.
     insert.run('dead-future', 'snapshotWorkspaceIfDue', 'scheduled', soonSec);
     insert.run('dead-cron', 'snapshotWorkspaceIfDue', 'cron', soonSec);
     insert.run('dead-interval', 'snapshotWorkspaceIfDue', 'interval', soonSec);
-    // A live callback of the same age and type survives, so the sweep is reading
-    // the CLASS and not the clock.
+    // A live callback of the same age survives: the sweep reads the class, not the clock.
     insert.run('live-future', '_kinuTerminalRetryTick', 'scheduled', soonSec);
 
     await agent.activateActor();
@@ -112,11 +74,7 @@ describe('the workspace keeps exactly one wake row', () => {
   });
 
   test('due duplicates of the tick retire when one of them runs', async () => {
-    // An object that dies inside the tick frame after frame leaves one overdue
-    // row per frame, and the SDK runs every one of them in the next alarm it
-    // completes (production 2026-09-21: sixteen in one cycle). The row the
-    // scheduler hands the callback is the one that stays; the other due rows
-    // are the same work and retire before the pass.
+    // Overdue duplicates of the tick retire before the pass; the row the scheduler hands the callback stays.
     const { agent, db } = orchestratorHarness();
     await agent.listSchedules();
     const overdueSec = Math.floor((Date.now() - 60_000) / 1000);
@@ -130,18 +88,12 @@ describe('the workspace keeps exactly one wake row', () => {
     await agent.activateActor();
     await agent._kinuTerminalRetryTick(undefined, { id: 'due-2', callback: '_kinuTerminalRetryTick', payload: undefined, type: 'scheduled', time: overdueSec });
 
-    // due-2 stays for the SDK to retire on return; the three duplicates are
-    // gone. What the pass armed for the future is the collapse's business,
-    // pinned above.
     const due = (await agent.listSchedules()).filter((row) => row.callback === '_kinuTerminalRetryTick' && row.time <= Math.floor(Date.now() / 1000));
     expect(due.map((row) => row.id)).toEqual(['due-2']);
   });
 
   test('a beyond-budget stale backlog drains across maintenance wakes, not the gate', async () => {
-    // The sweep carries a 4096-row budget because it runs in the init gate;
-    // deletion is the cursor, and a truncated pass arms the maintenance tick
-    // so the remainder drains in alarm frames instead of waiting for the next
-    // eviction.
+    // The sweep is budgeted (it runs in the init gate); a truncated pass arms the maintenance tick for the rest.
     const { agent, db } = orchestratorHarness();
     await agent.listSchedules();
     const overdueSec = Math.floor((Date.now() - 2 * DAY_MS) / 1000);
@@ -157,12 +109,10 @@ describe('the workspace keeps exactly one wake row', () => {
 
     const staleRecoveries = `SELECT COUNT(*) AS held FROM cf_agents_schedules WHERE callback = '_chatRecovery'`;
 
-    // One budget spent, and the continuation armed durably.
     expect(held(db, staleRecoveries)).toBe(50);
     const armed = (await agent.listSchedules()).filter((row) => row.callback === '_kinuTerminalRetryTick');
     expect(armed.length).toBe(1);
 
-    // The wake finishes the job and, with nothing left over, does not re-arm.
     await agent.terminalRetryPass();
     expect(held(db, staleRecoveries)).toBe(0);
   });
@@ -194,9 +144,7 @@ describe('the workspace keeps exactly one wake row', () => {
   });
 
   test('a hired child shares the workspace wake, and its backlog drains through it', async () => {
-    // The wake machinery lives on the workspace root. Hiring a child must not
-    // create a second wake: the backlog below lives in the one database both
-    // actors share, and the root's activation is what drains it.
+    // Hiring a child must not create a second wake: the root activation drains the shared database.
     const workspace = orchestratorHarness();
 
     const child = await hostedSubordinateHarness(workspace, {
@@ -223,8 +171,7 @@ describe('the workspace keeps exactly one wake row', () => {
     await workspace.agent.activateActor();
     await workspace.agent.harnessSettleBackgroundTasks();
 
-    // Seeded rows only: the activation's own terminal-lane fiber writes its
-    // carrier row here, fresh and correctly spared.
+    // Seeded rows only: the activation's own terminal-lane fiber writes a fresh carrier row here.
     const seededChildFibers = `SELECT COUNT(*) AS held FROM cf_agents_runs WHERE id LIKE 'sub-fiber-%'`;
 
     expect(held(workspace.db, seededChildFibers)).toBe(12);
@@ -236,14 +183,7 @@ describe('the workspace keeps exactly one wake row', () => {
   });
 
   test('a hired child deferred job is restored by the workspace wake', async () => {
-    // A hosted child drives background jobs through the shared runner, and a
-    // claim records the next attempt's instant in `resume_after`. An eviction
-    // between the claim and the wake write leaves that instant in the registry
-    // with no row to fire at it. The root notices from `owedWorkExists` on
-    // activation — a workspace-wide existence read, so a row stamped with the
-    // CHILD's actor id counts — and arms one wake; its first tick is what turns
-    // that wake into the child's own instant, because the activation classifies
-    // and the tick dispatches.
+    // The activation classifies (workspace-wide `owedWorkExists`) and arms an immediate wake; the tick dispatches to the child's instant.
     const workspace = orchestratorHarness();
 
     const child = await hostedSubordinateHarness(workspace, {
@@ -255,11 +195,8 @@ describe('the workspace keeps exactly one wake row', () => {
 
     await workspace.agent.activateActor();
     await workspace.agent.harnessSettleBackgroundTasks();
-    // Nothing owed: the activation invents no wake.
     expect(await workspace.agent.listSchedules()).toEqual([]);
 
-    // Seeded the way the runner leaves it after a claim: running, input kept,
-    // the next attempt's instant in `resume_after`, and no schedule row.
     const now = Date.now();
     const resumeAt = now + 60_000;
     workspace.db.prepare(
@@ -270,9 +207,6 @@ describe('the workspace keeps exactly one wake row', () => {
     await workspace.agent.activateActor();
     await workspace.agent.harnessSettleBackgroundTasks();
 
-    // The activation ARMS, and only arms: an existence read cannot know WHEN the
-    // work comes due, so the row it writes is immediate and the tick it delivers
-    // is what turns it into the child's instant.
     const wakes = async (): Promise<Array<{ id: string; time: number }>> =>
       (await workspace.agent.listSchedules())
         .filter((row) => row.callback === '_kinuTerminalRetryTick')
@@ -284,37 +218,22 @@ describe('the workspace keeps exactly one wake row', () => {
     const wake = armed[0];
 
     if (!wake) throw new Error('the activation armed no wake for the child\'s owed job');
-    // IMMEDIATE, and named as not-the-instant. "A wake exists" was already true
-    // before the chain was fixed — `hasUntimedLiveJobsInWorkspace` said so — so a case
-    // that only counted rows could not tell an armed workspace from a stranded
-    // one. WHEN it fires is the whole difference.
+    // Immediate and not the instant: counting rows alone cannot tell armed from stranded.
     expect(wake.time).not.toBe(owedAt);
 
-    // One delivery, in the platform's own order: a one-shot `scheduled` row is
-    // CONSUMED when its alarm fires and the callback runs after. The alarm
-    // itself is workerd's (tests/workerd/do-alarm.test.ts fires a real one);
-    // the row bookkeeping around it is what this file drives.
+    // A one-shot `scheduled` row is consumed when its alarm fires; the callback runs after.
     await workspace.agent.cancelSchedule(wake.id);
     const nowSec = Math.floor(Date.now() / 1000);
     await workspace.agent.terminalRetryPass();
 
-    // The immediate wake is spent, the drain found the job not-yet-due, and
-    // the registry holds exactly the instant that job owes — one row at its
-    // own time, armed by the sweep that knows what it is waiting for, not by
-    // a guess about laps. The job's wake and the retry's wake are the same
-    // row, by collapse.
+    // Exactly one row at the job's own instant; the job's wake and the retry's wake collapse.
     const restored = await wakes();
     expect(restored.map((row) => row.time)).toEqual([owedAt]);
     expect(restored[0]?.time).toBeGreaterThan(nowSec);
   });
 
   test('a deferred job costs one wake at its instant, not a climbing chain', async () => {
-    // The pace regression arm-first would otherwise buy: the pessimistic
-    // next-lap row collapses a deferred instant away, and owedWorkExists
-    // keeps it, so a workspace waiting sixty seconds wakes at two, four,
-    // eight, sixteen, thirty-two doing nothing — where the pre-arm shape woke
-    // once, at the instant. A FINISHED pass re-arms at the soonest timed owed
-    // instant instead, which is what the row below must show.
+    // A finished pass re-arms at the soonest timed owed instant, not the pessimistic next-lap row.
     const { agent, db } = orchestratorHarness();
     await agent.activateActor();
 
@@ -335,17 +254,13 @@ describe('the workspace keeps exactly one wake row', () => {
   });
 
   test('a failed re-arm leaves the previous wake row in place', async () => {
-    // KINU-N003 (first half): `armTimer` cancelled the armed rows and then
-    // wrote the replacement. A failure in that window left ZERO wake rows, and
-    // nothing re-arms a workspace whose only wake was the one just cancelled.
-    // The write comes first now, so the worst case is one extra wake.
+    // KINU-N003 (first half): the replacement row is written before cancelling, so a failure leaves an extra wake, not zero.
     const { agent } = orchestratorHarness();
     await agent.createTimerTrigger({ atMs: Date.now() + 4 * DAY_MS, label: 'far' });
     const before = await agent.listSchedules();
     expect(before.map((row) => row.callback)).toEqual([KINU_TIMER_CALLBACK]);
 
     breakScheduleWrites(agent);
-    // A sooner trigger wants a sooner row, so this really does re-arm.
     await expect(agent.createTimerTrigger({ atMs: Date.now() + 60_000, label: 'soon' }))
       .rejects.toThrow('storage write failed');
 
@@ -355,10 +270,7 @@ describe('the workspace keeps exactly one wake row', () => {
   });
 
   test('a live branch head spawned after activation survives every tick', async () => {
-    // The recovery cutoff is the ISOLATE's construction instant, and the pass
-    // runs once per activation: a head a request spawned after construction —
-    // including the window before the wake's first tick — is live work no
-    // recovery may mark, and a second tick must not re-run the seal at all.
+    // The recovery cutoff is the isolate's construction instant, and the pass runs once per activation.
     const { agent, db } = orchestratorHarness();
     await agent.activateActor();
     await agent.harnessSettleBackgroundTasks();
@@ -383,20 +295,14 @@ describe('the workspace keeps exactly one wake row', () => {
     expect(status('stale-head')).toBe('errored');
     expect(status('live-head')).toBe('running');
 
-    // The CUTOFF is the live-work guard, not the tick count: a row whose
-    // spawned_at predates construction is stale by definition wherever it
-    // appears, and the seal — which runs fenced on every tick — retires it.
-    // Only a backdated INSERT can manufacture this; production heads are
-    // stamped at spawn and land after the cutoff.
+    // The cutoff, not the tick count, guards live work: a row predating construction is stale wherever it appears.
     insertBranch('late-stale-head', Date.now() - 60_000);
     await agent.terminalRetryPass();
     expect(status('late-stale-head')).toBe('errored');
   });
 
   test('a live swarm ledger row created after activation survives the tick', async () => {
-    // The same cutoff, one ledger over: `closeUnclaimed` fails running swarm
-    // rows the resume gate did not claim, and a row a live request created
-    // after construction must not be one of them.
+    // `closeUnclaimed` must not fail swarm rows created after construction.
     const { agent, db } = orchestratorHarness();
     await agent.activateActor();
     await agent.harnessSettleBackgroundTasks();
@@ -428,12 +334,9 @@ describe('the workspace keeps exactly one wake row', () => {
     await agent.activateActor();
     await agent.harnessSettleBackgroundTasks();
 
-    // An orchestrator binds the workspace main actor, so these rows are written
-    // and read under the id the agent's own recorder uses.
     const actorId = harnessActorId(db);
 
-    // A start row as the recorder writes one: the ledger reads its open
-    // runs through the event schema, and a row it cannot read is a fault.
+    // The ledger reads open runs through the event schema; an unreadable row is a fault.
     const start = (run: string, ts: number): void => {
       const stamped = new Date(ts).toISOString();
       db.prepare(
@@ -455,16 +358,8 @@ describe('the workspace keeps exactly one wake row', () => {
   });
 
   test('an unfinished pass re-arms in the FUTURE, at a pace that grows per lap', async () => {
-    // The property the pacing exists for, stated as rows: a pass that fills its
-    // budget answers unfinished and re-arms LATER than the next second, and a
-    // second unfinished lap is armed later still — so a backlog drains at a
-    // growing pace and a pass that keeps answering unfinished cannot become a
-    // one-second loop. The DELAY is what is durable: it is baked into the
-    // schedule row, so nothing an eviction or a concurrent arm does can shorten
-    // a wake already armed.
-    //
-    // Driven by REAL work — a branch-head backlog past the 256-row seal budget
-    // — with no failure injection.
+    // A full-budget pass re-arms later each unfinished lap, so a backlog can never become a one-second loop.
+    // The delay is baked into the schedule row, so nothing can shorten an armed wake.
     const { agent, db } = orchestratorHarness();
     await agent.activateActor();
     await agent.harnessSettleBackgroundTasks();
@@ -479,11 +374,7 @@ describe('the workspace keeps exactly one wake row', () => {
 
     for (let i = 0; i < 769; i++) insert.run(actorId, `floor-head-${i}`, `branch-floor-${i}`, stale);
 
-    // ONE alarm, as the platform delivers it: the SDK deletes its own one-shot
-    // row once the callback returns, so the next tick starts with no armed row
-    // — and the delay the tick chose is what the platform waited. Modelled
-    // here because that deletion is the whole reason a ramp can grow: without
-    // it a soonest-wins arm would keep the earliest row forever.
+    // The SDK deletes its one-shot row once the callback returns; without that a soonest-wins arm never ramps.
     const fireArmedTick = async (): Promise<number> => {
       const before = (await agent.listSchedules())
         .filter((row) => row.callback === '_kinuTerminalRetryTick');
@@ -498,33 +389,22 @@ describe('the workspace keeps exactly one wake row', () => {
       return armed.length === 0 ? 0 : (armed[0]?.time ?? 0) - firedAtSec;
     };
 
-    // Lap one: 256 sealed, 513 left, so the pass is unfinished and its re-arm
-    // is a real delay out — never the next second.
     const first = await fireArmedTick();
     expect(first).toBeGreaterThan(1);
 
-    // Lap two waits strictly longer than lap one: the ramp, in the rows.
     const second = await fireArmedTick();
     expect(second).toBeGreaterThan(first);
 
-    // And the ramp ends: with the backlog drained the tick stops re-arming
-    // instead of pacing forever.
     expect(await fireArmedTick()).toBeGreaterThan(second);
     expect(await fireArmedTick()).toBe(0);
   });
 
   test('a tick killed after its arm and before its drain still leaves the wake', async () => {
-    // The arm-first ordering is the durability point: the pessimistic next-lap
-    // row is durable BEFORE any pass runs, so the one failure this test seeds
-    // — a roster row whose stored birth the lifecycle recovery refuses — is a
-    // row left behind, not a chain that ends. On the old shape the same throw
-    // propagated with nothing armed at all.
+    // Arm-first: the next-lap row is durable before any pass runs, so a failing roster row cannot end the chain.
     const { agent, db } = orchestratorHarness();
     await agent.activateActor();
 
-    // Real input, not a patched method: `birth_request` is TEXT the store
-    // JSON-parses on read, and `recoverSubordinateLifecycles` reaches
-    // `pendingBirths()` mid-tick — after the arm, before the drain.
+    // Real input: `birth_request` is JSON-parsed on read mid-tick, after the arm and before the drain.
     db.prepare(
       `INSERT INTO actor_subordinates
         (actor_id, name, created_by, status, current_task, created_at, dismissed_at,
@@ -541,10 +421,7 @@ describe('the workspace keeps exactly one wake row', () => {
   });
 
   test('a tick with nothing owed releases the row it armed', async () => {
-    // The other half of arm-first: the pessimistic row was insurance, not work
-    // anybody is waiting on, so a pass that ends with nothing unfinished and
-    // nothing owed deletes exactly the row it wrote — the registry sleeps
-    // empty rather than holding a wake that fires to find nothing.
+    // A pass with nothing unfinished and nothing owed deletes exactly the row it armed.
     const { agent } = orchestratorHarness();
     await agent.activateActor();
     expect(await agent.listSchedules()).toEqual([]);
@@ -555,26 +432,15 @@ describe('the workspace keeps exactly one wake row', () => {
   });
 
   test('a tick that cannot re-arm fails, so the runtime redelivers it', async () => {
-    // KINU-N003 (second half): the tick caught its re-arm failure, recorded a
-    // diagnostic and returned. The alarm therefore looked successful, platform
-    // redelivery never engaged, and the chain was over. The other three phases
-    // are still tolerated — their work is state-driven and the next wake retries
-    // it — but this failure IS the loss of the next wake.
+    // KINU-N003 (second half): a re-arm failure must reject the tick; the other phases stay tolerated.
     const { agent } = orchestratorHarness();
     await agent.createTimerTrigger({ atMs: Date.now() + 4 * DAY_MS, label: 'far' });
     const [armed] = await agent.listSchedules();
 
     if (!armed) throw new Error('the trigger did not arm a wake row');
-    // With the row gone (the state KINU-N027 produced) the tick has a real
-    // re-arm to do rather than a no-op dedup.
     await agent.cancelSchedule(armed.id);
     breakScheduleWrites(agent);
 
-    // try/catch rather than a rejection callback: the thrown value is a CAUGHT
-    // BINDING, so it is narrowed where it is used instead of entering through an
-    // unparsed parameter. A tick that resolved leaves this null, and the
-    // `toBeInstanceOf` below is what makes that case fail by name rather than
-    // reading as `undefined` inside a `toContain`.
     let failure: Error | null = null;
 
     try {
@@ -583,22 +449,14 @@ describe('the workspace keeps exactly one wake row', () => {
       if (thrown instanceof Error) failure = thrown;
     }
 
-    // It REJECTS — that rejection is the whole contract, because it is what makes
-    // the platform redeliver the alarm instead of counting the tick as done.
+    // The rejection is the contract: it makes the platform redeliver the alarm.
     expect(failure).toBeInstanceOf(Error);
-    // Classified at the boundary rather than rethrown raw, so the message names
-    // the operation and the storage failure stays on the cause chain. Both halves
-    // are asserted: a classification that dropped the cause would leave a red
-    // with nothing to debug, and a raw rethrow would lose the operation.
     expect(failure?.message).toContain('re-arming the wake that keeps the timer chain alive');
     expect(String(failure?.cause)).toContain('storage write failed');
   });
 
   test('an activation restores a wake row that went missing', async () => {
-    // The recovery half: platform redelivery is bounded, and a row that was
-    // never written is not a delivery to retry. An activation is then the one
-    // moment a stranded workspace can notice — and the row is derived state, so
-    // reconstructing it needs no record of the loss.
+    // Redelivery is bounded, so activation reconstructs the derived wake row.
     const { agent } = orchestratorHarness();
     await agent.createTimerTrigger({ atMs: Date.now() + 4 * DAY_MS, label: 'far' });
     const [armed] = await agent.listSchedules();
@@ -606,9 +464,7 @@ describe('the workspace keeps exactly one wake row', () => {
     if (!armed) throw new Error('the trigger did not arm a wake row');
     await agent.cancelSchedule(armed.id);
     expect(await agent.listSchedules()).toEqual([]);
-    // Through the activation entry point, not the reconcile method: the
-    // property is that a cold start notices the loss, and a direct call would
-    // pass while an onStart that stopped reconciling stranded the workspace.
+    // Through activation, not the reconcile method: an onStart that stopped reconciling must fail this.
     await agent.activateActor();
     await agent.harnessSettleBackgroundTasks();
 
@@ -617,8 +473,6 @@ describe('the workspace keeps exactly one wake row', () => {
   });
 
   test('the reconcile cannot invent a wake nothing is waiting for', async () => {
-    // It is derived from durable work, so a workspace with no triggers, no peer
-    // retries and no pending email stays asleep.
     const { agent } = orchestratorHarness();
 
     await agent.reconcileWakeRow();
@@ -627,9 +481,7 @@ describe('the workspace keeps exactly one wake row', () => {
   });
 
   test('an armed wake is left alone, however overdue', async () => {
-    // The reconcile answers "is there a wake row at all", never "is it soon
-    // enough" — that is `armTimer`'s question. A due row is a wake the platform
-    // still owes, so re-arming over it would add a second one on every touch.
+    // The reconcile asks whether a wake row exists, never whether it is soon enough (`armTimer`'s question).
     const { agent, db } = orchestratorHarness();
     await agent.createTimerTrigger({ atMs: Date.now() + 4 * DAY_MS, label: 'far' });
     const [armed] = await agent.listSchedules();
@@ -644,11 +496,7 @@ describe('the workspace keeps exactly one wake row', () => {
   });
 
   test('a due row is not counted as armed, so the chain re-arms over it', async () => {
-    // The other half of the same rule, and the one only an ARM can show: a row
-    // that is already due belongs to the tick that is running (or about to),
-    // which re-arms when it finishes. Counting it as "armed" would make that
-    // closing re-arm a no-op against itself and end the chain — so an arm for
-    // later work must write its own FUTURE row and leave the due one to fire.
+    // A due row belongs to the running tick; an arm for later work writes its own future row.
     const { agent, db } = orchestratorHarness();
     await agent.createTimerTrigger({ atMs: Date.now() + 4 * DAY_MS, label: 'far' });
     const [armed] = await agent.listSchedules();
@@ -661,18 +509,12 @@ describe('the workspace keeps exactly one wake row', () => {
     await agent.createTimerTrigger({ atMs: laterAtMs, label: 'later' });
 
     const rows = (await agent.listSchedules()).filter((row) => row.callback === KINU_TIMER_CALLBACK);
-    // The due row survives (it is a wake the platform still owes) and the new
-    // work has a future row of its own.
     expect(rows.map((row) => row.time).sort((a, b) => a - b))
       .toEqual([dueSec, Math.ceil(laterAtMs / 1000)]);
   });
 
   test('a root turn arms the wake when it opens', async () => {
-    // A turn that opens has a run row but owes nothing yet — and on the old
-    // shape it held NO wake of its own either: the ledger's open turn sat
-    // un-driven until some unrelated event woke the object. The arm rides the
-    // terminal-retry row (soonest-wins), so exactly one is what an opened turn
-    // leaves behind it.
+    // An opened turn owes nothing yet but must leave exactly one wake (riding the terminal-retry row).
     const { agent } = orchestratorHarness();
     await agent.activateActor();
     expect(await agent.listSchedules()).toEqual([]);
@@ -685,18 +527,12 @@ describe('the workspace keeps exactly one wake row', () => {
 
     expect(armed).toHaveLength(1);
 
-    // The turn is only parked, not owed by the suite: settle it so the pump
-    // finishes cleanly inside this test rather than leaking a pending call.
+    // Settle so the pump finishes inside this test.
     await turns.settle({ messageId: request.identity.messageId, text: 'done' });
   });
 
   test('a tick that fires inside a parked turn keeps a wake row', async () => {
-    // The turn's open run row is untimed owed work: nothing in the ledgers
-    // names an instant, and the process may die at any point of the turn.
-    // A finished pass used to release the row it armed on "nothing timed
-    // owed", which left an open turn with no wake from the first mid-turn
-    // tick to the end of the turn — exactly the state the turn-open arm
-    // exists to remove.
+    // An open turn is untimed owed work: a finished pass must keep its wake row.
     const { agent } = orchestratorHarness();
     await agent.activateActor();
     expect(await agent.listSchedules()).toEqual([]);
@@ -710,27 +546,20 @@ describe('the workspace keeps exactly one wake row', () => {
 
     expect(await wakes()).toHaveLength(1);
 
-    // The alarm the platform delivers: the SDK consumes the one-shot row
-    // when it fires, then the callback runs.
+    // The SDK consumes the one-shot row when it fires, then the callback runs.
     for (const row of await agent.listSchedules()) await agent.cancelSchedule(row.id);
     const firedAtSec = Math.floor(Date.now() / 1000);
     await agent.terminalRetryPass();
 
-    // A row remains, in the future, while the turn is still owed.
     const kept = await wakes();
     expect(kept).toHaveLength(1);
     expect(kept[0]).toBeGreaterThan(firedAtSec);
 
-    // The release half — a tick with nothing owed drops the row — is the
-    // case above; a settled turn in this harness still owes its terminal
-    // sequence's retry, which is timed work of its own.
     await turns.settle({ messageId: request.identity.messageId, text: 'done' });
   });
 
   test('a turn-open wake does not fire inside an ordinary turn', async () => {
-    // The turn-open arm seeds the chain for a kill; it is not a mid-turn
-    // maintenance pass. Armed at the recovery ceiling, it lands after any
-    // ordinary turn and the tick it delivers finds the turn settled.
+    // The turn-open arm is set at the recovery ceiling, after any ordinary turn.
     const { agent } = orchestratorHarness();
     await agent.activateActor();
 
@@ -749,18 +578,8 @@ describe('the workspace keeps exactly one wake row', () => {
   });
 
   test('two concurrent arms converge on ONE wake row, the earliest', async () => {
-    // The race a serialized harness would hide. `onStart` DETACHES the wake
-    // reconcile (`void this.reconcileTimerRow()`), so an activation reconcile
-    // and a registration arm interleave: every `await` in `armTimer` is a
-    // suspension point, both callers pre-read an EMPTY registry, both write,
-    // and a collapse over each caller's own pre-read set cancels nothing. That
-    // is two wake rows permanently — the one state this whole suite is named
-    // against.
-    //
-    // Two registrations are the same shape and need no internals: each arms, and
-    // the pair must agree on one survivor. It has to be the SOONER wake, because
-    // keeping the later one silently delays every trigger, peer retry and email
-    // reconciliation riding the row.
+    // `onStart` detaches `reconcileTimerRow()`, so concurrent arms interleave across awaits and both write.
+    // The pair must collapse to one survivor, the sooner wake.
     const { agent } = orchestratorHarness();
     const soonerMs = Date.now() + 2 * DAY_MS;
 

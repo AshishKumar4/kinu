@@ -1,18 +1,6 @@
 /**
- * One box, one meaning: what you type when you create a workspace is its
- * MISSION — what the workspace is for — and not the first thing you say to it.
- *
- * Read as both, it seeds SOUL.md and titles the workspace AND rides along in
- * navigation state to be replayed as an opening user turn, so a workspace
- * created with "My personal assistant, Jarvis" gets a reply that begins "This
- * is a very short, ambiguous statement": a standing brief handed over as a
- * task. These pin that the second reading cannot reach the one mission-first
- * creation surface.
- *
- * Wiring assertions over source, the technique unit-agent-naming.test.ts
- * already uses for the same reason: the app has no DOM test harness, and the
- * defect lives in a navigation payload and a copy string rather than in a
- * function anyone can call.
+ * What you type at workspace creation is its mission, not an opening user turn: replaying it as a prompt got a reply
+ * treating a standing brief as a task. Source-level wiring assertions: no DOM harness, and the defect is a nav payload.
  */
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
@@ -56,9 +44,7 @@ describe("the creation box is a mission, not a first prompt", () => {
     const page = source("src/pages/WorkspacePage.tsx");
 
     expect(page).toContain("<EmptyConversation mission={as?.purpose ?? \"\"} />");
-    // A workspace created without a mission carries the generic seeded one,
-    // which describes Kinu rather than the workspace — showing it as a
-    // brief would be noise.
+    // The generic seeded mission describes Kinu, not the workspace; showing it as a brief would be noise.
     expect(page).toContain("isPlaceholderMission(mission) ? null : mission.trim()");
   });
 });

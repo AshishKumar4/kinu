@@ -1,25 +1,6 @@
 /**
- * Heads are forks of their parent workspace.
- *
- * The production bug this locks down: a head got a freshly-created, empty
- * filesystem on its OWN facet storage, so an agent asked to research a codebase
- * the user had cloned into the workspace spawned heads that could see none of
- * it — and, because the tools were named `sandbox_*`, reported "found nothing"
- * rather than "no access".
- *
- * THE READ HALF. A head is a hosted actor of the workspace it forks: same
- * database, same container, same Nimbus session, same device consent, and the
- * workspace's own file plane keyed by the REGISTERED workspace rather than by
- * the head's own name. So the reads this file exists for are direct — no
- * `parent` executor, no `workspaceBoxOp` forwarding RPC, no second Durable
- * Object over async RPC.
- *
- * THE WRITE HALF is not symmetric with it, and is asserted as such below. A
- * head is provisioned its own home and its own credential (`hostedHomeKind`
- * answers `'head'`), so it reads the shared tree and writes only its own
- * subtree, exactly as a hired subordinate does. A head writing
- * `/home/user/shared/notes.md` into the canonical tree would mean an actor
- * sharing its parent's uid, which is not what a head is.
+ * Heads are forks of their parent workspace: they read the shared tree directly and write only their own subtree.
+ * Defends: a head getting an empty filesystem on its own facet storage and reporting "found nothing".
  */
 
 import { afterAll, describe, expect, test } from 'bun:test';
@@ -33,24 +14,17 @@ import * as v from 'valibot';
 
 mockAgentsSdk();
 
-/** The sandbox id the runtime asked for — the observable proof that a head
- *  rides the PARENT workspace's container rather than a fresh one of its own.
- *  Read through an accessor because the reset in the test narrows the binding
- *  itself to `null`, and the assignment that matters happens in the double. */
+/** Read through an accessor because the test's reset narrows the binding itself to `null`. */
 let requestedSandboxId: string | null = null;
 
 const lastRequestedSandboxId = (): string | null => requestedSandboxId;
 
-/** Restores performed through the handle the runtime built. A head rides a
- *  container it does not own, so this must stay at zero however it is touched. */
+/** A head rides a container it does not own, so this must stay at zero. */
 let restoresPerformed = 0;
 
-/** Every configuration the container was given, in order. */
 const configuredEgress: KinuEgressParams[] = [];
 
-// The suite's double for the container a head rides: the shared stand-in owns
-// the module, this file only points it. Reset in `afterAll`, so a later file
-// meets the real SDK.
+// Reset in `afterAll`, so a later file meets the real SDK.
 await installSandboxSdkMock();
 
 setSandboxSdk({
@@ -59,9 +33,7 @@ setSandboxSdk({
 
     return {
       resolveReadiness: async () => ({ kind: 'restored' as const }),
-      // A command with no caller-set deadline takes the PROCESS lane, so the
-      // double has to be able to run one: `exec` here is the SDK's bounded
-      // lane and is deliberately not what the handle reaches.
+      // A command with no deadline takes the process lane; `exec` is the SDK's bounded lane and not what the handle reaches.
       startProcess: async () => ({
         id: 'p1',
         exitCode: 0,
@@ -79,11 +51,7 @@ setSandboxSdk({
       getExposedPorts: async () => [],
       createBackup: async () => null,
       restoreBackup: async () => { restoresPerformed += 1; },
-      // Egress interception is configured before the container can run
-      // anything, so every handle-backed operation reaches this. A hosted actor
-      // rides the configuration its ROOT installed, so a head configuring the
-      // container would be a defect of the same shape as a head deciding its
-      // own restore.
+      // A hosted actor rides the configuration its root installed; a head configuring the container would be a defect.
       configureEgress: async (params: KinuEgressParams) => { configuredEgress.push(params); },
     };
   },
@@ -91,36 +59,21 @@ setSandboxSdk({
 
 afterAll(() => { setSandboxSdk(null); });
 
-// After the sandbox double above, and it has to be after: both helpers import
-// product modules at module scope, and that graph reaches the sandbox SDK.
+// Must follow the sandbox double: both helpers' module graphs reach the sandbox SDK.
 const { hostedExplorationHarness, orchestratorHarness } = await import('./helpers/actor-harness');
 
 const { TEST_CREDENTIAL_ENCRYPTION_KEY } = await import('./helpers/user-do');
 
-/** This backend CONSTRUCTS every hosted runtime with `createCFRuntime` —
- *  `ActorHostDeps.runtimeFor` IS that function. Core's `AgentRuntime` narrows
- *  the declared return type and never the value, so the concrete type is
- *  recovered by reading the two members only the CF runtime carries. */
+/** Core's `AgentRuntime` narrows the declared type, so the CF runtime is recovered by its two unique members. */
 function isCFRuntime(runtime: AgentRuntime): runtime is CFRuntime {
   return 'localVfs' in runtime && 'sandboxHandle' in runtime;
 }
 
-/**
- * A REAL hosted head over a REAL workspace, with the parent's files already in
- * the canonical tree and the container binding declared.
- *
- * `declareContainerBinding()` BEFORE the head is acquired, because
- * `ActorHostDeps.runtimeFor` memoizes one runtime per handle and
- * `createCFRuntime` gates the whole sandbox handle on `if (env.Sandbox)` — a
- * binding declared afterwards arrives too late for the runtime under test to
- * read it.
- */
+/** Declare the container binding before acquiring the head: `runtimeFor` memoizes one runtime per handle and gates the sandbox on `env.Sandbox`. */
 
 async function hostedHead(files: Record<string, string> = {}, id = 'head-1', userPlane?: RecordedUserPlaneCalls) {
   const workspace = orchestratorHarness(userPlane);
   workspace.agent.declareContainerBinding();
-  // A deployment that serves a claimed workspace holds the root secret the
-  // owner's capability derives from.
   workspace.agent.harnessDeclareEnv({ CREDENTIAL_ENCRYPTION_KEY: TEST_CREDENTIAL_ENCRYPTION_KEY });
 
   for (const [path, content] of Object.entries(files)) {
@@ -139,8 +92,6 @@ async function hostedHead(files: Record<string, string> = {}, id = 'head-1', use
   return { workspace, head, rt, home };
 }
 
-/** The workspace plane a head's tools act on. Absent means the fork never
- *  acquired the parent's file plane at all, which is the original defect. */
 function workspacePlane(rt: CFRuntime) {
   const provider = rt.executionRouter?.getProvider('workspace');
 
@@ -155,9 +106,7 @@ describe('a head forks its parent workspace', () => {
 
     const workspace = workspacePlane(rt);
     expect(await workspace.tools.readFile.execute('/home/user/repo/README.md')).toBe('# cloned project');
-    // No `parent` executor, and that absence is the fix: the head reads the one
-    // workspace tree directly instead of forwarding every operation to another
-    // Durable Object over async RPC.
+    // No `parent` executor: the head reads the workspace tree directly instead of forwarding over Durable Object RPC.
     expect(rt.executionRouter?.listExecutors().map((executor) => executor.name))
       .not.toContain('parent');
   });
@@ -179,10 +128,6 @@ describe('a head forks its parent workspace', () => {
     const found = await workspacePlane(rt).tools.exec.execute('grep -rl needle /home/user/repo');
     expect(v.parse(v.string(), found)).toContain('repo/a.ts');
 
-    // The head's OWN shell, and the identity is the observable: its `$HOME` and
-    // `$TMPDIR` are the ones the host provisioned for this actor, not the
-    // workspace user's. That is what a per-actor `shellId` buys — the shell
-    // state a head accumulates is its own, over a tree it shares.
     const shell = rt.shell;
 
     if (!shell) throw new Error('a hosted head runtime carries a shell');
@@ -196,10 +141,7 @@ describe('a head forks its parent workspace', () => {
     requestedSandboxId = null;
     const { head } = await hostedHead();
 
-    // The container the workspace works in — `kinu-${workspaceName}` in
-    // runtime.ts — and emphatically not one named after the fork. The file
-    // plane is keyed by the REGISTERED workspace precisely so a self-named
-    // child cannot derive a second, empty filesystem.
+    // The file plane is keyed by the registered workspace so a self-named child cannot derive a second, empty filesystem.
     expect(lastRequestedSandboxId()).toBe('kinu-harness-parent');
     expect(lastRequestedSandboxId()).not.toContain(head.actor.record.storageKey);
   });
@@ -207,10 +149,7 @@ describe('a head forks its parent workspace', () => {
   test('a head never decides the restore of the container it only rides', async () => {
     restoresPerformed = 0;
     const { rt, head, workspace } = await hostedHead();
-    // A backup handle recorded under the HEAD's own actor rows. It is not the
-    // shared container's history: `kinu-harness-parent` belongs to the
-    // workspace, so acting on it would roll that container back to whatever
-    // this head last happened to record.
+    // `kinu-harness-parent` belongs to the workspace; acting on it would roll the shared container back.
     workspace.db.prepare("INSERT INTO actor_config (actor_id,key,value) VALUES (?,'workspace_backup',?)")
       .run(head.actor.handle.actorId, JSON.stringify({ id: 'bk-1', dir: '/workspace' }));
 
@@ -220,11 +159,7 @@ describe('a head forks its parent workspace', () => {
     await handle.exec('true');
     await handle.exec('true');
 
-    // Zero, and the second touch is what makes it a regression test: a wrapper
-    // that marks the container restored from an EMPTY key restores nothing,
-    // one-shot and never retried, so every later call execs against whatever
-    // state it found. An actor that cannot mark the container restored cannot
-    // mark it falsely.
+    // The second touch matters: a restore from an empty key is one-shot and never retried.
     expect(restoresPerformed).toBe(0);
   });
 
@@ -239,47 +174,27 @@ describe('a head forks its parent workspace', () => {
     const handle = rt.sandboxHandle;
 
     if (!handle) throw new Error('a hosted head runtime rides the workspace container');
-    // An empty vault here would be memoized for the handle's life: every
-    // secret-bearing request refused until the object restarts.
+    // An empty vault here would be memoized for the handle's life.
     await expect(handle.exec('true')).rejects.toBe(unreadable);
     expect(configuredEgress).toEqual([]);
   });
 
-  /**
-   * The write half: a head reads the shared tree and writes only its own.
-   *
-   * A hosted head is provisioned its own home and its own credential — the same
-   * `hostedHomeKind` arm a hired subordinate takes — so the shared tree is
-   * READ-ONLY to it and its writes go to its own subtree. An actor sharing its
-   * parent's uid would land a head's write in the canonical filesystem instead.
-   * Asserted as a pair, because a refusal alone would also hold for a head with
-   * no file plane at all, which is the original defect wearing a different face.
-   */
+  /** Asserted as a pair: a refusal alone would also hold for a head with no file plane at all. */
   test('a head reads the canonical workspace and writes only its own home', async () => {
     const { rt, home, workspace } = await hostedHead({ 'repo/parser.ts': 'one\ntwo\n' });
     const plane = workspacePlane(rt);
 
     expect(await plane.tools.readFile.execute('/home/user/repo/parser.ts')).toBe('one\ntwo\n');
-    // Its own subtree accepts the write, and the WORKSPACE sees it: one tree,
-    // one database, a credential boundary inside them.
     await rt.storage.vfs.writeFile(`${home}/notes.md`, 'visible');
     expect(await workspace.agent.readWorkspaceFile(`${home}/notes.md`))
       .toMatchObject({ ok: true });
-    // The origin's own tree refuses it.
     await expect(rt.storage.vfs.writeFile('/home/user/repo/parser.ts', 'one\ntwo\nthree\n'))
       .rejects.toThrow(expect.objectContaining({ code: 'EACCES' }));
     expect(await workspace.agent.readWorkspaceFile('/home/user/repo/parser.ts'))
       .toMatchObject({ ok: true, value: new TextEncoder().encode('one\ntwo\n') });
   });
 
-  /**
-   * A head's SQL ledgers are `actor_id`-scoped rows in the workspace's one
-   * database, and `listTools` reads the crafted-tool quality columns ON
-   * `crafted_tools` while `createTool` seeds them — so with the memory and
-   * craft stores alone a head raised `no such table: crafted_tools` on its
-   * first call. Pinned on both backends: the CLI head hit exactly this inside a
-   * paid delegation run.
-   */
+  /** `listTools` reads quality columns on `crafted_tools`, so a head without that table fails its first call. */
   test("the head's own workspace plane scores the tools it crafts", async () => {
     const { rt } = await hostedHead();
     const plane = workspacePlane(rt);
@@ -293,17 +208,3 @@ describe('a head forks its parent workspace', () => {
     ]);
   });
 });
-
-/**
- * WHERE A HOSTED HEAD'S PROPERTIES ARE ANSWERED.
- *
- *   • The directory owns and revalidates the head's registered parent
- *     (`workspace_actors.parent_actor_id`, written under the parent's
- *     authority and re-validated on every binding).
- *   • `hostBranch` containment is covered in
- *     unit-exploration-containment.test.ts, which drives it and shows it
- *     acquires no home.
- *   • `hostHead` receives `HeadInput` in one in-process call, while
- *     interruption recovery is covered through `markInterrupted` and
- *     `ActorHost.resumable` over unsettled claims.
- */

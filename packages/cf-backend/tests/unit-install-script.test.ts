@@ -1,18 +1,6 @@
 /**
- * Behavioral regression tests for the served install.sh: under `curl | bash`
- * stdin is the script stream, not the terminal, and a headless run has no
- * /dev/tty at all. The installer must never freeze on (or die opening) the
- * terminal — interactive steps run only when /dev/tty actually opens, and
- * otherwise it prints instructions and exits 0.
- *
- * And the runtime half: a fresh install printed "Kinu CLI is ready." and the
- * first `kinu` in the next shell answered "Bun is required", over the same Bun
- * on disk. The installer verified Bun through a PATH it exported into its own
- * process and never persisted; the launcher re-derived Bun from the user's
- * ambient PATH. Both sides now inline one resolution
- * (`src/cli/bun-runtime.ts`), so the launcher runs the binary the installer
- * verified — asserted here by making the only Bun on the machine a stub that
- * records every path it was invoked through.
+ * install.sh under `curl | bash` (stdin is the script, maybe no /dev/tty) must never freeze on the terminal, and the
+ * launcher must run the Bun the installer verified: both inline one resolution (`src/cli/bun-runtime.ts`).
  */
 import { scratchDir } from '../../test-utils/src/scratch';
 import { spawn, spawnSync } from 'node:child_process';
@@ -43,8 +31,7 @@ interface InstallSandbox {
 interface SandboxOptions {
   /** Version the `bun` on PATH reports. `null` leaves the machine without one. */
   ambientBun?: string | null;
-  /** Served at `<origin>/downloads/kinu`. Defaults to a stub that answers
-   *  `--help` and `setup`; pass the real launcher to exercise it. */
+  /** Served at `<origin>/downloads/kinu`; defaults to a stub answering `--help` and `setup`. */
   launcher?: string;
 }
 
@@ -58,7 +45,6 @@ const PtyResultSchema = v.object({
   }),
 });
 
-/** The text the origin serves at one of its two script paths. */
 async function servedScript(path: string): Promise<string> {
   const response = await handleCliRequest(new Request(`${ORIGIN}${path}`), staticRouteCliEnv());
 
@@ -68,8 +54,7 @@ async function servedScript(path: string): Promise<string> {
   return response.text();
 }
 
-/** The approved Bun, read out of the rendered resolution the module hands out
- *  rather than imported: the served text is the contract both scripts ship. */
+/** Read from the rendered resolution, not imported: the served text is the contract both scripts ship. */
 function approvedBun(): string {
   const match = /KINU_BUN_VERSION="([^"]+)"/.exec(bunResolutionShell());
 
@@ -78,16 +63,13 @@ function approvedBun(): string {
   return match[1];
 }
 
-/** A Bun stand-in that records the path it was invoked through, answers
- *  `--version`, and prints the CLI help line for `run` — so a test can prove
- *  WHICH Bun binary ran, not merely that something did. */
+/** A Bun stand-in that logs the path it was invoked through, proving which binary ran. */
 function bunStub(version: string, logPath: string): string {
   return [
     '#!/bin/sh',
     `printf '%s\\n' "$0" >> "${logPath}"`,
     `if [ "$1" = "--version" ]; then printf '%s\\n' '${version}'; exit 0; fi`,
-    // The launcher verifies the release signature on the Bun it resolved:
-    // that verification is real here, on the Bun running this suite.
+    // The launcher's release-signature check runs for real on this suite's own Bun.
     `if [ "$1" = "-e" ]; then exec "${process.execPath}" "$@"; fi`,
     'if [ "$1" = "run" ]; then printf \'  setup   connect your account\\n\'; exit 0; fi',
     'exit 0',
@@ -95,18 +77,12 @@ function bunStub(version: string, logPath: string): string {
   ].join('\n');
 }
 
-/** The key this suite's fake origin signs its release with, minted once per
- *  process; every launcher run pins its public half through the environment,
- *  the way a machine's own operator would. */
+/** Minted once per process; launcher runs pin its public half through the environment. */
 const signingKey = await generateReleaseSigningKey();
 
-/** The environment a launcher under test runs with. */
 const RELEASE_ENV = { KINU_RELEASE_SIGNING_PUBLIC_KEY: signingKey.publicKeyHex };
 
-/** The two archives shaped like the published ones: a platform artifact
- *  carrying `kinu/cli.js`, and the shared CPython runtime that unpacks into
- *  the same tree. Each gets the sha256 sidecar, and the SIGNED manifest over
- *  both checksums is what the launcher verifies before it downloads. */
+/** Archives shaped like the published ones; the launcher verifies the signed manifest over both checksums first. */
 async function makeDistTarballs(home: string): Promise<void> {
   const stage = join(home, 'stage');
   mkdirSync(join(stage, 'kinu'), { recursive: true });
@@ -139,9 +115,7 @@ async function makeDistTarballs(home: string): Promise<void> {
   writeFileSync(join(home, 'kinu-version.json'), `${JSON.stringify({ sha: 'test', builtAt: 'now', ...signed })}\n`);
 }
 
-/** A sandbox HOME plus stub curl/bun/ln so the script runs without network
- *  or system side effects. The stub curl "downloads" the launcher, the Bun
- *  installer, and the two published build artifacts. */
+/** Sandbox HOME plus stub curl/bun/ln, so the script runs without network or system side effects. */
 async function makeSandbox(options: SandboxOptions = {}): Promise<InstallSandbox> {
   const ambientBun = options.ambientBun === undefined ? approvedBun() : options.ambientBun;
   const home = scratchDir('install-test');
@@ -160,11 +134,8 @@ async function makeSandbox(options: SandboxOptions = {}): Promise<InstallSandbox
   writeFileSync(join(home, 'stub-shim.sh'), `${stubShim}\n`);
   writeFileSync(join(home, 'launcher'), options.launcher ?? `${stubShim}\n`);
 
-  // Stands in for https://bun.sh/install: honours the `bun-vX.Y.Z` tag and
-  // $BUN_INSTALL as the real one does. It REQUIRES $BUN_INSTALL rather than
-  // defaulting to $HOME/.bun the way the real script does: the installer under
-  // test always sets it, and a stub that silently falls back would overwrite
-  // the developer's own Bun on any machine where BUN_INSTALL is exported.
+  // Stand-in for https://bun.sh/install. Requires $BUN_INSTALL rather than defaulting to $HOME/.bun,
+  // so it can never overwrite the developer's own Bun.
   writeFileSync(join(home, 'bun-stub-template'), bunStub('__BUN_VERSION__', bunLog));
 
   const bunInstaller = [
@@ -227,8 +198,7 @@ async function makeSandbox(options: SandboxOptions = {}): Promise<InstallSandbox
   return { home, stubBin, bunLog, managedBun: join(home, '.kinu/runtime/bin/bun') };
 }
 
-/** Runs the script exactly like `curl | bash` in a detached session: stdin is
- *  the script pipe and /dev/tty cannot be opened (no controlling terminal). */
+/** Runs the script like `curl | bash` in a detached session: stdin is the pipe, /dev/tty cannot open. */
 function runHeadlessInstall(
   script: string,
   home: string,
@@ -296,11 +266,6 @@ describe('install.sh terminal handling', () => {
     expect(result.exitCode).toBe(0);
   });
 
-  // The command handed to a user is one pipeline. Getting `kinu` onto the
-  // calling shell with a `KINU_PARENT_ACTIVATES=1` prefix and an
-  // `&& export PATH=…` tail is what makes the string on the site three commands
-  // wide. The script owns that concern: it says the export line out loud, and
-  // that line is what the user runs.
   test('the canonical install command is one pipeline, and the script says how to activate it', async () => {
     const script = await servedScript('/install.sh');
     const { home, stubBin } = await makeSandbox();
@@ -321,8 +286,7 @@ describe('install.sh terminal handling', () => {
     });
 
     expect(run.status, run.stderr).toBe(0);
-    // The installer runs in its own process, so the calling shell cannot see
-    // kinu yet. That is exactly when the hint has to appear.
+    // The installer's own process cannot change the calling shell's PATH, so the hint must appear.
     expect(run.stdout).toContain('BEFORE=\n');
     expect(run.stdout).toContain('To use kinu in this shell now, run:');
 
@@ -331,7 +295,6 @@ describe('install.sh terminal handling', () => {
 
     expect(hint).toBe(`export PATH="${binDir}:$PATH"`);
 
-    // The hint is not decoration: running it is what activates the CLI.
     const activated = spawnSync('bash', ['-c', [hint ?? '', 'command -v kinu', 'kinu --help'].join('\n')], {
       encoding: 'utf8',
       env: { HOME: home, KINU_HOME: join(home, '.kinu'), PATH: `${stubBin}:/usr/bin:/bin`, SHELL: '/bin/bash', ...RELEASE_ENV },
@@ -346,13 +309,10 @@ describe('install.sh terminal handling', () => {
     const script = await servedScript('/install.sh');
     expect(script).not.toContain('KINU_PARENT_ACTIVATES');
     expect(script).not.toContain('PARENT_ACTIVATES');
-    // The branch is gated on the script's OWN PATH check, not on anything the
-    // caller sets.
+    // Gated on the script's own PATH check, not on anything the caller sets.
     expect(script).toContain('if [ "$NEEDS_PARENT_ACTIVATION" = "1" ]; then');
   });
 
-  // What the web UI hands a user registering a device. The connect flow runs
-  // inside the installer, so one paste installs the CLI and pairs the machine.
   test('--connect pairs the machine from inside the installer, before the PATH hint', async () => {
     const script = await servedScript('/install.sh');
     const { home, stubBin } = await makeSandbox();
@@ -372,7 +332,6 @@ describe('install.sh terminal handling', () => {
     expect(run.status, run.stderr).toBe(0);
     expect(run.stdout).toContain("STUB-CONNECT-RAN connect --label Ashish's Mac");
     expect(run.stdout).not.toContain('STUB-SETUP-RAN');
-    // The hint is last: a user reads it after the flow it belongs to finishes.
     expect(run.stdout.indexOf('STUB-CONNECT-RAN'))
       .toBeLessThan(run.stdout.indexOf('To use kinu in this shell now'));
   });
@@ -383,14 +342,11 @@ describe('install.sh terminal handling', () => {
     // terminal; only a real open proves the redirects below will work.
     expect(script).toContain('( exec </dev/tty >/dev/tty ) 2>/dev/null');
     expect(script).not.toContain('[ -r /dev/tty ]');
-    // Interactive children run through run_on_tty: terminal on stdin, and a
-    // best-effort `stty sane` when the child dies mid-prompt.
     expect(script).toContain('"$@" < /dev/tty');
     expect(script).toContain('stty sane < /dev/tty 2>/dev/null || true');
     expect(script).toContain('run_on_tty "$BIN_PATH" setup --origin "$KINU_ORIGIN" --account-only');
     expect(script).toContain('run_on_tty "$BIN_PATH" connect');
-    // Children that are not interactive must not inherit the script stream:
-    // under curl|bash a stdin-reading child would eat unread script bytes.
+    // Under curl|bash a stdin-reading child would eat unread script bytes.
     expect(script).toContain('"$BIN_PATH" --help </dev/null');
   });
 
@@ -422,9 +378,7 @@ describe('install.sh terminal handling', () => {
         KINU_HOME: join(home, '.kinu'),
         PATH: `${stubBin}:/usr/bin:/bin`,
         SHELL: '/bin/bash',
-        // This is the one runner that inherits the ambient environment (the PTY
-        // harness needs python's own). An exported BUN_INSTALL must not reach
-        // the script: only the installer's own value may say where Bun lands.
+        // This runner inherits the ambient environment; an exported BUN_INSTALL must not reach the script.
         BUN_INSTALL: '',
       },
     });
@@ -435,49 +389,34 @@ describe('install.sh terminal handling', () => {
     if (!lastLine) throw new Error('PTY harness emitted no result');
     const result = v.parse(PtyResultSchema, JSON.parse(lastLine));
     expect(result.output).toContain('STUB-SETUP-DIED');
-    expect(result.exitcode).not.toBe(0); // setup failure still surfaces
+    expect(result.exitcode).not.toBe(0);
     expect(result.post).toEqual({ icanon: true, echo: true, isig: true });
   });
 });
 
-/**
- * The CLI is built at deploy time, so the user's machine resolves nothing. A
- * source checkout plus `bun install --frozen-lockfile` of the whole monorepo
- * measured cold on 2026-09-01: 13.35 s of a 16.08 s install, 950 packages,
- * 105,648 files, 1.9 GB of the user's disk, and the workerd postinstall
- * shelling out to `npm install` for a binary.
- */
+/** Built at deploy time. A source install measured cold 2026-09-01: 13.35 s of a 16.08 s install, 950 packages, 1.9 GB. */
 describe('the CLI installs as a prebuilt artifact', () => {
   test('the launcher unpacks published builds and runs no package manager', async () => {
     const launcher = await servedScript('/downloads/kinu');
     expect(launcher).toContain('/downloads/kinu-cli-${KINU_OS}-${KINU_ARCH}.tar.gz');
     expect(launcher).toContain('RUNTIME_URL="${KINU_ORIGIN}/downloads/kinu-runtime-cpython.tar.gz"');
     expect(launcher).toContain(`KINU_ORIGIN="\${KINU_ORIGIN:-${ORIGIN}}"`);
-    // The whole point: nothing on the user's machine resolves a dependency.
     expect(launcher).not.toContain('bun install');
     expect(launcher).not.toContain('--frozen-lockfile');
     expect(launcher).not.toContain('node_modules');
-    // Both downloads land in one staging tree beside the install, that tree
-    // answers --version, and the swap keeps prev until the proven tree is in
-    // place: an interrupted update or a build that cannot launch leaves the
-    // installed CLI as it was, and a kill mid-swap leaves a tree the launch
-    // recovers from (unit-cli-launcher-swap drives those states).
+    // Staging tree beside the install; the swap keeps prev until the proven tree is in place
+    // (unit-cli-launcher-swap drives those states).
     expect(launcher).toContain('mv "$tmp/extract/kinu" "$next"');
     expect(launcher).toContain('"$KINU_BUN" run "$next/cli.js" --version');
     expect(launcher).toContain('mv "$CLI_DIR" "$CLI_ROOT/prev"');
     expect(launcher).toContain('adopt_tree "$next"');
     expect(launcher).toContain('mv "$proven" "$CLI_DIR"');
-    // The installed tree is removed only to make way for a tree already
-    // proven — the launch check restoring prev, and the recovery of a missing
-    // current from a proven next-* or from prev.
     expect(launcher.split('rm -rf "$CLI_DIR"').length - 1).toBe(3);
   });
 
   test('every platform the launcher can name has a published artifact', async () => {
     const launcher = await servedScript('/downloads/kinu');
-    // `uname` answers on the left, artifact names on the right. A pair the
-    // launcher accepts but the deploy never publishes is a 404 body unpacked
-    // as a tarball, so the two sets are held equal here.
+    // A pair the launcher accepts but the deploy never publishes would unpack a 404 body as a tarball.
     const named = new Set<string>();
 
     for (const [unameS, os] of [['Darwin', 'darwin'], ['Linux', 'linux']] as const) {
@@ -489,8 +428,7 @@ describe('the CLI installs as a prebuilt artifact', () => {
     expect(launcher).toContain('arm64|aarch64) KINU_ARCH=arm64 ;;');
     expect(launcher).toContain('x86_64|amd64) KINU_ARCH=x64 ;;');
 
-    // The platforms the deploy publishes are read off the published paths —
-    // the surface production serves — not off a private list.
+    // Read off the paths production serves, not a private list.
     const published = CLI_DIST_PATHS.flatMap((path) => {
       const match = /\/downloads\/kinu-cli-([a-z0-9-]+)\.tar\.gz$/.exec(path);
 
@@ -498,24 +436,20 @@ describe('the CLI installs as a prebuilt artifact', () => {
     });
 
     expect([...named].sort()).toEqual([...published].sort());
-    // An unsupported pair stops rather than downloading a page.
     expect(launcher).toContain('Kinu supports macOS and Linux.');
     expect(launcher).toContain('Kinu supports arm64 and x86_64.');
   });
 
   test('every download is checksum-verified against the SIGNED release, with no way to skip it', async () => {
     const launcher = await servedScript('/downloads/kinu');
-    // The manifest's signature is verified against the pinned key before any
-    // artifact is fetched, and each artifact against the checksum it signed —
-    // never against a .sha256 the origin chooses for itself (C1).
+    // Signature against the pinned key before any fetch; artifacts against the signed checksums, never the origin's .sha256 (C1).
     expect(launcher).toContain('verify_release "$tmp/kinu-version.json"');
     expect(launcher).toContain('fetch_verified "$TARBALL_URL" "$tmp/cli.tar.gz" "$tmp/kinu-version.json"');
     expect(launcher).toContain('fetch_verified "$RUNTIME_URL" "$tmp/runtime.tar.gz" "$tmp/kinu-version.json"');
     expect(launcher).toContain(`RELEASE_SIGNING_PUBLIC_KEY="\${KINU_RELEASE_SIGNING_PUBLIC_KEY:-${RELEASE_SIGNING_PUBLIC_KEY}}"`);
     expect(launcher).not.toContain('curl -fsSL "$url.sha256"');
     expect(launcher).toContain('[ "$actual" = "$expected" ] || die "Checksum mismatch for $url."');
-    // The pin override is gone: verification against the published .sha256 is
-    // the only path, so no environment variable can turn it off.
+    // No environment variable can turn verification off.
     expect(launcher).not.toContain('KINU_SOURCE_SHA256');
     expect(launcher).not.toContain('KINU_CLI_SHA256');
   });
@@ -524,8 +458,7 @@ describe('the CLI installs as a prebuilt artifact', () => {
     const script = await servedScript('/install.sh');
     const launcher = await servedScript('/downloads/kinu');
     const { home, stubBin } = await makeSandbox({ ambientBun: null, launcher });
-    // The hostile deployment: the same artifacts and checksums, and a
-    // manifest without Kinu's signature over them.
+    // Same artifacts and checksums, manifest without Kinu's signature.
     const manifest = v.parse(v.looseObject({ signature: v.string() }), JSON.parse(readFileSync(join(home, 'kinu-version.json'), 'utf-8')));
     const { signature: _signature, ...unsigned } = manifest;
     writeFileSync(join(home, 'kinu-version.json'), `${JSON.stringify(unsigned)}\n`);
@@ -546,22 +479,15 @@ describe('the CLI installs as a prebuilt artifact', () => {
     expect(result.output).toContain('Downloading Kinu CLI...');
     expect(result.output).not.toContain('Preparing Kinu CLI...');
     expect(result.exitCode).toBe(0);
-    // Both artifacts unpacked into the one installed tree.
     expect(existsSync(join(home, '.kinu/cli/current/cli.js'))).toBe(true);
     expect(existsSync(
       join(home, '.kinu/cli/current/node_modules/@nimbus-sh/runtime-cpython/manifest.json'),
     )).toBe(true);
-    // The source checkout the old install left behind is not created at all.
     expect(existsSync(join(home, '.kinu/source'))).toBe(false);
   });
 });
 
-/**
- * The reported transition, in one file: the installer says "Kinu CLI is ready."
- * and the next `kinu` says "Bun is required." It happened because the two
- * scripts resolved Bun independently — the installer through a PATH it exported
- * into its own process, the launcher through the user's ambient PATH.
- */
+/** Pins: installer said "Kinu CLI is ready.", next `kinu` said "Bun is required." because the scripts resolved Bun independently. */
 describe('Bun runtime resolution is one source of truth', () => {
   test('the approved Bun is the version this repository itself pins', () => {
     const manifest = readFileSync(join(import.meta.dir, '../../../package.json'), 'utf8');
@@ -578,49 +504,26 @@ describe('Bun runtime resolution is one source of truth', () => {
 
     for (const script of [install, launcher]) {
       expect(script).toContain(shared);
-      // One `command -v bun`, and it is the shared one. A second probe beside
-      // it is the defect: two answers to one question.
+      // A second probe is the defect: two answers to one question.
       expect(script.split('command -v bun').length - 1)
         .toBe(shared.split('command -v bun').length - 1);
       expect(script).toContain('kinu_resolve_bun');
     }
 
-    // The launcher never installs a runtime, and it runs exactly one — the Bun
-    // it just resolved. The CLI imports bun:sqlite; there is no Node path.
+    // The CLI imports bun:sqlite; there is no Node path.
     expect(launcher).not.toContain('bun.sh/install');
     expect(launcher).toContain('exec "$KINU_BUN" run "$CLI_DIR/cli.js" "$@"');
   });
 
   /**
-   * The resolution is BUILT as a TypeScript template literal and SHIPPED as
-   * bash, and the two disagree about backslash. `\${` in the source is required
-   * — a bare `${` would interpolate at build time — while `\$` before anything
-   * else is a useless escape, and 19 of those were written here.
-   *
-   * WHAT THIS TEST CANNOT DO, stated because the alternative is a test that
-   * looks like it covers the 19 and does not. A stray `\$` has NO runtime
-   * observable: in a template literal `\$X` and `$X` render byte-identically
-   * and the output carries no backslash at all. Measured, not assumed — the
-   * two forms compare equal and `.includes("\\")` is false on both. So that
-   * defect class is structurally invisible to any behavioural test and belongs
-   * to the linter, which is where it was in fact caught.
-   *
-   * WHAT IT DOES DO is the neighbouring class, which is observable and worse: a
-   * DOUBLE escape (`\\$`) reaching the emitted text ships bash in which `\$` is
-   * a LITERAL dollar, so `"\$KINU_HOME"` would compare against the seven
-   * characters `$KINU_HOME` instead of reading the variable and every candidate
-   * would silently fail to resolve. That has a red direction and the second
-   * test below has a live one: removing one required `\${` makes it fail.
+   * Built as a TS template literal, shipped as bash. A stray `\$` renders identically (the linter owns that class);
+   * this guards a double escape `\\$`, which ships a literal dollar and silently breaks every candidate.
    */
   test('the emitted resolution expands shell variables, and escapes none of them', async () => {
     const shared = bunResolutionShell();
     expect(shared).not.toContain('\\$');
     expect(await servedScript('/downloads/kinu')).not.toContain('\\$');
-    // install.sh has exactly one legitimate escaped dollar, and it is the
-    // opposite case: the PROFILE line it appends must reach the user's rc file
-    // carrying a literal `$PATH`, expanded when that shell starts rather than
-    // when the installer runs. So every escape in install.sh must sit on a PATH
-    // line, and a stray one anywhere else still fails here.
+    // install.sh's one legitimate escape is the PROFILE line's literal `$PATH`; a stray one anywhere else fails here.
     const escaped = (await servedScript('/install.sh')).split('\n').filter((line) => line.includes('\\$'));
     expect(escaped.length).toBeGreaterThan(0);
     expect(escaped.filter((line) => !line.includes('PATH'))).toEqual([]);
@@ -639,10 +542,7 @@ describe('Bun runtime resolution is one source of truth', () => {
   });
 
   test('the emitted parameter expansions compute a real version key', () => {
-    // Behavioural rather than textual: runs the emitted shell and reads back
-    // what its `${1%%.*}` / `${kb_rest#*.}` chain actually produced. A
-    // mis-escaped expansion cannot pass this, because bash would hand the
-    // arithmetic the literal text instead of the digits.
+    // Behavioural: a mis-escaped expansion would hand the arithmetic literal text instead of digits.
     const script = `${bunResolutionShell()}\nkinu_bun_key "$1"\n`;
 
     for (const [version, key] of [
@@ -656,7 +556,6 @@ describe('Bun runtime resolution is one source of truth', () => {
       expect(run.stdout.trim()).toBe(key);
     }
 
-    // A version it must refuse to score rather than guess at.
     for (const bad of ['1.4', 'not-a-version', '']) {
       const run = spawnSync('bash', ['-c', script, 'kinu', bad], { encoding: 'utf8' });
       expect(run.status, `${bad} should not be comparable`).toBe(1);
@@ -665,11 +564,8 @@ describe('Bun runtime resolution is one source of truth', () => {
   });
 
   test('a candidate that is not an absolute path is refused', () => {
-    // `command -v bun` answers with a path for anything on PATH, but a shell
-    // function or builtin answers with the bare word — and an executable test
-    // on a bare word resolves against the WORKING DIRECTORY. A file named
-    // `bun` in whatever directory the user ran the installer from must never
-    // become the runtime this CLI executes.
+    // `command -v` answers a bare word for functions/builtins, and a bare word resolves against the cwd:
+    // a `bun` file in the user's directory must never become the runtime.
     const cwd = scratchDir('bun-cwd');
 
     const decoy = join(cwd, 'bun');
@@ -686,8 +582,6 @@ describe('Bun runtime resolution is one source of truth', () => {
 
     expect(probe.stdout).toContain('REFUSED');
     expect(probe.stdout).not.toContain('TOOK-RELATIVE');
-    // The same file BY ABSOLUTE PATH still qualifies: the rule is about how a
-    // candidate is named, not about distrusting the user's own binaries.
     expect(probe.stdout).toContain('TOOK-ABSOLUTE');
   });
 
@@ -712,7 +606,6 @@ describe('Bun runtime resolution is one source of truth', () => {
     expect(result.output).toContain(`Installing Bun ${approvedBun()}...`);
     expect(result.output).toContain(`Using Bun ${approvedBun()} at ${managedBun}.`);
     expect(existsSync(managedBun)).toBe(true);
-    // Once. A second install path is how the two sides drifted apart before.
     expect(result.output.split(`Installing Bun ${approvedBun()}...`).length - 1).toBe(1);
     expect(result.exitCode).toBe(0);
   });
@@ -730,7 +623,6 @@ describe('Bun runtime resolution is one source of truth', () => {
   test('the launcher runs the Bun the installer verified, in a later shell with no bun on PATH', async () => {
     const script = await servedScript('/install.sh');
     const launcher = await servedScript('/downloads/kinu');
-    // A machine with no Bun at all, and the real launcher installed — not a stub.
     const { home, stubBin, bunLog, managedBun } = await makeSandbox({ ambientBun: null, launcher });
     const install = await runHeadlessInstall(script, home, stubBin);
 
@@ -739,8 +631,7 @@ describe('Bun runtime resolution is one source of truth', () => {
     expect(install.output).toContain('Kinu CLI is ready.');
     expect(install.exitCode).toBe(0);
 
-    // A brand-new shell. Nothing sourced a profile, and no bun is on PATH —
-    // exactly the shell a PATH-resolved Bun would tell "Bun is required."
+    // A fresh shell with no bun on PATH: a PATH-resolved Bun would say "Bun is required."
     const later = spawnSync(join(home, '.kinu/bin/kinu'), ['--help'], {
       encoding: 'utf8',
       env: {
@@ -755,17 +646,13 @@ describe('Bun runtime resolution is one source of truth', () => {
     expect(`${later.stdout}${later.stderr}`).not.toContain('Bun is required');
     expect(later.status, later.stderr).toBe(0);
     expect(later.stdout).toContain('setup   connect your account');
-    // Every Bun the installer and the launcher ran is the one binary the
-    // installer put on disk. Nothing resolved through PATH or a shell profile.
     const invocations = readFileSync(bunLog, 'utf8').trim().split('\n');
     expect(invocations.length).toBeGreaterThan(1);
     expect(invocations.filter((path) => path !== managedBun)).toEqual([]);
   });
 });
 
-/** Runs `bash < install.sh` in its own session with a PTY controlling
- *  terminal and stdin on a pipe — the exact `curl | bash` topology — then
- *  reports the PTY's termios state after the script exits. */
+/** Runs `bash < install.sh` with a PTY controlling terminal and stdin on a pipe (the `curl | bash` topology), then reports termios. */
 const PTY_HARNESS = `
 import json, os, pty, sys, time, fcntl, termios, signal, select
 

@@ -1,11 +1,5 @@
-// The role a create request asks for, and where it lands.
-//
-// `POST /workspaces` accepts a `role` on both transports, `kinu create --role`
-// sends one (`cli/src/agent-create.ts`), and `createCloudWorkspaceForUser`
-// selects it on the new workspace before its first turn. The hop between the
-// parsed request and the create input is a mapping, and until that mapping was
-// named the field crossed by structural accident alone — which `gate:wired`
-// reported as a wire read at one end and connected at neither.
+// The requested `role` must cross the named request-to-input mapping and be selected before the first turn;
+// crossing by structural accident is what `gate:wired` reported.
 import { describe, expect, test } from 'bun:test';
 import * as v from 'valibot';
 import {
@@ -21,8 +15,7 @@ const USER_ID = '0123456789abcdef0123456789abcdef';
 
 const AGENT = 'jarvis';
 
-/** A Workers AI model the offline menu still lists, and not the native default,
- *  so a create that lands on it must have READ the catalog. */
+/** Not the native default, so a create landing on it must have read the catalog. */
 const CATALOG_DEFAULT = 'workers-ai/@cf/moonshotai/kimi-k2.6';
 
 function envelopeWithDefault(model: string): ProfileCatalogEnvelope {
@@ -39,10 +32,7 @@ interface CreateBody {
   reasoningEffort?: string;
 }
 
-/** One `POST /workspaces`, and every RPC the new workspace received in order.
- *  The whole route is driven rather than `createCloudWorkspaceForUser` alone,
- *  because the request-body-to-input mapping is the thing under test and
- *  calling the create directly would step over it. */
+/** The whole route is driven because the request-body-to-input mapping is under test. */
 async function postCreate(
   body: CreateBody,
   envelope: ProfileCatalogEnvelope = envelopeWithDefault(DEFAULT_WORKERS_AI_MODEL_SPEC),
@@ -103,8 +93,7 @@ async function postCreate(
   };
 
   const originalFetch = globalThis.fetch;
-  // No provider is reachable, so the model menu falls back to the native
-  // Workers AI default — which is what a create resolves to in production too.
+  // No reachable provider: the menu falls back to the native Workers AI default, as production creates do.
   globalThis.fetch = asFetchFunction(async () => new Response('{}', { status: 503 }));
 
   try {
@@ -133,9 +122,7 @@ describe('the role a create request asks for', () => {
 
     expect(created.status).toBe(201);
     expect(created.calls).toContain('role:auditor');
-    // Ordering, not just presence: the genesis turn has to run UNDER the role
-    // the request chose, so a role applied after it would be a turn that ran
-    // as something else.
+    // Ordering: the genesis turn must run under the chosen role.
     expect(created.calls.indexOf('role:auditor')).toBeLessThan(created.calls.indexOf('genesis'));
   });
 
@@ -147,8 +134,7 @@ describe('the role a create request asks for', () => {
   });
 
   test('selects nothing when the request names the default role', async () => {
-    // 'task' is where a workspace already starts, so asking for it is not a
-    // selection and must not spend an RPC changing the role to itself.
+    // 'task' is the starting role, so asking for it must not spend an RPC.
     const created = await postCreate({ name: AGENT, purpose: 'Review the checkout flow.', role: 'task' });
 
     expect(created.status).toBe(201);
@@ -168,10 +154,7 @@ describe('the model and effort a create request asks for', () => {
   });
 
   test('the catalog default tier is the model a new workspace starts on, and the one its turns resolve', async () => {
-    // ONE default, read from one place. The settings page once had a second
-    // "default model for new workspaces" beside the tier catalog's `default`,
-    // stored under its own config key; the two drifted (#6). A new workspace
-    // now starts on the same model the resolver hands every turn.
+    // One default, read from one place (#6): a new workspace starts on the model the resolver hands every turn.
     const envelope = envelopeWithDefault(CATALOG_DEFAULT);
     const created = await postCreate({ name: AGENT, purpose: 'Review the checkout flow.' }, envelope);
 

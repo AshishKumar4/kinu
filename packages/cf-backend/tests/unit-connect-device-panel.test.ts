@@ -1,26 +1,7 @@
 /**
- * Linking a machine from a work surface.
- *
- * The report: "when I want to connect my desktop from my Workspace → Env →
- * connect, it takes me to the settings page instead of a modal or something."
- * The connect affordance is now a panel that opens where it was asked for, and
- * the four things it must get right are all decisions rather than pixels:
- *
- *   - ONE registration per panel. `POST /api/user/devices` is what mints the
- *     row the owner then sees, so a second ask — a double click, a re-render,
- *     a second surface driving the same flow — must not mint a second one.
- *   - The command is the SERVER's. Nothing here builds one from an origin: the
- *     server owns the one-liner and the panel renders exactly what it received.
- *   - The panel settles on a machine that ARRIVED. `registerDevice` on the
- *     UserDO always inserts, so an id the account did not have and that reports
- *     connected is the machine the owner just linked.
- *   - Without a roster it says it cannot confirm. A null baseline makes every
- *     existing device look new, so the panel refuses to guess.
- *
- * `DeviceConnectFlow` is a plain object precisely so those four are provable
- * here rather than only in a browser. What is NOT provable here and is left to
- * `scripts/chat-and-files-ux.test.ts`: that the Environment card's button opens
- * this panel over the surface instead of navigating away.
+ * One registration per panel; the command is the server's verbatim; the panel settles only on a
+ * machine that arrived; with no roster it refuses to guess (a null baseline makes every device
+ * new).
  */
 import './helpers/ui-module-globals';
 import { describe, expect, test } from 'bun:test';
@@ -31,9 +12,8 @@ import { ConnectDevicePanel, DeviceConnectFlow } from '../src/components/Connect
 import { buildCliInstallCommand } from '@kinu.run/core';
 import type { UserDevice } from '../src/lib/user-api';
 
-/** The one-liner the server hands over, built by the same builder the devices
- *  route calls. A copy beside the panel would test the copy, so the verbatim
- *  assertions below prove not one character of it is the client's. */
+/** Built by the devices route's own builder: the verbatim assertions prove the client adds
+ *  nothing. */
 const SERVER_COMMAND = buildCliInstallCommand({ origin: 'https://kinu.run', setup: false, connect: true });
 
 const AT = Date.UTC(2026, 8, 1, 9, 0, 0);
@@ -50,12 +30,8 @@ function device(id: string, connected: boolean, label = id): UserDevice {
 
 interface Recorder {
   readonly flow: DeviceConnectFlow;
-  /** Every label `POST /api/user/devices` was called with, in order. An ask
-   *  with no name is recorded as `(unnamed)` rather than as `undefined`:
-   *  `toEqual` treats an undefined element as absent, so an array of them
-   *  cannot count. */
+  /** Unnamed asks record `(unnamed)`: `toEqual` treats an undefined element as absent. */
   readonly registrations: string[];
-  /** Every device the flow reported as connected. */
   readonly settled: UserDevice[];
 }
 
@@ -75,10 +51,7 @@ function recorder(command = SERVER_COMMAND): Recorder {
   return { flow, registrations, settled };
 }
 
-/** What a reader sees for a given flow state. `renderToStaticMarkup` runs the
- *  panel for real — `useSyncExternalStore` reads the flow's own snapshot — and
- *  hands back the markup. The one effect it skips is the roster hand-off,
- *  which is driven directly here instead. */
+/** Static markup skips the roster hand-off effect, which is driven directly here instead. */
 function render(flow: DeviceConnectFlow, devices: readonly UserDevice[] | null): string {
   return renderToStaticMarkup(createElement(ConnectDevicePanel, { flow, devices }));
 }
@@ -135,9 +108,7 @@ describe('the command on screen is the one the server handed over', () => {
     const { flow } = recorder();
     await flow.start(undefined, []);
     const html = render(flow, []);
-    // The rendered command, un-escaped, must be the server's string exactly:
-    // an origin joined client-side would differ by a flag, a quote or the
-    // PATH tail.
+    // The rendered command, un-escaped, must be the server's string exactly.
     const shown = /data-connect-command[^>]*>([\s\S]*?)<\/code>/.exec(html)?.[1] ?? '';
 
     const decoded = shown
@@ -161,7 +132,6 @@ describe('the command on screen is the one the server handed over', () => {
       expect(html).toContain(line.replaceAll('&', '&amp;'));
     }
 
-    // And it has NOT asked for a command yet: the disclosure comes first.
     expect(html).not.toContain('data-connect-command');
   });
 });

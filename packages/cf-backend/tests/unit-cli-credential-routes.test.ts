@@ -1,14 +1,5 @@
-// Route-level behavior for the CLI's provider-credential surface — what lets
-// `kinu provider connect` put a key in the owner's account instead of on
-// that machine's disk.
-//
-// Contract under test:
-//   - interactive session tokens only: a CI token cannot write a provider key
-//   - set and delete reach the store; the store's own validation surfaces
-//   - the listing carries key/kind/timestamps and never a secret
-//   - a mutation REACHES the workspaces holding cached provider state, exactly
-//     as the browser routes' mutations do — the CLI-only gap left a provider
-//     the owner just connected invisible to every live workspace
+// CLI provider-credential routes: interactive session tokens only, never a secret in the listing, and a mutation
+// reaches workspaces holding cached provider state exactly as the browser routes' mutations do.
 import { TEST_CREDENTIAL_ENCRYPTION_KEY } from './helpers/user-do';
 import { describe, expect, test } from 'bun:test';
 import { handleCliRequest, type CliRoutesEnv } from '../src/cli/routes';
@@ -26,8 +17,6 @@ const CI_TOKEN = `pta_${USER_ID}_${'c'.repeat(44)}`;
 
 const CredentialListSchema = v.array(v.object({ key: v.string(), kind: v.string() }));
 
-/** What a stored credential carries that the summary reads back: its kind, in
- *  the one vocabulary `CredentialSummary` names. */
 const StoredCredentialSchema = v.object({
   kind: v.optional(v.picklist(['bearer', 'oauth', 'openai-compat'])),
 });
@@ -40,7 +29,6 @@ function handled(response: Response | null): Response {
 
 function setupEnv() {
   const stored = new Map<string, { kind: CredentialSummary['kind']; value: { kind?: string } }>();
-  /** Workspaces told to drop their cached provider state, in fan-out order. */
   const notified: string[] = [];
 
   const userDO = cliAccount({
@@ -88,15 +76,11 @@ function setupEnv() {
       }),
     },
     CREDENTIAL_ENCRYPTION_KEY: TEST_CREDENTIAL_ENCRYPTION_KEY,
-    // Device-code sign-in and the published downloads are other suites';
-    // a credential route reaches neither.
     AUTH_KV: unreachableKv('AUTH_KV'),
     ASSETS: unreachableAssets(),
   };
 
-  // The request's own ExecutionContext owns the fan-out, so the suite holds the
-  // promises it hands over and joins them where the assertion is. The fan-out
-  // calls `waitUntil` and nothing else on it.
+  // The request's ExecutionContext owns the fan-out via `waitUntil`; the suite joins those promises.
   const pending: Promise<unknown>[] = [];
   const ctx = { waitUntil(promise: Promise<unknown>) { pending.push(promise); } };
 
@@ -129,10 +113,7 @@ describe('CLI provider credentials', () => {
 
     expect(res?.status).toBe(201);
     expect(stored.get('openrouter.bearer')).toMatchObject({ kind: 'bearer' });
-    // THE FAN-OUT. Both the browser routes and this one run it: without it,
-    // connecting a provider from a terminal leaves every running workspace
-    // holding a catalog that says the provider is absent, until some unrelated
-    // invalidation happens to land.
+    // Without the fan-out, a provider connected from a terminal stays absent in every running workspace's catalog.
     await settled();
     expect(notified).toEqual(['jarvis']);
   });
@@ -147,7 +128,6 @@ describe('CLI provider credentials', () => {
     expect(res?.status).toBe(403);
     expect(await handled(res).text()).toContain('interactive CLI session token');
     expect(stored.size).toBe(0);
-    // A refused write is not a change, so nothing is told to drop anything.
     await settled();
     expect(notified).toEqual([]);
   });
@@ -173,8 +153,6 @@ describe('CLI provider credentials', () => {
 
     expect(res?.status).toBe(200);
     expect(stored.size).toBe(0);
-    // A disconnect is the mutation that matters most: a workspace still holding
-    // the old listing offers a provider whose key is gone.
     await settled();
     expect(notified).toEqual(['jarvis', 'jarvis']);
   });

@@ -1,11 +1,5 @@
-// The owner's experience library at the UserDO boundary.
-//
-// The tier matrix in unit-workspace-tier-gate proves a shared workspace loses
-// both experience capabilities. What is proved here is the other half: that
-// provenance is taken from the PROVEN caller rather than from an argument, so a
-// workspace can only ever publish as itself and can never be handed back its
-// own entries — and that an owner session, which is not any workspace, cannot
-// publish at all.
+// Experience library at the UserDO boundary: provenance comes from the proven caller, not an argument;
+// an owner session cannot publish. (Tier denial: unit-workspace-tier-gate.)
 import { createTestUserDO, provisionTestWorkspace, testOwner, type TestUserDO } from './helpers/user-do';
 import { experienceLibraryOver } from '../src/user/experience-library';
 import { describe, expect, test } from 'bun:test';
@@ -26,9 +20,7 @@ function lesson(text: string): PublishableCandidate {
   };
 }
 
-/** The library as a holder reaches it: one hub per caller, the composition
- *  `orchestrator.ts` hands the workspace, so every case here crosses the wire
- *  and is decoded the way production decodes it. */
+/** One hub per caller, composed as `orchestrator.ts` does, so every case crosses the wire. */
 function libraryFor(harness: TestUserDO, caller: () => Promise<UserCaller>): ExperienceLibraryClient {
   return experienceLibraryOver(async () => ({ stub: harness.userDO, caller: await caller() }));
 }
@@ -63,8 +55,7 @@ describe('the experience library is owner-scoped and provenance is proven', () =
   test('a workspace cannot publish under a sibling\'s name', async () => {
     const { harness, alpha, beta } = await twoWorkspaces();
 
-    // The candidate carries no workspace field at all — provenance comes from
-    // the token, so there is nothing to forge.
+    // No workspace field: provenance comes from the token, so there is nothing to forge.
     await alpha.publish(lesson('Alpha knows this.'));
     const seenByBeta = await beta.search({});
     expect(seenByBeta.every((e) => e.sourceWorkspace === ALPHA)).toBe(true);
@@ -78,7 +69,6 @@ describe('the experience library is owner-scoped and provenance is proven', () =
     const { harness, alpha, owner } = await twoWorkspaces();
     await alpha.publish(lesson('Alpha knows this.'));
 
-    // No workspace identity, so nothing is excluded and nothing can be attributed.
     expect((await owner.search({})).map((e) => e.sourceWorkspace)).toEqual([ALPHA]);
     await expect(owner.publish(lesson('From nowhere.')))
       .rejects.toThrow('Only a workspace can publish experience');

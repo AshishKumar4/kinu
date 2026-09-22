@@ -1,13 +1,5 @@
-// Behavior tests for the general provider proxy (/api/user/ai/proxy/*) — the
-// route that makes a key connected in the web UI usable by a local agent with
-// no second copy of the secret on that machine.
-//
-// Contract under test:
-//   - auth: the same CLI-bearer gate the Cloudflare-pinned proxy uses
-//   - GET /credentials lists proxyable keys and never a secret
-//   - POST /forward attaches the credential server-side and streams through
-//   - a target outside the credential's own endpoint is refused (exfiltration)
-//   - the Cloudflare login is never attached to a client-chosen URL
+// General provider proxy (/api/user/ai/proxy/*): a key connected in the web UI serves a local
+// agent without a second copy of the secret; targets outside the credential's endpoint are refused.
 import { TEST_CREDENTIAL_ENCRYPTION_KEY } from './helpers/user-do';
 import { afterEach, describe, expect, test } from 'bun:test';
 import { handleCliRequest, type CliRoutesEnv } from '../src/cli/routes';
@@ -26,8 +18,6 @@ const AI_TOKEN = `pta_${USER_ID}_${'a'.repeat(44)}`;
 
 const READ_TOKEN = `pta_${USER_ID}_${'r'.repeat(44)}`;
 
-/** The scopes each access token in this suite carries. A bearer that is not one
- *  of these is not a token at all. */
 function scopesFor(bearer: string): AccessTokenScope[] | null {
   if (bearer === AI_TOKEN) return ['ai.proxy'];
 
@@ -94,8 +84,6 @@ function setupEnv(stored: StoredCredential[]) {
   const env: CliRoutesEnv<string> = {
     UserDO: { idFromName: (name) => name, get: () => userDO },
     CREDENTIAL_ENCRYPTION_KEY: TEST_CREDENTIAL_ENCRYPTION_KEY,
-    // A proxied credential never touches a workspace object, the device-code
-    // KV or the published assets.
     OrchestratorAgent: unreachableNamespace('OrchestratorAgent'),
     AUTH_KV: unreachableKv('AUTH_KV'),
     ASSETS: unreachableAssets(),
@@ -241,8 +229,7 @@ describe('POST /forward', () => {
     expect(seen[0]?.method).toBe('POST');
     expect(seen[0]?.body).toBe('{"model":"anthropic/claude"}');
     expect(seen[0]?.headers.get('authorization')).toBe('Bearer sk-or-real');
-    // Attribution and content headers survive; the proxy's own control
-    // headers and the caller's Kinu bearer do not.
+    // Attribution and content headers survive; proxy control headers and the Kinu bearer do not.
     expect(seen[0]?.headers.get('http-referer')).toBe('https://kinu.example.com');
     expect(seen[0]?.headers.get('x-kinu-proxy-cred')).toBeNull();
     expect(seen[0]?.headers.get('x-kinu-proxy-target')).toBeNull();
@@ -356,9 +343,7 @@ describe('POST /forward', () => {
   });
 
   test('refuses model management — an inference token cannot DELETE a model', async () => {
-    // `ai.proxy` buys inference spend. A target allowlist that checks only
-    // origin and path lets this exact request reach the provider with the
-    // owner's key attached and delete their fine-tuned model.
+    // Origin+path allowlisting alone would let `ai.proxy` delete the owner's fine-tuned model.
     const env = setupEnv([{ key: 'openai.bearer', headers: { Authorization: 'Bearer sk-real' } }]);
     const seen = captureUpstream(() => new Response('should not happen'));
 

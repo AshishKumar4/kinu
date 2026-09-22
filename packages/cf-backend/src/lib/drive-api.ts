@@ -1,12 +1,6 @@
 /**
- * Typed client for `/api/drive/*` — the owner's Drive. The session rides the
- * HttpOnly cookie, so the fetches are bare. Every answer is parsed through the
- * schema core declares for it, and a refusal arrives as {@link DriveApiError}
- * carrying the reason the object gave, which the page shows as it is.
- *
- * Folders leave the browser as one zip: `packZip` is core's own writer, so a
- * dropped folder or a picked skill directory is one PUT rather than one per
- * file, and the object lands the whole set or none of it.
+ * Typed client for `/api/drive/*`; the session rides the HttpOnly cookie.
+ * Folders upload as one zip (core's `packZip`) so the object lands the whole set or none.
  */
 import {
   DriveListingSchema, MarkedSkillSchema, packZip, type DriveListing, type JsonValue, type MarkedSkill,
@@ -17,7 +11,6 @@ import * as v from 'valibot';
 
 const ErrorBody = v.object({ error: v.string() });
 
-/** A refusal or failure, as the route answered it. */
 class DriveApiError extends Error {
   constructor(readonly status: number, message: string) {
     super(message);
@@ -80,17 +73,14 @@ export async function deleteEntry(path: string): Promise<void> {
   await api(Ok, 'DELETE', `?path=${encodeURIComponent(path)}`);
 }
 
-/** One file's bytes to `path`; an existing file there is replaced. */
 export async function uploadFile(path: string, file: Blob): Promise<void> {
   await api(Ok, 'PUT', `/files?path=${encodeURIComponent(path)}`, { body: file });
 }
 
-/** A zip's entries unpacked under `folder`. */
 export async function uploadZip(folder: string, archive: Blob): Promise<void> {
   await api(Ok, 'PUT', `/files?folder=${encodeURIComponent(folder)}&unpack=zip`, { body: archive });
 }
 
-/** A picked folder, landed under `folder` with its own name as the root. */
 export async function uploadFolder(folder: string, files: readonly PickedFile[]): Promise<void> {
   await uploadZip(folder, await zipped(files));
 }
@@ -99,13 +89,11 @@ export function markAsSkill(path: string): Promise<MarkedSkill> {
   return api(MarkedSkillSchema, 'POST', '/skills/mark', jsonBody({ path }));
 }
 
-/** A skill from the pasted text of one SKILL.md. */
 export function addSkillText(skill: string): Promise<MarkedSkill> {
   return api(MarkedSkillSchema, 'POST', '/skills', jsonBody({ skill }));
 }
 
-/** A skill from a picked folder or a zip; `name` is the folder's name, the
- *  skill's name when its front matter states none. */
+/** `name` is the folder's name, used as the skill's name when front matter states none. */
 export async function addSkillArchive(archive: Blob, name: string | null): Promise<MarkedSkill> {
   const query = name === null ? '' : `?name=${encodeURIComponent(name)}`;
 
@@ -116,7 +104,6 @@ export async function addSkillFolder(files: readonly PickedFile[], name: string 
   return addSkillArchive(await zipped(files), name);
 }
 
-/** Where a browser fetches an entry's bytes: a file as itself, a folder as a zip. */
 export function downloadUrl(path: string): string {
   return `/api/drive/files?path=${encodeURIComponent(path)}&download=1`;
 }

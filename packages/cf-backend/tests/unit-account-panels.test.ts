@@ -1,11 +1,6 @@
 /**
- * The account panels moved out of the pages that used to own them: providers
- * form code out of UserSettingsPage, the server roster out of UserMcpPage.
- * A page that still carried a copy would render two sources of truth — the
- * settings section and the setup modal would drift apart in exactly the way
- * this refactor exists to prevent. Source assertions, because the app has no
- * DOM harness: a component's render sites are its contract, so the test counts
- * `<Component` occurrences across src/ rather than trusting an import string.
+ * Providers and the MCP server roster each render from one panel, so settings and the setup modal cannot drift.
+ * Source assertions (no DOM harness): counts `<Component` render sites across src/.
  */
 import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
@@ -15,7 +10,6 @@ const SRC = join(import.meta.dir, "..", "src");
 
 const source = (path: string) => readFileSync(join(import.meta.dir, "..", path), "utf8");
 
-/** Every src file that renders the named component. */
 function renderers(component: string): string[] {
   const openTag = `<${component}`;
   const found: string[] = [];

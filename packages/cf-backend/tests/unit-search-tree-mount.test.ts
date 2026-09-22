@@ -1,15 +1,5 @@
-// The hero MOUNT lands on Canvas2D whenever the GPU half gives out — proved
-// deterministically through the real mount (`mountLivingCanvas`, the code
-// `SearchTreeHero` runs) over the real picture, with vgpu faked at its module
-// seam and the DOM faked as globals. No React is mocked: the mount is a plain
-// function of a host element, which is the seam the component itself uses.
-//
-// The browser case in scripts/public-pages.test.ts reaches the same swap
-// through a real GPUDevice.destroy(), but only on a lane where WebGPU is live;
-// on a headless lane it lands on canvas before the destroy and proves the
-// resting renderer, not the swap. This suite is the proof that holds
-// everywhere: the mount STARTS on WebGPU, the device dies mid-run, and the
-// picture goes on under Canvas2D with the clock it had.
+// The hero mount (`mountLivingCanvas`) falls back to Canvas2D when the GPU device dies mid-run, keeping
+// its clock. scripts/public-pages.test.ts only proves this where WebGPU is live; this holds everywhere.
 import { afterAll, afterEach, beforeEach, describe, expect, mock, test } from 'bun:test';
 import { VGPUError as CoreVGPUError } from '@vgpu/core';
 import { SearchTree } from '@kinu.run/core/web/hero-art';
@@ -19,8 +9,7 @@ import { installFakeVgpu, lastFakeGpu, resetFakeVgpu, setVgpuInit } from './help
 
 await installFakeVgpu();
 
-// Dynamic on purpose: the mount's GPU chunk imports vgpu at module load, so
-// it may only load AFTER the fake is installed.
+// Dynamic: the GPU chunk imports vgpu at load, so it must load after the fake is installed.
 const { mountLivingCanvas } = await import('../src/components/landing/search-tree/living-canvas');
 
 interface FakeCanvasDataset { renderer?: string; settled?: string }
@@ -45,7 +34,6 @@ let clock: number;
 
 const savedGlobals = new Map<string, PropertyDescriptor | undefined>();
 
-/** A Canvas2D surface that counts strokes and answers every other call with nothing. */
 function countingSurface(canvas: FakeCanvas): StrokeSurface {
   const gradient = { addColorStop: () => undefined, toString: () => 'gradient()' };
 
@@ -95,7 +83,6 @@ class FakePassiveObserver {
 
 class FakeIntersectionObserver {
   constructor(cb: (entries: readonly { isIntersecting: boolean }[]) => void) {
-    // The host is on screen from the start: the loop runs.
     cb([{ isIntersecting: true }]);
   }
 
@@ -121,9 +108,7 @@ const fakeWindow = {
   matchMedia: () => ({ matches: false, addEventListener: () => {}, removeEventListener: () => {} }),
 };
 
-/** The host, as the mount reads it: a child list and a box, nothing more.
- *  A null-prototype object, so the element type is a declaration rather
- *  than an assertion — the same way the renderer suite fakes its canvas. */
+/** Null-prototype, so the element type is a declaration rather than an assertion. */
 const host: HTMLElement = Object.assign(Object.create(null), {
   firstChild: null,
   insertBefore(child: FakeCanvas): void {
@@ -132,8 +117,6 @@ const host: HTMLElement = Object.assign(Object.create(null), {
   getBoundingClientRect: () => ({ left: 0, top: 0, right: 1200, bottom: 600, width: 1200, height: 600 }),
 });
 
-/** The globals the mount looks up by name. Every value is a fake this file owns,
- *  installed before each test and restored after, so none outlives the file. */
 const FAKE_GLOBALS = {
   window: fakeWindow,
   document: fakeDocument,
@@ -186,7 +169,6 @@ afterAll(() => {
   mock.restore();
 });
 
-/** Every queued animation frame, in order, sixteen wall-milliseconds apart. */
 function drainFrames(): void {
   const queue = rafQueue;
   rafQueue = [];
@@ -197,14 +179,8 @@ function drainFrames(): void {
   }
 }
 
-/**
- * Frames and turns of the event loop until the mount has LANDED — its
- * renderer is no longer pending. The start
- * crosses a real module load (the GPU chunk is a dynamic import), so this is
- * an end condition over turns of the loop, never a count of microtasks and
- * never a clock: a mount that never lands hangs here, which the ladder's
- * deadline ends.
- */
+/** Loop turns until the renderer is no longer pending: the GPU chunk is a dynamic import, so no
+ *  microtask count or clock works; a mount that never lands hangs until the ladder's deadline. */
 async function landed(living: { renderer(): string }): Promise<void> {
   while (living.renderer() === 'pending') {
     drainFrames();
@@ -212,7 +188,6 @@ async function landed(living: { renderer(): string }): Promise<void> {
   }
 }
 
-/** The hero's own mount spec, minus the pointer wiring the stage adds. */
 function mountHero() {
   const living = mountLivingCanvas(host, {
     create: (aspect) => new SearchTree({ seed: 417, aspect }),
@@ -236,8 +211,7 @@ describe('the hero mount lands on Canvas2D whenever the GPU half gives out', () 
       const living = mountHero();
       await landed(living);
 
-      // The precondition the browser case cannot guarantee on a headless
-      // lane: the mount really started on WebGPU.
+      // Precondition a headless browser lane cannot guarantee: started on WebGPU.
       expect(living.renderer()).toBe('webgpu');
       const gpu = lastFakeGpu();
 
@@ -248,10 +222,7 @@ describe('the hero mount lands on Canvas2D whenever the GPU half gives out', () 
       expect(before).toBeGreaterThan(0.1);
       expect(gpu.frames).toBeGreaterThan(0);
 
-      // The device dies through `frame()`, the only channel a real loss has.
-      // The swap is synchronous inside the fault handler, so the very next
-      // read is the verdict: a mount that never wired the handler still says
-      // webgpu here and fails, rather than hanging on a wait.
+      // Loss arrives only through `frame()`; the swap is synchronous in the fault handler, so the next read is the verdict.
       gpu.frameThrows = new CoreVGPUError({ code: 'VGPU-DEVICE-LOST', message: 'the device was lost' });
       drainFrames();
 
@@ -259,10 +230,9 @@ describe('the hero mount lands on Canvas2D whenever the GPU half gives out', () 
       expect(gpu.disposed).toBe(true);
       expect(hostChildren).toHaveLength(1);
       expect(hostChildren[0]?.dataset.renderer).toBe('canvas');
-      // The same picture, clock and all — never a restart.
+      // Same picture and clock: never a restart.
       expect(living.time()).toBeGreaterThanOrEqual(before);
 
-      // And it draws: the fallen canvas strokes the tree the GPU was drawing.
       for (let frame = 0; frame < 4; frame += 1) drainFrames();
       expect(hostChildren[0]?.strokes).toBeGreaterThan(0);
       expect(living.time()).toBeGreaterThan(before);

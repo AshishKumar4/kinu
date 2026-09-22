@@ -1,22 +1,6 @@
 /**
- * The per-workspace device grant, at the boundary that enforces it.
- *
- * Every agent call into a device passes through ONE chokepoint —
- * `UserDO.deviceRpc` — and consent is resolved there against the PROVEN
- * workspace. So these tests drive the real UserDO over bun:sqlite with a
- * connected device whose socket answers like the daemon does, because the
- * difference between "the grant let it through" and "the grant did nothing"
- * is only visible when the far end replies.
- *
- * Three claims, each provable in both directions:
- *   1. Before a grant, nothing executes: no frame reaches the device.
- *   2. After the owner grants the workspace, calls run without asking again.
- *   3. Revoking the grant takes effect on the NEXT call, with no restart.
- *
- * Plus the two halves the grant model needs to be usable: an agent can SEE
- * the machine by name before it may touch it, and when there is no machine at
- * all its request fails with a notice naming the registered machines instead
- * of a dead end.
+ * Consent is resolved at the one chokepoint, `UserDO.deviceRpc`, against the proven workspace:
+ * driven over a real UserDO whose device socket answers, so a grant that did nothing is visible.
  */
 import { describe, expect, test } from 'bun:test';
 import { readFileSync } from 'node:fs';
@@ -49,18 +33,15 @@ const UnstoppedRowSchema = v.object({ unstopped_at: v.nullable(v.number()) });
 describe('the per-workspace device grant, enforced at the hub chokepoint', () => {
   test('an ungranted workspace is refused, and nothing reaches the machine', async () => {
     const harness = await deviceHarness();
-    // The owner is away from the card: an unanswered prompt is not a refusal,
-    // but it is not a grant either.
+    // An unanswered prompt is not a refusal, but it is not a grant either.
     harness.consentDecision = 'deny';
 
     await expect(harness.userDO.deviceRpc(harness.workspace, 'exec', ['rm -rf ~/work'], {
       agentName: WORKSPACE,
     })).rejects.toThrow(DEVICE_CONSENT_DENIED);
 
-    // The refusal happened BEFORE the device — the executor boundary, not a
-    // message the daemon was asked to ignore.
+    // Refused before the device: at the executor boundary, not a message the daemon ignores.
     expect(harness.deviceFrames.filter((f) => f.method === 'exec')).toEqual([]);
-    // And the card the owner saw names the workspace whose access it decides.
     expect(harness.consentPrompts).toEqual([{
       workspace: WORKSPACE,
       method: 'exec',
@@ -74,14 +55,12 @@ describe('the per-workspace device grant, enforced at the hub chokepoint', () =>
     const harness = await deviceHarness();
     harness.consentDecision = 'always';
 
-    // On the tier a CARD can record, which is the base one. An exec asks every
-    // time, deliberately — see "an exec card cannot record the full tier".
+    // Recorded on the base tier a card can record; an exec asks every time, deliberately.
     await harness.userDO.deviceRpc(harness.workspace, 'readFile', ['/home/me/a.md'], {
       agentName: WORKSPACE,
     });
     expect(harness.consentPrompts).toHaveLength(1);
 
-    // The grant is remembered, so the second call asks nobody and still runs.
     await harness.userDO.deviceRpc(harness.workspace, 'readFile', ['/home/me/b.md'], {
       agentName: WORKSPACE,
     });
@@ -93,16 +72,13 @@ describe('the per-workspace device grant, enforced at the hub chokepoint', () =>
 
 
   test('one binding covers the shell too — the owner is asked once, not once per method', async () => {
-    // ONE question: a grant that left `exec` still gated would ask a workspace
-    // the owner had already approved AGAIN the first time it ran a command, on
-    // a card whose real question is "may I use this machine" and whose text is
-    // a shell line. What a command may touch is the device's own Sandbox switch.
+    // One question: a grant must not leave `exec` gated. What a command may touch is the device's
+    // own Sandbox switch.
     const harness = await deviceHarness();
     harness.consentDecision = 'always';
     await harness.userDO.deviceRpc(harness.workspace, 'readFile', ['/tmp/a'], { agentName: WORKSPACE });
     expect(harness.consentPrompts).toHaveLength(1);
 
-    // The owner has left. A second card here would park the command on nobody.
     harness.consentDecision = 'deny';
     await harness.userDO.deviceRpc(harness.workspace, 'exec', ['cat /etc/passwd'], { agentName: WORKSPACE });
 
@@ -115,8 +91,7 @@ describe('the per-workspace device grant, enforced at the hub chokepoint', () =>
     const harness = await deviceHarness();
     harness.consentDecision = 'deny';
 
-    // The /pc mount reads THROUGH this same call, so an ungranted read is
-    // refused for the same reason an ungranted command is.
+    // The /pc mount reads through this same call, so an ungranted read is refused too.
     await expect(harness.userDO.deviceRpc(harness.workspace, 'readFile', ['/home/me/.ssh/id_ed25519'], {
       agentName: WORKSPACE,
     })).rejects.toThrow(DEVICE_CONSENT_DENIED);
@@ -140,8 +115,8 @@ describe('the per-workspace device grant, enforced at the hub chokepoint', () =>
     expect(await harness.userDO.revokeDeviceConsent(await testOwner(), WORKSPACE, harness.deviceId))
       .toEqual({ ok: true });
 
-    // Revocation deletes the remembered policy rather than storing a refusal,
-    // so the workspace is ASKED again — and the owner, now saying no, stops it.
+    // Revocation deletes the remembered policy rather than storing a refusal, so the workspace is
+    // asked again.
     harness.consentDecision = 'deny';
     await expect(harness.userDO.deviceRpc(harness.workspace, 'exec', ['ls'], { agentName: WORKSPACE }))
       .rejects.toThrow(DEVICE_CONSENT_DENIED);
@@ -191,20 +166,13 @@ describe('the per-workspace device grant, enforced at the hub chokepoint', () =>
     await harness.closeDeviceHarness();
   });
 
-  /**
-   * Stopping a command is not the same decision as starting one.
-   *
-   * Consent decides what may RUN on the machine. A cancellation only ends
-   * something the owner already let through, and gating it would put a live
-   * process behind a card nobody is at the keyboard to answer — the exact
-   * failure cancellation exists for.
-   */
+  /** Stopping is not starting: gating a cancel would put a live process behind an unanswered
+   *  card. */
   test('a cancellation reaches the machine while consent is refusing new work', async () => {
     const harness = await deviceHarness();
     harness.consentDecision = 'deny';
     const requestId = 'rpc-epoch1-7';
 
-    // The control: this workspace cannot START anything right now.
     await expect(harness.userDO.deviceRpc(harness.workspace, 'exec', ['make'], {
       agentName: WORKSPACE,
     })).rejects.toThrow(DEVICE_CONSENT_DENIED);
@@ -217,15 +185,12 @@ describe('the per-workspace device grant, enforced at the hub chokepoint', () =>
 
     expect(harness.deviceFrames.map((frame) => ({ method: frame.method, params: frame.params })))
       .toEqual([{ method: DEVICE_CANCEL_METHOD, params: [requestId, DEVICE_CANCEL_PROTOCOL] }]);
-    // And it asked nobody: only the refused `exec` raised a card.
     expect(harness.consentPrompts.map((prompt) => prompt.method)).toEqual(['exec']);
     await harness.closeDeviceHarness();
   });
 
   test('the identity the caller minted is the id the command is issued under', async () => {
-    // The caller has to know the id before the answer, because that id is what
-    // a later cancellation names. The hub forwards it verbatim rather than
-    // minting one the caller could never learn in time.
+    // A later cancellation names this id, so the hub forwards the caller's id verbatim.
     const harness = await deviceHarness();
     harness.consentDecision = 'always';
     const requestId = nextDeviceRequestId();
@@ -240,16 +205,8 @@ describe('the per-workspace device grant, enforced at the hub chokepoint', () =>
   });
 
   /**
-   * A binding is read BY NAME on every later call, so its lifetime has to be
-   * the lifetime of the thing it names.
-   *
-   * Two ways it could outlive them are UNREPRESENTABLE rather than checked,
-   * which is why nothing below asserts them. There is one binding and no scope,
-   * so an "always" on an exec card has no BASE scope to record in place of
-   * full_filesystem — no scope column reader or writer exists. And the only
-   * writer of a consent row is the card path, keyed on the PROVEN workspace and
-   * run after `isActiveDevice`, so a row naming a workspace this registry does
-   * not hold, or a device that is not live, cannot be built.
+   * A binding is read by name on every later call, so it lives as long as the thing it names.
+   * Outliving it is unrepresentable (one binding, no scope; rows written only on the card path).
    */
   test('deleting a workspace deletes its device bindings, so a same-name replacement inherits nothing', async () => {
     const harness = await deviceHarness();
@@ -261,7 +218,6 @@ describe('the per-workspace device grant, enforced at the hub chokepoint', () =>
     await harness.userDO.removeWorkspace(owner, WORKSPACE, '0'.repeat(32));
     expect(await harness.userDO.listDeviceConsents(owner)).toEqual([]);
 
-    // The owner recreates the name — a shared template makes this ordinary.
     const rebuilt = await provisionTestWorkspace(harness, WORKSPACE, 'Workspace A');
     const replacement: UserCaller = { workspaceToken: rebuilt };
     harness.consentDecision = 'deny';
@@ -306,7 +262,6 @@ describe('durable device request ownership', () => {
     expect(await harness.userDO.transferDeviceRequestToBackgroundJob(harness.workspace, detaching, 'job-1'))
       .toEqual({ transferred: true });
 
-    // The turn still owns the sibling, and only the sibling.
     expect(await harness.userDO.cancelDeviceRequestsForTurn(harness.workspace, 'turn-1'))
       .toEqual([{ requestId: sibling, outcome: 'terminated' }]);
     expect(await harness.userDO.cancelDeviceRequestsForBackgroundJob(harness.workspace, 'job-1'))
@@ -327,12 +282,8 @@ describe('durable device request ownership', () => {
     await harness.closeDeviceHarness();
   });
 
-  /**
-   * The provider half of detached device ownership: the seam a background-job
-   * consumer must call. The consumer lives in the durable turn/job subsystem,
-   * so this proves the contract exists and is reachable rather than claiming an
-   * end-to-end detach this package does not own.
-   */
+  /** The provider half of detached device ownership; the consumer lives in the turn/job
+   *  subsystem. */
   test('the ownership seam a background-job consumer needs is reachable and native', async () => {
     const harness = await deviceHarness();
 
@@ -347,18 +298,13 @@ describe('durable device request ownership', () => {
       expect(USER_DO_RPC_SURFACE).toContain(name);
     }
 
-    // A per-request transfer takes exactly one request identity plus one job
-    // identity — no turn argument exists to widen it back to the whole turn.
+    // A per-request transfer takes one request and one job identity: no turn argument can widen it.
     expect(seam.transferDeviceRequestToBackgroundJob).toHaveLength(3);
     await harness.closeDeviceHarness();
   });
 
-  /**
-   * Controlled interleaving, not a snapshot: the sweep claims eligible rows
-   * before its first device await, so a detach that lands mid-sweep cannot move
-   * a request the sweep is already cancelling, and cannot be cancelled by a
-   * sweep it escaped in time.
-   */
+  /** The sweep claims eligible rows before its first device await: a mid-sweep detach cannot
+   *  move a claimed request, nor be cancelled by a sweep it escaped. */
   test('a detach racing an in-flight turn sweep loses to the sweep claim', async () => {
     const harness = await deviceHarness();
     const claimed = nextDeviceRequestId();
@@ -368,7 +314,6 @@ describe('durable device request ownership', () => {
     ).run(claimed, harness.deviceId, WORKSPACE, 'turn-1');
 
     const sweep = harness.userDO.cancelDeviceRequestsForTurn(harness.workspace, 'turn-1');
-    // Interleaved before the sweep resolves: the row is already claimed.
     expect(await harness.userDO.transferDeviceRequestToBackgroundJob(harness.workspace, claimed, 'job-1'))
       .toEqual({ transferred: false });
     expect(await sweep).toEqual([{ requestId: claimed, outcome: 'terminated' }]);
@@ -417,8 +362,6 @@ describe('durable device request ownership', () => {
       `INSERT INTO device_inflight_requests (request_id, device_id, workspace, turn_id)
        VALUES (?, ?, ?, ?)`,
     ).run(requestId, harness.deviceId, WORKSPACE, 'turn-1');
-    // Claimed, then the isolate died before the cancel frame went out: exactly
-    // the state a reset between claim and RPC leaves behind.
     harness.db.prepare(
       `UPDATE device_inflight_requests SET cancel_claim = ? WHERE request_id = ?`,
     ).run('claim-of-a-dead-activation', requestId);
@@ -449,16 +392,12 @@ describe('durable device request ownership', () => {
        VALUES (?, ?, ?, ?)`,
     ).run(requestId, harness.deviceId, WORKSPACE, 'turn-1');
 
-    // The kill is confirmed, so the outcome is truthful and the row is
-    // process-terminal with only its replay cleanup outstanding.
     expect(await harness.userDO.cancelDeviceRequestsForTurn(harness.workspace, 'turn-1'))
       .toEqual([{ requestId, outcome: 'terminated' }]);
-    // A dead command must never be handed to a background job.
     expect(await harness.userDO.transferDeviceRequestToBackgroundJob(harness.workspace, requestId, 'job-1'))
       .toEqual({ transferred: false });
 
-    // Same activation, same hot socket: the retry cleans up and never kills the
-    // dead process group a second time.
+    // The retry cleans up and never kills the dead process group a second time.
     ackWorks = true;
     expect(await harness.userDO.cancelDeviceRequestsForTurn(harness.workspace, 'turn-1'))
       .toEqual([{ requestId, outcome: 'terminated' }]);
@@ -485,8 +424,7 @@ describe('durable device request ownership', () => {
     expect(await harness.userDO.cancelDeviceRequestsForTurn(harness.workspace, 'turn-1'))
       .toEqual([{ requestId, outcome: 'terminated' }]);
 
-    // Death is durable, so it outlives the activation that observed it: the new
-    // activation refuses the transfer even before it cleans the row up.
+    // Death is durable: a new activation refuses the transfer even before cleaning the row up.
     const revived = createTestUserDO({ storage: harness.db, deviceResponder: daemon });
     revived.attachDevice(harness.deviceId);
     expect(await revived.userDO.transferDeviceRequestToBackgroundJob(harness.workspace, requestId, 'job-1'))
@@ -523,14 +461,12 @@ describe('durable device request ownership', () => {
        VALUES (?, ?, ?, ?)`,
     ).run(requestId, harness.deviceId, WORKSPACE, 'turn-1');
 
-    // `unknown` also proves nothing runs under the request, so the row settles.
     expect(await harness.userDO.cancelDeviceRequestsForTurn(harness.workspace, 'turn-1'))
       .toEqual([{ requestId, outcome: 'unknown' }]);
     expect(await harness.userDO.transferDeviceRequestToBackgroundJob(harness.workspace, requestId, 'job-1'))
       .toEqual({ transferred: false });
 
-    // A cleanup retry reports the STORED answer rather than promoting it to a
-    // termination this sweep never observed.
+    // A cleanup retry reports the stored answer, never a termination this sweep did not observe.
     ackWorks = true;
     expect(await harness.userDO.cancelDeviceRequestsForTurn(harness.workspace, 'turn-1'))
       .toEqual([{ requestId, outcome: 'unknown' }]);
@@ -550,14 +486,11 @@ describe('durable device request ownership', () => {
     ).run(requestId, harness.deviceId, WORKSPACE, 'turn-1', 'terminated');
     harness.attachDevice(null);
 
-    // A confirmed stop must never regress into "the kill failed" just because
-    // the socket needed for local cleanup is gone.
+    // A confirmed stop must never regress into "the kill failed" when the cleanup socket is gone.
     expect(await harness.userDO.cancelDeviceRequestsForTurn(harness.workspace, 'turn-1'))
       .toEqual([{ requestId, outcome: 'terminated' }]);
-    // Cleanup is still owed, so the row survives and stays untransferable.
     expect(await harness.userDO.transferDeviceRequestToBackgroundJob(harness.workspace, requestId, 'job-1'))
       .toEqual({ transferred: false });
-    // And the revoked-device incident does not count a request already answered.
     expect(await harness.userDO.revokeDevice(await testOwner(), harness.deviceId))
       .toEqual({ ok: true, unstoppedCommands: 0 });
     await harness.closeDeviceHarness();
@@ -580,8 +513,6 @@ describe('durable device request ownership', () => {
       `INSERT INTO device_inflight_requests (request_id, device_id, workspace, turn_id)
        VALUES (?, ?, ?, ?)`,
     ).run(requestId, harness.deviceId, WORKSPACE, 'turn-1');
-    // Revocation deletes the row while this kill is in flight, then the kill
-    // rejects. The row is gone, so this sweep no longer answers for it.
     dropRow = () => {
       harness.db.prepare(`DELETE FROM device_inflight_requests WHERE request_id = ?`).run(requestId);
       dropRow = null;
@@ -601,8 +532,6 @@ describe('durable device request ownership', () => {
       checkpoint: { agent: WORKSPACE, turnId: 'turn-1', sessionId: 's', dir: null },
     });
 
-    // No transfer ran, and the turn that opened the scope never owned the row:
-    // there is no window for a Stop to cancel work that already detached.
     expect(harness.db.prepare(
       `SELECT turn_id, background_job_id FROM device_inflight_requests WHERE request_id = ?`,
     ).all(requestId)).toEqual([{ turn_id: null, background_job_id: 'job-1' }]);
@@ -619,12 +548,10 @@ describe('durable device request ownership', () => {
       `INSERT INTO device_inflight_requests (request_id, device_id, workspace, turn_id)
        VALUES (?, ?, ?, ?)`,
     ).run(requestId, harness.deviceId, WORKSPACE, 'turn-1');
-    // Revoked, and a crashed activation left no claim behind to block a detach.
     harness.db.prepare(`UPDATE user_devices SET revoked_at = ? WHERE id = ?`)
       .run(Date.now(), harness.deviceId);
 
-    // The daemon can never reconnect, so a job that adopted this could never
-    // cancel it: the unresolved command stays revocation's to report.
+    // The daemon can never reconnect, so a job adopting this could never cancel it.
     expect(await harness.userDO.transferDeviceRequestToBackgroundJob(harness.workspace, requestId, 'job-1'))
       .toEqual({ transferred: false });
     await harness.closeDeviceHarness();
@@ -638,13 +565,10 @@ describe('durable device request ownership', () => {
        VALUES (?, ?, ?, ?)`,
     ).run(requestId, harness.deviceId, WORKSPACE, 'job-1');
 
-    // Idempotent while the machine can still be reached...
     expect(await harness.userDO.transferDeviceRequestToBackgroundJob(harness.workspace, requestId, 'job-1'))
       .toEqual({ transferred: true });
     harness.db.prepare(`UPDATE user_devices SET revoked_at = ? WHERE id = ?`)
       .run(Date.now(), harness.deviceId);
-    // ...and no longer a success once it cannot, because the job could not
-    // cancel what it would be told it owns.
     expect(await harness.userDO.transferDeviceRequestToBackgroundJob(harness.workspace, requestId, 'job-1'))
       .toEqual({ transferred: false });
     await harness.closeDeviceHarness();
@@ -655,8 +579,7 @@ describe('durable device request ownership', () => {
     harness.consentDecision = 'always';
     const requestId = nextDeviceRequestId();
 
-    // A blank owner would insert a row no turn sweep and no job sweep can ever
-    // select - the orphan this table exists to prevent.
+    // A blank owner would insert a row no sweep can ever select: the orphan this table prevents.
     await expect(harness.userDO.deviceRpc(harness.workspace, 'exec', ['sleep 30'], {
       agentName: WORKSPACE, requestId, backgroundJobId: '',
     })).rejects.toThrow('must name a job');
@@ -674,13 +597,10 @@ describe('durable device request ownership', () => {
       `INSERT INTO device_inflight_requests (request_id, device_id, workspace, turn_id)
        VALUES (?, ?, ?, ?)`,
     ).run(requestId, harness.deviceId, WORKSPACE, 'turn-1');
-    // The state a sweep leaves between writing its provisional warning and
-    // deciding: revoked, warned, rows still unsettled.
     harness.db.prepare(`UPDATE user_devices SET revoked_at = ?, unstopped_at = ? WHERE id = ?`)
       .run(Date.now(), Date.now(), harness.deviceId);
 
-    // Nothing to read yet, so nothing to acknowledge: clearing here could retire
-    // a warning about a process no one has confirmed and no one can ask again.
+    // Clearing here could retire a warning about a process no one has confirmed.
     expect(await harness.userDO.acknowledgeUnstoppedDevice(await testOwner(), harness.deviceId))
       .toEqual({ ok: false });
 
@@ -699,15 +619,12 @@ describe('durable device request ownership', () => {
        VALUES (?, ?, ?, ?)`,
     ).run(requestId, harness.deviceId, WORKSPACE, 'turn-1');
 
-    // The abort path the device exec tool takes: the cancellation frame goes
-    // straight through this same forwarder rather than through a sweep.
     await harness.userDO.deviceRpc(harness.workspace, DEVICE_CANCEL_METHOD, [requestId, DEVICE_CANCEL_PROTOCOL], {
       agentName: WORKSPACE,
     });
 
-    // The turn sweep then finds the request already answered: it reports THAT
-    // answer and sends no second kill, so the two paths cannot disagree about
-    // whether the process group died.
+    // The sweep reports the already-stored answer and sends no second kill: the paths cannot
+    // disagree.
     expect(await harness.userDO.cancelDeviceRequestsForTurn(harness.workspace, 'turn-1'))
       .toEqual([{ requestId, outcome: 'terminated' }]);
     expect(harness.deviceFrames.filter((frame) => frame.method === DEVICE_CANCEL_METHOD)
@@ -728,8 +645,8 @@ describe('durable device request ownership', () => {
     });
 
     harness.consentDecision = 'always';
-    // The probe is the one await between admission and the durable row, so this
-    // is where a revocation sweep can slip past an earlier check.
+    // The probe is the one await between admission and the durable row: where a revocation can slip
+    // past.
     revokeNow = () => {
       harness.db.prepare(`UPDATE user_devices SET revoked_at = ? WHERE id = ?`)
         .run(Date.now(), harness.deviceId);
@@ -740,7 +657,6 @@ describe('durable device request ownership', () => {
     await expect(harness.userDO.deviceRpc(harness.workspace, 'exec', ['sleep 30'], {
       agentName: WORKSPACE, requestId,
     })).rejects.toThrow(NO_DEVICE_CONNECTED);
-    // Neither a row a revoked device could never answer for, nor a command frame.
     expect(harness.db.prepare(
       `SELECT request_id FROM device_inflight_requests WHERE request_id = ?`,
     ).all(requestId)).toEqual([]);
@@ -757,11 +673,10 @@ describe('durable device request ownership', () => {
        VALUES (?, ?, ?, ?, ?)`,
     ).run(requestId, harness.deviceId, WORKSPACE, 'job-1', 'claim-of-the-live-sweep');
 
-    // Same job id, and the row is mid-cancellation: it has not changed hands,
-    // so a detach must not read the pre-existing owner as its own success.
+    // Mid-cancellation the row has not changed hands: a detach must not read the old owner as
+    // success.
     expect(await harness.userDO.transferDeviceRequestToBackgroundJob(harness.workspace, requestId, 'job-1'))
       .toEqual({ transferred: false });
-    // Unclaimed, the same transfer is idempotent rather than a false negative.
     harness.db.prepare(`UPDATE device_inflight_requests SET cancel_claim = NULL WHERE request_id = ?`)
       .run(requestId);
     expect(await harness.userDO.transferDeviceRequestToBackgroundJob(harness.workspace, requestId, 'job-1'))
@@ -787,8 +702,6 @@ describe('durable device request ownership', () => {
       ).run(requestId, harness.deviceId, WORKSPACE, 'turn-1');
     }
 
-    // Both rows are claimed by the sweep, then the terminal authority takes the
-    // second row's claim while the first row's frame is in flight.
     stealClaim = () => {
       harness.db.prepare(`UPDATE device_inflight_requests SET cancel_claim = ? WHERE request_id = ?`)
         .run('claim-of-the-revocation', second);
@@ -797,8 +710,7 @@ describe('durable device request ownership', () => {
 
     expect(await harness.userDO.cancelDeviceRequestsForTurn(harness.workspace, 'turn-1'))
       .toEqual([{ requestId: first, outcome: 'terminated' }]);
-    // Exactly one authority cancels and reports a request: the displaced row
-    // belongs to whoever took it.
+    // Exactly one authority cancels and reports a request.
     expect(harness.deviceFrames.filter((frame) => frame.method === DEVICE_CANCEL_METHOD)
       .map((frame) => frame.params[0])).toEqual([first]);
     await harness.closeDeviceHarness();
@@ -825,10 +737,8 @@ describe('durable device request ownership', () => {
 
     expect(await harness.userDO.revokeDevice(await testOwner(), harness.deviceId))
       .toEqual({ ok: true, unstoppedCommands: 0 });
-    // An activation dying anywhere after the claim leaves the incident standing.
     expect(seenAtFrame).toHaveLength(1);
     expect(seenAtFrame[0]).toBeNumber();
-    // Every command was confirmed dead, so nothing is left to warn about.
     expect(harness.db.prepare(`SELECT unstopped_at FROM user_devices WHERE id = ?`)
       .all(harness.deviceId)).toEqual([{ unstopped_at: null }]);
     await harness.closeDeviceHarness();
@@ -894,7 +804,6 @@ describe('device revocation admission', () => {
 describe('a device is visible before it is usable', () => {
   test('an ungranted workspace sees the machine by name, platform and liveness', async () => {
     const harness = await deviceHarness('ashish@studio');
-    // Nobody has granted anything, and no consent prompt is raised by looking.
     const status = await harness.userDO.deviceRuntimeStatus(harness.workspace);
 
     expect(status.connected).toBe(true);
@@ -902,8 +811,6 @@ describe('a device is visible before it is usable', () => {
     expect(status.devices).toMatchObject([
       { id: harness.deviceId, name: 'ashish@studio', os: 'linux', hostname: 'studio', connected: true },
     ]);
-    // The fleet entry says the same thing PER MACHINE: visible, and not yet
-    // this workspace's to use.
     expect(status.devices?.[0]?.granted).toBe(false);
     expect(harness.consentPrompts).toEqual([]);
     await harness.closeDeviceHarness();
@@ -1006,36 +913,27 @@ describe('asking for a machine when there is none', () => {
   });
 
   test('the round trip completes: request, connect, grant, execute', async () => {
-    // ONE hub throughout, because that is the shape of the real flow: the
-    // workspace, the device registry and the socket are all the same user's.
     const harness = createTestUserDO({ deviceResponder: daemon });
     const token = await provisionTestWorkspace(harness, WORKSPACE, 'Workspace A');
     const caller: UserCaller = { workspaceToken: token };
 
-    // 1. The agent reaches for a machine and there is none: a notice names
-    //    the registered machines, and the call refuses.
     await expect(harness.userDO.deviceRpc(caller, 'exec', ['make build'], { agentName: WORKSPACE }))
       .rejects.toThrow(NO_DEVICE_CONNECTED);
     expect(harness.consentPrompts).toEqual([]);
     expect(harness.unavailableNotices).toEqual([{ workspace: WORKSPACE, devices: [] }]);
     expect(harness.deviceFrames).toEqual([]);
 
-    // 2. The owner ran `kinu connect`, naming the machine. Its daemon says
-    //    what it proved on connect, which is what makes the machine usable:
-    //    one that proves nothing runs no commands.
+    // A daemon that proves nothing on connect runs no commands.
     const { deviceId } = await harness.userDO.registerDevice(await testOwner(), 'studio');
     harness.attachDevice(deviceId);
     await harness.sendDeviceHello(CAPABLE_HELLO);
-    // The agent can now SEE it — by name — while still holding no grant.
     const seen = await harness.userDO.deviceRuntimeStatus(caller);
     expect(seen.devices?.map((d) => d.name)).toEqual(['studio']);
     expect(seen.workspaceGranted).toBe(false);
 
-    // 3. The next call asks for THIS workspace's access, and the owner grants it.
     harness.consentDecision = 'always';
     const result = await harness.userDO.deviceRpc(caller, 'exec', ['make build'], { agentName: WORKSPACE });
 
-    // 4. It executed on the machine, and the grant is now recorded.
     expect(result).toContain('"exitCode":0');
     expect(harness.deviceFrames.filter((f) => f.method === 'exec').map((f) => f.params[0]))
       .toEqual(['make build']);
@@ -1114,11 +1012,6 @@ describe('asking for a machine when there is none', () => {
 
 });
 
-/**
- * shows online, the workspace holds no grant, and the agent asks for the
- * device. The grant card names the machine and this workspace; no offline
- * notice goes out beside it, because the machine is live.
- */
 describe('the owner\'s sequence: a live machine, an ungranted workspace, one ask', () => {
   test('a connected device raises the GRANT card, never the offline notice', async () => {
     const harness = await deviceHarness();
@@ -1128,7 +1021,6 @@ describe('the owner\'s sequence: a live machine, an ungranted workspace, one ask
       agentName: WORKSPACE,
     })).rejects.toThrow(DEVICE_CONSENT_DENIED);
 
-    // The one card names the machine and THIS workspace — the grant question.
     expect(harness.consentPrompts).toEqual([{
       workspace: WORKSPACE,
       method: 'exec',
@@ -1141,12 +1033,7 @@ describe('the owner\'s sequence: a live machine, an ungranted workspace, one ask
 });
 
 /**
- * One ask, four worlds — what the owner reads in the notice and what the Env
- * view says about the machine. The notice half lives in the hub chokepoint;
- * the Env half rides `deviceRuntimeStatus`, the read the executor row and the
- * surfaces both consume. A machine the workspace cannot use is OFFLINE in the
- * Env grid until the owner answers for it, because that is what a row that
- * says otherwise told him.
+ * A machine the workspace cannot use reads offline in the Env grid until the owner answers for it.
  */
 describe('the machine the agent asked for, as the owner reads it', () => {
   test('no device: the offline notice, and no device row to render', async () => {
@@ -1167,7 +1054,6 @@ describe('the machine the agent asked for, as the owner reads it', () => {
 
   test('device offline: the offline notice, and an offline row', async () => {
     const harness = await deviceHarness();
-    // The daemon's socket closes — the machine is registered but gone.
     harness.attachDevice(null);
 
     await expect(harness.userDO.deviceRpc(harness.workspace, 'exec', ['make'], {
@@ -1191,14 +1077,12 @@ describe('the machine the agent asked for, as the owner reads it', () => {
     await expect(harness.userDO.deviceRpc(harness.workspace, 'exec', ['make'], {
       agentName: WORKSPACE,
     })).rejects.toThrow(DEVICE_CONSENT_DENIED);
-    // The grant card, by name, for this workspace.
     expect(harness.consentPrompts).toEqual([{
       workspace: WORKSPACE,
       method: 'exec',
       command: 'make',
       workspaceName: WORKSPACE,
     }]);
-    // And the row the Env view renders reads as connected but not granted.
     const status = await harness.userDO.deviceRuntimeStatus(harness.workspace);
     expect(status.connected).toBe(true);
     expect(status.workspaceGranted).toBe(false);
@@ -1222,21 +1106,12 @@ describe('the machine the agent asked for, as the owner reads it', () => {
 });
 
 /**
- * A stolen `device.json` must not be an indefinite credential: a token that
- * never changes, on a window that slides forward on every use, keeps a copy
- * valid for as long as the thief keeps connecting. Rotation makes it a race,
- * and the race has to END — handing a displaced claimant a fresh grace to
- * reconnect on is what stops it terminating. These pin the properties that
- * make it terminate.
+ * A stolen `device.json` must not be an indefinite credential: rotation makes it a race, and a
+ * displaced claimant must never get a fresh grace, or the race never ends.
  */
 describe('a copied device.json goes stale', () => {
-  /** The daemon's own connect handshake, as `pc-handler` drives it: exchange the
-   *  stored token for a ticket, then upgrade with that ticket. Answers the
-   *  rotated token the hub pushes down the accepted socket.
-   *
-   *  The incumbent socket is dropped first, because that is the only state in
-   *  which a redial is a redial: the hub refuses a newcomer while a socket for
-   *  the device is live (`claimAgainstLiveSocket` below is that case). */
+  /** The incumbent socket is dropped first: the hub refuses a newcomer while the device's socket
+   *  is live. */
   async function connectDaemon(harness: TestUserDO, token: string): Promise<string | null> {
     harness.acceptedSockets.at(-1)?.drop();
     const issued = await harness.userDO.issueDeviceConnectTicket(await testOwner(), token);
@@ -1249,7 +1124,6 @@ describe('a copied device.json goes stale', () => {
     ));
 
     expect(response.status).toBe(101);
-    // The rotation frame rides the socket the hub just accepted.
     const socket = harness.acceptedSockets.at(-1);
 
     const rotation = (socket?.sent ?? [])
@@ -1259,9 +1133,7 @@ describe('a copied device.json goes stale', () => {
     return rotation?.success ? rotation.output.token : null;
   }
 
-  /** A second claimant arriving while the device's socket is still live: the
-   *  thief's case, and a duplicate daemon's. The newcomer wins the slot;
-   *  returns the upgrade status. */
+  /** The thief's case, and a duplicate daemon's: the newcomer wins the slot. */
   async function claimAgainstLiveSocket(harness: TestUserDO, token: string): Promise<number> {
     const issued = await harness.userDO.issueDeviceConnectTicket(await testOwner(), token);
 
@@ -1275,8 +1147,7 @@ describe('a copied device.json goes stale', () => {
     return response.status;
   }
 
-  /** The daemon's side of the rotation handshake: it persisted the new secret
-   *  and says so, which is what ends the grace on the superseded one. */
+  /** Acknowledging the persisted secret ends the grace on the superseded one. */
   async function acknowledgeRotation(harness: TestUserDO): Promise<void> {
     const socket = harness.acceptedSockets.at(-1);
 
@@ -1299,16 +1170,13 @@ describe('a copied device.json goes stale', () => {
     expect(second).toBeTruthy();
     expect(second).not.toBe(first);
 
-    // The real daemon persisted the rotation and reconnects with it. Either
-    // half of the handshake ends the grace; the reconnect is the half that
-    // survives a daemon too old to acknowledge.
+    // Either half of the handshake ends the grace; the reconnect survives a daemon too old to
+    // acknowledge.
     const third = await connectDaemon(harness, second ?? '');
     expect(third).toBeTruthy();
 
-    // The thief still holds the file as it was written at link time.
     expect(await harness.userDO.verifyDeviceToken(await testOwner(), first)).toEqual({ ok: false });
     expect(await harness.userDO.issueDeviceConnectTicket(await testOwner(), first)).toEqual({ ok: false });
-    // And the device itself is unharmed: its current secret works.
     expect(await harness.userDO.verifyDeviceToken(await testOwner(), third ?? ''))
       .toEqual({ ok: true, deviceId, current: true });
     await harness.joinFibers();
@@ -1319,11 +1187,8 @@ describe('a copied device.json goes stale', () => {
     const harness = createTestUserDO({ deviceResponder: daemon });
     const { deviceId, token: first } = await harness.userDO.registerDevice(await testOwner(), 'ashish@studio');
 
-    // The hub rotated, but the daemon never saw the frame (socket died first),
-    // so it redials with the secret it still has on disk.
     await connectDaemon(harness, first);
-    // `current: false` is the point: the machine is recovering ON the grace,
-    // which is the one accept that may not leave another behind.
+    // Recovering on the grace is the one accept that may not leave another behind.
     expect(await harness.userDO.verifyDeviceToken(await testOwner(), first))
       .toEqual({ ok: true, deviceId, current: false });
     await harness.joinFibers();
@@ -1335,13 +1200,12 @@ describe('a copied device.json goes stale', () => {
     const { deviceId, token: first } = await harness.userDO.registerDevice(await testOwner(), 'ashish@studio');
 
     const second = await connectDaemon(harness, first);
-    // Until the machine says the new secret landed, the old one still opens a
-    // socket — that grace is the whole reason a lost frame is survivable.
+    // Until the machine acknowledges, the old secret still opens a socket: that grace makes a lost
+    // frame survivable.
     expect(graceHash(harness, deviceId)).not.toBeNull();
 
     await acknowledgeRotation(harness);
 
-    // The machine has it on disk, so the copy the thief holds is now nothing.
     expect(graceHash(harness, deviceId)).toBeNull();
     expect(await harness.userDO.verifyDeviceToken(await testOwner(), first)).toEqual({ ok: false });
     expect(await harness.userDO.verifyDeviceToken(await testOwner(), second ?? ''))
@@ -1354,20 +1218,15 @@ describe('a copied device.json goes stale', () => {
     const harness = createTestUserDO({ deviceResponder: daemon });
     const { deviceId, token: stolen } = await harness.userDO.registerDevice(await testOwner(), 'ashish@studio');
 
-    // The thief connects first with the copied file, and does NOT acknowledge:
-    // a hostile daemon has no reason to end its own grace.
     const thief = await connectDaemon(harness, stolen);
     expect(thief).toBeTruthy();
 
-    // The real machine is displaced, redials with the secret on its disk, and
-    // spends the grace. That accept must not mint a FRESH grace over the thief's
-    // token: each side's reconnect would re-arm the other's and the pair would
-    // alternate every second indefinitely, both always holding a live token.
+    // Spending the grace must not mint a fresh one over the thief's token, or the two reconnects
+    // re-arm each other indefinitely.
     const real = await connectDaemon(harness, stolen);
     expect(real).toBeTruthy();
     expect(real).not.toBe(thief);
 
-    // The thief's rotated token is neither current nor grace: the chain ends.
     expect(await harness.userDO.verifyDeviceToken(await testOwner(), thief ?? '')).toEqual({ ok: false });
     expect(await harness.userDO.issueDeviceConnectTicket(await testOwner(), thief ?? ''))
       .toEqual({ ok: false });
@@ -1386,11 +1245,8 @@ describe('a copied device.json goes stale', () => {
       harness.sql.exec(`SELECT expires_at FROM user_devices WHERE id = ?`, deviceId).toArray(),
     )[0].expires_at;
 
-    // A window far enough out to be unmistakable: an idle-sliding
-    // implementation rewrites it to ~now+TTL, which is a different number, while
-    // an absolute one leaves it exactly where the last rotation put it. Reading
-    // the stored value rather than a clock is what makes this test independent
-    // of how fast the suite runs.
+    // An idle-sliding window would be rewritten to ~now+TTL; an absolute one stays put. Reading the
+    // stored value keeps this independent of suite speed.
     const anchor = Date.now() + 400 * 24 * 60 * 60 * 1000;
     harness.sql.exec(`UPDATE user_devices SET expires_at = ? WHERE id = ?`, anchor, deviceId);
 
@@ -1398,7 +1254,6 @@ describe('a copied device.json goes stale', () => {
       .toEqual({ ok: true, deviceId, current: true });
     expect(expiry()).toBe(anchor);
 
-    // An elapsed window is refused, however recently the token was used.
     harness.sql.exec(`UPDATE user_devices SET expires_at = ? WHERE id = ?`, 1, deviceId);
     expect(await harness.userDO.verifyDeviceToken(await testOwner(), token)).toEqual({ ok: false });
     await harness.joinFibers();
@@ -1415,13 +1270,11 @@ describe('a copied device.json goes stale', () => {
     });
     const incumbent = harness.acceptedSockets.at(-1);
 
-    // A second claimant arrives while that socket is live and TAKES the slot: a
-    // real machine redialling must not be locked out by a socket the hub has
-    // not noticed closing. What stops the alternation a take-over would
-    // otherwise start is the one-shot grace above, not a refusal here.
+    // A redialling machine must not be locked out by a socket the hub has not seen close: the one-
+    // shot
+    // grace, not a refusal here, stops the alternation.
     expect(await claimAgainstLiveSocket(harness, rotated ?? '')).toBe(101);
 
-    // Recorded where the owner reads the device, and the incumbent is closed.
     const [row] = await harness.userDO.listDevices(await testOwner());
     expect(row.replacedAt).not.toBeNull();
     expect(row.connected).toBe(true);
@@ -1435,8 +1288,8 @@ describe('a copied device.json goes stale', () => {
 describe('device RPC stays unreachable from owner HTTP routes', () => {
   test('no /api/user route forwards an arbitrary method to deviceRpc', () => {
     const source = readFileSync(new URL('../src/user/routes.ts', import.meta.url).pathname, 'utf8');
-    // Checkpoint reads are the only consent-free methods. An HTTP pass-through
-    // would still widen the owner route into an undeclared device RPC surface.
+    // Checkpoint reads are the only consent-free methods; an HTTP pass-through would widen the
+    // device RPC surface.
     expect(source).not.toContain('deviceRpc');
   });
 });

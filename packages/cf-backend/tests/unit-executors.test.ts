@@ -1,6 +1,4 @@
-// pickDefaultExecutor — which executor the diff/file-manager defaults to.
-// Prefers the sticky last-active executor only when it is already active, else
-// workspace. This keeps status/diff reads from waking idle remote executors.
+// Sticky last-active executor only when already active, else workspace: status/diff reads must not wake idle remotes.
 import { describe, test, expect } from "bun:test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
@@ -37,17 +35,11 @@ describe("pickDefaultExecutor", () => {
   test("falls back to workspace when nothing else is available", () => {
     expect(pickDefaultExecutor([{ name: "sandbox", available: false }])).toBe("workspace");
     expect(pickDefaultExecutor([])).toBe("workspace");
-    expect(pickDefaultExecutor([], "sandbox")).toBe("workspace"); // lastActive not in list
+    expect(pickDefaultExecutor([], "sandbox")).toBe("workspace");
   });
 });
 
-/**
- * releaseSubstrate — what the Releases surface says about whether the pipeline
- * can run at all. The release engine executes in the sandbox container, so the
- * sandbox executor row is the verdict; the surface must state an unavailable
- * substrate up front instead of rendering a pipeline that cannot run, and must
- * say nothing while the executor list has not loaded.
- */
+/** The release engine runs in the sandbox container, so that row is the verdict; say nothing until executors load. */
 describe("releaseSubstrate", () => {
   const exec = (over: Partial<ExecutorInfo>): ExecutorInfo => ({
     name: "sandbox", kind: "sandbox", capabilities: [], available: true,
@@ -80,15 +72,9 @@ describe("releaseSubstrate", () => {
   });
 });
 
-/**
- * The Environment surface renders one chip per environment, each carrying this
- * label. Nimbus runs the workspace filesystem and resident process plane;
- * there is deliberately no second Nimbus row.
- */
+/** There is deliberately no second Nimbus row. */
 describe("executor labels name one environment each", () => {
-  // The environments this build knows, as the Environment surface lists them.
-  // A fifth environment added to the module needs a row here: nothing else
-  // enumerates the whole set.
+  // Nothing else enumerates the whole set: a new environment needs a row here.
   const NAMES = ["device", "sandbox", "workspace", "parent"];
 
   test("no two environments share a name", () => {
@@ -97,8 +83,7 @@ describe("executor labels name one environment each", () => {
   });
 
   test("only the agent's own filesystem is called the Workspace", () => {
-    // `parent` is legitimately a workspace too — someone else's, and its label
-    // says whose. What no other environment may do is answer to the bare word.
+    // `parent` is someone else's workspace; no other environment may answer to the bare word.
     expect(executorLabel("workspace")).toBe("Workspace");
 
     for (const name of NAMES) {
@@ -119,14 +104,7 @@ describe("executor labels name one environment each", () => {
   });
 });
 
-/**
- * The Environment surface reads a mount row as its executor's name — one
- * environment, one filesystem, one exec plane, so there is no translation
- * layer to drift out of sync. What the card's Files action opens is DERIVED
- * from the core mount table (EXECUTOR_MOUNTS), never restated beside it: a
- * second table in the UI is the parallel system this module exists to
- * prevent.
- */
+/** The Files action derives from the core mount table (EXECUTOR_MOUNTS), never a second UI table. */
 describe("the environment surface names environments directly", () => {
   const surface = readFileSync(
     join(import.meta.dir, "..", "src", "components", "surfaces", "EnvironmentSurface.tsx"), "utf8",

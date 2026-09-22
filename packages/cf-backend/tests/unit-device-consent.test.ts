@@ -34,10 +34,8 @@ describe('device consent prompt data', () => {
   }
 
   test('an unanswered prompt does not read as a refusal', () => {
-    // Both are failures, but they mean opposite things to an agent running
-    // unattended: a refusal is policy and should stop it asking, while an
-    // expired prompt only means nobody was at the keyboard. One sentence for
-    // both turns an AFK moment into a permanent capability loss.
+    // A refusal is policy and should stop an unattended agent asking; an expired prompt only means nobody was
+    // at the keyboard. One sentence for both turns an AFK moment into a permanent capability loss.
     expect(DEVICE_CONSENT_UNANSWERED).not.toBe(DEVICE_CONSENT_DENIED);
     expect(DEVICE_CONSENT_UNANSWERED).toContain('nobody decided');
     expect(DEVICE_CONSENT_UNANSWERED).toContain('ask again later');
@@ -46,9 +44,7 @@ describe('device consent prompt data', () => {
   });
 
   test('the connect disclosure is three lines: daemon, sandbox, revoke', () => {
-    // The disclosure is what a person reads BEFORE the daemon is installed,
-    // in the owner's own fewer words. Six sentences drifted back into it; a
-    // fourth line arriving unnoticed is how that happens again.
+    // What a person reads before the daemon is installed: an extra line must not arrive unnoticed.
     expect(DEVICE_CONNECT_DISCLOSURE).toEqual([
       'Kinu installs a small daemon here and links this machine to your account.',
       'A workspace you approve runs in a sandbox: its own home plus folders you pick. Everything else stays invisible to it.',
@@ -57,10 +53,7 @@ describe('device consent prompt data', () => {
   });
 });
 
-// ── The Sandbox switch: PUT /api/user/devices/:id/sandbox ──────────────────
-// The tier the owner sets is the only tier there is. The consent-scope PUT
-// this replaces granted a `full_filesystem` tier per workspace; there is no
-// per-workspace tier now, so the route is gone with the vocabulary.
+// PUT /api/user/devices/:id/sandbox: the owner-set tier is the only tier; there is no per-workspace tier.
 
 const IDENTITY: AuthIdentity = {
   userId: '0123456789abcdef0123456789abcdef',
@@ -71,8 +64,7 @@ const IDENTITY: AuthIdentity = {
 };
 
 function deviceRoutesSetup() {
-  // In-memory device → tier, mirroring the UserDO contract so the flip is
-  // observable through the same routes a browser uses.
+  // Mirrors the UserDO contract so the flip is observable through the browser's routes.
   const tiers = new Map<string, string>();
   const calls: Array<{ deviceId: string; tier: string }> = [];
 
@@ -94,8 +86,6 @@ function deviceRoutesSetup() {
   const env: UserRoutesEnv<string> = {
     UserDO: { idFromName: (name) => name, get: () => stub },
     CREDENTIAL_ENCRYPTION_KEY: TEST_CREDENTIAL_ENCRYPTION_KEY,
-    // No device route fans a credential change out, so no workspace object is
-    // addressed on these paths.
     OrchestratorAgent: unreachableNamespace('OrchestratorAgent'),
   };
 
@@ -132,9 +122,7 @@ describe('the device Sandbox route', () => {
   test('a tier outside the vocabulary is refused before the DO call', async () => {
     const { call, calls } = deviceRoutesSetup();
 
-    // `files_only` is what a machine REPORTS, never what an owner selects. A
-    // route that accepted it would let the UI offer a third state that means
-    // "run nothing", which no owner would choose on purpose.
+    // `files_only` is what a machine reports, never what an owner selects.
     for (const tier of ['files_only', 'root_of_everything', '']) {
       const bad = await call('/devices/dev-1/sandbox', 'PUT', { tier });
       expect(requiredResponse(bad).status).toBe(400);
@@ -152,8 +140,6 @@ describe('the device Sandbox route', () => {
   });
 
   test('a binding listing carries no tier of its own', async () => {
-    // One tier, on the device. A per-workspace tier beside it is what made two
-    // answers to "what may this reach" possible in the first place.
     const { call } = deviceRoutesSetup();
     const list = await call('/devices/consents', 'GET');
     expect(requiredResponse(list).status).toBe(200);
@@ -170,8 +156,7 @@ describe('the device Sandbox route', () => {
   test('the consent-tier PUT is gone, not merely unused', async () => {
     const { call, calls } = deviceRoutesSetup();
     const answer = await call('/devices/dev-1/consent', 'PUT', { agentName: 'jarvis', scope: 'full_filesystem' });
-    // No route matches, so the user router falls through to its own 404 or
-    // answers nothing at all. Either way, nothing reached the UserDO.
+    // Either way, nothing reached the UserDO.
     expect(answer === null || answer === undefined || answer.status === 404).toBe(true);
     expect(calls).toEqual([]);
   });

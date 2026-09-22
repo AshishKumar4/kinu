@@ -1,23 +1,6 @@
 /**
- * `/api/drive/*` — the signed-in owner's Drive, the Mossaic tenant every
- * workspace of theirs mounts at `/shared`.
- *
- *   GET    /api/drive?path=<folder>                   — one folder's listing
- *   POST   /api/drive/folders        { path }         — new folder
- *   POST   /api/drive/rename         { from, to }     — move an entry
- *   DELETE /api/drive?path=<entry>                    — remove an entry
- *   GET    /api/drive/files?path=<entry>[&download=1] — a file's bytes; a folder as one zip
- *   PUT    /api/drive/files?path=<file>               — body: the file's bytes
- *   PUT    /api/drive/files?folder=<dir>&unpack=zip   — body: a zip, unpacked into the folder
- *   PUT    /api/drive/skills[?name=<folder name>]     — body: a zipped skill folder, or one SKILL.md
- *   POST   /api/drive/skills         { skill }        — a pasted SKILL.md
- *   POST   /api/drive/skills/mark    { path }         — link a folder under /skills
- *
- * The tenant is never named on the wire: the object derives it from the
- * signed-in identity's own profile. Bytes cross the Worker↔object boundary as
- * bounded chunks, the same rail as `files-routes.ts`, for the same reasons.
- * Every refusal the object folds into a `code` is answered with the status
- * that code means, and its reason as the body the UI shows.
+ * `/api/drive/*`: the owner's Mossaic tenant, mounted at `/shared` in every workspace.
+ * The tenant is never named on the wire; bytes cross in bounded chunks as in `files-routes.ts`.
  */
 import * as v from 'valibot';
 import {
@@ -28,7 +11,6 @@ import { diagnostics, KinuError, toKinuError, type ErrorCode } from '@kinu.run/c
 import type { AuthIdentity } from '../auth/session';
 import type { DriveAnswer, UserDO } from '../user/user-do';
 
-/** The status each folded failure code answers with. */
 const FAILURE_STATUS: Readonly<Record<ErrorCode, number>> = {
   bad_input: 400,
   denied: 403,
@@ -42,7 +24,6 @@ const FAILURE_STATUS: Readonly<Record<ErrorCode, number>> = {
   io: 500,
 };
 
-/** The stub surface these routes drive, narrowed so a test can stand in for the object. */
 export type DriveRouteObject = Pick<UserDO,
   | 'drive_list' | 'drive_mkdir' | 'drive_rename' | 'drive_delete' | 'drive_markAsSkill' | 'drive_addSkill'
   | 'drive_writeChunk' | 'drive_abortUpload' | 'drive_startDownload' | 'drive_readChunk' | 'drive_abortDownload'>;
@@ -56,7 +37,6 @@ function failed(failure: DriveFailure): Response {
   return err(FAILURE_STATUS[failure.code], failure.error);
 }
 
-/** An answer as a response: the value as JSON, or the failure as its status. */
 function answered<Value>(answer: DriveAnswer<Value>): Response {
   return answer.ok ? json({ body: answer.value ?? { ok: true } }) : failed(answer);
 }
@@ -70,8 +50,7 @@ const SkillBody = v.strictObject({ skill: v.string() });
 async function resolveObject(env: Env, identity: AuthIdentity): Promise<DriveRouteObject> {
   const stub = env.UserDO.get(env.UserDO.idFromName(identity.userId));
   const owner = await ownerCaller(env);
-  // The object derives its tenant from the profile row, so the row is
-  // confirmed before any Drive call — the same upsert every /api/user route runs.
+  // The tenant derives from the profile row, so upsert it before any Drive call.
   await retryTransientDO('ensureProfile', () => stub.ensureProfile(owner, identity.email, identity.displayName ?? undefined));
 
   return stub;
@@ -149,8 +128,6 @@ export async function handleDriveRequest(
   return null;
 }
 
-/** What a PUT to /files lands as, from its query: a file at `path`, or a
- *  zip unpacked into `folder`. */
 function uploadTarget(url: URL): DriveUploadTarget | null {
   const folder = url.searchParams.get('folder');
 
@@ -160,7 +137,6 @@ function uploadTarget(url: URL): DriveUploadTarget | null {
   return path === null ? null : { kind: 'file', path };
 }
 
-/** The uploaded bytes, streamed to the object one bounded chunk at a time. */
 async function upload(request: Request, ctx: DriveContext, target: DriveUploadTarget): Promise<Response> {
   if (request.body === null) return err(400, 'request body required');
   const transferId = crypto.randomUUID();
@@ -214,7 +190,6 @@ async function upload(request: Request, ctx: DriveContext, target: DriveUploadTa
   }
 }
 
-/** The entry's bytes, streamed from the object one bounded chunk at a time. */
 async function download(ctx: DriveContext, path: string, asAttachment: boolean): Promise<Response> {
   const transferId = crypto.randomUUID();
   const opened = await ctx.object.drive_startDownload(ctx.owner, path, transferId);

@@ -1,16 +1,5 @@
-// Which Cloudflare account serves a user's Workers AI.
-//
-// A token can see several accounts, and only one of them may carry the Workers
-// AI entitlement. Connect time picks the first so single-account users are
-// never asked anything; this is the path that lets everyone else move.
-//
-// Contract under test:
-//   - the accounts a login can see are readable without a second API call
-//   - the selection drives the account-scoped inference base URL
-//   - switching accounts drops the AI Gateway that belonged to the old one
-//   - an account the login cannot see is refused, selection unchanged
-//   - both operations are reachable over HTTP, and a successful switch tells
-//     the user's live workspaces to drop their cached provider state
+// Defends: account switching must drive the inference base URL, drop the old
+// account's AI Gateway, refuse unseen accounts, and notify live workspaces.
 import { describe, expect, test } from 'bun:test';
 import { asFetchFunction, type OAuthCredential } from '@kinu.run/core';
 import { TEST_CREDENTIAL_ENCRYPTION_KEY, createTestUserDO, testOwner } from './helpers/user-do';
@@ -31,7 +20,6 @@ const PERSONAL = { id: 'aaa111aaa111aaa111aaa111aaa111aa', name: 'Personal' };
 
 const EMPLOYER = { id: 'bbb222bbb222bbb222bbb222bbb222bb', name: 'Employer' };
 
-/** What connect time stores for a token that sees both accounts. */
 function multiAccountCredential(): OAuthCredential {
   return {
     kind: 'oauth',
@@ -46,8 +34,7 @@ function multiAccountCredential(): OAuthCredential {
   };
 }
 
-/** Two gateways, so gateway auto-select (which fires only at exactly one)
- *  cannot mask what account switching does to the selection. */
+/** Two gateways, so gateway auto-select (fires only at exactly one) cannot mask switching. */
 function stubGatewayNetwork(): () => void {
   const original = globalThis.fetch;
   globalThis.fetch = asFetchFunction(async () => new Response(JSON.stringify({
@@ -100,7 +87,6 @@ describe('Cloudflare account selection', () => {
       expect(await harness.userDO.listCloudflareAccounts(owner)).toMatchObject({ selectedId: EMPLOYER.id });
       expect(await harness.userDO.getCredentialBaseURL(owner, CLOUDFLARE_OAUTH_CRED_KEY))
         .toBe(`https://api.cloudflare.com/client/v4/accounts/${EMPLOYER.id}/ai/v1`);
-      // The token itself is untouched — switching account is not a re-login.
       expect(await harness.userDO.getAuthHeaders(owner, CLOUDFLARE_OAUTH_CRED_KEY))
         .toMatchObject({ Authorization: 'Bearer cf-access' });
     } finally {
@@ -159,8 +145,6 @@ const IDENTITY: AuthIdentity = {
   authTime: Date.now(),
 };
 
-/** The route surface over a stub UserDO — enough Env for the account handlers
- *  and the workspace notification they fan out on success. */
 function routeHarness(selectFails = false) {
   const notified: string[] = [];
   const selected: string[] = [];
@@ -180,7 +164,7 @@ function routeHarness(selectFails = false) {
     },
   });
 
-  // These two handlers call `waitUntil` on the context and nothing else.
+    // These two handlers call `waitUntil` on the context and nothing else.
   const pending: Promise<unknown>[] = [];
   const ctx = { waitUntil(promise: Promise<unknown>) { pending.push(promise); } };
 

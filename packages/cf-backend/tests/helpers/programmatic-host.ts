@@ -1,19 +1,7 @@
 /**
- * Nimbus's hosted runtime over a workspace opened in plain bun — the shape
- * `createHostedWorkspace` composes in the Durable Object, held here once so
- * every suite that drives the runtime's verbs over a `NimbusWorkspace` reads
- * the same composition.
- *
- * The runtime is composed over a Durable-Object-shaped ctx (`id`, `storage`,
- * `waitUntil`, `getWebSockets`, and the `exports` bag carrying the REAL
- * `SupervisorRPC`) and the two bindings its constructor reads: the fabric's
- * host namespace, answered by the workspace's own dispatch, and a `LOADER`
- * that no suite here spawns through. Scheduling runs on `waitUntil` directly,
- * because a test file may not arm a timer.
- *
- * `programmaticHostOver` stays synchronous — the composition is awaited by
- * the first verb — so a suite builds its host beside its workspace and asks
- * for readiness exactly as the production box does.
+ * Nimbus's hosted runtime over a workspace opened in plain bun: the composition `createHostedWorkspace`
+ * makes in the Durable Object, over a DO-shaped ctx whose `exports` carries the real `SupervisorRPC`.
+ * Scheduling runs on `waitUntil` directly because a test file may not arm a timer.
  */
 
 import { Database, type SQLQueryBindings } from 'bun:sqlite';
@@ -32,10 +20,8 @@ import type { NimbusSandboxHandle } from '@kinu.run/core';
 
 export type DurableState = Map<string, unknown>;
 
-/** The transactional view a reservation claim runs against. */
 type DurableTransaction = PortReservationTransaction;
 
-/** The Durable Object storage verbs the runtime reads, answered from one map. */
 export interface TestDurableStorage extends DurableTransaction {
   transaction<T>(body: (txn: DurableTransaction) => Promise<T>): Promise<T>;
   deleteAll(): Promise<void>;
@@ -54,11 +40,8 @@ export function durableStorage(durable: DurableState): TestDurableStorage {
     return entries;
   };
 
-  // The platform's `list` is generic in the type its CALLER names, and rows a
-  // stand-in holds under one untyped map cannot name it. Assigning the reader
-  // over a refusing declaration leaves the platform's signature on the type —
-  // where every reader validates what it asked for — and this reader at
-  // runtime; a literal would have to claim one type for every row.
+  // The platform's `list` is generic in the caller's type; assigning over a refusing declaration keeps
+  // that signature on the type and this untyped reader at runtime.
   const reads: Omit<DurableTransaction, 'list'> = {
     get: async (key) => durable.get(key),
     put: async (key, value) => { durable.set(key, value); },
@@ -80,10 +63,7 @@ export function durableStorage(durable: DurableState): TestDurableStorage {
   };
 }
 
-/**
- * The runtime's verbs, resolved through one lazy composition: the shape the
- * suites drive, with the composition awaited by whichever verb runs first.
- */
+/** The runtime's verbs, composed lazily by whichever verb runs first. */
 export type ProgrammaticHost = Pick<HostedRuntime,
   'ready' | 'exec' | 'startProcess' | 'runCode' | 'listProcesses' | 'killProcess' | 'processLogs'
   | 'listPorts' | 'exposeApp' | 'removeApp' | 'listApps' | 'routeCapabilityPort' | 'ensureRuntimes'
@@ -113,13 +93,7 @@ function sqlBinding(value: SqlValue): SQLQueryBindings {
   return v.parse(v.union([v.string(), v.number(), v.bigint(), v.null()]), value);
 }
 
-/**
- * Name a member of a platform object this stand-in does not answer.
- *
- * A Durable Object's `ctx` is thirty-odd members and a suite drives five. The
- * rest refusing by name is what keeps "the host read only these" a checked
- * claim rather than a stand-in quietly answering for one.
- */
+/** Unanswered platform members refuse by name, so "the host read only these" stays a checked claim. */
 function refusing(object: string) {
   return (member: string) => (): never => {
     throw new Error(`${object}.${member}: this test's Durable Object does not answer it`);
@@ -128,14 +102,8 @@ function refusing(object: string) {
 
 type SqlStorageRow = Record<string, SqlStorageValue>;
 
-/**
- * The rows one `exec` answered, in the cursor's shape.
- *
- * Nimbus reads a cursor by spreading it (`[...sql.exec(…)]`, worker
- * dist/session/hibernation.js:94 and its neighbours), so iteration is the one
- * member that has to be real. The accounting three refuse: bun:sqlite reports
- * no row counts and a number invented here would be read as one.
- */
+/** Nimbus spreads cursors (worker dist/session/hibernation.js:94), so iteration must be real; the
+ *  row counts refuse because bun:sqlite reports none. */
 class DurableSqlRows<T extends SqlStorageRow> {
   private taken = 0;
   constructor(private readonly rows: readonly T[] = []) {}
@@ -184,14 +152,10 @@ class DurableSqlRows<T extends SqlStorageRow> {
   }
 }
 
-/** The prepared-statement slot of `SqlStorage`. Nothing constructs one: the
- *  platform exposes the class, and `exec` is the whole of what is driven. */
+/** Nothing constructs one: `exec` is the whole of what is driven. */
 class DurableSqlStatement {}
 
-/**
- * One Durable Object's SQLite over a bun database — the storage half the
- * workspace's filesystem, process logs and shell state all live in.
- */
+/** One Durable Object's SQLite over a bun database. */
 export function durableSqlStorage(database: Database): SqlStorage {
   const refuse = refusing('SqlStorage');
 
@@ -213,26 +177,14 @@ export function durableSqlStorage(database: Database): SqlStorage {
   };
 }
 
-/**
- * What a suite may hand a platform stand-in for one of its members: the
- * platform's own type, or the call this suite answers it with. The second arm
- * exists because `get`, `put`, `delete` and `list` are generic in the type
- * their CALLER names, and rows held in one untyped map cannot restate it.
- */
+/** The platform's own type, or this suite's call: `get`/`put`/`delete`/`list` are generic in the
+ *  caller's type, which rows in one untyped map cannot restate. */
 type StandInFor<Platform> = {
   [Member in keyof Platform]?: Platform[Member] | ((...args: never[]) => object);
 };
 
-/**
- * A Durable Object's storage as the platform declares it, with every member
- * this suite did not build refusing by name.
- *
- * `Object.assign` rather than a spread: the result has to BE a
- * `DurableObjectStorage`. Assigning over a refusing base keeps both
- * signatures — the platform's on the type, where every reader validates the
- * rows it asked for, and this suite's at runtime — while a spread would keep
- * only the second and stop being the platform's storage at all.
- */
+/** `Object.assign`, not a spread: the result must be a `DurableObjectStorage`, keeping the platform's
+ *  signature on the type and this suite's at runtime. Unbuilt members refuse by name. */
 export function durableObjectStorage(built: StandInFor<DurableObjectStorage>): DurableObjectStorage {
   const refuse = refusing('DurableObjectStorage');
   const kv = refusing('SyncKvStorage');
@@ -257,30 +209,19 @@ export function durableObjectStorage(built: StandInFor<DurableObjectStorage>): D
   }, built);
 }
 
-/**
- * The bag workerd hangs on a Durable Object's `ctx`, reduced to what a
- * workspace host reads off it: the composed supervisor entrypoint the fabric
- * mints every facet's `env.SUPERVISOR` binding from. Not a member of
- * `DurableObjectState` in workers-types, and absent on an object that exports
- * none — which is the state a host refuses to compose over.
- */
+/** The `ctx.exports` bag (not in workers-types): the supervisor entrypoint the fabric mints each facet's
+ *  `env.SUPERVISOR` from. Absent when the object exports none, which a host refuses to compose over. */
 export interface ActorObjectState<Exports = unknown> extends DurableObjectState {
   readonly exports?: Exports;
 }
 
-/**
- * One Durable Object's `ctx` as the platform gives it, with every member this
- * suite did not build refusing by name. Same assignment rule as
- * {@link durableObjectStorage}, for the same reason.
- */
+/** A Durable Object's `ctx`, unbuilt members refusing by name; same assignment rule as {@link durableObjectStorage}. */
 export function actorObjectState(built: StandInFor<ActorObjectState>): ActorObjectState {
   const refuse = refusing('DurableObjectState');
   const facet = refusing('DurableObjectFacets');
 
   return Object.assign({
-    // Two members a bare object genuinely has none of: no startup props were
-    // bound, and no container is attached. Both are `undefined` on the
-    // platform too, so neither is a stand-in for something.
+    // `undefined` on the platform too: no startup props bound, no container attached.
     props: undefined,
     container: undefined,
     id: { toString: refuse('id.toString'), equals: refuse('id.equals') },
@@ -300,24 +241,19 @@ export function actorObjectState(built: StandInFor<ActorObjectState>): ActorObje
   }, built);
 }
 
-/** The loader binding the runtime's manager reads at composition. No suite
- *  over this host spawns a facet, so both members refuse by name; `load` is
- *  the member the manager checks for beside `get`, which the fabric's own
- *  declaration omits. */
+/** No suite here spawns a facet, so both refuse; `load` is checked by the manager though the fabric's declaration omits it. */
 const noFacetLoader = Object.assign(
   { get: (): never => { throw new Error('no suite over this host spawns a facet'); } },
   { load: (): never => { throw new Error('no suite over this host spawns a facet'); } },
 );
 
-/** The fabric composed once per test isolate: first write wins, and every
- *  workspace host in one process states the same composition. */
+/** Composed once per test isolate: first write wins. */
 let fabricComposed = false;
 
 export function programmaticHostOver(workspace: NimbusWorkspace, seams: ProgrammaticHostSeams = {}): TestProgrammaticHost {
   const durable = seams.durable ?? new Map<string, unknown>();
 
   if (!fabricComposed) {
-    // The deployment's own composition, as `createHostedWorkspace` states it.
     composeFabric({ supervisorEntrypoint: 'SupervisorRPC', hostNamespace: 'OrchestratorAgent', hostDispatchMethod: 'supervisorOp' });
     fabricComposed = true;
   }
@@ -338,17 +274,14 @@ export function programmaticHostOver(workspace: NimbusWorkspace, seams: Programm
     idFromString: (id: string) => id,
   };
 
-  // The fabric's host namespace rides beside the runtime's own env members:
-  // the runtime reads it by the composed name, off the same object.
+  // The runtime reads the fabric's host namespace by the composed name, off the same env object.
   const bindings: Parameters<typeof composeHostedRuntime>[0]['env'] & { readonly OrchestratorAgent: typeof namespace } = {
     OrchestratorAgent: namespace, LOADER: noFacetLoader,
   };
 
   let composing: Promise<HostedRuntime> | null = null;
-  // The scheduler runs without a clock: the launch turn is the one task the
-  // runtime asks for NOW and it runs on the next turn; the log flush and
-  // janitor are asked for later and stay pending, so a finished suite is never
-  // held open by a timer the production host would have armed.
+  // No clock: the launch turn runs next tick; the log flush and janitor stay pending so a finished
+  // suite is never held open by a timer.
   const pending = new Set<HostedRuntimeTask>();
 
   const runtime = (): Promise<HostedRuntime> => {
@@ -421,18 +354,10 @@ export const rpcRouteCapabilityPort = (host: ProgrammaticHost, ...args: Paramete
 
 export type ProgrammaticExecOptions = NonNullable<Parameters<HostedRuntime['exec']>[1]>;
 
-/** What the runtime's `stat` answers, as the credentialed plane reads it. */
 const FileStatSchema = v.object({ type: v.string(), size: v.number(), mtime: v.number() });
 
-/**
- * The runtime as the repo reaches it: `exec` carries the credential on every
- * command, and `files.as(agent)` answers the credentialed file plane — the
- * runtime's own files bound to `agent` — which is what the SDK's
- * `files.as(cred)` calls. The top-level `files` verbs refuse, so a
- * credentialed plane can never fall back to the session user. Shared by every
- * suite that boxes a hosted node (node-home-wiring, facet-tmp-confinement):
- * two copies of this shape already drifted once.
- */
+/** The credentialed runtime: `exec` carries the credential and `files.as(agent)` answers the bound
+ *  file plane; top-level `files` refuse so it never falls back to the session user. Shared to prevent drift. */
 export function credentialedSessionBox(
   runtime: () => Promise<HostedRuntime>,
   cred: VfsCred,
@@ -471,9 +396,7 @@ export function credentialedSessionBox(
   return {
     ready: async () => { await (await runtime()).ready(); },
     exec: async (rawCommand, options) => {
-      // Assigned rather than spread conditionally: an absent environment must
-      // stay an ABSENT KEY, because the runner reads presence to decide whether
-      // it was handed a request at all.
+      // Not spread conditionally: an absent environment must stay an absent key; the runner reads presence.
       const forwarded: ProgrammaticExecOptions = { cred: options?.cred ?? cred };
 
       if (options?.cwd !== undefined) forwarded.cwd = options.cwd;

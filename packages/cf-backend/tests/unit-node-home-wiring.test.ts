@@ -1,23 +1,6 @@
 /**
- * The node home provisioner, against a real workspace.
- *
- * `facetHomeProvisioner` is the seam a host fills so a swarm node stops
- * sharing the origin's file plane. It is asserted here rather than over a fake
- * because everything it claims is a substrate rule, not a line of its own code:
- * the uid floor, the uid-0-only `chown`, the 0o755 home mode and the EACCES a
- * sibling gets are all decided inside `SqliteVFS`, so a test with a stubbed root
- * view would assert only that three functions were called in order.
- *
- * The workspace is constructed directly, the way `unit-private-tmp.test.ts`
- * does, because the three things the seam needs — a uid-0 view, the principal
- * registry and durable SQL — are members of an in-isolate `NimbusWorkspace`.
- * A Durable Object holding a Nimbus SDK handle has none of them: every
- * filesystem RPC without a pid is pinned to the session user
- * (`@nimbus-sh/worker/dist/session/rpc.js:89-91`), and `confinePrincipal` has no
- * RPC at all — it exists only on `SqliteVFS`
- * (`@nimbus-sh/core/dist/vfs/sqlite-vfs.d.ts:302`). So the provisioner belongs
- * wherever the workspace object itself lives, and this is the plane that can
- * prove it.
+ * `facetHomeProvisioner` against a real workspace: the uid floor, uid-0-only `chown`, 0o755 home and sibling EACCES are
+ * `SqliteVFS` rules, and `confinePrincipal` has no RPC (`@nimbus-sh/core/dist/vfs/sqlite-vfs.d.ts:302`).
  */
 import { afterEach, describe, expect, test } from 'bun:test';
 import { Database, type SQLQueryBindings } from 'bun:sqlite';
@@ -55,9 +38,7 @@ afterEach(() => {
 
 const ROOT: VfsCred = { uid: 0, gid: 0, groups: [0], umask: 0o022 };
 
-/** The ORIGIN: the session user every unnamed exec already runs as, and the owner
- *  of the repository a node is asked to work on. Its uid is the substrate's, not
- *  this file's — see {@link SESSION_UID}. */
+/** The session user every unnamed exec runs as, and owner of the repo a node works on. */
 const ORIGIN: VfsCred = { uid: SESSION_UID, gid: SESSION_UID, groups: [SESSION_UID], umask: 0o022 };
 
 /** A tree only the ORIGIN has: the read window a node must keep. */
@@ -82,10 +63,8 @@ interface Fixture {
   readonly workspace: NimbusWorkspace;
   readonly host: ProgrammaticHost;
   readonly runtime: () => Promise<HostedRuntime>;
-  /** The seam under test, wired from this workspace's own three members. */
   readonly provision: NodeWorkspaceProvisioner;
-  /** A second provisioner over the same workspace — proves uid allocation is a
-   *  row rather than state held by the closure that made it. */
+  /** A second provisioner over the same workspace: uid allocation is a row, not closure state. */
   readonly reprovision: NodeWorkspaceProvisioner;
 }
 
@@ -121,24 +100,19 @@ async function openFixture(): Promise<Fixture> {
     workspace,
     host,
     runtime: composed.runtime,
-    // Keyed on the node ACTOR's storage key, not the raw node id. Every
-    // actor-scoped address is keyed that way — `shellId`, the state subtree,
-    // the home — because a rename must not move an actor's directory and two
-    // actors that briefly shared a name across a retirement must not share one.
-    // Keying a home on `node.nodeId` instead is exactly that collision.
+    // Keyed on the node actor's storage key, not the raw node id: a rename must not move the home, and
+    // two actors that briefly shared a name across a retirement must not share one.
     provision: (identity: NodeIdentity) => facetHomeProvisioner(wiring)(headAgentName(identity.nodeId)),
     reprovision: (identity: NodeIdentity) =>
       facetHomeProvisioner({ ...wiring, root: workspace.vfs.as(ROOT) })(headAgentName(identity.nodeId)),
   };
 }
 
-/** A node as the engine's own row names it. */
 function node(nodeId: string): NodeIdentity {
   return { nodeId, rootId: 'root-1', depth: 1 };
 }
 
-/** Ownership and mode as the substrate itself records them, mode masked to the
- *  permission bits so a comparison is against `0o755` and not the file type. */
+/** Mode masked to permission bits, so comparisons are against `0o755`, not the file type. */
 function statOf(workspace: NimbusWorkspace, path: string) {
   const stat = workspace.vfs.as(ROOT).stat(path);
 
@@ -147,8 +121,7 @@ function statOf(workspace: NimbusWorkspace, path: string) {
   return { uid: stat.uid, gid: stat.gid, mode: stat.mode & 0o777 };
 }
 
-/** The credential the seam hands back, refusing the shared-plane value: a test
- *  that silently accepted `undefined` would pass against no boundary at all. */
+/** Refuses the shared-plane `undefined`, which would pass against no boundary at all. */
 function credOf(workspace: NodeWorkspace): VfsCred {
   if (!workspace.cred) throw new Error(`node at ${workspace.home} was given no credential`);
 
@@ -200,16 +173,11 @@ describe('a provisioned node gets a real home', () => {
     const provisioned = await f.provision(node('aX9'));
     f.workspace.vfs.as(credOf(provisioned)).writeFile(`${provisioned.home}/candidate.md`, 'my answer\n');
 
-    // The GRADER is scored on what is in a node's home and does not run as the
-    // node; MERGE-BACK copies the winner's diff out. Both are the ORIGIN here,
-    // and both need traverse plus read. Asserted as a read rather than against
-    // `AGENT_HOME_MODE`, because comparing the substrate's record to the constant
-    // that set it moves both sides of the comparison together — a home narrowed
-    // to 0o700 satisfies that equality and locks both readers out.
+    // Grader and merge-back run as the origin and need traverse plus read. Asserted as a read, not against
+    // `AGENT_HOME_MODE`: a home narrowed to 0o700 would satisfy that equality and lock both out.
     const origin = f.workspace.vfs.as(ORIGIN);
     expect(origin.readdir(provisioned.home).map((entry) => entry.name)).toEqual(['.kinu', 'candidate.md']);
     expect(origin.readFileString(`${provisioned.home}/candidate.md`)).toBe('my answer\n');
-    // The literal, once: owner writes, everyone reads.
     expect(statOf(f.workspace, provisioned.home).mode).toBe(0o755);
   });
 });
@@ -219,8 +187,7 @@ describe('the allocation is durable and injective', () => {
     const f = await openFixture();
 
     const first = await f.provision(node('aX9'));
-    // A fresh provisioner over the same workspace: an eviction between two
-    // activations must not hand the node back a home it no longer owns.
+    // An eviction between two activations must not hand the node back a home it no longer owns.
     const second = await f.reprovision(node('aX9'));
 
     expect(credOf(second).uid).toBe(credOf(first).uid);
@@ -232,8 +199,7 @@ describe('the allocation is durable and injective', () => {
     const f = await openFixture();
 
     const a = await f.provision(node('aX9'));
-    // A node id is a nanoid, so it may begin with `-`: the `head-` prefix has to
-    // supply the safe first character without collapsing two ids into one home.
+    // A nanoid may begin with `-`: the `head-` prefix supplies a safe first character without merging homes.
     const b = await f.provision(node('-Zq7'));
 
     expect(b.home).toBe('/home/head--Zq7');
@@ -265,8 +231,7 @@ describe('one node cannot write into another node\u2019s home', () => {
   });
 });
 
-/** A repository only the ORIGIN has, with a needle deep enough that finding it
- *  requires walking rather than stat-ing a path the test already knows. */
+/** The needle sits deep enough that finding it requires walking, not stat-ing a known path. */
 function seedOriginRepo(workspace: NimbusWorkspace): void {
   const origin = workspace.vfs.as(ORIGIN);
   origin.mkdir(`${ORIGIN_REPO}/src/parser`, { recursive: true });
@@ -280,8 +245,7 @@ describe('a node keeps the origin\u2019s read window', () => {
     seedOriginRepo(f.workspace);
     const provisioned = await f.provision(node('aX9'));
 
-    // Through the filesystem, and through the one real shell, because a node
-    // reads with both and a boundary that held for only one is not a boundary.
+    // A node reads through both the filesystem and the shell; the boundary must hold on both.
     expect(f.workspace.vfs.as(credOf(provisioned)).readFileString(`${ORIGIN_REPO}/README.md`))
       .toBe('the origin cloned this\n');
     expect(await rpcExec(f.host, `cat ${ORIGIN_REPO}/README.md`, { cred: credOf(provisioned) }))
@@ -293,10 +257,7 @@ describe('a node keeps the origin\u2019s read window', () => {
     seedOriginRepo(f.workspace);
     const cred = credOf(await f.provision(node('aX9')));
 
-    // The distinction that matters: a walk needs +x on every directory down the
-    // chain, and a grep needs +r on files the node never named. The empty-tree
-    // regression this design exists to prevent would pass a single stat of a path
-    // handed to it and fail exactly here.
+    // A walk needs +x down the chain and a grep needs +r on unnamed files; a single stat would pass an empty tree.
     const walked = await rpcExec(f.host, `find ${ORIGIN_REPO} -type f`, { cred });
     expect(walked.exitCode).toBe(0);
     expect(walked.stdout.split('\n').filter((line) => line.length > 0).sort()).toEqual([
@@ -318,7 +279,6 @@ describe('a node cannot write outside its own home, fail-closed', () => {
 
     expect(() => f.workspace.vfs.as(cred).writeFile(`${ORIGIN_REPO}/planted.ts`, 'planted'))
       .toThrow(expect.objectContaining({ code: 'EACCES' }));
-    // And through the shell, where a refusal the node can actually read matters.
     const refused = await rpcExec(f.host, `echo planted > ${ORIGIN_REPO}/planted.ts`, { cred });
     expect(refused.exitCode).not.toBe(0);
     expect(refused.stderr.toLowerCase()).toContain('permission denied');
@@ -330,8 +290,7 @@ describe('a node cannot write outside its own home, fail-closed', () => {
     seedOriginRepo(f.workspace);
     const cred = credOf(await f.provision(node('aX9')));
 
-    // Separate from creating one: the parent directory's write bit stops a create,
-    // the FILE's own bits stop an overwrite, and only one of those was asserted.
+    // Distinct from create: the parent's write bit stops a create, the file's own bits stop an overwrite.
     expect(() => f.workspace.vfs.as(cred).writeFile(`${ORIGIN_REPO}/README.md`, 'rewritten'))
       .toThrow(expect.objectContaining({ code: 'EACCES' }));
     expect(f.workspace.vfs.as(ROOT).readFileString(`${ORIGIN_REPO}/README.md`))
@@ -345,11 +304,8 @@ describe('a node cannot widen its own home nor chown it away', () => {
     const provisioned = await f.provision(node('aX9'));
     const cred = credOf(provisioned);
 
-    // The owner triad moves freely — `u+x` on a script a node wrote must work, or
-    // the node cannot run what it built. What must not move is group and other,
-    // and a confined principal is what makes that a substrate rule rather than a
-    // convention: `confineAgentTmp` registers the uid, and registration is also
-    // what makes the chmod ceiling apply.
+    // The owner triad moves freely (a node must `u+x` what it built); group and other must not.
+    // `confineAgentTmp` registers the uid, and registration is what applies the chmod ceiling.
     expect(() => f.workspace.vfs.as(cred).chmod(provisioned.home, 0o777))
       .toThrow(expect.objectContaining({ code: 'EPERM' }));
     expect(statOf(f.workspace, provisioned.home).mode).toBe(AGENT_HOME_MODE);
@@ -361,8 +317,6 @@ describe('a node cannot widen its own home nor chown it away', () => {
     const credA = credOf(target);
     const credB = credOf(await f.provision(node('bK2')));
 
-    // The consequence, not just the refusal: a widened home would be a sibling's
-    // to overwrite, which is the whole thing the boundary is for.
     expect(() => f.workspace.vfs.as(credA).chmod(target.home, 0o777)).toThrow(
       expect.objectContaining({ code: 'EPERM' }),
     );
@@ -375,8 +329,7 @@ describe('a node cannot widen its own home nor chown it away', () => {
     const provisioned = await f.provision(node('aX9'));
     const cred = credOf(provisioned);
 
-    // Handing it to the origin would put a node's graded output under an owner the
-    // grader cannot attribute, which is the shared plane again by another route.
+    // Handing the home to the origin would put graded output under an owner the grader cannot attribute.
     expect(() => f.workspace.vfs.as(cred).chown(provisioned.home, SESSION_UID, SESSION_UID))
       .toThrow(expect.objectContaining({ code: 'EPERM' }));
     expect(statOf(f.workspace, provisioned.home)).toEqual({
@@ -412,9 +365,7 @@ function hostedSql(database: Database): SqlDatabase {
   };
 }
 
-/** A session that answers every command, and records what it was asked. The
- *  outcome is fixed: a test that needs a REFUSAL scripts one through
- *  {@link scriptedBox}, where the answer is the runner's own JSON. */
+/** Answers every command and records it; a refusal is scripted through {@link scriptedBox}. */
 function nimbusBox(nimbus: RootExecNimbus): NimbusSandboxHandle {
   return {
     ready: async () => undefined,
@@ -462,8 +413,7 @@ describe('hosted node execution', () => {
     };
 
     const execution = withHostedNodeExecution(base, HOSTED_NODE);
-    // A credential is HOST-INJECTED: an option arriving from anywhere else must
-    // not be able to choose one.
+    // A credential is host-injected: an option arriving from anywhere else must not choose one.
     const attacker = { uid: 0, gid: 0, groups: [0], umask: 0o022 };
 
     await execution.exec('exec', { cred: attacker, cwd: '/outside', env: { HOME: '/outside' } });
@@ -478,12 +428,7 @@ describe('hosted node execution', () => {
   });
 });
 
-/**
- * The session as this repo reaches it. `exec` carries the credential on every
- * command; the file plane is the session's own pid-less file RPCs bound to
- * the same credential — what the SDK's `files.as(cred)` calls — so a node's
- * file tools and its commands are one identity over one tree.
- */
+/** `exec` and the pid-less file RPCs carry the same credential, so file tools and commands are one identity. */
 function sessionBox(f: Fixture, cred: VfsCred): NimbusSandboxHandle {
   return credentialedSessionBox(f.runtime, cred);
 }
@@ -502,10 +447,7 @@ describe('the hosted file plane acts as the node, or the home is unwritable', ()
   });
 
   test('a credentialed plane whose view lacks stat, mkdir or readRange still acts as the node', async () => {
-    // The SDK view carries all three today; the type does not promise them,
-    // and a fallback that ran the shell as the SESSION USER changed identity
-    // silently — the boundary is uid/gid on real inodes, so a mkdir as the
-    // origin is a home the node then cannot write.
+    // A fallback to the session user would silently change identity: the boundary is uid/gid on real inodes.
     const nimbus = new RootExecNimbus();
     const box = nimbusBox(nimbus);
     const cred: VfsCred = { uid: 2000, gid: 2000, groups: [2000], umask: 0o022 };
@@ -537,16 +479,12 @@ describe('the hosted file plane acts as the node, or the home is unwritable', ()
     const bytes = new Uint8Array([0, 1, 2, 0xff, 0xfe, 0x80, 0x0a, 0x27, 0x5c]);
     await asA.writeFile('/home/head-aX9/candidate.bin', bytes);
 
-    // Byte-exact, and the ORIGIN's uid-0 view agrees these are the same rows.
     expect(await asA.readFile('/home/head-aX9/candidate.bin')).toEqual(bytes);
     expect(f.workspace.vfs.as(ROOT).readFile('/home/head-aX9/candidate.bin')).toEqual(bytes);
     expect(await asA.readdir('/home/head-aX9')).toEqual(['.kinu', 'candidate.bin']);
     expect((await asA.stat('/home/head-aX9/candidate.bin'))?.size).toBe(bytes.byteLength);
-    // The read window: a sibling reads a 0o755 home, which the grader and
-    // merge-back need too.
     expect(await asB.readFile('/home/head-aX9/candidate.bin')).toEqual(bytes);
-    // And the boundary: the sibling's FILE TOOLS are refused, not only its
-    // shell. This is the half a session-user plane could never enforce.
+    // The sibling's file tools are refused, not only its shell.
     await expect(asB.writeFile('/home/head-aX9/candidate.bin', 'overwritten'))
       .rejects.toThrow(expect.objectContaining({ code: 'EACCES' }));
     await expect(asB.mkdir('/home/head-aX9/hostile')).rejects.toThrow(
@@ -561,9 +499,7 @@ describe('the hosted file plane acts as the node, or the home is unwritable', ()
       expect.objectContaining({ code: 'ENOENT' }),
     );
     expect(await asA.stat('/home/head-aX9/absent')).toBeNull();
-    // And against a real refusal rather than a scripted one: a sibling's 0o700
-    // directory inside A's home. `stat` must NOT answer `null` here, or a caller
-    // reads a boundary as an empty space and writes into it.
+    // A real refusal: `stat` must not answer `null`, or a caller reads a boundary as empty space and writes into it.
     const shut = '/home/head-aX9/shut';
     f.workspace.vfs.as(ROOT).mkdir(shut, { recursive: true });
     f.workspace.vfs.as(ROOT).chown(shut, b.uid, b.gid);
@@ -582,7 +518,6 @@ describe('the hosted file plane acts as the node, or the home is unwritable', ()
     const f = await openFixture();
     const a = credOf(await f.provision(node('aX9')));
     const asA = nimbusSessionFiles(sessionBox(f, a), a);
-    // Every name `ls` cannot express unambiguously.
     const names = ["we\nird 'q'-name", '--dash-leading', 'two  spaces\ttab', 'back\\slash$dollar'];
 
     for (const [index, name] of names.entries()) {
@@ -607,16 +542,13 @@ describe('the hosted file plane acts as the node, or the home is unwritable', ()
     const f = await openFixture();
     const a = credOf(await f.provision(node('aX9')));
     const asA = nimbusSessionFiles(sessionBox(f, a), a);
-    // A non-repeating pattern well past any single chunk, so a lost or
-    // reordered piece cannot pass.
+    // Non-repeating and past any single chunk, so a lost or reordered piece cannot pass.
     const big = new Uint8Array(2 * 1024 * 1024 + 4096);
 
     for (let at = 0; at < big.length; at += 1) big[at] = (at * 31 + (at >> 8)) & 0xff;
 
     await asA.writeFile('/home/head-aX9/big.bin', big);
     const read = await asA.readFile('/home/head-aX9/big.bin');
-    // Parsed rather than tested at runtime: a byte read that came back decoded
-    // would be a different contract, and this states which one is under test.
     const bytes = v.parse(v.instance(Uint8Array), read);
 
     expect(bytes).toEqual(big);
@@ -629,8 +561,6 @@ describe('the hosted file plane acts as the node, or the home is unwritable', ()
     const a = credOf(await f.provision(node('aX9')));
     const asA = nimbusSessionFiles(sessionBox(f, a), a);
     await asA.writeFile('/home/head-aX9/keeper', 'the old bytes\n');
-    // A directory a file write cannot land on: the refusal is the plane's own
-    // and the neighbouring files survive untouched.
     await asA.mkdir('/home/head-aX9/occupied', { recursive: true });
     await asA.writeFile('/home/head-aX9/occupied/child', 'child');
 
@@ -642,15 +572,13 @@ describe('the hosted file plane acts as the node, or the home is unwritable', ()
   });
 });
 
-
 describe('the in-isolate plane acts as the node on both surfaces', () => {
   test('main and a node keep private temporary files after workspace reset', async () => {
     const database = new Database(':memory:');
     databases.push(database);
     const sql = hostedSql(database);
     const transactions = { storage: { transactionSync: <T,>(fn: () => T): T => database.transaction(fn)() } };
-    // One counter row, adopted and bumped by each open: the second workspace
-    // is the next generation of the same database, as a reset is.
+    // One counter row bumped per open: the second workspace is the next generation of the same database.
     const first = createWorkspace({ sql, transactions, generation: workspaceGenerationStorage(sql) });
     const provision = facetHomeProvisioner(first.privileged().then((host) => ({ ...host, sql })));
     const identity = await provision(headAgentName(node('reset').nodeId));
@@ -660,7 +588,6 @@ describe('the in-isolate plane acts as the node on both surfaces', () => {
     expect(await first.shell.exec('echo main > /tmp/note; echo shared > /home/user/shared')).toMatchObject({ exitCode: 0 });
     expect(await child.shell.exec('echo node > /tmp/note')).toMatchObject({ exitCode: 0 });
     expect((await first.shell.exec('echo $HOME $TMPDIR')).stdout.trim()).toBe('/home/user /tmp/main');
-    // A reset discards the instance and keeps its database.
     const second = createWorkspace({ sql, transactions, generation: workspaceGenerationStorage(sql) });
     const restored = await second.asAgent(identity);
     expect((await second.shell.exec('cat /tmp/note')).stdout).toBe('main\n');
@@ -695,15 +622,12 @@ describe('the in-isolate plane acts as the node on both surfaces', () => {
     const asA = await workspace.asAgent(a);
     const asB = await workspace.asAgent(b);
 
-    // FILE PLANE: its own home is writable, which a session-user plane refuses.
     await asA.vfs.writeFile(`${a.home}/candidate.md`, 'my answer\n');
     expect(await asA.vfs.readFile(`${a.home}/candidate.md`, { encoding: 'utf8' })).toBe('my answer\n');
     await expect(asB.vfs.writeFile(`${a.home}/candidate.md`, 'stolen'))
       .rejects.toThrow(expect.objectContaining({ code: 'EACCES' }));
-    // The read window stays open, for the grader and for merge-back.
     expect(await asB.vfs.readFile(`${a.home}/candidate.md`, { encoding: 'utf8' })).toBe('my answer\n');
 
-    // SHELL PLANE: the same identity, the node's home as cwd, and its own tmp.
     expect(await asA.shell.exec('pwd')).toMatchObject({ exitCode: 0, stdout: `${a.home}\n` });
     expect((await asA.shell.exec('echo $HOME $TMPDIR')).stdout.trim()).toBe(`${a.home} ${a.tmp}`);
     expect(await asA.shell.exec(`echo mine > ${a.home}/via-shell.txt`)).toMatchObject({ exitCode: 0 });
@@ -717,26 +641,16 @@ describe('the in-isolate plane acts as the node on both surfaces', () => {
     expect(await workspace.vfs.exists('/tmp/pad.txt')).toBe(false);
     expect(await asA.vfs.readFile('/tmp/pad.txt', { encoding: 'utf8' })).toBe('scratch\n');
 
-    // The ORIGIN is untouched: same filesystem, its own identity, and it can
-    // still read every home it must grade.
     expect((await workspace.shell.exec('id -u')).stdout).toContain(String(SESSION_UID));
     expect(await workspace.vfs.readFile(`${a.home}/candidate.md`, { encoding: 'utf8' })).toBe('my answer\n');
 
-    // One plane per uid: a shell holds cwd, so a second call must not hand the
-    // node a fresh one that forgot its own `cd`.
+    // One plane per uid: a shell holds cwd, so a second call must not forget the node's `cd`.
     expect(await workspace.asAgent(a)).toBe(asA);
   });
 });
 
-/**
- * The plane has no compare-and-write, and says so once, in one voice. The
- * SDK's `files.write` takes no precondition and `stat` reports no revision, so
- * neither the origin's plane nor the node's declares `writeFileIfRevision`;
- * the product refuses an in-place save as `unsupported`, an unconditional
- * save still lands, and the viewer is handed the same reason. Held on the
- * real substrate through `files.as` — the property the retired runner's
- * suite pinned and this one keeps.
- */
+/** The SDK's `files.write` takes no precondition and `stat` reports no revision, so no plane declares
+ *  `writeFileIfRevision`: in-place save is `unsupported`, unconditional save lands. */
 describe('a plane with no compare-and-write says so, once, in one voice', () => {
   const lookupFor = (files: VFS): ExecutorFileLookup => ({ getProvider: () => ({ files, homeDir: async () => '/home/user' }) });
 

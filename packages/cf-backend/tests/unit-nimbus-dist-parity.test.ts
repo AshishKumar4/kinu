@@ -1,11 +1,6 @@
 /**
- * The patched dependency behaves the same in the artifact PRODUCTION loads.
- *
- * `@nimbus-sh/core` ships a conditional exports map — `"bun": "./src/*.ts"`,
- * `"import": "./dist/*.js"` — so Bun resolves the TypeScript sources while a
- * bundled Worker resolves `dist`. A patch that edited only one of them would be
- * honoured by every test here and absent in production, or the reverse, and
- * nothing would say so. This suite loads `dist` on purpose for that reason.
+ * `@nimbus-sh/core` exports `"bun": src`, `"import": dist`; a patch to only one
+ * would pass here and differ in production, so this suite loads `dist`.
  */
 import { test, expect } from 'bun:test';
 import { Database, type SQLQueryBindings } from 'bun:sqlite';
@@ -17,9 +12,7 @@ import type {
   TransactionHost,
   VfsCred,
 } from '@nimbus-sh/core/runtime/os-contracts.js';
-// Deliberately the dist artifact, by path: Bun's exports condition resolves
-// `src`, so a test that imported the package name would never load what a
-// bundled Worker loads.
+// By path: Bun's exports condition would resolve `src`, not what a bundled Worker loads.
 import { SqliteVFS } from '@nimbus-sh/core/vfs/sqlite-vfs.js';
 
 const ROOT: VfsCred = { uid: 0, gid: 0, groups: [0], umask: 0o022 };
@@ -86,10 +79,8 @@ test('dist carries the per-credential /tmp, the list reverse-map, and confined c
   expect(vfs.as(A).readFileString('/tmp/note.txt')).toBe('A bytes');
   expect(vfs.as(B).readFileString('/tmp/note.txt')).toBe('B bytes');
 
-  // readdir remap
   expect(vfs.as(A).readdir('/tmp').map((e: { name: string }) => e.name)).toEqual(['note.txt']);
 
-  // list reverse-map: own name, not the storage key, and not the neighbour
   const seen = vfs.as(A).list(null, 500).entries
     .map((e: { path: string }) => e.path)
     .filter((p: string) => p.startsWith('tmp'));
@@ -97,14 +88,12 @@ test('dist carries the per-credential /tmp, the list reverse-map, and confined c
   expect(seen).toContain('tmp/note.txt');
   expect(seen.some((p: string) => p.includes('agent-b'))).toBe(false);
 
-  // rename resolves both names through the private root
   vfs.as(A).rename('/tmp/note.txt', '/tmp/moved.txt');
   expect(vfs.as(A).readFileString('/tmp/moved.txt')).toBe('A bytes');
   expect(vfs.as(B).readFileString('/tmp/note.txt')).toBe('B bytes');
   expect([...sql.exec("SELECT path FROM inodes WHERE path LIKE 'tmp/agent-a/%'")].map((row) => v.parse(v.string(), row.path)))
     .toEqual(['tmp/agent-a/moved.txt']);
 
-  // confined chmod: owner triad moves, widening refused, nothing clamped
   root.mkdir('home/agent-a', { recursive: true });
   root.chown('home/agent-a', A.uid, A.gid);
   root.chmod('home/agent-a', 0o700);
@@ -117,7 +106,6 @@ test('dist carries the per-credential /tmp, the list reverse-map, and confined c
   expect(() => vfs.as(A).chmod('home/agent-a/s.sh', 0o777)).toThrow(/use u\+x/);
   expect(root.stat('home/agent-a/s.sh').mode & 0o777).toBe(0o700);
 
-  // unconfined is untouched: root moves the mode and nothing refuses it
   expect(() => root.chmod('home/agent-a/s.sh', 0o755)).not.toThrow();
   expect(root.stat('home/agent-a/s.sh').mode & 0o777).toBe(0o755);
 });

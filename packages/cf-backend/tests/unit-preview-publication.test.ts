@@ -1,22 +1,6 @@
 /**
- * Publication: the writer half of the preview gate.
- *
- * The edge refuses a preview hostname it cannot prove against the exposures
- * this deployment published (`unit-preview-forgery.test.ts` drives that half
- * through the Worker entry). This file holds the other end of the same
- * contract, on the executor lane the workspace's own Durable Object runs:
- *
- *   * every preview URL the lane hands out is published FIRST, and published
- *     under the token the URL actually carries;
- *   * a deployment that cannot publish refuses to mint a URL instead of handing
- *     out a link the edge will turn away;
- *   * unexposing and removing a port withdraw it, in the fail-closed order;
- *   * listing ports re-publishes what the container still reports, which is how
- *     a long-lived exposure does not age out of the record and how one minted
- *     before the record existed gets into it.
- *
- * The round trip is asserted through the real reader, so a change to either
- * side of the token derivation fails here rather than in production.
+ * Writer half of the preview gate (`unit-preview-forgery.test.ts` holds the edge half): every URL is published first
+ * under the token it carries, unpublishable deployments refuse to mint, withdrawal is fail-closed, and listing re-publishes.
  */
 import { afterAll, describe, expect, setSystemTime, test } from 'bun:test';
 import { adaptCloudflareSandbox } from '../src/sandbox-exec-lane';
@@ -40,13 +24,11 @@ const PORT = 8080;
 
 const TOKEN = 'p8080_ab12cd34';
 
-/** The exposure lifetime these cases pin: thirty days without observation. */
 const EXPOSURE_LIFETIME_MS = 30 * 24 * 60 * 60 * 1000;
 
 afterAll(() => { setSystemTime(); });
 
-/** What a body reported while it ran. A failure that is reported rather than
- *  propagated still has to be visible, and this is where that is checked. */
+/** A failure reported rather than propagated must still be visible. */
 async function recordDiagnostics(body: () => Promise<void>): Promise<readonly RecordedLog[]> {
   const logger = createRecordingLogger();
   const restore = setDiagnosticsSink(logger);
@@ -57,17 +39,13 @@ async function recordDiagnostics(body: () => Promise<void>): Promise<readonly Re
 }
 
 interface PortBox {
-  /** Ports the container object was asked to expose. */
   readonly exposed: number[];
-  /** Ports revoked on the container object. */
   readonly revoked: number[];
-  /** Ports whose durable row was removed. */
   readonly removed: number[];
   readonly box: KinuSandbox;
 }
 
-/** A container object that answers the four port methods and nothing else, the
- *  way the SDK does: `exposePort` returns the URL it minted. */
+/** Answers the four port methods only; `exposePort` returns the minted URL, like the SDK. */
 function portBox(options: { token?: string; failRevoke?: boolean } = {}): PortBox {
   const exposed: number[] = [];
   const revoked: number[] = [];
@@ -101,9 +79,7 @@ function portBox(options: { token?: string; failRevoke?: boolean } = {}): PortBo
   return { exposed, revoked, removed, box };
 }
 
-/** The lane as the workspace's Durable Object composes it. `writer` is the
- *  exposures writer that object built when it woke; a test that needs the
- *  writer to predate a revocation hands it in instead of minting one per call. */
+/** `writer` is built when the object woke; pass one in when it must predate a revocation. */
 function lane(kv: FakeKv | null, box: KinuSandbox, writer?: SandboxPreviewExposures) {
   return adaptCloudflareSandbox(
     box,
@@ -127,9 +103,7 @@ describe('exposing a port publishes the preview the edge will be asked about', (
   });
 
   test('the token PUBLISHED is the one the URL carries, not the one asked for', async () => {
-    // The SDK reuses a port's existing token rather than the one passed in, so
-    // recording the requested token would publish a record no URL matches. The
-    // lane reads the token back out of the minted URL for exactly this case.
+    // The SDK reuses a port's existing token, so the lane reads the token back out of the minted URL.
     const kv = makeKv();
     const { box } = portBox({ token: 'p8080_reused99' });
 
@@ -148,16 +122,13 @@ describe('exposing a port publishes the preview the edge will be asked about', (
 
     await expect(lane(null, box).exposePort(PORT, { hostname: SUFFIX }))
       .rejects.toThrow('AUTH_KV');
-    // And it refuses BEFORE the container is asked, so no exposure exists that
-    // the edge would then turn away.
+    // Refused before the container is asked.
     expect(exposed).toEqual([]);
   });
 
   test('a minted URL the deployment cannot parse is a failure, not a silent link', async () => {
     const kv = makeKv();
 
-    // An SDK that changed its URL shape: the record could not name the token,
-    // so the edge would refuse the link the agent is about to hand out.
     const box: KinuSandbox = Object.create({
       resolveReadiness: async () => ({ kind: 'restored' as const }),
       exposePort: async () => ({ url: 'https://preview.elsewhere.example/8080', port: PORT }),
@@ -174,8 +145,7 @@ describe('revoking a port withdraws its published preview', () => {
     const { box } = portBox({ failRevoke: true });
     await sandboxPreviewExposures(kv, SANDBOX_ID).publish(PORT, TOKEN);
 
-    // The container half fails; the safe direction is a live port nothing can
-    // reach, never a revoked port the edge still admits.
+    // Fail-safe direction: a live unreachable port, never a revoked port the edge still admits.
     await expect(lane(kv, box).unexposePort(PORT)).rejects.toThrow('container unreachable');
 
     expect(await sandboxPreviewExposed(kv, {
@@ -218,17 +188,13 @@ describe('listing ports re-observes what the container still reports', () => {
     setSystemTime(new Date('2026-03-01T12:00:00.000Z'));
     await sandboxPreviewExposures(kv, SANDBOX_ID).publish(PORT, TOKEN);
 
-    // Two thirds of the way through the record's life, the Ports panel lists.
     setSystemTime(new Date(Date.now() + (EXPOSURE_LIFETIME_MS * 2) / 3));
     await lane(kv, box).getExposedPorts(SUFFIX);
-    // Two thirds again: past the first record's expiry, so a preview still in
-    // use resolves only because the observation refreshed it.
+    // Past the first expiry: the preview resolves only because the listing refreshed it.
     setSystemTime(new Date(Date.now() + (EXPOSURE_LIFETIME_MS * 2) / 3));
 
     expect(await sandboxPreviewExposed(kv, claim)).toBe(true);
 
-    // And it is a bound, not an immortal record: with nothing observing it, the
-    // same wait lapses.
     setSystemTime(new Date(Date.now() + EXPOSURE_LIFETIME_MS));
     expect(await sandboxPreviewExposed(kv, claim)).toBe(false);
     setSystemTime();
@@ -251,9 +217,7 @@ describe('listing ports re-observes what the container still reports', () => {
     const kv = makeKv();
     const { box } = portBox();
 
-    // The record is already correct; only the maintenance write fails. A
-    // workspace whose ports are all live must not see an empty panel because
-    // the store hiccupped — and the failure is reported, never dropped.
+    // A failed maintenance write must not empty the panel, and is reported.
     const refusing: KvStore = {
       get: (key) => kv.get(key),
       put: async () => { throw new Error('KV PUT failed: 429'); },
@@ -273,11 +237,7 @@ describe('listing ports re-observes what the container still reports', () => {
 });
 
 describe('a revoked exposure is never resurrected by the lane that published it', () => {
-  // `destroyAgent` writes the watermark first and then spends several awaits
-  // destroying the container object. A Ports listing, or an expose whose
-  // container call was already in flight, runs in those gaps on the same
-  // object, and its writer was built when the object woke — before the
-  // watermark. Neither may put a record back that the edge would then prove.
+  // `destroyAgent` writes the watermark then awaits container teardown; writers built before it must not re-publish.
   const claim = { sandboxId: SANDBOX_ID, port: PORT, token: TOKEN };
 
   test('a listing racing the destroy does not refresh a record the watermark withdrew', async () => {
@@ -287,13 +247,11 @@ describe('a revoked exposure is never resurrected by the lane that published it'
     const writer = sandboxPreviewExposures(kv, SANDBOX_ID);
     await writer.publish(PORT, TOKEN);
 
-    // Late enough in the record's life that a listing would rewrite it.
     setSystemTime(new Date(Date.now() + (EXPOSURE_LIFETIME_MS * 2) / 3));
     await writer.revokeAll();
     setSystemTime(new Date(Date.now() + 1));
     const rows = await lane(kv, box, writer).getExposedPorts(SUFFIX);
 
-    // The listing itself stands: the container still reports the port.
     expect(rows.map((row) => row.port)).toEqual([PORT]);
     expect(await sandboxPreviewExposed(kv, claim)).toBe(false);
     setSystemTime();
@@ -321,7 +279,6 @@ describe('a revoked exposure is never resurrected by the lane that published it'
     await writer.revokeAll();
     setSystemTime(new Date(Date.now() + 1));
 
-    // A URL the edge would refuse is a failure here, never a dead link.
     await expect(lane(kv, box, writer).exposePort(PORT, { hostname: SUFFIX }))
       .rejects.toThrow('revoked');
 

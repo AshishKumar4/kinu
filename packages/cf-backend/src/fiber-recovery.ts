@@ -1,47 +1,8 @@
 /**
- * The durable lanes' RECOVERY half — what happens to one when the platform
- * interrupted it.
- *
- * An ActorAgent runs its work through `runFiber`, so each lane writes a
- * `cf_agents_runs` row with its stashed identity before it runs and each is
- * handed back to {@link classifyRecoveredFiber} on the next activation:
- *
- *   • a detached tool call   (`bg:<kind>`, minted by core's BackgroundJobRunner)
- *   • a search               (`mcts`, minted by core's SEARCH_FIBER_NAME)
- *   • the evolution lane     (`evolution:settle`, started by settleEvolutionInBackground)
- *   • the advisor lane       (`advisor:review`, started by reviewTurnInBackground)
- *
- * That activation needs NO client and NO request: with nothing connected, the
- * persisted keepAlive alarm fires on its own and the SDK's housekeeping runs the
- * interrupted-fiber scan. This module owns the ROSTER and each arm's semantics;
- * the actor owns only the transports the arms re-drive through, declared once in
- * {@link FiberLaneTransports}. The two cf-minted lane names live here beside the
- * dispatch that matches them — `BACKGROUND_FIBER_PREFIX` and `SEARCH_FIBER_NAME`
- * stay in core, because there core mints and this backend matches.
- *
- * ## Every arm CLASSIFIES. No arm re-drives here
- *
- * The scan that offers these rows runs INSIDE the Durable Object's init gate:
- * `fetch`, `webSocketMessage`, `webSocketClose` and `alarm` all await
- * partyserver's `blockConcurrencyWhile`, and the agents SDK awaits
- * `_checkRunFibers` — and so this hook — inside it. A re-drive that ran here
- * would hold every request on the object, pure `@callable` reads included, for
- * as long as the lane takes: an advisor review is a model call, the evolution
- * lane spends model calls and real tool loops, a settled background job's wake
- * resolves only when the turn it queues ENDS, and a terminal sequence replays
- * SMTP round trips and waits on other agents' live heads. Past
- * `do.block_concurrency.cancel_ms` the runtime cancels the gate and RESETS the
- * object, which re-offers the same row on the next wake — a reset loop that can
- * hold a workspace unusable for {@link FIBER_RECOVERY_MAX_AGE_MS}.
- *
- * So each arm does three things, all synchronously: decide what the row means,
- * ask the lane's own idempotency guard whether anything is still owed, and hand
- * the re-drive to {@link FiberLaneTransports.redrive} — the actor's detached
- * durable carrier, a fresh fiber under the same lane name holding the same
- * checkpoint, so an interruption of the RE-DRIVE re-enters this classification
- * with the same inputs. Nothing here awaits, which is what makes "the gate
- * awaits classification only" a property of the code rather than a claim about
- * it; `scripts/do-init-gate.ts` holds the hook and this seam to that shape.
+ * Recovery of interrupted durable lanes (`bg:<kind>`, `mcts`, `evolution:settle`, `advisor:review`, ...).
+ * Arms only classify and hand off to {@link FiberLaneTransports.redrive}: the scan runs inside the DO
+ * init gate (`blockConcurrencyWhile`), and awaiting a lane there trips `do.block_concurrency.cancel_ms`,
+ * resetting the object into a re-offer loop. `scripts/do-init-gate.ts` enforces this shape.
  */
 import * as v from 'valibot';
 import type { FiberRecoveryContext, FiberRecoveryResult } from 'agents';
@@ -56,45 +17,19 @@ import {
 import type { ActorHandle } from '@kinu.run/core';
 import { diagnostics, KinuError, toKinuError } from '@kinu.run/core/obs';
 
-/**
- * How old an unrecovered `cf_agents_runs` row may be before recovery gives up
- * on it — Kinu's declared value for the SDK option of the same name, and the
- * ONE place the number lives.
- *
- * Declared once here: this is the SDK's own 24h default, and a second spelling
- * beside it (such as the schedule sweep's "past it the framework stops
- * recovering the fiber a continuation callback would resume") is a hand-mirror
- * of a vendor default nobody owns. It is read by the schedule sweep and handed
- * to the SDK through `ActorAgent.options` — which makes it the number the
- * framework actually enforces rather than a guess about it.
- */
+/** Kinu's value for the SDK's `fiberRecoveryMaxAgeMs` (the SDK default); the one place it lives. */
 export const FIBER_RECOVERY_MAX_AGE_MS = 24 * 60 * 60 * 1000;
 
 /**
- * The most rows ONE activation sweep scans — the inherent bound the init
- * ruling requires, and the same number the framework's own scan carries
- * (`patches/agents@0.22.0.patch`, where a stopwatch bounded nothing but the
- * wait). Shared by every row-budgeted sweep in this backend, because three
- * spellings of one budget are three numbers that can drift; a sweep whose
- * per-row cost is different says so with its own constant and its reason
- * (`ORPHAN_SEAL_MAX_ROWS`).
- *
- * Metadata-only pages, so the worst case is a handful of indexed reads; a
- * backlog deeper than this drains on the maintenance wake rather than holding
- * an activation hostage.
+ * Max rows one activation sweep scans; matches the framework's own scan
+ * (`patches/agents@0.22.0.patch`). Shared by every row-budgeted sweep here.
  */
 export const SWEEP_MAX_ROWS = 4096;
 
-/**
- * One metadata row per read. This is not a policy cap: the framework's own
- * scan carries the same 4096-row budget (patches/agents@0.22.0.patch — a
- * stopwatch bounded nothing but the wait), while the read is structurally
- * incapable of holding more than one snapshot candidate at a time.
- */
+/** One metadata row per read, so a read never holds more than one snapshot candidate. */
 const ONE_FIBER_ROW = 1;
 
-/** One `cf_agents_runs` row's METADATA. The `snapshot` column is deliberately
- *  absent — reading it is the allocation this sweep exists to avoid. */
+/** Metadata only: the `snapshot` column is deliberately absent. */
 const FiberMetaRowSchema = v.object({
   rowid: v.number(),
   id: v.string(),
@@ -103,28 +38,16 @@ const FiberMetaRowSchema = v.object({
 
 export type FiberMetaRow = v.InferOutput<typeof FiberMetaRowSchema>;
 
-/**
- * The four questions the sweep asks of `cf_agents_runs`, and nothing wider.
- *
- * A port rather than a raw `SqlExecutor`, and the narrowness IS the design: no
- * method here can return a stashed snapshot, so "this pass never materializes a
- * blob" is a property of the interface instead of a claim about a query string.
- * The SQL lives in {@link fiberRowStore}, the only thing that has to know the
- * framework's column names.
- */
+/** Narrow port over `cf_agents_runs`: no method can return a snapshot blob. */
 export interface FiberRowStore {
   /** The framework creates the table lazily, on the first `runFiber`. */
   present(): boolean;
   /** `MAX(rowid)`, read once and then frozen by the caller. */
   upperBoundary(): number | null;
-  /** Metadata for EXPIRED rows in `(after, through]`, oldest rowid first.
-   *  The cutoff sits in the query: a fresh row is never scanned at all, so a
-   *  backlog of live fibers cannot starve an expired row behind it — the
-   *  ordering `created_at` roughly tracks rowid is a tendency, never the
-   *  guarantee (imported rows and a stepped clock both break it). */
+  /** Expired rows in `(after, through]`, oldest rowid first. The cutoff is in the query
+   *  because `created_at` does not reliably track rowid. */
   page(after: number, through: number, cutoff: number): readonly FiberMetaRow[];
-  /** Remove one row, re-checking AT ITS OWN ID that it is still expired.
-   *  `false` when a concurrent pass already handled it. */
+  /** Delete one row, re-checking expiry at its own id; `false` if a concurrent pass took it. */
   dropIfExpired(id: string, cutoff: number): boolean;
 }
 
@@ -147,8 +70,6 @@ export function fiberRowStore(sql: SqlExecutor): FiberRowStore {
   };
 }
 
-/** How many rows one sweep dropped, how many it looked at, and whether it ran
- *  out of deadline before reaching the frozen boundary. */
 export interface FiberSweepResult {
   readonly dropped: number;
   readonly scanned: number;
@@ -156,41 +77,10 @@ export interface FiberSweepResult {
 }
 
 /**
- * Drop the interrupted-fiber rows the recovery budget has already given up on,
- * BEFORE the framework allocates their snapshots.
- *
- * `Agent._checkRunFibers` opens with `SELECT id, name, snapshot, created_at FROM
- * cf_agents_runs` — one materialization of every row, snapshot blobs included —
- * and only then walks them, checking its scan deadline per row and its max-age
- * budget after each recovery hook. Both bounds are therefore evaluated after the
- * allocation they exist to bound: a workspace holding many or large stashes pays
- * for all of them at once, and the deadline it then trips is a deadline on work
- * already paid for. The vendored SDK owns that read; this is the same budget,
- * applied first, in the shape the read cannot take:
- *
- *   • FREEZE THE UPPER BOUNDARY. `MAX(rowid)`, read once. Every row at or below
- *     it was written by an earlier activation, so a fiber THIS activation starts
- *     lands above the boundary and is structurally outside the sweep. That is
- *     what makes an "is it live?" check unnecessary rather than racy, and it is
- *     why the boundary is frozen instead of re-read per page.
- *   • PAGE METADATA ONLY. `rowid, id, created_at`. The snapshot column is never
- *     selected, so the memory held is one page of timestamps regardless of what
- *     the lanes stashed.
- *   • REVALIDATE BEFORE ACTING. The delete is guarded on the row still being
- *     over the budget at its own id, so a page — a snapshot of a table a
- *     concurrent framework scan writes to — cannot authorise a stale removal.
- *   • A ROW BUDGET, NOT A STOPWATCH. One activation scans at most
- *     {@link SWEEP_MAX_ROWS} rows — an inherent bound on the work
- *     itself, where the wall-clock cutoff this replaces bounded nothing but
- *     the wait. What the pass does not reach stays for the next wake,
- *     exactly as the framework's own scan leaves it.
- *
- * Only rows the budget has ALREADY refused are dropped, so no recovery decision
- * changes: past `fiberRecoveryMaxAgeMs` the framework discards the row anyway
- * (`fiber:recovery:skipped`, `max_age_exceeded`), and Kinu's schedule sweep
- * already acts on the same rule — a continuation past that age can only replay
- * dead work. Rows inside the budget are untouched and remain the framework's to
- * recover.
+ * Drop rows past the recovery max age before `Agent._checkRunFibers` materializes every snapshot.
+ * The rowid boundary is frozen so fibers started this activation are never swept; deletes
+ * revalidate expiry per id; scanning is bounded by {@link SWEEP_MAX_ROWS}, not a stopwatch.
+ * Only rows the framework would already skip (`max_age_exceeded`) are dropped.
  */
 export function sweepUnrecoverableFibers(
   store: FiberRowStore,
@@ -199,8 +89,7 @@ export function sweepUnrecoverableFibers(
   const cutoff = now - FIBER_RECOVERY_MAX_AGE_MS;
   const nothing: FiberSweepResult = { dropped: 0, scanned: 0, truncated: false };
 
-  // An actor that has never detached durable work has no table. That is not a
-  // failure, it is zero rows, and saying so keeps a fresh workspace quiet.
+  // No table means the actor never detached durable work: zero rows, not a failure.
   if (!store.present()) return nothing;
   const boundary = store.upperBoundary();
 
@@ -227,96 +116,45 @@ export function sweepUnrecoverableFibers(
   }
 }
 
-/** The post-turn evolution lane's durable fiber name. */
 export const EVOLUTION_LANE_FIBER = 'evolution:settle';
 
-/** The post-turn MCP warmup lane's durable fiber name. */
 export const MCP_WARM_LANE_FIBER = 'mcp:warm';
 
-/** The terminal-sequence lane's durable fiber name — the effects a settled turn
- *  owes, held open while they report. */
 export const TERMINAL_LANE_FIBER = 'terminal:effects';
 
-/** The fork-journal recovery notice in flight — the wake text a reconcile owes
- *  the agent, carried as its own lane so an eviction between the journal's
- *  terminal writes and the notice landing replays the DELIVERY, not the
- *  reconcile. The signal rides the checkpoint whole, and its idempotency key
- *  makes the replay collide with a delivery that already landed. */
+/** Fork-journal recovery notice lane: an eviction replays the delivery, not the reconcile;
+ *  the signal's idempotency key dedupes a delivery that already landed. */
 const FORK_NOTICE_LANE_FIBER = 'fork:notice';
 
-/** The transports one actor supplies to its lanes' recovery. Every member is
- *  something an activation re-resolves for itself — a stub call, a fresh model
- *  route, its own storage — which is exactly why they are parameters and the
- *  arms below are shared: the arms must not drift per backend, and the
- *  transports cannot be captured at interruption time anyway. */
+/** Transports an activation re-resolves for itself; the arms stay shared across backends. */
 export interface FiberLaneTransports {
-  /** The durable background-job registry: re-drive a lost executor, sweep
-   *  jobs whose fiber row did not survive. */
   readonly jobs: Pick<BackgroundJobRunner, 'recover' | 'recoverOrphans'>;
-  /** Re-enter every unit the evolution cadence drives from durable storage. */
   readonly runDueSessionEvolution: () => Promise<void>;
-  /** Whether one turn's advisor note already landed — the idempotency guard.
-   *  Synchronous storage, because the guard is what decides IN the gate whether
-   *  anything is handed to a carrier at all. */
+  /** Idempotency guard for the advisor lane; synchronous because it is decided inside the init gate. */
   readonly hasAdvisorNoteForTurn: (turnId: string) => boolean;
-  /** The ONE review body both the live lane and its recovery run. */
+  /** The one review body both the live lane and its recovery run. */
   readonly reviewAdvisorSnapshot: (
     snapshot: AdvisorRecoverySnapshot,
   ) => Promise<AdvisorDisposition | null>;
-  /** The workspace's one SQLite — where the interrupted-search notice is filed. */
   readonly sql: SqlExecutor;
-  /** WHOSE row that notice is. One database holds every actor's evolution
-   *  stream, so which database was opened does not imply the actor: an
-   *  unstamped row fails NOT NULL, and a row stamped with the wrong actor shows
-   *  one actor's recovery in every sibling's stream. */
+  /** Stamp for the notice row: one database holds every actor's evolution stream. */
   readonly actor: ActorHandle;
-  /** The agent's own memory surface — what tells it about the lost turn. */
   readonly appendMemory: (path: string, text: string) => Promise<void>;
-  /** Arm the durable wake the terminal ledger already owns, and replay nothing:
-   *  the owed rows are the record, and the alarm frame they were designed for is
-   *  where a replay may await an SMTP round trip. */
+  /** Arm the terminal ledger's durable wake and replay nothing here (a replay may await SMTP). */
   readonly armOwedTerminalRecovery: () => Promise<void>;
-  /** Deliver one recovered signal — the fork-notice lane's replay body. The
-   *  OUTCOME is load-bearing: `undelivered` means the enqueue was pre-empted
-   *  and the notice is still owed. */
+  /** Fork-notice replay body. `undelivered` means the notice is still owed. */
   readonly deliverSignal: (signal: AgentSignal) => Promise<SendOutcome>;
   /**
-   * Hand one lane's re-drive to the actor's detached durable carrier.
-   *
-   * Returns nothing, and the absence IS the contract: an arm that could await
-   * the re-drive would be back inside the init gate. What the actor supplies is
-   * a fresh fiber under `lane` holding `checkpoint`, so the work is durable
-   * before this hook returns — the SDK deletes the row it recovered as soon as
-   * it does — and an interruption of the re-drive re-enters this classification
-   * with the same inputs.
+   * Hand a re-drive to a fresh fiber under `lane` holding `checkpoint`. Returns void on purpose:
+   * an awaitable re-drive would be back inside the init gate.
    */
   readonly redrive: (lane: string, checkpoint: JsonValue, body: () => Promise<void>) => void;
 }
 
 /**
- * Decide what to do with one fiber the platform interrupted, SAY SO, and hand
- * the work itself to a carrier that may take as long as the work takes.
- *
- * The return value is load-bearing. The SDK deletes an interrupted
- * `cf_agents_runs` row when this hook RETURNS and retains it when this hook
- * THROWS — a retained row is re-offered on every activation until
- * `fiberRecoveryMaxAgeMs` (24h) discards it, keeping the object warm the whole
- * time. So this never throws: every path below ends in a terminal
- * `FiberRecoveryResult`, and a lane nobody here recognises ends in a classified
- * `error` rather than in a poison row that re-enters for a day. For a managed
- * row the same value is what moves the ledger off `interrupted`, which is why
- * the classified paths return `completed` rather than nothing.
- *
- * SYNCHRONOUS, which is the whole gate argument (see the module header): the row
- * the SDK is about to delete is replaced by the carrier's own row before this
- * returns, so classifying rather than re-driving loses no work and stalls
- * nobody. A `completed` here therefore means "this row's obligation now has a
- * carrier", not "the lane finished".
- *
- * One branch per lane, and the branches are not interchangeable: a background
- * job has durable rows to re-drive from, the evolution lane has durable queues
- * to re-enter, the advisor lane has neither, and a search's tree survives but
- * the turn that was reading it does not.
+ * Classify one interrupted fiber and hand its work to a carrier. Never throws: the SDK retains a
+ * row whose hook throws and re-offers it every activation until max age. Synchronous (init gate);
+ * `completed` means the obligation has a carrier, not that the lane finished.
  */
 export function classifyRecoveredFiber(
   transports: FiberLaneTransports,
@@ -349,24 +187,13 @@ export function classifyRecoveredFiber(
 
     diagnostics.failure('fiber.recovery_failed', failure, { fiber: ctx.name, fiberId: ctx.id });
 
-    // Terminal, not rethrown. A lane whose guard could not be read, or whose
-    // carrier could not write its row, will not classify on the fifth attempt
-    // either, and re-offering the row is how one broken lane holds a Durable
-    // Object open for a day.
+    // Terminal, not rethrown: a retained row would be re-offered every activation until max age.
     return { status: 'error', error: failure.message, snapshot: { lane: ctx.name, recovered: false } };
   }
 }
 
-/**
- * A settled turn whose owed effects were still reporting when the isolate died.
- *
- * Every input is already on the ledger's rows, so there is nothing to
- * reconstruct and — here — nothing to replay: the replay awaits an SMTP round
- * trip, a wait on another agent's live head and a model call per between-turn
- * lane, and this hook runs in the init gate. The arm hands the ledger's own
- * retry wake to the carrier instead, and the alarm frame the ledger was designed
- * for does the replay under the claim join that makes re-entry safe.
- */
+/** Terminal effects lane: replay nothing in the init gate (it awaits SMTP, peers, models);
+ *  arm the ledger's own retry wake, whose alarm replays under the claim join. */
 function armTerminalLaneRecovery(
   transports: FiberLaneTransports,
   ctx: FiberRecoveryContext,
@@ -379,14 +206,8 @@ function armTerminalLaneRecovery(
 }
 
 /**
- * A detached tool call whose executor died. The fiber row carries one fact
- * the registry does not — that THIS job's executor is dead — which is what
- * lets a job that already settled get its lost wake re-delivered.
- *
- * The registry sweep runs beside it because a cold start is also the moment
- * jobs whose fiber row did NOT survive become provably orphaned: nothing in
- * this isolate owns a job yet, so any other row still `running` is an orphan
- * no recovery callback will ever arrive for.
+ * The fiber row proves this job's executor is dead, so a settled job's lost wake is re-delivered.
+ * `recoverOrphans` runs too: on cold start no other `running` row can have a live owner.
  */
 function redriveBackgroundJobLane(
   transports: FiberLaneTransports,
@@ -396,10 +217,8 @@ function redriveBackgroundJobLane(
   transports.redrive(ctx.name, checkpoint, async () => {
     const redriven = await transports.jobs.recover(checkpoint);
     const inFlight = await transports.jobs.recoverOrphans();
-    // The return value carries no outcome. A settled job's re-drive is a WAKE,
-    // and delivering one queues a turn that resolves only when the turn ends —
-    // so the outcome cannot be part of a classification, and this is the only
-    // place left that can say which job it was.
+    // A settled job's re-drive is a wake that resolves only when the queued turn ends,
+    // so its outcome can only be reported here, not in the classification.
     diagnostics.event('fiber.job_lane_redriven', {
       fiber: ctx.name,
       redriven: redriven?.id ?? '(none)',
@@ -411,17 +230,8 @@ function redriveBackgroundJobLane(
 }
 
 /**
- * The post-turn evolution lane, re-entered from storage.
- *
- * `settleEvolution()` is deliberately NOT called: it joins promises this
- * isolate dispatched, and this isolate dispatched none — the ones that died
- * with the last activation are unreachable and un-rejoinable. What IS
- * recoverable is every unit the lane drives from a DURABLE queue, and
- * `runDueSessionEvolution()` is exactly that: it drains the shadow-trial
- * queue and runs the session pass if the durable window is due, claiming and
- * settling that window itself. Re-entering it is idempotent by construction —
- * a window is claimed in one tick and retired only once its pass has run, and
- * a trial is dropped only after it is scored.
+ * Not `settleEvolution()`: its promises died with the last isolate. `runDueSessionEvolution()`
+ * drains the durable queues and is idempotent (windows claimed once, trials dropped after scoring).
  */
 function redriveEvolutionLane(
   transports: FiberLaneTransports,
@@ -435,31 +245,8 @@ function redriveEvolutionLane(
 }
 
 /**
- * The advisor lane, whose re-drive is a MODEL CALL and therefore leaves here.
- *
- * IDEMPOTENT ON THE NOTE, not on the attempt, and the distinction is the whole
- * correctness argument. A lane can be interrupted on either side of its one
- * durable write: before `recordAdvisorNote`, in which case nothing landed and
- * the review must run; or after it, in which case the review COMPLETED and
- * only the fiber row's release was lost — re-running there would write a
- * second note about one turn and speak it twice. The note row is the only
- * durable evidence of which happened, so it is what decides. The signal is
- * idempotent independently (`advisor:<turnId>` derives the queued turn's
- * durable message id), so the two guards agree rather than one covering for
- * the other.
- *
- * A turn with no durable id cannot be guarded that way and is not given a
- * fabricated one: it re-runs, exactly as its signal goes out unkeyed. That is
- * pre-existing lane behaviour, not a decision taken here.
- *
- * A snapshot that will not parse is the one genuinely terminal case left, and
- * it is a real terminal rather than a lost review: there is no turn to review,
- * so there is nothing a further attempt could do differently.
- *
- * The guard runs HERE, before anything is handed to a carrier, and the ordering
- * is the point: a review that already landed costs one synchronous row read to
- * refuse, so recovery cannot double a note by detaching first and checking
- * later.
+ * Advisor lane: idempotent on the note, not the attempt. The guard runs before detaching, so a
+ * review that already recorded its note is never re-run. A turn without a durable id re-runs.
  */
 function redriveAdvisorLane(
   transports: FiberLaneTransports,
@@ -501,15 +288,7 @@ function redriveAdvisorLane(
   };
 }
 
-/**
- * A recovery notice that was minted and never confirmed delivered.
- *
- * The checkpoint IS the signal: everything the delivery needs crossed into the
- * fiber row before the reconcile returned, so the replay reconstructs nothing.
- * A checkpoint that will not parse as a signal is terminal — there is no fact
- * left to announce — and the idempotency key the producer stamped is what makes
- * a replay of an already-landed delivery collide instead of duplicating.
- */
+/** Replay a minted, unconfirmed notice; the checkpoint is the whole signal. */
 function redriveForkNoticeLane(
   transports: FiberLaneTransports,
   ctx: FiberRecoveryContext,
@@ -533,21 +312,8 @@ function redriveForkNoticeLane(
 }
 
 /**
- * Dispatch one notice on a fresh carrier, retrying an `undelivered` outcome
- * forever at a capped pace.
- *
- * `undelivered` = the enqueue was pre-empted or refused, so the notice is
- * still owed: a FRESH fiber row carries each retry (durable across evictions,
- * with the attempt count in its checkpoint so the backoff resumes where it
- * left off), and the idempotency key makes any landed duplicate collide.
- *
- * WHAT THE PACE PROTECTS is a TURN, not a row. This notice carries an
- * idempotency key, so its delivery goes through `submitMessages`, and
- * `undelivered` there means the submitted turn came back aborted, skipped or
- * errored — after running. An unpaced retry would therefore re-run agent turns
- * in a loop, which is why the sleep is not optional and why it survives an
- * eviction: attempts are UNBOUNDED (a cap loses the notice the carrier exists
- * to keep) and only the pace holds them apart.
+ * Deliver on a fresh carrier, retrying `undelivered` unbounded at a capped pace. `undelivered`
+ * means a submitted turn came back aborted/skipped/errored, so an unpaced retry would loop turns.
  */
 export function dispatchRecoveredNotice(
   transports: Pick<FiberLaneTransports, 'redrive' | 'deliverSignal'>,
@@ -556,10 +322,8 @@ export function dispatchRecoveredNotice(
 ): void {
   const checkpoint: JsonValue = { ...signal, attempts };
   transports.redrive(FORK_NOTICE_LANE_FIBER, checkpoint, async () => {
-    // SLEEP FIRST for any attempt after the first, because the checkpoint
-    // carries the ATTEMPT COUNT and not the sleep: an eviction mid-backoff
-    // recovers this row and re-enters here with the same count, and pacing
-    // that ran after the refusal would be skipped by exactly that replay.
+    // Sleep before the attempt, not after the refusal: the checkpoint carries the count,
+    // so an eviction mid-backoff would otherwise skip the pace.
     if (attempts > 0) {
       await new Promise((resolve) => { setTimeout(resolve, recoveryBackoffMs(attempts)); });
     }
@@ -573,62 +337,36 @@ export function dispatchRecoveredNotice(
   });
 }
 
-/** The shape a recovered notice must still have to be deliverable. Structural
- *  and minimal: the delivery seam needs the kind and the text; the key and
- *  metadata ride along when present. */
 const RecoveredSignalSchema = v.object({
   kind: v.string(),
   text: v.string(),
   idempotencyKey: v.optional(v.string()),
   metadata: v.optional(JsonObjectSchema),
-  /** Delivery attempts so far — rides the checkpoint so the capped backoff
-   *  survives an eviction mid-retry. */
+  /** Rides the checkpoint so the backoff survives an eviction mid-retry. */
   attempts: v.optional(v.number()),
 });
 
-/** One notice as the carrier hands it around — the named owner contract for
- *  every dispatch site. */
 export type RecoveredNotice = v.InferOutput<typeof RecoveredSignalSchema>;
 
 
 /**
- * The MCP warmup lane, which has NOTHING to re-enter.
- *
- * Establishing a connection is not a durable unit of work: the live connection
- * IS the state, and the next settled turn warms again unconditionally. So an
- * interrupted warm needs no re-drive and must not get one — a re-entry would
- * open sockets to third parties on an activation no turn asked anything of, for
- * a turn whose successor is about to warm anyway.
- *
- * It exists because `classifyRecoveredFiber` is a CLOSED set: a lane nobody names
- * there is reported as unrecognised, which files a classified error for a fiber
- * whose interruption is not a fault.
+ * The MCP warm lane has nothing to re-enter: the next turn warms anyway. Named so
+ * `classifyRecoveredFiber`'s closed set does not report it as unrecognised.
  */
 function recoverMcpWarmLane(): FiberRecoveryResult {
   return { status: 'completed', snapshot: { lane: MCP_WARM_LANE_FIBER, reentered: false } };
 }
 
 /**
- * A search interrupted mid-iteration. Its tree is durable (the search store)
- * and, when the call had been detached, its job row is what re-drives it —
- * so this branch does not re-drive anything. What it owns is TELLING the
- * agent: the turn that was reading the search is gone, and a future turn that
- * finds a half-expanded tree needs to know why.
- *
- * The notice is two writes with different costs. The audit row is this object's
- * own SQLite, synchronous, so it lands in the classification; the MEMORY.md line
- * goes through the workspace filesystem, which for a hosted workspace is another
- * Durable Object, so it rides the carrier like every other lane's work.
+ * Search trees are durable and detached jobs re-drive themselves; this only tells the agent.
+ * The audit row is local sync SQLite; the MEMORY.md write may cross to another DO, so it rides the carrier.
  */
 function recordInterruptedSearch(
   transports: FiberLaneTransports,
   ctx: FiberRecoveryContext,
 ): FiberRecoveryResult {
   const snapshot = fiberSnapshot(ctx);
-  // The recovering ACTOR's row, not the workspace's: an interrupted search
-  // belongs to the actor that started it, and a row without the column both
-  // fails NOT NULL and — if it did not — would show one actor's recovery in
-  // every sibling's evolution stream.
+  // Stamped with the recovering actor: the column is NOT NULL and the stream is shared.
   void transports.sql`INSERT INTO evolution_events (actor_id, id, type, message, data, created_at)
     VALUES (${transports.actor.actorId}, ${nanoid()}, 'fiber_recovered',
             ${`Fiber "${ctx.name}" recovered after interruption`},
@@ -647,15 +385,7 @@ function recordInterruptedSearch(
   };
 }
 
-/**
- * A fiber name this class does not know.
- *
- * Falling into the search branch above writes the agent's own MEMORY.md — so
- * any lane added anywhere, by anyone, puts a line in the agent's memory about
- * platform plumbing it has no way to act on. An unrecognised lane is an
- * operational fact: it is classified, it is logged once, and its row is
- * released rather than re-offered for a day.
- */
+/** Unknown lane: classified error, logged once, row released; never a MEMORY.md line. */
 function unrecognisedLane(ctx: FiberRecoveryContext): FiberRecoveryResult {
   const failure = new KinuError(
     'unsupported',
@@ -667,8 +397,6 @@ function unrecognisedLane(ctx: FiberRecoveryContext): FiberRecoveryResult {
   return { status: 'error', error: failure.message, snapshot: { lane: ctx.name, recovered: false } };
 }
 
-/** The stashed checkpoint in the portable JSON vocabulary, or null when the
- *  fiber never stashed one. */
 function fiberSnapshot(ctx: FiberRecoveryContext): JsonValue {
   return ctx.snapshot === null || ctx.snapshot === undefined
     ? null

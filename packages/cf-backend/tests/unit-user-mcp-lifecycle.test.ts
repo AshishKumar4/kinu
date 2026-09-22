@@ -1,17 +1,5 @@
-// Behavior tests for the per-user MCP lifecycle inside a real UserDO.
-//
-// Contracts under test:
-//   - the config table is the ONE identity: a name is unique atomically, in the
-//     database, not by a SELECT that an await can be interleaved through
-//   - the management surface completes a round trip: create, list, rename,
-//     remove, with no row reporting a repair
-//   - the SDK's server rows are DERIVED: an orphan is removed, never left as a
-//     second writable truth
-//   - a stored credential never reaches the SDK as data, on any path, including
-//     the one an activation takes after hibernation
-//   - a rotated credential is spent without a reconnect
-//   - a dispatch the TRANSPORT could not authorize converges to the reconnect
-//     state the UI already renders; a tool's own prose about a 401 does not
+// Per-user MCP lifecycle in a real UserDO: atomic name uniqueness, derived SDK rows,
+// credentials never reach the SDK as data, and only a transport 401 forces reconnect.
 import { describe, expect, test } from 'bun:test';
 import {
   createTestUserDO, sqlExec, testOwner, TEST_CREDENTIAL_ENCRYPTION_KEY,
@@ -31,29 +19,14 @@ import { UnauthorizedError } from '@modelcontextprotocol/sdk/client/auth.js';
 import { StreamableHTTPError } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 import * as v from 'valibot';
 
-/**
- * The descriptor surface, PARSED by the schema that defines it.
- *
- * `userMcp_toolDescriptors` answers with JSON on the wire, and
- * `McpToolSurfaceSchema` is the contract the orchestrator's cache validates it
- * against. Asserting a shape here instead would pin this test's guess at the
- * surface rather than the surface, and would keep passing after the real one
- * changed underneath it.
- */
+/** The descriptor surface, parsed by `McpToolSurfaceSchema`, the contract the orchestrator's cache validates. */
 async function readSurface(h: TestUserDO, owner: UserCaller): Promise<McpToolSurface> {
   return v.parse(McpToolSurfaceSchema, JSON.parse(await h.userDO.userMcp_toolDescriptors(owner)));
 }
 
 /**
- * What the SDK's own `cf_agents_mcp_servers.server_options` column HOLDS for a
- * server — the bytes, not a reconstruction of them.
- *
- * This is the state a credential-custody question has to be asked of:
- * `restoreConnectionsFromStorage` rebuilds a live transport out of exactly
- * these bytes (`agents/dist/client-zqKcsyFa.js:1557-1571`), so a credential
- * that is absent from our own column and present here is still spent on every
- * reconnect. The stand-in persists them the way `encodeMcpServerOptions` does,
- * whitelist and all.
+ * The SDK's `cf_agents_mcp_servers.server_options` bytes: `restoreConnectionsFromStorage` rebuilds a
+ * transport from exactly these (`agents/dist/client-zqKcsyFa.js:1557-1571`).
  */
 function persistedServerOptions(id: string): string {
   const row = recordedMcpServers().find((server) => server.id === id);
@@ -71,15 +44,12 @@ function harness(options?: TestUserDOOptions): TestUserDO {
   return createTestUserDO(options);
 }
 
-/** A configured server, written the way `userMcp_add` writes one. Going through
- *  `userMcp_add` itself needs a live third-party endpoint: it connects and rolls
- *  the row back when it cannot. */
+/** A configured server, written as `userMcp_add` would; the real call needs a live endpoint. */
 async function seedServer(
   h: TestUserDO,
   id: string,
   fields: { name?: string; url?: string; headers?: Record<string, string> } = {},
 ): Promise<void> {
-  // Any gated call brings the real schema up before a row is written.
   await h.userDO.userMcp_list(await testOwner());
   sqlExec(h.db).exec(
     `INSERT INTO user_mcp_servers (id, name, server_url, transport, headers, allowed_tools, created_at, updated_at)
@@ -93,8 +63,7 @@ async function seedServer(
     return;
   }
 
-  // A read over a non-empty table is what hydrates the manager, and every test
-  // below asks a question about hydrated state.
+  // A read over a non-empty table hydrates the manager.
   await h.userDO.userMcp_list(await testOwner());
 }
 
@@ -105,14 +74,7 @@ function storedName(h: TestUserDO, id: string): string | undefined {
   return parsed.success ? parsed.output : undefined;
 }
 
-/**
- * The `authorization` header every request made while `body` runs carried, in
- * order, with the global restored whatever the body does.
- *
- * `typeof globalThis.fetch` carries `preconnect` beside the call signature. The
- * stub is COMPLETED with the real one's rather than asserted into shape, and the
- * two parameters take their platform types by inference.
- */
+/** The `authorization` header of every request made while `body` runs, in order; restores the global. */
 async function authorizationsSeenDuring(body: () => Promise<void>): Promise<string[]> {
   const seen: string[] = [];
   const real = globalThis.fetch;
@@ -139,9 +101,7 @@ describe('a server name is one identity, enforced by the database', () => {
   test('a second row under the same name, in any case, is refused', async () => {
     const h = harness();
     await seedServer(h, 'srv1', { name: 'GitHub' });
-    // The UNIQUE index is on `lower(name)`, which is the rule the old
-    // SELECT-then-INSERT used — and the rule an await could be interleaved
-    // through. Now the write itself refuses.
+    // The UNIQUE index on `lower(name)` refuses the write itself.
     expect(() => sqlExec(h.db).exec(
       `INSERT INTO user_mcp_servers (id, name, server_url, transport, headers, allowed_tools, created_at, updated_at)
        VALUES ('srv2', 'github', 'https://other.example/sse', 'auto', NULL, NULL, 0, 0)`,
@@ -168,8 +128,7 @@ describe('a server name is one identity, enforced by the database', () => {
   });
 
   test('a rename obeys the SAME name rule an add does', async () => {
-    // Rename and add run the SAME bounds, so the two write paths onto one
-    // UNIQUE index cannot disagree about what a name is.
+    // Rename and add share bounds so both writes onto one UNIQUE index agree on what a name is.
     const h = harness();
     await seedServer(h, 'srv1', { name: 'github' });
     const owner = await testOwner();
@@ -189,7 +148,6 @@ describe('a server name is one identity, enforced by the database', () => {
       .rejects.toThrow(addRefusal('x'.repeat(65)));
     expect(storedName(h, 'srv1')).toBe('github');
 
-    // And the accepted form is the stored form on both paths: trimmed.
     await h.userDO.userMcp_update(owner, 'srv1', { name: '  spaced  ' });
     expect(storedName(h, 'srv1')).toBe('spaced');
     expect(validateMcpServerInput({ name: '  spaced  ', serverUrl: 'https://mcp.example/sse' }).name)
@@ -198,8 +156,7 @@ describe('a server name is one identity, enforced by the database', () => {
   });
 
   test('two servers may share one endpoint under different names', async () => {
-    // Two credentials for one endpoint is a real configuration: identity is the
-    // name, so uniqueness must not be pinned to the URL.
+    // Identity is the name; uniqueness must not be pinned to the URL.
     const h = harness();
     await seedServer(h, 'srv1', { name: 'work', url: 'https://mcp.example/sse' });
     await seedServer(h, 'srv2', { name: 'personal', url: 'https://mcp.example/sse' });
@@ -208,10 +165,8 @@ describe('a server name is one identity, enforced by the database', () => {
   });
 
   test('two renames racing for one free name: exactly one lands', async () => {
-    // The claim reads `lower(name)` and writes inside ONE storage transaction,
-    // so the loser sees the winner rather than a stale read. The UNIQUE index
-    // refuses the second write too — but as a constraint violation, not as the
-    // sentence naming the taken name that the owner is meant to read.
+    // The claim reads and writes in one storage transaction, so the loser gets the named-taken
+    // sentence rather than a raw constraint violation.
     const h = harness();
     const owner = await testOwner();
     await seedServer(h, 'srv1', { name: 'linear' });
@@ -239,7 +194,6 @@ describe('the management surface completes a round trip', () => {
 
     const listed = await h.userDO.userMcp_list(owner);
     expect(listed.map((s) => s.id)).toEqual(['srv1', 'srv2']);
-    // Nothing to repair: the `error` channel carries connection errors only.
     expect(listed.every((s) => s.error === null)).toBe(true);
 
     await h.userDO.userMcp_update(owner, 'srv2', { name: 'linear-work' });
@@ -283,9 +237,7 @@ describe('the descriptor read is off the connection critical path', () => {
 
     const surface = await readSurface(h, owner);
 
-    // It hydrated nothing: `hydrateUserMcp` awaits `establishConnection`, which
-    // awaits `_connectWithRetry` with no bound, so the deleted
-    // `waitForConnections({ timeout: 5_000 })` could never bound what it claimed.
+    // `hydrateUserMcp` awaits `_connectWithRetry` with no bound, so nothing hydrated.
     const after = recordedMcpLifecycle();
     expect(after.established.length).toBe(establishedBefore);
     expect(after.restored).toBe(restoredBefore);
@@ -307,23 +259,15 @@ describe('the descriptor read is off the connection critical path', () => {
       `INSERT INTO user_mcp_servers (id, name, server_url, transport, headers, allowed_tools, created_at, updated_at)
        VALUES ('srv2', 'stuck', 'https://srv2.example/sse', 'auto', 'sealed', NULL, 0, 0)`,
     );
-    // A third party that accepts the socket and never finishes. The warmup owner
-    // is left hanging on it, unawaited, exactly as a slow connect leaves it.
     const gate = hangMcpEstablish();
     const warming = h.userDO.userMcp_warmConnections(owner);
 
-    // THE GATE MUST ACTUALLY BE ENGAGED, or this test cannot tell "the read does
-    // not wait" from "there was nothing to wait for" — and it would stay green
-    // if the gate ever stopped reaching `establishConnection`, measuring its own
-    // fixture instead of the read. Awaiting the gate's own arrival signal, not a
-    // delay: establishment is STARTED and suspended inside it from here on.
+    // The gate must be engaged, or this cannot tell "the read does not wait" from "nothing to wait for".
     await gate.entered;
     expect(recordedMcpLifecycle().established).toContain('srv2');
 
     const surface = await readSurface(h, owner);
 
-    // The turn got what was already connected and a report for what was not,
-    // while a connection was in flight the whole time.
     expect(surface.descriptors.map((d) => d.toolKey)).toEqual(['mcp_fast_ready_tool']);
     expect(surface.unavailable.map((u) => u.server)).toEqual(['stuck']);
     gate.release();
@@ -344,7 +288,6 @@ describe('the descriptor read is off the connection critical path', () => {
     expect(first.descriptors).toEqual([]);
     expect(first.unavailable.map((u) => u.server)).toEqual(['later']);
 
-    // The warmup owner establishes, off the turn.
     await h.userDO.userMcp_warmConnections(owner);
     seedMcpTools('srv1', [{ name: 'warm_tool', inputSchema: { type: 'object' } }]);
 
@@ -355,12 +298,8 @@ describe('the descriptor read is off the connection critical path', () => {
   });
 
   test('a deferred server contributes no descriptor, so it cannot reach the prompt', async () => {
-    // The two channels are disjoint, and that is what keeps the turn's cached
-    // system prompt independent of connection timing: the prompt is fed the
-    // admitted tool NAMES, and a server that was not connected when the turn
-    // opened produces none of them. Its absence travels on `unavailable`, which
-    // the actor renders into the per-step dynamic ledger rather than the
-    // byte-stable prefix.
+    // Disjoint channels keep the cached system prompt independent of connection timing: absence
+    // travels on `unavailable`, rendered into the dynamic ledger, not the byte-stable prefix.
     const h = harness();
     const owner = await testOwner();
     await seedServer(h, 'srv1', { name: 'ready' });
@@ -404,9 +343,6 @@ describe('the SDK server rows are derived from the config table', () => {
   });
 
   test('the row left behind by the LAST server is still collected', async () => {
-    // A count-first short-circuit made this the one case nothing looked at: the
-    // user has no configured server, and an SDK row is still reconnecting to a
-    // third party with their credential.
     const h = harness();
     await h.userDO.userMcp_list(await testOwner());
     seedSdkMcpServer('ghost');
@@ -416,13 +352,8 @@ describe('the SDK server rows are derived from the config table', () => {
   });
 
   test('an activation dials nothing through the SDK’s own start path', async () => {
-    // The defect: the SDK's lifecycle calls `restoreConnectionsFromStorage` on
-    // its manager unconditionally at every activation, before this plane has
-    // registered a single credential closure — so a UserDO waking up opened an
-    // anonymous connection to every MCP endpoint the user had configured,
-    // whether or not anyone touched MCP. Since agents@0.22.0 that manager is
-    // the ONLY one (a capability reaches storage through its lifecycle alone),
-    // so the plane runs on it and what is retired is the start-path CALL.
+    // The SDK calls `restoreConnectionsFromStorage` at every activation, before any credential closure is
+    // registered; the start-path call is retired so waking a UserDO opens no anonymous connections.
     const h = harness();
     seedSdkMcpServer('srv1');
     const before = recordedMcpLifecycle().restored;
@@ -432,9 +363,7 @@ describe('the SDK server rows are derived from the config table', () => {
     expect(recordedMcpLifecycle().restored).toBe(before);
     expect(Object.keys(inheritedMcpManager(h.userDO).mcpConnections)).toEqual([]);
 
-    // The same manager's restore still runs where the credentials are —
-    // hydration, after the credentialed transport is registered — which is
-    // what makes the retirement a deferral, not a loss.
+    // Restore still runs at hydration, after the credentialed transport is registered.
     await seedServer(h, 'srv1', { headers: { Authorization: 'Bearer mcp-secret' } });
     expect(recordedMcpLifecycle().restored).toBe(before + 1);
     expect(Object.keys(inheritedMcpManager(h.userDO).mcpConnections)).toEqual(['srv1']);
@@ -466,19 +395,16 @@ describe('a stored MCP credential never reaches the SDK as data', () => {
   test('a cold activation over storage a pre-change build wrote scrubs it', async () => {
     const first = harness();
     await seedServer(first, 'srv1', { headers: { Authorization: 'Bearer mcp-secret' } });
-    // The SDK's own storage with the credential as DATA — a plaintext row this
-    // build never writes, replayed from there on every reconnect.
+    // A plaintext credential row in the SDK's storage, replayed on every reconnect.
     seedSdkMcpServer('srv1', { type: 'auto', requestInit: { headers: { Authorization: 'Bearer mcp-secret' } } });
     expect(persistedServerOptions('srv1')).toContain('mcp-secret');
 
-    // An eviction and the next request: a new Durable Object over the same
-    // storage. Not `harness()` — that would clear the SDK rows under test.
+    // A new DO over the same storage; not `harness()`, which would clear the SDK rows under test.
     const woken = createTestUserDO({ storage: first.db });
     await woken.userDO.userMcp_list(await testOwner());
 
     expect(persistedServerOptions('srv1')).toBe(JSON.stringify({ transport: { type: 'auto' } }));
-    // And the LIVE connection is the one carrying the seam, not one the restore
-    // built from the stale plaintext row — the cold-start ordering invariant.
+    // The live connection carries the seam: cold-start ordering invariant.
     expect(liveMcpFetch('srv1')).not.toBeNull();
     expect(liveMcpTransport('srv1')?.requestInit).toBeUndefined();
     woken.close();
@@ -486,17 +412,11 @@ describe('a stored MCP credential never reaches the SDK as data', () => {
   });
 
   test('a row whose credential column is NULL is scrubbed too, not replayed', async () => {
-    // The custody hole this closes: a scrub that is a side effect of registering
-    // a CREDENTIALED row is keyed on a column that can be null. Clear the
-    // credential — or let a best-effort re-register fail — and the column goes
-    // NULL while the SDK's own row keeps the plaintext, which every reconnect
-    // then spends. Once NULL, nothing would reach the row again.
+    // The scrub must not be keyed on our credential column: once it goes NULL the SDK row keeps the
+    // plaintext and nothing would reach it again.
     const first = harness();
     await seedServer(first, 'srv1');
-    // Exactly the shape a stored plaintext row has: `requestInit: { headers }`
-    // beside an `eventSourceInit` wrapper (`buildMcpHeaderTransportOpts` at
-    // `7ba56550e^:src/user/mcp.ts:270-287`), whose closure half does not survive
-    // JSON.
+    // Shape of a stored plaintext row (`buildMcpHeaderTransportOpts`, `7ba56550e^:src/user/mcp.ts:270-287`).
     seedSdkMcpServer('srv1', {
       type: 'auto',
       eventSourceInit: {},
@@ -507,17 +427,12 @@ describe('a stored MCP credential never reaches the SDK as data', () => {
     const woken = createTestUserDO({ storage: first.db });
     const listed = await woken.userDO.userMcp_list(await testOwner());
 
-    // The plaintext is gone from the SDK's OWN state, which is the only place
-    // it ever was — asserting it is absent from our column would prove nothing.
+    // The plaintext is gone from the SDK's own state, the only place it ever was.
     expect(persistedServerOptions('srv1')).toBe(JSON.stringify({ transport: { type: 'auto' } }));
     expect(liveMcpTransport('srv1')?.requestInit).toBeUndefined();
     expect(liveMcpTransport('srv1')?.eventSourceInit).toBeUndefined();
-    // A row with no credential gets no seam: there is nothing to open per
-    // request, so the transport is bare rather than a closure over a NULL read.
     expect(liveMcpFetch('srv1')).toBeNull();
-    // And the server still works: the rewrite re-establishes what it tore down,
-    // because `restoreConnectionsFromStorage` skips a connection this pass
-    // registered (`client-zqKcsyFa.js:1541-1549`).
+    // `restoreConnectionsFromStorage` skips a connection this pass registered (`client-zqKcsyFa.js:1541-1549`).
     expect(recordedMcpLifecycle().established).toContain('srv1');
     expect(listed[0]?.status).toBe('ready');
     woken.close();
@@ -525,10 +440,7 @@ describe('a stored MCP credential never reaches the SDK as data', () => {
   });
 
   test('a scrubbed row that DOES hold a credential still serves from the sealed copy', async () => {
-    // The neighbour case, and the one that says the scrub is not a deletion of
-    // the capability: the config row holds a credential, the SDK's row holds a
-    // plaintext copy of it, and after the rewrite the request must still be
-    // authorized — from the sealed column, opened per request.
+    // The scrub removes the plaintext copy, not the capability: requests stay authorized from the sealed column.
     const first = harness();
     await seedServer(first, 'srv1', { headers: { Authorization: 'Bearer sealed' } });
     seedSdkMcpServer('srv1', {
@@ -554,10 +466,7 @@ describe('a stored MCP credential never reaches the SDK as data', () => {
   });
 
   test('a headers-clearing patch as an activation’s FIRST MCP call leaves no plaintext', async () => {
-    // Hydration runs after the NULL write, so a scrub that depended on the
-    // column could not see the row it was meant to clean. Nothing has hydrated
-    // yet on this activation either, so the scrub cannot ride along on
-    // somebody else's registration.
+    // Hydration runs after the NULL write, so the scrub cannot depend on the column.
     const first = harness();
     const owner = await testOwner();
     await seedServer(first, 'srv1', { headers: { Authorization: 'Bearer mcp-secret' } });
@@ -572,8 +481,6 @@ describe('a stored MCP credential never reaches the SDK as data', () => {
     expect(persistedServerOptions('srv1')).toBe(JSON.stringify({ transport: { type: 'auto' } }));
     expect(liveMcpTransport('srv1')?.requestInit).toBeUndefined();
     expect(liveMcpFetch('srv1')).toBeNull();
-    // The credential really was removed on our side, so nothing can re-derive
-    // it: this is the state the owner asked for.
     expect(sqlExec(first.db).exec(
       'SELECT headers FROM user_mcp_servers WHERE id = ?', 'srv1',
     ).toArray()[0]?.headers).toBeNull();
@@ -582,9 +489,8 @@ describe('a stored MCP credential never reaches the SDK as data', () => {
   });
 
   test('a row that never held a credential keeps the SDK session state it had', async () => {
-    // The scrub is keyed on the fields a credential can arrive in, NOT on "the
-    // SDK persisted something". Rewriting for `sessionId` would drop a
-    // resumable session on every activation and re-register forever.
+    // Keyed on credential fields, not "the SDK persisted something": rewriting for `sessionId` would drop a
+    // resumable session on every activation.
     const h = harness();
     await seedServer(h, 'plain');
     seedSdkMcpServer('plain', { type: 'auto', sessionId: 'sess-1', protocolVersion: '2026-07-28' });
@@ -605,14 +511,11 @@ describe('a stored MCP credential never reaches the SDK as data', () => {
 
     await h.userDO.userMcp_update(await testOwner(), 'srv1', { headers: { Authorization: 'Bearer rotated' } });
 
-    // Same closure, no re-register, no reconnect: the seam reads the sealed
-    // column per request, so there is nothing to reinstall.
+    // The seam reads the sealed column per request, so rotation needs no re-register.
     expect(recordedMcpServers().find((server) => server.id === 'srv1')?.transport.fetch).toBe(resolve);
     expect(recordedMcpLifecycle().established.length).toBe(established);
 
     const seen = await authorizationsSeenDuring(async () => {
-      // Spent through the helper's validated accessor, so the signature is
-      // established rather than asserted here.
       const send = recordedMcpFetch('srv1');
       expect(send).not.toBeNull();
       await send?.('https://srv1.example/sse');
@@ -625,7 +528,6 @@ describe('a stored MCP credential never reaches the SDK as data', () => {
   test('stored headers that no longer open fail the request instead of sending it bare', async () => {
     const h = harness();
     await seedServer(h, 'srv1', { headers: { Authorization: 'Bearer sealed' } });
-    // An envelope sealed for another server: it does not open under this one.
     const cipher = await createCredentialCipher({ CREDENTIAL_ENCRYPTION_KEY: TEST_CREDENTIAL_ENCRYPTION_KEY });
     sqlExec(h.db).exec(
       'UPDATE user_mcp_servers SET headers = ? WHERE id = ?',
@@ -650,15 +552,10 @@ describe('a stored MCP credential never reaches the SDK as data', () => {
     await seedServer(h, 'srv1', { headers: { Authorization: 'Bearer first' } });
     dropLiveMcpFetch('srv1');
     failNextMcpRemove(new Error('close refused'));
-    // Header rotation tries to install the credential closure. The update itself
-    // persists the sealed header, but its best-effort hydration must stop at the
-    // failed teardown instead of registering over the stale wire and claiming
-    // the closure is live.
+    // Best-effort hydration must stop at the failed teardown rather than register over the stale wire.
     await h.userDO.userMcp_update(owner, 'srv1', { headers: { Authorization: 'Bearer rotated' } });
     expect(liveMcpFetch('srv1')).toBeNull();
 
-    // The next owner-owned hydration retries the complete sequence and only then
-    // exposes the closure.
     await h.userDO.userMcp_warmConnections(owner);
     expect(liveMcpFetch('srv1')).not.toBeNull();
     h.close();
@@ -687,7 +584,6 @@ describe('a stored MCP credential never reaches the SDK as data', () => {
     const h = harness();
     await seedServer(h, 'plain');
     await h.userDO.userMcp_list(await testOwner());
-    // Nothing to install a seam for, so nothing was registered by us.
     expect(recordedMcpLifecycle().established).toEqual([]);
     h.close();
   });
@@ -695,12 +591,8 @@ describe('a stored MCP credential never reaches the SDK as data', () => {
 
 describe('what counts as a credential in the SDK’s stored options', () => {
   test('the three data fields count, and the SDK’s own connection state does not', () => {
-    // The same vocabulary the seeds use, so a field named here is a field the
-    // SDK's column can really hold.
     const stored = (transport: RecordedMcpTransport): string => JSON.stringify({ transport });
 
-    // The two a plaintext-era build produced, plus the third the persistence
-    // whitelist keeps.
     expect(storedMcpOptionsCarryCredential(
       stored({ type: 'auto', requestInit: { headers: { Authorization: 'Bearer x' } } }),
     )).toBe(true);
@@ -711,15 +603,13 @@ describe('what counts as a credential in the SDK’s stored options', () => {
       stored({ type: 'auto', headers: { Authorization: 'Bearer x' } }),
     )).toBe(true);
 
-    // Session resumption and retry policy are the SDK's own state. Reading them
-    // as a reason to rewrite would drop a resumable session on every activation
-    // and re-register forever.
+    // Session resumption and retry policy are the SDK's own state; rewriting for them would drop a
+    // resumable session on every activation.
     expect(storedMcpOptionsCarryCredential(
       stored({ type: 'auto', sessionId: 'sess-1', protocolVersion: '2026-07-28' }),
     )).toBe(false);
     expect(storedMcpOptionsCarryCredential(stored({ type: 'auto' }))).toBe(false);
 
-    // Nothing a credential could be restored from.
     expect(storedMcpOptionsCarryCredential('{"client":{}}')).toBe(false);
     expect(storedMcpOptionsCarryCredential('{"transport":null}')).toBe(false);
     expect(storedMcpOptionsCarryCredential('not json at all')).toBe(false);
@@ -732,29 +622,17 @@ describe('an authorization failure converges to the reconnect state', () => {
     const h = harness();
     await seedServer(h, 'srv1');
     seedMcpTools('srv1', [{ name: 'do_thing', inputSchema: { type: 'object' } }]);
-    // The continuation a completed authorization left on the live transport —
-    // the `authUrl` the SDK reads back while AUTHENTICATING
-    // (`client-zqKcsyFa.js:1704-1706`).
+    // The `authUrl` the SDK reads back while AUTHENTICATING (`client-zqKcsyFa.js:1704-1706`).
     seedMcpAuthContinuation('srv1', 'https://auth.example/authorize?srv1');
-    // What the pinned SDK actually throws when a POST comes back 401 and the
-    // transport cannot resolve it (`streamableHttp.js:364`). The status is a
-    // NUMBER on the error, which is what the convergence reads.
+    // What the pinned SDK throws on an unresolvable POST 401 (`streamableHttp.js:364`); the status is a number.
     failNextMcpToolCall(new StreamableHTTPError(401, 'Error POSTing to endpoint: nope'));
-    // The probe is the SDK's OWN request inside `discoverIfConnected`, and a
-    // revoked grant refuses it too — queued separately because in production
-    // these are two different requests failing, not one error seen twice.
+    // In production the dispatch and the `discoverIfConnected` probe are two failing requests.
     failNextMcpDiscovery(new StreamableHTTPError(401, 'Error POSTing to endpoint: nope'));
 
     await expect(h.userDO.userMcp_callTool(await testOwner(), 'srv1', 'do_thing', {}))
       .rejects.toThrow(/Streamable HTTP error/);
 
-    // `discoverIfConnected` is the SDK's own reauthorization path: an
-    // unauthorized probe moves the connection to AUTHENTICATING and persists the
-    // authorize URL, which is what the UI renders as "Open authorize". The
-    // assertions below observe THAT state — the persisted `authenticating`
-    // status and the `authUrl` behind the button. An assertion that the
-    // re-probe was merely attempted would pass whether or not the convergence
-    // this test names actually happened.
+    // Observe the persisted `authenticating` status and `authUrl`, not merely that a re-probe was attempted.
     expect(recordedMcpLifecycle().discovered).toContain('srv1');
     const [listed] = await h.userDO.userMcp_list(await testOwner());
     expect(listed?.status).toBe('authenticating');
@@ -767,8 +645,6 @@ describe('an authorization failure converges to the reconnect state', () => {
     await seedServer(h, 'srv1');
     seedMcpTools('srv1', [{ name: 'do_thing', inputSchema: { type: 'object' } }]);
     seedMcpAuthContinuation('srv1', 'https://auth.example/authorize?srv1');
-    // The dispatch failure is the auth layer's own error shape; the probe's
-    // refusal is the transport's, as in production.
     failNextMcpToolCall(new UnauthorizedError());
     failNextMcpDiscovery(new StreamableHTTPError(401, 'Error POSTing to endpoint: nope'));
 
@@ -803,13 +679,8 @@ describe('an authorization failure converges to the reconnect state', () => {
   });
 
   test('a converged connection leaves the descriptor surface: offered nowhere, disclaimed once', async () => {
-    // The model-facing half of the convergence. The failed probe does NOT
-    // clear the connection's cached tools (the SDK reassigns them only on the
-    // success paths), so after convergence the same server must appear in
-    // exactly one channel: absent from the descriptors the model plans with,
-    // named once in the `unavailable` the model reads as absence. Both at once
-    // would offer tools that 401 on every call alongside the notice that they
-    // are gone.
+    // A failed probe does not clear cached tools, so the server must appear in exactly one channel:
+    // absent from descriptors, named once in `unavailable`.
     const h = harness();
     await seedServer(h, 'srv1');
     seedMcpTools('srv1', [{ name: 'do_thing', inputSchema: { type: 'object' } }]);
@@ -840,10 +711,7 @@ describe('an authorization failure converges to the reconnect state', () => {
   });
 
   test("a tool error whose PROSE says 401 unauthorized reconnects NOTHING", async () => {
-    // The regression this replaces. A remote tool that proxies some other API
-    // hands back that API's 401 as its own error text; the old matcher read the
-    // rendered cause chain, found `unauthorized`, and tore down a connection
-    // that was authorized perfectly well. The words belong to a third party.
+    // A proxied third-party 401 in a tool's error text is not a transport auth failure.
     const h = harness();
     await seedServer(h, 'srv1');
     seedMcpTools('srv1', [{ name: 'do_thing', inputSchema: { type: 'object' } }]);

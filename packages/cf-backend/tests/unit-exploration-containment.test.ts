@@ -1,16 +1,5 @@
-// Head containment — asserted against the ToolSet a head is actually handed.
-//
-// A head is a FORK of its parent workspace: it rides the parent's exec planes
-// and reads the parent's files. What it must never gain is the parent's
-// AUTHORITY to create actors — `think`, `team` and `peers` open unbounded spawn
-// trees, and `split_subheads` (depth-budgeted) must stay the only spawn route.
-//
-// These assertions run against buildHeadToolSet's real output rather than the
-// text of any class, so they keep holding when the surface is refactored and
-// they catch a tool that appears through a dependency instead of a literal.
-// That is now the WHOLE of head containment on this backend: a hosted head is
-// not addressable over a stub at all, so what it may do is exactly what its
-// ToolSet carries.
+// Head containment, asserted on buildHeadToolSet's real output: a head forks its parent's exec planes and
+// files but never its authority to create actors; `split_subheads` (depth-budgeted) is the only spawn route.
 import { describe, expect, test } from 'bun:test';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
@@ -77,8 +66,7 @@ function headInput(overrides?: Partial<HeadInput>): HeadInput {
     task: 'study the cloned repo', rationale: 'the parser angle',
     inheritedContext: [],
     budget: { maxDepth: 2, maxWallClockMs: 60_000, spawnedAt: Date.now() },
-    // A fork explores under the loop it is forking FROM; a fresh bootstrap loop
-    // would measure the wrong program.
+    // A fork explores under the loop it forks from; a fresh bootstrap loop measures the wrong program.
     loop: { kind: 'inherit' },
     mergeStrategy: 'synthesize',
     ...overrides,
@@ -112,8 +100,6 @@ function buildSurface(opts?: {
   return { tools, capture };
 }
 
-/** The split stub the budget cases hand to the surface: one body, counting the
- *  calls it took, with the result it reports supplied by the caller. */
 function countingSplit(
   calls: { splits: number },
   result: { narrative: string; headCount: number },
@@ -157,23 +143,19 @@ describe('head tool surface — containment', () => {
     expect(tools.eval).toBeDefined();
     expect(tools.shell).toBeDefined();
 
-    // The tools that lied about being a sandbox are gone — the real planes
-    // are reached through eval/run instead.
     for (const gone of ['sandbox_exec', 'sandbox_read', 'sandbox_write', 'sandbox_list']) {
       expect(Object.keys(tools)).not.toContain(gone);
     }
   });
 
   test('split_subheads is not on the surface at all once the depth budget is spent', async () => {
-    // Depth is fixed for the whole run, so the tool could only ever refuse.
-    // Offering it anyway spent a step to learn a limit the surface already knew.
+    // Depth is fixed for the run, so the tool could only ever refuse.
     const { tools } = buildSurface({
       input: headInput({ budget: { maxDepth: 0, maxWallClockMs: 60_000, spawnedAt: Date.now() } }),
     });
 
     expect(tools.split_subheads).toBeUndefined();
 
-    // The work tools are untouched — this removes a dead option, not capability.
     for (const name of HEAD_BUILTIN_TOOLS) expect(tools[name]).toBeDefined();
   });
 
@@ -186,8 +168,7 @@ describe('head tool surface — containment', () => {
   });
 
   test('split_subheads refuses once a caller-requested deadline has passed, and records the refusal', async () => {
-    // Wall-clock stays a runtime check: unlike depth it can pass mid-run, so the
-    // tool is present and refuses when called.
+    // Wall-clock can pass mid-run, unlike depth, so the tool stays and refuses when called.
     const calls = { splits: 0 };
 
     const { tools, capture } = buildSurface({
@@ -199,8 +180,6 @@ describe('head tool surface — containment', () => {
     await expect(split({ rationale: 'go deeper', heads: [{ task: 'a', rationale: 'a' }, { task: 'b', rationale: 'b' }] }))
       .rejects.toMatchObject({ code: 'denied', message: expect.stringContaining('budget exhausted (wall-clock)') });
     expect(calls.splits).toBe(0);
-    // Unrecorded, this refusal left no trace in the journal — so how often a
-    // head is stopped mid-plan could not be asked of the ledger.
     expect(capture.toolCalls).toHaveLength(1);
     const refusal = capture.toolCalls.at(0);
 
@@ -218,7 +197,6 @@ describe('head tool surface — containment', () => {
       split: countingSplit(calls, { narrative: 'merged', headCount: 2 }),
     });
 
-    // A head an hour in that has burned 2M tokens. Neither is a reason to refuse.
     capture.recordStepUsage({ input: 2_000_000, output: 500_000 });
     const split = toolExecute<SplitToolInput, string>(tools.split_subheads);
     await split({
@@ -249,38 +227,20 @@ describe('head tool surface — containment', () => {
   });
 });
 
-/**
- * Where an exploration actor's trace lands, and what a rollout branch may
- * touch — driven through the production seams instead of read out of a class.
- *
- * Five source-text assertions stood here over `subordinate-agent.ts`: which
- * statements sat inside the MCTS-mode block, that `createCFRuntime` appeared
- * exactly once, that both run modes wired `reportStep`, and that the parent
- * journal was written in one place. Every one of them was a proxy for a
- * behaviour the runner could not execute, because the facet was a Durable
- * Object class. Both are executable now — one isolate, one database — so they
- * are asserted rather than approximated, and the C2 property they circled (one
- * journal for the whole subtree) becomes an assertion about WHOSE rows they
- * are, which no source scan could make.
- */
+/** Where an exploration actor's trace lands and what a rollout branch may touch (C2: one journal per subtree). */
 describe('exploration actors write the workspace journal and acquire only their own plane', () => {
   test("a head's step trace lands in the workspace's journal, under the workspace's own actor", async () => {
     const workspace = orchestratorHarness();
     const head = await hostedExplorationHarness(workspace, 'head', 'head-1');
     const root = workspace.agent.observeRuntime().actor.actorId;
-    // DISTINCT actors, which is what makes the ownership assertion below mean
-    // anything: a step filed under the head's own id would be invisible to
-    // every reader of the subtree's journal, and that unreadable depth-2 head
-    // is the defect this property exists for.
+    // Distinct actors: a step filed under the head's own id would be invisible to the subtree's journal readers.
     expect(head.actor.handle.actorId).not.toBe(root);
 
     await workspace.agent.observeExplorationSeams().recordStep('head-1', 1, {
       text: 'read the parser', toolCalls: [],
     });
 
-    // UNSCOPED, deliberately. The question is whose row this is, and a read
-    // filtered by the actor it expects would answer an empty set for a row
-    // filed under the wrong owner and pass.
+    // Unscoped on purpose: a read filtered by the expected actor would pass on a row filed under the wrong owner.
     const rows = workspace.db.prepare<{ actor_id: string; head_id: string; text: string }, []>(
       'SELECT actor_id, head_id, text FROM head_steps',
     ).all();
@@ -291,10 +251,7 @@ describe('exploration actors write the workspace journal and acquire only their 
   test('a rollout branch reasons through the caller\'s model seam and is given no plane to act on', async () => {
     const workspace = orchestratorHarness();
     const asked: string[] = [];
-    // The SAME creation id through both doors. `register` is idempotent per
-    // creation id, so the seat and the branch handle below bind one actor —
-    // which is what lets the home assertion name the row the directory issued
-    // instead of a key the fixture invented.
+    // `register` is idempotent per creation id, so seat and branch handle bind one actor.
     const branchRecord = (await hostedExplorationHarness(workspace, 'branch', 'branch-1')).actor.record;
 
     const branch = await hostBranch(workspace.agent.observeExplorationSeams(), 'branch-1', {
@@ -314,18 +271,10 @@ describe('exploration actors write the workspace journal and acquire only their 
       mode: 'build',
     });
 
-    // It REASONED: the answer came back through the only seam it has.
     expect(answer.text).toBe('the parser branch looks promising');
     expect(asked).toEqual(['context: user: probe the parser']);
-    // And it was given nothing to act WITH. `hostedHomeKind` answers null for a
-    // branch, so no home and no credential are provisioned — where a head of
-    // the same workspace gets both. Asserted as a pair, because "no directory"
-    // holds trivially for a tree nothing was ever provisioned on.
-    //
-    // Keyed off the storage key the DIRECTORY issued, decoded the way
-    // `provisionHostedActorHome` decodes it: the home follows the issued
-    // identity, never the creation id a caller happened to pass, so a fixture
-    // that spelled the name itself would be asserting its own arithmetic.
+    // `hostedHomeKind` is null for a branch, while a head gets home and credential; asserted as a pair so
+    // "no directory" cannot hold trivially. Keyed off the storage key the directory issued.
     const head = await hostedExplorationHarness(workspace, 'head', 'head-2');
     const headHome = agentHome(headAgentName(parseActorKey(head.actor.record.storageKey).id));
     const branchHome = agentHome(headAgentName(parseActorKey(branchRecord.storageKey).id));
@@ -338,29 +287,8 @@ describe('exploration actors write the workspace journal and acquire only their 
 });
 
 /**
- * THE SEED-BUILT CONTAINMENT BLOCK IS GONE, AND ITS SUBJECT WITH IT.
- *
- * Six tests stood here. They drove `facetHarness()`, pushed a production seed
- * (`initHead`, `initNode`, `setSubordinateIdentity`), and read `Object.hasOwn`
- * on the instance to see which family the constructor's seal had narrowed it
- * to — a head that could not resolve `setSubordinateIdentity`, a subordinate
- * that could not resolve `runAsHead`. Every one of those names is deleted:
- * there is no facet class, no seed RPC, and no per-family re-seal, because a
- * hosted actor is not addressable over a stub at all. There is no object to
- * hold a stub to, so there is nothing for a seal to narrow.
- *
- * What replaced the mechanism is not a smaller version of it. Containment rides
- * the ACTOR: `actor_id` in every scoped table's primary key, a handle each store
- * re-validates before every statement, a per-binding release fence, and one
- * `workspace_actors` row per actor under its parent's authority. That is
- * asserted where it lives — the actor-scoping suites for the rows, and
- * `unit-rpc-surface.test.ts` plus `tests/workerd/plan-announce-probe.ts` for
- * what a stub-holder may still reach on the one addressable object.
- *
- * What this file keeps is the half that was always the strongest and is now the
- * whole of head containment: `describe('head tool surface — containment')`
- * above, which reads the ToolSet a head is actually handed rather than the text
- * of any class. A hosted head may do exactly what that set carries.
+ * Containment rides the actor (`actor_id` in every scoped key, per-statement handle checks, release fence):
+ * see the actor-scoping suites, `unit-rpc-surface.test.ts` and `tests/workerd/plan-announce-probe.ts`.
  */
 
 describe('recursive split budget', () => {
@@ -412,24 +340,15 @@ describe('recursive split budget', () => {
 });
 
 describe('the mission ledger bounds a hosted head', () => {
-  // A head carries no execution cap of its own — no wall clock, no token pool,
-  // no step guard — which makes the mission budget the only bound on a fork. A
-  // hosted head runs in the ledger holder's own isolate, so the port is a pair
-  // of in-process calls and the seam that builds it can simply be driven; an
-  // RPC to the actor that holds the ledger would be a cross-Durable-Object call
-  // this runner cannot exercise, leaving only a source-level assertion of the
-  // wiring.
+  // A head has no execution cap of its own, so the mission budget is the only bound on a fork.
   const actor = readFileSync(join(import.meta.dir, '..', 'src', 'actor-agent.ts'), 'utf8');
   const surface = readFileSync(join(import.meta.dir, '..', 'src', 'rpc-surface.ts'), 'utf8');
 
   test('an unbudgeted head is given no ledger at all, and a budgeted one is given its own labels', () => {
     const seams = orchestratorHarness().agent.observeExplorationSeams();
-    // NULL, not an inert port: an undeclared run must not touch the table, and
-    // a port handed over "just in case" is how a cap gets created for a head
-    // nobody budgeted.
+    // Null, not an inert port: an undeclared run must not touch the table.
     expect(seams.mission(headInput())).toBeNull();
-    // The denominator. Without it the null above would hold for a seam that
-    // answers null unconditionally.
+    // The denominator: without it the null above holds for a seam that always answers null.
     const scoped = seams.mission(headInput({ missionLabels: ['q3-migration'] }));
     expect(scoped?.labels).toEqual(['q3-migration']);
   });
@@ -442,20 +361,14 @@ describe('the mission ledger bounds a hosted head', () => {
 
     if (!scoped) throw new Error('a head with labels is given a mission port');
 
-    // Guarding an undeclared mission is not a refusal — there is no cap to
-    // exceed — and the debit that follows lands on THIS workspace's own ledger
-    // rather than on storage a fork would have had of its own. Driving both
-    // halves is what proves the port reaches a live ledger: a closure over a
-    // released or foreign handle throws on `assertCurrent` instead.
+    // The debit lands on this workspace's own ledger; a closure over a released or foreign handle throws on `assertCurrent`.
     expect(await scoped.port.guard('model_call', scoped.labels)).toBeNull();
     await scoped.port.debit(120, { labels: scoped.labels, calls: 1 });
     expect(await scoped.port.guard('model_call', scoped.labels)).toBeNull();
   });
 
   test('a subtree charges the mission its root does', () => {
-    // Otherwise a head escapes its budget simply by splitting again. Still read
-    // at the source: the recursive split needs a live head and a merge model,
-    // which this runner has neither of.
+    // Otherwise a head escapes its budget by splitting again. Read at the source: the recursive split needs a live head.
     const orchestrator = readFileSync(join(import.meta.dir, '..', 'src', 'orchestrator.ts'), 'utf8');
     expect(orchestrator).toContain('controllerInput.missionLabels = parent.missionLabels');
   });
@@ -464,9 +377,7 @@ describe('the mission ledger bounds a hosted head', () => {
     const guard = actor.slice(actor.indexOf('async missionGuard('), actor.indexOf('async missionDebit('));
     expect(guard).not.toContain('@callable');
     expect(actor).not.toContain("@callable()\n  async missionDebit(");
-    // Still allowlisted, and that is not vestigial: a spend ledger must not
-    // become writable over the public WS/HTTP transport just because the head
-    // that charges it runs in-process.
+    // Still allowlisted: a spend ledger must not become writable over the public WS/HTTP transport.
     expect(surface).toContain("'missionGuard'");
     expect(surface).toContain("'missionDebit'");
   });

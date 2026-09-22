@@ -1,44 +1,7 @@
 /**
- * The hosted workspace, in the Durable Object that owns it.
- *
- * ONE DURABLE OBJECT PER WORKSPACE. Nimbus is held as a library over
- * `ctx.storage.sql`: the filesystem tables sit beside the actor's conversation,
- * its ledgers, its memory index and its fork lineage, so a write to
- * `memory/MEMORY.md` and the FTS5 rows that index it commit under one
- * `transactionSync`, a SQL-only snapshot of this object contains the workspace,
- * and deleting a workspace is one object's teardown rather than a three-step
- * cross-object sequence with no transaction around it.
- *
- * WHAT COMES FROM WHERE
- *
- * `@kinu.run/core/workspace` composes the filesystem and the shell — the same
- * `createWorkspace` the local CLI runs, so there is one recipe and not one per
- * backend. What a Durable Object has and a `bun` process does not — background
- * processes held open by `ctx.waitUntil`, a port registry, capability-routed
- * previews, an R2 runtime catalogue, wasm interpreters in dynamic-worker
- * facets, an xterm shell, durable per-actor shell state in `ctx.storage` — is
- * Nimbus's own hosted runtime (`composeHostedRuntime`), composed over that
- * workspace itself (see `WorkspaceSession.workspace`). Nothing is
- * reimplemented on either side of that line.
- *
- * WHAT A FACET SEES
- *
- * A subordinate or an exploration head runs in its own Durable Object facet with
- * its own SQLite, and shares the WORKSPACE — the same SOUL.md, the same
- * `memory/`, the same tree. So a facet does not compose a workspace of its own;
- * it holds {@link createWorkspaceBoxClient}, which is the same
- * `NimbusSandboxHandle` over one RPC into the orchestrator that owns the bytes.
- * Both boxes satisfy the same interface, so `nimbusSessionFiles`,
- * `nimbusSessionShell`, `createNimbusWorkspaceExecutor` and the node-home
- * provisioner are built identically wherever they run.
- *
- * WHAT A HOSTED WORKSPACE CAN RUN
- *
- * Files, POSIX shell, coreutils, package installation, isomorphic git, `node`
- * programs and the interpreters the R2 catalogue holds (`python3`, `bash`,
- * `ruby`), each in a dynamic-worker facet of the hosted runtime. Bundled
- * Worker modules run as resident Fabric processes; native Linux workloads use
- * the sandbox container.
+ * The hosted workspace, in the Durable Object that owns it: Nimbus over `ctx.storage.sql`, so a file write
+ * and the FTS5 rows indexing it commit under one `transactionSync`. Composes core's `createWorkspace` with
+ * Nimbus's hosted runtime (`composeHostedRuntime`); facets reach it through {@link createWorkspaceBoxClient}.
  */
 
 import { createWorkspace, workspaceGenerationStorage } from '@kinu.run/core/workspace';
@@ -60,38 +23,14 @@ import { clearPortCapability, readPortExposure, readPortReservationByOwner, rele
 import type { DurableApps } from '@kinu.run/core/slates';
 import * as v from 'valibot';
 
-/**
- * The fabric every workspace this Worker hosts is composed with.
- *
- * A facet runs in its own isolate and reaches the object that owns the
- * filesystem through the supervisor entrypoint — and the entrypoint can only
- * mint that binding from `ctx.exports` against a composed name, and can only
- * reach the host through a composed namespace and method. Each half names
- * something Kinu already has: `SupervisorRPC` is re-exported from
- * `server.ts`, `OrchestratorAgent` is this deployment's own Durable Object
- * namespace binding, and `supervisorOp` is the one method the orchestrator
- * mounts for its facets. `NIMBUS_SESSION` is deliberately NOT named: the
- * class is gone (wrangler.jsonc migrations `v3`) and no binding carries that
- * name, so composing it would point every facet at a namespace that does not
- * exist. `hostDispatchMethod` repeats the default on purpose — a reader must
- * not have to know the default to see which method a facet lands on.
- */
+/** `NIMBUS_SESSION` is deliberately not named: the class is gone (wrangler.jsonc migration `v3`). */
 const HOST_FABRIC_COMPOSITION: FabricComposition = {
   supervisorEntrypoint: 'SupervisorRPC',
   hostNamespace: 'OrchestratorAgent',
   hostDispatchMethod: 'supervisorOp',
 };
 
-/**
- * The one `LOADER` binding, as the fabric declares it.
- *
- * Both names describe the binding workerd hands this Worker: the platform's
- * `WorkerLoader` and the fabric's vendored one differ only in that the
- * fabric's `globalOutbound` stub omits `connect`, which every real service
- * binding carries. Wrapping the stub would replace the binding with a plain
- * object workerd refuses as an outbound, so the binding crosses as itself,
- * checked for the one member the fabric calls.
- */
+/** Crosses as itself: workerd refuses a wrapped stub as an outbound. */
 type FabricWorkerLoader = NonNullable<HostedRuntimeOptions['env']['LOADER']>;
 
 const FabricWorkerLoaderSchema = v.custom<FabricWorkerLoader>(
@@ -103,50 +42,25 @@ function fabricLoader(loader: WorkerLoader): FabricWorkerLoader {
   return v.parse(FabricWorkerLoaderSchema, loader);
 }
 
-/**
- * The one call the fabric makes on an object it resolves in the host
- * namespace: a facet's supervisor envelope, dispatched by the composed
- * `hostDispatchMethod`. It holds for every name this object is opened under —
- * the siblings Nimbus opens for the npm resolver's wide layers and for peer
- * process hosting answer the same method.
- */
+/** Also answered by the siblings Nimbus opens under other names. */
 export interface WorkspaceHostTarget {
   supervisorOp(envelope: SupervisorOpEnvelope): Promise<SupervisorOpResult>;
 }
 
-/** The fabric's host namespace. `idFromString` rides beside the pair every
- *  other port names because the supervisor entrypoint resolves its host from
- *  an id it was handed, never from a name. */
+/** The supervisor entrypoint resolves its host from an id, never a name. */
 export interface WorkspaceHostNamespace<Id> extends ObjectNamespace<Id, WorkspaceHostTarget> {
   idFromString(id: string): Id;
 }
 
-/**
- * Every binding a hosted workspace reads.
- *
- * Three are Nimbus's own — the loader it spawns facets through, the assets it
- * serves and the R2 runtime catalogue it installs toolchains from — and the
- * fourth is the fabric's host namespace. Nothing else of the actor's Env is
- * reachable from here, and handing the whole of it over would put every
- * binding this Worker holds inside a package manager.
- */
+/** Never the whole Env: that would put every binding inside a package manager. */
 export interface HostedWorkspaceEnv<Id> extends Pick<Env, 'LOADER' | 'NIMBUS_RUNTIME_CACHE'> {
   readonly ASSETS?: Fetcher;
   readonly OrchestratorAgent: WorkspaceHostNamespace<Id>;
 }
 
-/** The bindings the runtime reads: the fabric's host namespace beside the
- *  loader, the assets and the runtime catalogue its own env type names. */
 type HostedRuntimeBindings<Id> = HostedRuntimeOptions['env'] & { readonly OrchestratorAgent: WorkspaceHostNamespace<Id> };
 
-/**
- * The hosted runtime's module, loaded on first composition rather than at
- * module eval: its static graph carries isomorphic-git, the npm installer, the
- * REPLs and the substrate's wasm-adjacent machinery. Every consumer already
- * awaits the workspace host before reaching any of it, so the import belongs
- * to that first await, and module eval stays clean for the Worker's cold
- * start and the workerd test pool's loader.
- */
+/** Loaded on first composition, not at module eval, to keep cold start and the test pool loader clean. */
 interface HostedRuntimeModule {
   readonly composeHostedRuntime: (options: HostedRuntimeOptions) => Promise<HostedRuntime>;
   readonly runtimeCatalogSource: (env: Pick<HostedRuntimeOptions['env'], 'NIMBUS_RUNTIME_CACHE'>) => RuntimeSource;
@@ -163,40 +77,16 @@ function hostedRuntimeModule(): Promise<HostedRuntimeModule> {
   return runtimeModule;
 }
 
-/**
- * A read whose only tolerated failure is "there is no such path".
- *
- * ENOENT is how the filesystem reports a missing path, and every SDK-shaped file
- * read answers `null` for exactly that case: `null` is a fact the caller acts on,
- * while a permission failure or a torn chunk is not something to report as
- * absence. Synchronous on purpose — the durable filesystem is, so the throw
- * happens on this stack and nothing has to inspect a rejection.
- *
- * The tolerance is declared through `obs`, not matched on rendered text.
- * Rendered text reports a directory as absent when its path holds the
- * substring. The VFS sets `code` on every error it raises, and this reads
- * that.
- */
+/** Only ENOENT (by `code`, not rendered text) reads as absence; other failures throw. */
 function absentAsNull<T>(read: () => T): T | null {
   return tolerate(read, 'enoent') ?? null;
 }
 
-/**
- * The workspace's files in the SDK handle's shape, straight off the durable
- * filesystem.
- *
- * The raw `SqliteVFS`, credentialed as the session user, is what the Nimbus
- * session's own pid-less file RPCs resolve to — so this is the same identity
- * reading the same rows, with the round trip removed. `stat`, `rename`, `chmod`,
- * a recursive removal and a byte-exact read are native operations here rather
- * than the shell-outs a remote handle needs.
- */
+/** The raw `SqliteVFS` as the session user: the same identity the Nimbus session's file RPCs resolve to. */
 function workspaceBoxFiles(open: () => Promise<SqliteVFS>, cred: VfsCred = CRED_SESSION_USER): NimbusSandboxHandle['files'] {
   const view = async (): Promise<CredentialedVfs> => (await open()).as(cred);
 
   return {
-    // The same rows as one agent: the raw filesystem credentialed to it,
-    // exactly the view its commands run under.
     as: (agent) => workspaceBoxFiles(open, agent),
     async read(path) {
       const vfs = await view();
@@ -215,9 +105,7 @@ function workspaceBoxFiles(open: () => Promise<SqliteVFS>, cred: VfsCred = CRED_
     },
     async write(path, content) {
       const vfs = await view();
-      // The SDK write contract creates missing parents — the remote session's
-      // pid-less write always did, and bootstrapScaffold writes
-      // `scaffold/agent.js` into a fresh workspace with no mkdir of its own.
+      // The SDK write contract creates missing parents.
       const cut = path.lastIndexOf('/');
 
       if (cut > 0) {
@@ -262,9 +150,7 @@ function workspaceBoxFiles(open: () => Promise<SqliteVFS>, cred: VfsCred = CRED_
         return;
       }
 
-      // A non-recursive delete of a directory is `rmdir`, which refuses a
-      // populated one — the same distinction `rm` and `rmdir` draw, kept because
-      // the SDK surface has one method for both.
+      // Non-recursive delete of a directory is `rmdir`, which refuses a populated one.
       if (vfs.isDirectory(path)) {
         vfs.rmdir(path);
 
@@ -279,177 +165,73 @@ function workspaceBoxFiles(open: () => Promise<SqliteVFS>, cred: VfsCred = CRED_
 export interface HostedWorkspaceDeps<Id> {
   readonly ctx: DurableObjectState;
   readonly env: HostedWorkspaceEnv<Id>;
-  /**
-   * The public URL an exposed port is reachable at, or the reason there is
-   * none. Supplied by the actor because a preview URL names the workspace and
-   * is signed with a key derived from the user-plane secret, neither of which
-   * the workspace itself has any business holding.
-   */
+  /** Supplied by the actor: the URL names the workspace and is signed with a user-plane-derived key. */
   previewUrl: (port: number, capability: string) => Promise<WorkspacePreviewUrl>;
   onFilesChanged?: (paths: readonly string[]) => void;
-  /**
-   * Bring the slate that owns a durable application to life: the process a
-   * reset took is re-driven, a process whose source changed is replaced, a
-   * live one is answered as it is. Asked before a preview request is routed
-   * to its port, and again by the launch journal on the wake after a reset
-   * or a hibernation took a launch (`resolveWorkerLaunch` below). A refusal
-   * says why the slate cannot serve — `missing` once its tree is gone, the
-   * compiler's `bad_input` when its source is broken.
-   */
+  /** Asked before a preview request is routed and by the launch journal after a reset. A refusal says why
+     *  the slate cannot serve. */
   ensureSlate?(owner: string): Promise<Refusal | null>;
-  /** Mint the app invocation a preview request runs under, so a slate cannot
-   *  keep its bindings and replay them as an unnamed root lineage. `socket`
-   *  marks the invocation for the WebSocket case: it must outlive the routed
-   *  response, which a 101 only opens. */
+  /** Keeps a slate from replaying retained bindings as an unnamed root lineage. `socket`: the invocation
+     *  must outlive the routed 101 response. */
   slateInvocation?(port: number, socket: boolean): { readonly value: string; release: () => void } | null;
 }
 
-/** What one composition yields: Nimbus's hosted runtime, the facet manager it carries, and the registry both register into. */
 interface HostComposition {
   readonly runtime: HostedRuntime;
   readonly facets: ComposedFacetManager;
   readonly ports: PortRegistry;
 }
 
-/**
- * The socket an attached terminal writes to.
- *
- * `send` is the whole of it: `attachTerminal` answers `{"type":"ready"}` on it,
- * `terminalFrame` writes the shell's output frames through the same call, and
- * `terminalClose` only detaches. The runtime compares the socket by identity
- * and never reads a state, a URL or a listener off it, so a caller owes it one
- * method. Measured against `@nimbus-sh/worker` dist/hosted/runtime.js
- * (`attachTerminal`/`terminalFrame`/`terminalClose`) and dist/facets/
- * ws-terminal.js (every `this.ws` read) on 2026-09-22.
- */
+/** The runtime compares the socket by identity and only calls `send`. */
 export interface TerminalSocket {
   send(data: string): void;
 }
 
-/**
- * The runtime's terminal surface, as this host exposes it to the actor.
- *
- * Declared rather than `Pick`ed so the socket is named at this seam: the
- * runtime types the parameter as the platform's whole `WebSocket`, and the
- * actor hands it a `Connection`, both of which satisfy {@link TerminalSocket}.
- */
 export interface WorkspaceTerminal {
   attachTerminal(ws: TerminalSocket): Promise<void>;
   terminalFrame(ws: TerminalSocket, frame: string | ArrayBuffer): Promise<void>;
   terminalClose(ws: TerminalSocket): void;
 }
 
-/**
- * A supervisor envelope as a facet sends it.
- *
- * `supervisorOp` is a Durable Object RPC method, so the `op` arrives as wire
- * data: any string a process in this workspace put on it.
- */
+/** `op` arrives as wire data: any string a process in this workspace put on it. */
 export interface WireSupervisorEnvelope extends Omit<SupervisorOpEnvelope, 'op'> {
   readonly op: string;
 }
 
 const SERVED_OPS: ReadonlySet<string> = new Set(SUPERVISOR_OPS);
 
-/**
- * Does Nimbus's op table name this envelope's operation?
- *
- * The refusal behind this guard is a RUNTIME one because it cannot be a typed
- * one. Measured on this tree 2026-09-22: `SUPERVISOR_OPS` carries 81 names,
- * `SUPERVISOR_NATIVE_OPS` 44 and `SUPERVISOR_OP_ROUTES` 37, and the set
- * difference is empty — every member of `SupervisorOpName` is served, so no
- * value of that type can reach the refusal. A name that does reach it came off
- * the wire and was never in the type.
- */
+/** A runtime refusal: every `SupervisorOpName` is served, so only an off-the-wire name reaches it. */
 function servesOp(envelope: WireSupervisorEnvelope): envelope is SupervisorOpEnvelope {
   return SERVED_OPS.has(envelope.op);
 }
 
 export interface HostedWorkspace {
-  /** The filesystem and the shell, as `Storage.vfs` and every file surface
-   *  consume them. */
   readonly bundle: WorkspaceBundle;
-  /**
-   * The process/port/runtime/exec plane, with commands running in the named
-   * durable shell.
-   *
-   * One box per actor and cached by `shellId`, because a named shell HOLDS a
-   * working directory and exported variables: the orchestrator's `agent:main`,
-   * a subordinate's `subordinate:<name>` and a head's `head:<id>` each keep
-   * their own `cd` across calls over one filesystem and one process table.
-   */
+  /** Cached by `shellId`: a named shell holds its own cwd and exported variables. */
   box(shellId: string): NimbusSandboxHandle;
-  /**
-   * The one method a workspace host mounts for its facets, answered by the
-   * composed HOSTED RUNTIME.
-   *
-   * Half of the operations an envelope can carry are filesystem ops a bare
-   * workspace serves; the other half — `fanoutExecute`, `hostProcess`,
-   * `cpSpawn`, `writeBatch`, `registerPort`, `routeLoopback` and the rest of
-   * `SUPERVISOR_OP_ROUTES` — are HOST ops, and only the runtime has the
-   * methods behind them. Answering from the workspace alone refused every one
-   * of them.
-   *
-   * It holds for EVERY name this object is opened under. Nimbus opens
-   * siblings of the host namespace by name for the npm resolver's wide layers
-   * and for peer process hosting, and a sibling answers this same method; it
-   * is a runtime over its own scratch storage, never a Kinu workspace, so
-   * nothing here claims an owner or writes a transcript. Composing it boots
-   * the workspace exactly as the first file touch does, through the same
-   * memoized open with the same failure-clearing retry.
-   */
+  /** Answered by the hosted runtime (host ops need it), for every name this object is opened under; a
+     *  sibling is never a Kinu workspace, so nothing here claims an owner or writes a transcript. */
   supervisorOp(envelope: WireSupervisorEnvelope): Promise<SupervisorOpResult>;
-  /**
-   * The facet manager composed over this object — the slate host's spawn
-   * and kill path, and the one registrar of a resident's port: it binds the
-   * port a durable launch declared and decides, against the owner's
-   * reservation, whether the port's stored capability is re-adopted or
-   * retired. Composing it opens the workspace, exactly as the first file
-   * touch does.
-   */
+  /** The slate host's spawn/kill path and the one registrar of a resident's port. */
   facetManager(): Promise<ComposedFacetManager>;
-  /** The live listeners of this isolate, the registry the manager registers into. */
   ports(): Promise<PortRegistry>;
-  /**
-   * The runtime's own xterm shell over its WebSocket protocol: `attach` on
-   * accept, `frame` per message, `close` when the socket goes. One terminal
-   * per workspace, as Nimbus keeps it; a second attach replaces the first.
-   */
+  /** One terminal per workspace; a second attach replaces the first. */
   terminal(): Promise<WorkspaceTerminal>;
   readonly apps: DurableApps;
-  /**
-   * Route a preview request whose signed hostname the edge has already
-   * verified. `handle` is the capability prefix that hostname carried — the full
-   * capability never leaves this object.
-   */
+  /** The edge has verified the signed hostname; the full capability never leaves this object. */
   routePreview(port: number, handle: string, request: Request, pathname: string): Promise<Response>;
-  /** Drop the workspace's own tables, leaving the actor's rows alone. */
+  /** Leaves the actor's rows alone. */
   destroy(): Promise<void>;
 }
 
-/**
- * How much of a port capability the public hostname carries.
- *
- * Enough to PIN a URL to one exposure — unexposing and re-exposing a port mints
- * a fresh capability, so an old link stops resolving — and no more, because the
- * capability is the secret this object checks while the hostname is a public DNS
- * label already carrying a signed token and the workspace's own name. The full
- * 24-hex capability would not fit beside them; its first 10 characters do.
- */
+/** Pins a URL to one exposure; the full 24-hex capability would not fit the DNS label. */
 export const PREVIEW_CAPABILITY_HANDLE_LENGTH = 10;
 
-/** A URL that names nothing this object serves. Never a 403: a wrong handle
- *  must not confirm that the port is listening at all. */
+/** Never a 403: a wrong handle must not confirm that the port is listening. */
 function previewNotFound(): Response {
   return new Response('Not found', { status: 404, headers: { 'cache-control': 'no-store' } });
 }
 
-/**
- * The slate behind a durable URL could not be brought to life: its source no
- * longer compiles, or its boot was refused. The refusal is the body, so the
- * visitor sees the compiler's own words rather than a blank page, and the
- * status invites a retry once the author has fixed the tree.
- */
 function previewUnavailable(refusal: Refusal): Response {
   return new Response(JSON.stringify({ reason: refusal.reason, error: refusal.error }), {
     status: 503,
@@ -457,24 +239,9 @@ function previewUnavailable(refusal: Refusal): Response {
   });
 }
 
-/**
- * How a journalled worker launch is re-driven here.
- *
- * Every worker the slate host spawns is journalled under the slate that owns
- * it, and the journal re-drives a row a reset or a hibernation interrupted
- * through this hook. What a row carries is the recipe — image digests, port,
- * cwd — and never the launch's inputs: a slate's bindings are minted per
- * caller by the slate host and its modules are compiled from the tree as it
- * is now, so those inputs are not re-resolved from the row. The slate host
- * re-drives the application through its own boot instead — the same path a
- * request on its URL takes, which also replaces a process whose source
- * changed — and the row this re-drive was owed on is released by answering
- * null. An interpreter resident (`recipe.resident`) is the session's own
- * launch and never an embedder's; the guard keeps that true here.
- */
-/** Account for both answers a re-drive can give: a refusal is the slate's own,
- *  while a throw inside `waitUntil` would otherwise vanish — that one is the
- *  host failing to ask. */
+/** Rows carry the recipe, never the inputs: the slate host re-drives through its own boot and the row is
+ * released by answering null. An interpreter resident is never an embedder's launch. */
+/** A throw inside `waitUntil` would otherwise vanish. */
 async function redriveSlate(ensuring: Promise<Refusal | null>, owner: string): Promise<void> {
   try {
     const refusal = await ensuring;
@@ -497,22 +264,12 @@ function resolveSlateLaunch<Id>(deps: HostedWorkspaceDeps<Id>, recipe: WorkerRec
   return Promise.resolve(null);
 }
 
-/**
- * Compose the workspace this Durable Object owns.
- *
- * Called once per isolate, lazily — `workspaceGenerationStorage` bumps a durable
- * counter, and the filesystem itself does not open until the first operation
- * touches it, so an activation that never reads a file pays for neither.
- */
+/** Called once per isolate; the filesystem opens on first operation. */
 export function createHostedWorkspace<Id>(deps: HostedWorkspaceDeps<Id>): HostedWorkspace {
   const sql = deps.ctx.storage.sql;
   const catalog = deps.env.NIMBUS_RUNTIME_CACHE;
 
-  // The R2 catalogue, and nothing else of this env, is what the workspace's
-  // install stubs resolve against: a name the registry cannot answer becomes
-  // a command that installs on first use, exactly as the CLI's packaged
-  // runtimes do. The source reads the module lazily, as every reach into the
-  // runtime here does, so an unopened workspace loads none of it.
+  // Only the R2 catalogue of this env; the module is read lazily.
   const runtimeSource: RuntimeSource | undefined = catalog === undefined ? undefined : {
     list: async () => (await hostedRuntimeModule()).runtimeCatalogSource({ NIMBUS_RUNTIME_CACHE: catalog }).list(),
     resolve: async (spec) => (await hostedRuntimeModule()).runtimeCatalogSource({ NIMBUS_RUNTIME_CACHE: catalog }).resolve(spec),
@@ -522,31 +279,20 @@ export function createHostedWorkspace<Id>(deps: HostedWorkspaceDeps<Id>): Hosted
     sql,
     transactions: deps.ctx,
     generation: workspaceGenerationStorage(sql),
-    // What makes this object a workspace HOST rather than a bare filesystem
-    // holder: the fabric mints every facet's `env.SUPERVISOR` binding, and
-    // `ctx.exports` is adopted off `transactions` — which here IS the Durable
-    // Object's own `ctx`, the object workerd hangs `exports` on. Without both
-    // halves `git clone` refuses before it spawns anything.
+    // The fabric mints each facet's `env.SUPERVISOR`, and `ctx.exports` comes off `transactions` (the DO's
+    // own `ctx`). Without both, `git clone` refuses.
     fabric: HOST_FABRIC_COMPOSITION,
     runtimeSource,
   });
 
   if (deps.onFilesChanged) bundle.onFilesChanged(deps.onFilesChanged);
 
-  // One registry per isolate, exactly as a session has one: a port is a live
-  // listener in this isolate's memory. What survives an eviction is Nimbus's
-  // reservation record in `ctx.storage` and the manager's launch journal.
+  // One registry per isolate: a port is a live listener in this isolate's memory.
   const portRegistry = new PortRegistry();
   let composing: Promise<HostComposition> | undefined;
 
-  // The runtime's scheduling, on this object's timers. The runtime drives its
-  // launch pump, log flush and log janitor through `schedule`; a session owns
-  // its object's one alarm slot and arms that, while this object's slot is
-  // the SDK scheduler's, so a timer plus waitUntil takes each task onto a
-  // fresh turn instead. A timer dies with a hibernated isolate, which is why
-  // the launch pump also runs once per incarnation below: the journal rows
-  // it drains are what a dead timer left owed. One pending timer per reason,
-  // and a re-schedule replaces it.
+  // This object's alarm slot is the SDK scheduler's, so tasks run on a timer plus waitUntil. Timers die with
+  // a hibernated isolate, hence the launch pump also runs once per incarnation.
   const pending = new Map<HostedRuntimeTask, { timer: ReturnType<typeof setTimeout>; settle: (run: boolean) => void }>();
 
   const lifecycle: HostedRuntimeOptions['lifecycle'] = {
@@ -576,12 +322,6 @@ export function createHostedWorkspace<Id>(deps: HostedWorkspaceDeps<Id>): Hosted
         const session = await bundle.session();
         const { composeHostedRuntime } = await hostedRuntimeModule();
 
-        // The runtime composes the facet manager itself, over this object's
-        // ctx, its env and the workspace's own process owner and registry;
-        // it registers `git`, `node`, the interpreter runners and their
-        // REPLs, and starts the workspace. This host supplies what only it
-        // has: the bindings the runtime reads, the launch re-drive for the
-        // slates it owns, and the scheduling above.
         const runtimeBindings: HostedRuntimeBindings<Id> = {
           OrchestratorAgent: deps.env.OrchestratorAgent,
           LOADER: fabricLoader(deps.env.LOADER),
@@ -592,26 +332,18 @@ export function createHostedWorkspace<Id>(deps: HostedWorkspaceDeps<Id>): Hosted
         const runtime = await composeHostedRuntime({
           workspace: session.workspace,
           ctx: deps.ctx,
-          // The bindings the runtime reads and no other: handing over the
-          // actor's whole Env would put every binding it holds inside a
-          // package manager and a dynamic-worker loader.
           env: runtimeBindings,
           ports: portRegistry,
           lifecycle,
           resolveWorkerLaunch: (recipe) => resolveSlateLaunch(deps, recipe),
         });
 
-        // The first pump of an incarnation drains the launch journal's
-        // cold-start recovery: a launch a reset or a hibernation interrupted
-        // is re-driven here, on the wake that composed this runtime.
+        // Cold-start recovery of launches a reset or hibernation interrupted.
         deps.ctx.waitUntil(runtime.onScheduled('resident-launch'));
 
         return { runtime, facets: runtime.facets(), ports: portRegistry };
       } catch (cause) {
-        // Same rule as the bundle's `booting` and `planes`: this host lives for
-        // the whole actor isolate, and a cached rejection would poison every
-        // later box op and preview route on one transient failure while each
-        // user retry resets the eviction timer that is the only other way out.
+        // A cached rejection would poison every later op on one transient failure.
         composing = undefined;
         throw cause;
       }
@@ -655,11 +387,7 @@ export function createHostedWorkspace<Id>(deps: HostedWorkspaceDeps<Id>): Hosted
         const { facets } = await compose();
         const held = await readPortReservationByOwner(deps.ctx, owner);
 
-        // The declaration moved: the identity moves with it. The old
-        // reservation is released — never silently kept beside a port the
-        // author no longer named — and a fresh port and capability are minted
-        // below. The facet slot is untouched, so the application's own
-        // storage follows it to the new address.
+        // The declaration moved: release the old reservation; the facet slot (and its storage) is kept.
         if (held !== null && preferredPort !== undefined && held.port !== preferredPort) {
           await releasePortReservation(deps.ctx, { owner, port: held.port });
         }
@@ -672,9 +400,6 @@ export function createHostedWorkspace<Id>(deps: HostedWorkspaceDeps<Id>): Hosted
 
         return { port: reserved.port, capability: reserved.capability };
       },
-      // Straight off the reservation record, with no session composed and no
-      // process driven: a capability is minted when the application is first
-      // reserved, so a held one is enough to build its URL from.
       async reserved(owner) {
         const held = await readPortReservationByOwner(deps.ctx, owner);
 
@@ -689,16 +414,12 @@ export function createHostedWorkspace<Id>(deps: HostedWorkspaceDeps<Id>): Hosted
       },
     },
     async routePreview(port, handle, request, pathname) {
-      // Every refusal below names its branch: a bare 404 on a durable URL is
-      // otherwise indistinguishable from the runner's own, and that silence
-      // hid a live regression on 2026-09-14.
+      // Every refusal names its branch: a bare 404 is otherwise indistinguishable from the runner's own.
       const refused = (reason: string, owner: string | null, detail = ''): void => {
         diagnostics.event('preview.route.refused', { port, handle, reason, owner: owner ?? '', detail });
       };
 
-      // The URL was minted from the durable record, so the record is what the
-      // handle is checked against — a port nothing was ever handed a URL for
-      // is a 404 whether or not something listens on it now.
+      // Checked against the durable record: a port never handed a URL is a 404 even if something listens.
       const exposure = await readPortExposure(deps.ctx, port);
 
       if (exposure === null) {
@@ -713,10 +434,6 @@ export function createHostedWorkspace<Id>(deps: HostedWorkspaceDeps<Id>): Hosted
         return previewNotFound();
       }
 
-      // A durable application answers its URL whether or not its process
-      // survived: the owner is brought to life (or replaced, when its source
-      // changed) before anything is routed. A port exposed without an owner
-      // has nothing to re-drive and is served only while it listens.
       if (exposure.owner !== null) {
         const refusal = await deps.ensureSlate?.(exposure.owner) ?? null;
 
@@ -727,10 +444,6 @@ export function createHostedWorkspace<Id>(deps: HostedWorkspaceDeps<Id>): Hosted
         }
       }
 
-      // What Nimbus's registry holds for the port at routing time: the listener
-      // it will consult, or nothing, which is the one reason its route answers
-      // a bare 404 (`routeCapabilityRequest` returns null without a live entry
-      // whose capability matches).
       const listener = portRegistry.get(port);
 
       if (listener === undefined) {
@@ -742,9 +455,8 @@ export function createHostedWorkspace<Id>(deps: HostedWorkspaceDeps<Id>): Hosted
       }
 
       const publicRequest = new Request(request);
-      // The visitor's own header is dropped first, then the host names this
-      // request's invocation. A preview entry is a root lineage, and naming it
-      // is what stops retained preview bindings standing in for a deeper one.
+      // Drop the visitor's header first: naming the invocation stops retained preview bindings standing in
+      // for a deeper lineage.
       publicRequest.headers.delete('x-slate-call');
       const upgrade = request.headers.get('upgrade')?.toLowerCase() === 'websocket';
       const invocation = deps.slateInvocation?.(port, upgrade) ?? null;
@@ -752,16 +464,10 @@ export function createHostedWorkspace<Id>(deps: HostedWorkspaceDeps<Id>): Hosted
       if (invocation !== null) publicRequest.headers.set('x-slate-call', invocation.value);
       const { facets } = await compose();
 
-      // Nimbus routes with the WHOLE capability and checks it against the live
-      // registration itself; this object only ever compared the handle. The
-      // composed apps answer upgrades and plain fetches alike — the manager
-      // is in-process, so a 101 never has to cross an RPC boundary.
       try {
         const response = await facets.apps.routeCapabilityPort(port, exposure.capability, publicRequest, pathname);
 
-        // A 101 only OPENS the socket session: the invocation stays minted
-        // for its life, released by the process's close listener — releasing
-        // here would retire it before the first frame arrives.
+        // A 101 only opens the socket: the process's close listener releases the invocation.
         if (response.status !== 101) invocation?.release();
 
         return response;
@@ -774,9 +480,6 @@ export function createHostedWorkspace<Id>(deps: HostedWorkspaceDeps<Id>): Hosted
   };
 }
 
-/** `runtimes.*` and `processes.*` answer with whatever the catalogue or the
- *  process table holds, and the executor renders it as JSON. One decode, so an
- *  unexpected shape is a named failure rather than an `[object Object]`. */
 async function json(result: Promise<unknown>): Promise<JsonValue | undefined> {
   const value = await result;
 
@@ -795,9 +498,7 @@ function workspaceBox(deps: {
 
   return {
     ready: async () => { await (await runtime()).ready(); },
-    // `shellId` on every command: each actor's work goes into ITS named durable
-    // shell, which is what makes `cd` persist for it and stay invisible to its
-    // siblings.
+    // Each actor's work runs in its own named durable shell.
     exec: async (command, options): Promise<NimbusExecResult> =>
       await (await runtime()).exec(command, { ...options, shellId }),
     startProcess: async (command, options): Promise<NimbusStartResult> =>
@@ -818,10 +519,6 @@ function workspaceBox(deps: {
       logs: async (pid, options) => await json((await runtime()).processLogs(pid, options)),
     },
     ports: {
-      // A listening port with no URL is refused with the reason, under the
-      // same code sandbox.ts gives a container whose previews are not
-      // configured: the port works, the deployment cannot address it, and a
-      // retry cannot change that.
       expose: async (port) => {
         const exposed = await (await runtime()).exposeApp({ port });
 
@@ -834,8 +531,7 @@ function workspaceBox(deps: {
 
         return { port: exposed.port, pid: exposed.pid, capability: exposed.capability, url: answer.url };
       },
-      // The capability is retired before the listener is dropped, so a crash
-      // between the two leaves a dead token rather than a live one.
+      // Retire the capability before dropping the listener, so a crash leaves a dead token, not a live one.
       unexpose: async (port) => {
         await runtime();
         await clearPortCapability({ ctx: deps.ctx, portRegistry: deps.ports }, port);

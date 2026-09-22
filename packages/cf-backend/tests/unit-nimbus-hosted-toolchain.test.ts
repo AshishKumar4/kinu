@@ -1,22 +1,6 @@
 /**
- * What the HOSTED Nimbus session's toolchain actually is, and where it stops.
- *
- * Kinu's deployed workspace is `@nimbus-sh/worker`'s session Durable Object,
- * reached through `@nimbus-sh/sdk`. Its extra commands are registered by
- * `initSession` — `git` at dist/session/init.js:460, `npm` at :1927, `npx` at
- * :2311, `node` at :698, `bun` at :847 — and none of them needs a runtime
- * catalog. The interpreter runtimes DO: `nimbus install` reads them out of R2
- * through `env.NIMBUS_RUNTIME_CACHE`, and Kinu does not bind that bucket.
- *
- * These tests pin both halves of that, because both are claims the capability
- * declarations make to the model:
- *
- *   - git runs over a Nimbus workspace filesystem with no Durable Object
- *     behind it for anything local, so declaring `git` on the Nimbus executor
- *     is honest rather than aspirational.
- *   - asking the same session for a runtime with no bucket bound fails with a
- *     named binding error, which is why `python` is declared only when
- *     `NIMBUS_RUNTIME_CACHE` is present (execution/nimbus.ts runtimeCatalog).
+ * The hosted Nimbus session's toolchain: `git` runs over the workspace filesystem with no DO behind local history,
+ * and a runtime install without `NIMBUS_RUNTIME_CACHE` bound fails by binding name (why `python` is gated on it).
  */
 import { afterEach, describe, expect, test } from 'bun:test';
 import { Database, type SQLQueryBindings } from 'bun:sqlite';
@@ -31,8 +15,7 @@ afterEach(() => {
   for (const database of databases.splice(0)) database.close();
 });
 
-/** Identical to the binder in unit-workspace-cwd.test.ts: the filesystem binds
- *  BLOBs as ArrayBuffer, bun:sqlite binds only TypedArrays. */
+/** Same binder as unit-workspace-cwd.test.ts: the filesystem binds BLOBs as ArrayBuffer, bun:sqlite only TypedArrays. */
 function sqlBinding(value: SqlValue): SQLQueryBindings {
   if (value instanceof ArrayBuffer) return new Uint8Array(value);
 
@@ -71,11 +54,7 @@ async function hostedWorkspace(): Promise<NimbusWorkspace> {
     cwd: '/home/user',
   });
 
-  // The two arguments after the filesystem are the Durable Object's own context
-  // and env, which only the NETWORK subcommands reach (clone/fetch/pull/push go
-  // through the git-network facet). Local history needs neither. The session
-  // registers this handler at init.js:460 with its own ctx/env; the probe has
-  // no DO behind it, so both are absent here.
+  // The DO ctx/env arguments are reached only by network subcommands (clone/fetch/pull/push); local history needs neither.
   workspace.registry.register('git', async (ctx) => runGitCommand(ctx, workspace.vfs, undefined, {}));
 
   return workspace;
@@ -85,10 +64,7 @@ describe('hosted Nimbus session toolchain', () => {
   test('git is a real command over the workspace filesystem, not a container capability', async () => {
     const workspace = await hostedWorkspace();
 
-    // Run through the workspace's own `Shell`, which is what `workspace.exec`
-    // delegates to, with an explicit cwd rather than a `cd` that has to persist.
-    // This git is a command in a Nimbus registry over a SQLite filesystem —
-    // there is no child process and nothing reaches the host's git.
+    // A registry command over a SQLite filesystem: no child process, nothing reaches the host's git.
     const repo = '/home/user/repo';
     await workspace.fs.mkdir(repo, { recursive: true });
     await workspace.fs.writeFile(`${repo}/a.txt`, 'first');

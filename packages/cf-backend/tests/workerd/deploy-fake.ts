@@ -1,22 +1,7 @@
 /**
- * The Node-side plane the deploy probe runs against: a Cloudflare API that
- * remembers what it created, an authorization server that issues a token pair
- * for a PKCE exchange, and a release channel that serves a real
- * `release.json` and a real `.tar.gz` whose digest matches the one it
- * publishes.
- *
- * WHY HTTP AND NOT THE CORE FAKE. `packages/core/tests/unit-deploy-flow.test.ts`
- * fakes the `CloudflareTransport` PORT, which is the right level for the step
- * logic. The Durable Object is one level below that: it builds the transport
- * itself, downloads the artifact with the global `fetch`, gunzips it, verifies
- * the published digest, and exchanges an authorization code against
- * `dash.cloudflare.com`. None of that is exercised by a port fake, and all of
- * it is what a real run does first. So this plane speaks HTTP, and the probe
- * worker's `outboundService` is where it is installed.
- *
- * WHAT IT REFUSES. An unmatched host or path throws rather than answering
- * something plausible: a run that reached an unnamed network is a finding, not
- * a pass.
+ * Node-side plane for the deploy probe (Cloudflare API, OAuth server, release channel) over HTTP, installed as the probe's
+ * `outboundService`: the DO builds its own transport and fetches/verifies the artifact, which a port fake would not exercise.
+ * Unmatched host or path throws: a run that reached an unnamed network is a finding, not a pass.
  */
 import { createHash, randomBytes } from 'node:crypto';
 import { gzipSync } from 'node:zlib';
@@ -27,8 +12,7 @@ const ACCOUNT_ID = '0'.repeat(32);
 
 const VERSION = '0.4.0+probe01';
 
-/** The account's workers.dev subdomain, and therefore the address a run
- *  settles on: `<instance>.<subdomain>.workers.dev`. */
+/** Runs settle on `<instance>.<subdomain>.workers.dev`. */
 const SUBDOMAIN = 'probe';
 
 export const DEPLOY_FAKE_ACCOUNT = ACCOUNT_ID;
@@ -45,40 +29,29 @@ export const DEPLOY_FAKE_ACCESS_TOKEN = 'probe-access-token';
 
 export const DEPLOY_FAKE_REFRESH_TOKEN = 'probe-refresh-token';
 
-/** What the authorization server hands back for a REFRESH grant, which is the
- *  grant a self-update spends. Distinct from the first pair on purpose: the
- *  token the update writes back into the deployment must be the rotated one. */
+/** The REFRESH-grant pair; distinct so the update must write back the rotated token. */
 export const DEPLOY_FAKE_ROTATED_REFRESH = 'probe-refresh-token-2';
 
-/** The access token a REFRESH grant hands back. Distinct from the first one so
- *  this plane can tell a run that renewed an expiring token from one still
- *  presenting the dead one — see `expireGrant`. */
+/** Distinct from the first token so a run still presenting the expired one is visible (see `expireGrant`). */
 export const DEPLOY_FAKE_REFRESHED_ACCESS_TOKEN = 'probe-access-token-2';
 
-/** The address the probe deployment was created for, and therefore the only
- *  session its Updates surface answers. */
+/** The only session the probe deployment's Updates surface answers. */
 export const DEPLOY_FAKE_OWNER = 'owner@example.com';
 
-/** A build behind the channel's: what the probe deployment serves as its own
- *  stamp until a row says otherwise, and the version its record names. */
+/** A build behind the channel's: the probe deployment's own stamp and record version. */
 export const DEPLOY_FAKE_OLDER_BUILD = {
   version: '0.3.9+probe00',
   sha: 'probe00',
   builtAt: '2026-09-01T00:00:00.000Z',
 };
 
-/** The build the channel publishes, as `release.json` states it and as the new
- *  Worker's `/api/health` answers it. */
 export const DEPLOY_FAKE_CHANNEL_BUILD = {
   version: VERSION,
   sha: 'probe01',
   builtAt: '2026-09-18T00:00:00.000Z',
 };
 
-/** The deployment record the probe Worker is bound with: what a first run left
- *  behind, as `handoverStep` writes it. Held here rather than in the test,
- *  because it is a BINDING of the probe worker (`vitest.config.ts`) and the
- *  test reads the same constant it is bound with. */
+/** A binding of the probe worker (`vitest.config.ts`), held here so the test reads the constant it is bound with. */
 export const DEPLOY_FAKE_RECORD = JSON.stringify({
   inputs: {
     accountId: ACCOUNT_ID,
@@ -104,13 +77,8 @@ const FILES = {
 } satisfies Record<string, string>;
 
 /**
- * A release the size and shape of a published one.
- *
- * The four files above are bytes; a row that measures what one release costs
- * the installing object needs the real thing. Measured 2026-09-18 from
- * `packages/cf-backend/dist` (built 2026-09-16 in the primary checkout, maps
- * and `wrangler.json` excluded): 120 modules of 29.19 MiB and 421 assets of
- * 78.01 MiB, the largest of them 21.55 MiB.
+ * A release the size of a published one. Measured 2026-09-18 from `packages/cf-backend/dist`:
+ * 120 modules of 29.19 MiB and 421 assets of 78.01 MiB, the largest 21.55 MiB.
  */
 export interface DeployFakeWeight {
   readonly modules: number;
@@ -128,12 +96,8 @@ const WeighSchema: v.GenericSchema<DeployFakeWeight> = v.object({
   largestAsset: v.number(),
 });
 
-/** Half of every 64 KiB is fresh random hex and half is a block the release
- *  repeats. Deflate's window is 32 KiB, so the repeated half all but vanishes
- *  and the random half halves: the artifact lands near the 0.25 ratio the
- *  real one has (27.35 MiB compressed, 107.99 MiB unpacked, 2026-09-18).
- *  A body of one repeated character would gzip to a thousandth of itself and
- *  the row would measure a download nobody has. */
+/** Half of every 64 KiB is random hex, half a repeated block, so it gzips near the real 0.25 ratio (27.35 MiB of 107.99 MiB, 2026-09-18).
+ *  A one-character body would gzip to nothing and measure a download nobody has. */
 const BLOCK_CHARS = 32 * 1024;
 
 const FILLER = 'k'.repeat(BLOCK_CHARS);
@@ -158,13 +122,9 @@ function releaseBody(size: number): string {
   return pieces.join('');
 }
 
-/** One file of the release: its archive path and its bytes. */
 type ReleaseEntry = readonly [path: string, body: string];
 
-/** The release's files, at the weight a row asked for. Made once per weight:
- *  a fresh body would hash differently from the release the run already
- *  downloaded, and the upload would ask the artifact for a file it does not
- *  carry. */
+/** Made once per weight: a fresh body would hash differently from the downloaded release. */
 const weighed = new Map<string, readonly ReleaseEntry[]>();
 
 function files(): readonly ReleaseEntry[] {
@@ -200,9 +160,7 @@ function sha256(bytes: Uint8Array | string): string {
   return createHash('sha256').update(bytes).digest('hex');
 }
 
-/** A ustar member: a 512-byte header with an octal size and a checksum, then
- *  the body padded to a block. The reader under test
- *  (`core/src/deploy/artifact.ts`) accepts exactly this. */
+/** ustar member: 512-byte header with octal size and checksum, body padded to a block; what `core/src/deploy/artifact.ts` accepts. */
 function tarMember(path: string, body: string): Buffer {
   const header = Buffer.alloc(512);
   const bytes = Buffer.from(body, 'utf8');
@@ -274,20 +232,13 @@ interface Release {
   readonly text: string;
   readonly archive: Buffer<ArrayBuffer>;
   readonly digest: string;
-  /** What the archive unpacks to. NOT what the object holds any more: the
-   *  reader walks it a member at a time, and what the run held at its peak is
-   *  the fact the upload step records (`FACT_UPLOAD_PEAK`). This is here so a
-   *  row can hold that peak against the size of the release it installed. */
+  /** What the archive unpacks to, not the object's peak (`FACT_UPLOAD_PEAK`); kept so a row can compare the two. */
   readonly unpacked: number;
-  /** The largest single member, which is what the peak is supposed to be
-   *  bounded by instead of the release. */
+  /** The bound the peak should respect instead of the whole release. */
   readonly largestMember: number;
 }
 
-/** The channel's two objects for one version: the manifest and the tarball that
- *  carries it plus every file it names. Built per version and kept, because a
- *  row that publishes a second build asks for both again — and keyed by the
- *  weight too, because a weighed release is a different artifact. */
+/** Built per version and cached (keyed by weight too) because a row publishing a second build asks for both again. */
 const releases = new Map<string, Release>();
 
 function release(): Release {
@@ -298,9 +249,7 @@ function release(): Release {
   const text = manifestText(held.published);
   const carried = files();
 
-  // Assets before modules, the order `scripts/build-worker-release.ts` writes
-  // them in: a single-pass installer holds the module set to the end, so the
-  // archive puts it last.
+  // Assets before modules, as `scripts/build-worker-release.ts` writes them: a single-pass installer holds modules to the end.
   const ordered = [
     ...carried.filter(([path]) => !path.startsWith('worker/')),
     ...carried.filter(([path]) => path.startsWith('worker/')),
@@ -328,19 +277,8 @@ function release(): Release {
 }
 
 /**
- * What one release cost the Durable Object, measured by the plane it talked to
- * rather than computed from the code.
- *
- * `served` is the compressed artifact this channel handed over; `unpacked` is
- * what that archive expands to and `largestMember` is its biggest single
- * file; `assetBody` and `versionBody` are the largest multipart bodies the
- * object built and sent, and `assetBatches` is how many asset requests it
- * took. The isolate offers no memory reading at all (measured 2026-09-18 on
- * `@cloudflare/workerd-linux-64` through `vitest-pool-workers`:
- * `performance.measureUserAgentSpecificMemory` is undefined and
- * `process.memoryUsage()` answers zeroes), so these are the footprint that
- * can be measured from outside; what the object HELD is its own count, kept
- * on the upload step's ledger row (`FACT_UPLOAD_PEAK`).
+ * What one release cost the DO, measured from this plane. The isolate offers no memory reading (measured 2026-09-18 on
+ * `@cloudflare/workerd-linux-64`: `measureUserAgentSpecificMemory` undefined, `memoryUsage()` zeroes); held bytes live on `FACT_UPLOAD_PEAK`.
  */
 export interface DeployFakeFootprint {
   readonly served: number;
@@ -381,33 +319,25 @@ export const DeployFakeStateSchema = v.object({
 });
 
 export interface DeployFakeState {
-  /** Every version id the deployment pointer was moved to, in order. */
   readonly deployments: readonly string[];
   readonly namespaces: readonly string[];
   readonly buckets: readonly string[];
   readonly indexes: readonly string[];
   readonly gateways: readonly string[];
   readonly apps: readonly string[];
-  /** The secrets PUT on the new Worker's script, by name and text. Values are
-   *  this plane's own fakes, and they are what proves the handover wrote the
-   *  token and the record it was supposed to write. */
+  /** Values are this plane's fakes: they prove the handover wrote the token and record it was meant to. */
   readonly secrets: Readonly<Record<string, string>>;
   readonly uploads: number;
   readonly creates: readonly string[];
-  /** How many REFRESH grants this authorization server issued. A guided run
-   *  whose access token expired mid-plan shows up here as 1. */
+  /** A run whose access token expired mid-plan shows 1 here. */
   readonly refreshes: number;
-  /** Calls that presented an access token this server had already expired.
-   *  Every one of them was answered 401, the way Cloudflare answers. */
+  /** Calls presenting an already-expired token, each answered 401 as Cloudflare does. */
   readonly expiredCalls: number;
-  /** What one release cost the object, in bytes this plane really served and
-   *  really received (§ the footprint row in `deploy-ledger.test.ts`). */
+  /** Bytes really served and received for one release (footprint row in `deploy-ledger.test.ts`). */
   readonly footprint: DeployFakeFootprint;
 }
 
-/** The build this plane serves as the deployment's own `kinu-version.json`,
- *  which is what `readBuildStamp` reads and therefore what the Updates surface
- *  compares the channel against. */
+/** Served as `kinu-version.json`, which `readBuildStamp` reads and the Updates surface compares to the channel. */
 export interface DeployFakeServedBuild {
   readonly version: string;
   readonly sha: string;
@@ -421,15 +351,10 @@ const ServedBuildSchema = v.object({
 });
 
 interface Held {
-  /** What the channel publishes right now. A row that installs two releases in
-   *  a row moves this between the two applies. */
   published: DeployFakeServedBuild;
-  /** Every version id a deployment pointer was moved to, in order. Two
-   *  successive releases must leave two entries: an update that uploaded and
-   *  never repointed is the silent no-op this records. */
+  /** Two releases must leave two entries: an update that uploaded and never repointed is the silent no-op this records. */
   deployments: string[];
-  /** Which release each uploaded version id carries, so `/api/health` can
-   *  answer what the Worker actually serves. */
+  /** So `/api/health` answers what the Worker actually serves. */
   versions: Map<string, string>;
   namespaces: string[];
   buckets: string[];
@@ -442,25 +367,17 @@ interface Held {
   scriptExists: boolean;
   refuseOnce: DeployFakeRefusal | null;
   served: DeployFakeServedBuild | null;
-  /** The shape of the release the channel serves, or null for the four small
-   *  files. Set by a row that measures what a published release costs the
-   *  object that installs it. */
+  /** Null serves the four small files. */
   weigh: DeployFakeWeight | null;
-  /** The lifetime the next authorization-code grant answers with, and — once
-   *  it has been issued — the first access token is dead: every call bearing
-   *  it is answered 401 until the run refreshes. `null` is the ordinary hour,
-   *  and the strictness is off. */
+  /** Lifetime of the next auth-code grant; once issued, its access token is answered 401 until the run refreshes.
+   *  `null`: the ordinary hour, no strictness. */
   shortGrant: number | null;
   refreshes: number;
   expiredCalls: number;
-  /** One call this plane HOLDS after doing its work: the window in which a
-   *  Durable Object dies having written to somebody's account without learning
-   *  that it did. Held until the row that armed it says so, never for a
-   *  duration — the row is what observes the abort and then releases. */
+  /** A call held after doing its work: the window where a DO dies having written without learning it.
+   *  Released by the arming row, never by a duration. */
   stallOnce: ArmedStall | null;
-  /** Which asset hashes the open upload session still wants, and which have
-   *  arrived: the completion token is answered when the second covers the
-   *  first, the way the reference describes it. */
+  /** The completion token is answered once the arrived hashes cover the wanted ones. */
   assetsWanted: Set<string>;
   assetsUploaded: Set<string>;
   footprint: {
@@ -519,9 +436,7 @@ function reset(): void {
   held.shortGrant = null;
   held.refreshes = 0;
   held.expiredCalls = 0;
-  // A hold the previous row left open is answered rather than dropped: the call
-  // waiting on it belongs to an object that is gone, and a promise nobody
-  // resolves would keep that activation's fetch alive into the next row.
+  // Answer a hold the previous row left open: an unresolved promise would keep that activation's fetch alive into the next row.
   held.stallOnce?.answer();
   held.stallOnce = null;
   held.assetsWanted = new Set<string>();
@@ -553,10 +468,7 @@ const RefusalSchema = v.object({
   message: v.string(),
 });
 
-/** One call held open: the method and path it matches. The method is part of
- *  it because a step LOOKS before it creates, and the call worth holding is the
- *  one that wrote. No duration — the row that armed it decides when it is
- *  answered, so the window is a signal and not a race with the machine. */
+/** Method included because a step looks before it creates and only the write is worth holding. No duration: the window is a signal, not a race. */
 export interface DeployFakeStall {
   readonly method: string;
   readonly path: string;
@@ -564,14 +476,10 @@ export interface DeployFakeStall {
 
 const StallSchema = v.object({ method: v.string(), path: v.string() });
 
-/** An armed stall and its two signals: `reached` settles when the matched call
- *  has done its work and is being held, and `answer` is what the row calls to
- *  let that call return. Deferreds rather than events, so a row that asks after
- *  the call arrived is answered instead of waiting for a second one. */
+/** Deferreds, not events, so a row asking after the call arrived is answered instead of waiting for a second one. */
 interface ArmedStall {
   readonly match: DeployFakeStall;
-  /** Whether the matched call has already been taken: the hold is one call,
-   *  and the arming outlives it so the row can still ask and release. */
+  /** The hold is one call; the arming outlives it so the row can still ask and release. */
   taken: boolean;
   readonly reached: Promise<void>;
   readonly enter: () => void;
@@ -595,8 +503,7 @@ function armStall(match: DeployFakeStall): ArmedStall {
 
 const ExpireSchema = v.object({ expiresIn: v.number() });
 
-/** The control surface, named once: anything else is a caller's typo and this
- *  plane refuses it rather than answering a state nobody asked to change. */
+/** Anything else is a caller's typo and is refused. */
 const CONTROL_PATHS: readonly string[] = [
   '/reset', '/refuse', '/serve', '/publish', '/state', '/stall', '/stall/reached',
   '/stall/release', '/weigh', '/expire',
@@ -610,7 +517,6 @@ function refusal(status: number, code: number, message: string): Response {
   return Response.json({ success: false, errors: [{ code, message }], result: null }, { status });
 }
 
-/** The bearer a call presented, or ''. */
 function bearerOf(request: Request): string {
   const authorization = request.headers.get('authorization') ?? '';
 
@@ -618,14 +524,8 @@ function bearerOf(request: Request): string {
 }
 
 /**
- * The armed hold, entered AFTER the call it matched has already done its work.
- *
- * The window a deployment cannot avoid: the account was written to and the
- * object has not learned it yet. The row that armed the hold is told when this
- * call reached it (`/stall/reached`), aborts the object, and then releases it;
- * what must happen next is that the redelivered alarm looks before it creates
- * rather than creating a second one. A hold bounded by a duration instead would
- * end on whichever of the two the machine got to first.
+ * Entered after the matched call has done its work: the row aborts the object, then releases, and the redelivered alarm
+ * must look before it creates. A duration-bounded hold would race the machine.
  */
 async function stalled(method: string, path: string, answer: Response): Promise<Response> {
   const armed = held.stallOnce;
@@ -640,9 +540,7 @@ async function stalled(method: string, path: string, answer: Response): Promise<
   return answer;
 }
 
-/** The API's answer for one call, and the record of what it created. `creates`
- *  is what proves a resumed run creates nothing twice: it is appended to only
- *  by a POST that really made something. */
+/** `creates` is appended only by a POST that really made something: proof a resumed run creates nothing twice. */
 async function api(url: URL, request: Request): Promise<Response> {
   const path = `${url.pathname.replace('/client/v4', '')}${url.search}`;
   const armed = held.refuseOnce;
@@ -653,8 +551,7 @@ async function api(url: URL, request: Request): Promise<Response> {
     return refusal(armed.status, armed.code, armed.message);
   }
 
-  // An access token this server has expired, answered the way Cloudflare
-  // answers one: the run either renews it or fails every step from here.
+  // Expired token answered as Cloudflare does: the run renews it or every later step fails.
   if (held.shortGrant !== null && bearerOf(request) === DEPLOY_FAKE_ACCESS_TOKEN) {
     held.expiredCalls += 1;
 
@@ -733,8 +630,6 @@ async function api(url: URL, request: Request): Promise<Response> {
   if (path.endsWith('/subdomain')) return envelope({ enabled: true });
 
   if (path.endsWith('/deployments')) {
-    // What the pointer now serves. A row asserting "the deployment moved" reads
-    // this, and `/api/health` below answers the release it names.
     const versions = v.parse(
       v.object({ versions: v.array(v.object({ version_id: v.string() })) }),
       body,
@@ -758,11 +653,7 @@ async function api(url: URL, request: Request): Promise<Response> {
   }
 
   if (path.endsWith('/assets-upload-session')) {
-    // One bucket holding every asset hash, which is Cloudflare's own advice
-    // shape ("how to optimally batch upload your files"). The installer is
-    // free to send it in several requests, and this plane answers the
-    // completion token the way the reference describes: once every file in
-    // the manifest has arrived, not once a bucket has.
+    // One bucket (Cloudflare's advised shape); completion is answered once every manifest file has arrived, however batched.
     const wanted = files()
       .filter(([name]) => name.startsWith('client/'))
       .map(([, content]) => sha256(content).slice(0, 32));
@@ -776,9 +667,7 @@ async function api(url: URL, request: Request): Promise<Response> {
   throw new Error(`the deploy fake has no answer for ${request.method} ${path}`);
 }
 
-/** The multipart legs: the asset batch and the version upload. The version
- *  upload is counted, because "the run uploaded twice" is the failure a
- *  resumed run must not have. */
+/** Version uploads are counted: "the run uploaded twice" is the failure a resumed run must not have. */
 async function multipart(url: URL, request: Request): Promise<Response> {
   const path = url.pathname.replace('/client/v4', '');
   const armed = held.refuseOnce;
@@ -789,8 +678,6 @@ async function multipart(url: URL, request: Request): Promise<Response> {
     return refusal(armed.status, armed.code, armed.message);
   }
 
-  // The body this object built and sent, measured: base64 of every asset in
-  // the batch, in one multipart envelope. What the footprint row is about.
   const raw = await request.arrayBuffer();
   const sent = raw.byteLength;
 
@@ -823,12 +710,8 @@ async function multipart(url: URL, request: Request): Promise<Response> {
 }
 
 /**
- * The authorization server's token endpoint, for both grants.
- *
- * The refresh grant is what a self-update spends: it presents no verifier
- * (there is no person at a browser) and it must present the pair's own refresh
- * token. The pair it answers with is ROTATED, so a deployment that re-bound the
- * token it already had rather than the new one is a failure here.
+ * Token endpoint for both grants. The refresh grant (a self-update) presents no verifier and gets a rotated pair,
+ * so a deployment that re-binds its old token fails here.
  */
 async function token(request: Request): Promise<Response> {
   const form = new URLSearchParams(await request.text());
@@ -843,10 +726,7 @@ async function token(request: Request): Promise<Response> {
   }
 
   if (grant === 'refresh_token') {
-    // The seed pair's token, or one this server already rotated to: a
-    // deployment that spent a grant and failed mid-update presents the rotated
-    // one on its next attempt, and a server that refused it would make the
-    // retry path untestable rather than safe.
+    // Seed or already-rotated token: a retry after a failed mid-update presents the rotated one.
     const spendable = [DEPLOY_FAKE_REFRESH_TOKEN, DEPLOY_FAKE_ROTATED_REFRESH];
 
     if (!spendable.includes(form.get('refresh_token') ?? '')) {
@@ -856,8 +736,7 @@ async function token(request: Request): Promise<Response> {
     held.refreshes += 1;
 
     return Response.json({
-      // A DIFFERENT access token, so a call that still carries the expired one
-      // is visible here as a call this server refuses.
+      // A different access token, so calls still carrying the expired one are visible.
       access_token: DEPLOY_FAKE_REFRESHED_ACCESS_TOKEN,
       refresh_token: DEPLOY_FAKE_ROTATED_REFRESH,
       expires_in: 3600,
@@ -865,8 +744,7 @@ async function token(request: Request): Promise<Response> {
     });
   }
 
-  // PKCE, checked rather than assumed: a public client with no verifier is the
-  // shape this whole leg exists to refuse.
+  // PKCE checked, not assumed: a public client with no verifier is what this leg refuses.
   if ((form.get('code_verifier') ?? '').length < 43) {
     return Response.json({ error: 'invalid_grant', error_description: 'the code_verifier is missing or too short' }, { status: 400 });
   }
@@ -878,9 +756,7 @@ async function token(request: Request): Promise<Response> {
   return Response.json({
     access_token: DEPLOY_FAKE_ACCESS_TOKEN,
     refresh_token: DEPLOY_FAKE_REFRESH_TOKEN,
-    // The lifetime a row asked for, when one did: a grant that is already
-    // inside the run's renewal floor is how an expired authorization is
-    // reached without waiting an hour for one.
+    // A lifetime already inside the renewal floor reaches expiry without waiting an hour.
     expires_in: held.shortGrant ?? 3600,
     token_type: 'bearer',
   });
@@ -897,10 +773,7 @@ async function control(url: URL, request: Request): Promise<Response> {
 
   if (url.pathname === '/stall') held.stallOnce = armStall(v.parse(StallSchema, await request.json()));
 
-  // The two halves of the hold, both answered on the hold itself rather than on
-  // a clock: `reached` settles once the matched call has written and is being
-  // held, and `release` lets it answer. An unarmed plane answers both at once —
-  // a row that did not arm one is not waiting for one.
+  // Both halves are answered on the hold, not a clock; an unarmed plane answers both at once.
   if (url.pathname === '/stall/reached') await held.stallOnce?.reached;
 
   if (url.pathname === '/stall/release') held.stallOnce?.answer();
@@ -913,24 +786,12 @@ async function control(url: URL, request: Request): Promise<Response> {
     throw new Error(`the deploy fake has no control surface at ${url.pathname}`);
   }
 
-  // Every control call answers the same shape — what this plane has created so
-  // far — so the caller parses one schema and a reset is observable in its own
-  // answer.
   return Response.json(snapshot());
 }
 
 /**
- * The deployment's own static assets, as `env.ASSETS` on the probe Worker.
- *
- * One file is served: the build stamp `readBuildStamp` reads, which is how a
- * deployment says what version it is running. A stamp nothing set is absent,
- * which is the state of a Worker whose asset bundle is incomplete.
- *
- * The path is spelled here rather than imported from `CLI_VERSION_PATH`
- * (`packages/core/src/http/deployed-assets.ts`), because this module is loaded
- * by `vitest.config.ts` under raw Node, where core's extensionless imports do
- * not resolve. A rename there is not silent: any other path throws below, so
- * the rows read "the deploy probe's assets hold no …" instead of passing.
+ * `env.ASSETS`: serves only the build stamp `readBuildStamp` reads. Path spelled out rather than imported from `CLI_VERSION_PATH`
+ * because this loads under raw Node, where core's extensionless imports fail; any other path throws.
  */
 const STAMP_PATH = '/downloads/kinu-version.json';
 
@@ -984,9 +845,7 @@ export async function deployOutbound(request: Request): Promise<Response> {
     }
   }
 
-  // The deployment's own smoke check, answered as the new Worker would: the
-  // release the LAST deployment pointer named, which is what makes an
-  // unchecked pointer move visible to a smoke step that compares versions.
+  // The release the last pointer named, so an unchecked pointer move is visible to a version-comparing smoke step.
   if (url.pathname === '/api/health' && url.host.endsWith('.workers.dev')) {
     const armed = held.refuseOnce;
 

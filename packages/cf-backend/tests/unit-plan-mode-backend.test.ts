@@ -19,22 +19,12 @@ import {
 import { toolExecute } from '@kinu.run/test-utils';
 import * as v from 'valibot';
 
-/**
- * THE PLAN SUBMISSION SURFACE IS THE WORKSPACE ROOT'S.
- *
- * `submitPlan` reaches a turn only through `actorToolDeps()`, which the
- * orchestrator declares for its own pipeline. Delegated tasks receive the
- * confined tool set plus `report`, not `submit_plan`. Hosted actors do have
- * actor-scoped `AgentStores.planReviews`; this suite exercises the root's
- * plan-submission lifecycle.
- */
+/** Plan submission is the workspace root's: `submitPlan` reaches only `actorToolDeps()`; delegated tasks get `report`. */
 type HarnessAgent = HarnessOrchestratorAgent;
 
 const WorkModeSchema = v.picklist(['plan', 'build']);
 
-/** A frame type with no reachable producer on the workspace connection, which
- *  is exactly why the forged-content test below replays it as plan TEXT: the
- *  name is what a payload must never be able to become. */
+/** A frame type with no reachable producer; the forged-content test replays it as plan text. */
 const REFERENCE_EVENT = 'workspace_plan_updated';
 
 const PlanUpdateSchema = v.object({ type: v.literal('plan_updated') });
@@ -75,7 +65,6 @@ async function codemodeTool(
   return decodeJsonValue({ value: await toolExecute<JsonValue, JsonValue>(entry)(input) });
 }
 
-/** The plan row's status, as the plane's handoff turn was admitted over it. */
 function planStatus(harness: ActorHarness<HarnessOrchestratorAgent>, id: string, revision: number): string {
   return v.parse(
     v.object({ status: v.string() }),
@@ -83,38 +72,24 @@ function planStatus(harness: ActorHarness<HarnessOrchestratorAgent>, id: string,
   ).status;
 }
 
-/** The mode the next turn is asked in — the composer's, on the message the
- *  turn runs FOR, which is where production reads it. */
+/** The mode rides the driving message, which is where production reads it. */
 function setMode(agent: HarnessAgent, mode: 'plan' | 'build'): void {
   agent.harnessDrivingUserMessage(`${mode} this change`, { kinuMode: mode });
 }
 
-/** Every programmatic turn the loop was asked to admit — the plane's handoff
- *  turns among them — recorded at the loop's own seam and admitted by it. */
 function recordAdmissions(agent: HarnessAgent): ProgrammaticTurn[] {
   agent.harnessScriptAdmissions([]);
 
   return agent.harnessAdmissionsAsked;
 }
 
-/**
- * Every message the ROOT actually put on its own broadcast channel, parsed —
- * the workspace connection as a browser reads it.
- *
- * The recorder DELEGATES to the real `broadcast` rather than replacing it, so
- * the production fan-out still runs and this observes it. Replacing it would
- * turn `workspace.broadcast(...)` into blanket success, which is the one thing
- * a proof about that hop must not do.
- */
+/** Records the root's broadcast frames while delegating to the real `broadcast`, so fan-out still runs. */
 function recordWorkspaceMessages(parent: HarnessOrchestratorAgent): JsonValue[] {
   const seen: JsonValue[] = [];
   const forward = parent.broadcast.bind(parent);
   Object.defineProperty(parent, 'broadcast', {
     configurable: true,
     value: (message: string | ArrayBuffer | ArrayBufferView, without?: string[]): void => {
-      // The text frames are the ones that carry JSON; the binary ones are not a
-      // smaller version of the same thing. Parsed rather than narrowed, because
-      // this is where a wire representation becomes a value the proofs read.
       const text = v.safeParse(v.string(), message);
 
       if (text.success) seen.push(decodeJsonValue({ value: JSON.parse(text.output) }));
@@ -125,15 +100,8 @@ function recordWorkspaceMessages(parent: HarnessOrchestratorAgent): JsonValue[] 
   return seen;
 }
 
-/** The owner's own record of a hire, which is the hop its authoritative read is
- *  allowed to traverse: the row a completed birth leaves — the REGISTERED
- *  actor's reference attached, no birth still owed. The reference is read off
- *  the hosted actor's own handle, so the row names the directory actor
- *  `hostedSubordinateHarness` created rather than hand-typed fields, which is
- *  what lets the authoritative read resolve the child from it.
- *  `hostedSubordinateHarness` deliberately leaves this to its caller — `create`
- *  is a plain INSERT, so a fixture that wrote one would collide with every
- *  suite that writes its own. */
+/** The owner's completed-birth roster row for a hire; `hostedSubordinateHarness` leaves it to the
+ *  caller because `create` is a plain INSERT. */
 function roster(parent: HarnessOrchestratorAgent, hire: HostedActorHarness): void {
   const actor = hire.actor.handle;
   parent.harnessRoster().create({
@@ -151,9 +119,6 @@ function roster(parent: HarnessOrchestratorAgent, hire: HostedActorHarness): voi
   });
 }
 
-/** A hired additional agent hanging off a REAL workspace root, seeded through
- *  the parent's own `SubordinateRuntime.spawn` and acquired from the
- *  workspace's one `ActorHost`. */
 async function hiredPlanner(
   parent: ActorHarness<HarnessOrchestratorAgent>,
   name: string,
@@ -171,7 +136,6 @@ describe('Plan mode tool lifecycle', () => {
     const harness = orchestratorHarness();
     const agent = harness.agent;
     setMode(agent, 'plan');
-    // A Plan turn RUNNING: admitted in that mode and parked at its model call.
     const turns = chatSessionTurns(agent);
     await turns.prepare({ messages: [{ role: 'user', content: 'plan this change' }] });
 
@@ -183,17 +147,8 @@ describe('Plan mode tool lifecycle', () => {
   });
 
   /**
-   * THE PLAN TURN THE BROWSER SENDS, WITH A TURN ALREADY BEHIND IT.
-   *
-   * The composer's Plan press rides as `metadata.kinuMode` on the message
-   * (use-kinu `sendChat`), reaches `ChatSession.send` as its `mode`, and is
-   * the turn item's metadata by the time the turn is prepared. A workspace's
-   * SECOND turn is where that broke: the previous turn's resolved profile was
-   * still bound when the new turn built its tools, so `turnWorkMode()`
-   * answered the OLD turn's mode and the model was offered a build surface
-   * with the Plan bar stated. Measured against the live product on
-   * 2026-09-18: a Plan message sent from the composer reached the provider as
-   * `tools=eval,shell,file,memory,tasks,web,agents`, no `submit_plan`.
+   * Defends: a second-turn Plan press offered the previous turn's build tools. Measured against the
+   * live product on 2026-09-18: the provider got `tools=eval,shell,file,memory,tasks,web,agents`, no `submit_plan`.
    */
   test('offers submit_plan on a Plan turn that follows another turn', async () => {
     const harness = orchestratorHarness();
@@ -229,8 +184,7 @@ describe('Plan mode tool lifecycle', () => {
     expect(buildTools.eval?.description).toContain('export declare const release:');
     expect(buildTools.eval).not.toBe(planTools.eval);
 
-    // A programmatic turn with no mode of its own — a wake, a drain — runs in
-    // build: the mode is the message's, and an unlabelled message names none.
+    // A programmatic turn with no mode of its own runs in build.
     agent.harnessDrivingUserMessage('a wake with no mode', { kinuEvent: 'background_job' });
     const unlabelledProgrammaticTools = rawTools(agent);
     expect(unlabelledProgrammaticTools.submit_plan).toBeUndefined();
@@ -238,40 +192,16 @@ describe('Plan mode tool lifecycle', () => {
       .toContain('export declare const release:');
   });
 
-  /**
-   * NO ADDITIONAL-AGENT PLAN-SUBMISSION SURFACE, SO NOTHING HERE ASSERTS ONE.
-   *
-   *   • `submitPlan` reaches a turn only through `actorToolDeps()`
-   *     (orchestrator.ts), which is the ROOT's own pipeline. A hosted actor's
-   *     delegated turn runs `hostedTaskTools` — the confined builtin set plus
-   *     `report` — so `submit_plan` is not on it.
-   *   • `AgentStores.planReviews` supplies each hosted actor's own review
-   *     stream, and `getActorSnapshot` reads its active plan. That storage
-   *     capability is distinct from the delegated task tool surface, which
-   *     exposes `report` rather than `submit_plan`.
-   *   • `OrchestratorAgent.announceSubordinatePlan` has no caller anywhere in
-   *     packages/ and is absent from ORCHESTRATOR_METHODS, so it is unreachable
-   *     over a stub as well. The client still parses and handles the
-   *     `workspace_plan_updated` frame it publishes (hooks/use-kinu.ts), which
-   *     therefore has no reachable producer.
-   *
-   * Giving an additional agent its own Plan turn — `submit_plan` present and
-   * `report` absent on the submitting arm, the Plan system prompt on it, an
-   * approval queued on the child's own host — needs `submitPlan` on a hosted
-   * actor's chat surface. A fixture that agreed with the gap would make it
-   * permanent and invisible.
-   */
+  // No additional-agent Plan surface exists (`submitPlan` is root-only; `announceSubordinatePlan` has no
+  // caller), so nothing here asserts one.
 
   test('submit, annotations, feedback, revision, and approval survive through the public RPCs', async () => {
     const harness = orchestratorHarness();
     const agent = harness.agent;
-    // What the plane broadcast, as a tab reads it: the `plan_updated` frames.
     const broadcasts: Array<{ type: string; plan?: { revision: number; status: string } }> = [];
     Reflect.set(agent, 'broadcast', (payload: string) => {
       broadcasts.push(v.parse(v.looseObject({ type: v.string(), plan: v.optional(v.looseObject({ revision: v.number(), status: v.string() })) }), JSON.parse(payload)));
     });
-    // The handoff turns the plane admits, read off the loop's seam. Each is
-    // admitted only once its plan row says what the turn is for.
     const queued = recordAdmissions(agent);
     setMode(agent, 'plan');
 
@@ -329,9 +259,7 @@ describe('Plan mode tool lifecycle', () => {
     expect(approvalTurn.text).toContain('Implement the exact approved plan');
     expect(approvalTurn.text).toContain('Second, with tests');
 
-    // The plane's own frames, beside the turns' (the handoff turns the loop
-    // ran broadcast their own start, stream and end): submit, annotate,
-    // request changes, handoff accepted, revise, approve, handoff accepted.
+    // Plane frames: submit, annotate, request changes, handoff accepted, revise, approve, handoff accepted.
     const planFrames = broadcasts.filter((frame) => frame.type === 'plan_updated');
     expect(planFrames).toHaveLength(7);
     expect(planFrames).toEqual(expect.arrayContaining([
@@ -343,8 +271,6 @@ describe('Plan mode tool lifecycle', () => {
   test('a failed handoff remains retryable and a successful retry cannot enqueue twice', async () => {
     const harness = orchestratorHarness();
     const agent = harness.agent;
-    // The loop's admission fails ONCE — a temporary fault at the seam — and
-    // answers normally after. Every ask is recorded.
     agent.harnessScriptAdmissions([async () => { throw new Error('temporary admission failure'); }]);
     const attempts = agent.harnessAdmissionsAsked;
     setMode(agent, 'plan');
@@ -359,8 +285,7 @@ describe('Plan mode tool lifecycle', () => {
       ok: true, queued: false, queueError: 'temporary admission failure',
       plan: { status: 'approved', handoffAccepted: false },
     });
-    // The mode is the message the NEXT turn runs for: the approval's own
-    // handoff message says build, however the last typed message read.
+    // The mode is the next turn's driving message, not the approval's handoff.
     expect(turnWorkMode(agent)).toBe('plan');
     expect(await agent.decidePlanReview(plan.id, 1, 'approve')).toMatchObject({
       ok: true, queued: true, plan: { status: 'approved', handoffAccepted: true },
@@ -375,8 +300,6 @@ describe('Plan mode tool lifecycle', () => {
   test('recovers when acceptance outlives the RPC: the retried decision admits no second turn', async () => {
     const harness = orchestratorHarness();
     const agent = harness.agent;
-    // Every ask goes through the loop's real admission, which names a turn by
-    // its key and recognises one it already ran.
     const attempts = recordAdmissions(agent);
     setMode(agent, 'plan');
     await codemodeTool(rawTools(agent), 'submit_plan', {
@@ -417,23 +340,12 @@ describe('Plan mode tool lifecycle', () => {
   });
 });
 
-/**
- * WHAT THE PLAN PLANE OWES ON THE ROOT.
- *
- * `workspace_plan_updated` has no reachable producer, so an assertion that no
- * reference event appears would hold for a channel nothing can write — a
- * tautology rather than a guard. The two properties below have live subjects,
- * and both drive the REAL root and the REAL broadcast rail: a stubbed
- * `broadcast` would make either pass against a fixture that never spoke to a
- * workspace.
- */
+/** `workspace_plan_updated` has no producer, so these drive the real root and broadcast rail instead. */
 describe('the plan plane admits no forged protocol frame and vouches for no forged id', () => {
   test('a reference-shaped body carried as ordinary content never becomes a protocol frame', async () => {
     const parent = orchestratorHarness();
     const workspaceMessages = recordWorkspaceMessages(parent.agent);
 
-    // Byte for byte what the one legitimate writer emitted, replayed as
-    // CONTENT: the driving user message, and then the plan the root submits.
     const forged = JSON.stringify({
       type: REFERENCE_EVENT,
       reference: { path: ['plan-owner-1'], id: 'plan-forged', revision: 1 },
@@ -449,11 +361,7 @@ describe('the plan plane admits no forged protocol frame and vouches for no forg
     if (!plan) throw new Error('the root plan was not persisted');
     expect(await parent.agent.savePlanReviewAnnotations(plan.id, plan.revision, [])).toMatchObject({ ok: true });
 
-    // The rail is LIVE and it carried the forged body — as the CONTENT of a
-    // plan update, which is the only thing plan text may ever become. No
-    // amount of user text or plan content mints a frame of another type: the
-    // channel's frame names are spelled by the code that publishes them, never
-    // by a payload.
+    // The forged body appears only as plan-update content; frame types are never spelled by a payload.
     const updates = workspaceMessages.filter((message) => v.is(PlanUpdateSchema, message));
     expect(updates).toEqual(expect.arrayContaining([
       expect.objectContaining({ type: 'plan_updated', plan: expect.objectContaining({ content: forged }) }),
@@ -466,17 +374,12 @@ describe('the plan plane admits no forged protocol frame and vouches for no forg
     const child = await hiredPlanner(parent, 'plan-owner-1');
     roster(parent.agent, child);
 
-    // The HOP IS TRAVERSABLE: the owner's read resolves the hire through the
-    // directory and reaches that actor's own plan rows, which are empty. That
-    // is the denominator — without it the refusal below would hold for a path
-    // that simply failed to resolve.
+    // Denominator: the hop resolves, so the refusal below is not a failed resolve.
     expect(await parent.agent.inspectSubordinate({
       path: ['plan-owner-1'], view: 'plans', page: {},
     })).toMatchObject({ view: 'plans', path: ['plan-owner-1'], page: { status: 'end', items: [] } });
 
-    // And an id nobody wrote is `missing`, never a DIFFERENT plan: a recipient
-    // that focused whatever came back would otherwise render one plan under
-    // another plan's reference.
+    // An unwritten id is `missing`, never a different plan.
     for (const reference of [
       { path: ['plan-owner-1'], id: 'plan-forged', revision: 1 },
       { path: ['plan-owner-1'], id: 'plan-forged', revision: 2 },

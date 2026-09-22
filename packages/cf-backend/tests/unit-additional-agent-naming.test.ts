@@ -1,14 +1,6 @@
 /**
- * How an agent the owner ADDED gets its name, through hosted actors.
- *
- * The owner adds an agent to a workspace and says nothing about it: no name, no
- * mission, no role. It is hired with a blank display name, and a rename sets
- * the name the roster shows and the config keeps — on both sides, once.
- *
- * The first ADMITTED message still titles it: the hosted actor holds no chat
- * session, so the turn-time `auto_title` terminal effect never exists — the
- * admission itself applies the shared title plan instead, which is the part
- * these tests pin along with the rename path.
+ * Added agents are hired with a blank display name. Hosted actors have no chat session (no `auto_title`
+ * effect), so admission of the first message applies the shared title plan.
  */
 
 import { describe, expect, test } from 'bun:test';
@@ -17,11 +9,6 @@ import { hostedSubordinateHarness, orchestratorHarness } from './helpers/actor-h
 
 const WORKSPACE_MISSION = 'Keep the release train moving.';
 
-/**
- * A parent workspace with one agent added to it, through the production hire.
- * The roster row is the one every reader shows; the config is what the actor
- * itself answers.
- */
 async function addedAgent(seed: {
   name?: string;
   displayName: string;
@@ -40,9 +27,7 @@ async function addedAgent(seed: {
     roleId: seed.roleId ?? 'task',
   });
 
-  // The roster LINK row: hiring binds stores and runtime, but the roster is
-  // the reader-facing listing — without the link the child exists and nobody
-  // lists it, which is exactly what the rename path below refuses.
+  // Without the roster link the child exists but nobody lists it, and rename refuses it.
   parent.agent.harnessRoster().create({
     name,
     actorReference: { ...child.actor.reference },
@@ -74,8 +59,7 @@ describe('an agent the owner added without naming it', () => {
     });
 
     expect(child.actor.stores.config.getDisplayName()).toBe(codenameFor(name));
-    // The roster row is the one every reader shows, so a title only the actor
-    // knows about is a title nobody can see.
+    // The roster row is what every reader shows.
     expect(await displayedName(parent, name)).toBe(codenameFor(name));
   });
 
@@ -157,8 +141,7 @@ describe('the first message to an agent the owner added without naming it', () =
 });
 
 describe('an agent hired with a name', () => {
-  // The hire states the name, and it stands as hired: there is no titler to
-  // replace a choice its parent made with one nobody asked for.
+  // A name stated at hire stands; nothing retitles it.
   test('keeps the name it was hired with', async () => {
     const { child, parent, name } = await addedAgent({
       name: 'auditor-a1b2c3', displayName: 'Auditor', nameOrigin: 'auto',

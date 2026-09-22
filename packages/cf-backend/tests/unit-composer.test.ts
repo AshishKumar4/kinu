@@ -1,16 +1,6 @@
 /**
- * The composer's status row as the reader sees it.
- *
- * The workspace load failure arrives as a structured notice (blocking vs
- * partial), and this suite proves what the composer does with each half: a
- * partial failure renders a warning that names the resource, keeps its retry,
- * and — the property K-02 exists for — leaves the textarea and Send enabled.
- * A blocking failure renders an alert. The raw reason is available inside the
- * "Technical details" disclosure, never only in a hover title.
- *
- * Rendered through `renderToStaticMarkup`: the real `Notice` path the page
- * mounts, with no effects needed — tone, role, title, disclosure, and the
- * enabled controls are all derived from props.
+ * The composer's status row: a partial load failure warns, keeps its retry and leaves the textarea and Send
+ * enabled (K-02); a blocking one renders an alert. The raw reason sits in "Technical details", not only a hover title.
  */
 import './helpers/ui-module-globals';
 import { describe, expect, test } from 'bun:test';
@@ -127,9 +117,7 @@ describe('the mode control', () => {
   });
 });
 
-// Overflow is measured by a client layout effect (scrollHeight beats a char
-// count in a resizable column), so SSR asserts the initial markup: collapsed
-// text plus the button for a long notice, no button for a short one.
+// Overflow is measured by a client layout effect, so SSR asserts only the initial markup.
 const LONG_NOTICE_TEXT = 'The provider reset the stream before the turn finished, so the panel below shows the last known snapshot. '
   + 'The provider reset the stream before the turn finished, so the panel below shows the last known snapshot. ';
 

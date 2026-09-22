@@ -1,6 +1,4 @@
-// The MCTS tree view's read model — the decisions that carry the meaning of
-// the picture (which line the search paid for, how big a node is, what a label
-// says, which branches are foldable) without a DOM to render them into.
+// The MCTS tree view's read model: principal line, node size, labels and folding, without a DOM.
 import { describe, test, expect } from 'bun:test';
 import type { ForkNode } from '@kinu.run/core';
 import type { HeadRunView } from '@kinu.run/core';
@@ -156,7 +154,7 @@ describe('settled winner', () => {
 
 describe('size scales', () => {
   test('radius grows with visits and stays inside its bracket', () => {
-    // Hand-derived from the area scale. A broken formula fails these literals.
+    // Hand-derived from the area scale.
     expect(nodeRadius(0, 20)).toBe(3.5);
     expect(nodeRadius(20, 20)).toBe(NODE_R_MAX);
     expect(nodeRadius(1, 20)).toBeCloseTo(5.17705, 5);
@@ -164,7 +162,6 @@ describe('size scales', () => {
   });
 
   test('area, not diameter, tracks visits', () => {
-    // Four times the rollouts is twice the radius above the floor.
     const quarter = nodeRadius(5, 20) - nodeRadius(0, 20);
     const full = nodeRadius(20, 20) - nodeRadius(0, 20);
     expect(full / quarter).toBeCloseTo(2, 5);
@@ -205,11 +202,8 @@ describe('folding', () => {
     expect(losingBranchIds(root).size).toBe(0);
   });
 
-  // convergence.ts:107-111 prunes every still-open node of a settled search
-  // except the winner, and the root matches that WHERE clause — so a converged
-  // tree's root carries status 'pruned', and an abandoned one's carries
-  // 'failed'. Folding "the topmost abandoned node" from the root down then
-  // selected the root itself and hid the entire search behind one dot.
+  // convergence.ts:107-111 prunes every open node of a settled search but the winner, root included,
+  // so a settled root is 'pruned' or 'failed' and must not fold the whole search.
   test('a settled root is not a losing branch — the split is not a branch of itself', () => {
     for (const status of ['pruned', 'failed'] as const) {
       const root = node({
@@ -253,9 +247,7 @@ describe('labels', () => {
     expect(cleanNodeLabel('   ', '(root)')).toBe('(root)');
   });
 
-  // Fixed-width faces stand in for the real one. The contract under test is
-  // that the clip is decided by the ROOM; measuring a proportional face here
-  // would make every expected string an assertion about Chrome's metrics.
+  // Fixed-width faces: the clip is decided by the room, not by Chrome's proportional metrics.
   const perChar = (text: string) => text.length * 10;
 
   const wide = (text: string): number => {
@@ -272,10 +264,7 @@ describe('labels', () => {
   });
 
   test('the ellipsis is inside the room, never beyond it', () => {
-    // 10 chars want 100px; 50px holds four glyphs, so three survive plus the
-    // ellipsis. A clip that spent the room on text and then appended would
-    // overflow by exactly one glyph — which is how a label lands on its
-    // neighbour's column.
+    // Appending the ellipsis after filling the room would overflow by one glyph into the next column.
     expect(clipToWidth('abcdefghij', 50, perChar)).toBe('abcd…');
     expect(clipToWidth('abcdefghij', 55, perChar)).toBe('abcd…');
     expect(clipToWidth('abcdefghij', 60, perChar)).toBe('abcde…');
@@ -288,17 +277,12 @@ describe('labels', () => {
   });
 
   test('room is spent on the widest prefix that fits, not on a character count', () => {
-    // `iiiiii` and `WWWWWW` are the same six characters and not the same label.
     expect(clipToWidth('WWWWWW', 45, wide)).toBe('WW…');
     expect(clipToWidth('iiiiii', 45, wide)).toBe('iiiiii');
   });
 });
 
-// ── viewNoteFor ─────────────────────────────────────────────────────────────
-// A canvas that crops or de-labels itself without a word is how a narrow
-// viewport reads as a broken picture (#206). The note names the two states
-// that silently lose information: below the label-legibility zoom, and wider
-// than the view. Legible AND fitting says nothing.
+// A canvas that crops or de-labels itself silently reads as broken (#206): note below legible zoom or wider than view.
 
 describe('viewNoteFor', () => {
 	const BAND = { x0: 0, x1: 946 };

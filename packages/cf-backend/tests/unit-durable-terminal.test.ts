@@ -1,20 +1,6 @@
 /**
- * What a settled turn causes, and what survives an interruption in the middle
- * of causing it.
- *
- * A durable turn ends once, and everything downstream hangs off that one
- * moment: the reply an answered event batch owes, the takes claim, the extension
- * turn-end, the between-turn evolution lanes. The sequence had no durable
- * marker, so an interruption left a prefix nobody could tell from a completed
- * turn — and the effect claims that would have made a replay safe were dropped
- * at the TOP of the sequence, before any of it ran.
- *
- * Every case here forces a prefix rather than asserting an end state. The defect
- * was an ordering one, so a test that let the whole sequence run would read the
- * same either way.
- *
- * What a resumed activation does with the leases and fibers an interruption left
- * behind is unit-durable-terminal-recovery.test.ts.
+ * Defends: the terminal sequence dropped its effect claims before running, so an interrupted
+ * prefix read as a completed turn. Cases force a prefix; recovery is unit-durable-terminal-recovery.test.ts.
  */
 import { describe, expect, test } from 'bun:test';
 import * as v from 'valibot';
@@ -32,21 +18,13 @@ import type { CompletedTurn } from '@kinu.run/core';
 import { openTurnRun, TERMINAL_EFFECT_RETRY_CEILING_MS } from '@kinu.run/core';
 import { present } from '@kinu.run/test-utils';
 
-/** One settled assistant response, as Think reports it. */
-/** The one way this suite runs a turn: the turn seam over the harness root. */
 function turns(harness: ActorHarness<HarnessOrchestratorAgent>): TurnHarness {
   return chatSessionTurns(harness.agent);
 }
 
 const OVERFLOW_ERROR = 'prompt is too long: 210000 tokens > 200000 maximum';
 
-/**
- * How many reviews the window OWES — parked awaiting a follow-up or queued for a
- * host, since both are obligations somebody still has to discharge.
- *
- * The oracle for the review obligation: `turn_record` writes it in the same
- * insert as the turn, so a lost review counts 0 and a doubled one counts 2.
- */
+/** Owed reviews, written in the same insert as the turn: lost reads 0, doubled reads 2. */
 function owedReviews(harness: ActorHarness<HarnessOrchestratorAgent>): number {
   return v.parse(
     v.object({ n: v.number() }),
@@ -56,21 +34,12 @@ function owedReviews(harness: ActorHarness<HarnessOrchestratorAgent>): number {
   ).n;
 }
 
-/** How many alternate-take sets exist. The oracle for the branch settlement key:
- *  the write is append-only, so a replayed comparison shows up as a second row. */
+/** Take sets are append-only, so a replayed comparison is a second row. */
 function takeSets(harness: ActorHarness<HarnessOrchestratorAgent>): number {
   return rowCount(harness, 'alternate_takes');
 }
 
-/**
- * What each branch settlement told the workspace, oldest first.
- *
- * The oracle for a settlement that writes NO take set: a failed branch has no
- * answer to compare, so the takes table cannot tell a stated refusal from a
- * dropped one. `branchSettle` is the durable half of the same broadcast the chip
- * renders, so it survives the activation that wrote it — which the broadcast,
- * being a live socket write, does not.
- */
+/** Durable branch-settle log: the only record of a settlement that writes no take set. */
 function branchSettlements(harness: ActorHarness<HarnessOrchestratorAgent>): string[] {
   return v.parse(
     v.array(v.object({ detail: v.string() })),
@@ -80,8 +49,7 @@ function branchSettlements(harness: ActorHarness<HarnessOrchestratorAgent>): str
   ).map((row) => row.detail);
 }
 
-/** The branch effects this sequence still owes, by key. Empty means every branch
- *  row reached a disposition — pruned or recorded — rather than being carried. */
+/** Unsettled branch effect keys; empty means every branch row reached a disposition. */
 function owedBranchEffects(
   harness: ActorHarness<HarnessOrchestratorAgent>, turnId: string, messageId: string,
 ): string[] {
@@ -90,9 +58,6 @@ function owedBranchEffects(
     .map((row) => row.effect_key);
 }
 
-/** How many turns the evolution window holds. The duplicate oracle for the
- *  settle spine: its recording mints a fresh row id per append, so a spine that
- *  ran twice for one answer is two rows and nothing else could make it two. */
 function rowCount(harness: ActorHarness<HarnessOrchestratorAgent>, table: string): number {
   return v.parse(
     v.object({ n: v.number() }),
@@ -100,8 +65,6 @@ function rowCount(harness: ActorHarness<HarnessOrchestratorAgent>, table: string
   ).n;
 }
 
-/** The cadence markers one lane holds. The oracle for what the abandonment
- *  branch reads: entry and completion are one row each. */
 function tickMarkers(harness: ActorHarness<HarnessOrchestratorAgent>, scope: string): number {
   return v.parse(
     v.object({ n: v.number() }),
@@ -113,14 +76,7 @@ function windowedTurns(harness: ActorHarness<HarnessOrchestratorAgent>): number 
   return rowCount(harness, 'completed_turns');
 }
 
-/**
- * Drive one settled response and wait for its terminal sequence to finish.
- *
- * `harnessTerminalReported` is the sequence's OWN join, so this waits on the
- * outcome rather than on a guessed number of ticks: the detached effects each
- * await real work (a dynamic import, a between-turn model call), and a fixed
- * wait would assert against whatever had happened by then.
- */
+/** Settle one response and await the sequence's own join, not a guessed tick count. */
 async function settleResponse(
   harness: ActorHarness<HarnessOrchestratorAgent>, messageId: string, text = 'the answer',
 ): Promise<void> {
@@ -140,21 +96,11 @@ describe('a terminal transition is claimed before its effects and released after
       { turn_id: 'u-live', call_id: 'terminal:response:a-live', result_json: '"settled"' },
     ]);
     expect(harness.agent.harnessBeginTerminalTransition('u-live', 'a-live')).toBe('done');
-    // Completed rows are pruned once the outer transition closes: their whole
-    // purpose was to gate it, and the settled outer row is what a duplicate
-    // callback reads.
+    // Completed rows are pruned once the outer transition closes; the outer row gates duplicates.
     expect(harness.agent.harnessTerminalEffects('u-live', 'a-live')).toEqual([]);
   });
 
-  /**
-   * The defect this identity exists for.
-   *
-   * Think fires this hook once per RESPONSE and an auto-continuation keeps the
-   * turn's user-message id. Keyed on the turn alone, the first continuation's
-   * sequence settled the claim and the SECOND — the one carrying the actual
-   * answer — read `done` and skipped every effect it owed. The oracle is the
-   * evolution window: two answers, two recorded turns.
-   */
+  /** Auto-continuations keep the user-message id, so the claim is keyed per response, not per turn. */
   test('each response of one durable turn settles its own sequence', async () => {
     const harness = orchestratorHarness();
     turns(harness).open('u-multi');
@@ -168,14 +114,7 @@ describe('a terminal transition is claimed before its effects and released after
     expect(windowedTurns(harness)).toBe(2);
   });
 
-  /**
-   * The forced prefix: the claim is written, and then nothing else happens.
-   *
-   * This is what an isolate reset between the claim and the first effect leaves
-   * behind, and the assertion is that it is LEGIBLE — a row with no result. The
-   * old code had no row at all here, which is why an interrupted sequence and a
-   * completed one were the same observation.
-   */
+  /** An isolate reset between claim and first effect must leave a row with no result. */
   test('a claimed sequence that never finishes stays legible as unfinished', () => {
     const harness = orchestratorHarness();
 
@@ -190,19 +129,13 @@ describe('a terminal transition is claimed before its effects and released after
     const harness = orchestratorHarness();
 
     expect(harness.agent.harnessBeginTerminalTransition('u-again')).toBe('first');
-    // A second attempt against a claim with no recorded result: resume, not
-    // repeat, and not a silent first-run.
     expect(harness.agent.harnessBeginTerminalTransition('u-again')).toBe('resumed');
 
     harness.agent.harnessEndTerminalTransition('u-again');
-    // The settled disposition is durable, so duplicate terminal callbacks are
-    // no-ops rather than a new first attempt.
     expect(harness.agent.harnessBeginTerminalTransition('u-again')).toBe('done');
   });
 
-  /** The negative control for the claim itself. A turn with no durable identity
-   *  must not be given one — otherwise every unclaimable turn would share a key
-   *  and the second of them would read as already done. */
+  /** Invented identities would collide: every unclaimable turn would share one key. */
   test('a turn with no durable identity is unclaimed rather than invented', () => {
     const harness = orchestratorHarness();
 
@@ -212,12 +145,7 @@ describe('a terminal transition is claimed before its effects and released after
 });
 
 describe('an owed follow-up turn is a durable terminal effect', () => {
-  /**
-   * Queued is RAM. Here the pump refuses the retry at dequeue — another
-   * activation holds the driver lease — so a row that completed on `queued`
-   * would leave the retry lost with nothing saying it was owed. The row waits
-   * for the retry turn's own durable row instead, and a replay re-queues it.
-   */
+  /** Queued is RAM: the row stays owed until the retry turn's own row is on disk. */
   test('an overflow retry stays owed until its turn is on disk, across a refused dequeue', async () => {
     const harness = orchestratorHarness();
 
@@ -253,30 +181,11 @@ describe('an owed follow-up turn is a durable terminal effect', () => {
 });
 
 /**
- * The exactly-once claim, tested where it is actually made: at a named instant
- * inside the sequence.
- *
- * Every case here CUTS the sequence — `harnessArmTerminalFault` throws at a
- * chosen effect, before or after its side effect — and then re-drives recovery
- * on a FRESH activation over the surviving storage. An end-state test cannot
- * distinguish the two failures this design exists to prevent: an effect repeated
- * because nobody recorded that it happened, and an effect dropped because the
- * marker said the turn was done. Both are only visible at the cut.
- *
- * `before` and `after` are the two instants that matter. `before` is "nothing
- * happened" — the effect is owed and must be replayed. `after` is "it happened
- * and nothing recorded it" — the indeterminate case, where a keyed effect is
- * replayed and an announcing one is refused rather than announced twice.
+ * Each case cuts the sequence at an effect (`before`: owed, replay; `after`: indeterminate, keyed
+ * effects replay) and recovers on a fresh activation; only the cut shows a repeat or a drop.
  */
 describe('an interrupted terminal sequence replays its suffix and repeats nothing', () => {
-  /**
-   * The reason the whole sequence is claimed before any of it runs.
-   *
-   * Cut at the FIRST effect and every later effect must already have a row with
-   * its input written down. Claiming each effect just before its own side effect
-   * would leave the ones after the cut with no row at all — indistinguishable
-   * from effects that were never owed, which is a suffix nobody can replay.
-   */
+  /** The whole sequence is claimed up front, so effects after a first-effect cut still have rows. */
   test('a cut at the first effect still leaves every later effect owed', async () => {
     const harness = orchestratorHarness();
     turns(harness).open('u-head');
@@ -287,16 +196,14 @@ describe('an interrupted terminal sequence replays its suffix and repeats nothin
 
     const owed = harness.agent.harnessTerminalEffects('u-head', 'a-head');
     expect(owed.map((row) => row.effect_key)).toEqual([
-      // No `branches` row: this turn launched none, and branches are claimed one
-      // row per branch id rather than one row for the list.
+      // No `branches` row: branches are claimed per branch id and this turn launched none.
       'v1:takes:a-head',
       'v1:turn_end_extensions:a-head', 'v1:turn_record:a-head',
       'v1:event_drain:a-head', 'v1:improvement_lanes:a-head',
       'v1:sleep_time:a-head', 'v1:auto_title:a-head', 'v1:auto_gepa:a-head',
     ]);
     expect(owed.every((row) => row.status === 'pending')).toBe(true);
-    // And the outer transition is still open, so the next activation is handed
-    // the suffix rather than told the turn was done.
+    // The outer transition stays open, so the next activation gets the suffix.
     expect(harness.agent.harnessTerminalClaims()).toEqual([
       { turn_id: 'u-head', call_id: 'terminal:response:a-head', result_json: null },
     ]);
@@ -304,15 +211,8 @@ describe('an interrupted terminal sequence replays its suffix and repeats nothin
 
 
   /**
-   * The hardest instant to recover, on the effect where repeating is worst.
-   *
-   * The extension emit fired and then the isolate died before anything recorded
-   * that. Recovery cannot tell that apart from an interruption BEFORE the emit,
-   * so REFUSING this row would also drop the pre-emit case — the answer is not
-   * to refuse but to make the boundary idempotent and replay it. The oracle
-   * is the evolution window: its append is keyed on the turn's own identity, so a
-   * recording that ran twice for one answer would still be ONE row, and a
-   * recording that never ran would be zero.
+   * Post-emit and pre-emit cuts are indistinguishable, so the boundary is idempotent and replayed;
+   * the window append is keyed on the turn, so it stays one row.
    */
   test('an announcing effect cut after its side effect is replayed, never doubled', async () => {
     const harness = orchestratorHarness();
@@ -323,9 +223,7 @@ describe('an interrupted terminal sequence replays its suffix and repeats nothin
       .rejects.toThrow('terminal effect turn_record:a-spine interrupted after its side effect');
     expect(windowedTurns(harness)).toBe(1);
 
-    // Past the backoff BEFORE the activation runs its own reconcile: an owed row
-    // is retried on a schedule, never abandoned, so a replay before it is due is
-    // correctly a no-op.
+    // Past the backoff first: a replay before the row is due is correctly a no-op.
     const restarted = await reactivateOrchestratorHarness(harness.db, undefined, {
       clockSkewMs: TERMINAL_EFFECT_RETRY_CEILING_MS,
     });
@@ -335,26 +233,12 @@ describe('an interrupted terminal sequence replays its suffix and repeats nothin
     // Replayed, not refused: nothing is owed and the outer row closes.
     expect(restarted.agent.harnessTerminalEffects('u-spine', 'a-spine')
       .filter((row) => row.status === 'pending')).toEqual([]);
-    // And the idempotent append is what makes the replay safe: one answer, one
-    // window row, across the restart.
     expect(windowedTurns(harness)).toBe(1);
   });
 
   /**
-   * The fact update and its tombstone, as ONE unit.
-   *
-   * `applySleepTimeUpdate` commits several upserts and several CUMULATIVE
-   * confidence decays, and the tombstone rolls back with them as ONE unit. A
-   * tombstone stated separately after them leaves a termination in between with
-   * the whole update retryable over a prefix already applied, so a replay takes
-   * another 0.2 off a fact it had already decayed — 0.4 for one turn's decision.
-   *
-   * The injected failure is the exact instant the defect names: the fact writes
-   * have landed and the tombstone write throws. Rolled back, the retry applies the
-   * update once; committed separately, it would apply the decay twice.
-   *
-   * Two turns settle first with the lane off: the compute runs on a cadence,
-   * and the third completed turn is the first one it is due on.
+   * The fact upserts, cumulative decays, and tombstone commit as one unit; a separate tombstone
+   * let a replay decay twice (0.4 for one turn). The lane's cadence is due on the third turn.
    */
   test('a fact update whose tombstone fails leaves no half-applied prefix', async () => {
     const harness = orchestratorHarness();
@@ -372,10 +256,8 @@ describe('an interrupted terminal sequence replays its suffix and repeats nothin
     await turns(harness).settle({ messageId: 'a-decay' });
     await joinHarnessFibers();
 
-    // UNCHANGED. The decay rolled back with the tombstone, so nothing is left for
-    // the retry to repeat.
+    // Unchanged: the decay rolled back with the tombstone.
     expect(harness.agent.harnessFacts().recall('deploy_target')?.confidence).toBe(0.6);
-    // And the row is still owed, which is what brings the retry at all.
     expect(harness.agent.harnessTerminalEffects('u-decay', 'a-decay')
       .find((row) => row.effect_key === 'v1:sleep_time:a-decay')?.status).toBe('pending');
 
@@ -388,17 +270,13 @@ describe('an interrupted terminal sequence replays its suffix and repeats nothin
 
     await restarted.agent.terminalRetryPass();
 
-    // ONE decay for one decision, and the sequence closes. Approximate because
-    // the decay is float subtraction; a second one would land near 0.2.
+    // One decay; approximate because it is float subtraction.
     expect(restarted.agent.harnessFacts().recall('deploy_target')?.confidence)
       .toBeCloseTo(0.4, 10);
     expect(restarted.agent.harnessTerminalEffects('u-decay', 'a-decay')).toEqual([]);
   });
 
-  /**
-   * The other half of the same instant: a KEYED effect cut after its side effect
-   * is re-run, because re-running it cannot double.
-   */
+  /** A keyed effect cut after its side effect is re-run, because re-running cannot double. */
   test('a keyed effect cut after its side effect is replayed and the sequence closes', async () => {
     const harness = orchestratorHarness();
     turns(harness).open('u-takes');
@@ -419,8 +297,7 @@ describe('an interrupted terminal sequence replays its suffix and repeats nothin
     expect(restarted.agent.harnessBeginTerminalTransition('u-takes', 'a-takes')).toBe('done');
   });
 
-  /** The gate, stated on its own: one owed effect keeps the whole transition
-   *  open. Without it the marker would say "finished" over work nobody did. */
+  /** One owed effect keeps the whole transition open. */
   test('the outer transition does not settle while any effect is still owed', async () => {
     const harness = orchestratorHarness();
     turns(harness).open('u-owed-gate');
@@ -429,24 +306,14 @@ describe('an interrupted terminal sequence replays its suffix and repeats nothin
     await turns(harness).settle({ messageId: 'a-owed-gate' });
     await harness.agent.harnessTerminalReported();
 
-    // Named, not an exact set: the detached effects are started in one tick, so
-    // the injected rejection of one of them arrives before its siblings have
-    // finished recording. What the gate claims is about THIS row.
+    // Named, not an exact set: the injected rejection lands before sibling effects finish recording.
     expect(harness.agent.harnessTerminalEffects('u-owed-gate', 'a-owed-gate')
       .some((row) => row.effect_key === 'v1:auto_gepa:a-owed-gate' && row.status === 'pending'))
       .toBe(true);
     expect(harness.agent.harnessBeginTerminalTransition('u-owed-gate', 'a-owed-gate')).toBe('resumed');
   });
 
-  /**
-   * The review obligation, at both instants.
-   *
-   * `turn_record` writes the window row AND the review it owes in ONE insert.
-   * Two writes with a dispatch between them would let a cut after the insert
-   * lose the review while a replay ran it twice. The oracle is the row's own
-   * review state: exactly one queued review, whichever side of the effect the
-   * interruption landed on.
-   */
+  /** `turn_record` writes the window row and its review in one insert, so each cut leaves exactly one review. */
   test('a cut around the turn recording leaves exactly one owed review', async () => {
     const before = orchestratorHarness();
     turns(before).open('u-rev-b');
@@ -469,19 +336,12 @@ describe('an interrupted terminal sequence replays its suffix and repeats nothin
     await reactivateOrchestratorHarness(after.db, undefined, {
       clockSkewMs: TERMINAL_EFFECT_RETRY_CEILING_MS,
     });
-    // Replayed, and still ONE: the insert is idempotent on the turn's own id, so
-    // the obligation cannot be written a second time.
+    // The insert is idempotent on the turn's own id.
     expect(owedReviews(after)).toBe(1);
     expect(windowedTurns(after)).toBe(1);
   });
 
-  /**
-   * A branch gets its OWN row, so a replay cannot redo a branch that settled.
-   *
-   * One row for the whole list meant the second branch's retry re-settled the
-   * first and wrote a second take set. The oracle is the row set itself: one
-   * `branches` row per branch id, keyed and independently disposable.
-   */
+  /** One row per branch id, so a replay cannot re-settle a branch that already settled. */
   test('each steer branch is claimed under its own key', async () => {
     const harness = orchestratorHarness();
     turns(harness).open('u-branch');
@@ -497,15 +357,7 @@ describe('an interrupted terminal sequence replays its suffix and repeats nothin
       .toEqual(['v1:branches:branch-a', 'v1:branches:branch-b']);
   });
 
-  /**
-   * The PRODUCTION side effects, counted across a crash at both instants.
-   *
-   * The earlier oracles counted obligations and ledger rows, which pass over the
-   * failure this design exists to prevent: an effect whose row was interrupted
-   * after its write, replayed, and written a second time. These count the
-   * append-only tables the effects actually touch, so a duplicate is visible as a
-   * number.
-   */
+  /** Counts the append-only tables the effects touch, so a replayed write shows as a number. */
   test('a cut on either side of the recording leaves exactly one of every append', async () => {
     for (const phase of ['before', 'after'] as const) {
       const harness = orchestratorHarness();
@@ -514,8 +366,7 @@ describe('an interrupted terminal sequence replays its suffix and repeats nothin
 
       await expect(turns(harness).settle({ messageId: `a-sfx-${phase}` })).rejects.toThrow(`terminal effect turn_record:a-sfx-${phase} interrupted ${phase} its side effect`);
 
-      // Replayed twice: the second pass is the one that would double anything the
-      // first left un-tombstoned.
+      // Two passes: the second would double anything the first left un-tombstoned.
       for (let pass = 0; pass < 2; pass++) {
         const restarted = await reactivateOrchestratorHarness(harness.db, undefined, {
           clockSkewMs: TERMINAL_EFFECT_RETRY_CEILING_MS * (pass + 1),
@@ -524,31 +375,19 @@ describe('an interrupted terminal sequence replays its suffix and repeats nothin
         await restarted.agent.harnessResumeTerminalTransitions();
       }
 
-      // ONE window row and ONE owed review, whichever side of the write the
-      // interruption landed on. The keyed append plus its tombstone is what makes
-      // the `after` case one rather than two, and the replay is what makes the
-      // `before` case one rather than zero.
+      // One row either side: the tombstone keeps `after` at one, the replay keeps `before` at one.
       expect(windowedTurns(harness)).toBe(1);
       expect(owedReviews(harness)).toBe(1);
     }
   });
 
-  /**
-   * The take set, at the instant that would double it.
-   *
-   * A branch reaches `completed` in the journal when its report lands, which is
-   * BEFORE the comparison writes its take set — so a replay keyed only on head
-   * status writes a second set. The settlement key is what closes it, and the
-   * oracle is the table the sets live in.
-   */
+  /** A branch is `completed` before its take set is written, so only the settlement key prevents a second set. */
   test('a branch settled twice writes one take set', async () => {
     const harness = orchestratorHarness();
     turns(harness).open('u-take');
     await harness.agent.harnessRecordBranchReport('branch-x', 'try the other library', 'the branch answer');
     harness.agent.harnessDeclarePendingBranch('branch-x', 'try the other library');
-    // Cut BEFORE the branch effect runs, so its row is claimed and owed. Then the
-    // live handles are gone, which is exactly what an eviction leaves: the journal
-    // is the only record, and the replay settles from it.
+    // Cut before the branch effect, then drop live handles: the journal is the only record.
     harness.agent.harnessArmTerminalFault('branches', 'before');
     await turns(harness).settle({ messageId: 'a-take', text: 'the live answer' });
     await harness.agent.harnessTerminalReported();
@@ -563,33 +402,20 @@ describe('an interrupted terminal sequence replays its suffix and repeats nothin
       await restarted.agent.harnessResumeTerminalTransitions();
     }
 
-    // The first replay writes the set; the two after it write nothing, because the
-    // settlement key names the comparison rather than the row that held it.
+    // The settlement key names the comparison, not the row, so later replays write nothing.
     expect(takeSets(harness)).toBe(1);
   });
 
-  /**
-   * The LIVE settlement, at the same instant.
-   *
-   * The oracle above cuts before the body, so the branch only ever settles from
-   * the journal. This one lets the live handle settle — the path that writes
-   * through `settlePendingBranch` — and then interrupts before the row reaches a
-   * disposition. Recovery finds the journal head completed and settles it again,
-   * so a live write that did not carry the settlement key is a second take set.
-   */
+  /** Live settlement via `settlePendingBranch` must carry the settlement key too, or recovery writes a second set. */
   test('a branch settled LIVE and then replayed writes one take set', async () => {
     const harness = orchestratorHarness();
     turns(harness).open('u-live-take');
     await harness.agent.harnessRecordBranchReport('branch-l', 'try the other library', 'the branch answer');
     harness.agent.harnessDeclareLiveBranch('branch-l', 'try the other library', 'the branch answer');
-    // AFTER the body: the live comparison has run and written its set, and the
-    // row is interrupted before it can record that it did.
     harness.agent.harnessArmTerminalFault('branches', 'after');
 
     await turns(harness).settle({ messageId: 'a-live-take', text: 'the live answer' });
     await harness.agent.harnessTerminalReported();
-    // The live pass wrote it, which is what makes the count below a duplicate
-    // test rather than a replay test.
     expect(takeSets(harness)).toBe(1);
     harness.agent.harnessDropPendingBranches();
 
@@ -605,19 +431,8 @@ describe('an interrupted terminal sequence replays its suffix and repeats nothin
   });
 
   /**
-   * The SAME eviction, over a branch whose head FAILED.
-   *
-   * A failed branch has no answer to compare, so it writes no take set — which is
-   * why the take table cannot tell a settled refusal from a dropped one, and why
-   * this reads what the settlement TOLD the workspace instead. The replay looks
-   * the head up under the DERIVED id a branch's head is journalled under; under
-   * the RUN's id it finds nothing and reports `completed` with "the journal holds
-   * no such branch head", so the row is pruned, nothing is said, and the only
-   * record of why the user's redirect produced no take is gone.
-   *
-   * `errored` is not a hypothetical here: it is what `reconcileOrphanedBranches`
-   * stamps onto every reportless branch head at the START of the very activation
-   * that then replays this row, so it is the status a cold settle meets most.
+   * A failed head writes no take set, so this reads the settlement log. The replay must look the head
+   * up under its derived id; `reconcileOrphanedBranches` stamps `errored` on reportless heads at cold start.
    */
   test('a branch whose head failed settles as a stated refusal, not silence', async () => {
     for (const [branchId, status, message] of [
@@ -641,10 +456,7 @@ describe('an interrupted terminal sequence replays its suffix and repeats nothin
 
       await restarted.agent.harnessResumeTerminalTransitions();
 
-      // The head's OWN cause, under the branch the user started. The status
-      // reaches it through `settleBranchIntoTakes`, which prefers the recorded
-      // message and falls back to naming the status — the fallback the earlier
-      // body could only ever have spelled `errored`.
+      // The head's own cause, via `settleBranchIntoTakes`.
       expect(branchSettlements(harness)).toEqual([`error: ${message}`]);
       // No answer, so no comparison — and the row is discharged rather than owed.
       expect(takeSets(harness)).toBe(0);
@@ -653,35 +465,21 @@ describe('an interrupted terminal sequence replays its suffix and repeats nothin
   });
 
   /**
-   * The two states that are still OWED, and nothing else.
-   *
-   * A head reaches `completed` when its report lands, which is before any take set
-   * exists — so the effect cannot key on "not running". What it may key on is the
-   * two statuses under which a head is still executing, and this holds the replay
-   * to exactly those: a spawned head with no report keeps the row, an `interrupted`
-   * one keeps it too, and the pass after the report lands settles it.
-   *
-   * Replayed on THIS activation rather than across a restart, because a restart is
-   * the case where neither status survives: `reconcileOrphanedBranches` seals every
-   * reportless branch head `errored` before any row is resumed, which is what makes
-   * the failed-head case above the cold one and this one the live one.
+   * Only `running` and `interrupted` heads keep the row owed. Replayed on this activation because a
+   * restart's `reconcileOrphanedBranches` seals reportless heads `errored` first.
    */
   test('a branch head still executing keeps the row owed until it reports', async () => {
     const harness = orchestratorHarness();
     turns(harness).open('u-owed');
-    // Spawned, no report: `running`, exactly as an in-flight head is journalled.
     await harness.agent.harnessSpawnBranchHead('branch-o', 'try the other library', null);
     harness.agent.harnessDeclarePendingBranch('branch-o', 'try the other library');
     harness.agent.harnessArmTerminalFault('branches', 'before');
     await turns(harness).settle({ messageId: 'a-owed', text: 'the live answer' });
     await harness.agent.harnessTerminalReported();
-    // No live handle left, so the replay has only the journal to read.
     harness.agent.harnessDropPendingBranches();
     harness.agent.harnessDisarmTerminalFault();
 
     for (const unsettled of ['running', 'interrupted'] as const) {
-      // The second pass runs over the OTHER unsettled status, written by the
-      // journal's own cold-activation transition.
       if (unsettled === 'interrupted') harness.agent.harnessMarkHeadsInterrupted();
       harness.agent.harnessAdvanceTerminalClock(TERMINAL_EFFECT_RETRY_CEILING_MS);
       await harness.agent.harnessResumeTerminalTransitions();
@@ -690,7 +488,6 @@ describe('an interrupted terminal sequence replays its suffix and repeats nothin
       expect(owedBranchEffects(harness, 'u-owed', 'a-owed')).toEqual(['v1:branches:branch-o']);
     }
 
-    // The report lands. The kept row is what makes this settle at all.
     harness.agent.harnessReportBranchHead('branch-o', 'the branch answer');
     harness.agent.harnessAdvanceTerminalClock(TERMINAL_EFFECT_RETRY_CEILING_MS);
     await harness.agent.harnessResumeTerminalTransitions();
@@ -698,14 +495,7 @@ describe('an interrupted terminal sequence replays its suffix and repeats nothin
     expect(owedBranchEffects(harness, 'u-owed', 'a-owed')).toEqual([]);
   });
 
-  /**
-   * The REVIEW, executed across the interruption.
-   *
-   * Counting window rows says the recording did not double; it says nothing
-   * about the review that recording owes, which is where the model calls and the
-   * append-only writes are. This drains the queued review on each pass and counts
-   * the tables it appends to.
-   */
+  /** Counts what the review appends (outcomes, lessons), not the window row. */
   test('a review re-run after a refusal grades the turn once', async () => {
     const harness = orchestratorHarness();
 
@@ -715,8 +505,7 @@ describe('an interrupted terminal sequence replays its suffix and repeats nothin
       turnId: 'u-review', sessionId: 'default', origin: 'user',
     };
 
-    // Twice, and on a fresh activation the second time: the retry a refused
-    // review gets, over storage that already holds the first pass's writes.
+    // Second pass on a fresh activation over the first pass's writes.
     await harness.agent.harnessReviewTurn(turn, 'no, that is the batch API again');
     expect(rowCount(harness, 'turn_outcomes')).toBe(1);
     expect(rowCount(harness, 'lessons')).toBe(1);
@@ -724,48 +513,35 @@ describe('an interrupted terminal sequence replays its suffix and repeats nothin
     const restarted = await reactivateOrchestratorHarness(harness.db);
     await restarted.agent.harnessReviewTurn(turn, 'no, that is the batch API again');
 
-    // ONE verdict, ONE reflection. The grading tombstone is what keeps the
-    // outcome row at one; the review-step tombstone is what keeps the lesson at
-    // one when the retry re-reaches the reflection call behind it.
+    // The grading and review-step tombstones keep each at one.
     expect(rowCount(harness, 'turn_outcomes')).toBe(1);
     expect(rowCount(harness, 'lessons')).toBe(1);
   });
 
-  /**
-   * The lanes that must NOT be replayed.
-   *
-   * The scaffold and prompt-section passes drive candidates through the live
-   * tool surface, so a pass the platform cut may already have written files or
-   * cut a release. Replaying it from the top repeats those — the same loss this
-   * ledger exists to prevent, arriving from the other side. So a cut pass is
-   * abandoned to the next cadence tick, and the tick converges either way.
-   */
+  /** Scaffold/prompt passes touch the live tool surface, so a cut pass is abandoned to the next tick, not re-run. */
   test('a cut optimisation pass is abandoned, not re-run', async () => {
     const harness = orchestratorHarness();
     let runs = 0;
 
-    // Interrupted: the attempt is on record, the completion is not.
     await expect(harness.agent.harnessOncePerTick('probe_lane', 'tick-1', async () => {
       runs++;
       await Promise.reject(new Error('the isolate went away mid-rollout'));
     })).rejects.toThrow('the isolate went away mid-rollout');
     expect(runs).toBe(1);
 
-    // The replay finds the attempt and converges the tick without repeating it.
     await harness.agent.harnessOncePerTick('probe_lane', 'tick-1', async () => {
       runs++;
       await Promise.resolve();
     });
     expect(runs).toBe(1);
 
-    // And it stays converged, rather than re-opening on the pass after that.
     await harness.agent.harnessOncePerTick('probe_lane', 'tick-1', async () => {
       runs++;
       await Promise.resolve();
     });
     expect(runs).toBe(1);
 
-    // A NEW tick is a new obligation — the work is delayed, never dropped.
+    // A new tick is a new obligation: delayed, never dropped.
     await harness.agent.harnessOncePerTick('probe_lane', 'tick-2', async () => {
       runs++;
       await Promise.resolve();
@@ -774,14 +550,8 @@ describe('an interrupted terminal sequence replays its suffix and repeats nothin
   });
 
   /**
-   * The other half of that trade: the tick the abandonment must not lose.
-   *
-   * The marker says ENTERED — it is written in the same synchronous slice as the
-   * call, so the pass's own opening writes and it reach storage together. A
-   * marker written BEFORE the pass was called would let a cut in between abandon
-   * a tick whose pass had not run a single statement, and an idle workspace
-   * simply never runs the cadence work that tick owed: no future turn is a
-   * recovery carrier for it.
+   * The marker is written in the same synchronous slice as the call; an earlier marker would let a
+   * cut abandon a tick that never ran, and an idle workspace has no later carrier for it.
    */
   test('the tick marker says entered, not armed', async () => {
     const harness = orchestratorHarness();
@@ -792,22 +562,11 @@ describe('an interrupted terminal sequence replays its suffix and repeats nothin
       await Promise.resolve();
     });
 
-    // Nothing was on record when the pass began, so a cut before this instant
-    // leaves the tick owed rather than abandoned.
     expect(markersWhenPassStarted).toBe(0);
-    // Entry and completion are both recorded once it has run.
     expect(tickMarkers(harness, 'probe_lane')).toBe(2);
   });
 
-  /**
-   * What a turn the promotion gate cannot learn from OWES.
-   *
-   * The shadow trial is its own effect now, declared outside the improvement
-   * lanes, so the advisor-lane gate oracles say nothing about it. A trial runs
-   * the candidate scaffold through the LIVE tool surface, so an aborted, errored
-   * or Plan turn declaring one both contaminates the evidence and spends that
-   * surface on a turn that earned nothing.
-   */
+  /** Trials run on the live tool surface, so aborted, errored, and Plan turns must not declare one. */
   test('only a completed build turn declares a shadow trial', async () => {
     const sampled = (harness: ActorHarness<HarnessOrchestratorAgent>): string => {
       for (let i = 0; i < 500; i++) {
@@ -817,19 +576,14 @@ describe('an interrupted terminal sequence replays its suffix and repeats nothin
       throw new Error('no sampling id found');
     };
 
-    // The QUEUE, not the ledger row: a completed effect is pruned once its
-    // sequence closes, and what the gate is about is whether the candidate got
-    // scored against this turn at all. Counted under this harness's own actor:
-    // the queue is per-actor, and `rowCount` is the unscoped oracle the
-    // non-actor-keyed ledgers above use.
+    // The queue, not the pruned ledger row; scoped to this actor because the queue is per-actor.
     const queued = (harness: ActorHarness<HarnessOrchestratorAgent>): number => v.parse(
       v.object({ n: v.number() }),
       harness.db.query('SELECT COUNT(*) AS n FROM scaffold_trial_queue WHERE actor_id = ?')
         .get(harness.agent.observeRuntime().actor.actorId),
     ).n;
 
-    // The completed build turn: the trial IS owed, which is what makes the three
-    // refusals below a gate rather than a broken declaration.
+    // Positive control: a completed build turn does owe a trial.
     const open = orchestratorHarness();
     declareShadowCandidate(open.agent.observeRuntime());
     const openId = sampled(open);
@@ -844,9 +598,7 @@ describe('an interrupted terminal sequence replays its suffix and repeats nothin
       const messageId = sampled(harness);
       turns(harness).open(`u-shadow-${shut}`);
 
-      // The mode comes off the driving user message, which is where production
-      // reads it — stubbing the orchestrator's live turn instead would assert
-      // against a path `onChatResponse` never consults.
+      // The mode comes from the driving user message, which `onChatResponse` reads.
       if (shut === 'plan') harness.agent.harnessDrivingUserMessage('plan it', { kinuMode: 'plan' });
       await turns(harness).settle({
         messageId, text: 'the answer',
@@ -857,14 +609,7 @@ describe('an interrupted terminal sequence replays its suffix and repeats nothin
     }
   });
 
-  /**
-   * The sampling decision, asked twice.
-   *
-   * A duplicate callback rebuilds the whole declaration before the ledger
-   * recognises it, so a rolled coin would claim a different set of rows than the
-   * sequence already on record — a `shadow_trial` row that the first attempt
-   * never owed, or the loss of one it did.
-   */
+  /** Sampling is deterministic per id: a duplicate callback rebuilds the declaration and must claim the same rows. */
   test('one turn always makes the same sampling decision', async () => {
     const harness = orchestratorHarness();
     declareShadowCandidate(harness.agent.observeRuntime());
@@ -875,7 +620,7 @@ describe('an interrupted terminal sequence replays its suffix and repeats nothin
       expect(harness.agent.harnessShadowPlan('a-sample')).toEqual(first);
     }
 
-    // And it is a decision, not a constant: across ids both answers occur.
+    // A decision, not a constant: across ids both answers occur.
     const spread = new Set(
       Array.from({ length: 200 }, (_, i) => harness.agent.harnessShadowPlan(`a-${i}`) !== null),
     );
@@ -884,15 +629,8 @@ describe('an interrupted terminal sequence replays its suffix and repeats nothin
   });
 
   /**
-   * The wake a LIVE sequence still gets.
-   *
-   * A sequence this activation is running is skipped by the sweep — its rows are
-   * pending because a model lane has not answered, not because they need
-   * re-driving — and waking on their overdue instant re-armed one second later,
-   * every second, for the whole call. Excluding them outright was the other
-   * failure: the activation can die at any moment, and the SDK deletes the
-   * one-shot row that fired, so the sequence would be left with no carrier at all.
-   * DEFERRED is the answer, and the deferral is what this pins.
+   * A sequence this activation runs is deferred, not woken on its overdue instant (re-arms every second)
+   * nor excluded (the SDK deletes the fired one-shot row, leaving no carrier).
    */
   test('a live sequence keeps a wake, pushed past the busy window', async () => {
     const harness = orchestratorHarness();
@@ -902,7 +640,6 @@ describe('an interrupted terminal sequence replays its suffix and repeats nothin
 
     const owedAt = present(harness.agent.harnessNextRetryAt(new Set()), 'the owed retry instant');
 
-    // The same roster, read while this activation owns the sequence.
     const live = new Set([harness.agent.harnessSequenceId('u-live-wake', 'a-live-wake')]);
     const deferredAt = present(harness.agent.harnessNextRetryAt(live), 'the deferred retry instant');
     // Not dropped, and not the overdue instant that would re-arm on every tick.
@@ -910,17 +647,7 @@ describe('an interrupted terminal sequence replays its suffix and repeats nothin
     expect(deferredAt).toBeGreaterThanOrEqual(Date.now() + TERMINAL_EFFECT_RETRY_CEILING_MS - 1_000);
   });
 
-  /**
-   * NO ABANDONMENT. An effect nothing can finish yet stays owed, however many
-   * activations have tried it.
-   *
-   * The earlier design turned the third attempt into a recorded refusal and then
-   * treated the sequence as settled, so a parent RPC or a model service that was
-   * unavailable across three activations was abandoned permanently. A fixed
-   * activation count must never convert owed work into success: convergence is
-   * the backoff plus the durable wake, and a row nobody can finish keeps the
-   * transition open and visible instead.
-   */
+  /** No abandonment: an effect nobody can finish stays owed; convergence is backoff plus the durable wake. */
   test('an effect no activation can finish stays owed rather than being abandoned', async () => {
     const harness = orchestratorHarness();
     turns(harness).open('u-stuck');
@@ -942,16 +669,10 @@ describe('an interrupted terminal sequence replays its suffix and repeats nothin
       .find((row) => row.effect_key === 'v1:auto_gepa:a-stuck');
 
     expect(stuck?.status).toBe('pending');
-    // Still owed, so the outer transition is still open and the next activation
-    // is still handed the suffix.
     expect(harness.agent.harnessBeginTerminalTransition('u-stuck', 'a-stuck')).toBe('resumed');
   });
 
-  /**
-   * A close that rejects while the activation lives on must hand its sequence
-   * back: one this activation still held is skipped by every later sweep and
-   * alarm, which is the one way the ledger wedges.
-   */
+  /** A rejected close must release its sequence, or every later sweep and alarm skips it. */
   test('a close that rejects releases its sequence to the next sweep', async () => {
     const harness = orchestratorHarness();
     turns(harness).open('u-rejected-close');
@@ -963,18 +684,11 @@ describe('an interrupted terminal sequence replays its suffix and repeats nothin
     expect(harness.agent.harnessSequencesInFlight()).toBe(0);
   });
 
-  /**
-   * A row this build cannot interpret — written by a build whose effect set was
-   * different. It must be REFUSED by name: guessing at its input would be worse,
-   * and dropping it would leave the outer transition closed over work nobody
-   * ever looked at.
-   */
+  /** A row from a build with a different effect set is blocked by name, never guessed at or dropped. */
   test('an effect this build does not implement is blocked by name, never skipped', async () => {
     const harness = orchestratorHarness();
     expect(harness.agent.harnessBeginTerminalTransition('u-alien', 'a-alien')).toBe('first');
-    // Filed under the workspace's OWN actor: `terminal_effects` is keyed by
-    // `actor_id` and the resume reads its suffix as this agent, so a row seeded
-    // under any other id is simply not in the set the refusal is asked about.
+    // Seeded under this agent's actor: `terminal_effects` is keyed by `actor_id`.
     harness.db.prepare(
       `INSERT INTO terminal_effects
          (actor_id, sequence_id, effect_key, effect_name, scope, seq, input_json, status, outcome, attempts, claimed_at, settled_at)
@@ -988,43 +702,17 @@ describe('an interrupted terminal sequence replays its suffix and repeats nothin
     expect(rows[0]?.effect_key).toBe('v9:teleport:a-alien');
     expect(rows[0]?.status).toBe('blocked');
     expect(rows[0]?.outcome).toBe('unknown effect "teleport"');
-    // BLOCKED still gates: a row this build cannot interpret is a deploy-shape
-    // problem a human resolves, so it keeps the transition open and visible
-    // rather than converging to a success nobody earned.
+    // Blocked still gates: a human resolves the deploy-shape problem.
     expect(harness.agent.harnessBeginTerminalTransition('u-alien', 'a-alien')).toBe('resumed');
   });
 });
 
 /**
- * When a turn's tool claims may be dropped.
- *
- * The close releases them once its turn can no longer act, and a turn is not
- * over when its last SETTLED response is: Think fires the hook once per
- * response and an auto-continuation runs under the same durable turn id, so a
- * continuation can already be executing a claimed tool with no terminal claim
- * of its own yet. Releasing there hands the next interruption a free replay of
- * an external effect.
- *
- * The witness cannot be `_inFlight`, and that is what these cases force: after
- * an eviction a fresh actor has it clear while the interrupted continuation is
- * still owed a replay. The chat-turn fiber row is what survives the isolate, so
- * it is what is seeded here.
+ * Auto-continuations share the durable turn id, so claims are released only when no response can run.
+ * `_inFlight` is clear after eviction; the surviving run row is the witness seeded here.
  */
 describe('a turn releases its tool claims only when no response can still run', () => {
-  /**
-   * The row Think leaves for one response of a turn.
-   *
-  * The snapshot body comes from the SDK's OWN builders rather than a literal:
-  * its field names are the framework's, and a hand-written fixture would keep
-  * passing after a version renamed the one field the production read depends
-  * on. Only the envelope key is spelled here — the SDK exports it nowhere. The
-  * row's NAME is decoration — the read matches on the snapshot — and is spelled
-  * as Think spells it so the fixture reads true.
-   */
-  /** The defect's durable shape on the loop: an open run the isolate died
-   *  inside — a response that started and has not finished. The restart
-   *  re-opens it as a continuation, so the turn's claims survive the close of
-   *  the earlier response. */
+  /** An open run the isolate died inside; the restart re-opens it as a continuation. */
   function openRun(harness: ActorHarness<HarnessOrchestratorAgent>, runId: string, turnId: string): void {
     openTurnRun(harness.agent.harnessEventRecorder, runId, {
       agentId: harness.agent.observeRuntime().actor.actorId,
@@ -1037,12 +725,7 @@ describe('a turn releases its tool claims only when no response can still run', 
 
   const released = [
     { name: 'a settled response with nothing else running releases them', turn: 'u-done', answer: 'a-done' },
-    /**
-     * The response being closed owns a chat fiber row of its own, and the close
-     * can reach the release before Think's fiber returns and deletes it. Read as
-     * "somebody else may still run", every ordinary turn would keep its claims
-     * for good — so the settling response is excluded by request id.
-     */
+    /** The settling response's own fiber row may still exist at release; it is excluded by request id. */
     {
       name: 'the settling response is not mistaken for another one still running',
       turn: 'u-self',
@@ -1062,31 +745,22 @@ describe('a turn releases its tool claims only when no response can still run', 
     });
   }
 
-  /**
-   * The defect. The isolate died while an auto-continuation was executing a
-   * claimed tool, so the fresh activation resuming the EARLIER response has
-   * `_inFlight` clear while the durable claim ledger still identifies the turn
-   * and a chat fiber can replay its continuation. Closing the earlier response
-   * must retain the continuation's tool claim until no response can still run.
-   */
+  /** Defends: closing the earlier response must keep a live continuation's tool claim. */
   test('cold recovery keeps the claims of a continuation it has not replayed yet', async () => {
     const harness = orchestratorHarness();
     await harness.agent.harnessPersistActiveTurn('u-cont');
     harness.agent.harnessClaimTool('u-cont', 'call_send_1');
-    // The earlier response: claimed, interrupted, and now being recovered.
     expect(harness.agent.harnessBeginTerminalTransition('u-cont', 'a-first')).toBe('first');
     openRun(harness, 'run-a-cont', 'u-cont');
 
     const restarted = await reactivateOrchestratorHarness(harness.db);
     await restarted.agent.harnessResumeTerminalTransitions();
 
-    // The recovered response is closed — and the continuation's guard is intact.
     expect(restarted.agent.harnessBeginTerminalTransition('u-cont', 'a-first')).toBe('done');
     expect(restarted.agent.harnessToolClaims('u-cont')).toEqual(['call_send_1']);
   });
 
-  /** The negative control: no response of the turn survived the isolate, so
-   *  nothing can replay under it and the claims are the close's to drop. */
+  /** Negative control: no response of the turn survived, so the close drops the claims. */
   test('cold recovery releases them when no response survived the isolate', async () => {
     const harness = orchestratorHarness();
     await harness.agent.harnessPersistActiveTurn('u-gone');

@@ -1,13 +1,6 @@
 /**
- * The shell's filesystem view implements the surface its consumers call.
- *
- * `ctx.vfs` in a workspace shell is `kernel.vfs.as(cred)`, and the durable
- * coreutils are written against `CredentialedVfs`. The view omitted the type
- * probes that interface declares, so `touch` on an EXISTING file died with
- * `targetVfs.isDirectory is not a function` (unix-commands.ts:3123). `&&`
- * short-circuited past the call whenever the file was absent, which is exactly
- * why creating a file worked and touching one did not — the shape of gap that
- * stays hidden until someone touches a file twice.
+ * The shell's `kernel.vfs.as(cred)` view implements `CredentialedVfs`'s type probes. Defends: `touch` on an
+ * existing file died with `targetVfs.isDirectory is not a function` (unix-commands.ts:3123).
  */
 import { afterEach, describe, expect, test } from 'bun:test';
 import { Database, type SQLQueryBindings } from 'bun:sqlite';
@@ -101,9 +94,8 @@ describe('the shell filesystem view answers the type probes its callers make', (
     expect(view.isFile('/home/user')).toBe(false);
     expect(view.isFile('/home/user/f.txt')).toBe(true);
     expect(view.isDirectory('/home/user/f.txt')).toBe(false);
-    // Unmounted root: the in-memory tree, not a provider.
     expect(view.isDirectory('/')).toBe(true);
-    // Absent is false, never a throw — fs.existsSync semantics.
+    // Absent is false, never a throw (fs.existsSync semantics).
     expect(view.isFile('/home/user/nope.txt')).toBe(false);
     expect(view.isDirectory('/home/user/nope')).toBe(false);
   });
@@ -118,8 +110,7 @@ describe('the shell filesystem view answers the type probes its callers make', (
 
     const stranger = workspace.kernel.vfs.as(OTHER);
 
-    // Traverse-x is missing for OTHER, so this is EACCES, not "absent".
-    // A false here would let a caller read a denial as a structural miss.
+    // Traverse-x is missing for OTHER: EACCES, never a false a caller would read as a structural miss.
     expect(() => stranger.isFile('/home/user/private/secret.txt')).toThrow(/EACCES/);
     expect(workspace.kernel.vfs.as(SESSION_USER).isFile('/home/user/private/secret.txt')).toBe(true);
   });

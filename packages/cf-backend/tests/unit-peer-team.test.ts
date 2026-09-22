@@ -1,11 +1,5 @@
-// Peer transport behavior — TWO real hubs (EventLog + ReplyChannelStore + the
-// shared outbox's `outbox_peer` over in-memory SQLite) wired back-to-back
-// through PeerHub, the same seams the orchestrator wires to DO RPC. Covers the
-// peers-tool paths:
-// fire-and-forget, send-and-await round-trip, trust-grant enforcement,
-// timer-less waiter and post-eviction reply delivery, crash redelivery dedupe,
-// per-receiver ordering, the spawn-a-specialist round-trip, and the
-// reference-plus-digest spill for bodies past the brief budget.
+// Peer transport: two real hubs over in-memory SQLite wired back-to-back through PeerHub, the seams the
+// orchestrator wires to DO RPC.
 import { describe, test, expect } from 'bun:test';
 import { Database } from 'bun:sqlite';
 import * as v from 'valibot';
@@ -33,16 +27,15 @@ interface TestAgent {
   hub: PeerHub;
   /** The agent's own file plane — oversize peer bodies spill here. */
   files: MemoryVfs['files'];
-  /** onAdmitted() fires — the drain→programmatic-turn wake. */
+  /** onAdmitted() fires: the drain-to-turn wake. */
   wakes: number;
-  /** scheduleDispatch timestamps — the DO alarm arms. */
+  /** scheduleDispatch timestamps: the DO alarm arms. */
   retries: number[];
   /** Cross-owner senders this agent's owner has granted: `${userId}:${agent}`. */
   grants: Set<string>;
-  /** Simulates the receiver DO being unreachable (RPC throws). */
+  /** Receiver DO unreachable (RPC throws). */
   online: boolean;
-  /** The hub's clock. Null leaves it on the wall clock; a number pins it so a
-   *  backoff curve can be read as an exact instant. */
+  /** Null uses the wall clock; a number pins it so a backoff curve reads as an exact instant. */
   clock: number | null;
 }
 
@@ -122,8 +115,6 @@ function makeNetwork() {
       name, userId, sql, log, replyChannels, files, hub,
       wakes: 0, retries: [], grants: new Set(), online: true, clock: null,
     };
-    // The peer_back reply dispatcher routes answers back over the same outbox
-    // (exactly how the orchestrator registers it, lazily bound).
     dispatchers.peer_back = { dispatch: (ch, p) => agent.hub.dispatchPeerBack(ch, p) };
     network.set(name, agent);
 
@@ -180,11 +171,9 @@ describe('fire-and-forget (send)', () => {
     expect(payload.reply_expected).toBe(false);
     expect(bob.wakes).toBe(1);
 
-    // Same-owner peer events land at authenticated trust, normal priority.
     expect(events[0].trust).toBe('authenticated');
     expect(events[0].priority).toBe('normal');
 
-    // The drained turn renders the message without a reply instruction.
     const batch = present(buildDrainBatch(pendingPeerEvents(bob)), 'the drain batch');
     expect(batch.text).toContain('peer agent (alice)');
     expect(batch.text).not.toContain("action:'msg'");
@@ -206,26 +195,21 @@ describe('send-and-await (ask) round-trip', () => {
 
     await until(() => pendingPeerEvents(bob).length === 1, 'the ask delivery');
 
-    // Bob was woken; his drained turn carries the mechanical reply route.
     const events = pendingPeerEvents(bob);
     expect(events).toHaveLength(1);
     expect(peerPayload(events[0]).reply_expected).toBe(true);
     const batch = present(buildDrainBatch(events), 'the drain batch');
     expect(batch.text).toContain(`agents({action:'msg', event_id:'${events[0].id}'`);
 
-    // Bob answers through the peer-back reply channel.
     const replied = await bob.hub.reply({ eventId: events[0].id, message: 'v2 API landed' });
     expect(replied).toEqual({ ok: true });
 
-    // Alice's ask resolves with the answer.
     expect(await askPromise).toEqual({ status: 'replied', from: 'bob', reply: 'v2 API landed' });
 
-    // The reply envelope was consumed inline by the waiter — it must NOT wake
-    // Alice as a fresh turn nor linger as a pending event.
+    // Consumed inline by the waiter: must not wake Alice nor linger as a pending event.
     expect(alice.wakes).toBe(0);
     expect(pendingPeerEvents(alice)).toHaveLength(0);
 
-    // Channel is spent: answering again is a sharp no-op error.
     const again = await bob.hub.reply({ eventId: events[0].id, message: 'dup' });
     expect(again.ok).toBe(false);
   });
@@ -276,8 +260,7 @@ describe('trust-grant enforcement (cross-owner)', () => {
     expect(events).toHaveLength(1);
     await alice.hub.reply({ eventId: events[0].id, message: '99.99%' });
 
-    // Without the reply-to-my-ask correlation this would dead-letter on
-    // carol's side (no grant for alice) and the ask could never complete.
+    // Without reply-to-my-ask correlation this would dead-letter on carol's side (no grant for alice).
     expect(await askPromise).toEqual({ status: 'replied', from: 'alice', reply: '99.99%' });
     expect(outboxRows(alice).map((r) => r.state)).toEqual(['sent']);
   });
@@ -286,8 +269,7 @@ describe('trust-grant enforcement (cross-owner)', () => {
     const { addAgent } = makeNetwork();
     const alice = addAgent('alice', userA);
 
-    // Alice never delivered an ask to "mallory"; a forged reply envelope with
-    // a guessed id must hit the normal default-deny grant path.
+    // A forged reply with a guessed id must hit the default-deny grant path.
     const result = await alice.hub.receive({ mode: 'build',
       sender_event_id: 'forged-1',
       sender_agent_name: 'mallory',
@@ -372,8 +354,7 @@ describe('redelivery dedupe (crash between deliver and mark)', () => {
     await alice.hub.send({ mode: 'plan', agent: 'bob', userId: bob.userId, topic: 'once', message: 'exactly once' });
     expect(pendingPeerEvents(bob)).toHaveLength(1);
 
-    // Simulate a crash after delivery but before the delivered-mark landed:
-    // the row is pending again and the alarm re-drives it.
+    // Crash after delivery, before the delivered-mark: the row is pending again.
     const row = outboxRows(alice)[0];
     alice.sql.exec(`UPDATE outbox_peer SET state = 'pending', next_attempt_at = 0 WHERE id = ?`, row.id);
     await alice.hub.dispatchOutbox();
@@ -400,15 +381,12 @@ describe('per-receiver ordering + retry backoff', () => {
     expect(first.status).toBe('queued');
     expect(second.status).toBe('queued');
 
-    // Only the head-of-line row was attempted — the second stayed untouched
-    // behind it (ordering) — and a retry alarm was armed.
     const rows = outboxRows(alice);
     expect(rows.map((r) => r.state)).toEqual(['pending', 'pending']);
     expect(rows[0].attempt_count).toBe(1);
     expect(rows[1].attempt_count).toBe(0);
     expect(alice.retries.length).toBeGreaterThan(0);
 
-    // Receiver comes back; the alarm re-drives past the backoff window.
     bob.online = true;
     await alice.hub.dispatchOutbox(Date.now() + 60_000);
 
@@ -433,16 +411,12 @@ describe('per-receiver ordering + retry backoff', () => {
     const retryAt = alice.hub.nextRetryAt();
     expect(retryAt).not.toBeNull();
 
-    // The DO idled past the retry time with no dispatch (e.g. the armed alarm
-    // fired while an inline dispatch held the reentrancy guard). The retry is
-    // now PAST-DUE: a future-only reschedule filter would drop it and the
-    // delivery would stall forever on an idle agent. The fold clamps it to
-    // "fire immediately" instead.
+    // A past-due retry (alarm fired while an inline dispatch held the reentrancy guard) must clamp to
+    // "fire immediately"; a future-only filter would stall delivery forever.
     if (retryAt === null) throw new Error('expected scheduled peer retry');
     const later = retryAt + 3_600_000;
     expect(nextAlarmTime(later, [], alice.hub.nextRetryAt())).toBe(later);
 
-    // The immediate alarm re-drives the outbox and the delivery lands.
     bob.online = true;
     await alice.hub.dispatchOutbox(later);
     expect(outboxRows(alice).map((r) => r.state)).toEqual(['sent']);
@@ -490,7 +464,6 @@ describe('per-receiver ordering + retry backoff', () => {
     const { addAgent } = makeNetwork();
     const alice = addAgent('alice', 'u1'.padEnd(32, '0'));
     const bob = addAgent('bob', alice.userId);
-    // The receiver's own event log cannot take the write.
     bob.sql.exec('DROP TABLE agent_log');
 
     const sent = await alice.hub.send({ mode: 'build', agent: 'bob', userId: bob.userId, topic: 'step', message: 'first' });
@@ -508,8 +481,6 @@ describe('spawn a specialist (fresh peer joins mid-flight)', () => {
     const { addAgent } = makeNetwork();
     const alice = addAgent('alice', 'u1'.padEnd(32, '0'));
 
-    // The orchestrator's spawn action: create the agent (registry +
-    // claimOwner — here: joins the network under the same owner), then ask.
     const specialist = addAgent('paper-summarizer', alice.userId);
 
     const askPromise = alice.hub.ask({ mode: 'build',
@@ -547,10 +518,8 @@ describe('oversize peer bodies stay reachable', () => {
     const path = payload.body_path;
     expect(path).toBe(eventContentPath(JSON.stringify(message)));
 
-    // The reference resolves, losslessly, on the receiver's own file plane.
     if (!path) throw new Error('expected spilled peer body path');
     expect(bob.files.get(path)).toBe(JSON.stringify(message));
-    // …and the drained turn is told where to look.
     expect(renderForLLM(events[0]).brief).toEndWith(` — full message: ${path}`);
     const batch = buildDrainBatch(events);
 

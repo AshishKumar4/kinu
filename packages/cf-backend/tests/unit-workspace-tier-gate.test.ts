@@ -1,13 +1,5 @@
-// The attenuation boundary, exercised against the REAL UserDO methods.
-//
-// A registered workspace reaches every capability except the account
-// authorities the matrix marks `owner_only`. What this pins down is that each
-// method actually passes through the gate — and that the agent can still
-// think, because model-inference credentials resolve.
-//
-// Every entry below names a real method. A denial is a CapabilityDeniedError;
-// anything else (a missing device, an unknown change id, a stubbed MCP client)
-// means the gate let the call through, which is what "allowed" asserts.
+// The attenuation boundary against the real UserDO methods: a registered workspace reaches everything
+// but `owner_only` authorities. A non-CapabilityDeniedError failure means the gate let the call through.
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
@@ -31,8 +23,7 @@ const USER_ID = '0123456789abcdef0123456789abcdef';
 
 const TOKEN_HASH = 'a'.repeat(64);
 
-// No test here should reach the network; a provider/OAuth call that survives
-// the gate must fail loudly rather than dial out.
+// A provider/OAuth call that survives the gate must fail loudly rather than dial out.
 const realFetch = globalThis.fetch;
 
 beforeAll(() => {
@@ -57,29 +48,21 @@ interface GatedCall {
   run(userDO: UserDOInstance, caller: UserCaller): Promise<AsyncUserDOResult>;
 }
 
-/**
- * The attenuation matrix as calls. One row per privileged method — grouped by
- * the capability it names — so "is the matrix complete" is answerable by
- * reading this list against the design's table.
- */
+/** The attenuation matrix as calls, one row per privileged method, grouped by capability. */
 const GATED_CALLS: GatedCall[] = [
-  // Model providers — the agent must still function, and these headers attach
-  // inside trusted DO code, never in LLM context.
+  // Model providers: the agent must still function; these headers attach in trusted DO code, never LLM context.
   { capability: 'credentials.model', name: 'getAuthHeaders(codex.oauth)', run: (u, c) => u.getAuthHeaders(c, 'codex.oauth') },
   { capability: 'credentials.model', name: 'getAuthHeaders(openai.bearer)', run: (u, c) => u.getAuthHeaders(c, 'openai.bearer') },
   { capability: 'credentials.model', name: 'getCredentialBaseURL(openai-compat.box)', run: (u, c) => u.getCredentialBaseURL(c, 'openai-compat.box') },
   { capability: 'credentials.model', name: 'listCredentials', run: (u, c) => u.listCredentials(c) },
   { capability: 'credentials.model', name: 'listConnectedProviders', run: (u, c) => u.listConnectedProviders(c) },
 
-  // Everything else in the credential store.
   { capability: 'credentials.other', name: 'getAuthHeaders(github)', run: (u, c) => u.getAuthHeaders(c, 'github') },
   { capability: 'credentials.other', name: 'getCredentialBaseURL(github)', run: (u, c) => u.getCredentialBaseURL(c, 'github') },
   { capability: 'credentials.other', name: 'setCredential', run: (u, c) => u.setCredential(c, 'github', { kind: 'bearer', token: 'ghp_x' }) },
   { capability: 'credentials.other', name: 'deleteCredential', run: (u, c) => u.deleteCredential(c, 'github') },
 
-  // The egress secret vault. Binding one of the owner's secrets to a host is
-  // the same class of act as storing a credential, and turning a placeholder
-  // back into the real secret is strictly more privileged than holding it.
+  // Binding a secret to a host is like storing a credential; unwrapping a placeholder is more privileged still.
   { capability: 'egress_secrets.manage', name: 'listEgressSecrets', run: (u, c) => u.listEgressSecrets(c) },
   {
     capability: 'egress_secrets.manage',
@@ -121,10 +104,7 @@ const GATED_CALLS: GatedCall[] = [
   { capability: 'device.rpc', name: 'deviceRuntimeStatus', run: (u, c) => u.deviceRuntimeStatus(c) },
   { capability: 'device.rpc', name: 'openDeviceTerminal', run: (u, c) => u.openDeviceTerminal(c, WORKSPACE, { cols: 80, rows: 24 }) },
 
-  // `device.consent.read_self` answers for the calling workspace: the file view
-  // narrows its own path scope with the answer, so refusing it would widen the
-  // scope rather than close it. Every other device method is an account
-  // authority and lives in OWNER_ONLY_CALLS below.
+  // `device.consent.read_self` narrows the file view's own path scope, so refusing it would widen the scope.
   { capability: 'device.consent.read_self', name: 'getDeviceFileView', run: (u, c) => u.getDeviceFileView(c, WORKSPACE) },
 
   { capability: 'device.rpc', name: 'transferDeviceRequestToBackgroundJob', run: (u, c) => u.transferDeviceRequestToBackgroundJob(c, 'rpc-1', 'job-1') },
@@ -217,27 +197,19 @@ const GATED_CALLS: GatedCall[] = [
   },
   { capability: 'auth_tokens', name: 'verifyBrowserSession', run: (u, c) => u.verifyBrowserSession(c, TOKEN_HASH) },
   { capability: 'auth_tokens', name: 'revokeBrowserSession', run: (u, c) => u.revokeBrowserSession(c, TOKEN_HASH) },
-  // The frame-time revocation check a workspace runs on its own CLI sockets.
-  // A workspace that could not ask would either keep serving a revoked CLI or
-  // lose its CLI entirely, so refusing here would make revocation
-  // unenforceable exactly where the workspace is least trusted.
+  // Refusing a workspace's own revocation check would make revocation unenforceable on its CLI sockets.
   {
     capability: 'auth_tokens.socket',
     name: 'verifyCliSocketBearer',
     run: (u, c) => u.verifyCliSocketBearer(c, TOKEN_HASH),
   },
-  // The session-side twin of the row above: same reasoning — a workspace must
-  // still be able to enforce a logout.
+  // Session-side twin of the row above: a workspace must still be able to enforce a logout.
   {
     capability: 'auth_tokens.socket',
     name: 'verifySocketSession',
     run: (u, c) => u.verifySocketSession(c, TOKEN_HASH),
   },
-  // The orphaned-bearer recovery surface: naming what is still live and ending
-  // it is account administration, exactly as every other auth_tokens write is.
   { capability: 'auth_tokens', name: 'revokeAllCliTokens', run: (u, c) => u.revokeAllCliTokens(c) },
-  // The credential revision compare a cached provider listing is held against —
-  // a number about state the workspace already depends on, like the socket row.
   {
     capability: 'credentials.model',
     name: 'getCredentialsRevision',
@@ -252,33 +224,20 @@ const GATED_CALLS: GatedCall[] = [
 
 interface OwnerOnlyCall {
   name: string;
-  /** Present when the whole CAPABILITY is floored at `owner_only`, so this row
-   *  also carries that capability's coverage. Absent for an owner-only method
-   *  inside a capability workspaces do legitimately use. */
+  /** Present when the whole capability is floored at `owner_only`, so this row carries its coverage. */
   capability?: WorkspaceCapability;
   run(userDO: UserDOInstance, caller: UserCaller): Promise<AsyncUserDOResult>;
 }
 
 /**
- * Methods no workspace token reaches at all, and an owner session does.
- *
- * Two kinds sit here and the difference is where the rule is written. The
- * profile catalog is an owner-only METHOD inside `config`, a capability
- * workspaces do use, so the check is in the method. The device registry and
- * device consent are owner-only CAPABILITIES: the matrix floors both at
- * `owner_only` and refuses them before any method runs.
+ * Owner-only: the profile catalog is refused by its method inside `config`; the device registry and
+ * device consent are `owner_only` capabilities refused before any method runs.
  */
 const OWNER_ONLY_CALLS: OwnerOnlyCall[] = [
-  // The account's own authorities: onboarding's finish and the owner's
-  // display name. A workspace token that could write either could reset
-  // every sibling workspace's setup or rename the account it lives under.
   { capability: 'account', name: 'completeOnboarding', run: (u, c) => u.completeOnboarding(c) },
   { capability: 'account', name: 'setDisplayName', run: (u, c) => u.setDisplayName(c, 'Owner') },
   { name: 'getProfileCatalog', run: (userDO, caller) => userDO.getProfileCatalog(caller) },
-  // The device Sandbox switch. A workspace holds no device authority at all
-  // after F5/F6; this one additionally names the reason it can never move to a
-  // workspace: a workspace that could turn its own sandbox off would be
-  // granting itself the whole machine.
+  // A workspace that could turn its own Sandbox off would be granting itself the whole machine (F5/F6).
   {
     name: 'setDeviceTier',
     run: (userDO: UserDOInstance, caller: UserCaller) => userDO.setDeviceTier(caller, 'dev-1', 'raw'),
@@ -292,12 +251,9 @@ const OWNER_ONLY_CALLS: OwnerOnlyCall[] = [
     ),
   },
 
-  // Writing a grant is granting the owner's machine away, and reading the
-  // roster hands over every other workspace's grants too.
   { capability: 'device.consent', name: 'listDeviceConsents', run: (u, c) => u.listDeviceConsents(c) },
   { capability: 'device.consent', name: 'revokeDeviceConsent', run: (u, c) => u.revokeDeviceConsent(c, WORKSPACE, 'dev-1') },
 
-  // The registry and the daemon's own credential exchange.
   { capability: 'device.manage', name: 'listDevices', run: (u, c) => u.listDevices(c) },
   { capability: 'device.manage', name: 'registerDevice', run: (u, c) => u.registerDevice(c, 'device') },
   { capability: 'device.manage', name: 'revokeDevice', run: (u, c) => u.revokeDevice(c, 'dev-1') },
@@ -307,10 +263,6 @@ const OWNER_ONLY_CALLS: OwnerOnlyCall[] = [
   { capability: 'device.manage', name: 'verifyDeviceConnectTicket', run: (u, c) => u.verifyDeviceConnectTicket(c, 'pct_x') },
   { capability: 'device.manage', name: 'issueDeviceConnectTicket', run: (u, c) => u.issueDeviceConnectTicket(c, 'pdt_x') },
 
-  // A slate share granted to this owner is the owner's receipt — the write
-  // stamps the owner's id on a foreign workspace's share and the read hands
-  // over every blueprint the owner was ever named on. Neither belongs to a
-  // workspace token: the capability floors at owner_only.
   {
     capability: 'shares',
     name: 'sharesReceived_add',
@@ -322,8 +274,6 @@ const OWNER_ONLY_CALLS: OwnerOnlyCall[] = [
   { capability: 'shares', name: 'sharesReceived_list', run: (u, c) => u.sharesReceived_list(c) },
   { capability: 'shares', name: 'sharesReceived_forget', run: (u, c) => u.sharesReceived_forget(c, USER_ID) },
 
-  // The owner's Drive. Every workspace already reaches the same tenant through
-  // its own `/shared` mount, so the management surface is the owner's alone.
   { capability: 'drive', name: 'drive_list', run: (u, c) => u.drive_list(c, '/') },
   { capability: 'drive', name: 'drive_mkdir', run: (u, c) => u.drive_mkdir(c, '/x') },
   { capability: 'drive', name: 'drive_rename', run: (u, c) => u.drive_rename(c, '/x', '/y') },
@@ -342,14 +292,11 @@ const OWNER_ONLY_CALLS: OwnerOnlyCall[] = [
   { capability: 'drive', name: 'drive_readChunk', run: (u, c) => u.drive_readChunk(c, 't', 0, 1) },
   { capability: 'drive', name: 'drive_abortDownload', run: (u, c) => u.drive_abortDownload(c, 't') },
 
-  // LAST, because an owner reaching it destroys the object under every row
-  // above: its storage is dropped and its context aborted, so no later call
-  // could observe anything but a wiped harness.
+  // Last: an owner reaching it drops the object's storage and aborts its context.
   { capability: 'account', name: 'deleteAccount', run: (u, c) => u.deleteAccount(c, USER_ID) },
 ];
 
-/** Did the boundary refuse this call, as opposed to the call failing for its
- *  own reasons (no device connected, unknown change id, stubbed MCP client)? */
+/** Refused by the boundary, as opposed to failing for its own reasons (no device, stubbed MCP). */
 async function refused(call: Pick<GatedCall, 'run'>, userDO: UserDOInstance, caller: UserCaller): Promise<boolean> {
   try {
     await call.run(userDO, caller);
@@ -363,25 +310,18 @@ async function refused(call: Pick<GatedCall, 'run'>, userDO: UserDOInstance, cal
 async function setupWorkspaces(
   options: { connectedDeviceId?: string } = {},
 ): Promise<TestUserDO & { token: string; otherToken: string }> {
-  // A responder, so a call that PASSES the boundary completes instead of
-  // hanging on a socket nobody listens to — the fixture cannot seed a binding
-  // through the card the owner actually answers otherwise.
+  // A responder, so a call that passes the boundary completes instead of hanging.
   const harness = createTestUserDO({ ...options, deviceResponder: daemon });
   const token = await provisionTestWorkspace(harness, WORKSPACE, 'Workspace A');
   const otherToken = await provisionTestWorkspace(harness, OTHER_WORKSPACE, 'Workspace B');
 
-  // A connected socket must belong to a registered device row. The real hub
-  // cannot accept a slot whose row does not exist; the old fixture only
-  // attached the socket, so deviceRpc quite correctly read "no device
-  // connected" before it ever reached the sibling-consent assertion.
+  // The real hub cannot accept a socket whose device row does not exist.
   if (options.connectedDeviceId) {
     harness.sql.exec(
       `INSERT INTO user_devices (id, token_hash, label) VALUES (?, ?, ?)`,
       options.connectedDeviceId, 'fixture-token-hash', 'fixture device',
     );
-    // And it reports like a daemon: a machine that has proved nothing runs no
-    // commands, which would refuse these calls for a reason this suite is not
-    // about.
+    // Reports like a daemon: a machine that has proved nothing runs no commands.
     await harness.sendDeviceHello(CAPABLE_HELLO);
   }
 
@@ -401,7 +341,6 @@ describe('a registered workspace reaches the whole surface', () => {
     }
 
     expect(cut).toEqual([]);
-    // Named explicitly so the reach is legible, not just counted.
     expect(kept).toContain('device.rpc:deviceRpc');
     expect(kept).toContain('mcp.tools:userMcp_callTool');
     expect(kept).toContain('credentials.other:getAuthHeaders(github)');
@@ -481,12 +420,8 @@ describe('a registered workspace reaches the whole surface', () => {
 });
 
 describe('the boundary fails closed', () => {
-  /** Four callers a privileged method must refuse: two presenting no identity
-   *  at all, and two presenting a token this deployment never minted —
-   *  including a workspace-shaped token offered in the owner's slot, which is
-   *  the confusion the two-armed caller type invites. The shapes the gate's
-   *  own parse rejects are its unit's to cover; these are the values that
-   *  reach every method. */
+  /** Callers a privileged method must refuse: no identity, or a token this deployment never minted
+   *  (including a workspace-shaped token in the owner's slot). */
   const badCallers: Array<{ name: string; caller: UserCaller }> = [
     { name: 'an empty owner token', caller: { ownerToken: '' } },
     { name: 'an empty workspace token', caller: { workspaceToken: '' } },
@@ -510,8 +445,7 @@ describe('the boundary fails closed', () => {
 
   test('a workspace that never claimed an owner reaches nothing', async () => {
     const harness = createTestUserDO();
-    // No registerWorkspace, no mint — exactly the state of a DO the Worker has
-    // not yet claimed. There is no token it could present.
+    // The state of a DO the Worker has not yet claimed: no token to present.
     const allowed: string[] = [];
 
     for (const call of GATED_CALLS) {
@@ -558,11 +492,8 @@ describe('capability provisioning', () => {
   });
 
   test('concurrent first touches settle on ONE identity, never a split one', async () => {
-    // Two Worker invocations both see "no token" and both reconcile. Without a
-    // serialization point each mints and each installs, and the surviving
-    // stored hash can belong to a different mint than the surviving installed
-    // token — a workspace that can never authenticate and never re-provisions,
-    // because it does hold a token.
+    // Two invocations both reconciling without a serialization point can leave the stored hash from a
+    // different mint than the installed token: a workspace that never authenticates nor re-provisions.
     const harness = createTestUserDO();
     await harness.userDO.registerWorkspace(await testOwner(), WORKSPACE, 'Workspace A');
 
@@ -579,8 +510,7 @@ describe('capability provisioning', () => {
 
   test('a workspace holding a token the registry does not know is repaired', async () => {
     const harness = await setupWorkspaces();
-    // Exactly the state a failed teardown leaves behind: the workspace kept its
-    // copy while the UserDO dropped the row.
+    // The state a failed teardown leaves: the workspace kept its copy, the UserDO dropped the row.
     harness.db.prepare('DELETE FROM workspace_capability_tokens WHERE workspace_name = ?').run(WORKSPACE);
 
     await harness.userDO.ensureWorkspaceCapability(WORKSPACE, await sha256Hex(harness.token));
@@ -623,9 +553,7 @@ describe('capability provisioning', () => {
 });
 
 describe('workspace name reservation', () => {
-  /** The roster rows as SQL sees them. A reservation is invisible to every
-   *  owner-visible read until it is published (KINU-027), so the listing cannot
-   *  answer whether a release left the row alone — only the row can. */
+  /** Raw SQL rows: a reservation is invisible to owner-visible reads until published (KINU-027). */
   const rosterRows = (harness: TestUserDO): string[] => harness.db
     .prepare<{ name: string }, []>(`SELECT name FROM user_workspaces ORDER BY name`)
     .all().map((row) => row.name);
@@ -667,31 +595,21 @@ describe('workspace name reservation', () => {
 });
 
 describe('facets attenuate with their workspace', () => {
-  // A subordinate or head presents the PARENT workspace's token (pushed at
-  // spawn, refreshed on reissue — see unit-subordinates / unit-facet-spawn).
-  // What that BUYS is here: the token resolves as the parent no matter who
-  // holds it, so scoping follows the workspace and no facet carries identity
-  // of its own. These need a LIVE device: without one the device methods
-  // short-circuit on "no device connected" before ever reaching the identity
-  // substitution, and the assertions below would hold whether or not it
-  // existed.
+  // Facets present the parent workspace's token, so identity follows the workspace. These need a live
+  // device: otherwise device methods short-circuit before the identity substitution.
   test('device consent answers for the PROVEN workspace, not the name the caller passed', async () => {
     const harness = await setupWorkspaces({ connectedDeviceId: 'dev-1' });
     const facetCaller: UserCaller = { workspaceToken: harness.token };
-    // workspace-a is bound to the machine, and the owner has turned that
-    // device's Sandbox switch off — the two facts that lift the file view.
     harness.consentDecision = 'always';
     await harness.userDO.deviceRpc(facetCaller, 'readFile', ['/tmp/a'], { agentName: WORKSPACE });
     expect(await harness.userDO.setDeviceTier(await testOwner(), 'dev-1', 'raw')).toEqual({ ok: true });
 
-    // A facet of workspace-a naming anything at all still gets workspace-a's
-    // answer — its identity is the token, not the argument.
+    // A facet naming anything still gets workspace-a's answer: its identity is the token, not the argument.
     expect(await harness.userDO.getDeviceFileView(facetCaller, 'some-facet-name'))
       .toEqual({ unconfined: true });
     expect(await harness.userDO.getDeviceFileView(facetCaller, OTHER_WORKSPACE))
       .toEqual({ unconfined: true });
 
-    // …and workspace-b cannot read workspace-a's grant by naming it.
     const sibling: UserCaller = { workspaceToken: harness.otherToken };
     expect(await harness.userDO.getDeviceFileView(sibling, WORKSPACE))
       .toEqual({ unconfined: false });
@@ -700,15 +618,12 @@ describe('facets attenuate with their workspace', () => {
 
   test('a workspace cannot ride a sibling\'s remembered device grant', async () => {
     const harness = await setupWorkspaces({ connectedDeviceId: 'dev-1' });
-    // workspace-a has already said "always" for this device.
     harness.consentDecision = 'always';
     await harness.userDO.deviceRpc({ workspaceToken: harness.token }, 'readFile', ['/tmp/a'], { agentName: WORKSPACE });
     harness.consentDecision = 'deny';
     const sibling: UserCaller = { workspaceToken: harness.otherToken };
 
-    // workspace-b calls while CLAIMING to be workspace-a. Consent is resolved
-    // against the proven caller, so it is asked rather than waved through — and
-    // this harness's workspace refuses.
+    // Consent resolves against the proven caller, so a borrowed claim is asked, not waved through.
     await expect(harness.userDO.deviceRpc(sibling, 'exec', ['ls'], { agentName: WORKSPACE }))
       .rejects.toThrow('device use was not approved');
     expect(harness.consentPrompts.filter((p) => p.workspace === OTHER_WORKSPACE)).toEqual([{
@@ -718,8 +633,6 @@ describe('facets attenuate with their workspace', () => {
       workspaceName: OTHER_WORKSPACE,
     }]);
 
-    // The remembered grant still belongs to workspace-a alone; being asked did
-    // not create one for the caller that tried to borrow it.
     const consents = await harness.userDO.listDeviceConsents(await testOwner());
     expect(consents.map((c) => c.agentName)).toEqual([WORKSPACE]);
     harness.close();
@@ -730,8 +643,7 @@ describe('facets attenuate with their workspace', () => {
     const facetCaller: UserCaller = { workspaceToken: harness.token };
     expect((await harness.userDO.listWorkspaces(facetCaller)).entries).toHaveLength(2);
 
-    // Same token, same facet, no re-issue anywhere: the registry answers
-    // current state on every call.
+    // No re-issue: the registry answers current state on every call.
     await harness.userDO.setWorkspaceDisplayName(facetCaller, WORKSPACE, 'Renamed by its facet', 'user');
     await expect(harness.userDO.setWorkspaceDisplayName(facetCaller, OTHER_WORKSPACE, 'Hijacked', 'user'))
       .rejects.toThrow('may only rename itself');
@@ -744,31 +656,21 @@ describe('facets attenuate with their workspace', () => {
     const harness = await setupWorkspaces();
     const facetCaller: UserCaller = { workspaceToken: harness.token };
 
-    // Name arguments stay scoped to the proven workspace: the file view answers
-    // from the proven grant (pinned with a live device above), and a rename
-    // names its own workspace or fails.
     await expect(harness.userDO.setWorkspaceDisplayName(facetCaller, OTHER_WORKSPACE, 'Hijacked', 'user'))
       .rejects.toThrow('may only rename itself');
     harness.close();
   });
 });
 
-// ── Completeness ────────────────────────────────────────────────────────────
-// The lists above are only as good as their coverage of the class. This reads
-// the source so a privileged method added later must either take the caller or
-// be deliberately exempted — it cannot quietly ship ungated.
+// Completeness: reads the source so a new privileged method must take the caller or be exempted.
 
 const USER_DO_SOURCE = readFileSync(join(import.meta.dir, '..', 'src', 'user', 'user-do.ts'), 'utf8');
 
-/** Not RPC: the Durable Object runtime calls the first four, and the SDK base
- *  calls `createMcpOAuthProvider` in process to build its manager's OAuth
- *  provider — never a stub-holder, and `unit-rpc-surface.test.ts` holds the
- *  override to being sealed. */
+/** Not RPC: the runtime calls the first four; the SDK base calls `createMcpOAuthProvider` in
+ *  process (`unit-rpc-surface.test.ts` holds that override sealed). */
 const NON_RPC_METHODS = new Set(['fetch', 'webSocketMessage', 'webSocketClose', 'webSocketError', 'createMcpOAuthProvider']);
 
-/** The one method that cannot take a caller, because it IS the bootstrap of
- *  caller identity. Safe by shape rather than by gate — see its own tests
- *  below and the contract asserted here. */
+/** Cannot take a caller: it bootstraps caller identity. Safe by shape, not by gate. */
 const IDENTITY_BOOTSTRAP = 'ensureWorkspaceCapability';
 
 const declaredMembers = () => declaredClassMembers(USER_DO_SOURCE);
@@ -785,8 +687,7 @@ describe('no privileged UserDO method escapes the gate', () => {
   });
 
   test('the check sees the method shapes someone might actually add', () => {
-    // Guards the guard: a regex that only matched `async foo(` would let a
-    // getter, a plain method, or a `public async` one through ungated.
+    // Guards the guard: a regex matching only `async foo(` would let getters and modifiers through.
     const declared = declaredMembers();
     const named = (name: string) => declared.some((m) => m.name === name);
     expect(named('getAuthHeaders')).toBe(true);              // async, no modifier

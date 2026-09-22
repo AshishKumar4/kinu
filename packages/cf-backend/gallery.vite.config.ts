@@ -1,10 +1,4 @@
-/**
- * Standalone Vite config for the design gallery (gallery.html) — frontend
- * only, no Cloudflare worker plugin, so the component gallery renders without
- * auth or bindings. Used by the design-system audit harness:
- *
- *   bunx vite dev --config gallery.vite.config.ts --port 5199
- */
+/** Design gallery config, frontend only (no worker plugin): `bunx vite dev --config gallery.vite.config.ts --port 5199`. */
 import { fileURLToPath } from "node:url";
 import { dirname, resolve } from "node:path";
 import tailwindcss from "@tailwindcss/vite";
@@ -16,12 +10,8 @@ import { promptText } from "./vite-prompt-text";
 const galleryRoot = dirname(fileURLToPath(import.meta.url));
 
 export default defineConfig({
-  // The hero's shaders: this config has no worker environment, so the loader
-  // needs no scoping here.
   plugins: [promptText(), wgslVitePlugin(), react(), tailwindcss()],
-  // @plannotator/web-highlighter ships UMD only (its `module` field points at
-  // the same min.js), so served raw it has no `default` export and the plan
-  // panel's lazy chunk dies in dev. Prebundle it; builds interop natively.
+  // UMD-only, so it has no `default` export when served raw; prebundle it.
   optimizeDeps: {
     include: ["@plannotator/web-highlighter"],
   },
@@ -31,10 +21,7 @@ export default defineConfig({
       "node:crypto": resolve(galleryRoot, "client-node-stubs.ts"),
       "node:async_hooks": resolve(galleryRoot, "client-node-stubs.ts"),
       "node:util": resolve(galleryRoot, "client-node-stubs.ts"),
-      // The agent transport. A frame that mounts a PAGE rather than a surface
-      // gets no `Rpc` prop — the page opens its own connection — so without
-      // these two the page opened a WebSocket to a vite server that is not a
-      // Worker and drew nothing. Three fork frames did exactly that.
+      // Pages open their own agent connection; without these stubs they dial a non-Worker vite server.
       "agents/react": resolve(galleryRoot, "src/gallery-agent-stub.ts"),
       "@cloudflare/ai-chat/react": resolve(galleryRoot, "src/gallery-agent-stub.ts"),
     },

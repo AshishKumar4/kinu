@@ -1,12 +1,6 @@
 /**
- * The hub's half of the daemon self-update: the UPDATE frame a HELLO earns,
- * and the version the Devices read model shows for it.
- *
- * Driven through the real socket handler and the real `listDevices`, over a
- * harness whose `ASSETS` binding serves a build stamp and the artifacts'
- * checksums. The hub pushes exactly when the HELLO named a build that is not
- * the served one and the owner did not opt out; a daemon that named none
- * keeps the `daemon_outdated` reading and gets nothing.
+ * The hub pushes UPDATE on HELLO exactly when the named build differs from the served one and the owner
+ * did not opt out; a daemon naming no build keeps `daemon_outdated` and gets nothing.
  */
 import { afterEach, describe, expect, test } from 'bun:test';
 import { Database } from 'bun:sqlite';
@@ -21,8 +15,7 @@ const LINUX_X64 = '/downloads/kinu-cli-linux-x64.tar.gz';
 
 const CHECKSUM = 'a'.repeat(64);
 
-/** The hub RELAYS the build lane's signature; it never mints one, so any
- *  well-formed value stands in here — the daemon is what verifies it. */
+/** The hub relays the build lane's signature and never mints one; the daemon verifies it. */
 const SIGNATURE = 'c2ln'.repeat(21) + 'c2ln';
 
 const open: TestUserDO[] = [];
@@ -31,8 +24,7 @@ afterEach(() => {
   for (const harness of open.splice(0)) harness.close();
 });
 
-/** A registered device with the harness socket attached, on a deployment
- *  serving `SERVED` (or nothing, when `served` is null). */
+/** No served build when `served` is null. */
 async function connected(served: string | null = SERVED): Promise<TestUserDO & { deviceId: string }> {
   const harness = createTestUserDO(served === null
     ? {}
@@ -94,7 +86,6 @@ describe('the UPDATE frame a HELLO earns', () => {
     expect(harness.devicePushes).toEqual([]);
     const [row] = await devices(harness);
     expect(row).toMatchObject({ hostname: 'studio', version: null, update: 'unreported', servedVersion: SERVED });
-    // The sandbox verdict path is untouched: this daemon proved a sandbox.
     expect(row?.sandbox.capability).toBe('sandboxed');
   });
 
@@ -124,14 +115,12 @@ describe('the UPDATE frame a HELLO earns', () => {
     const harness = await connected();
     await harness.sendDeviceHello(hello({ version: '0.2.0', updateCheck: true }));
 
-    // An unstamped report is not a build the deploy published, so the hub
-    // must never push the production build over it.
+    // An unstamped report is not a published build, so the hub must never push over it.
     expect(harness.devicePushes).toEqual([]);
 
     const [row] = await devices(harness);
     expect(row).toMatchObject({ version: '0.2.0', update: 'unstamped' });
-    // The badge the Devices card shows is the exported copy constant, keyed
-    // by this same state — never a literal the page invented for itself.
+    // The badge is the exported copy constant, never a page literal.
     expect(DEVICE_UPDATE_COPY).toHaveProperty('unstamped');
   });
 
@@ -175,10 +164,8 @@ describe('the Devices read model carries the version and the served build', () =
 });
 
 describe('a UserDO opened over storage from before the self-update lane', () => {
-  // The shipped user_devices DDL — every column this table carried before the
-  // lane, and none of it. A `CREATE TABLE IF NOT EXISTS` inside `initUserTables`
-  // is a no-op on this storage, so the object under test runs against exactly
-  // the shape a pre-lane account holds in production.
+  // The shipped pre-lane user_devices DDL: `CREATE TABLE IF NOT EXISTS` in `initUserTables` is a no-op
+  // on it, so the object runs against what a pre-lane account holds.
   const SHIPPED_USER_DEVICES = `
     CREATE TABLE IF NOT EXISTS user_devices (
       id              TEXT PRIMARY KEY,
@@ -217,8 +204,7 @@ describe('a UserDO opened over storage from before the self-update lane', () => 
     const { deviceId } = await harness.userDO.registerDevice(await testOwner(), 'studio');
     harness.attachDevice(deviceId);
 
-    // The failing statement in production: recordDeviceHello named columns the
-    // old table never had. Here it writes its own table instead.
+    // recordDeviceHello once named columns the old table never had; it writes its own table instead.
     await harness.sendDeviceHello(hello({ version: '0.2.0+older', updateCheck: true }));
 
     expect(harness.devicePushes).toEqual([{
@@ -247,8 +233,7 @@ describe('a UserDO opened over storage from before the self-update lane', () => 
     await harness.userDO.registerDevice(await testOwner(), 'studio');
 
     const [row] = await devices(harness);
-    // No user_device_builds row exists yet — the LEFT JOIN absent row reads
-    // as the daemon that named nothing.
+    // No user_device_builds row: the LEFT JOIN absent row reads as a daemon that named nothing.
     expect(row).toMatchObject({ version: null, update: 'unreported' });
 
     db.close();

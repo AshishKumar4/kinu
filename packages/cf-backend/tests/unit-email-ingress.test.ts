@@ -1,7 +1,5 @@
-// Mission Inbox — inbound side. Addressing (recipient → agent), MIME parsing
-// + quoted-history stripping, the sender trust gate (owner / allowlist /
-// dropped), Message-ID dedupe, the rate limit, and the Worker-level routing
-// seam. Mocks live only at the email seam (raw MIME in, RPC target out).
+// Mission Inbox inbound: addressing, MIME parsing, sender trust gate, dedupe, rate limit, Worker routing.
+// Mocks only at the email seam (raw MIME in, RPC target out).
 import { describe, expect, test } from 'bun:test';
 import { Database } from 'bun:sqlite';
 import * as v from 'valibot';
@@ -96,7 +94,6 @@ describe('addressing', () => {
   });
 });
 
-/** The text MIME part `text` parses to, through the production parse. */
 async function strippedBody(text: string): Promise<string> {
   const raw = [
     'From: owner@example.com',
@@ -194,7 +191,6 @@ describe('acceptInboundEmail — the trust gate', () => {
     expect(event.trust).toBe('authenticated');       // capped — never owner
     expect(event.priority).toBe('normal');
 
-    // The thread reply channel is bound to the event and carries threading.
     const channel = present(replies.findOpenByEvent(result.event_id), 'the open reply channel for the event');
     expect(channel.kind).toBe('email_thread');
     expect(v.parse(v.object({
@@ -206,7 +202,6 @@ describe('acceptInboundEmail — the trust gate', () => {
       message_id: '<abc@mail.example.com>',
     });
 
-    // The event wakes a turn: it appears in the drain batch.
     const batch = present(buildDrainBatch(log.pending()), 'the drain batch');
     expect(batch.ids).toContain(result.event_id);
     expect(batch.text).toContain('email (owner@example.com)');
@@ -258,9 +253,7 @@ describe('acceptInboundEmail — the trust gate', () => {
   });
 
   test('a long mail spills its body and the brief cites the path', async () => {
-    // The agent is woken BY this message. A brief that silently holds its
-    // first few hundred characters leaves it reading a fragment it cannot
-    // tell is a fragment, with nothing to read the rest from.
+    // The agent is woken by this message; a silently truncated brief reads as complete.
     const { deps, log, files } = makeDeps();
     const body = `URGENT-HEAD ${'detail '.repeat(400)}ACTION-TAIL`;
     const result = await acceptInboundEmail(deps, incoming({ body_text: body }));
@@ -295,13 +288,9 @@ describe('acceptInboundEmail — the trust gate', () => {
   });
 });
 
-// KINU-054, the header half. Every id in a References chain arrives from
-// outside, the chain only ever grows, and nothing in the protocol shortens it.
-// Left alone it becomes a header no receiver is obliged to accept — RFC 5322
-// §2.1.1 puts the whole field, name included, inside 998 octets.
+// KINU-054: References chains only grow; RFC 5322 §2.1.1 caps the whole field at 998 octets.
 describe('threading identity is bounded at admission', () => {
-  /** The field body budget for `References`, from the protocol: the 998-octet
-   *  line minus the field name and its `: `. */
+  /** The 998-octet line minus the field name and its `: `. */
   const REFERENCES_BUDGET = 998 - 'References'.length - 2;
 
   test('a msg-id is admitted, repaired never, and refused when it cannot fit a line', () => {
@@ -311,8 +300,7 @@ describe('threading identity is bounded at admission', () => {
     expect(boundedMessageId('abc@mail.example.com')).toBeNull();
     expect(boundedMessageId('<a b@x>')).toBeNull();
     expect(boundedMessageId(null)).toBeNull();
-    // Longer than a line can carry. Null, not a truncation: a cut msg-id is a
-    // DIFFERENT identity, and threading on it would silently thread on nothing.
+    // Null, not a truncation: a cut msg-id is a different identity.
     expect(boundedMessageId(`<${'x'.repeat(1_200)}@x>`)).toBeNull();
   });
 
@@ -322,12 +310,10 @@ describe('threading identity is bounded at admission', () => {
 
     expect(bounded.length).toBeLessThanOrEqual(REFERENCES_BUDGET);
     const kept = bounded.split(' ');
-    // The first id is what a reader threads the whole conversation under.
     expect(kept[0]).toBe('<r000@x>');
-    // The tail is what it threads THIS message under, so the newest survive.
+    // The tail threads this message, so the newest survive.
     expect(kept[kept.length - 1]).toBe('<answered@x>');
     expect(kept[kept.length - 2]).toBe('<r199@x>');
-    // Trimming came from the middle, so entries were genuinely dropped.
     expect(kept.length).toBeLessThan(201);
     expect(kept).not.toContain('<r001@x>');
   });
@@ -347,8 +333,7 @@ describe('threading identity is bounded at admission', () => {
 
     const payload = requireEmailEvent(log, result.event_id).payload;
     expect(present(payload.references, 'the event payload References').length).toBeLessThanOrEqual(REFERENCES_BUDGET);
-    // One authority: the payload the model reads and the address the reply is
-    // sent from cannot disagree about which thread this is.
+    // One authority: the payload and the reply address cannot disagree about the thread.
     const channel = present(replies.findOpenByEvent(result.event_id), 'the open reply channel for the event');
 
     const addr = v.parse(
@@ -375,10 +360,7 @@ describe('threading identity is bounded at admission', () => {
 });
 
 describe('the inbox gate says when it is deaf', () => {
-  // A rate-limited delivery leaves no trace the agent can read: the sender
-  // gets nothing, nothing is stored, and the agent goes on believing it has
-  // seen its inbox. A reply storm or a list subscription makes it silently
-  // deaf for a whole minute.
+  // A rate-limited delivery leaves no trace the agent can read: it silently goes deaf.
   const RESET_AT = 1_700_000_060_000;
 
   test('while the window is exhausted, the turn is told — with the limit and the reset', () => {
@@ -398,7 +380,6 @@ describe('the inbox gate says when it is deaf', () => {
 });
 
 describe('routeInboundEmail — the Worker seam', () => {
-  /** A target that accepts whoever asks — the pre-parse gate's happy answer. */
   function target(over: Partial<EmailDeliveryTarget> = {}): EmailDeliveryTarget {
     return {
       authorizeEmailSender: async () => ({ authorized: true }),
@@ -520,16 +501,13 @@ describe('routeInboundEmail — the Worker seam', () => {
   });
 
   test('an unauthorized sender is refused BEFORE the message is read or parsed', async () => {
-    // The defect: the whole raw stream was buffered and PostalMime parsed every
-    // body and attachment before anything asked who the sender was — the first
-    // owner/allowlist comparison ran inside the agent, after the parse.
+    // The sender gate must run before PostalMime parses the body or attachments.
     let pulled = false;
     const message = mockMessage({ from: 'stranger@elsewhere.example' });
 
     const watched = {
       ...message,
-      // `highWaterMark: 0` so nothing is pulled until a READER asks, which is
-      // the thing that must not happen for a sender the agent does not accept.
+      // `highWaterMark: 0`: nothing is pulled until a reader asks.
       raw: new ReadableStream<Uint8Array>(
         { pull(controller) { pulled = true; controller.close(); } },
         { highWaterMark: 0 },
@@ -550,8 +528,7 @@ describe('routeInboundEmail — the Worker seam', () => {
   test('a message over the byte ceiling is dropped without resolving an agent', async () => {
     let resolves = 0;
 
-    // Sized clearly over any ceiling the route sets. The ceiling itself is
-    // read from the refusal the route hands back, never restated here.
+    // Clearly over any ceiling; the ceiling is read from the route's refusal, never restated.
     const result = await routeInboundEmail(
       mockMessage({ rawSize: 10 * 1024 * 1024 }),
       DOMAIN,
@@ -571,9 +548,7 @@ describe('routeInboundEmail — the Worker seam', () => {
   });
 
   test('a message that LIES about its size is refused by the count of arriving bytes', async () => {
-    // `rawSize` is the edge's claim and the pre-filter; the gate is the count,
-    // so a stream that keeps arriving past the limit is cut off there rather
-    // than assembled. Sized clearly over, for the same reason as above.
+    // `rawSize` is the edge's claim; the byte count is the gate, so an overlong stream is cut off.
     const oversize = 'x'.repeat(3 * 1024 * 1024);
     const body = new Response(`Subject: big\r\n\r\n${oversize}`).body;
 

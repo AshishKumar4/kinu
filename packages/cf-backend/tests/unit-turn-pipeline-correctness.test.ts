@@ -22,26 +22,14 @@ import type { ModelMessage, ToolSet, UIMessage } from 'ai';
 import { jsonSchema, streamText, tool } from 'ai';
 import * as v from 'valibot';
 
-/** The provider handle a live streamText also passes. `beforeStep` forwards
- *  only `stepNumber` and `messages` to the shared pipeline, so this is supplied
- *  as the model a step carries rather than asserted away. */
-/**
- * The messages one step actually carries, through the turn seam.
- *
- * Awaited: the shared pipeline is promoted to a Promise whenever a registered
- * extension must finish I/O before the model sees its rewrite, and this actor
- * registers three. Reading the result synchronously takes a pending Promise for
- * "nothing changed" and silently passes the input back.
- */
+/** Awaited: with I/O-bound extensions registered the step pipeline returns a Promise. */
 async function stepMessages(
   agent: HarnessOrchestratorAgent, stepNumber: number, messages: readonly ModelMessage[],
 ): Promise<ModelMessage[]> {
   return [...await chatSessionTurns(agent).step(stepNumber, messages)];
 }
 
-/** One conversation as role plus flattened text — the comparison that survives
- *  the same message being carried as a string on one side and as one text part
- *  on the other. */
+/** Role plus flattened text, so string content and a single text part compare equal. */
 function spoken(messages: readonly ModelMessage[]): { role: string; text: string }[] {
   return messages.map((message) => ({
     role: message.role,
@@ -51,7 +39,6 @@ function spoken(messages: readonly ModelMessage[]): { role: string; text: string
   }));
 }
 
-/** The turn-local block the ledger weaves into every step's request. */
 function isDynamicContextBlock(message: ModelMessage): boolean {
   if (message.role !== 'user') return false;
   const { content } = message;
@@ -59,17 +46,9 @@ function isDynamicContextBlock(message: ModelMessage): boolean {
   return !Array.isArray(content) && content.includes('<dynamic_context');
 }
 
-/** No `TasksToolProbeSchema` here: `v.function()` erases the SIGNATURE, so a
- *  hand-driven `execute(input)` compiled with the SDK's `options` argument
- *  missing and only failed at runtime, inside the effect-claim wrapper reading
- *  `options.toolCallId`. `toolExecute` is the typed drive every other suite uses
- *  and it supplies the canonical `ToolExecutionOptions`, which is what the SDK
- *  hands a tool in production. */
+/** Drive tools via `toolExecute`: `v.function()` erases the signature, dropping the SDK's `options` argument. */
 const RoleResultSchema = v.object({ role: v.string() });
 
-// The turn pipeline is split across the actor substrate (actor-agent.ts —
-// beforeTurn assembly, the BackendHost, the event-injection machinery) and
-// the orchestrator (onChatResponse sequencing, schema, callables).
 const actor = readFileSync(join(import.meta.dir, '..', 'src', 'actor-agent.ts'), 'utf8');
 
 const source = readFileSync(join(import.meta.dir, '..', 'src', 'orchestrator.ts'), 'utf8');
@@ -80,17 +59,13 @@ const takePick = readFileSync(join(import.meta.dir, '..', '..', 'core', 'src', '
 
 const exploration = readFileSync(join(import.meta.dir, '..', 'src', 'exploration-hosting.ts'), 'utf8');
 
-// The one turn loop this backend runs on, and the chat runner under it: what a
-// pin used to read off Think's hooks it reads off these.
 const loop = readFileSync(join(import.meta.dir, '..', '..', 'core', 'src', 'orchestrator', 'chat-session.ts'), 'utf8');
 
 const chatRunner = readFileSync(join(import.meta.dir, '..', '..', 'core', 'src', 'chat.ts'), 'utf8');
 
 const transport = readFileSync(join(import.meta.dir, '..', 'src', 'chat-transport.ts'), 'utf8');
 
-/** Every cf-backend source that turns a reasoning-effort level into provider
- *  options. Core owns the function; this names its callers, so a second
- *  derivation added anywhere in the backend shows up as a new entry. */
+/** cf-backend callers of core's `reasoningEffortOptions`, so a second derivation shows up as a new entry. */
 function effortDerivationSites(): string[] {
   const sites: string[] = [];
 
@@ -110,21 +85,14 @@ function effortDerivationSites(): string[] {
   return sites.sort();
 }
 
-/** The exploration substrate a merge must never reach. Fail-loud on every member
- *  at once rather than member by member: `mergeLLM` touching the spawn seams at
- *  all is the wiring regression this wants named, and a Proxy cannot grow a
- *  quietly answering member the day the interface grows one. */
+/** Fails loud on any member access: a merge must never reach the exploration substrate. */
 const noExplorationHost: ExplorationHostSeams = new Proxy(Object.create(null), {
   get: (_target, key) => {
     throw new Error(`the head merge reached the exploration substrate: ${String(key)}`);
   },
 });
 
-/** What the model behind the port answers a merge with. Valid JSON, because the
- *  assertion is what the port was ASKED for and a refused parse would take the
- *  second ask down with it. Built through the shared scripted factory, which
- *  answers `doStream` as well — nothing here streams, and a fixture that only
- *  implements the half production skips is how nine of them failed at once. */
+/** Valid JSON merge answer; the scripted factory also answers `doStream`. */
 const MERGE_ANSWER_MODEL = scriptedTurnModel({
   doGenerate: () => ({
     content: [{
@@ -141,17 +109,12 @@ const MERGE_ANSWER_MODEL = scriptedTurnModel({
   }),
 });
 
-/** A SECOND judge route, disagreeing with the shared merge fixture on both axes:
- *  a route that moved only its model cannot tell a bound effort from a routed
- *  one, and one that moved only its effort cannot tell a bound model. */
+/** A second judge route differing in both model and effort, so neither can pass alone. */
 const REBOUND_JUDGE = {
   model: 'fake/deep-rebound', reasoningEffort: 'low',
 } satisfies { model: string; reasoningEffort: ReasoningEffort };
 
-/** The shared merge fixture with that route in its `deep` slot. A rebind rather
- *  than a second catalog resolution: `judge` is a fixed-tier producer, so its
- *  route IS `profile.tiers.deep`, and resolving a whole second profile would
- *  restate the fixture's construction beside it to move one slot. */
+/** `judge` is a fixed-tier producer, so its route is `profile.tiers.deep`. */
 function reboundJudgeRoute(profile: ResolvedTurnProfile): ResolvedTurnProfile {
   return { ...profile, tiers: { ...profile.tiers, deep: REBOUND_JUDGE } };
 }
@@ -201,8 +164,7 @@ describe('turn-pipeline correctness wiring', () => {
   });
 
   test('the turn prompt carries the loaded SOUL', async () => {
-    // `beforeTurn` refreshes the soul only when nothing is cached, so the
-    // observed text is the one the turn renders.
+    // `beforeTurn` refreshes the soul only when nothing is cached.
     const harness = orchestratorHarness();
     const agent = harness.agent;
     agent.setObservedSoul('You are Atlas. Preserve the owner\'s exact requirements.');
@@ -213,13 +175,8 @@ describe('turn-pipeline correctness wiring', () => {
   });
 
   test('the second turn\'s request carries the message that started it, after the first', async () => {
-    // Two turns through the real pipeline: `beforeTurn` admits each against
-    // the context plane, `onChatResponse` closes the boundary. Measured on the
-    // deployed 234ed5d7d (bench-artifacts/first-run-flash-1789196459812/
-    // every-tool): the second turn's request held ONE user message, the first
-    // turn's, and the model answered the genesis signal twice. The boundary
-    // adopted the first turn's INPUT as the next turn's whole history, so the
-    // user message the second turn was started with never reached the model.
+    // Measured on deployed 234ed5d7d (bench-artifacts/first-run-flash-1789196459812/every-tool): the
+    // second turn's request held only the first turn's user message.
     const harness = orchestratorHarness();
     const agent = harness.agent;
     const first: ModelMessage = { role: 'user', content: 'first: list your tools' };
@@ -237,9 +194,7 @@ describe('turn-pipeline correctness wiring', () => {
     const following = await chatSessionTurns(agent).prepare(turn([first, reply, second]));
     const request = following?.messages ?? [];
 
-    // Both halves: the message that started this turn is in the request, and
-    // the first turn is still there ahead of it — a request that carried only
-    // the second message would pass a bare `toContain`.
+    // Both halves, in order: a bare `toContain` would pass with only the second message.
     expect(request.filter((message) => message.role === 'user')).toEqual([first, second]);
     expect(request.filter((message) => message.role === 'assistant')).toEqual([reply]);
   });
@@ -267,22 +222,13 @@ describe('turn-pipeline correctness wiring', () => {
 
     if (trial === undefined || prepared?.messages === undefined) throw new Error('the turn did not retain its request and trial');
     expect(prepared.messages[0]).toEqual({ role: 'user', content: 'use the NEW premise' });
-    // The trial retains what the model was CALLED with — the admitted history
-    // plus the dynamic block the step pipeline splices in — so the edit has to
-    // be in both. Compared on role and text: the request carries the
-    // assistant's answer as one text part and the retained revision as a
-    // string, and that shape is not what this case is about.
+    // The trial retains the called request (history plus dynamic block); compared on role and text.
     expect(spoken(trial.context)).toEqual(spoken(prepared.prompt));
     expect(trial.context.filter((message) => message.content === 'follow-up input')).toHaveLength(1);
   });
 
   test('a catalog the turn cannot reach runs on builtins; any other failure is the turn\'s own', async () => {
-    // The MCP descriptor read is one owner-plane hop. A hop that fails, times
-    // out or breaks mid-read is tolerated: the turn runs on builtins and the
-    // surface says the catalog is unavailable. A denied caller is not a read
-    // failure, and a turn that swallowed it would advertise "no MCP" for a
-    // fault that needs fixing. The class decides, never the mere presence of
-    // a catch.
+    // An unreachable catalog degrades to builtins; a denied caller is a fault and fails the turn.
     const turn = {
       system: 'sys',
       messages: [{ role: 'user' as const, content: 'hello' }],
@@ -310,27 +256,15 @@ describe('turn-pipeline correctness wiring', () => {
   });
 
   test('the admission count and the submitted model resolve ONE spec, not two', () => {
-    // The counter picks a provider by parsing the profile tier's spec; the model
-    // actually submitted comes from `resolveModel`, which NORMALISES first. So
-    // parsing the raw spec keyed the count on a different answer for exactly the
-    // forms normalisation exists to accept — a bare model id has no slash and
-    // `parseModelSpec` throws on it inside turn assembly, and a bare `@cf/…`
-    // parses to provider `@cf`, which no registry knows.
-    //
-    // A source pin because the rule is an AGREEMENT BETWEEN TWO CALL SITES: no
-    // behavioural test can state it without a turn harness that captures which
-    // provider was asked for a count, and the harness has no such seam. The
-    // property each site upholds alone is checked in unit-agent-registry.
+    // Source pin: both call sites must parse the normalized spec (bare ids and `@cf/…` break
+    // `parseModelSpec`); the harness has no seam to observe which provider counted.
     const assembleTurn = memberBody(actor, 'private async assembleTurn(input: TurnAssemblyInput): Promise<AssembledTurn>');
     expect(assembleTurn).toContain('parseModelSpec(providers.normalizeSpecSync(profile.tier.model))');
     expect(assembleTurn).not.toContain('parseModelSpec(profile.tier.model)');
   });
 
   test('a pinned model is the model the next turn\'s request names', async () => {
-    // The composer's picker writes through the setModel RPC and the turn must
-    // run on what it wrote — not on the account default the role's tier names.
-    // Since account profiles the resolution read only the owner's catalog, so
-    // every pinned workspace turned on the default while status named the pin.
+    // The turn runs on the `setModel` pin, not the role tier's account default.
     const harness = orchestratorHarness();
     const agent = harness.agent;
     agent.harnessInstallCatalog({
@@ -338,7 +272,6 @@ describe('turn-pipeline correctness wiring', () => {
       availableModels: ['workers-ai/account-default', 'workers-ai/pinned-model'],
     });
 
-    // The same RPC the picker uses, not a config write beside it.
     const pinned = await agent.setModel('workers-ai/pinned-model');
     expect(pinned).toEqual({ ok: true, spec: 'workers-ai/pinned-model' });
 
@@ -348,19 +281,14 @@ describe('turn-pipeline correctness wiring', () => {
       id: 'default', source: 'workspace', model: 'workers-ai/pinned-model',
       reasoningEffort: 'medium',
     });
-    // The request handed to the SDK is that resolution's model: the memoized
-    // instance the backend resolves the pinned spec to, not the default's.
+    // The request's model is the memoized instance for the pinned spec.
     const request = v.safeParse(v.object({ model: v.unknown() }), config ?? {});
     expect(request.success && request.output.model).toBe(agent.getModel());
   });
 
   test("a hosted actor's turn runs on the workspace's pinned model too", async () => {
-    // A hosted actor — an agent the owner added in the strip, a hire, a head, a
-    // node — resolves through one authority, and that authority was passing the
-    // role's tier model while the workspace was pinned. Measured 2026-09-18 on
-    // a local dev build: a workspace pinned to `openai-compat/fake-live`
-    // answered the added agent's pane on `workers-ai/@cf/zai-org/glm-5.3`, so
-    // the pane's words never reached the provider the owner chose.
+    // Measured 2026-09-18 on a local dev build: a workspace pinned to `openai-compat/fake-live`
+    // answered an added agent's pane on `workers-ai/@cf/zai-org/glm-5.3`.
     const workspace = orchestratorHarness();
     workspace.agent.harnessInstallCatalog({
       tiers: { default: { model: 'workers-ai/account-default' } },
@@ -381,24 +309,15 @@ describe('turn-pipeline correctness wiring', () => {
   });
 
   test("a hosted actor's snapshot reports the effective model and the tier source that chose it", async () => {
-    // The pane's picker reads `getActorSnapshot`, and it was answering the
-    // child's OWN config pin — a row no write path sets — so every agent
-    // pane drew an empty model while its pick wrote the workspace's. The
-    // snapshot now carries the same resolution the turn makes, with the
-    // source the pick would name.
-    //
-    // The child is added the way the tab strip's "+" adds one
-    // (`createSubordinateAgent`), so the roster row the snapshot resolves
-    // through is the row a real add writes — the read under test is then the
-    // whole path a pane takes, not a seeded row beside it.
+    // Defends: the snapshot reported the child's own (never-set) config pin. Added via
+    // `createSubordinateAgent` so the roster row is the one a real add writes.
     const workspace = orchestratorHarness();
     workspace.agent.harnessInstallCatalog({
       tiers: { default: { model: 'workers-ai/account-default' } },
       availableModels: ['workers-ai/account-default', 'workers-ai/pinned-model'],
     });
     await workspace.agent.setModel('workers-ai/pinned-model');
-    // An added agent inherits the workspace's purpose, so the workspace has to
-    // have one — the same order the owner does it in.
+    // An added agent inherits the workspace's purpose, so it needs one.
     await workspace.agent.setSoul('# Purpose\n\nShip the deploy gates.');
 
     const added = await workspace.agent.createSubordinateAgent();
@@ -406,8 +325,7 @@ describe('turn-pipeline correctness wiring', () => {
     const pinned = await workspace.agent.getActorSnapshot(added.name);
     expect(pinned.model).toEqual({ model: 'workers-ai/pinned-model', source: 'workspace' });
 
-    // Unpin the workspace: the same read resolves the role's tier, and says
-    // the role chose it — the only other answer a picker can show.
+    // Unpinned: the role's tier, with source `role`.
     workspace.db.prepare("DELETE FROM actor_config WHERE key = 'model'").run();
 
     const unpinned = await workspace.agent.getActorSnapshot(added.name);
@@ -415,12 +333,7 @@ describe('turn-pipeline correctness wiring', () => {
   });
 
   test('hosted heads run on the registered workspace identity, never a self-named filesystem', async () => {
-    // The old failure this replaces: the root's split seeded the child with
-    // the REGISTERED workspace, never the splitter's own DO name — the file
-    // plane is keyed by it, so a self-named head derived a second, empty
-    // filesystem. Registration now names no workspace at all (the directory
-    // owns the name), so the proof is behavioral: bytes the root wrote are
-    // the bytes the head reads, on the one file plane.
+    // A self-named head would derive a second, empty filesystem; bytes the root wrote must be the head's.
     const workspace = orchestratorHarness();
     await hostedMainActor(workspace);
     const rootFiles = workspace.agent.observeRuntime().storage.vfs;
@@ -430,38 +343,24 @@ describe('turn-pipeline correctness wiring', () => {
     const headFiles = head.actor.runtime.storage.vfs;
     expect(await headFiles.readFile('/home/user/shared-proof.md', { encoding: 'utf8' }))
       .toBe('registered workspace bytes');
-    // And the seam carries no name of its own to get wrong: no sharedParent,
-    // no facet identity, no spawn RPC — the only names in play are the
-    // directory's.
+    // The seam carries no name of its own; the only names are the directory's.
     expect(exploration).not.toContain('sharedParent');
     expect(exploration).not.toContain('facetIdentity');
     expect(exploration).not.toContain('setSharedParent');
     expect(exploration).not.toContain('spawnHeadFacet');
-    // The actor's own model services, not a second provider registry.
     expect(headRuntime).not.toContain('createAgentProviderRegistry');
   });
 
   test('the head runtime constructor receives this actor\'s operation sink', () => {
-    // A head's non-turn calls (its merge synthesis, its inference) must land
-    // in the ROOT's operation ledger — the actor hands over the one sink it
-    // holds, so the rows cannot strand in facet SQLite.
+    // A head's non-turn calls must land in the root's operation ledger, not facet SQLite.
     const rootRuntime = memberBody(actor, 'protected getCFHeadRuntime()');
     expect(rootRuntime).toContain('operations: this.modelOperations');
     expect(headRuntime).toContain('operations?: ModelOperationSink');
   });
 
   test('the dynamic-context ledger rides the shared STEP pipeline, not the turn assembly', async () => {
-    // Per-step, because the state it carries changes mid-turn: a job detaches,
-    // a sandbox comes up, a consent card lands. Assembling it once per turn
-    // would show the model a snapshot that is already stale by step 2 — and a
-    // prepareStep override never feeds the next step's input, so a block woven
-    // at turn assembly would be gone from every request after the first.
-    //
-    // Driven rather than read: `beforeStep` is the hook streamText calls, and
-    // the two facts here — the block is absent from what the step is HANDED and
-    // present in what it CARRIES, on every step — are the operational content of
-    // "per step, not per turn". A source scan for the wiring cannot tell a live
-    // weave from a dead one.
+    // Per step: the state changes mid-turn and a prepareStep override never feeds the next step's
+    // input. Driven, because a source scan cannot tell a live weave from a dead one.
     const { agent } = orchestratorHarness();
     const handed: ModelMessage[] = [{ role: 'user', content: 'deploy the api' }];
 
@@ -518,8 +417,7 @@ describe('turn-pipeline correctness wiring', () => {
     const admitted = turn?.messages ?? handed;
 
     expect((await stepMessages(agent, 0, admitted)).filter(isDynamicContextBlock)).toHaveLength(1);
-    // The prepared turn settles first: the loop runs one turn at a time, and a
-    // NEW preparation is a new turn. Cut at its admission, it is refused.
+    // Settle first: the loop runs one turn at a time, so this preparation is a new turn.
     await chatSessionTurns(agent).settle({ messageId: 'prepared-answer', text: 'done' });
     const abort = new AbortController();
     abort.abort(new Error('rejected preparation'));
@@ -534,17 +432,12 @@ describe('turn-pipeline correctness wiring', () => {
     );
 
     expect(assembly).toContain('profile.tier.reasoningEffort');
-    // Was `parseModelSpec(profile.tier.model).provider` — a RAW parse, and the
-    // second of two in this method. Reasoning options for a provider spelled
-    // `@cf` reach a provider no registry knows, and a bare model id threw here.
-    // Both sites now read the one normalised parse.
+    // Both sites read the one normalised parse (a raw parse yields `@cf` or throws on bare ids).
     expect(assembly).toContain('tierModel.provider');
     expect(assembly).not.toContain('parseModelSpec(profile.tier.model)');
     expect(assembly).toContain('reasoningEffortOptions');
 
-    // The reasoning options ride the execution as its provider options, the
-    // cache plan as its cache: the ONE merge is the chat runner's, by provider
-    // namespace, the same for both backends.
+    // The one provider-options merge is the chat runner's, by provider namespace.
     const prepare = actor.slice(
       actor.indexOf('protected async prepareTurn(item: ChatTurnInput'),
       actor.indexOf('private async assembleTurn(input: TurnAssemblyInput)'),
@@ -556,19 +449,11 @@ describe('turn-pipeline correctness wiring', () => {
     expect(actor).not.toContain('mergeProviderOptions(');
   });
 
-  // Output caps are not restated at this seam. The gate below owns that rule for
-  // every production source at once, and a second, weaker copy of it beside a
-  // hand-picked seam is the drift that gate exists to prevent — which is also why
-  // what this asserts is DRIVEN rather than read: a source scan for
-  // `route.reasoningEffort` cannot tell a spent effort from a shadowed one.
+  // Output caps are owned by the gate below; this is driven because a source scan cannot tell
+  // a spent effort from a shadowed one.
   test('an auxiliary call binds the route it resolved — the model AND that route\'s own effort', async () => {
-    // A tier is a (model, effort) PAIR, and hosting SPLIT the producer of that
-    // pair from the consumer that binds it. An effort can go missing across that
-    // split without anything failing to compile: the routed model still arrives,
-    // the spend still files as `judge`, and the call runs at whatever constant
-    // sits beside the spec. Which is why the port is driven TWICE, under two
-    // judge routes that disagree on BOTH axes — a constant that happens to equal
-    // the first route's effort passes any single-call assertion and fails here.
+    // Driven twice under routes that differ on both axes, so a constant effort that matches the
+    // first route still fails.
     const asked: Array<{ spec: string | null | undefined; effort: ReasoningEffort }> = [];
     let profile = mergePolicyProfile();
 
@@ -589,30 +474,17 @@ describe('turn-pipeline correctness wiring', () => {
     profile = reboundJudgeRoute(profile);
     await runtime.mergeLLM('merge the second pair of heads', MergeOutputSchema);
 
-    // The first ask is the SHARED merge binding — the value the local backend's
-    // suite compares against too, so the two backends resolving one policy is an
-    // equality between suites rather than two expectations maintained apart. The
-    // second is the rebound route, and it has to be that route's own pair: a
-    // captured route, a bound model or a bound effort each answer the first ask
-    // correctly and the second with the first one's.
+    // The first ask is `MERGE_POLICY_BINDING`, shared with the local backend's suite.
     expect(asked).toEqual([
       MERGE_POLICY_BINDING,
       { spec: REBOUND_JUDGE.model, effort: REBOUND_JUDGE.reasoningEffort },
     ]);
   });
 
-  // A whole-backend scan, and stated here because no gate owns it:
-  // `gate:duplication` compares implementations that both exist and a three-line
-  // re-derivation is below its fingerprint, while `gate:capability-parity` asks
-  // who WIRES a contract, not who computes one answer twice. So this is not the
-  // per-seam copy the comment above refuses: there is no wider owner to drift
-  // from, and the denominator is every file in the backend rather than a
-  // hand-picked few.
+  // Whole-backend scan: `gate:duplication` misses three-line re-derivations and
+  // `gate:capability-parity` checks wiring, so no gate owns this.
   test('one place in this backend turns a reasoning-effort level into provider options', () => {
-    // Chat and every auxiliary profile lane derive provider options at the point
-    // where their resolved concrete model is known. A fourth entry is a second
-    // derivation, which is how a lane came to carry options computed from the
-    // CHAT model's family and applied to a review model on another provider.
+    // A new entry is a second derivation, e.g. options from the chat model applied to another provider.
     expect(effortDerivationSites()).toEqual([
       'actor-agent.ts',
       'owned-model-services.ts',
@@ -620,29 +492,9 @@ describe('turn-pipeline correctness wiring', () => {
     ]);
   });
 
-  // Owner directive: output caps are the wrong mechanism entirely — a reasoning
-  // model spends its budget thinking before it emits anything, so a cap
-  // truncates or starves the answer. Cost is controlled by reasoning effort,
-  // and completion length is the model's, bounded by the provider. So it is not
-  // only the hardcoded literal that is gone: no production source NAMES the
-  // field, and no config supplies one — `LLMProviderConfig.maxTokens`,
-  // `generateJson`'s cap option and `StrategyBudget.maxOutputTokens` were the
-  // three sources, and all three were deleted rather than defaulted.
-  //
-  // Where the field still legitimately exists is inside a provider adapter that
-  // must send it: Anthropic's Messages API requires `max_tokens`, and
-  // `@ai-sdk/anthropic` fills it with the resolved MODEL's own maximum when the
-  // caller sets nothing (dist/index.mjs, `maxOutputTokens != null ? … :
-  // maxOutputTokensForModel`). That is the provider bounding the completion,
-  // which is exactly the arrangement this gate protects — and it lives in the
-  // adapter, never here.
-  //
-  // `maxOutputTokens` means exactly one thing in this repo and this gate is why:
-  // an output cap on a model REQUEST. Context admission reserves the resolved
-  // model's answer allowance under its own name (`ModelWindow.modelOutputLimit`,
-  // prompting/step-prune.ts) precisely so this stays strict — a second meaning
-  // for the same identifier would have needed an exception here, and an
-  // exception in a gate is the gate.
+  // Owner directive: no output caps (reasoning models spend budget thinking); cost is set by effort.
+  // Adapters that must send one (`@ai-sdk/anthropic` `max_tokens`) use the model's own maximum.
+  // Context admission's reserve is `ModelWindow.modelOutputLimit`, so this gate stays strict.
   test('no production source names an output-token cap', () => {
     const root = join(import.meta.dir, '..', '..');
     const offenders: string[] = [];
@@ -674,9 +526,7 @@ describe('turn-pipeline correctness wiring', () => {
   });
 
   test('CHAT_CLEAR resets the dynamic-context ledger and durable compaction plan after the transcript is cleared', () => {
-    // The transport takes the client's clear and hands it to the actor's one
-    // clear, which empties the transcript FIRST, then the ledger, then the
-    // durable plan — the same order Think's handler and the resets kept.
+    // Order: transcript first, then the ledger, then the durable plan.
     expect(transport).toContain("case 'clear': {");
     expect(transport).toContain('await this.wire.clear();');
     expect(actor).toContain('clear: () => this.clearConversation(),');
@@ -695,13 +545,8 @@ describe('turn-pipeline correctness wiring', () => {
   });
 
   test('the settle spine runs FIRST and hands the turn status to the one delivery seam', () => {
-    // What the aborted turn does with absorbed/leftover signals is core's
-    // (Inbox.settle — behaviourally pinned in core's
-    // unit-signals.test.ts). What THIS backend must do is call the spine before
-    // anything that can throw or return early, and tell it how the turn ended.
-    // The loop settles the signals right after the commit — before the
-    // failure branch, before the terminal sequence — and hands the seam the
-    // one verdict that includes durability.
+    // Signal disposition is core's (unit-signals.test.ts); this backend must settle the inbox before
+    // anything can throw or return early, with the durability-inclusive verdict.
     const run = loop.slice(loop.indexOf('private async runTurn(item: QueueItem'));
     const settle = run.indexOf('const settled = this.actorSession.orchestrator.inbox.settle({ completed: durable });');
     const failureBranch = run.indexOf("if (!('committed' in commit)) {");
@@ -716,56 +561,34 @@ describe('turn-pipeline correctness wiring', () => {
   });
 
   test('an INTERRUPTED turn is complete through every reader, with no projection write', async () => {
-    // The bug the operator hit: he forked from a message the chat pane was
-    // showing and got `fork point not found`, because every reader but the
-    // fork cut read a projection beside the canonical store, and the
-    // projection skipped anything that had not been reconciled. Every reader
-    // goes through the canonical conversation store now, so no projection of
-    // the default chat may exist to skip anything, and the interrupted turn
-    // must still be served by the paged history read.
+    // Defends: forking from a shown message gave `fork point not found` because readers used a
+    // projection that skipped unreconciled turns. All readers use the canonical store.
     const harness = orchestratorHarness();
-    // The rows are the loop's own: the turn it opened under the user's id,
-    // and the answer it was streaming when it was cut.
     chatSessionTurns(harness.agent).open('u-live');
     await chatSessionTurns(harness.agent).settle({ messageId: 'a-live', text: 'partial answer', requestId: 'req-interrupted', status: 'aborted' });
 
-    // No projection to write into: the pane-era tables are gone from the
-    // workspace, not merely left unwritten.
+    // The pane-era projection tables must not exist at all.
     const projections = harness.db.prepare<{ name: string }, []>(
       `SELECT name FROM sqlite_master WHERE type = 'table' AND name IN ('actor_messages', 'assistant_messages')`,
     ).all();
 
     expect(projections).toEqual([]);
 
-    // The paged history read serves the interrupted turn straight from the
-    // authority, text flattened, edges intact.
     const page = await harness.agent.getChatHistoryPage({ limit: 10 });
     expect(page.items.map((entry) => entry.id)).toEqual(['u-live', 'a-live']);
     expect(page.items[1].content).toBe('partial answer');
   });
 
   test('an ABORTED turn is still recorded as evidence', async () => {
-    // The drift this closes: `onChatResponse` early-returned on any status but
-    // 'completed', so a failed cloud turn reached neither the outcome-review
-    // buffer nor `extensions.onTurnEnd`, while the identical turn on the CLI
-    // reached both. Failures are the most informative evidence the evolution
-    // loop has, and the comment justifying that early return covered only the
-    // alternate-takes purge beside it. Core's terminal roster is the one
-    // declaration now, and it owes `turn_end_extensions` before `turn_record` on
-    // every status; the ordering half is core's (unit-core-adapter-seams pins
-    // it), so what THIS asserts is the half that was unprovable here — the
-    // durable row.
+    // Defends: failed cloud turns skipped the review buffer and `onTurnEnd` (the CLI reached both).
+    // Ordering is pinned in core's unit-core-adapter-seams; this asserts the durable row.
     const harness = orchestratorHarness();
-    // What `beforeTurn` establishes for a turn with no durable identity: this
-    // session records evolution state, and the settled response carries that
-    // fact into the recording rather than asking the host that recovers it.
+    // What `beforeTurn` establishes for a turn with no durable identity.
     harness.agent.declareTurnEvolutionGate();
 
     await chatSessionTurns(harness.agent).settle({ messageId: 'a-cut', text: 'partial', requestId: 'req-cut', status: 'aborted' });
 
-    // The outcome-review buffer core's recordTurn appends to, and the turn's own
-    // partial answer inside it — a row for some other turn would pass a bare
-    // count.
+    // The turn's own partial answer, so another turn's row cannot pass a bare count.
     const recorded = harness.db.prepare<{ turn: string }, []>(
       `SELECT turn FROM completed_turns`,
     ).all();
@@ -774,22 +597,10 @@ describe('turn-pipeline correctness wiring', () => {
     expect(recorded[0].turn).toContain('partial');
   });
 
-  // The credit decision, behaviourally, on this backend. Core's
-  // `creditedTurnId` decides it for both; what THIS suite pins is that the
-  // orchestrator asks it and honours the answer.
-  //
-  // The plan case is the sharp one: a completed PLAN turn does not claim its
-  // mid-turn takes. `status === 'completed'` plus a message id is not guard
-  // enough — a plan is not an answer the captures competed against, which is
-  // why the CLI excludes plan mode too.
+  // Core's `creditedTurnId` decides; this pins that the orchestrator honours it. A completed plan
+  // turn is not an answer the captures competed against, so it purges them (as the CLI does).
   describe('mid-turn captures are credited to the turn only when it answered', () => {
-    /** One take set captured mid-turn: written unclaimed, stamped inside the
-     *  claiming turn's window (the scoped claim drops anything older). The
-     *  workspace schema the harness already ran owns the table — and it now
-     *  keys every set on `(actor_id, id)`, because one database holds every
-     *  actor's captures. The claim and the purge are both `actor_id`-scoped, so
-     *  a set written under any other owner is not merely uncredited here, it is
-     *  invisible to the settle under test. */
+    /** Seeds one unclaimed take set inside the turn's window, under this actor (claim and purge are `actor_id`-scoped). */
     function settleOneTurn(mode: 'plan' | 'build'): ActorHarness<HarnessOrchestratorAgent> {
       const harness = orchestratorHarness();
       harness.db.prepare(
@@ -806,8 +617,7 @@ describe('turn-pipeline correctness wiring', () => {
         Date.now() + 1_000,
       );
 
-      // The message the turn runs FOR, carrying the composer's mode: the loop
-      // admits the turn under it, and the roster reads the mode off it.
+      // The roster reads the composer's mode off the driving message.
       harness.agent.harnessDrivingUserMessage(`${mode} this`, { kinuMode: mode });
 
       return harness;
@@ -826,9 +636,7 @@ describe('turn-pipeline correctness wiring', () => {
 
     test('a completed PLAN turn purges them', async () => {
       const harness = settleOneTurn('plan');
-      // The seeded set is there to be purged. Stated because the assertion below
-      // is an ABSENCE: a fixture whose insert stopped landing — the shape the
-      // `actor_id` key change produced — would purge nothing and still read 0.
+      // Positive control for the absence below: the seeded row did land.
       expect(harness.db.query('SELECT COUNT(*) AS n FROM alternate_takes').get())
         .toMatchObject({ n: 1 });
       await chatSessionTurns(harness.agent).settle({ messageId: settled.id, parts: settled.parts, requestId: 'req-plan' });
@@ -837,29 +645,14 @@ describe('turn-pipeline correctness wiring', () => {
     });
   });
 
-  // A delivery's recovery lease says "a running turn still owes this an
-  // answer", and `onStart`'s sweep re-pends every lease it finds open. So the
-  // settle has to close the lease for EVERY way a drain reaches a turn, and
-  // only when the turn's answer is durable — otherwise the sweep either
-  // re-delivers an answered event or abandons an unanswered one.
+  // `onStart`'s sweep re-pends every open lease, so the settle must close a lease for every drain
+  // path, and only once the answer is durable.
   describe('a settled turn closes the delivery leases it answered, and only those', () => {
-    /**
-     * When the lease was taken. A LIVE stamp, not a literal: the activation
-     * reconcile sweeps leases stranded past a grace, so a 1970 stamp would make
-     * every case measure the sweep instead of the closure. unit-durable-terminal
-     * uses the same shape for the same reason.
-     */
+    /** Live stamp: activation reconcile sweeps leases past a grace, so a 1970 stamp would test the sweep. */
     const LEASE_TAKEN_AT = Date.now();
 
-    /** One admitted event, bound to `turnId` with its recovery lease OPEN —
-     *  what a drain leaves behind on its way to the turn. Written under THIS
-     *  actor: the settle closes leases through an `actor_id`-scoped update, so a
-     *  row seeded under any other owner is not a lease this turn declines to
-     *  close, it is a lease the turn cannot see — and two of the three cases
-     *  below assert an UNCHANGED row, which a lease nobody can see also
-     *  produces. What rules that out is the spliced case: it is the one that
-     *  demands a CHANGE, so a seed bound to the wrong owner fails there rather
-     *  than passing quietly in all three. */
+    /** An admitted event bound to `turnId` with its lease open, seeded under this actor; the spliced
+     *  case demands a change, so a wrong-owner seed fails there. */
     function boundDelivery(harness: ActorHarness<HarnessOrchestratorAgent>, turnId: string): void {
       harness.db.prepare(
         `INSERT INTO agent_log
@@ -877,10 +670,7 @@ describe('turn-pipeline correctness wiring', () => {
       }), LEASE_TAKEN_AT);
     }
 
-    /** The lease once every owed effect of the turn has reported. The write is
-     *  the tail of a detached dispatch, so reading the row synchronously would
-     *  pin the absence of a guarantee nobody makes. Bounded, so the two
-     *  recoverable cases — where it must NEVER close — still fail loudly. */
+    /** The lease after the detached dispatch reports; bounded so the must-stay-open cases still fail. */
     async function settledLease(
       harness: ActorHarness<HarnessOrchestratorAgent>,
     ): Promise<{ turn_id: string | null; consumed_at: number | null }> {
@@ -898,12 +688,10 @@ describe('turn-pipeline correctness wiring', () => {
       );
     }
 
-    /** Splice a drain into the live turn, exactly as the reactor does: the seam
-     *  routes on `turnInFlight`, and the step boundary is what absorbs it. */
+    /** Splice a drain into the live turn as the reactor does; the step boundary absorbs it. */
     async function spliceDrain(
       harness: ActorHarness<HarnessOrchestratorAgent>, replyTurnId: string,
     ): Promise<void> {
-      // A live turn, parked at its model call: what "in flight" IS on the loop.
       await harness.agent.declareTurnInFlight(true);
 
       const inbox = harness.agent.observeOrch().inbox;
@@ -919,10 +707,8 @@ describe('turn-pipeline correctness wiring', () => {
 
       await chatSessionTurns(harness.agent).settle({ messageId: 'a-1', text: 'the answer', requestId: 'req-spliced' });
 
-      // Answered: the lease is closed and the BINDING is kept, so no drain can
-      // select it again either.
+      // Answered: lease closed, binding kept, so no drain selects it again.
       expect(await settledLease(harness)).toEqual({ turn_id: 'evt-spliced', consumed_at: null });
-      // What the next activation's sweep would take: nothing.
       expect(harness.db.query(
         `SELECT COUNT(*) AS n FROM agent_log WHERE kind = 'event' AND consumed_at IS NOT NULL`,
       ).get()).toMatchObject({ n: 0 });
@@ -950,7 +736,6 @@ describe('turn-pipeline correctness wiring', () => {
       ).run(actorId, JSON.stringify({
         to: 'owner@example.com', from: 'agent@example.com', subject: 'the build', message_id: null, references: null,
       }), LEASE_TAKEN_AT + 3_600_000);
-      // The one write this dispatch cannot land: its reply-attempt record.
       harness.db.run(`CREATE TRIGGER refuse_reply_record BEFORE INSERT ON agent_log
         WHEN NEW.kind = 'reply_attempt' BEGIN SELECT RAISE(ABORT, 'storage refused the reply record'); END`);
       await spliceDrain(harness, 'evt-mail');
@@ -969,11 +754,7 @@ describe('turn-pipeline correctness wiring', () => {
       boundDelivery(harness, 'evt-nodurable');
       await spliceDrain(harness, 'evt-nodurable');
 
-      // The model answered, but no assistant row carries the answer — the
-      // commit failed — so a later activation reads this turn back as never
-      // having happened, and the delivery is still owed. The loop does not
-      // leave it owed: the seam re-queues the absorbed drain as a turn of its
-      // own, which runs at once and answers it.
+      // The commit failed, so the delivery is still owed; the seam re-queues the drain as its own turn.
       await expect(chatSessionTurns(harness.agent).settle({ messageId: 'a-nodurable', text: 'the answer', requestId: 'req-nodurable', persistFails: true }))
         .rejects.toThrow('could not be written');
 
@@ -1002,8 +783,6 @@ describe('turn-pipeline correctness wiring', () => {
   });
 
   test('a queued drain is driven by its own words and answered by the model', async () => {
-    // Behavioural: the driving text of a queued drain is the drain's own words,
-    // and its answer is the model's.
     const drained = orchestratorHarness();
     drained.agent.harnessDrivingUserMessage('the drain text', { kinuEvent: 'event_drain', drainTurnId: 'drain-1' });
     const parked = await chatSessionTurns(drained.agent).prepare({ messages: [{ role: 'user', content: 'the drain text' }] });
@@ -1015,71 +794,47 @@ describe('turn-pipeline correctness wiring', () => {
   });
 
   test('standalone drain identity survives the turn\'s own continuation until reply settlement', () => {
-    // The reply is one CLAIMED terminal effect, so the identity it answers
-    // under is part of that effect's RECORDED input — which is what makes it
-    // survive an eviction, not only a continuation. Registered for the QUEUED
-    // drain only: that identity rides the admitted item through the turn's own
-    // output-limit continuation (one item, one turn), while a spliced one is
-    // reported afresh on every absorbed signal and has nothing to carry forward.
+    // The drain identity is part of the reply effect's recorded input, so it survives eviction;
+    // registered for queued drains only (spliced ones are reported per absorbed signal).
     const replyEffect = source.slice(
       source.indexOf('event_reply: terminalEffect({'),
       source.indexOf('branches: terminalEffect({'),
     );
 
     expect(replyEffect).toContain('drainTurnId: v.string()');
-    // The request id is part of the RECORDED input, so a replay on a later
-    // activation re-registers under the same identity instead of inventing one.
+    // The request id is recorded too, so a later replay re-registers under the same identity.
     expect(replyEffect).toContain('requestId: v.string()');
     expect(replyEffect).toContain('await this.completeEventBatch(drainTurnId, answer)');
-    // No per-activation stash of the identity anywhere on this side: the
-    // durable item and the recorded input are the two witnesses, and both
-    // survive the process.
+    // No per-activation stash: the durable item and the recorded input are the witnesses.
     expect(actor).not.toContain('_pendingDrainReplyTurns');
     expect(source).not.toContain('_pendingDrainReplyTurns');
     expect(loop).toContain('private answeredDeliveries(item: QueueItem): ReadonlySet<string> {');
   });
 
   test('nothing on this backend seals a run reason of its own', () => {
-    // The run bracket is the shared core `closeTurnRun` (turn_end + run_end),
-    // fed the driver's raw facts; `classifyRunEnd` owns the vocabulary. What
-    // this guards is the DIVERGENCE that produced it — a backend picking a
-    // status string itself, which is how one sealed a user Stop as 'error'.
-    // Every arm of the classification itself is driven behaviourally in core's
-    // unit-core-adapter-seams.test.ts.
+    // `classifyRunEnd` owns run-end vocabulary (driven in core's unit-core-adapter-seams.test.ts);
+    // a backend-picked status string once sealed a user Stop as 'error'.
     expect(loop).toContain('closeTurnRun(this.eventRecorder,');
     expect(actor).not.toContain('reason: result.status');
     expect(source).not.toContain('reason: result.status');
   });
 
-  // Observed on the TurnConfig the model is handed, not on the source text of
-  // `beforeTurn`: a grep for `provenance: this.turnProvenance()` passed while
-  // that field was buying a full prefix rewrite on every chat↔wake transition,
-  // and it would have failed for the fix that stopped it. The two axes reading
-  // from different metadata keys is core's own behavioural test
-  // (unit-prompt.test.ts, "the two axes are read from different metadata
-  // keys"); this one is about which TIER each fact lands in on the prompt this
-  // backend actually ships.
+  // Observed on the TurnConfig, not source text; the axes' metadata keys are core's (unit-prompt.test.ts).
   test('the role rides the cacheable prefix; provenance never does', async () => {
     const { agent } = orchestratorHarness();
 
     const config = await chatSessionTurns(agent).prepare({ messages: [{ role: 'user', content: 'summarise this file' }] });
 
     const system = config?.system ?? '';
-    // The turn's resolved role is a prefix fact: it changes on a deliberate
-    // agent event and nothing else.
+    // Role is a prefix fact: it changes only on a deliberate agent event.
     expect(system).toContain('## Role: Task (task)');
-    // Provenance is not. The resume sentence must not appear at system
-    // placement on ANY turn, because it flips mid-session and the prefix
-    // cannot: it rides `turnLocalTail` instead.
+    // Provenance flips mid-session, so it rides `turnLocalTail`, never system placement.
     expect(system).not.toContain('the referenced job result first');
     expect(system).not.toContain('Background-resume');
   });
 
   test('the turn prompt advertises the temporary rung the child substrate always wires', async () => {
-    // Every cf actor with room below it holds team deps, so the temporary rung is
-    // wired on every turn this backend runs. `TurnConfig.system` is the one
-    // prompt the model receives, so it is the one surface that must name the
-    // ladder's middle rung.
+    // Every cf actor wires the temporary rung, and `TurnConfig.system` is the prompt the model gets.
     const { agent } = orchestratorHarness();
 
     const config = await chatSessionTurns(agent).prepare({ messages: [{ role: 'user', content: 'summarise this file' }] });
@@ -1097,18 +852,14 @@ describe('turn-pipeline correctness wiring', () => {
     const setMode = toolExecute<{ action: 'mode'; role: string }, unknown>(agent.getTools().tasks);
     const result = v.parse(RoleResultSchema, await setMode({ action: 'mode', role: 'auditor' }));
     expect(result.role).toBe('auditor');
-    // The NEXT prompt: the open turn settles first, since the loop runs one
-    // turn at a time and a second message while it runs would splice into it.
+    // Settle first: a second message during a running turn would splice into it.
     await chatSessionTurns(agent).settle({ messageId: 'role-set-answer', text: 'switched' });
     const config = await turn('audit this change');
     expect(config?.system).toContain('## Role: Auditor (auditor)');
   });
 
   test('a fresh multi-part ask gets NO delegation nudge at step 0', async () => {
-    // No turn-start hint splices a `[Runtime steering …]` message onto a fresh
-    // ask. Telling the model to run the parts as one search is the pressure that
-    // sent a simple diagnosis into a three-node swarm on 2026-09-03; the model
-    // decides from the tool description instead.
+    // No turn-start delegation hint: that pressure sent a simple diagnosis into a three-node swarm on 2026-09-03.
     const harness = orchestratorHarness();
     const agent = harness.agent;
     const orch = agent.observeOrch();
@@ -1127,8 +878,7 @@ describe('turn-pipeline correctness wiring', () => {
 
 
   test('pickAlternateTake returns false unless the awaited delivery actually landed', () => {
-    // One implementation, in core, that both backends' transports call — so
-    // neither can report a pick as queued without waiting for the delivery.
+    // One core implementation both transports call.
     const pick = takePick.slice(takePick.indexOf('export async function pickAlternateTake('));
     expect(pick).toContain('let continuationQueued = false');
     expect(pick).toContain('const outcome = await deps.inbox.send');
@@ -1139,13 +889,7 @@ describe('turn-pipeline correctness wiring', () => {
 });
 
 describe('improvement_lanes — one verdict gates the improvement lanes', () => {
-  // Behavioral, not source-shaped: the lanes are driven through the CLAIMED
-  // effect both actor classes dispatch, and what each verdict leaves behind is
-  // read from storage. A FAILED build turn has no subject to replay and no answer to
-  // review; a plan turn belongs in neither evidence set. Both facts are ONE
-  // core decision (`improvementLanesOpen`, asked from inside the row) — these
-  // arms fail independently on any backend that starts spelling its own
-  // condition again.
+  // Driven through the claimed effect; both verdicts are one core decision (`improvementLanesOpen`).
   const NOTE = JSON.stringify({
     note: 'the staging cluster was never named', severity: 'nit', class: 'wrong-work',
   });
@@ -1162,8 +906,6 @@ describe('improvement_lanes — one verdict gates the improvement lanes', () => 
     return harness;
   }
 
-  /** A build turn that settled on anything but `completed` feeds no lane,
-   *  whichever of the two non-completed reasons ended it. */
   async function noLaneFor(status: 'error' | 'aborted'): Promise<void> {
     const { agent } = advisorHarness();
     await agent.harnessSettleSpine({ status, turn: turnOf() });
@@ -1173,8 +915,7 @@ describe('improvement_lanes — one verdict gates the improvement lanes', () => 
   test('a completed build turn earns its review', async () => {
     const { agent } = advisorHarness();
     await agent.harnessSettleSpine({ status: 'completed', turn: turnOf() });
-    // The review rides a detached durable fiber by contract; join the mock
-    // runtime's live fibers rather than guessing at its clock.
+    // The review rides a detached durable fiber; join them rather than guessing at the clock.
     await agent.harnessJoinDetachedFibers();
     expect(agent.harnessAdvisorNotes()).toBe(1);
   });
@@ -1184,9 +925,7 @@ describe('improvement_lanes — one verdict gates the improvement lanes', () => 
   test('a completed PLAN turn feeds no lane', async () => {
     const { agent } = advisorHarness();
     agent.observeOrch().beginTurn(Date.now(), { kinuMode: 'plan' });
-    // The mode is stated because the effect READS it from its row: a replay on a
-    // fresh activation has no live turn to derive it from, and defaulting to
-    // build is exactly what would feed a plan turn into the lanes.
+    // The effect reads the mode from its row: a cold replay has no live turn, and defaulting to build leaks plans.
     await agent.harnessSettleSpine({ status: 'completed', turn: turnOf(), workMode: 'plan' });
     expect(agent.harnessAdvisorNotes()).toBe(0);
   });
@@ -1195,16 +934,11 @@ describe('improvement_lanes — one verdict gates the improvement lanes', () => 
 });
 
 /**
- * A queued shadow trial is re-drivable after an interruption, and its candidate
- * reaches the LIVE tool surface — so its calls pass the same once-only claim an
- * ordinary turn's calls do. That claim is keyed on the turn, the call id and
- * the arguments: the rollout's scope fixes the call id, and it has to fix the
- * turn half too, because the ambient one is the last turn's checkpoint while
- * the trial is queued and `_workspace` once the isolate that queued it is gone.
+ * Shadow trials hit the live tool surface, so their claims are keyed on the rollout scope: the ambient
+ * turn is the last checkpoint while queued and `_workspace` after the isolate dies.
  */
 describe('a recoverable rollout claims its tool calls on the rollout', () => {
-  /** A claimed capability that runs entirely on this actor's own storage, so
-   *  what the claim admits or refuses is observable without a network. */
+  /** A claimed capability on this actor's own storage, observable without a network. */
   const RECALL = { action: 'recall', key: 'trial-probe' };
 
   test('the scope is the claim identity, not whatever turn is ambient', async () => {
@@ -1218,12 +952,7 @@ describe('a recoverable rollout claims its tool calls on the rollout', () => {
     expect(harness.agent.harnessToolClaims(WORKSPACE_RUN_ID)).toEqual([]);
   });
 
-  /**
-   * The defect, end to end: the same trial re-driven on an activation that
-   * shares nothing with the one that queued it. The world is moved in between,
-   * so a call that ran a second time would answer differently — and the row the
-   * first attempt left is what makes it answer the same.
-   */
+  /** Defends: a cold replay after the world moved must answer from the first attempt's row. */
   test('a cold replay is answered from the first attempt row', async () => {
     const harness = orchestratorHarness();
     await chatSessionTurns(harness.agent).prepare({ messages: [{ role: 'user', content: 'the live turn' }] });
@@ -1238,9 +967,7 @@ describe('a recoverable rollout claims its tool calls on the rollout', () => {
     expect(restarted.agent.harnessToolClaims('trial-7')).toEqual(['trial-7#0']);
   });
 
-  /** A rollout with no durable identity — a live preview, a GEPA candidate — is
-   *  re-driven by nothing, so it keeps the ambient turn rather than inventing a
-   *  scope that would claim to be recoverable. */
+  /** An unscoped rollout (live preview, GEPA candidate) is never re-driven, so it keeps the ambient turn. */
   test('an unscoped rollout still claims against the live turn', async () => {
     const harness = orchestratorHarness();
     const live = await chatSessionTurns(harness.agent).prepare({ messages: [{ role: 'user', content: 'the live turn' }] });

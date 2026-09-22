@@ -1,13 +1,5 @@
-// Behavior tests for the signed-in AI proxy (/api/user/ai/v1/*) — the route
-// that lets LOCAL CLI agents run on the user's Cloudflare AI without any
-// Cloudflare token leaving the server.
-//
-// Contract under test:
-//   - auth: CLI bearer only (ptc_ session ok; pta_ needs ai.proxy; no cookie path)
-//   - model → upstream selection: @cf/… rides cloudflare.oauth, {author}/{model}
-//     rides the derived cloudflare.ai-gateway view (cf-aig-gateway-id header)
-//   - streaming SSE passthrough, refresh-on-401 retry, my-gateway error mapping
-//   - GET /models lists the proxy-served wire ids in OpenAI list shape
+// The signed-in AI proxy (/api/user/ai/v1/*): local CLI agents use the user's Cloudflare AI without
+// the Cloudflare token leaving the server. Auth: CLI bearer only (pta_ needs ai.proxy; no cookie path).
 import { TEST_CREDENTIAL_ENCRYPTION_KEY } from './helpers/user-do';
 import { afterEach, describe, expect, test } from 'bun:test';
 import { handleCliRequest, type CliRoutesEnv } from '../src/cli/routes';
@@ -31,8 +23,6 @@ const AI_TOKEN = `pta_${USER_ID}_${'a'.repeat(44)}`;
 
 const READ_TOKEN = `pta_${USER_ID}_${'r'.repeat(44)}`;
 
-/** The scopes each access token in this suite carries. A bearer that is not one
- *  of these is not a token at all. */
 function scopesFor(bearer: string): AccessTokenScope[] | null {
   if (bearer === AI_TOKEN) return ['ai.proxy'];
 
@@ -58,9 +48,7 @@ const originalFetch = globalThis.fetch;
 
 afterEach(() => { globalThis.fetch = originalFetch; });
 
-/** The direct binding's default event stream: what a streamed turn really gets
- *  back from `Ai.run`, rather than a finished completion the adapter would
- *  refuse to replay. */
+/** What a streamed turn really gets back from `Ai.run`, not a finished completion. */
 const DIRECT_SSE = [
   'data: {"response":"ok"}\n\n',
   'data: {"response":"","usage":{"prompt_tokens":1,"completion_tokens":1,"total_tokens":2}}\n\n',
@@ -72,12 +60,9 @@ function setupEnv(opts: {
   token?: string;
   freshToken?: string;
   evalService?: boolean;
-  /** The binding's answer to a request for one whole completion. */
   directOutput?: JsonObject;
-  /** The event stream the binding answers a streamed request with. */
   directStream?: string;
-  /** A whole completion the binding answers a STREAMED request with, which is a
-   *  model that will not stream and which the adapter refuses. */
+  /** A model that will not stream: the adapter refuses it. */
   directRefusal?: JsonObject;
 } = {}) {
   const gatewayId = opts.gatewayId === undefined ? 'my-gw' : opts.gatewayId;
@@ -129,16 +114,13 @@ function setupEnv(opts: {
   const env: CliRoutesEnv<string> = {
     UserDO: { idFromName: (name) => name, get: () => userDO },
     CREDENTIAL_ENCRYPTION_KEY: TEST_CREDENTIAL_ENCRYPTION_KEY,
-    // A proxied completion never reaches a workspace object, the device-code
-    // KV or the published assets.
     OrchestratorAgent: unreachableNamespace('OrchestratorAgent'),
     AUTH_KV: unreachableKv('AUTH_KV'),
     ASSETS: unreachableAssets(),
   };
 
   if (opts.evalService) {
-    // The eval identity's direct path calls `run` on the binding and reads no
-    // other member of it; the gateway half is the same binding's `gateway`.
+    // The direct path calls only `run`; the gateway half is the same binding's `gateway`.
     env.DEV_USER_EMAIL = 'eval-service@kinu.run';
 
     env.AI = {
@@ -281,8 +263,7 @@ describe('AI proxy model → upstream selection', () => {
     expect(body).toContain('"finish_reason":"stop"');
     expect(body).toContain('"prompt_tokens":1');
     expect(body?.trimEnd().endsWith('data: [DONE]')).toBe(true);
-    // The binding is asked to stream, and asked for the usage an OpenAI-style
-    // stream reports only on request.
+    // Usage is requested: an OpenAI-style stream reports it only on request.
     expect(directRuns).toEqual([{
       model: '@cf/moonshotai/kimi-k2.6',
       inputs: {
@@ -339,8 +320,7 @@ describe('AI proxy model → upstream selection', () => {
       stream: true,
     }), env);
 
-    // The CLI client is told the model does not stream here, rather than being
-    // handed a finished answer dressed as a stream.
+    // Told the model does not stream, not handed a finished answer dressed as a stream.
     expect(res?.status).toBe(502);
     const message = v.parse(MessageErrorSchema, await handled(res).json()).error.message;
     expect(message).toContain('did not stream');

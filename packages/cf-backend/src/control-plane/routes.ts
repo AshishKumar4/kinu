@@ -1,41 +1,7 @@
 /**
- * `/api/control/*` — the admin control plane's HTTP surface.
- *
- * THE OPERATOR GATE IS IN THIS FILE AND NOWHERE ELSE. Every handler below goes
- * through the authorization at the top of `handleControlRequest` before it
- * touches a binding, and that is the only place the operator allowlist, the
- * dev-identity refusal and the step-up window are consulted. The backend audit of
- * this Worker recorded that `run-events-routes.ts` relies on an ownership check
- * performed in `server.ts` rather than in its own handlers; that pattern is not
- * copied here, because a route whose authorization lives in its caller is one
- * refactor away from being unguarded.
- *
- * THE ONE THING THAT IS DELIBERATELY NOT IN THIS FILE is the Cloudflare Access
- * check, and the reason is the ordering the security property needs: it has to
- * run BEFORE the app's own session gate, which means before this module is
- * reached at all. So `server.ts` verifies the assertion for every control-plane
- * path — the UI document and this API alike — and hands the verified identity
- * down. It cannot be forgotten or refactored away, because `AccessIdentity` is a
- * REQUIRED parameter of this function and of `authorizeAdmin` below it: there is
- * no way to call either without one, and no way to obtain one except from
- * `access-gate.ts`.
- *
- * ROUTES
- *   GET  /api/control/overview               fleet counts + last admin action
- *   GET  /api/control/users                  ?cursor=&limit=   cursored
- *   GET  /api/control/users/:userId          profile + that account's live roster,
- *                                            reconciled from its UserDO on read
- *   GET  /api/control/workspaces             ?cursor=&limit=&userId=&includeRemoved=
- *   GET  /api/control/workspaces/:name       runs, spend, jobs, approvals, executors
- *   GET  /api/control/incidents              synthetic-monitoring ledger
- *   GET  /api/control/feedback               ?cursor=&limit=   cursored
- *   GET  /api/control/metrics                ?hours=&workspace=
- *   GET  /api/control/audit                  ?cursor=&limit=   cursored
- *   POST /api/control/actions                the only mutation; fresh auth required
- *
- * ONE MUTATION ENDPOINT, not one per action. The action is a discriminated union
- * validated by `ControlActionSchema`, which is what makes "every mutation is
- * audited" checkable by reading one function instead of trusting eight.
+ * `/api/control/*`. The operator gate lives here, at the top of `handleControlRequest`, never in
+ * callers. Cloudflare Access runs earlier in `server.ts`; the required `AccessIdentity` parameter
+ * keeps it structural. One mutation endpoint (`POST /actions`) so every mutation is audited in one place.
  */
 import { diagnostics, renderThrownChain, toKinuError } from '@kinu.run/core/obs';
 import { claimOwnedWorkspace } from '../user/workspace-ownership';
@@ -68,18 +34,11 @@ import type {
 import type { IndexFeedSink } from './index-feed';
 import type { ObjectNamespace } from '@kinu.run/core';
 
-/** Bound on the per-workspace detail reads. Each is a separate Durable Object
- *  query and the panel shows a recent window, not a history — the history has
- *  its own cursored route on the workspace itself. */
+/** Panels show a recent window; history has its own cursored route on the workspace. */
 const DETAIL_WINDOW = 25;
 
-/** Incidents are a small ledger — one row per probe — so this is a sanity bound
- *  rather than a page size. */
 const INCIDENT_MAX = 100;
 
-/** Every call these routes make on the control plane: the panels' reads, the
- *  roster reconcile, the two audit writes — and the index feed's own sink,
- *  which the removal action writes a tombstone through. */
 type ControlPlaneReach = IndexFeedSink & Pick<ControlPlaneDO,
   | 'overview'
   | 'listUsers'
@@ -92,8 +51,6 @@ type ControlPlaneReach = IndexFeedSink & Pick<ControlPlaneDO,
   | 'settleAudit'
 >;
 
-/** The workspace object as this plane reaches it: everything an action does to
- *  one, plus the panels the drilldown reads. */
 type ControlTarget = ActionTarget & Pick<OrchestratorAgent,
   | 'getRunSummaries'
   | 'getActivitySnapshot'
@@ -103,13 +60,8 @@ type ControlTarget = ActionTarget & Pick<OrchestratorAgent,
   | 'getExecutors'
 >;
 
-/** The account object as this plane reaches it: everything an action does to
- *  one, plus the roster walk the reconcile reads. */
 type ControlRegistry = ActionRegistry & Pick<UserDO, 'listWorkspaces'>;
 
-/** Every binding these routes read: the gate's allowlist and root secret, the
- *  analytics settings the metrics view reports on, the three objects an admin
- *  request can reach, and the monitor's incident ledger. */
 export interface ControlEnv<Id> extends ActionEnv<Id>, AdminGateEnv, AnalyticsSqlEnv {
   ControlPlaneDO: ObjectNamespace<Id, ControlPlaneReach>;
   OrchestratorAgent: ObjectNamespace<Id, ControlTarget>;
@@ -117,20 +69,7 @@ export interface ControlEnv<Id> extends ActionEnv<Id>, AdminGateEnv, AnalyticsSq
   MonitorDO: ObjectNamespace<Id, Pick<MonitorDO, 'listIncidents'>>;
 }
 
-/**
- * Route an admin request, or decline the path.
- *
- * Returns `null` for anything outside `/api/control/`, so `server.ts` can hang
- * it in its table the same way every other route module is hung.
- *
- * `access` is the verified Cloudflare Access identity `server.ts` produced for
- * this request. It is a REQUIRED parameter and there is no arm that tolerates its
- * absence: that is what makes the outer gate structural rather than a step in a
- * checklist. The path test is shared with `access-gate.ts` rather than spelled
- * again here, because the set of paths this module answers and the set of paths
- * the outer gate protects have to be the same set — a route answered here and not
- * gated there is exactly the hole this whole change closes.
- */
+/** `access` is required; the path test is shared with `access-gate.ts` so answered and gated paths match. */
 export async function handleControlRequest<Id>(
   request: Request,
   env: ControlEnv<Id>,
@@ -141,11 +80,8 @@ export async function handleControlRequest<Id>(
 
   if (!isControlPlaneApiPath(url.pathname)) return null;
 
-  // Authorize as a READER first, for every method. A recognized operator whose
-  // sign-in has gone stale is authorized here and refused at the mutation check
-  // below — which is deliberate, because it is the only way an attempted
-  // mutation by a real operator gets an audit row instead of vanishing into a
-  // 403.
+  // Authorize as a reader first: a stale-sign-in operator is refused at the mutation check below,
+  // so the attempt still gets an audit row.
   const authorization = authorizeAdmin(env, identity, access, { mutating: false });
 
   if (!authorization.ok) {
@@ -171,8 +107,6 @@ export async function handleControlRequest<Id>(
   }
 }
 
-/** The three things every control-plane handler needs: the bindings, who is
- *  asking, and the capability their answer is read with. */
 interface ControlContext<Id> {
   env: ControlEnv<Id>;
   admin: AuthorizedAdmin;
@@ -210,9 +144,7 @@ async function dispatch<Id>(request: Request, url: URL, control: ControlContext<
       const name = segments[1] === undefined ? undefined : decodeURIComponent(segments[1]);
 
       if (name === undefined) {
-        // Built in statements: an absent `?userId=` must leave the property
-        // ABSENT, because the store treats `userId: ''` as a filter that matches
-        // no account rather than as no filter at all.
+        // An absent `?userId=` must leave the property absent: `userId: ''` matches no account.
         const filter: WorkspaceFilter = {
           includeRemoved: url.searchParams.get('includeRemoved') === '1',
         };
@@ -224,10 +156,7 @@ async function dispatch<Id>(request: Request, url: URL, control: ControlContext<
         return json({ body: await stub.listWorkspaces(caller, pageQuery(url), filter) });
       }
 
-      // A workspace name is not an address — `?userId=` is what makes it one.
-      // Required rather than optional: the alternative resolves the global
-      // Durable Object for whatever account happens to hold that name first,
-      // which is the reach this route exists to bound.
+      // Required: without `?userId=` the name resolves whichever account's global DO holds it.
       const owner = url.searchParams.get('userId');
 
       if (owner === null || !v.is(UserIdSchema, owner)) {
@@ -268,29 +197,9 @@ async function dispatch<Id>(request: Request, url: URL, control: ControlContext<
   }
 }
 
-/* ── The mutation ────────────────────────────────────────────────────────── */
-
 /**
- * Run one admin action, and write an audit row whichever way it goes.
- *
- * THE ORDER MATTERS AND IT IS THE POINT OF THIS FUNCTION.
- *
- * THE INTENT IS WRITTEN BEFORE THE MUTATION RUNS, and a failure to write it
- * STOPS the mutation. An audit log that is appended after the fact records only
- * the actions that happened to be followed by a working audit log; the one it
- * misses is the one taken while the plane was degraded, which is exactly the
- * action an operator later needs to find. Writing first inverts the failure:
- * either the attempt is on the record, or it never happened.
- *
- * THE SETTLEMENT CAN STILL BE LOST, and that is visible rather than hidden. A
- * pending row is the durable statement "this ran and nobody recorded how it
- * ended", which `listPendingAudit` surfaces; the response is a failure, so the
- * operator knows to go and look.
- *
- * A stale sign-in and a malformed body are audited too, because the attempts an
- * operator surface most needs recorded are the ones that did not work. Only a
- * caller who never got past `admin()` produces no row, and that one is not an
- * operator action at all — it is reported as `control_plane.denied` instead.
+ * The intent row is written before the mutation and a failed write stops it; a lost settlement
+ * stays visible as pending (`listPendingAudit`). Stale sign-ins and malformed bodies are audited too.
  */
 async function handleAction<Id>(
   request: Request,
@@ -343,10 +252,6 @@ async function handleAction<Id>(
       detail: outcome.detail,
       actorDigest: await actorDigest(env, admin.email),
       reason: outcome.reason,
-      // The thrown arm's classification, and `undefined` on every other — which
-      // the marker publishes as an empty slot. Written with the rest of the
-      // settlement rather than assigned after it, so one statement carries the
-      // whole shape a settled attempt reports.
       code: outcome.code,
     };
 
@@ -354,9 +259,7 @@ async function handleAction<Id>(
   } catch (cause) {
     reportAuditFailure('settle', { cause }, described.operation);
 
-    // Not a success, whatever the action did. The operator is told the row is
-    // unfinished and where to find it, because the alternative is a green answer
-    // over an audit log that cannot say what happened.
+    // Not a success: the audit row is unfinished.
     return err(500, `${AUDIT_UNSETTLED} (audit row ${intent.id})`);
   }
 
@@ -365,12 +268,9 @@ async function handleAction<Id>(
   return json({ body: { outcome: outcome.outcome, detail: outcome.detail } }, { status });
 }
 
-/** A refusal by the owning object is a 409, not a 500: the request was
- *  well-formed and authorized, and the state said no. */
+/** An owning-object refusal is 409, not 500: well-formed, authorized, and the state said no. */
 const ACTION_STATUS: Readonly<Record<AuditSettlement, number>> = { ok: 200, denied: 409, failed: 502 };
 
-/** What a pending row says while its action is in flight. Read by an operator,
- *  so it states the fact rather than leaving the column empty. */
 const PENDING_DETAIL = 'in flight: the outcome has not been recorded';
 
 const AUDIT_UNAVAILABLE =
@@ -379,14 +279,7 @@ const AUDIT_UNAVAILABLE =
 const AUDIT_UNSETTLED =
   'the action ran and its outcome could not be recorded; the attempt is still pending in the audit log';
 
-/**
- * Audit a refusal this plane made, and answer with it.
- *
- * One terminal row: there is no mutation to bracket, so a pending phase would
- * describe an action that was never going to run. The audit write is still
- * fail-closed — an operator told "refused" by a plane that recorded nothing has
- * been told half the truth.
- */
+/** One terminal row, no pending phase; the audit write is still fail-closed. */
 async function refuse<Id>(
   control: ControlContext<Id>,
   identity: ActionIdentity,
@@ -407,13 +300,7 @@ async function refuse<Id>(
   return err(refusal.status, refusal.message);
 }
 
-/**
- * Append one row, with the operator's digest attached.
- *
- * Throws on failure, and every caller treats that as fatal to the request. That
- * is the whole change from the version this replaced, which caught the failure,
- * logged a line and returned success over an action nobody recorded.
- */
+/** Throws on failure; every caller treats that as fatal to the request. */
 interface AuditSettlementRequest extends OperationMarker {
   id: string;
   outcome: AuditSettlement;
@@ -453,28 +340,14 @@ function reportAuditFailure(
   }), { operation, phase });
 }
 
-/* ── Reads that reach through to the owning object ───────────────────────── */
-
 /**
- * One account: its index row, and a cursored page of the workspaces it owns.
- *
- * RECONCILED ON THE FIRST PAGE, NEVER MID-WALK. The roster read is the source of
- * truth and `replaceUserWorkspaces` settles the difference, so opening an
- * account repairs its rows before any of them are shown. But that reconcile
- * REWRITES `last_seen_at`, which is the column the cursor orders on — running it
- * again on page two would reorder the list underneath a walk already in
- * progress, and a walk whose ordering changes silently repeats and skips rows.
- * So the walk reconciles once, at the top, and says so.
- *
- * PAGED, because an unpaged account with more than `CONTROL_PAGE_MAX`
- * workspaces leaves every row past 200 unreachable while the page's own copy
- * says the table was reconciled.
+ * Reconciles on the first page only: `replaceUserWorkspaces` rewrites `last_seen_at`, the cursor's
+ * order column, so reconciling mid-walk would repeat and skip rows.
  */
 async function handleUserDetail<Id>(control: ControlContext<Id>, userId: string, url: URL): Promise<Response> {
   const { env, admin, caller } = control;
 
-  // A UserDO name. The action schema demands the same shape, so the drilldown
-  // and the actions cannot disagree about what a userId is.
+  // Same shape the action schema demands, so drilldown and actions agree on a userId.
   if (!v.is(UserIdSchema, userId)) return err(400, 'not a user id');
   const stub = controlPlaneStub(env);
   const user = await stub.getUser(caller, userId);
@@ -486,14 +359,6 @@ async function handleUserDetail<Id>(control: ControlContext<Id>, userId: string,
   return json({ body: { user, workspaces, reconcile, viewer: admin.email } });
 }
 
-/**
- * What a drilldown page did about the index it is showing.
- *
- * Three states, not a boolean, because "reconciled", "the registry could not be
- * read" and "this is page four of a walk that reconciled at page one" are three
- * different things to tell an operator who is deciding whether to remove a
- * workspace.
- */
 export type ReconcileReport =
   | { status: 'ok' }
   | { status: 'failed'; reason: string }
@@ -521,19 +386,8 @@ type RosterRead =
   | { status: 'failed'; reason: string };
 
 /**
- * Walk one account's whole roster.
- *
- * `UserDO.listWorkspaces` is cursored and caps a page at its own
- * `WORKSPACE_LIST_LIMIT`, so a reconcile that read one page would silently
- * tombstone every workspace past that limit. The walk is bounded by a page count
- * rather than left open, because an unbounded loop over a remote cursor is a
- * subrequest budget nobody set — and it reports partial rather than pretending,
- * because a reconcile that stopped early must not be allowed to tombstone the
- * rows it never read.
- *
- * No limit is passed: `clampRosterLimit` THROWS on anything it dislikes and
- * caps at its own maximum anyway, so the roster's own default is the right page
- * size and this caller has no business naming one.
+ * Walks every roster page, else rows past `WORKSPACE_LIST_LIMIT` get tombstoned. Page-count bounded
+ * and reports partial. No limit is passed: `clampRosterLimit` throws on values it dislikes.
  */
 async function readRoster<Id>(env: ControlEnv<Id>, userId: string): Promise<RosterRead> {
   const MAX_PAGES = 25;
@@ -561,8 +415,7 @@ async function readRoster<Id>(env: ControlEnv<Id>, userId: string): Promise<Rost
       if (cursor === null) return { status: 'ok', workspaces };
     }
 
-    // The walk ran out of pages before the roster ran out of rows. Tombstoning
-    // on a partial read would delete rows that exist, so this is a failure.
+    // Tombstoning on a partial read would delete rows that exist, so this is a failure.
     return {
       status: 'failed',
       reason: `the roster did not end within ${String(MAX_PAGES)} pages; the index was left alone`,
@@ -573,19 +426,8 @@ async function readRoster<Id>(env: ControlEnv<Id>, userId: string): Promise<Rost
 }
 
 /**
- * One workspace, read from the Durable Object that owns it.
- *
- * RESOLVED THROUGH THE OWNER, exactly as an action is. The panels below are a
- * workspace's conversation runs, its spend, its pending approvals and its
- * standing shell grants — reading them for the wrong account is the same
- * cross-user reach as acting on it, and `OrchestratorAgent` is addressed by a
- * name that is unique only inside one UserDO. `claimOwnedWorkspace` refuses
- * before any panel RPC is issued.
- *
- * Every field comes from an existing `@callable`. Each is settled independently
- * so one unavailable surface degrades to a stated reason instead of blanking the
- * page — a workspace whose sandbox is down still has runs, jobs and approvals
- * worth reading, and that is exactly the workspace an operator is looking at.
+ * Resolved through the owner via `claimOwnedWorkspace`, exactly as an action is. Panels settle
+ * independently so one unavailable surface degrades to a stated reason.
  */
 async function handleWorkspaceDetail<Id>(
   env: ControlEnv<Id>, userId: string, workspace: string,
@@ -620,25 +462,14 @@ async function handleWorkspaceDetail<Id>(
   return json({ body: detail });
 }
 
-/** A panel's value, or why it has none. Never a silent `null`: a missing panel
- *  and an empty one are different facts and an operator has to be able to tell
- *  them apart. */
+/** Never a silent `null`: a missing panel and an empty one are different facts. */
 export type SettledPanel<Value> =
   | { status: 'ok'; value: Value }
   | { status: 'failed'; reason: string };
 
-/**
- * One workspace as the drilldown reads it.
- *
- * Each panel is generic over what its `@callable` returns, so the response type
- * follows the orchestrator's own contracts rather than restating them — and a
- * caller reading `runs.value` gets `Page<RunSummary>`, not `unknown`.
- */
 export interface WorkspaceDetail {
   workspace: string;
-  /** The account this read was resolved through. Echoed so a browser holding the
-   *  answer can bind its action buttons to the same pair the read proved, rather
-   *  than to whatever is in the address bar. */
+  /** Echoed so action buttons bind to the pair the read proved, not the address bar. */
   userId: string;
   runs: SettledPanel<Awaited<ReturnType<OrchestratorAgent['getRunSummaries']>>>;
   activity: SettledPanel<Awaited<ReturnType<OrchestratorAgent['getActivitySnapshot']>>>;
@@ -655,19 +486,11 @@ function settled<Value>(result: PromiseSettledResult<Value>): SettledPanel<Value
     : { status: 'failed', reason: renderThrownChain({ cause: result.reason }) };
 }
 
-/* ── Query parsing ───────────────────────────────────────────────────────── */
-
 const CursorParamSchema = v.pipe(v.string(), v.nonEmpty());
 
-/** Read `?cursor=&limit=` into the repo's own `PageRequest`. A malformed limit
- *  is dropped rather than rejected — the store clamps it — but a malformed
- *  cursor is passed through so the store can refuse it, because silently
- *  restarting a walk from the top looks like success and repeats rows. */
+/** A malformed limit is dropped (the store clamps); a malformed cursor passes through for the store to refuse. */
 function pageQuery(url: URL): PageRequest {
-  // Statements, not spreads: `PageRequest` distinguishes an ABSENT cursor (start
-  // at the beginning) from a present one, and a spread that produced
-  // `cursor: undefined` would read as present-and-malformed to a store that
-  // refuses a cursor it did not issue.
+  // Statements, not spreads: `cursor: undefined` would read as present-and-malformed to the store.
   const request: PageRequest = {};
   const cursor = v.safeParse(CursorParamSchema, url.searchParams.get('cursor'));
 
@@ -688,6 +511,4 @@ function numberParam(url: URL, name: string): number | undefined {
   return Number.isFinite(parsed) ? parsed : undefined;
 }
 
-/** Re-exported so the browser client and the tests describe a page with the same
- *  type the store produces, rather than a second declaration of it. */
 export type { Page, PageRequest };

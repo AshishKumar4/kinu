@@ -1,24 +1,6 @@
 /**
- * The line terminal, at the two seams a user reaches: what the keyboard puts
- * into a command, and what a finished command puts on the screen.
- *
- * Every case here was measured first in a browser against a live workspace
- * executor (Chrome 152, `vite dev`, executor `workspace`, 2026-09-01) and each
- * assertion states the reading it was measured against:
- *
- *   · `printf 'a\nb\nc\n'` drew `a`, ` b`, `  c`, `   $` — one column further
- *     right per line, because xterm was handed bare LF and an LF moves down
- *     without returning to column 0. `ls -la` walked off the right edge.
- *   · a pasted `echo first-line\necho second-line\n` ran the first line and
- *     dropped the second with no echo and no error.
- *   · `echo one \` submitted at once, and `cat <<EOF` answered
- *     `Expected HeredocBody but got EOF ('')` before its body was typed.
- *   · `ls /definitely-not-here` printed its failure twice, once plain and once
- *     in red, because the row carries the same rendered text in both columns.
- *   · an arrow key typed `[A` into the command line.
- *
- * The driver is imported directly: it decides over strings, and the pane's own
- * module graph pulls xterm, a stylesheet and React.
+ * Line terminal keyboard-to-command and output-to-screen seams. Measured 2026-09-01 in Chrome 152 against a live
+ * workspace executor: bare LF staircased output, pastes dropped lines, continuations submitted early, arrows typed `[A`.
  */
 
 import { describe, expect, test } from 'bun:test';
@@ -28,8 +10,7 @@ import {
   type TerminalPaneOutput, type TerminalWriter,
 } from '@kinu.run/core';
 
-/** A terminal that keeps its bytes. The pane hands xterm's `Terminal` here;
- *  the one method is all either of them uses. */
+/** Keeps its bytes; the pane hands xterm's `Terminal` here. */
 class Recorder implements TerminalWriter {
   #written = '';
 
@@ -37,15 +18,11 @@ class Recorder implements TerminalWriter {
     this.#written += data;
   }
 
-  /** Everything written, control bytes included. */
   get raw(): string {
     return this.#written;
   }
 
-  /** The rows a reader sees. Splitting on CR LF is the point of the test: a
-   *  bare LF leaves its row joined to the one before it here exactly as it
-   *  leaves the cursor mid-row in xterm. `Bun.stripANSI` takes the colour off
-   *  structurally — no regex, no control characters — as the CLI suites do. */
+  /** Split on CR LF: a bare LF stays joined to the previous row, as it leaves the xterm cursor mid-row. */
   get rows(): readonly string[] {
     return Bun.stripANSI(this.#written).split('\r\n');
   }
@@ -65,7 +42,6 @@ function row(stdout: string, over: Partial<TerminalPaneOutput> = {}): TerminalPa
   };
 }
 
-/** A state at a fresh generation, as the pane's mount effect leaves it. */
 function editor(): LineTerminalState {
   const state = new LineTerminalState();
   state.reset();
@@ -73,12 +49,7 @@ function editor(): LineTerminalState {
   return state;
 }
 
-/**
- * Whether Enter after `source` opens a continuation line or submits: the
- * lexer judged through the editor's own surface, the way a paste reaches it.
- * Submitted, or an empty Enter that redrew the prompt, both read as finished;
- * only a drawn `> ` continuation reads as still listening.
- */
+/** True only when Enter after `source` draws a `> ` continuation. */
 function keepsReading(source: string): boolean {
   const term = new Recorder();
   const state = editor();
@@ -89,8 +60,6 @@ function keepsReading(source: string): boolean {
 
 describe('program output reaches the terminal as terminal lines', () => {
   const drawnRows = [
-    // Red against the pre-fix `term.write(out.stdout)`: that wrote `a\nb\r\n`,
-    // so `b` began in the column `a` ended in.
     { name: 'a bare LF between two lines arrives as CR LF', source: 'a\nb', drawn: 'a\r\nb\r\n' },
     { name: 'CR LF already in the output is not doubled', source: 'a\r\nb\r\n', drawn: 'a\r\nb\r\n' },
     {
@@ -123,8 +92,7 @@ describe('program output reaches the terminal as terminal lines', () => {
     const rendered = "Error (exit 1)\n--- stderr ---\nls: cannot access '/nope'\n";
     const term = new Recorder();
     writeOutputRow(term, row(rendered, { stderr: rendered, stderr_len: rendered.length, exit_code: 1 }));
-    // One copy of the text, and it keeps the failure colour. Red against the
-    // pre-fix pane, which wrote stdout and then the identical stderr again.
+    // One copy of the text, keeping the failure colour.
     expect(term.raw.split('Error (exit 1)').length - 1).toBe(1);
     expect(term.raw.startsWith('\x1b[31m')).toBe(true);
     expect(term.rows).toEqual(['Error (exit 1)', '--- stderr ---', "ls: cannot access '/nope'", '']);
@@ -168,10 +136,7 @@ describe('what the keyboard puts into a command', () => {
   test('a pasted script runs whole, not just its first line', () => {
     const state = editor();
     const term = new Recorder();
-    // xterm delivers a paste as one chunk with every newline turned into CR
-    // (browser/Clipboard.ts `prepareTextForTerminal`). Red against the loop
-    // this replaces, which returned after the first CR: it answered
-    // `echo first-line` and dropped the rest with no echo and no error.
+    // xterm delivers a paste as one chunk with newlines turned into CR (browser/Clipboard.ts `prepareTextForTerminal`).
     const command = feedInput(term, state, 'echo first-line\recho second-line\r');
     expect(command).toBe('echo first-line\necho second-line');
   });
@@ -205,8 +170,6 @@ describe('what the keyboard puts into a command', () => {
   test('a backslash at the end of the line opens a continuation line', () => {
     const state = editor();
     const term = new Recorder();
-    // Red against the pre-fix editor, which submitted `echo one \` at once and
-    // then ran `two` as its own command: `two: command not found`.
     expect(feedInput(term, state, 'echo one \\\r')).toBeNull();
     expect(term.raw.endsWith('\x1b[32m>\x1b[0m ')).toBe(true);
     expect(feedInput(term, state, 'two\r')).toBe('echo one \\\ntwo');
@@ -226,8 +189,6 @@ describe('what the keyboard puts into a command', () => {
     feedInput(term, state, 'abc');
     feedInput(term, state, '\x1b[A');
     feedInput(term, state, '\x1bOB');
-    // Red against the pre-fix loop, which dropped the ESC and appended the
-    // rest: the line read `abc[A[B`.
     expect(state.buffer).toBe('abc');
   });
 
@@ -247,8 +208,7 @@ describe('what the keyboard puts into a command', () => {
     feedInput(term, state, 'echo a \\\r');
     const written = term.raw;
     feedInput(term, state, '\x7f');
-    // Nothing erased and nothing echoed: this editor cannot repaint the row
-    // above, and joining the lines silently would lose a character.
+    // This editor cannot repaint the row above, so nothing is erased or echoed.
     expect(state.buffer).toBe('echo a \\\n');
     expect(term.raw).toBe(written);
   });
@@ -300,8 +260,7 @@ describe('when the shell is still reading', () => {
   });
 
   test('a heredoc body is not read for quotes of its own', () => {
-    // The body is data. A lone apostrophe in it opened a quote that never
-    // closed, which would strand the editor on a continuation prompt.
+    // The body is data: an apostrophe in it must not open a quote.
     expect(keepsReading("cat <<EOF\nit's fine\nEOF\n")).toBe(false);
   });
 
@@ -312,9 +271,7 @@ describe('when the shell is still reading', () => {
 
 describe('the line driver runs only where there is no pseudo-terminal', () => {
   test('the sandbox lane still asks for the PTY driver', () => {
-    // The newline conversion above belongs to the line seam alone. A container
-    // PTY sends its own CR LF and positions the cursor before an LF, so the
-    // shared `newTerminal` must stay free of `convertEol` for this lane.
+    // A container PTY sends its own CR LF, so `newTerminal` must stay free of `convertEol` for this lane.
     expect(terminalLane('sandbox')).toEqual({ mode: 'pty' });
   });
 });

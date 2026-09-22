@@ -1,30 +1,6 @@
 /**
- * The `db` capability on real Durable Object SQLite, reached from a program
- * running in the real dynamic-Worker sandbox.
- *
- * WHY THIS IS A PLATFORM TEST. Two of the mechanisms `db` is built on are the
- * platform's to provide, and `bun:sqlite` having them says nothing whatever
- * about workerd:
- *
- *   1. `Storage.transactionSync` over `ctx.storage`. The all-or-nothing batch —
- *      and, more importantly, the guarantee that a mutation's `db_op` evidence
- *      rolls back WITH it — is that transaction and nothing else. A workerd
- *      transaction that committed the rows of the operations before the failing
- *      one would leave a partially applied batch in production with every unit
- *      test green.
- *   2. `UPDATE`/`DELETE`/`INSERT … RETURNING`. That is how a row count crosses
- *      the `SqlExecutor` seam, which answers rows and never a change count.
- *      Durable Object SQLite is the runtime that has to answer them.
- *
- * And the program is executed by the REAL `@cloudflare/codemode`
- * DynamicWorkerExecutor over `env.LOADER`, so the arguments the store validates
- * are the ones that actually survive the isolate boundary: JSON, with bytes as
- * base64 and a refusal as a value the program branches on.
- *
- * The subject is the PRODUCTION store and provider — `createAppDataStore`,
- * `createDbCodemodeProvider`, `initWorkspaceSchema` — over `ctx.storage`. Only
- * the SqlExecutor adapter is local, and it is the tagged-template protocol
- * `bindAgentSql` bridges in production.
+ * The `db` capability on real Durable Object SQLite, run from the real dynamic-Worker sandbox. Defends platform
+ * behaviour bun:sqlite cannot: `transactionSync` rolling back a failed batch with its `db_op` evidence, and `… RETURNING` row counts.
  */
 import { DurableObject } from 'cloudflare:workers';
 import * as v from 'valibot';
@@ -37,7 +13,6 @@ import {
 } from '@kinu.run/core';
 import { KinuSandboxExecutor } from '../../src/codemode-sandbox';
 
-/** The two issued actors this probe runs programs as. */
 interface ProbeActors {
   readonly main: ActorHandle;
   readonly scout: ActorHandle;
@@ -45,15 +20,11 @@ interface ProbeActors {
 
 /** What one probe run reports back across the RPC boundary. */
 export interface DbProbeAnswer {
-  /** The program's own return value, JSON-encoded — a `Map` or a domain object
-   *  is not structured-cloneable through a Durable Object stub. */
+  /** JSON-encoded: a `Map` or domain object is not structured-cloneable through a Durable Object stub. */
   readonly answer: string;
-  /** Rows of `app_<name>` as the DATABASE holds them, per actor, so the
-   *  assertion is not the program agreeing with itself. */
+  /** Rows as the database holds them, so the assertion is not the program agreeing with itself. */
   readonly rows: readonly { readonly actor: string; readonly key: string }[];
-  /** `sqlite_master` table names, for the before/after of an attack. */
   readonly tables: readonly string[];
-  /** Every `db_op` event the run recorded, in order. */
   readonly evidence: readonly string[];
 }
 
@@ -64,19 +35,10 @@ export class DbCapabilityProbeDO extends DurableObject<Cloudflare.Env> {
 
   private readonly execRaw = (ddl: string): void => { this.ctx.storage.sql.exec(ddl); };
 
-  /**
-   * The dynamic-SQL peer of the bridge above, for the schema entry point.
-   *
-   * A boolean becomes 0/1 rather than being refused, which is not a silent
-   * conversion of meaning: SQLite has no boolean type and stores a bound one
-   * exactly this way. Declaring the adapter's parameter as the platform's
-   * narrower value type instead would make it unassignable to `SqlExec`.
-   */
+  /** A boolean becomes 0/1, as SQLite stores a bound one; the platform's narrower value type would be unassignable to `SqlExec`. */
   private readonly exec: SqlExec = {
     exec: (query, ...bindings) => this.ctx.storage.sql.exec(
       query,
-      // A boolean is admitted by `SqlExec` and not by the platform's own value
-      // type, so it is parsed here rather than shape-checked.
       ...bindings.map((value) => (v.is(v.boolean(), value) ? Number(value) : value)),
     ),
   };
@@ -85,14 +47,9 @@ export class DbCapabilityProbeDO extends DurableObject<Cloudflare.Env> {
   private main: ActorHandle | undefined;
   private scout: ActorHandle | undefined;
 
-  /** The workspace, its schema and two issued actors — main and a real
-   *  subordinate of it, both from the production directory, both over THIS
-   *  object's one database. */
   private open(): ProbeActors {
     if (!this.ready) {
-      // `initWorkspaceSchema` creates workspace_identity and the actor roster
-      // itself (initWorkspaceOwnershipTables + initWorkspaceActorTable), so the
-      // probe adds only the identity ROW the directory reads for ownership.
+      // `initWorkspaceSchema` creates the identity and roster tables; the probe adds only the identity row.
       initWorkspaceSchema({ execRaw: this.execRaw, sql: this.sql, exec: this.exec });
       void this.sql`INSERT OR IGNORE INTO workspace_identity (id, name) VALUES (${'ws-db-probe'}, ${'db-probe'})`;
       const directory = new WorkspaceActorDirectory(this.sql, { workspaceId: 'ws-db-probe', ownerUserId: '' });
@@ -122,12 +79,7 @@ export class DbCapabilityProbeDO extends DurableObject<Cloudflare.Env> {
     });
   }
 
-  /**
-   * Run one model-authored program in the real sandbox, as the named actor.
-   *
-   * `db` is the ONLY namespace bound, so a program that reached anything else
-   * would fail on a ReferenceError rather than quietly using another path.
-   */
+  /** `db` is the only namespace bound, so reaching anything else fails with a ReferenceError. */
   async program(code: string, as: 'main' | 'scout'): Promise<DbProbeAnswer> {
     const actors = this.open();
     const actor = as === 'main' ? actors.main : actors.scout;
@@ -152,8 +104,7 @@ export class DbCapabilityProbeDO extends DurableObject<Cloudflare.Env> {
     };
   }
 
-  /** Whether the actor-scoped table this suite writes exists, and whose rows it
-   *  holds. Read through neither the store nor the provider. */
+  /** Read through neither the store nor the provider. */
   private rows(): readonly { readonly actor: string; readonly key: string }[] {
     const present = this.sql<{ name: string }>`
       SELECT name FROM sqlite_master WHERE type = 'table' AND name = ${'app_ledger'}`;
@@ -177,9 +128,7 @@ export class DbCapabilityProbeDO extends DurableObject<Cloudflare.Env> {
         : []));
   }
 
-  /** Bind a handle whose identity is NOT in the directory, so the probe can
-   *  show that a stale binding is refused before any statement runs — the
-   *  hosted equivalent of a dismissed actor still holding a store. */
+  /** A handle whose identity is not in the directory: a stale binding is refused before any statement runs. */
   async staleActor(): Promise<string> {
     this.open();
     let live = true;

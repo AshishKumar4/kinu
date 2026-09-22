@@ -1,8 +1,6 @@
 import { Agent, type FiberRecoveryContext, type FiberRecoveryResult } from 'agents';
 
-/** Minimal real SDK subject for the patched `_checkRunFibers` scan. No ActorAgent
- * policy or Kinu lane is involved: the assertion is about the installed Agents
- * dependency reading cf_agents_runs one metadata row then one snapshot at a time. */
+/** Minimal real SDK subject: asserts the installed Agents dependency's patched `_checkRunFibers` reads one run row, then one snapshot, at a time. */
 export class FiberRecoveryProbeAgent extends Agent<Cloudflare.Env> {
   readonly recovered: string[] = [];
 
@@ -16,9 +14,7 @@ export class FiberRecoveryProbeAgent extends Agent<Cloudflare.Env> {
     );
   }
 
-  /** Public SDK lifecycle entry. `Agent.onStart()` is what calls the installed
-   *  recovery scan on an activation; invoking it here tests that entry instead
-   *  of reaching through the dependency's private `_checkRunFibers` member. */
+  /** Public lifecycle entry: `Agent.onStart()` calls the installed recovery scan, so the private member is not reached into. */
   async scan(): Promise<void> {
     await this.onStart();
   }

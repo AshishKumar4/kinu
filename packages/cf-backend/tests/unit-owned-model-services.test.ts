@@ -18,8 +18,7 @@ import type { UserCaller } from '@kinu.run/core';
 import { platformGatewayEnv } from './helpers/platform-gateway';
 import type { ProviderEnv } from '@kinu.run/core';
 
-/** `LanguageModel` is `string | LanguageModelV3`; a resolver hands back the
- *  object half, and these tests read its provider/model ids. */
+/** `LanguageModel` is `string | LanguageModelV3`; resolvers hand back the object half. */
 const ResolvedModelSchema = v.object({ provider: v.string(), modelId: v.string() });
 
 function resolved(model: LanguageModel): v.InferOutput<typeof ResolvedModelSchema> {
@@ -67,9 +66,7 @@ describe('OwnedModelServices', () => {
     expect(actor).toContain('return this.ownedModelServices.providerRegistry();');
     expect(actor).toContain('return this.ownedModelServices.getWebSearchProvider();');
     expect(actor).toContain('this.ownedModelServices.invalidate();');
-    // No second registry: exploration runners resolve through the root's owned
-    // services — a hosted head runs in a claimed workspace, so there is no
-    // ownerless mode to settle a separate policy for.
+    // No second registry: a hosted head runs in a claimed workspace, so there is no ownerless mode.
     expect(hosting).not.toContain('createAgentProviderRegistry');
     expect(hosting).not.toContain('ownerRequired');
     expect(orchestrator).toContain('resolveModel: (spec) => this.ownedModelServices.resolveModel(spec),');
@@ -151,9 +148,8 @@ describe('OwnedModelServices', () => {
       getCredentialsRevision: async () => 0,
     });
 
-    // The minimal mock response does not satisfy the AI SDK decoder. Asserted
-    // rather than swallowed: this test is about the OUTGOING request headers, so a
-    // mock that starts decoding cleanly should fail here, not pass silently.
+    // The mock response fails the AI SDK decoder; asserted so a mock that decodes cleanly fails
+    // here.
     await expect(generateText({
       model: services.resolveModel('openrouter/anthropic/claude-sonnet-4'),
       prompt: 'hello',
@@ -202,26 +198,13 @@ describe('OwnedModelServices', () => {
 });
 
 /**
- * The provider snapshot: what it preserves, and when it is allowed to be reused.
- *
- * NOTE ON DETERMINISM — no test here mocks a HEALTHY models.dev. `models-dev.ts`
- * memoizes its catalog in a module-level variable for 5 minutes, so a healthy
- * fetch anywhere in this file would be served to every later test and the
- * degraded cases below would silently stop being degraded. A 503 is not cached
- * (it takes the `models_dev.catalog_fallback` path), so 503-only mocking is
- * order-independent.
- *
- * The two shapes used below are chosen because they differ in EXACTLY the failure
- * set: an owner-bound registry consults the dynamic catalog source, so a 503
- * there is a listing that failed; an unowned one has no dynamic source at all,
- * so the same 503 leaves its listing complete. Same models, one failure apart.
+ * Only 503s are mocked: `models-dev.ts` memoizes a healthy catalog module-wide, which would leak
+ * into later tests; a 503 is not cached. Owner-bound and unowned registries differ by exactly
+ * the failure set.
  */
 function snapshotServices(
   owner: string | null,
   credentials: Readonly<Record<string, CredentialHeaders>> = {},
-  /** The account credential revision this cache measures itself against. A
-   *  constant is a world where nothing changed; a reader that moves is a
-   *  mutation the fan-out may or may not have delivered. */
   getCredentialsRevision: () => Promise<number> = async () => 0,
 ): OwnedModelServices<string> {
   return new OwnedModelServices({
@@ -235,10 +218,7 @@ function snapshotServices(
   });
 }
 
-/** An owner-bound registry holding a CATALOG-backed credential: enumerating it
- *  needs models.dev, so a 503 there is a listing that genuinely FAILED. Without
- *  the credential there is nothing to enumerate and the same 503 is only a
- *  metadata fallback — which is exactly the clean case beside it. */
+/** A catalog-backed credential: enumerating it needs models.dev, so a 503 is a failed listing. */
 function degradedServices(): OwnedModelServices<string> {
   return snapshotServices('owner-1', { 'groq.bearer': { Authorization: 'Bearer gsk' } });
 }
@@ -254,21 +234,14 @@ function catalogDown() {
 }
 
 describe('OwnedModelServices — the provider snapshot', () => {
-  // `profileProviderSnapshot()` now answers with core's `ProviderSnapshotRead`:
-  // the snapshot AND how it was obtained. The cache outcome is what core writes
-  // into the `profile_resolution` evidence row, and it is also what these tests
-  // assert on — the previous ones compared object identity as a proxy for "was
-  // the sweep re-run", which stopped meaning that once the snapshot became a
-  // pure function of a cached LISTING. Asserting the reported outcome states the
-  // claim directly.
+  // Assert the reported cache outcome (what core writes into `profile_resolution`), not object
+  // identity.
   test('a failed provider listing is preserved, never dropped into model absence', async () => {
     catalogDown();
 
     const { snapshot } = await degradedServices().profileProviderSnapshot();
 
     expect(snapshot.unavailableProviders?.map((p) => p.provider)).toEqual(['catalog']);
-    // The row is carried whole: a reader has the provider, a human label and the
-    // real reason, so "could not ask" is distinguishable from "asked, absent".
     expect(snapshot.unavailableProviders?.[0]).toEqual({
       provider: 'catalog',
       label: 'models.dev catalog',
@@ -282,11 +255,9 @@ describe('OwnedModelServices — the provider snapshot', () => {
     const degraded = (await degradedServices().profileProviderSnapshot()).snapshot;
     const clean = (await snapshotServices(null).profileProviderSnapshot()).snapshot;
 
-    // Identical positive listings...
     expect(degraded.availableModels).toEqual(clean.availableModels);
     expect(clean.unavailableProviders).toEqual([]);
-    // ...and still different revisions, which is the producer obligation: nothing
-    // keyed on revision may serve a partial picture as though it were complete.
+    // Different revisions: nothing keyed on revision may serve a partial picture as complete.
     expect(degraded.revision).not.toBe(clean.revision);
   });
 
@@ -300,7 +271,6 @@ describe('OwnedModelServices — the provider snapshot', () => {
 
     services.invalidate();
     const afterChange = await services.profileProviderSnapshot();
-    // Re-swept, and the world had not changed, so the revision is identical.
     // Nothing here expires on a clock.
     expect(afterChange.cache).toBe('miss');
     expect(afterChange.snapshot.revision).toBe(first.snapshot.revision);
@@ -314,17 +284,14 @@ describe('OwnedModelServices — the provider snapshot', () => {
     const second = await services.profileProviderSnapshot();
 
     expect(first.snapshot.unavailableProviders).toHaveLength(1);
-    // Swept again: caching this would hold the unverified-admission window open
-    // past the fault and freeze `revision` at a degraded value.
+    // Caching this would hold the unverified-admission window open and freeze `revision` degraded.
     expect(first.cache).toBe('miss');
     expect(second.cache).toBe('miss');
   });
 
   test('concurrent callers share one sweep instead of racing their own', async () => {
     const mock = catalogDown();
-    // Baseline: what ONE sweep costs. Not a fixed number — a single sweep issues
-    // more than one catalog request (enumeration, then metadata fallback), so
-    // the claim being tested is "three callers cost one sweep", not "one fetch".
+    // One sweep issues several catalog requests, so the claim is "three callers cost one sweep".
     await degradedServices().profileProviderSnapshot();
     const oneSweep = mock.matching('models.dev/api.json').length;
     expect(oneSweep).toBeGreaterThan(0);
@@ -338,25 +305,17 @@ describe('OwnedModelServices — the provider snapshot', () => {
       services.profileProviderSnapshot(),
     ]);
 
-    // One sweep, and the two that arrived while it ran say so rather than
-    // reporting a cache hit they never had.
     expect([a.cache, b.cache, c.cache].filter((outcome) => outcome === 'miss')).toHaveLength(1);
     expect([a.cache, b.cache, c.cache].filter((outcome) => outcome === 'joined')).toHaveLength(2);
     expect(b.snapshot.revision).toBe(a.snapshot.revision);
     expect(c.snapshot.revision).toBe(a.snapshot.revision);
-    // This is the TTFT half: three streams opening together would otherwise
-    // start three credential sweeps, each one a models.dev and Codex refresh
-    // deep.
     expect(mock.matching('models.dev/api.json')).toHaveLength(oneSweep);
   });
 
   test('a sweep the change landed on top of is answered, and never becomes the next turn\'s answer', async () => {
-    // The interleaving that matters, held open where it really happens: INSIDE
-    // the sweep. `profileProviderSnapshot` reads the account's credential
-    // revision before it reads the listing, so a change arriving before that
-    // read produces a post-change sweep (which is correct to cache, and is
-    // covered by the revision compare below). What must still never be cached
-    // is a sweep the change landed in the MIDDLE of.
+    // The snapshot reads the credential revision before the listing: a change landing mid-sweep
+    // must
+    // never be cached.
     const mock = catalogDown();
     const upstream = globalThis.fetch;
     const held = Promise.withResolvers<void>();
@@ -370,24 +329,18 @@ describe('OwnedModelServices — the provider snapshot', () => {
 
     const inFlight = services.profileProviderSnapshot();
 
-    // The sweep is in flight once its first upstream call is parked.
     while (mock.matching('models.dev/api.json').length === 0) await Promise.resolve();
     services.invalidate();
     held.resolve();
     const answered = await inFlight;
 
-    // Its own caller is answered — the listing really happened — but the result
-    // describes the world before the change, so it must not become the answer
-    // for every turn after it: the next read sweeps again rather than hitting.
     expect(answered.snapshot.availableModels.length).toBeGreaterThan(0);
     expect((await services.profileProviderSnapshot()).cache).toBe('miss');
   });
 
   test('a credential change the fan-out never delivered is caught at the next use', async () => {
-    // THE DURABLE HALF. The notification is a timeliness optimization and can
-    // fail silently — a workspace that was unreachable, a waitUntil that lost
-    // its request. Nothing here calls `invalidate()`: the only signal is the
-    // account's own revision, compared before the cache is read.
+    // The notification can fail silently: the only signal here is the account's own revision,
+    // compared before the cache is read.
     catalogDown();
     let revision = 7;
     const services = snapshotServices(null, {}, async () => revision);
@@ -397,12 +350,8 @@ describe('OwnedModelServices — the provider snapshot', () => {
 
     revision = 8;
 
-    // Swept again, with no notification anywhere in the story. Before this, a
-    // dropped notification meant the workspace served its stale catalog until
-    // an unrelated invalidation happened to land.
     expect((await services.profileProviderSnapshot()).cache).toBe('miss');
-    // And it settles: the same revision twice is a hit again, so the compare
-    // costs one round trip rather than a sweep per turn.
+    // The same revision twice is a hit again: the compare costs one round trip, not a sweep.
     expect((await services.profileProviderSnapshot()).cache).toBe('hit');
   });
 
@@ -419,16 +368,13 @@ describe('OwnedModelServices — the provider snapshot', () => {
     expect((await services.profileProviderSnapshot()).cache).toBe('miss');
     refuse = true;
 
-    // A cache-freshness question that cannot be answered must not cost the
-    // turn: the fan-out and the next successful compare still repair it.
+    // An unanswerable freshness question must not cost the turn.
     const answered = await services.profileProviderSnapshot();
     expect(answered.cache).toBe('hit');
     expect(answered.snapshot.availableModels.length).toBeGreaterThan(0);
   });
 
   test('the account revision the compare reads rises with every credential mutation', async () => {
-    // The write half, in the object that owns the store — so the number the
-    // workspace compares against is the one the mutation actually moved.
     const harness = createTestUserDO({ durableObjectId: 'owner-1' });
     const owner = await testOwner();
 
@@ -439,27 +385,16 @@ describe('OwnedModelServices — the provider snapshot', () => {
     const afterDisconnect = await harness.userDO.getCredentialsRevision(owner);
 
     expect(afterConnect).toBeGreaterThan(before);
-    // A DISCONNECT moves it too. That direction is the dangerous one: a
-    // workspace holding the old listing would keep offering a provider whose
-    // credential no longer exists.
+    // A disconnect moves it too: a stale listing would offer a provider whose credential is gone.
     expect(afterDisconnect).toBeGreaterThan(afterConnect);
     harness.close();
   });
 });
 
-/**
- * The seam this producer exists to serve: a real snapshot resolved by core.
- *
- * The whole point of carrying failures is what the RESOLVER does with them, and
- * that is one decision made in two places — this file produces the evidence,
- * `profiles/resolve.ts` acts on it. Asserted end to end rather than on the shape
- * alone, because a snapshot that carries a perfect failure list into a resolver
- * that ignores it fixes nothing.
- */
+/** A snapshot's failure list is acted on by `profiles/resolve.ts`: asserted end to end. */
 describe('a degraded listing versus a confirmed-missing model', () => {
-  /** A tier pinned to a model no listing here can see. Deliberately a catalog
-   *  provider: on a models.dev outage its models vanish AND the only failure row
-   *  says `catalog`, which is the case a prefix match would have missed. */
+  /** A catalog provider: on a models.dev outage its models vanish and the only failure row says
+   *  `catalog`. */
   const PINNED = 'groq/llama-3.3-70b-versatile';
 
   function envelopeWithDeepPin(defaultModel: string): ProfileCatalogEnvelope {
@@ -502,10 +437,8 @@ describe('a degraded listing versus a confirmed-missing model', () => {
 
     const profile = resolveWith(degraded);
 
-    // Admitted UNVERIFIED: the listing could not prove the model absent, and the
-    // owner's signed catalog stands. Before this, one vendor being unreachable
-    // refused every turn on the account — including turns whose own tier ran on
-    // a provider that was answering perfectly.
+    // Admitted unverified: the listing could not prove the model absent, and the signed catalog
+    // stands.
     expect(profile.tiers.deep.model).toBe(PINNED);
     expect(profile.providerRevision).toBe(degraded.revision);
   });
@@ -515,8 +448,7 @@ describe('a degraded listing versus a confirmed-missing model', () => {
     const clean = (await snapshotServices(null).profileProviderSnapshot()).snapshot;
     expect(clean.unavailableProviders).toEqual([]);
 
-    // An empty failure set ASSERTS the listing was complete, so absence is proof
-    // and the refusal is the correct answer rather than a guess.
+    // An empty failure set asserts the listing was complete, so absence is proof.
     expect(() => resolveWith(clean)).toThrow(/unavailable on provider revision/);
   });
 });

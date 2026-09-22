@@ -1,9 +1,6 @@
 /**
- * `highlightCode` is the one place a code fence becomes coloured tokens — or
- * does not. The defect this pins is the pair a surface cannot recover from:
- * a KNOWN language rendered as flat text (every token the same colour reads
- * as no highlighting at all), and an UNKNOWN language throwing or mangling
- * the source (a fence's first job is to show the code it was handed).
+ * Defends: a known language rendered as flat text, and an unknown language
+ * throwing or mangling the source.
  */
 import { describe, expect, test } from 'bun:test';
 
@@ -18,15 +15,12 @@ describe('highlightCode', () => {
     // Shiki emits one <span style="color:…"> per token; flat text has none.
     const tokens = present(result.html, 'the highlighted markup').match(/<span style="color:#/g) ?? [];
     expect(tokens.length).toBeGreaterThan(1);
-    // …and the source survives inside the markup, not a paraphrase of it.
     expect(result.html).toContain('const');
     expect(result.code).toBe('const x: number = 1;');
     expect(result.language).toBe('ts');
   });
 
   test('an alias resolves to its grammar', async () => {
-    // `bash` is an alias of `shellscript`; a fence labelled bash is the
-    // everyday case.
     const result = await highlightCode('echo "$HOME"', 'bash');
 
     expect(result.html).not.toBeNull();

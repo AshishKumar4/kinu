@@ -1,12 +1,4 @@
-// Browser authentication for Kinu.
-//
-// Primary path: app-owned OAuth/OIDC sessions in KV. Browser cookies are
-// opaque, HttpOnly session handles; KV stores only hashes.
-//
-// `env.DEV_USER_EMAIL` names ONE identity a caller may act as without signing
-// in: a developer's own identity locally, the eval service account on the
-// deployment. It says which identity, never that anyone may have it — see
-// `authenticateRequest`.
+// Cookies are opaque HttpOnly session handles; KV stores only their hashes.
 
 import { DEVICE_CONNECT_PATH, timingSafeEqual } from '@kinu.run/core';
 import {
@@ -21,44 +13,22 @@ import type { AccessTokenScope } from '@kinu.run/core';
 
 export const SESSION_COOKIE_NAME = '__Host-kinu_session';
 
-/** The handoff cookie that binds ONE OAuth sign-in to the browser that started
- *  it. `__Host-` and HttpOnly so no subdomain and no script can plant a value
- *  the callback would accept, random so nothing can guess one, and paired with
- *  a server-side state record that holds only its hash. Without it a callback
- *  URL is bearer authority: an attacker completes a sign-in in their own
- *  browser, hands the resulting `?code=&state=` link to a victim, and the
- *  victim's browser is signed in as the attacker. */
+/** Binds one OAuth sign-in to the browser that started it; without it a
+ *  callback URL is bearer authority (login CSRF). */
 export const OAUTH_STATE_COOKIE_NAME = '__Host-kinu_oauth_state';
 
-/** The same binding on the Cloudflare deploy door's leg (`deploy/routes.ts`),
- *  which has no session to pair a KV record with: the value is the digest of
- *  the OAuth `state` that leg minted, so `/deploy/callback` can prove the
- *  browser in front of it is the one that started the authorization. Without
- *  it, `state` alone decides which run a stranger's Cloudflare tokens land in
- *  — an attacker mints a run, forwards the authorize URL, and collects the
- *  victim's account. */
+/** Same binding for the deploy door (`deploy/routes.ts`): the digest of the
+ *  OAuth `state`, so `/deploy/callback` proves it is the starting browser. */
 export const DEPLOY_STATE_COOKIE_NAME = '__Host-kinu_deploy_state';
 
-/** The cookie the CLI approval page sets so its POST can only come from the
- *  page a signed-in browser was shown (`cli/routes.ts`). Path-scoped to that
- *  page and short-lived; still a cookie this app writes. */
+/** CSRF cookie for the CLI approval page's POST (`cli/routes.ts`). */
 export const CLI_APPROVAL_CSRF_COOKIE_NAME = 'kinu_cli_auth_csrf';
 
-/** The viewer cookie a share origin sets after a ticket exchange. It names a
- *  viewer of one slate on one origin — `__Host-` so no other origin can plant
- *  it — and the sanitizer strips it before guest code sees it. */
+/** Share-origin viewer cookie, set after a ticket exchange. */
 export const VIEWER_COOKIE_NAME = '__Host-kinu_viewer';
 
-/**
- * Every cookie this app sets, and the one place that says so.
- *
- * The preview edge strips exactly this set before a request crosses into
- * agent-controlled guest code (`lib/preview-request.ts`), and it strips it by
- * importing this set rather than by keeping a copy. So a cookie is registered
- * here when its name is declared, above, and not in a second list somewhere
- * else: a second copy beside the sanitizer drifts in both directions,
- * stripping a name no setter wrote and missing one a setter did.
- */
+/** Every cookie this app sets. The preview edge (`lib/preview-request.ts`)
+ *  strips exactly this set before guest code; register new cookies here only. */
 export const KINU_COOKIE_NAMES: readonly string[] = [
   SESSION_COOKIE_NAME,
   OAUTH_STATE_COOKIE_NAME,
@@ -78,30 +48,18 @@ export interface AuthIdentity {
   displayName?: string | null;
   /** App-session auth time in epoch ms, used for step-up checks. */
   authTime?: number;
-  /** The hash of the session token this identity was verified against. Present
-   *  only on the cookie path — the one thing a workspace websocket needs to
-   *  name this sign-in on its connection tags, so logout can reach a socket the
-   *  cookie no longer gates. Absent for every synthesized and ticket identity. */
+  /** Cookie path only: tags workspace sockets so logout can reach them. */
   sessionTokenHash?: string;
-  /** Present only for connect-ticket identities backed by a scoped `pta_…`
-   *  access token — the agent websocket pins the connection to these scopes.
-   *  Absent for browser sessions and interactive CLI session tokens. */
+  /** Connect tickets backed by a scoped `pta_…` token only. */
   cliScopes?: AccessTokenScope[];
-  /** Present only for connect-ticket identities: the bearer the upgrade
-   *  authenticated, and the account authorization generation it was admitted
-   *  under. The agent websocket persists this on the connection, so a
-   *  revocation can still name the socket after hibernation. */
+  /** Connect tickets only; persisted on the socket so revocation survives hibernation. */
   cliBearer?: { tokenHash: string; generation: number };
 }
 
-/** Step-up (fresh-auth) window for sensitive operations — creating webhook
- *  ingress endpoints requires an interactive sign-in within this window. */
 const STEP_UP_WINDOW_MS = 5 * 60 * 1000;
 
-/** Single step-up rule for every webhook-creation path: web sessions check
- *  the session auth time; the CLI checks its token mint time (minting
- *  requires a live browser approval, so it is the CLI's interactive-auth
- *  timestamp). */
+/** Step-up rule for webhook creation; the CLI passes its token mint time
+ *  (minting requires live browser approval). */
 export function isFreshAuthTime(authTimeMs: number | null | undefined, now = Date.now()): boolean {
   return authTimeMs !== null
     && authTimeMs !== undefined
@@ -120,11 +78,6 @@ export function readSessionToken(request: Request): string | null {
   return readCookie(request, SESSION_COOKIE_NAME);
 }
 
-/** One cookie by name, or null when the request carries no such cookie.
- *
- *  Values are written percent-encoded, so they are decoded back here — and a
- *  value that is not valid percent-encoding is not one this app wrote, which
- *  is an absent cookie rather than a thrown request. */
 export function readCookie(request: Request, name: string): string | null {
   const cookie = request.headers.get('cookie');
 
@@ -141,10 +94,7 @@ export function readCookie(request: Request, name: string): string | null {
     try {
       return decodeURIComponent(raw);
     } catch (malformed) {
-      // A cookie this app did not write can carry anything, and a broken
-      // percent escape is the one failure that reaches here: that value is not
-      // one of ours, so there is no cookie of ours in the request. Anything
-      // else is not a cookie problem and is not this function's to answer.
+      // Invalid percent-encoding is not a cookie we wrote: treat as absent.
       if (!(malformed instanceof URIError)) throw malformed;
 
       return null;
@@ -154,12 +104,8 @@ export function readCookie(request: Request, name: string): string | null {
   return null;
 }
 
-/** Every cookie this app sets, and the one recipe it sets them with. `__Host-`
- *  requires `Secure` and `Path=/` and forbids a `Domain`, so the cookie is
- *  this exact origin's and no subdomain can write it. `Lax` rather than
- *  `Strict`: an OAuth callback IS a cross-site top-level navigation, and
- *  `Strict` would withhold the handoff cookie from the one request that has to
- *  present it. An `expiresAt` already past clears the cookie. */
+/** `Lax`, not `Strict`: the OAuth callback is a cross-site navigation that
+ *  must carry the handoff cookie. A past `expiresAt` clears the cookie. */
 export function setCookie(name: string, value: string, expiresAt: number): string {
   const maxAge = Math.max(0, Math.floor((expiresAt - Date.now()) / 1000));
 
@@ -168,35 +114,18 @@ export function setCookie(name: string, value: string, expiresAt: number): strin
 
 export interface AuthEnv<Id = DurableObjectId> extends OwnerCapabilityEnv {
   AUTH_KV?: KvStore;
-  /** Where a session cookie's authority lives: the row that says the session
-   *  is still live sits in the signing-in user's own Durable Object. */
   UserDO?: ObjectNamespace<Id, SessionAuthority>;
   DEV_USER_EMAIL?: string;
-  /** The shared secret a caller presents to act as `DEV_USER_EMAIL` on a
-   *  deployment that is not a developer's own machine. */
+  /** Required to act as `DEV_USER_EMAIL` off loopback. */
   DEV_IDENTITY_SECRET?: string;
 }
 
-/**
- * How a caller proves it may act as `DEV_USER_EMAIL`.
- *
- * A HEADER rather than a cookie, deliberately: a browser attaches cookies to
- * every request to an origin, including ones another page caused, so a
- * cookie-carried dev identity would be an ambient credential on the one
- * deployment that has no real sign-in behind it. A header is never ambient.
- */
+/** A header, not a cookie: a cookie-carried dev identity would be an ambient credential. */
 const DEV_IDENTITY_HEADER = 'x-kinu-dev-identity';
 
-/** Hosts that can only be a developer's own machine. `[::1]` keeps its brackets
- *  because `URL.hostname` does. */
+/** `[::1]` keeps its brackets because `URL.hostname` does. */
 const LOOPBACK_HOSTS: readonly string[] = ['localhost', '127.0.0.1', '[::1]', '0.0.0.0'];
 
-/** Resolve the caller identity for a request.
- *
- *   - production: verify app session, return identity, or throw AuthError
- *   - dev (DEV_USER_EMAIL set): synthesize identity, no JWT required
- *   - mis-configured: throw 500
- */
 export async function authenticateRequest<Id>(request: Request, env: AuthEnv<Id>): Promise<AuthIdentity> {
   const sessionToken = readSessionToken(request);
 
@@ -209,24 +138,16 @@ export async function authenticateRequest<Id>(request: Request, env: AuthEnv<Id>
       if (identity) return identity;
     } catch (e) {
       if (!(e instanceof SessionAuthorityUnavailableError)) throw e;
-      // Unreachable authority is not an expired cookie: 401 here would send a
-      // signed-in user into a sign-in the same outage cannot complete.
+      // Unreachable authority is not an expired cookie: 401 would force a
+      // sign-in the same outage cannot complete.
       throw new AuthError(503, e.message, { cause: e });
     }
 
     throw new AuthError(401, 'Kinu session expired. Sign in again.');
   }
 
-  // A synthesized identity is a signed-in user without a sign-in, so what
-  // enables it must be POSSESSION, never the absence of a cookie. The
-  // deployment publishes `DEV_USER_EMAIL` on a public route: gated on absence, every
-  // unauthenticated request that reached it arrived as the eval service account
-  // holding ordinary user, workspace, MCP and feedback authority.
-  //
-  // Two ways to hold it, and no third. A developer's own machine is already
-  // the whole trust boundary, so localhost needs no secret and local dev is
-  // unchanged. Everywhere else the caller presents the shared secret, and a
-  // deployment that configures no secret grants nothing.
+  // The dev identity requires possession, never mere absence of a cookie:
+  // loopback, or the shared secret (none configured grants nothing).
   if (env.DEV_USER_EMAIL) {
     const presented = request.headers.get(DEV_IDENTITY_HEADER);
 
@@ -253,8 +174,6 @@ export async function authenticateRequest<Id>(request: Request, env: AuthEnv<Id>
   throw new AuthError(401, 'No Kinu session in request');
 }
 
-/** The bindings a cookie carries no authority without. Checked only on the
- *  cookie path: the dev identity reaches neither. */
 function assertSessionBindings<Id>(env: AuthEnv<Id>): asserts env is AuthEnv<Id> & AuthStoreEnv<Id> {
   if (!env.AUTH_KV) throw new AuthError(500, 'AUTH_KV binding is not configured');
 
@@ -264,22 +183,8 @@ function assertSessionBindings<Id>(env: AuthEnv<Id>): asserts env is AuthEnv<Id>
 /** Methods a site can be made to issue cross-site without reading the reply. */
 const SAFE_METHODS = new Set(['GET', 'HEAD', 'OPTIONS']);
 
-/**
- * CSRF gate for cookie-authenticated requests.
- *
- * The session cookie is ambient: the browser attaches it to any request to this
- * origin, including ones another page caused. Every state-changing request that
- * arrives with it must therefore prove it was issued by this app, and the proof
- * is the `Origin` header — set by the browser, not settable by script.
- * WebSocket upgrades are included: they are GETs, but they open a live RPC
- * channel to the agent and browsers always send `Origin` on the handshake.
- *
- * Requests authenticated some other way (CLI bearer token, connect ticket)
- * carry no ambient credential and are not gated — an attacker's page cannot
- * make the browser attach a token it does not have.
- *
- * Returns a denial, or null when the request may proceed.
- */
+/** CSRF gate for cookie-authenticated requests: state changes and WebSocket
+ *  upgrades (GETs that open live RPC) must carry a same-origin `Origin`. */
 export function crossSiteRejection(request: Request): Response | null {
   if (!readSessionToken(request)) return null;
   const isUpgrade = request.headers.get('upgrade')?.toLowerCase() === 'websocket';
@@ -303,8 +208,6 @@ function originOf(value: string | null): string | null {
   return new URL(value).origin;
 }
 
-/** Public routes on the app's own host that bypass auth. (Preview hosts are
- *  not here: they are served on the preview host, which never reaches this.) */
 export function isPublicPath(pathname: string): boolean {
   if (pathname === '/api/health') return true;
 
@@ -314,19 +217,15 @@ export function isPublicPath(pathname: string): boolean {
 
   if (pathname.startsWith('/api/auth/')) return true;
 
-  // covers /pc/connect and /pc/connect-ticket — the tunnel uses its own auth
+  // the tunnel uses its own auth
   if (pathname.startsWith(DEVICE_CONNECT_PATH)) return true;
 
-  if (pathname.startsWith('/assets/')) return true;    // hashed static bundles
+  if (pathname.startsWith('/assets/')) return true;
 
-  // A blueprint's read-only page: the document is public, and the data behind
-  // it (`/api/shared/blueprint/:id`) is answered before the auth gate by the
-  // shared-library route with the id's signature checked first.
+  // Data (`/api/shared/blueprint/:id`) is signature-checked before the auth gate.
   if (pathname.startsWith('/shared/blueprint/')) return true;
 
-  // The self-deploy door. Public because a person deploying their own Kinu has
-  // no account here to sign in to; what authorizes its calls is the run key
-  // (deploy/routes.ts), and the page itself must render before any of them.
+  // The self-deploy door: authorized by the run key (deploy/routes.ts), not a session.
   if (isDeployPath(pathname)) return true;
 
   return false;

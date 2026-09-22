@@ -1,10 +1,7 @@
-// nextCronFire — minimal cron next-fire (every-n-minutes + daily), UTC.
-// nextAlarmTime — the alarm-reschedule fold (triggers ∪ peer-outbox retry).
 import { describe, test, expect } from "bun:test";
 import { nextAlarmTime, nextCronFire } from '@kinu.run/core';
 import { present } from '@kinu.run/test-utils';
 
-// A fixed UTC base: 2026-06-02T10:17:30Z
 const BASE = Date.UTC(2026, 5, 2, 10, 17, 30);
 
 describe("nextCronFire", () => {
@@ -39,7 +36,6 @@ describe("nextAlarmTime", () => {
   test("future triggers and the peer retry compete; soonest wins", () => {
     expect(nextAlarmTime(1_000, [5_000, 3_000], 4_000)).toBe(3_000);
     expect(nextAlarmTime(1_000, [5_000], 2_000)).toBe(2_000);
-    // A past-due retry outranks every future trigger (fires immediately).
     expect(nextAlarmTime(1_000, [5_000], 500)).toBe(1_000);
   });
 

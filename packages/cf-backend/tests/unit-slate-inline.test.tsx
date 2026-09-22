@@ -1,16 +1,6 @@
 /**
- * Where the chat's inline slate card is proven. The repo's component tests
- * drive React's static renderer and fake hosts — there is no DOM harness —
- * so what this file asserts is the two things the component cannot hide
- * behind effects: the card and its chrome render through the context, and
- * the pure seams the effects call decide exactly what the browser would
- * have decided.
- *
- * The iframe src carrying `?kinu=`, the clamp on a reported height, the
- * origin/source guard on messages, and the refusal text all execute inside
- * effects and postMessage handlers this harness cannot run; each is covered
- * at its pure seam in `packages/core/tests/unit-slate-host-context.test.ts`
- * and through `slateFrameSrc`/`buildSlateHostContext` here.
+ * No DOM harness: effect-bound behaviour is covered at its pure seams, here and
+ * in `packages/core/tests/unit-slate-host-context.test.ts`.
  */
 import './helpers/ui-module-globals';
 import { describe, expect, test } from 'bun:test';
@@ -32,7 +22,6 @@ describe('the inline slate card', () => {
       }),
     ));
 
-    // The bare address became the card, not a link and not dead text.
     expect(html).toContain('data-slate-inline="deploy-choice"');
     expect(html).toContain('>deploy-choice<');
     expect(html).not.toContain('href="slate://deploy-choice"');

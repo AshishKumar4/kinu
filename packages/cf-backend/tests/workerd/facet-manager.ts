@@ -1,9 +1,6 @@
 /**
- * The facet manager a slate probe composes over its own Durable Object — the
- * same factory and the same diagnostics-backed hooks `createHostedWorkspace`
- * composes with, over the probe's real ctx, env, supervisor, registry and
- * filesystem. Only the launch turn differs: a probe file arms no timer, so
- * the pump rides `waitUntil` directly.
+ * The facet manager a slate probe composes over its own Durable Object, as `createHostedWorkspace` does.
+ * A probe arms no timer, so the launch pump rides `waitUntil` directly.
  */
 import type { SqliteVFS } from '@nimbus-sh/core/vfs/sqlite-vfs.js';
 import { SqliteFilesystemAuthority } from '@nimbus-sh/core/runtime/filesystem-authority.js';
@@ -23,20 +20,14 @@ export interface ProbeFacetManagerDeps {
 export function probeFacetManager(deps: ProbeFacetManagerDeps): ComposedFacetManager {
   const composed: ComposedFacetManager = composeFacetManager({
     ...deps,
-    // A probe opens the disk itself instead of through `NimbusWorkspace`, so it
-    // also owns the credentialed authority every runtime binds through. One per
-    // object, because a second authority is a second set of descriptor scopes
-    // over the same rows.
+    // One authority per object: a second is a second set of descriptor scopes over the same rows.
     filesystem: new SqliteFilesystemAuthority(deps.vfs),
     hooks: {
       onExternalExit: () => undefined,
       onSpawn: () => undefined,
       notify: () => undefined,
       requestLaunchTurn: () => { deps.ctx.waitUntil(composed.pumpLaunches()); },
-      // A durable spawn carrying the egress binding is journalled only under
-      // a resolver; a probe re-drives nothing across a reset, so the journal
-      // is answered the way the hosted workspace answers it — null, the row
-      // released — without the slate host's own boot behind it.
+      // Journal answered as the hosted workspace does (null, row released): a probe re-drives nothing across a reset.
       resolveWorkerLaunch: () => Promise.resolve(null),
     },
   });
@@ -44,7 +35,7 @@ export function probeFacetManager(deps: ProbeFacetManagerDeps): ComposedFacetMan
   return composed;
 }
 
-/** `SlateApps.ensure`/`reserved` over the composed manager: the reservation a durable spawn is pre-flighted against, and the read of it. */
+/** The reservation a durable spawn is pre-flighted against, and its read. */
 export function probeDurableApps(composed: ComposedFacetManager, ctx: DurableObjectState) {
   return {
     reserved: async (owner: string) => {

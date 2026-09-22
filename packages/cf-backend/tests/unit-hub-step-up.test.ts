@@ -1,5 +1,4 @@
-// Step-up gate on the web trigger-creation route (events/routes.ts) —
-// the same isFreshAuthTime rule the CLI webhook route enforces.
+// Step-up gate on web trigger creation (events/routes.ts): the CLI webhook route's isFreshAuthTime rule.
 import type { HubEnv, HubTarget } from '../src/events/routes';
 import { describe, test, expect } from 'bun:test';
 import { isFreshAuthTime } from '../src/auth/session';
@@ -9,8 +8,7 @@ mockAgentsSdk();
 
 const { handleHubRequest } = await import('../src/events/routes');
 
-/** Name one call this suite does not make on the workspace object. The
- *  refusal is the point: the gate is only proven if nothing else answered. */
+/** Any call reaching the workspace object fails: the gate is proven only if nothing else answered. */
 function unreached(member: string) {
   return (): never => { throw new Error(`OrchestratorAgent.${member}: not reachable in this test`); };
 }
@@ -39,9 +37,7 @@ function hubWorkspace() {
   };
 
   const env: HubEnv = {
-    // Creation refuses without it, because a webhook whose delivery URL cannot
-    // be signed is a row nobody can deliver to. The step-up gate this suite is
-    // about is upstream of that refusal — see unit-webhook-route.test.ts.
+    // Unsignable delivery URLs are refused downstream; the step-up gate is upstream (unit-webhook-route.test.ts).
     WEBHOOK_ROUTE_SECRET: 'test-webhook-route-secret-0123456789',
   };
 

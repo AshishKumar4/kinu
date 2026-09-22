@@ -1,8 +1,5 @@
-// One simulation, two renderers: both read the frame the simulation emits,
-// neither may need anything the other does not get — and the mount's GPU
-// half hands the caller an outcome, never a throw. The mount itself mounts
-// the real component, so it is covered where it can only be true: against
-// the real browser (scripts/public-pages.test.ts reads `__kinuSearchTree`).
+// Both renderers read the simulation's frame and need nothing the other lacks; the GPU mount returns an outcome,
+// never a throw. The mount itself is covered in the real browser (scripts/public-pages.test.ts).
 import { VGPUError as CoreVGPUError } from '@vgpu/core';
 import * as v from 'valibot';
 import { afterAll, beforeEach, describe, expect, mock, test } from 'bun:test';
@@ -20,8 +17,7 @@ import { keepOutOf } from '../src/components/landing/search-tree/stage';
 
 await installFakeVgpu();
 
-// Dynamic on purpose: the renderer imports vgpu at module load, so it may
-// only load AFTER the fake is installed.
+// Dynamic: the renderer imports vgpu at load, so it loads only after the fake is installed.
 const { createWebGpuRenderer } = await import('../src/components/landing/search-tree/renderer-webgpu');
 
 const TREE_DIR = resolve(import.meta.dir, '../src/components/landing/search-tree');
@@ -38,8 +34,7 @@ interface Recording {
   readonly gradientStyles: string[];
 }
 
-/** The gradient this surface's `createLinearGradient` hands back: it renders
- *  itself as the text the assertions match, which `CanvasGradient` does not. */
+/** Renders as the text the assertions match, which `CanvasGradient` does not. */
 interface RecordedGradient extends CanvasGradient {
   readonly stops: readonly { offset: number; color: string }[];
   toString(): string;
@@ -49,8 +44,6 @@ function isRecordedGradient(style: CanvasGradient | CanvasPattern): style is Rec
   return 'stops' in style;
 }
 
-/** The style a canvas call left in `strokeStyle`/`fillStyle`, as the text the
- *  recording keeps. */
 function styleText(style: string | CanvasGradient | CanvasPattern): string {
   if (v.is(v.string(), style)) return style;
 
@@ -59,7 +52,6 @@ function styleText(style: string | CanvasGradient | CanvasPattern): string {
   throw new Error('the recording surface was handed a style it never made');
 }
 
-/** A CanvasRenderingContext2D that remembers what was asked of it. */
 function recordingSurface(): StrokeSurface & Recording {
   const styles = new Set<string>();
   const gradientStyles: string[] = [];
@@ -170,8 +162,6 @@ describe('the frame is what both renderers read', () => {
     expect(surface.strokes).toBe(visibleStrokes + haloStrokes + visiblePulses + haloPulses);
     expect(surface.fills).toBe(visibleNodes + haloNodes);
 
-    // Every colour it painted is one of the three tokens or a mix of them: a
-    // flat rgba, or a pulse's gradient from a transparent tail to its head.
     for (const style of surface.styles) {
       expect(style).toMatch(/^(?:rgba\(\d+,\d+,\d+,[\d.e-]+\)|gradient\(rgba\(\d+,\d+,\d+,[\d.e-]+\)@0,rgba\(\d+,\d+,\d+,[\d.e-]+\)@1\))$/u);
     }
@@ -217,8 +207,7 @@ describe('the frame is what both renderers read', () => {
   test('the WebGPU renderer uploads the same arrays at the same strides', () => {
     const source = readFileSync(resolve(TREE_DIR, 'renderer-webgpu.ts'), 'utf8');
 
-    // The instance streams are the frame's own buffers, sliced by the frame's
-    // counts, at the simulation's strides: no repacking in between.
+    // The frame's own buffers, sliced by its counts at the simulation's strides: no repacking.
     expect(source).toContain('strokeGeometry.write(current.strokes.subarray(0, strokeCount * STROKE_STRIDE))');
     expect(source).toContain('nodeGeometry.write(current.nodes.subarray(0, nodeCount * NODE_STRIDE))');
     expect(source).toContain('pulseGeometry.write(current.pulses.subarray(0, pulseCount * PULSE_STRIDE))');
@@ -234,13 +223,10 @@ describe('the frame is what both renderers read', () => {
     const wgsl = readFileSync(resolve(TREE_DIR, 'palette.wgsl'), 'utf8');
     const canvas = readFileSync(resolve(CORE_WEB, 'hero-canvas.ts'), 'utf8');
 
-    // Tone 0 is the ordinary attempt, the fall-through of both rules.
     expect([TONE_BRIGHT, TONE_ASH, TONE_EMBER]).toEqual([1, 2, 3]);
-    // Thresholds between integer tones, highest first, in the shader.
     expect(wgsl).toContain('if (tone > 2.5)');
     expect(wgsl).toContain('if (tone > 1.5)');
     expect(wgsl).toContain('if (tone > 0.5)');
-    // The same mixes on the CPU.
     expect(wgsl).toContain('mix(palette.accent.rgb, palette.ash.rgb, 0.35)');
     expect(canvas).toContain('mix(palette.accent, palette.ash, 0.35)');
     expect(wgsl).toContain('mix(palette.ash.rgb, palette.accent.rgb, 0.35 + 0.65 * glow)');
@@ -252,9 +238,7 @@ describe('the frame is what both renderers read', () => {
     const canvas = readFileSync(resolve(CORE_WEB, 'hero-canvas.ts'), 'utf8');
 
     expect(pulses).toContain('import { Palette, View, glow_scale, recede, to_clip, tone_color } from "./palette.wgsl"');
-    // The tone colour pulled toward bright by its glow, then receded, on the GPU.
     expect(pulses).toContain('recede(palette, mix(tone_color(palette, look.z, glow), palette.bright.rgb, glow * 0.6)) * glow_scale(palette, glow)');
-    // The same mix on the CPU, shared by nodes and pulses.
     expect(canvas.split('mix(toneColor(palette, tone, glow), palette.bright, glow * 0.6)').length - 1).toBe(2);
   });
 
@@ -269,15 +253,12 @@ describe('the frame is what both renderers read', () => {
     expect(canvas).toContain('mix(color, palette.ground, RECESS)');
     expect(webgpu).toContain('recess: RECESS');
 
-    // Stroke, pulse, and node shaders all draw through it, as all canvas paths do.
     for (const shader of ['strokes.wgsl', 'pulses.wgsl', 'nodes.wgsl']) {
       expect(readFileSync(resolve(TREE_DIR, shader), 'utf8')).toContain('recede(palette, ');
     }
 
     expect(canvas.split('recede(palette, ').length - 1).toBe(3);
 
-    // The ground the palette carries is what the canvas renderer draws with: a
-    // stroke drawn in the kept path's gold lands between the gold and the ground.
     const frame = frameAfter(8);
     const surface = recordingSurface();
     createCanvasRenderer(surface, PALETTE).render(frame);
@@ -317,10 +298,7 @@ describe('the frame is what both renderers read', () => {
   });
 });
 
-/* ── the fallback half: vgpu mocked at its module seam. The mount itself
- *  needs a real DOM, so the mount assertions live in the Chrome suite; what
- *  this half pins is the outcome contract `createWebGpuRenderer` hands the
- *  mount, and the live-fault path the renderer takes on `gpu.onError`. ── */
+/* Fallback half: vgpu mocked at its module seam; mount assertions need a real DOM and live in the Chrome suite. */
 
 beforeEach(() => {
   resetFakeVgpu();
@@ -334,7 +312,6 @@ afterAll(() => {
 describe('the GPU half hands the mount an outcome, never a throw', () => {
   test('a missing adapter answers unsupported', async () => {
     setVgpuInit(() => Promise.reject(new MockVGPUError({ code: 'VGPU-RING1-UNSUPPORTED', message: 'no adapter' })));
-    // The canvas only reaches vgpu's `surface`, which a rejecting init never gets to.
     const canvas: HTMLCanvasElement = Object.create(null);
     const outcome = await createWebGpuRenderer({ canvas, initialPalette: PALETTE, width: 1200, height: 600, ratio: 1 });
 
@@ -352,7 +329,6 @@ describe('the GPU half hands the mount an outcome, never a throw', () => {
   });
 
   test('a live fault disposes the renderer and reaches the fault handler', async () => {
-    // The fake `surface` records the canvas without reading it.
     const canvas: HTMLCanvasElement = Object.create(null);
     const outcome = await createWebGpuRenderer({ canvas, initialPalette: PALETTE, width: 1200, height: 600, ratio: 1 });
 
@@ -373,7 +349,6 @@ describe('the GPU half hands the mount an outcome, never a throw', () => {
     expect(seen).toEqual([fault]);
     expect(gpu.disposed).toBe(true);
 
-    // The dead renderer stays quiet instead of drawing or throwing.
     outcome.renderer.render(frameAfter(4));
     expect(gpu.frames).toBe(0);
   });
@@ -392,13 +367,11 @@ describe('a device loss mid-run is the same fault the listener reports', () => {
     const seen: Error[] = [];
     outcome.renderer.onFault?.((error) => { seen.push(error); });
 
-    // One live frame, then the device dies — through `frame()`, the only
-    // channel a real loss has.
+    // `frame()` is the only channel a real device loss has.
     outcome.renderer.render(frameAfter(4));
     expect(gpu.frames).toBe(1);
 
-    // The real class: the renderer names @vgpu/core's base, which is what
-    // the frame guard throws, not vgpu's own subclass.
+    // The frame guard throws @vgpu/core's base class, not vgpu's subclass.
     const loss = new CoreVGPUError({ code: 'VGPU-DEVICE-LOST', message: 'the device was lost' });
     gpu.frameThrows = loss;
 
@@ -407,7 +380,6 @@ describe('a device loss mid-run is the same fault the listener reports', () => {
     expect(seen).toEqual([loss]);
     expect(gpu.disposed).toBe(true);
 
-    // The renderer already handed off: a later render is a no-op, never a throw.
     outcome.renderer.render(frameAfter(4));
   });
 });

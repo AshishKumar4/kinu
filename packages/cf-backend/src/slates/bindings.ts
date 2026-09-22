@@ -3,38 +3,25 @@ import { CRED_SESSION_USER, type VfsCred } from '@nimbus-sh/core/runtime/os-cont
 import { workspaceOwner, type WorkspaceOwnerNamespace } from '../workspace-owner-rpc';
 import type { JsonValue, SlateCallResult, WorkMode } from '@kinu.run/core';
 
-/** One hop of an actor's root-relative path, as the workspace directory records
- *  it: a registered actor NAME under the workspace root. A class name is not an
- *  identity — every actor is hosted by the one root object, so what
- *  distinguishes two callers is which actor they are, which is exactly the name
- *  the directory holds. */
+/** A registered actor name: every actor shares one root object, so the name, not a class, is the identity. */
 export interface SlateCallerHop {
   readonly name: string;
 }
 
-/**
- * The actor a slate acts FOR: its actor path under the workspace root (empty
- * for the main actor itself) and the credential its own file plane runs as. Both
- * are stamped by actor code on the Durable Object stub transport — never by a
- * browser, a CLI client, or the process that holds a binding.
- */
+/** The actor a slate acts for; stamped only by actor code, never by a browser, client, or the binding holder. */
 export interface SlateCaller {
   readonly path: readonly SlateCallerHop[];
   readonly cred: VfsCred;
   readonly workMode: WorkMode;
-  /** The live share a viewer's process runs under — present only on the share
-   *  caller, so the share id travels on the reference and never on the wire. */
+  /** Share callers only: the id travels on the reference, never on the wire. */
   readonly share?: string;
 }
 
-/** The caller a live share's process is booted under: the workspace's own root
- *  — the calls dispatch as the owner, S2 — carrying the share id so the
- *  process key and every binding call stay distinct from the owner's own. */
+/** Dispatches as the owner (S2); the share id keeps the process key distinct from the owner's own. */
 export function shareCaller(share: string): SlateCaller {
   return { ...ROOT_SLATE_CALLER, share };
 }
 
-/** The workspace root acting as itself: the owner-facing surfaces mint this locally. */
 export const ROOT_SLATE_CALLER: SlateCaller = { path: [], cred: CRED_SESSION_USER, workMode: 'build' };
 
 /** Every field changes the VFS view or the permissions of files it creates. */
@@ -42,9 +29,7 @@ export function slateCredentialKey(cred: VfsCred): string {
   return JSON.stringify([cred.uid, cred.gid, cred.groups, cred.umask]);
 }
 
-/** Structured path encoding keeps different actor names from sharing a key;
- *  the share is in the key so a share's process and the owner's own preview
- *  never coalesce — the owner's preview stays private. */
+/** The share is in the key so a share's process never coalesces with the owner's private preview. */
 export function slateCallerKey(caller: SlateCaller): string {
   return JSON.stringify([slateCredentialKey(caller.cred), caller.path, caller.workMode, caller.share ?? null]);
 }

@@ -1,74 +1,13 @@
 /**
- * Sandbox lifecycle failures — the notification the container could not make.
- *
- * The container's persistence path (the filesystem attach on start, the
- * periodic checkpoint, the supervised processes and ports it restores) reports
- * its failures to `diagnostics`, which is a logging sink: on its own it leaves
- * an agent that lost a workspace attach with a generically-failing tool call,
- * and an agent whose checkpoint has been failing for an hour with nothing at
- * all. So the sandbox's Durable Object calls
- * {@link acceptSandboxLifecycleFailure} on the workspace root stub, and the
- * failure becomes a signal the agent is woken for.
- *
- * ── Why its own announcement, and how it lands ───────────────────
- * Every stage below means work the agent is about to do — or has just done —
- * cannot be relied on, so the incident goes through the inbox
- * (`orchestrator/inbox.ts`) as an ordinary event signal: it sets no
- * severity, and whether it splices into a live step or starts its own turn is
- * the inbox's read of turn state. Nothing here picks a delivery mechanism.
- *
- * ── Exactly-once, stated exactly ─────────────────────────────────
- * The ledger below is the dedupe, keyed by the caller's `incidentId`. A row is
- * written BEFORE delivery is attempted and carries the outcome, so:
- *   • an incident already ANNOUNCED is answered from the row and never
- *     re-delivered — one incident, one turn, however many times the container
- *     retries;
- *   • an incident whose delivery did NOT land is re-delivered on the next
- *     call, which is what makes the container's retry loop terminate.
- * The signal's `idempotencyKey` is the same identity, so even a re-delivery
- * lands on the durable message row the first one wrote rather than beside it.
- * The ledger exists because the submission ledger cannot answer "was this
- * incident already announced" — it is keyed by submission, and its accept flag
- * is not carried back through the signal seam.
- *
- * ── What must never cross this boundary ──────────────────────────
- * The envelope carries a bounded reason string and nothing else. It has no
- * field for an R2 key, a presigned URL, an archive path or a credential, and
- * `v.strictObject` REFUSES an envelope that invents one rather than stripping
- * it — a silently-dropped field would let a caller believe it had passed
- * something the agent would read. The reason itself is the caller's prose: it
- * is bounded, and it is not scrubbed, which is why the contract with the
- * sandbox is that it puts no secret material there.
- *
- * ── Nothing is deferred past the response ────────────────────────
- * `waitUntil` is a no-op in a Durable Object and a floating promise there is
- * cancelled on eviction with the cancellation swallowed. So the ledger write
- * and the delivery both run inside the invocation that answers the container,
- * and the container's retry is the recovery.
- *
- * -- Every settlement is a row, including the good ones ----------
- * Every exit below hands ONE typed record to `deps.recordRecovery`: the stage,
- * how it settled, which delivery attempt it was, how long since the incident
- * was first reported, and the class of failure where this side can classify
- * one. Successful recovery and failed recovery go through that one seam, so a
- * query asks about the outcome dimension rather than about whether a row
- * exists. A seam that produced no fleet signal at all would make an incident
- * the agent acted on and an incident that reached nobody the same observable
- * result: nothing.
- *
- * -- The envelope is versioned, and refuses to guess ----------
- * {@link SANDBOX_LIFECYCLE_ENVELOPE_VERSION} is stamped by the one producer
- * (`kinu-sandbox.ts`) and required by the schema. A caller that predates the
- * current shape is refused BY NAME rather than admitted with defaults invented
- * for the fields it did not send: a guessed attempt count would be a number in
- * the dataset that nothing measured.
+ * Sandbox lifecycle failures, announced to the agent through the inbox. The ledger, keyed by
+ * `incidentId` and written before delivery, makes it exactly-once: announced incidents are answered
+ * from the row, undelivered ones re-delivered. The reason is not scrubbed; the sandbox must put no secrets there.
+ * `waitUntil` is a no-op in a DO, so ledger write and delivery run inside the answering invocation.
  */
 
 import * as v from 'valibot';
 import type { IncidentStage } from '@kinu.run/devbox';
-// The VALUE import rides the pure subpath: the barrel loads Devbox -> Sandbox ->
-// `cloudflare:workers`, which only exists under workerd, and this module's
-// tests run under bun.
+// Pure subpath: the barrel loads `cloudflare:workers`, which exists only under workerd.
 import { INCIDENT_REASON_MAX_CHARS } from '@kinu.run/devbox/incidents';
 import { toKinuError } from '@kinu.run/core/obs';
 import type { ErrorCode } from '@kinu.run/core/obs';
@@ -78,32 +17,11 @@ import type {
   SqlExecutor,
 } from '@kinu.run/core';
 
-/** Longest reason a caller may hand over. Past this it is not a reason, it is
- *  a payload wearing one — and the agent reads it in a turn, not a log. The
- *  ONE bound for incident reasons, imported from the package that mints them. */
 const MAX_REASON_CHARS = INCIDENT_REASON_MAX_CHARS;
 
-/** The `kinuEvent` name a lifecycle failure's turn is stamped with. */
 const SANDBOX_LIFECYCLE_SIGNAL_KIND = 'sandbox_lifecycle_failure';
 
-/**
- * What each stage costs the agent, in the agent's own terms.
- *
- * Data rather than one generic sentence, because the sentences are not
- * interchangeable: a failed checkpoint means recent work is not durable, while
- * a failed attach means the workspace it is looking at may be missing content
- * that does exist. An agent told only "the sandbox failed" would check the
- * wrong thing.
- *
- * ONE VOCABULARY, AND IT IS THE PRODUCER'S. Keyed by `@kinu.run/devbox`'s own
- * `IncidentStage`, so the compiler refuses a table that is missing a stage the
- * container can emit and refuses one that invents a stage nothing produces.
- * Both halves are load-bearing: let the two sides keep separate lists and the
- * container emits `attach` and `checkpoint` while this schema admits neither,
- * so every restore failure and snapshot failure — the two the seam exists for
- * — is answered `rejected` and frozen in the container's ledger, never
- * retried and never seen by the agent.
- */
+/** Keyed by devbox's `IncidentStage` so the compiler rejects a missing or invented stage. */
 const STAGE_CONSEQUENCE = {
   attach: 'The container came up without its workspace, or with an incomplete one. '
     + 'Files you expect to be there may be absent even though they were written earlier, '
@@ -120,110 +38,52 @@ const STAGE_CONSEQUENCE = {
     + 'Re-expose it if you still need it, and do not hand out the old URL.',
 } satisfies Record<IncidentStage, string>;
 
-/** A key of the consequence table is a stage by construction: the table is
- *  compiler-checked exhaustive over `IncidentStage` and a literal, so it
- *  carries no other key. */
 function isIncidentStage(name: string): name is IncidentStage {
   return name in STAGE_CONSEQUENCE;
 }
 
-/**
- * Where the container's persistence path can fail. Closed, and closed on the
- * consequence table above: a stage nobody has decided a consequence for must
- * not be admitted with a generic one, and a stage the container can emit must
- * not be refused. Derived from the table so neither can happen.
- */
 const STAGE_KEYS: readonly IncidentStage[] = Object.keys(STAGE_CONSEQUENCE).filter(isIncidentStage);
 
 const SANDBOX_LIFECYCLE_STAGES = STAGE_KEYS;
 
 export type SandboxLifecycleStage = IncidentStage;
 
-/**
- * The shape this seam accepts, as a number the producer stamps.
- *
- * Version 1 was the unversioned envelope, which carried no attempt count. The
- * count cannot be derived here — the box counts its own deliveries, and a
- * Worker evicted between two of them cannot see how many there were — so it is
- * transported, and it is REQUIRED. An optional field with a default would put a
- * fabricated attempt number in the dataset every time an older caller appeared,
- * which is the one failure a dataset cannot recover from later.
- */
+/** Required `attempts` cannot be derived here, so older envelopes are refused, never defaulted. */
 export const SANDBOX_LIFECYCLE_ENVELOPE_VERSION = 2;
 
 const SandboxLifecycleFailureSchema = v.strictObject({
-  /** Which envelope shape this is. Refused by name when it does not match, so a
-   *  caller that predates the current fields is told what it sent rather than
-   *  told which field it left out. */
   version: v.literal(SANDBOX_LIFECYCLE_ENVELOPE_VERSION),
-  /** The caller's stable name for this failure. The dedupe key, and the
-   *  identity the queued turn's durable message id is derived from. */
   incidentId: v.pipe(v.string(), v.minLength(1), v.maxLength(200)),
-  /** Which delivery attempt this is, as the PRODUCER counts them: its ledger is
-   *  where deliveries are counted, and its first attempt is 1. Read-only here,
-   *  never stored: this side mirrors no counter it does not own. */
+  /** The producer's delivery count (first is 1); never stored here. */
   attempts: v.pipe(v.number(), v.integer(), v.minValue(1)),
   stage: v.picklist(SANDBOX_LIFECYCLE_STAGES),
   reason: v.pipe(v.string(), v.minLength(1), v.maxLength(MAX_REASON_CHARS)),
-  /** The process this failure belongs to, where the stage has one. */
   processId: v.optional(v.pipe(v.string(), v.minLength(1), v.maxLength(200))),
-  /** The exposed port this failure belongs to, where the stage has one. */
   port: v.optional(v.pipe(v.number(), v.integer(), v.minValue(1), v.maxValue(65_535))),
 });
 
 export type SandboxLifecycleFailure = v.InferOutput<typeof SandboxLifecycleFailureSchema>;
 
 /**
- * The answer the container's host acts on, and the ONLY delivery verdict on it.
- *
- * `status` speaks the producer's own `IncidentDisposition` vocabulary verbatim —
- * `queued`, `undelivered`, `rejected` — so the host returns it rather than
- * translating it, and the two sides cannot hold different opinions about whether
- * an announcement landed.
- *
- * THAT DISAGREEMENT IS THE DEFECT THIS SHAPE FORECLOSES. A `status` that meant
- * only "the shape was fine" — the constant `'queued'` for every accepted
- * envelope — beside a second `signal` field holding the delivery truth is a
- * contradiction the host cannot see: it reads `status`, and the box maps
- * `queued` to `deliveredAt`, so an announcement that reached nobody makes the
- * box write the incident off and stop retrying while this side's own ledger
- * still holds it as re-deliverable and waits to be asked again. Nobody is ever
- * told, and nothing is left to tell them. The parse verdict is not a delivery
- * answer, and there is no second field for it to contradict.
+ * The only delivery verdict: `status` uses devbox's `IncidentDisposition` verbatim, so the box and
+ * this ledger cannot disagree about whether an announcement landed.
  */
 export type SandboxLifecycleFailureResult =
   | {
-    /** `queued` ONLY when the announcement landed. `undelivered` when this side
-     *  took the incident and could not announce it: the ledger row stays
-     *  unannounced, and the caller must offer it again. */
+    /** `undelivered`: the row stays unannounced and the caller must offer it again. */
     readonly status: 'queued' | 'undelivered';
     readonly incidentId: string;
-    /** This incident had already been announced before this call. */
     readonly duplicate: boolean;
   }
   | { readonly status: 'rejected'; readonly reason: string };
 
-/** The signal's stable identity — one announcement per incident, whichever
- *  path delivers it. The queued turn's durable message id is derived from
- *  this, which is what makes a re-delivery land on the same row. */
 function sandboxLifecycleIncidentKey(incidentId: string): string {
   return `sandbox-lifecycle:${incidentId}`;
 }
 
 /**
- * The incident ledger — identity and delivery state, and deliberately nothing
- * else.
- *
- * The stage, the reason and the process or port are NOT stored here, because
- * the announcement itself is already durable: it becomes a Think submission
- * and then a chat row the agent reads and a human can read beside it. A copy
- * here would be a second source of truth for the same sentence, drifting the
- * moment the wording changed. What no other store can answer is the one
- * question the dedupe turns on — has this incident id already been announced,
- * and if not, did the last attempt land — so that is the whole table.
- *
- * Declared `sandbox_lifecycle_incidents` for `cf-orchestrator` in core's
- * conformance manifest.
+ * Identity and delivery state only; the announcement itself is already durable as a chat row.
+ * Declared `sandbox_lifecycle_incidents` for `cf-orchestrator` in core's conformance manifest.
  */
 export function initSandboxLifecycleTable(execRaw: RawSqlExec): void {
   execRaw(`CREATE TABLE IF NOT EXISTS sandbox_lifecycle_incidents (
@@ -243,14 +103,7 @@ interface IncidentRow {
 
 const StoredOutcomeSchema = v.picklist(['mid-turn', 'queued', 'undelivered'] as const);
 
-/** The stored delivery state of one incident, or null when it is new. A stored
- *  outcome outside the seam's own vocabulary is a corrupt row, not a state to
- *  branch on, so it throws here rather than reading as "not announced".
- *
- *  `firstSeenAt` is returned because it is the start of the one duration worth
- *  measuring here: how long the agent went without being told. The column is
- *  already selected, written once and never moved, so the fact is on hand and a
- *  reader that drops it loses the duration for nothing. */
+/** A stored outcome outside the vocabulary is a corrupt row and throws. */
 function readDeliveryState(
   sql: SqlExecutor, incidentId: string,
 ): {
@@ -272,32 +125,13 @@ function readDeliveryState(
 
 export interface SandboxLifecycleDeps {
   readonly sql: SqlExecutor;
-  /** The one way anything asynchronous reaches the agent. */
   readonly inbox: AgentInbox;
-  /**
-   * The fleet row for one settlement, successful or not.
-   *
-   * REQUIRED, unlike `logActivity`. An instrument that may be absent is one
-   * whose absence looks exactly like a quiet fleet, which is the failure mode
-   * `analytics/boundaries.ts` exists to prevent. `workspace` is the caller's own
-   * identity and the one dimension this module cannot know, so the caller
-   * supplies it and everything else on the row is decided here.
-   */
+  /** Required: an absent instrument looks exactly like a quiet fleet. */
   readonly recordRecovery: (row: Omit<RecoveryRowInput, 'workspace'>) => void;
-  /** Best-effort tracing. Optional, and its failures are contained by whoever
-   *  implements it: nothing on this path may be lost to a log line. */
   readonly logActivity?: (event: string, detail?: string) => void;
 }
 
-/**
- * Record and announce one sandbox lifecycle failure.
- *
- * `body` is arbitrary JSON because it crossed a Durable Object RPC boundary
- * from another object — this function IS the parse boundary, and
- * {@link SandboxLifecycleFailureSchema} is the parser. A `rejected` answer is
- * a caller bug, not a transient: retrying the same malformed envelope cannot
- * change the outcome, and the reason names the field.
- */
+/** `body` crossed a DO RPC boundary; this is its parse boundary. `rejected` is a caller bug, not transient. */
 export async function acceptSandboxLifecycleFailure(
   deps: SandboxLifecycleDeps,
   body: JsonValue,
@@ -306,21 +140,12 @@ export async function acceptSandboxLifecycleFailure(
   const parsed = v.safeParse(SandboxLifecycleFailureSchema, body);
 
   if (!parsed.success) {
-    // Nothing about this envelope is claimed as a dimension: it named no stage
-    // and no attempt, and a fabricated one is worse than an absent one. The
-    // outcome is `refused` rather than `failed` because `bad_input` IS a
-    // refusal (core's CODE_IS_REFUSAL) — a rate that pooled a caller's bad
-    // envelope with a delivery that broke would answer neither question.
+    // `refused`, not `failed`: `bad_input` is a refusal (core's CODE_IS_REFUSAL).
     deps.recordRecovery({
       stage: '', outcome: 'refused', code: 'bad_input', attempts: 0, durationMs: 0,
     });
 
-    // NAMED, and through valibot's own path helper. A missing key already
-    // carries its name in the message; a mismatched VALUE does not — "Expected 2
-    // but received 1" is the version refusal, which is the one a caller most
-    // needs to read and the one that said least. Prepending the path is what
-    // makes this module's promise that "the reason names the field" true of
-    // every issue rather than of most of them.
+    // Prefix the path: a value mismatch (e.g. the version) does not name its field.
     const named = parsed.issues.map((issue) => {
       const path = v.getDotPath(issue);
 
@@ -335,14 +160,9 @@ export async function acceptSandboxLifecycleFailure(
 
   const incident = parsed.output;
 
-  // Read BEFORE writing: the answer this call gives depends on whether the
-  // announcement had already landed, and the insert below would overwrite that.
+  // Read before the insert, which would overwrite it.
   const before = readDeliveryState(deps.sql, incident.incidentId);
-  // The clock starts at the FIRST report, not at this attempt: what is worth
-  // measuring is how long the agent went without being told, and a re-delivery
-  // that finally lands after four failures took the whole span, not the last
-  // hop. Equal to `now` for an incident nobody has reported before, which is a
-  // duration of zero rather than an unmeasured one.
+  // Duration spans from the first report: how long the agent went untold.
   const firstSeenAt = before?.firstSeenAt ?? now;
 
   const recordSettlement = (outcome: RowOutcome, code: ErrorCode | ''): void => {
@@ -357,21 +177,14 @@ export async function acceptSandboxLifecycleFailure(
 
   if (before !== null && before.announcedAt !== null && before.outcome !== null
     && before.outcome !== 'undelivered') {
-    // `ok`, and deliberately: the agent HAS been told, which is what this seam
-    // is for. A repeat is the container's retry loop being conservative about
-    // an answer it may not have received, not a recovery that failed.
+    // `ok`: the agent has been told; a repeat is the container's conservative retry.
     recordSettlement('ok', '');
     deps.logActivity?.('sandbox_incident_duplicate', `${incident.stage} — ${incident.incidentId}`);
 
-    // `queued` is the truth here and not a courtesy: this arm is reached only
-    // when the row says the announcement HAS landed, so the caller may stop.
     return { status: 'queued', incidentId: incident.incidentId, duplicate: true };
   }
 
-  // The row lands BEFORE delivery is attempted, so an incident whose delivery
-  // is lost is still on record and is still re-deliverable by the caller's next
-  // attempt. `first_seen_at` is written once and never moved: when the incident
-  // was first reported is a fact, not a per-attempt one.
+  // Row lands before delivery so a lost delivery stays re-deliverable; `first_seen_at` is written once.
   void deps.sql`INSERT INTO sandbox_lifecycle_incidents
       (incident_id, first_seen_at, announced_at, outcome)
     VALUES (${incident.incidentId}, ${now}, NULL, NULL)
@@ -390,10 +203,7 @@ export async function acceptSandboxLifecycleFailure(
     kind: SANDBOX_LIFECYCLE_SIGNAL_KIND,
     text: incidentText(incident),
     metadata,
-    // NAMES ITS OWN FACT. Without this the signal has no identity, so
-    // `inbox.send` takes the non-idempotent path and a re-delivery of the
-    // same incident lands as a second message instead of being recognised as
-    // the one already announced.
+    // Without it `inbox.send` is non-idempotent and a re-delivery lands as a second message.
     idempotencyKey: sandboxLifecycleIncidentKey(incident.incidentId),
   };
 
@@ -402,12 +212,7 @@ export async function acceptSandboxLifecycleFailure(
   try {
     outcome = await deps.inbox.send(signal);
   } catch (cause) {
-    // RECORDED AND RE-THROWN. The throw stands because the container's retry is
-    // the documented recovery and answering it normally would tell the box its
-    // incident had landed. But a delivery that broke is a failed recovery, and
-    // it reaches the same seam a successful one does — with the class of
-    // failure, which is the one arm on this path where a cause exists to
-    // classify. The ledger row stays unannounced, so the retry is still safe.
+    // Re-thrown so the container retries; the row stays unannounced, so the retry is safe.
     const error = toKinuError({
       doing: 'announcing a sandbox lifecycle failure to the agent',
       cause,
@@ -422,17 +227,13 @@ export async function acceptSandboxLifecycleFailure(
   void deps.sql`UPDATE sandbox_lifecycle_incidents
     SET outcome = ${outcome}, announced_at = ${landed ? now : null}
     WHERE incident_id = ${incident.incidentId}`;
-  // No code on either arm: the signal seam answers with an OUTCOME and holds no
-  // cause, so `undelivered` is a fact about delivery and not a classified
-  // failure. An invented code here would be the only unmeasured value on the row.
+  // No code: the signal seam returns an outcome, not a classifiable cause.
   recordSettlement(landed ? 'ok' : 'failed', '');
   deps.logActivity?.(
     landed ? 'sandbox_incident_announced' : 'sandbox_incident_undelivered',
     `${incident.stage} — ${incident.incidentId}`,
   );
 
-  // The delivery outcome IS the answer. `announced_at` above and this status are
-  // written from the same `landed`, so the ledger and the caller cannot diverge.
   return {
     status: landed ? 'queued' : 'undelivered',
     incidentId: incident.incidentId,
@@ -440,7 +241,6 @@ export async function acceptSandboxLifecycleFailure(
   };
 }
 
-/** Which process or port the failure names, when it names one. */
 function incidentWhere(incident: SandboxLifecycleFailure): string {
   if (incident.processId !== undefined) return ` (process ${incident.processId})`;
 
@@ -449,8 +249,6 @@ function incidentWhere(incident: SandboxLifecycleFailure): string {
   return '';
 }
 
-/** What the agent reads. The stage's consequence first, because that is what
- *  it has to act on; the caller's reason after it, because that is evidence. */
 function incidentText(incident: SandboxLifecycleFailure): string {
   const where = incidentWhere(incident);
 

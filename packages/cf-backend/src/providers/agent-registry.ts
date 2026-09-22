@@ -1,20 +1,5 @@
-// Per-agent provider registry composition.
-//
-// Composes:
-//   1. Cloudflare-specific providers from cf-backend/src/providers/
-//      (workers-ai + my-gateway via the logged-in user's Cloudflare OAuth
-//       credential, ai-gateway env vars)
-//   2. Runtime-agnostic providers from @kinu.run/core
-//      (codex, openai, openrouter, openai-compat, anthropic)
-//   3. The models.dev dynamic catalog source — any other catalog provider
-//      with a stored `<id>.bearer` key resolves through the openai-compat
-//      wire path. Static providers stay authoritative for their ids.
-//
-// Registration order is the listing order the model picker shows.
-//
-// Auth flows through the UserDO stub passed in opts.userDO — getAuth /
-// hasCredential are thin wrappers over its RPCs. No credential material ever
-// touches this layer.
+// Per-agent provider registry: Cloudflare providers, core providers, then the models.dev catalog (static ids win).
+// Registration order is the model picker's listing order. Auth goes through the UserDO stub; no credential material here.
 import {
   createProviderRegistry, createCodexProvider, createOpenAIProvider,
   createOpenRouterProvider, createOpenAICompatProvider, createAnthropicProvider,
@@ -30,12 +15,10 @@ import type { CredentialSummary } from '../user/user-do';
 import type { UserCaller } from '@kinu.run/core';
 import { retryTransientDO } from '@kinu.run/core';
 
-/** Stub for the per-user DO that owns this user's credentials, paired with the
- *  identity this context presents to it — a Worker route acting for the
- *  signed-in owner presents the owner capability, an agent passes its workspace
- *  capability token (resolved per call, since a facet reads it from its
- *  parent). The two travel together so no context can hold the stub without
- *  saying who it is. */
+/**
+ * Credential DO stub paired with the capability this context presents (owner, or workspace token resolved per call),
+ * so no context holds the stub without saying who it is.
+ */
 export interface UserCredentialClient {
   getAuthHeaders(
     caller: UserCaller,
@@ -51,10 +34,7 @@ export interface UserCredentialSource {
   caller: UserCaller | (() => Promise<UserCaller>);
 }
 
-/** What the DIRECT Workers AI transport runs on, taken from the provider that
- *  consumes it so the two cannot drift. `ProviderEnv` declares the gateway seam
- *  only; the eval identity's direct path calls `run`, which the platform `Ai`
- *  binding has and a gateway-only env does not. */
+/** Taken from the consuming provider: the direct path calls `run`, which a gateway-only env lacks. */
 type DirectAiBinding =
   NonNullable<ProviderEnv['AI']> & NonNullable<Parameters<typeof createWorkersAIProvider>[1]>;
 
@@ -64,18 +44,10 @@ function isDirectAiBinding(binding: NonNullable<ProviderEnv['AI']>): binding is 
 
 export interface AgentProviderDeps {
   env: ProviderEnv;
-  /** Null/absent is allowed for short-lived "env-bound providers only" contexts
-   *  (e.g. the inline-branch fallback in runtime.ts, where the spawn closure
-   *  cannot reach the user's UserDO). In that case getAuth always returns null
-   *  and hasCredential always returns false — only env-bound providers end up
-   *  usable. */
+  /** Null for env-bound-only contexts (e.g. runtime.ts inline-branch fallback): getAuth is null, hasCredential false. */
   userDO?: UserCredentialSource | null;
   fetch?: typeof fetch;
-  /** Called the moment one of this registry's models is about to sleep on a
-   *  provider-mandated wait — rate-limit retry, backoff, or a pacer cooldown a
-   *  sibling declared. The actor turns each notice into a `provider_wait` run
-   *  event, which is how a rate-limited turn reads as waiting rather than
-   *  silent. */
+  /** Fires before a provider-mandated wait; the actor emits `provider_wait` so a rate-limited turn reads as waiting. */
   onProviderWait?: (info: ProviderWaitInfo) => void;
   appTitle?: string;
   sessionAffinity?: string;
@@ -85,10 +57,7 @@ export interface AgentProviderRegistry {
   registry: ProviderRegistry;
   deps: ProviderDeps;
   resolveModel(spec: string): LanguageModel;
-  /** The one spec resolver. Empty input is the platform default, never a
-   *  survey of which BYO credential happens to be stored: the native Workers
-   *  AI model is what a user who has chosen nothing runs on. Also handles the
-   *  BC forms (bare `@cf/...`, bare modelId). */
+  /** Empty input is the platform default (native Workers AI), never a survey of stored BYO credentials. Also accepts bare `@cf/...` and bare model ids. */
   normalizeSpecSync(specOrNull?: string | null): string;
 }
 
@@ -96,24 +65,14 @@ async function resolveCaller(source: UserCredentialSource): Promise<UserCaller> 
   return source.caller instanceof Function ? await source.caller() : source.caller;
 }
 
-/** Auth resolver proxying to UserDO — getAuth is a thin wrapper over its
- *  RPCs, so no credential material ever touches the caller's layer. The DO
- *  event loop serializes concurrent refreshes for the same credential. With no
- *  source (inline-branch context) every lookup returns null, leaving only
- *  env-bound providers usable. Shared by the registry below and the
- *  /api/user/ai/v1 proxy. */
+/** Proxies to UserDO so no credential material touches the caller; the DO serializes concurrent refreshes. Null source: every lookup null. */
 export function createUserDOAuthResolver(source: UserCredentialSource | null): AuthResolver {
   return async (key, opts) => {
     if (!source) return null;
     const caller = await resolveCaller(source);
 
-    // Auth is re-resolved before EVERY request to a provider (providers/util.ts
-    // createAuthedFetch), which puts these two cross-DO reads on the critical
-    // path of every model step of every turn: one dropped connection ended the
-    // turn with an error card the user had to retry by hand. Both are reads —
-    // the conditional OAuth refresh inside getAuthHeaders persists before it
-    // returns, so a retry either sees the refreshed credential and does nothing,
-    // or re-runs a refresh that never happened.
+    // Auth resolves before every provider request, so these cross-DO reads are on every step's critical path; both are
+    // retry-safe reads (the conditional OAuth refresh persists before returning).
     const headers = await retryTransientDO('credential auth',
       () => source.stub.getAuthHeaders(caller, key, opts));
 
@@ -145,9 +104,7 @@ export function createAgentProviderRegistry(opts: AgentProviderDeps): AgentProvi
     appTitle: opts.appTitle,
   }));
   registry.register(createOpenAICompatProvider());
-  // models.dev id `cloudflare-workers-ai` aliases the bespoke workers-ai
-  // provider (and its endpoint needs an account-id template anyway) — exclude
-  // it so workers-ai never grows a second resolution path.
+  // `cloudflare-workers-ai` aliases the bespoke workers-ai provider; excluded so it has one resolution path.
   registry.registerDynamic(createModelsDevCatalogSource({ exclude: ['cloudflare-workers-ai'] }));
 
   const source = opts.userDO ?? null;
@@ -173,15 +130,10 @@ export function createAgentProviderRegistry(opts: AgentProviderDeps): AgentProvi
     onProviderWait: opts.onProviderWait,
   };
 
-  // Model construction is sync, but credential access is not: providers that
-  // need user credentials resolve them inside custom fetch wrappers. workers-ai
-  // resolves the user's Cloudflare OAuth credential through the UserDO stub —
-  // without a stub every request is a guaranteed 401, so the default falls back
-  // to the env-bound ai-gateway, which serves the same native model.
+  // Without a UserDO stub, workers-ai is a guaranteed 401, so the default falls back to the env-bound ai-gateway.
   function defaultProvider(): string {
     if (source && registry.get('workers-ai')) return 'workers-ai';
-    // Same predicate the provider's own isAvailable() uses, so the default can
-    // never name a gateway the provider would refuse to build a model for.
+    // Same predicate as the provider's isAvailable(), so the default never names a gateway it would refuse.
     const platform = resolvePlatformGateway(opts.env);
 
     if (!('reason' in platform)) return AI_GATEWAY_PROVIDER_ID;
@@ -223,16 +175,13 @@ export function createAgentProviderRegistry(opts: AgentProviderDeps): AgentProvi
       if (s.includes('/')) {
         const first = s.slice(0, s.indexOf('/'));
 
-        // canResolve is optimistic for catalog-shaped ids — a typo'd provider
-        // surfaces a clear models.dev error at request time instead of here
-        // (the catalog cannot be consulted synchronously).
+        // Optimistic for catalog-shaped ids: the catalog cannot be consulted synchronously; typos surface at request time.
         if (registry.canResolve(first)) return s;
 
-        if (first === 'workers-ai') return s;   // canonical form pre-existed
+        if (first === 'workers-ai') return s;
         throw new Error(`Unknown provider in model spec ${JSON.stringify(s)}.`);
       }
 
-      // Bare model id — wrap with the default provider.
       return `${defaultProvider()}/${s}`;
     },
   };

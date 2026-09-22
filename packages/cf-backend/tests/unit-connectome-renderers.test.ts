@@ -1,7 +1,5 @@
-// The signed-in shell's connectome and the landing hero's search tree speak
-// one frame contract: both renderers must draw either picture's frame
-// unchanged — the canvas renderer stroking what the frame marks visible,
-// the WebGPU renderer uploading the frame's own arrays at their strides.
+// The connectome and the landing hero's search tree share one frame contract: both renderers
+// must draw either picture's frame unchanged.
 import { afterAll, describe, expect, mock, test } from 'bun:test';
 import * as v from 'valibot';
 import {
@@ -29,8 +27,7 @@ interface Recording {
   readonly gradientStyles: string[];
 }
 
-/** The gradient this surface's `createLinearGradient` hands back: it renders
- *  itself as the text the assertions match, which `CanvasGradient` does not. */
+/** Renders itself as the text the assertions match, which `CanvasGradient` does not. */
 interface RecordedGradient extends CanvasGradient {
   readonly stops: readonly { offset: number; color: string }[];
   toString(): string;
@@ -40,8 +37,6 @@ function isRecordedGradient(style: CanvasGradient | CanvasPattern): style is Rec
   return 'stops' in style;
 }
 
-/** The style a canvas call left in `strokeStyle`/`fillStyle`, as the text the
- *  recording keeps. */
 function styleText(style: string | CanvasGradient | CanvasPattern): string {
   if (v.is(v.string(), style)) return style;
 
@@ -50,7 +45,6 @@ function styleText(style: string | CanvasGradient | CanvasPattern): string {
   throw new Error('the recording surface was handed a style it never made');
 }
 
-/** A CanvasRenderingContext2D that remembers what was asked of it. */
 function recordingSurface(): StrokeSurface & Recording {
   const styles = new Set<string>();
   const gradientStyles: string[] = [];
@@ -104,8 +98,7 @@ function recordingSurface(): StrokeSurface & Recording {
   return surface;
 }
 
-/** The canvas-budget mat twelve seconds into work: the picture the fallback
- *  renderer actually strokes on screen. */
+/** The canvas-budget mat twelve seconds into work: what the fallback renderer strokes. */
 function connectomeFrame(): ArtFrame {
   const connectome = new Connectome({ seed: 1729, aspect: 900 / 1440, segments: CANVAS_SEGMENTS });
   connectome.setActivity({ working: true, decisions: 0 });
@@ -174,9 +167,6 @@ describe('the connectome frame is what both renderers read', () => {
   });
 });
 
-/* ── the GPU half: vgpu mocked at its module seam, `geometry.write` recording
- *  the lengths the renderer hands it. ── */
-
 /** The one shape vgpu's `init` rejects with that is not a failure. */
 class MockVGPUError extends Error {
   readonly code: string;
@@ -202,14 +192,12 @@ class FakeGpu {
   }
 }
 
-/** Every `geometry.write` payload length, in floats, by the geometry's label. */
 const writes = new Map<string, number[]>();
 
 interface FakePassSpec {
   readonly target?: { dispose(): void };
 }
 
-/** The fake's stand-in for a vgpu draw or effect handle. */
 interface FakeHandle {
   compile(): Promise<void>;
   set(): void;
@@ -277,8 +265,8 @@ describe('the WebGPU renderer uploads the connectome\'s arrays at their strides'
     writes.clear();
     outcome.renderer.render(frame);
 
-    // The renderer's capacities sit above what either picture emits: the
-    // write is the frame's own counts at the frame's strides.
+    // Renderer capacities exceed either picture: the write is the frame's own counts at its
+    // strides.
     const strokeCount = Math.min(frame.count, 16384);
     const nodeCount = Math.min(frame.nodeCount, 1024);
     const pulseCount = Math.min(frame.pulseCount, 1024);
@@ -304,9 +292,7 @@ describe('one contract, two pictures', () => {
   });
 
   test('a scripted pointer frame reads the same node brightness through both renderers', () => {
-    // The pointer is a simulation input, so both renderers see the same
-    // frame: strokes the pointer holds ride TONE_BRIGHT, and the canvas
-    // half strokes a bright one for every bright frame entry.
+    // The pointer is a simulation input, so both renderers see the same frame.
     const connectome = new Connectome({ seed: 1729, aspect: 900 / 1440, segments: CANVAS_SEGMENTS });
 
     for (let index = 0; index < 120; index += 1) connectome.step(1 / 60);
@@ -332,9 +318,8 @@ describe('one contract, two pictures', () => {
     renderer.resize(1440, 900, 1);
     renderer.render(frame);
 
-    // The WGSL half reads the same tone field: the shader lifts light
-    // strokes by the same factor the canvas applies, and resolves tone 0
-    // through the same bright mix on paper.
+    // The shader lifts light strokes by the canvas's factor and resolves tone 0 through the same
+    // bright mix.
     const wgsl = readFileSync(resolve(TREE_DIR, 'palette.wgsl'), 'utf8');
     const strokes = readFileSync(resolve(TREE_DIR, 'strokes.wgsl'), 'utf8');
     const canvas = readFileSync(resolve(CORE_WEB, 'hero-canvas.ts'), 'utf8');

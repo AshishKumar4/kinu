@@ -1,19 +1,6 @@
 /**
- * `/api/shared/*` — the shared library and blueprints on the app host.
- *
- * Routes:
- *   GET  /api/shared/blueprint/:id   — one blueprint's read-only page data. PUBLIC by
- *                                      link: the id carries a signature checked here,
- *                                      before any object is touched, and the owner's
- *                                      object re-reads the row on every call (S6).
- *   GET  /api/shared                 — my slates, my shared, shared with me
- *   POST /api/shared/publish         — publish a committed version of my slate as a
- *                                      blueprint and name users on it
- *   POST /api/shared/fork            — admit a blueprint into one of my workspaces
- *
- * A blueprint carries no credential (S8): what crosses between the two
- * workspace objects is the bundle — tree, bytes, requirements — and nothing
- * of the owner's user object. The forker's bindings resolve as the forker.
+ * `/api/shared/*`: shared library and blueprints. `GET /api/shared/blueprint/:id` is public by link: the signature is
+ * checked before any object is touched, and the owner's object re-reads the row every call (S6). No credential crosses (S8).
  */
 import * as v from 'valibot';
 import {
@@ -34,20 +21,18 @@ import { workspaceOwner } from '../workspace-owner-rpc';
 import { ROOT_SLATE_CALLER } from '../slates/bindings';
 import type { ErrorCode } from '@kinu.run/core/obs';
 
-/** What `{ op: 'list' }` answers, read for the fields the Drive shows. */
 const SlateListingSchema = v.object({
   slates: v.array(v.object({ id: v.string(), title: v.string(), bindings: v.array(v.string()) })),
 });
 
-/** The blueprint signer: its own salt and info, so a preview token and a
- *  blueprint token never verify each other. */
+/** Its own salt and info, so preview and blueprint tokens never verify each other. */
 const blueprintSigner = labelSigner('kinu.blueprint.salt', 'kinu.blueprint.v1');
 
 function blueprintMessage(workspace: string, share: string): string {
   return `kinu:blueprint:v1:${workspace}:${share}`;
 }
 
-/** The public id for one share row, or null on a deployment with no signing secret. */
+/** Null on a deployment with no signing secret. */
 async function mintBlueprintId(env: Env, workspace: string, share: string): Promise<string | null> {
   const secret = blueprintSigner.secrets(env)[0];
 
@@ -56,7 +41,6 @@ async function mintBlueprintId(env: Env, workspace: string, share: string): Prom
   return formatBlueprintId({ workspace, share, token: await blueprintSigner.token(secret, blueprintMessage(workspace, share)) });
 }
 
-/** The address an id names, once its signature verifies; null for anything else. */
 async function verifiedBlueprintAddress(env: Env, id: string): Promise<{ workspace: string; share: string } | null> {
   const address = parseBlueprintId(id);
 
@@ -69,7 +53,7 @@ async function verifiedBlueprintAddress(env: Env, id: string): Promise<{ workspa
 
 const NOT_FOUND = 'No such blueprint';
 
-/** The public half: before the auth gate, and answering nothing but the page data. */
+/** Public half: before the auth gate; answers nothing but page data. */
 export async function handleSharedPublicRequest(request: Request, env: Env): Promise<Response | null> {
   const url = new URL(request.url);
   const match = /^\/api\/shared\/blueprint\/([^/]+)$/.exec(url.pathname);
@@ -78,11 +62,11 @@ export async function handleSharedPublicRequest(request: Request, env: Env): Pro
   const id = decodeURIComponent(match[1]);
   const address = await verifiedBlueprintAddress(env, id);
 
-  // Unminted, forged and malformed ids are one answer, given without waking an object.
+  // Unminted, forged and malformed ids get one answer, without waking an object.
   if (address === null) return err(404, NOT_FOUND);
   const answer = await workspaceOwner(env, address.workspace).readBlueprint(address.share);
 
-  // A revoked blueprint is not distinguishable from one that never existed.
+  // A revoked blueprint is indistinguishable from one that never existed.
   if (!answer.ok) return err(404, NOT_FOUND);
   const view: BlueprintView = { id, ...answer.value.view };
 
@@ -100,13 +84,9 @@ const PublishBody = v.object({
 
 const ForkBody = v.union([
   v.strictObject({ blueprint: v.string(), workspace: v.string() }),
-  /** A live share fork names the share row and the owner's workspace: the
-   *  bundle it carries is the running slate's skeleton, asked of the owner's
-   *  object under the forker's account. */
   v.strictObject({ live: v.string(), ownerWorkspace: v.string(), workspace: v.string() }),
 ]);
 
-/** The signed-in half. */
 export async function handleSharedRequest(request: Request, env: Env, identity: AuthIdentity): Promise<Response | null> {
   const url = new URL(request.url);
 
@@ -116,7 +96,6 @@ export async function handleSharedRequest(request: Request, env: Env, identity: 
 
   try { owner = await ownerCaller(env); }
   catch (cause) {
-    // Same answer the user plane gives: no root secret, nothing to authorize with.
     if (cause instanceof OwnerCapabilityUnavailableError) return err(503, cause.message);
     throw cause;
   }
@@ -142,8 +121,6 @@ async function library(env: Env, identity: AuthIdentity, owner: UserCaller): Pro
   const mine: SharedRow[] = [];
   const named: string[] = [];
 
-  // Every share row lives in the workspace that holds the slate, so "my shared"
-  // is each of my workspaces asked in turn; a row's id is minted here.
   for (const { workspace, shares } of await sharesGiven(env, owner, identity.userId)) {
     const owned = workspaceOwner(env, workspace);
 
@@ -174,8 +151,7 @@ async function library(env: Env, identity: AuthIdentity, owner: UserCaller): Pro
 
       if (!reading.ok) continue;
 
-      // Two shares of one slate: the badge says the wider reach, never the
-      // narrower one, so it cannot understate who can see the slate.
+      // Two shares of one slate: the badge shows the wider reach, never understating who can see it.
       if (share.visibility === 'public' || shared.get(share.slate) === undefined) shared.set(share.slate, share.visibility);
 
       mine.push({
@@ -186,11 +162,7 @@ async function library(env: Env, identity: AuthIdentity, owner: UserCaller): Pro
       named.push(...share.users);
     }
 
-    // The slates themselves, from the workspace that holds them: no user-level
-    // index of them exists, and this workspace is already awake for its shares.
-    // A slate this workspace cannot read is one of its `problems` and is left
-    // out — a listing that names a slate it could not open would offer a tile
-    // that opens nothing.
+    // A slate this workspace cannot read is left out: a tile that opens nothing is worse than none.
     const owns = await owned.slateAs(ROOT_SLATE_CALLER, { op: 'list' });
 
     if (!owns.ok) throw new Error(`listing slates of ${workspace}: ${owns.reason}: ${owns.error}`);
@@ -202,15 +174,11 @@ async function library(env: Env, identity: AuthIdentity, owner: UserCaller): Pro
 
   const received: SharedRow[] = [];
 
-  // Each received row is a projection; the owner's object is asked again and a
-  // refusal drops the row, so a revoked blueprint is not offered for forking.
+  // A refusal from the owner's object drops the row, so a revoked blueprint is not offered for forking.
   const receipts = await userDO.sharesReceived_list(owner);
 
   for (const receipt of receipts) {
     const object = workspaceOwner(env, receipt.workspace);
-    // A receipt names one share row on the owner's object, whichever table
-    // holds it: a live share reads as itself, a blueprint as its view, and a
-    // row neither table answers is dropped — a revoked share is not offered.
     const live = await object.readLiveShare(receipt.shareId);
 
     if (live.ok) {
@@ -237,10 +205,7 @@ async function library(env: Env, identity: AuthIdentity, owner: UserCaller): Pro
     });
   }
 
-  // The index is a projection: each row is asked of its owner's object and a
-  // refusal drops it, so a stale row can list a share that then refuses and
-  // never one that admits. "Known" is derived on the way past — the owners who
-  // named me, plus everyone I ever named — and stored nowhere.
+  // Each index row is re-asked of its owner's object; a refusal drops it. "Known" is derived here and stored nowhere.
   const known = new Set<string>(receipts.map((receipt) => receipt.ownerUserId));
 
   for (const email of named) known.add(await deriveUserId(email));
@@ -260,7 +225,6 @@ async function library(env: Env, identity: AuthIdentity, owner: UserCaller): Pro
   return { slates, mine, received, public: publicRows, known: knownRows };
 }
 
-/** One index entry verified against its owner's object, as a Shared row. */
 async function publicRow(env: Env, entry: PublicShareRow): Promise<SharedRow | null> {
   const object = workspaceOwner(env, entry.workspace);
 
@@ -289,8 +253,6 @@ async function publicRow(env: Env, entry: PublicShareRow): Promise<SharedRow | n
   };
 }
 
-/** A slate refusal as a status: bad input and a slate that is not there are the
- *  caller's to fix, and everything else is a conflict with the slate's state. */
 function slateRefusalStatus(reason: ErrorCode): number {
   if (reason === 'bad_input') return 400;
 
@@ -369,7 +331,6 @@ async function fork(request: Request, env: Env, identity: AuthIdentity): Promise
   return json({ body: result }, { status: 201 });
 }
 
-/** A blueprint's bundle, or the absent answer a bad address and a revoked row share. */
 async function blueprintBundle(env: Env, id: string) {
   const address = await verifiedBlueprintAddress(env, id);
 
@@ -384,14 +345,12 @@ const LiveShareBody = v.object({
   visibility: v.picklist(['users', 'public']),
   emails: v.optional(v.array(v.pipe(v.string(), v.trim(), v.email()))),
   approved: v.optional(v.array(v.strictObject({ slate: v.string(), binding: v.string(), member: v.string() }))),
-  /** Whether viewers may copy the slate's skeleton into a workspace of theirs. */
   fork: v.optional(v.boolean()),
 });
 
 const LiveIdBody = v.object({ workspace: v.string(), share: v.string() });
 
-/** Mint or return the live share over one of my slates. `emails` names users
- *  on a `users` share; `approved` is the mutating grant the dialog checked. */
+/** `emails` names users on a `users` share; `approved` is the mutating grant the dialog checked. */
 async function shareLive(request: Request, env: Env, identity: AuthIdentity, owner: UserCaller): Promise<Response> {
   const body = await safeJson(request, LiveShareBody);
 
@@ -456,8 +415,6 @@ async function revokeLive(request: Request, env: Env, identity: AuthIdentity): P
   return json({ body: revoked.value });
 }
 
-/** The URL the signed-in user opens a live share at: the share's own origin,
- *  or the ticket-bearing entry that names this account on a `users` share. */
 async function openLive(request: Request, env: Env, identity: AuthIdentity): Promise<Response> {
   const body = await safeJson(request, LiveIdBody);
 

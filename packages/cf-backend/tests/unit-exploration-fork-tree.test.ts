@@ -1,22 +1,6 @@
 /**
- * A RUNNING swarm's nodes are on the canvas while they run.
- *
- * The incident this pins, measured on the owner's own workspace: a swarm the
- * agent reported as 5/10 nodes deep drew a lone 0% root, "0 branches" and no
- * live nodes, for its whole life. Nothing was lost — every node was in the
- * journal and the response carried it — and the canvas chose not to look.
- *
- * The engine writes the root `search_nodes` row at dispatch
- * (`strategy/swarm-run.ts`) and a child row only once a node has REPORTED, while
- * each node's spawn is journalled the instant it starts under the same node id.
- * So mid-flight a swarm's tree half is exactly one row and its journal half is
- * every node currently working. A fold that reads one half or the other, and
- * prefers the tree because it is non-empty, therefore draws the root alone every
- * time — not for an edge case but for every real swarm.
- *
- * Which is why these tests are about a run that has completed ZERO nodes. That
- * is the state a search is in for most of its life and the state the canvas was
- * blind in.
+ * Defends: a running swarm drawn as a lone 0% root. The engine writes a child `search_nodes` row only once a node
+ * reports, while spawns are journalled immediately, so a zero-completed run must be drawn from the journal half.
  */
 
 import { describe, test, expect } from 'bun:test';
@@ -27,8 +11,7 @@ import { present } from '@kinu.run/test-utils';
 
 const ROOT = 'root-1';
 
-/** The root row the engine writes at dispatch, and the only search row a swarm
- *  has until one of its nodes reports. */
+/** Until a node reports, a swarm's only search row. */
 function rootRow(): MctsRow {
   return {
     id: ROOT, parent_id: null, depth: 0, visits: 0, value: 0,
@@ -37,7 +20,6 @@ function rootRow(): MctsRow {
   };
 }
 
-/** A settled child row — what a node that HAS reported leaves in the tree. */
 function settledRow(id: string, value: number): MctsRow {
   return {
     id, parent_id: ROOT, depth: 1, visits: 1, value,
@@ -62,7 +44,6 @@ function journal(heads: HeadRunView['heads'], status = 'running'): HeadRunView {
   };
 }
 
-/** Every vertex of the folded tree, root included. */
 function vertices(node: ForkNode | null): ForkNode[] {
   return node === null ? [] : [node, ...node.children.flatMap(vertices)];
 }
@@ -87,16 +68,13 @@ describe('explorationForkTree — a running swarm', () => {
     const tree = present(explorationForkTree({ tree: [rootRow()], head: journal([head('n1', 'running')]) }), 'the folded fork tree');
     const node = tree.children[0];
     expect(node.status).toBe('running');
-    // The lie the incident's "0%" root told. A node that has reported nothing
-    // has earned no number, and null is how this view spells that.
+    // A node that has reported nothing has earned no number.
     expect(node.value).toBeNull();
     expect(node.visits).toBeNull();
   });
 
   test('the settled row wins over the journal row for the same node', () => {
-    // A node that reported has BOTH halves under one id. The tree row is the
-    // engine's own settled statement about it, so it decides — and the node
-    // appears once, not twice.
+    // A reported node has both halves under one id; the settled tree row decides, and it appears once.
     const tree = present(explorationForkTree({
       tree: [rootRow(), settledRow('n1', 0.71)],
       head: journal([head('n1', 'completed'), head('n2', 'running')]),
@@ -111,8 +89,6 @@ describe('explorationForkTree — a running swarm', () => {
   });
 
   test('a journalled node hangs under its own parent, not under the root', () => {
-    // A depth-2 node's parent is a node, and flattening it to the root is the
-    // shape a deeper search would be misdrawn in.
     const tree = present(explorationForkTree({
       tree: [rootRow(), settledRow('n1', 0.4)],
       head: journal([
@@ -127,8 +103,7 @@ describe('explorationForkTree — a running swarm', () => {
   });
 
   test('a node whose parent is not in either half still reaches the canvas', () => {
-    // Dropping it would be the same silent loss at a smaller scale, so it
-    // attaches to the root rather than vanishing.
+    // Attached to the root rather than silently dropped.
     const tree = present(explorationForkTree({
       tree: [rootRow()],
       head: journal([head('orphan', 'running', { parentId: 'gone', depth: 3 })]),
@@ -152,21 +127,8 @@ describe('explorationForkTree — a running swarm', () => {
 });
 
 /**
- * THE RUN AS PRODUCTION HELD IT, at the moment the owner's canvas drew one
- * vertex at 0%.
- *
- * Root `2rye1eyny1efm9583sqye`: one `search_nodes` root row, `mcts_search_runs`
- * status `running` at epoch 2, and FIFTEEN `head_journal` rows over three spawn
- * generations — 2 completed carrying real summaries, 5 running with `lastStepAt`
- * advancing past `spawnedAt`, 2 errored, 6 aborted. Each earlier generation was
- * retired when its activation died and re-spawned from zero, which is why one
- * search holds fifteen rows for five live nodes.
- *
- * A harder case than a clean wave in two ways, and both are the point. The two
- * FINISHED candidates were shadowed as completely as the live ones, so the run
- * had answers a reader could not reach. And six of the fifteen rows are dead:
- * drawing those as live would replace one silence with a worse lie, so the census
- * is asserted status by status rather than only by count.
+ * The production run behind the incident: fifteen journal rows over three spawn generations (2 completed, 5 running,
+ * 2 errored, 6 aborted), so the census is asserted status by status, not only by count.
  */
 const GENERATIONS = [
   { spawnedAt: 1_787_284_776_338, ids: ['a1', 'a2', 'a3', 'a4', 'a5'], status: 'aborted' },
@@ -177,8 +139,6 @@ const GENERATIONS = [
 function productionCensus(): HeadRunView {
   const heads = GENERATIONS.flatMap((generation) => generation.ids.map((id) => head(id, generation.status, {
     spawnedAt: generation.spawnedAt,
-    // The five live nodes are demonstrably working: their last step is later than
-    // their spawn. That is the fact the canvas had and did not draw.
     lastStepAt: generation.status === 'running' ? 1_787_285_894_585 : null,
   })));
 
@@ -202,9 +162,6 @@ describe('explorationForkTree — the run as production held it', () => {
     const tree = present(explorationForkTree({ tree: [rootRow()], head: productionCensus() }), 'the folded fork tree');
     expect(productionCensus().heads).toHaveLength(15);
     expect(vertices(tree)).toHaveLength(16);
-    // Not one of them was drawn. The run header counted fifteen from the same
-    // response, which is how the two numbers came to contradict each other on one
-    // screen.
     expect(tree.children).toHaveLength(15);
   });
 
@@ -224,10 +181,7 @@ describe('explorationForkTree — the run as production held it', () => {
       byStatus.set(child.status, (byStatus.get(child.status) ?? 0) + 1);
     }
 
-    // `aborted` and `errored` are both terminal and both failures, so the tree's
-    // own vocabulary has one word for them. What matters is that eight rows are
-    // NOT running: replacing an invisible node with a fake live one would be a
-    // worse defect than the one being fixed.
+    // Eight rows are not running: drawing a dead node as live would be worse than the original defect.
     expect(byStatus.get('failed')).toBe(8);
     expect(byStatus.get('running')).toBe(5);
     expect(byStatus.get('open')).toBe(2);
@@ -244,20 +198,7 @@ describe('explorationForkTree — the run as production held it', () => {
   });
 });
 
-/**
- * The last of the lone `0% root`.
- *
- * The fold above puts a running node on the canvas. The ROOT is not a running
- * node: it comes from the settled half, because the engine writes its row at
- * dispatch — and `SearchNode.value` is a `number` initialised to 0. So the root
- * of a swarm that has evaluated nothing carries a real, stored `0`, survives the
- * fold intact, and is drawn `0%`.
- *
- * That is the caption in the owner's screenshot, and it is a lie of the same kind
- * as the missing nodes: 0 is the initialiser, not a measurement. `visits === 0`
- * is what says so — nothing has been backpropagated through this node — and it is
- * the store's own field, not a heuristic.
- */
+/** A root with `visits === 0` carries the initialiser `0`, not a measurement, and must not be drawn `0%`. */
 describe('a node nothing has been backpropagated through has no score', () => {
   test('the root of a search that has evaluated nothing carries null, not 0', () => {
     const tree = explorationForkTree({ tree: [rootRow()], head: null });
@@ -272,15 +213,13 @@ describe('a node nothing has been backpropagated through has no score', () => {
 
     const tree = explorationForkTree({ tree: [rootRow(), scored], head: null });
     const child = tree?.children[0];
-    // Three rollouts that all returned 0 is a measurement and must survive: this
-    // is the case a blanket "hide zeroes" rule would erase.
+    // Three rollouts all returning 0 is a measurement a blanket "hide zeroes" rule would erase.
     expect(child?.visits).toBe(3);
     expect(child?.value).toBe(0);
   });
 
   test('an unvisited row that somehow carries a value keeps it', () => {
-    // The store should not produce this, and if it does the number is the only
-    // evidence there is. Suppressing it would be inventing an absence.
+    // Should not happen; if it does, the number is the only evidence.
     const odd: MctsRow = {
       ...rootRow(), id: 'n2', parent_id: ROOT, depth: 1, visits: 0, value: 0.7,
     };
@@ -290,22 +229,9 @@ describe('a node nothing has been backpropagated through has no score', () => {
   });
 });
 
-/**
- * WHAT THE PICTURE DRAWS AND WHAT IT SAYS ARE TWO VOCABULARIES.
- *
- * `ForkNode.status` is the drawing one — `failed` is a hollow dot, `pruned` a
- * dashed edge, `terminal` the winner's ring — and it has exactly one word for
- * every ending that is not `completed`. The journal has six. So the fold that
- * puts a head in the tree collapsed four different endings into `failed` and
- * `completed` into `open`, and the graph then PRINTED that word at the reader:
- * a node that blew its budget, one the operator stopped, one that threw and one
- * a cold activation interrupted all read "failed", and a node that finished read
- * "open". The lifecycle rides beside the drawing status so both are honest.
- */
+/** `ForkNode.status` is the drawing vocabulary with one word per ending; the journal lifecycle rides beside it. */
 describe('the fold keeps the journal\'s own status word', () => {
-  /** Every word `head_journal.status` can hold, against the one the picture
-   *  draws it as. Typed pairs rather than an object, so a status the union stops
-   *  declaring fails to compile here instead of being iterated as a string. */
+  /** Typed pairs rather than an object, so a status the union drops fails to compile here. */
   const DRAWN: ReadonlyArray<readonly [ForkNodeLifecycle, ForkNode['status']]> = [
     ['completed', 'open'],
     ['running', 'running'],
@@ -325,9 +251,7 @@ describe('the fold keeps the journal\'s own status word', () => {
   }
 
   test('a word no version of this journal writes names nothing at all', () => {
-    // Absent rather than passed through: the graph prints `lifecycle ?? status`,
-    // so a stray column value must fall back to the drawing word instead of
-    // putting an unknown string on screen as a lifecycle.
+    // The graph prints `lifecycle ?? status`, so an unknown column value falls back to the drawing word.
     const tree = explorationForkTree({ tree: [rootRow()], head: journal([head('n1', 'reticulating')]) });
     expect(tree?.children[0]?.lifecycle).toBeUndefined();
     expect(tree?.children[0]?.status).toBe('failed');

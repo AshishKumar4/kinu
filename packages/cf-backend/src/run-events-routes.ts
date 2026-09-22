@@ -1,17 +1,7 @@
 /**
- * HTTP routes for the durable run-event log.
- *
- *   GET /api/workspaces/:agentName/runs            → list recent runs
- *   GET /api/workspaces/:agentName/runs/:runId/events?since=&limit=&types=
- *   GET /api/workspaces/:agentName/runs/:runId/stream  → SSE w/ Last-Event-ID resume
- *
- * Routes through to the OrchestratorAgent DO by name, calling its @callable
- * RPCs (getRunEvents / listRuns / countRunEvents). The SSE stream loops a
- * polling read against the agent — Worker DO RPCs can't hold a single
- * persistent server-push channel here, so we drain new events on a short
- * interval. This is the simple Flue-compatible model; future enhancement can swap for
- * a true push over agent.broadcast() once the chat protocol surface is
- * extended.
+ * HTTP routes for the durable run-event log: list runs, page events, and an SSE
+ * stream with Last-Event-ID resume. The stream polls the DO's @callable RPCs; DO RPC
+ * cannot hold a persistent server-push channel here.
  */
 
 import { getAgentByName } from "agents";
@@ -25,16 +15,7 @@ import {
 import { err, json, waitOn, type Clock } from "@kinu.run/core";
 import { diagnostics, renderThrownChain, toKinuError } from '@kinu.run/core/obs';
 
-/**
- * One 500 from this file, counted. Answering with a rendered cause and recording
- * nothing leaves a workspace whose history is unreachable producing no fleet
- * signal at all — the failure visible to the one person looking at the panel and
- * to nobody else.
- *
- * The workspace NAME is not a field. It is mission-derived user text; naming the
- * SURFACE instead answers the question this row exists for, which is which route
- * is failing rather than whose workspace it was.
- */
+/** Record each 500 as a fleet signal. The workspace name is user text, so the row names the surface instead. */
 function reportRouteFailure(input: { surface: string; cause: unknown }): Response {
   const { surface, cause } = input;
   diagnostics.failure('http.run_events_failed', toKinuError({
@@ -48,9 +29,8 @@ function reportRouteFailure(input: { surface: string; cause: unknown }): Respons
 
 const SSE_POLL_MS = 500;
 
-/** How long one browser SSE subscription stays open before the client
- *  reconnects. Unrelated to core's `DEVICE_CONSENT_TIMEOUT_MS`, the same five
- *  minutes for a person answering a prompt. */
+/** How long one browser SSE subscription stays open before the client reconnects.
+ *  Unrelated to core's `DEVICE_CONSENT_TIMEOUT_MS`, the same five minutes. */
 const SSE_TIMEOUT_MS = 5 * 60 * 1000;
 
 const SSE_HEARTBEAT_MS = 15_000;
@@ -62,23 +42,12 @@ const ALLOWED_TYPES = [
   'turn_end', 'run_end',
 ] as const satisfies readonly RunEventType[];
 
-/** Every call a run-event route makes on the workspace object it addresses. */
 export type RunEventsTarget = Pick<OrchestratorAgent, 'listRuns' | 'getRunEvents'>;
 
-/**
- * How a run-event route reaches that object.
- *
- * A function rather than the namespace binding, because resolving one is not
- * `get(idFromName(name))`: the deployment binds the Agents SDK's own
- * `getAgentByName` (agents@0.22.0, `dist/agent-routing.js:176-183`, read
- * 2026-09-22), which resolves the stub and then awaits
- * `__unsafe_ensureInitialized` on it — the lifecycle gate that runs `onStart`
- * before the first RPC — under the SDK's own retry. Injecting the resolver
- * leaves all of that to the vendor and lets a test hand over its own object.
- */
+/** A resolver, not the namespace binding: the SDK's `getAgentByName` (agents@0.22.0,
+ *  `dist/agent-routing.js:176-183`, read 2026-09-22) awaits `__unsafe_ensureInitialized`. */
 export type RunEventsResolver = (name: string) => Promise<RunEventsTarget>;
 
-/** The deployment's resolver: the SDK's own, over this Worker's binding. */
 export const runEventsResolver = (env: Env): RunEventsResolver =>
   (name) => getAgentByName<Env, OrchestratorAgent>(env.OrchestratorAgent, name);
 
@@ -104,22 +73,17 @@ export async function handleRunEventsRequest(
 
   if (request.method !== 'GET') return null;
 
-  // /api/workspaces/<name>/runs
   const listMatch = path.match(/^\/api\/workspaces\/([^/]+)\/runs\/?$/);
 
   if (listMatch) {
     const [, agentName] = listMatch;
 
-    // Forwarded raw: `listRuns` closes it in core, where the MCP tool and the CLI
-    // reach it too. The old `Math.min(200, Math.max(1, Number(...)))` here let
-    // `Number('abc')` through as NaN, because `Math.max(1, NaN)` is NaN.
+    // Forwarded raw: `listRuns` validates it in core for every caller.
     const limit = url.searchParams.has('limit')
       ? Number(url.searchParams.get('limit'))
       : undefined;
 
-    // The page's own `next`, echoed back verbatim. A caller that ignores it gets
-    // exactly what it got before; a caller that reads it can tell a full page
-    // from the end of the history, which `limit` alone never said.
+    // The page's own `next`, echoed verbatim, so a caller can tell a full page from the end.
     const after = url.searchParams.get('after');
 
     try {
@@ -131,16 +95,12 @@ export async function handleRunEventsRequest(
     }
   }
 
-  // /api/workspaces/<name>/runs/<runId>/events
   const eventsMatch = path.match(/^\/api\/workspaces\/([^/]+)\/runs\/([^/]+)\/events\/?$/);
 
   if (eventsMatch) {
     const [, agentName, runId] = eventsMatch;
 
-    // The same closed parser the boundary read-model behind this RPC applies, so
-    // a request that skips the route gets the identical ceiling. `Number('abc')`
-    // is NaN, which the parser reads as "unstated" — the route never has to
-    // decide what a garbage query string meant.
+    // The read-model's own closed parser; it reads NaN as "unstated".
     const opts = boundRunEventQuery({
       since: url.searchParams.has('since') ? Number(url.searchParams.get('since')) : undefined,
       limit: url.searchParams.has('limit') ? Number(url.searchParams.get('limit')) : undefined,
@@ -157,7 +117,6 @@ export async function handleRunEventsRequest(
     }
   }
 
-  // /api/workspaces/<name>/runs/<runId>/stream — SSE w/ Last-Event-ID resume
   const streamMatch = path.match(/^\/api\/workspaces\/([^/]+)\/runs\/([^/]+)\/stream\/?$/);
 
   if (streamMatch) {
@@ -176,28 +135,22 @@ export async function handleRunEventsRequest(
 }
 
 
-/** One SSE subscription to a run's durable event log. */
 export interface RunEventStreamOptions {
   readonly resolveAgent: RunEventsResolver;
   readonly agentName: string;
   readonly runId: string;
   readonly sinceIndex: number;
   readonly signal: AbortSignal;
-  /** The stream's clock (D19): a test hands one it drives, so a poll
-   *  iteration is a step the test takes rather than 500 ms it sleeps through. */
+  /** The stream's clock (D19): a test drives poll iterations instead of sleeping. */
   readonly clock: Clock;
 }
 
 function streamRunEvents(options: RunEventStreamOptions): Response {
   const { resolveAgent, agentName, runId, sinceIndex, signal, clock } = options;
   const encoder = new TextEncoder();
-  // Stop polling the DO the moment the client goes away — via stream
-  // cancel() (reader released) or the request abort signal — instead of
-  // burning DO requests for up to 5 minutes against a dead connection.
+  // Stop polling the DO the moment the client goes away (stream cancel or request abort).
   let closed = false;
-  // Which way it went: a cancelled stream's controller is already unusable,
-  // an aborted request's is still open and is closed below so a reader that
-  // is still attached sees the end rather than a stream that never ends.
+  // A cancelled stream's controller is unusable; an aborted request's is closed below so an attached reader sees the end.
   let cancelled = false;
 
   const stream = new ReadableStream<Uint8Array>({
@@ -210,11 +163,7 @@ function streamRunEvents(options: RunEventStreamOptions): Response {
       const stub = await resolveAgent(agentName);
       const resolvedAt = clock.now();
 
-      // First byte, measured once. What a reader of this stream actually waits
-      // for is not the response headers — those return immediately, because the
-      // body is a stream — but the first EVENT. `resolveMs` separates the two
-      // costs that make it up: reaching the Durable Object (a cold activation
-      // pays for its own init here) and the first ledger read.
+      // First event, not headers, is what a reader waits for; `resolveMs` separates DO activation from the first ledger read.
       let firstByteReported = false;
 
       const reportFirstByte = (events: number): void => {
@@ -243,28 +192,20 @@ function streamRunEvents(options: RunEventStreamOptions): Response {
       };
 
       try {
-        // Initial replay — drain everything strictly after sinceIndex.
         let backlog = await stub.getRunEvents(runId, { since: cursor + 1, limit: RUN_EVENT_LIMIT_MAX });
 
         for (const ev of backlog) send(ev);
-        // Reported even when the replay is EMPTY: a run with nothing new to say
-        // still made the reader wait for the round trip, and a measurement that
-        // only counted streams with a backlog would report the fast half.
+        // Reported even when the replay is empty, or the measurement would only count backlogged streams.
         reportFirstByte(backlog.length);
 
-        // A run that already ended has nothing more to say. The loop below
-        // only tests batches it fetched itself, so without this a run_end in
-        // the replay above never ends the stream and the poll loop runs dead
-        // reads until the timeout.
+        // The poll loop only tests batches it fetched, so a run_end in the replay must end the stream here.
         if (backlog.some((e) => e.type === 'run_end')) {
           controller.close();
 
           return;
         }
 
-        // Poll loop until run_end, client disconnect, or timeout. Cloudflare
-        // Workers can hold a single SSE connection for up to several minutes;
-        // the client's EventSource auto-reconnects with Last-Event-ID.
+        // The client's EventSource auto-reconnects with Last-Event-ID.
         while (!closed && clock.now() - startedAt < SSE_TIMEOUT_MS) {
           await waitOn(clock, SSE_POLL_MS);
 
@@ -309,12 +250,7 @@ function streamRunEvents(options: RunEventStreamOptions): Response {
   });
 }
 
-/**
- * `GET /api/workspaces/:name/overview` — the home card's read. Ownership is
- * already proven where server.ts dispatches this (the same gate that fronts
- * run events), so the handler only matches the path, asks the workspace, and
- * formats the answer: a failed read is a 500, never a zeroed card.
- */
+/** `GET /api/workspaces/:name/overview`; ownership is proven in server.ts. A failed read is a 500, never a zeroed card. */
 export async function handleWorkspaceOverviewRequest(
   request: Request,
   read: () => Promise<WorkspaceOverview>,

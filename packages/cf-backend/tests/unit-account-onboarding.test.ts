@@ -1,12 +1,4 @@
-/**
- * The UserDO's onboarding and display-name authorities, exercised over the
- * real object against in-memory storage. What a test here proves that a unit
- * of the read model cannot: the row exists, the stamp is written once and
- * kept, the name constraint is enforced inside the object, and a workspace
- * token is refused before it reaches either one. It also proves the profile's
- * `workspaceCount`, the read the gate consults so an account that already
- * holds a workspace is never sent through the wizard.
- */
+/** UserDO onboarding and display-name authorities over the real object. */
 import { describe, expect, test } from 'bun:test';
 import { CapabilityDeniedError, needsOnboarding } from '@kinu.run/core';
 import { createTestUserDO, provisionTestWorkspace, testOwner } from './helpers/user-do';

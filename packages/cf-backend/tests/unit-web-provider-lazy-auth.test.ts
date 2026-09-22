@@ -1,8 +1,5 @@
-// The cf web-search provider is cached for the DO lifetime, and the toolset
-// holding it is cached across turns. buildCfWebSearchProvider takes a thunk
-// resolved PER CALL: baking the owner-scoped getAuth at construction freezes
-// getAuth=undefined for a first web call made before owner claim, and the
-// Tavily upgrade then never engages even after the claim. This pins that.
+// The provider is cached for the DO lifetime, so getAuth must resolve per call: baking it at construction freezes
+// undefined for a pre-claim first call and Tavily never engages after the owner claims.
 import { describe, test, expect, afterEach } from 'bun:test';
 import type { AuthResolver } from '@kinu.run/core';
 import { buildCfWebSearchProvider } from '@kinu.run/core';
@@ -44,19 +41,15 @@ function stubGlobalFetch(): FetchRecorder {
 describe('buildCfWebSearchProvider — lazy per-call getAuth', () => {
   test('a credential that lands after the first (pre-claim) search is picked up on the cached provider', async () => {
     stubGlobalFetch();
-    // Pre-claim: no owner yet, the thunk returns undefined.
     let resolver: AuthResolver | undefined;
     const provider = buildCfWebSearchProvider({}, () => resolver);
 
-    // First search precedes owner claim → key-less DuckDuckGo.
     const before = await provider.search('topic');
     expect(before.source).toBe('duckduckgo');
 
-    // Owner claims → the resolver now yields the stored Tavily credential.
     resolver = async (key) => (key === 'tavily' ? { headers: { authorization: 'Bearer tvly-x' } } : null);
 
-    // The SAME cached provider now routes through Tavily — proving getAuth
-    // resolved at call time, not baked undefined at construction.
+    // The same cached provider now routes through Tavily.
     const after = await provider.search('topic');
     expect(after.source).toBe('tavily');
     expect(after.answer).toBe('synthesized');

@@ -6,13 +6,7 @@ import { LANDING_PROFILE, LANDING_ROSTER } from '@/components/landing/landing-fi
 import { LandingPage } from '@/components/landing/LandingPage';
 import './index.css';
 
-/**
- * The rail's sample data. The landing frames mount the real `Sidebar`, which
- * reads through the real `getProfile` / `listWorkspaces` transport — and the
- * static landing build serves no `/api/user/*`. Answer exactly those two
- * reads the way `gallery.tsx` answers them; everything else reaches the
- * network untouched, so a stubbed 404 can never leak into another surface.
- */
+// The static landing serves no `/api/user/*`; stub only the two reads the real `Sidebar` makes.
 
 const realFetch = window.fetch.bind(window);
 

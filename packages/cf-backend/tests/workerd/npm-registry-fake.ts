@@ -1,20 +1,12 @@
 import { gzipSync } from 'node:zlib';
 import { gitRepositoryRoute } from './git-http-fake';
 
-/** One package a hosted `npm install` can fetch: its metadata and its tarball. */
 export const REGISTRY_HOST = 'npm-registry.invalid';
 
 export const REGISTRY_PKG = 'host-fixture';
 
-/**
- * A family wide enough to route the resolver off the coordinator.
- *
- * Nimbus resolves a layer of fewer than five packages in the calling object's
- * own loaders and shards a wider one across sibling Durable Objects
- * (`@nimbus-sh/fabric/dist/fanout.js:29`, `IN_DO_THRESHOLD = 5`). Six names
- * therefore make one install prove the sibling leg, which a single-package
- * install never reaches.
- */
+/** Nimbus shards layers of five or more across sibling Durable Objects
+ *  (`@nimbus-sh/fabric/dist/fanout.js:29`, `IN_DO_THRESHOLD = 5`); six names prove the sibling leg. */
 export const REGISTRY_FANOUT_PKGS = [
   REGISTRY_PKG, 'host-fixture-b', 'host-fixture-c', 'host-fixture-d', 'host-fixture-e', 'host-fixture-f',
 ] as const;
@@ -54,9 +46,7 @@ function tarFile(name: string, data: string): Uint8Array[] {
   return [header, padded];
 }
 
-// package.json FIRST in the archive, as npm ships it. The streaming writer
-// holds the manifest back and lands it last, so a tree without one is a tree
-// the next install re-extracts rather than trusts.
+// package.json first, as npm ships it; the streaming writer lands it last, so a tree without one is re-extracted.
 const REGISTRY_PACKAGES: Record<string, { manifest: string; tarball: Uint8Array<ArrayBuffer> }> =
   Object.fromEntries(REGISTRY_FANOUT_PKGS.map((name) => {
     const manifest = `{"name":"${name}","version":"${REGISTRY_VERSION}","main":"lib/index.js"}`;
@@ -75,10 +65,6 @@ const REGISTRY_PACKAGES: Record<string, { manifest: string; tarball: Uint8Array<
     return [name, { manifest, tarball: new Uint8Array(gzipSync(out)) }];
   }));
 
-/**
- * The only network a hosted `npm install` may reach under test is this
- * registry; every other origin is refused.
- */
 export async function registryOutbound(request: Request): Promise<Response> {
   const url = new URL(request.url);
 

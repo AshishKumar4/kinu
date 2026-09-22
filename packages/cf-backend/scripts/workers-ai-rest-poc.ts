@@ -1,17 +1,6 @@
 /**
- * POC: call Workers AI through Cloudflare's AI Gateway REST API instead of
- * the env.AI binding.
- *
- * Required:
- *   CLOUDFLARE_ACCOUNT_ID=<account id to charge>
- *   CLOUDFLARE_API_TOKEN=<api token or OAuth access token with AI access>
- *
- * Optional:
- *   CLOUDFLARE_AI_GATEWAY_ID=default
- *   CLOUDFLARE_AI_MODEL=@cf/deepseek-ai/deepseek-v4-pro-0813
- *
- * Run:
- *   bun packages/cf-backend/scripts/workers-ai-rest-poc.ts
+ * POC: Workers AI via the AI Gateway REST API instead of env.AI. Needs CLOUDFLARE_ACCOUNT_ID and
+ * CLOUDFLARE_API_TOKEN; optional CLOUDFLARE_AI_GATEWAY_ID, CLOUDFLARE_AI_MODEL.
  */
 
 import {

@@ -6,8 +6,7 @@ import { join } from 'node:path';
 import { scratchDir } from '@kinu.run/test-utils';
 import { SLATE_CLIENT_MODULE } from '@kinu.run/core/slates';
 
-// The client module is the `kinu:slate` import map target: the specifiers it
-// imports are exactly what the shell maps, and every name it uses is imported.
+// The `kinu:slate` import map target: its specifiers are exactly what the shell maps, and every used name is imported.
 test('the client module imports exactly react, react-dom/client and capnweb', async () => {
   const built = await build({
     stdin: { contents: SLATE_CLIENT_MODULE, loader: 'js', resolveDir: '.' },
@@ -20,8 +19,7 @@ test('the client module imports exactly react, react-dom/client and capnweb', as
     .toEqual(['capnweb', 'react', 'react-dom/client']);
 });
 
-// A substring assertion would pass over a name never imported; this mounts the
-// module for real under a DOM shim and calls the surface.
+// A substring assertion would pass over a name never imported, so this mounts the module under a DOM shim.
 test('the client module evaluates and its surface answers under a DOM shim', async () => {
   const dir = scratchDir('kinu-slate-client');
 
@@ -49,10 +47,7 @@ test('the client module evaluates and its surface answers under a DOM shim', asy
     postMessage(data: JsonValue) { seen.push(JSON.stringify(data)); },
   };
 
-  // The DOM shim lives only for this import: later files import modules whose
-  // top level reads the real window (`use-theme` calls `matchMedia`), and the
-  // shared `ui-module-globals` helper installs its shim only when `window` is
-  // ABSENT — so restoring has to delete the keys, not leave them undefined.
+  // Delete the keys, not leave them undefined: `ui-module-globals` installs its shim only when `window` is absent.
   const KEYS = ['window', 'document', 'WebSocket'] as const;
   const previous = new Map(KEYS.map((key) => [key, Object.getOwnPropertyDescriptor(globalThis, key)]));
 

@@ -1,12 +1,5 @@
-// A call that crosses into a Durable Object can fail for reasons that belong to
-// the platform rather than to the request — a dropped connection, a deploy
-// superseding the callee's isolate. These pin what the retry seam does with each
-// class, that the classes it must NOT touch are untouched, and that the paths
-// every request passes through survive one drop.
-//
-// The set of re-attemptable reset strings is not retyped here: it is read out of
-// PLATFORM_CATALOG['do.reset.transient'], the entry the classifier cites, so the
-// two cannot drift apart.
+// Pins the DO retry seam per failure class. Reset strings come from
+// PLATFORM_CATALOG['do.reset.transient'], the entry the classifier cites, so they cannot drift.
 import { describe, test, expect } from 'bun:test';
 import { PLATFORM_CATALOG } from '@kinu.run/core';
 import { retryTransientDO, classifyTransientDO } from '@kinu.run/core';
@@ -19,8 +12,7 @@ const USER = '0123456789abcdef0123456789abcdef';
 
 const CONNECTION_LOST = 'Network connection lost.';
 
-/** A call that fails `failures` times with `error`, then succeeds. Counts calls
- *  so "retried" is proven by attempts, never inferred from the outcome. */
+/** Fails `failures` times with `error`, then succeeds; counts calls so retries are proven. */
 function flaky<T>(failures: number, error: Error, value: T) {
   let seen = 0;
 
@@ -34,8 +26,6 @@ function flaky<T>(failures: number, error: Error, value: T) {
   };
 }
 
-/** Sequential answers: resolves each value in order, holding the last. Counts
- *  calls like flaky does. */
 function answers<T>(...values: T[]) {
   let seen = 0;
 
@@ -46,8 +36,7 @@ function answers<T>(...values: T[]) {
 }
 
 describe('classifyTransientDO — which failures belong to the platform', () => {
-  // The catalog entry is the source of truth for this class. If someone adds a
-  // fourth observable string to it, this fails until the matcher learns it.
+    // If the catalog entry gains a string, this fails until the matcher learns it.
   test('every reset string do.reset.transient declares is classified transient', () => {
     const observables = PLATFORM_CATALOG['do.reset.transient'].observable;
     expect(observables.length).toBeGreaterThan(0);
@@ -103,8 +92,6 @@ describe('classifyTransientDO — which failures belong to the platform', () => 
     expect(classifyTransientDO({ cause: a })).toBeNull();
   });
 
-  // The platform surfaces these as Errors; a thrown string is unclassifiable
-  // here for the same reason it is in classifyErrorCode, rather than a crash.
   test('a non-error throw is unclassifiable, not a crash', () => {
     expect(classifyTransientDO({ cause: CONNECTION_LOST })).toBeNull();
     expect(classifyTransientDO({ cause: null })).toBeNull();
@@ -155,8 +142,7 @@ describe('claimOwnedWorkspace — the gate on every authenticated workspace requ
     registryReads?: string[];
     claimError?: Error;
     capabilityError?: Error;
-    /** Reconciles that succeed before `capabilityError` applies — models a
-     *  removal that lands between requests. Default 0: always throws. */
+        /** Reconciles that succeed before `capabilityError` applies. Default 0: always throws. */
     capabilitySucceeds?: number;
     claims?: string[];
   }): WorkspaceOwnershipEnv<string, WorkspaceOwnerClaim> {
@@ -198,8 +184,6 @@ describe('claimOwnedWorkspace — the gate on every authenticated workspace requ
     };
   }
 
-  /** The gate's answer when the claim throws: every case below reads the
-   *  status it decided off the same call. */
   async function claimFailure(workspace: string, message: string): Promise<OwnedWorkspaceResult<WorkspaceOwnerClaim>> {
     return await claimOwnedWorkspace(envWith({ claimError: new Error(message) }), USER, workspace);
   }
@@ -237,8 +221,6 @@ describe('claimOwnedWorkspace — the gate on every authenticated workspace requ
     const env = envWith({ membershipAnswers: [true], registryReads: reads });
     expect((await claimOwnedWorkspace(env, USER, 'warm-cache')).ok).toBe(true);
     expect(reads).toEqual(['warm-cache']);
-    // The proof is earned by exactly one real registry read; the next request
-    // goes straight to the claim, which still verifies the caller's identity.
     expect((await claimOwnedWorkspace(env, USER, 'warm-cache')).ok).toBe(true);
     expect(reads).toEqual(['warm-cache']);
   });
@@ -264,11 +246,9 @@ describe('claimOwnedWorkspace — the gate on every authenticated workspace requ
     });
 
     expect((await claimOwnedWorkspace(env, USER, 'evicted-404')).ok).toBe(true);
-    // The proof is now stale: the UserDO's own registry re-check contradicts
-    // it, so the request reports 404 and the proof is discarded.
+    // The UserDO's registry re-check contradicts the stale proof: 404, proof discarded.
     await expect(claimOwnedWorkspace(env, USER, 'evicted-404'))
       .resolves.toMatchObject({ ok: false, status: 404 });
-    // The next request re-reads the registry for real and finds it gone.
     await expect(claimOwnedWorkspace(env, USER, 'evicted-404'))
       .resolves.toMatchObject({ ok: false, status: 404 });
     expect(reads).toEqual(['evicted-404', 'evicted-404']);

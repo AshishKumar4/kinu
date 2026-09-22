@@ -1,8 +1,4 @@
-// Preset adds on the real UserDO: `presetId` resolves the catalog entry, the
-// row carries it, and the OAuth variant answers the authorize URL the card
-// opens. The manager and the OAuth provider are the same fakes the lifecycle
-// suite runs against — `queueMcpAuthUrl` is the only new seam, standing in for
-// the authorization redirect the harness cannot perform.
+// Preset adds on the real UserDO; `queueMcpAuthUrl` stands in for the authorization redirect the harness cannot perform.
 import { Database } from 'bun:sqlite';
 import * as v from 'valibot';
 import { describe, expect, test } from 'bun:test';
@@ -17,9 +13,7 @@ import { auth } from '@modelcontextprotocol/sdk/client/auth.js';
 import { requestBodyText } from '@kinu.run/test-utils';
 import { durableObjectStorage } from './helpers/programmatic-host';
 
-// Imported AFTER the helper's mock registration (see `mockAgentsSdk`): mcp.ts
-// binds the provider class at load, so a static import here would hold the
-// real one and every DO it reaches would register DCR-shaped providers.
+// Imported after `mockAgentsSdk` registers: mcp.ts binds the provider class at load.
 const { RegisteredAppOAuthClientProvider } = await import('../src/user/user-do');
 
 function harness(options?: TestUserDOOptions): TestUserDO {
@@ -80,7 +74,6 @@ describe('an MCP preset add', () => {
 
     expect(row?.preset_id).toBe('github');
     expect(row?.name).toBe('GitHub');
-    // Sealed at rest: the column holds ciphertext, not the token.
     expect(v.parse(v.string(), row?.headers)).not.toContain('ghp_test');
 
     const [listed] = await h.userDO.userMcp_list(await testOwner());
@@ -147,8 +140,7 @@ describe('an MCP preset add', () => {
     expect(provider instanceof RegisteredAppOAuthClientProvider).toBe(true);
 
     if (provider instanceof RegisteredAppOAuthClientProvider) {
-      // The registration the SDK reads: the env's app answered as already
-      // registered — which is what makes `auth()` skip the /register call.
+      // Registered already, which makes `auth()` skip the /register call.
       expect(await provider.clientInformation()).toMatchObject({
         client_id: 'test-github-client-id',
         client_secret: 'test-github-client-secret',
@@ -156,8 +148,7 @@ describe('an MCP preset add', () => {
       expect(provider.clientMetadata.scope).toBe('repo read:user');
     }
 
-    // The SDK row names the registered app, not a client it minted — so a
-    // restore after eviction keeps pointing at the same registration.
+    // Names the registered app, so a restore after eviction keeps the same registration.
     expect(recordedMcpServers().find((s) => s.id === added.id)?.clientId)
       .toBe('test-github-client-id');
 
@@ -202,8 +193,7 @@ describe('an MCP preset add', () => {
         WHERE s.id = ?`, added.id,
     ).toArray();
 
-    // A custom add leaves NO row in the presets table — the join's NULL is
-    // the "no preset" answer, not a stored NULL.
+    // The join's NULL is the "no preset" answer, not a stored NULL.
     expect(row?.preset_id).toBeNull();
     const [listed] = await h.userDO.userMcp_list(await testOwner());
     expect(listed?.presetId).toBeNull();
@@ -225,10 +215,7 @@ describe('an MCP preset add', () => {
 });
 
 describe('a UserDO opened over storage from before the MCP presets lane', () => {
-  // The shipped user_mcp_servers DDL — every column the table carried before
-  // the lane, and none it does now. `CREATE TABLE IF NOT EXISTS` inside
-  // `initUserTables` is a no-op on this storage, so the object under test runs
-  // against exactly the shape a pre-lane account holds in production.
+  // The shipped pre-lane DDL: `CREATE TABLE IF NOT EXISTS` in `initUserTables` is a no-op on this storage.
   const SHIPPED_USER_MCP_SERVERS = `
     CREATE TABLE IF NOT EXISTS user_mcp_servers (
       id            TEXT PRIMARY KEY,
@@ -248,7 +235,7 @@ describe('a UserDO opened over storage from before the MCP presets lane', () => 
 
     const h = createTestUserDO({ storage: db });
 
-    // The production failure was `no such column: preset_id` on this read.
+    // Defends: `no such column: preset_id` on this read.
     expect(await h.userDO.userMcp_list(await testOwner())).toEqual([]);
 
     await h.userDO.userMcp_add(
@@ -292,10 +279,6 @@ describe('a cold activation over a preset row', () => {
     const [row] = sqlExec(first.db).exec(`SELECT id FROM user_mcp_servers`).toArray();
     const id = v.parse(v.string(), row?.id);
 
-    // The SDK's own row as a pre-provider build wrote it: plaintext headers,
-    // a stale dynamically-registered client id, and the callback URL a row in
-    // flight carries. The rewrite the woken object runs is what installs the
-    // provider — the seam the test is here to observe.
     seedSdkMcpServer(id, {
       type: 'streamable-http',
       requestInit: { headers: { Authorization: 'Bearer stale' } },
@@ -323,10 +306,7 @@ describe('a cold activation over a preset row', () => {
 });
 
 describe('the registered-app provider against the real SDK auth flow', () => {
-  /** An authorization server the way GitHub's runs: it advertises a
-   *  registration endpoint the flow must NEVER reach, answers the authorize
-   *  step by URL, and exchanges the code for a token. Every call lands in
-   *  `seen` so the assertions read what the SDK actually did. */
+  /** Advertises a registration endpoint the flow must never reach, as GitHub's does. */
   test('the flow skips registration and the token call authenticates the app', async () => {
     interface SeenCall {
       url: string;
@@ -353,9 +333,7 @@ describe('the registered-app provider against the real SDK auth flow', () => {
       }
 
       if (entry.url === 'https://mcp.example/register') {
-        // Answering here would mean the flow tried DCR — which is exactly the
-        // failure the registered-app provider exists to prevent, so a reach
-        // is recorded rather than answered.
+        // Reaching here would mean the flow tried DCR, so the reach is recorded rather than answered.
         return new Response('should not be called', { status: 500 });
       }
 
@@ -386,8 +364,6 @@ describe('the registered-app provider against the real SDK auth flow', () => {
       serverUrl: 'https://mcp.example/mcp', fetchFn,
     });
 
-    // The authorize URL carries the registered app and the preset's scope —
-    // the two things a token-fallback flow could never put on the URL.
     expect(redirect).toBe('REDIRECT');
     const authUrl = new URL(provider.authUrl ?? '');
     expect(authUrl.searchParams.get('client_id')).toBe('test-github-client-id');
@@ -405,8 +381,6 @@ describe('the registered-app provider against the real SDK auth flow', () => {
     expect(token?.body?.get('client_id')).toBe('test-github-client-id');
     expect(token?.body?.get('client_secret')).toBe('test-github-client-secret');
 
-    // The claim the whole shape rests on: the SDK's registration step exists
-    // and the AS would have honored it, and the flow never reached it.
     expect(seen.some((call) => call.url === 'https://mcp.example/register')).toBe(false);
   });
 });

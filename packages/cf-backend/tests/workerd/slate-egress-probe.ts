@@ -55,8 +55,7 @@ export class SlateEgressProbe extends Agent<Cloudflare.Env> {
   private prepare(): void {
     initWorkspaceSchema({
       execRaw: statement => { this.ctx.storage.sql.exec(statement); }, exec: this.ctx.storage.sql,
-      // Schema initialization uses scalar bindings; the SDK's tagged handle
-      // omits blob parameters from its type. No row result is cast here.
+      // The SDK's tagged handle omits blob parameters from its type; schema init binds scalars only.
       sql: <Row>(query: TemplateStringsArray, ...values: SqlValue[]): Row[] => this.sql<Row>(query,
         ...v.parse(v.array(v.union([v.string(), v.number(), v.boolean(), v.null()])), values)),
     });
@@ -91,10 +90,7 @@ export class SlateEgressProbe extends Agent<Cloudflare.Env> {
       await this.host.operation(ROOT_SLATE_CALLER, { op: 'commit', id: 'network' }));
 
     const digest = new ContentRef(committed.value.source).digest.value;
-    // This fixed key models an already-cached image that does not include the
-    // egress policy in its identity; the fixture seeds that cache entry
-    // directly and is not a production compatibility reader. A mediated start
-    // for the same workspace, source and caller must not reuse it.
+    // Models a cached image whose key omits the egress policy; a mediated start must not reuse it.
     const key = 'slate:' + this.ctx.id.toString() + ':' + slateCallerKey(ROOT_SLATE_CALLER) + '#network:' + digest;
     const writerId = crypto.randomUUID();
 

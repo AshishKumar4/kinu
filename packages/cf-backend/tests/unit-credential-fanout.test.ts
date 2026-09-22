@@ -1,6 +1,4 @@
-// Credential mutations must notify the user's active agents so each drops
-// its cached provider/model state (orchestrator.onCredentialsChanged) — a
-// hook nothing invokes leaves every live agent on a stale catalog.
+// Credential mutations must notify active agents to drop cached provider/model state.
 import { TEST_CREDENTIAL_ENCRYPTION_KEY } from './helpers/user-do';
 import { describe, test, expect } from 'bun:test';
 import { handleUserRequest, type UserRoutesEnv } from '../src/user/routes';
@@ -35,8 +33,7 @@ function setup() {
     },
   });
 
-  // The route hands the fan-out to `waitUntil` and calls nothing else on the
-  // context, so the suite holds the promises and joins them at the assertion.
+  // The route hands the fan-out to `waitUntil`; the suite holds the promises and joins them.
   const pending: Promise<unknown>[] = [];
   const ctx = { waitUntil(promise: Promise<unknown>) { pending.push(promise); } };
 

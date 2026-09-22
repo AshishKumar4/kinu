@@ -1,10 +1,5 @@
-// Bindings of the workerd test worker. Deliberately separate from
-// ../../env.d.ts, which declares the PRODUCTION `Env` and is compiled by
-// packages/cf-backend/tsconfig.json — this directory is its own tsc project
-// (see ./tsconfig.json) precisely so the two binding surfaces cannot drift into
-// each other. `cloudflare:test` and `cloudflare:workers` both read
-// `Cloudflare.Env`, which is why the augmentation targets that namespace and
-// not the bare global `Env`.
+// Workerd test-worker bindings, a separate tsc project from the production ../../env.d.ts so the two cannot drift.
+// Augments `Cloudflare.Env`, which `cloudflare:test` and `cloudflare:workers` both read.
 import type { VfsCred } from '@nimbus-sh/core/runtime/os-contracts.js';
 import type {
   AlarmDO, CacheWarmProbeDO, GatedDO, NeighbourDO, RetentionDO, SocketDO, StreamLifecycleDO, TransactionDO,
@@ -48,9 +43,7 @@ interface PlanAnnounceRpc extends Rpc.DurableObjectBranded {
   }>;
 }
 
-/** `public-surface-probe`'s control entrypoint. Declared here rather than
- *  imported: that file is compiled by the cf-backend project against the
- *  production `Env`, and a type import would drag the whole worker in here. */
+/** Declared, not imported: a type import would drag the production worker graph in here. */
 interface SurfaceControlRpc extends Rpc.WorkerEntrypointBranded {
   resetModelLog(): Promise<void>;
 }
@@ -154,9 +147,7 @@ interface SlateDurabilityProbeRpc extends Rpc.DurableObjectBranded {
 }
 
 
-/** The wire projection of `SlateCallResult` - spelled flat because declaring
- *  the recursive `JsonValue` in the RPC surface makes the stub's
- *  serializability check exceed the type-instantiation budget. */
+/** Spelled flat: the recursive `JsonValue` makes the stub's serializability check exceed the instantiation budget. */
 type ProbeAnswer = { ok: true; value: unknown } | { ok: false; reason: string; error?: string };
 
 interface SlateShareProbeRpc extends Rpc.DurableObjectBranded {
@@ -172,10 +163,7 @@ interface SlateShareProbeRpc extends Rpc.DurableObjectBranded {
 }
 
 
-/** The deploy run, as the runner reaches it. Declared here rather than
- *  imported from the probe, because the probe compiles under the PRODUCTION
- *  project (it subclasses `DeployRunDO`, whose `Env` is production's) and this
- *  project must not pull that closure in. */
+/** Declared, not imported: the probe compiles under the production project. */
 interface DeployRunProbeRpc extends Rpc.DurableObjectBranded {
   open(runId: string, keyDigest: string): Promise<void>;
   admits(runKey: string): Promise<boolean>;
@@ -211,10 +199,6 @@ interface DeployFakeControlRpc extends Rpc.WorkerEntrypointBranded {
   expireGrant(expiresIn: number): Promise<void>;
 }
 
-/** A session as the Updates gate reads one: an email, and the two fields that
- *  make an identity synthesized or non-interactive. Spelled here rather than
- *  imported for the same reason `SurfaceControlRpc` is — `AuthIdentity` is the
- *  production project's type. */
 interface UpdatesSession {
   userId: string;
   email: string;
@@ -227,9 +211,6 @@ interface UpdatesProbeRpc extends Rpc.WorkerEntrypointBranded {
   hit(method: string, path: string, session: UpdatesSession): Promise<{ status: number; body: string }>;
 }
 
-/** One call to the door's public routes, as a browser makes it. `setCookie`
- *  carries every `set-cookie` the answer wrote, because the binding under test
- *  IS a cookie. */
 interface DoorProbeAnswer {
   status: number;
   body: string;
@@ -273,36 +254,20 @@ declare global {
       USER_SOCKET_PROBE: DurableObjectNamespace<UserSocketProbeRpc>;
       SLATE_DURABILITY_PROBE: DurableObjectNamespace<SlateDurabilityProbeRpc>;
       ACCOUNT_RESET_PROBE: DurableObjectNamespace<AccountResetProbeRpc>;
-  // A devbox's readiness refusal must serialise over Workers RPC as data,
-  // not as a thrown class name. The probe is a narrow DO exposing only the
-  // two halves of `RestoreReadiness` plus the normalization control —
-  // deliberately NOT a sandbox stub, so it says nothing about containers.
+  // Readiness refusal must serialise over Workers RPC as data, not a thrown class name; not a sandbox stub.
   DEVBOX_NOT_READY_PROBE: DurableObjectNamespace<DevboxNotReadyProbeDO>;
-      /** The dynamic-Worker loader the eval sandbox runs in. */
       LOADER: WorkerLoader;
-      /** The production Worker entry, hosted by `public-surface-probe`: the
-       *  public route table as a peer of this runner, WebSocket upgrades
-       *  included. */
+      /** The production Worker entry hosted by `public-surface-probe`, WebSocket upgrades included. */
       PUBLIC_SURFACE: Fetcher;
-      /** That worker's one test-only entrypoint, for the shared model log. */
       SURFACE_CONTROL: Service<SurfaceControlRpc>;
-      /** The production deploy run, hosted by `deploy-probe` as the probe
-       *  subclass that adds two read-only windows onto its storage. */
+      /** Production deploy run, hosted by `deploy-probe` as a subclass with read-only storage windows. */
       DEPLOY_RUN_PROBE: DurableObjectNamespace<DeployRunProbeRpc>;
-      /** That worker's control entrypoint, for the deploy fake's state. */
       DEPLOY_FAKE: Service<DeployFakeControlRpc>;
-      /** The production `/api/updates` handlers on that worker, which is bound
-       *  like a deployed Kinu: a record, a refresh token of its own, and an
-       *  asset bundle carrying its build stamp. */
       UPDATES_PROBE: Service<UpdatesProbeRpc>;
-      /** The production deploy routes on that worker, called as a browser and
-       *  as the CLI call them: what a callback proves, and where the key is
-       *  allowed to be. */
       DEPLOY_DOOR_PROBE: Service<DeployDoorProbeRpc>;
     }
 
-    /** The test worker re-exports the production egress entrypoint, so
-     *  `exports.CodemodeEgress` is a loopback stub here as it is in production. */
+    /** `exports.CodemodeEgress` is a loopback stub here as in production. */
     interface GlobalProps {
       mainModule: {
         SlateBinding: typeof SlateBinding;

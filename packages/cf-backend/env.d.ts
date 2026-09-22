@@ -1,11 +1,4 @@
 // Generated from wrangler.jsonc bindings.
-//
-// Note on the AI binding: env.AI serves platform-side work billed to the
-// Worker's own account — embeddings, HTML→markdown, and the `ai-gateway`
-// provider's chat transport, which is pre-authenticated in-account and so needs
-// no API token. It is declared OPTIONAL because a deployment can omit the
-// binding; the providers that need it report themselves unavailable rather than
-// guessing (providers/ai-gateway.ts `resolvePlatformGateway`).
 import type { OrchestratorAgent } from "./src/orchestrator";
 import type { KinuSandbox } from "./src/kinu-sandbox";
 import type { UserDO } from "./src/user/user-do";
@@ -17,102 +10,56 @@ import type { SlateBinding } from "./src/slates/bindings";
 import type { MossaicShardDO, MossaicUserDO } from "./src/server";
 import type { VectorizeIndex as KinuVectorizeIndex } from "@kinu.run/core";
 
-// This file has top-level imports (for the DO class generics below), which
-// makes it a module — so `interface Env` here would be module-scoped, not
-// global. The Workers runtime + every DO/Worker references `Env` as a GLOBAL
-// type, so we declare it in the global scope explicitly.
+// Top-level imports make this a module, so `Env` is declared global explicitly.
 declare global {
   interface Env {
-    /** Workers AI binding. Absent ⇒ the `ai-gateway` provider and semantic
-     *  memory's embedder report unavailable; nothing silently degrades. */
+    /** Workers AI (in-account, no token). Absent ⇒ `ai-gateway` and the memory embedder report unavailable. */
     AI?: Ai;
-    /** The deployed Worker version — Cloudflare's own build identity for this
-     *  code. A durable turn claim records it for a turn that ran the BUILTIN
-     *  loop; OPTIONAL because a deployment made before the binding existed (and
-     *  every `wrangler dev` without it) has none, and the claim then records the
-     *  build as unknown rather than naming one nobody can verify. */
+    /** Worker version recorded on builtin-loop turn claims; absent (old deploys, `wrangler dev`) ⇒ unknown. */
     CF_VERSION_METADATA?: { id: string; tag: string; timestamp: string };
     /** Optional semantic-memory index. Without it, memory remains FTS-only. */
     MEMORY_VECTORS?: KinuVectorizeIndex;
-    /** The Nimbus runtime artifact store a HOSTED workspace installs its
-     *  toolchain from — `catalog/v1.json`, per-version manifests and
-     *  content-addressed blobs. An R2 BUCKET, not a marker string: the Nimbus
-     *  session DO calls `.get()` on it
-     *  (external/nimbus/packages/worker/src/runtime/runtime-catalog.ts:117).
-     *  Absent ⇒ a hosted `python3`/`ruby`/`clang` exits 127 and the shell says
-     *  the binding is missing; the local CLI is unaffected because it ships its
-     *  runtimes as npm packages. */
+    /** R2 store for hosted Nimbus runtimes (runtime-catalog.ts:117 calls `.get()`); absent ⇒ hosted
+     *  `python3`/`ruby`/`clang` exit 127. */
     NIMBUS_RUNTIME_CACHE?: R2Bucket;
     LOADER: WorkerLoader;
     OrchestratorAgent: DurableObjectNamespace<OrchestratorAgent>;
     /** Per-user DO: profile + agent registry + credentials + defaults. */
     UserDO: DurableObjectNamespace<UserDO>;
-    /** Singleton DO holding synthetic monitoring's open incidents + alert outbox. */
+    /** Singleton DO: synthetic monitoring incidents and alert outbox. */
     MonitorDO: DurableObjectNamespace<MonitorDO>;
-    /** Singleton DO holding the admin control plane's cross-user index (users,
-     *  workspaces, feedback) and the append-only admin audit log. Reachable only
-     *  from Worker code holding a capability token derived from
-     *  CREDENTIAL_ENCRYPTION_KEY — see control-plane/admin-caller.ts. */
+    /** Singleton admin control-plane index and audit log; reachable only via a capability derived from
+     *  CREDENTIAL_ENCRYPTION_KEY (control-plane/admin-caller.ts). */
     ControlPlaneDO: DurableObjectNamespace<ControlPlaneDO>;
-    /** Sandbox container DO — @cloudflare/sandbox. One per agent.
-     *  Binding name is fixed to "Sandbox" because the SDK's proxyToSandbox
-     *  looks up `env.Sandbox` directly. */
+    /** @cloudflare/sandbox container DO; the name is fixed because `proxyToSandbox` reads `env.Sandbox`. */
     Sandbox: DurableObjectNamespace<KinuSandbox>;
-    /** One guided self-deployment per run (docs/SELF-DEPLOY.md § The Cloudflare
-     *  door): the step ledger, the run key's digest, and the Cloudflare tokens
-     *  the run holds until the last step hands them to the new Worker. */
+    /** One guided self-deployment per run (docs/SELF-DEPLOY.md § The Cloudflare door). */
     DeployRunDO: DurableObjectNamespace<DeployRunDO>;
-    /** The user-level shared Drive's tenant objects (Mossaic). Both are the
-     *  SDK's fixed binding names; `createVFS(env, { tenant })` reads the first
-     *  and the tenant object reads the second. OPTIONAL because a test worker
-     *  that binds neither still composes a workspace: the `/shared` mount then
-     *  states its absence instead of failing the first file call. */
+    /** Mossaic Drive tenant objects (SDK-fixed names); optional, the `/shared` mount then states its absence. */
     MOSSAIC_USER?: DurableObjectNamespace<MossaicUserDO>;
     MOSSAIC_SHARD?: DurableObjectNamespace<MossaicShardDO>;
-    /** The Drive's tenant objects sign every listing cursor with this, read off
-     *  their own env inside the Durable Object (Mossaic
-     *  `worker/core/objects/user/list-files.ts`), so it is a Wrangler secret on
-     *  THIS Worker, never a var. Without it every Drive listing answers 500
-     *  (measured 2026-09-21 on the deployed build, `tests/first-run/drive`).
-     *  Generate with `openssl rand -base64 32`. */
+    /** Mossaic signs listing cursors with this inside its DO, so it is a Wrangler secret on this Worker;
+     *  without it every Drive listing answers 500 (measured 2026-09-21, `tests/first-run/drive`). */
     JWT_SECRET?: string;
-    /** Browser sessions, one-time OAuth state, and CLI browser-approval state.
-     *  Everything in it expires on its own; nothing in it is a source of truth. */
+    /** Sessions, OAuth state, CLI approval state; all self-expiring, never a source of truth. */
     AUTH_KV: KVNamespace;
-    /** R2 bucket holding sandbox /workspace snapshots; bytes stream
-     *  container → Durable Object → R2 through this binding, and no
-     *  credential ever enters the container. */
+    /** R2 sandbox `/workspace` snapshots; bytes stream through the DO so no credential enters the container. */
     BACKUP_BUCKET?: R2Bucket;
-    /** In-product feedback screenshots. The metadata row in ControlPlaneDO
-     *  carries the object key; the bytes never enter a DO row or an analytics
-     *  blob. Absent ⇒ note-only feedback still lands and a screenshot
-     *  submission is refused with a reason. */
+    /** Feedback screenshots; absent ⇒ note-only feedback lands and screenshots are refused. */
     FEEDBACK_BUCKET?: R2Bucket;
-    /** The worker release artifacts the self-deploy flow downloads. Absent ⇒
-     *  /downloads/kinu-worker-<version>.tar.gz answers 404 and a self-deploy
-     *  run stops at the artifact with that status; every other surface is
-     *  unaffected, which is why it is optional. */
+    /** Worker release artifacts; absent ⇒ downloads answer 404 and self-deploy stops at the artifact. */
     RELEASES_BUCKET?: R2Bucket;
-    /** Analytics Engine datasets — the fleet-level aggregate plane. All three
-     *  OPTIONAL so a deployment without the bindings degrades to
-     *  console-only diagnostics instead of throwing. Nothing user-authored is
-     *  written to them: the workspace name and the admin email are digested
-     *  before they become an index value. */
+    /** Analytics Engine datasets, optional; user-authored names are digested before indexing. */
     readonly AGENT_METRICS?: AnalyticsEngineDataset;
     readonly FEEDBACK_MARKERS?: AnalyticsEngineDataset;
     readonly CONTROL_PLANE_OPS?: AnalyticsEngineDataset;
-    /** Account the Analytics Engine SQL API is queried against, and the
-     *  Account-Analytics-Read token that authorizes the query. A var and a
-     *  Wrangler secret respectively. Either absent ⇒ the control plane's
-     *  metrics view reports itself unconfigured; nothing else degrades. */
+    /** Analytics SQL API account (var) and token (secret); either absent ⇒ metrics view unconfigured. */
     CLOUDFLARE_ACCOUNT_ID?: string;
     ANALYTICS_SQL_API_TOKEN?: string;
     AI_GATEWAY_URL: string;
-    /** Zone isolated previews are served under, one capability hostname per
-     *  exposed Workspace or Sandbox port. Empty disables previews. */
+    /** Zone for per-port preview hostnames; empty disables previews. */
     PREVIEW_HOST_SUFFIX: string;
-    /** Static asset binding — required for SPA fallback when the Worker
-     *  runs first on every route (see `run_worker_first` in wrangler). */
+    /** Static assets; needed for SPA fallback under `run_worker_first`. */
     ASSETS: Fetcher;
     /** Google OAuth client settings. Client secret must be a Wrangler secret. */
     GOOGLE_OAUTH_CLIENT_ID?: string;
@@ -122,32 +69,18 @@ declare global {
     GITHUB_OAUTH_CLIENT_ID?: string;
     GITHUB_OAUTH_CLIENT_SECRET?: string;
     GITHUB_OAUTH_SCOPES?: string;
-    /** Registered OAuth apps for `oauth-app` MCP presets — the vendored
-     *  identity the server's sign-in runs under (GitHub's remote MCP, Google
-     *  Workspace MCP). Wrangler secrets on the deployment; either absent ⇒
-     *  that preset falls back to a token, or is not offered. */
+    /** OAuth apps for `oauth-app` MCP presets (secrets); absent ⇒ token fallback or not offered. */
     MCP_GITHUB_CLIENT_ID?: string;
     MCP_GITHUB_CLIENT_SECRET?: string;
     MCP_GOOGLE_CLIENT_ID?: string;
     MCP_GOOGLE_CLIENT_SECRET?: string;
-    /** The Worker's root secret for the user plane. A Wrangler secret, never a
-     *  var. It seals the credential store (`user_credentials.value`) and, under
-     *  a separate label, derives the owner capability every privileged UserDO
-     *  call presents — so WITHOUT IT THE WORKER CANNOT SERVE A SIGNED-IN USER
-     *  AT ALL: no sign-in, no CLI, no credentials. Public routes still answer.
-     *  Generate with `openssl rand -base64 32`. */
+    /** Root user-plane secret: seals credentials and derives the owner capability; without it no
+     *  signed-in user can be served. Generate with `openssl rand -base64 32`. */
     CREDENTIAL_ENCRYPTION_KEY?: string;
-    /** Retired credential encryption keys, comma-separated, used for reading
-     *  only. Populate during a rotation and drop once every UserDO has been
-     *  touched — see user/credential-envelope.ts. */
+    /** Retired keys for reading only during rotation (user/credential-envelope.ts). */
     CREDENTIAL_ENCRYPTION_KEY_PREVIOUS?: string;
-    /** Signs the route capability every public webhook delivery URL carries.
-     *  A Wrangler secret, never a var. Without it a workspace cannot be given a
-     *  webhook: creation answers 503, and every delivery URL answers 404
-     *  without waking a workspace. Rotating it revokes every URL already given
-     *  to an external system; owners re-read the new one from the triggers
-     *  list. Generate with `openssl rand -base64 32`.
-     *  See events/webhook-route.ts. */
+    /** Signs webhook delivery URLs (secret); without it creation answers 503 and URLs 404. Rotation
+     *  revokes every URL (events/webhook-route.ts). */
     WEBHOOK_ROUTE_SECRET?: string;
     /** Cloudflare account OAuth client settings. Client secret must be a Wrangler secret. */
     CLOUDFLARE_OAUTH_CLIENT_ID?: string;
@@ -156,85 +89,37 @@ declare global {
     CLOUDFLARE_OAUTH_TOKEN_AUTH_METHOD?: string;
     /** AI Gateway id used with the user's Cloudflare OAuth token for Workers AI. */
     CLOUDFLARE_AI_GATEWAY_ID?: string;
-    /** The self-managed PUBLIC OAuth client the owner registered for the
-     *  self-deploy door. A var, not a secret: a PKCE client has no secret.
-     *  Absent ⇒ /deploy renders the Cloudflare half as not configured and
-     *  refuses to start a run; `kinu deploy local` is unaffected. */
+    /** Public PKCE client for the self-deploy door (a var: no secret); absent ⇒ /deploy is not configured. */
     CLOUDFLARE_DEPLOY_CLIENT_ID?: string;
-    /** What this deployment knows about itself, as JSON — the answers its first
-     *  run was given, the address it took, the build it installed and the
-     *  channel it pulls from. Written onto the Worker by the self-deploy flow's
-     *  handover step, so kinu.run itself has none: absent ⇒ `/updates` says
-     *  this Kinu was not installed by the flow and offers nothing. */
+    /** This deployment's self-deploy record (JSON); absent ⇒ `/updates` offers nothing. */
     KINU_DEPLOYMENT_RECORD?: string;
-    /** This deployment's own Cloudflare refresh token, written by the same
-     *  handover step. It is what makes an update a PULL: the deployment spends
-     *  its own key on itself and kinu.run holds nothing. Absent ⇒ `/updates`
-     *  reads the channel and can install nothing. */
+    /** This deployment's own Cloudflare refresh token, so updates are pulls; absent ⇒ install nothing. */
     KINU_SELF_DEPLOY_REFRESH_TOKEN?: string;
-    /** Names the ONE identity a caller may act as without an OAuth browser
-     *  session. Says WHICH identity, never that anyone may have it: off a
-     *  developer's own machine, `DEV_IDENTITY_SECRET` is what grants it.
-     *  Production names the eval service account here. */
+    /** The one identity usable without OAuth; off localhost it also needs `DEV_IDENTITY_SECRET`. */
     DEV_USER_EMAIL?: string;
-    /** The shared secret a caller presents in `x-kinu-dev-identity` to act as
-     *  `DEV_USER_EMAIL` on a deployment that is not localhost. Set with
-     *  `wrangler secret put DEV_IDENTITY_SECRET`; without it a
-     *  published deployment grants no synthetic identity at all. */
+    /** Presented in `x-kinu-dev-identity` to act as `DEV_USER_EMAIL` off localhost. */
     DEV_IDENTITY_SECRET?: string;
-    /** Cloudflare Email Sending binding (`send_email` in wrangler.jsonc).
-     *  OPTIONAL — without it, outbound email (thread replies, owner
-     *  notifications) skips quietly. */
+    /** Email Sending (`send_email`); optional, outbound email skips without it. */
     EMAIL?: SendEmail;
-    /** The mail domain agents live on (`<agent-name>@EMAIL_DOMAIN`). Must be
-     *  onboarded to Email Sending + have an Email Routing catch-all rule
-     *  pointing at this Worker — see docs/EMAIL-INGRESS.md. OPTIONAL: unset
-     *  disables the Mission Inbox. */
+    /** Agent mail domain; needs Email Sending and a catch-all route (docs/EMAIL-INGRESS.md). */
     EMAIL_DOMAIN?: string;
-    /** Public origin for unauthenticated CLI install/auth endpoints. Also the
-     *  origin synthetic monitoring probes. */
+    /** Origin for unauthenticated CLI install/auth endpoints and synthetic monitoring. */
     CLI_PUBLIC_ORIGIN?: string;
-    /** Where synthetic-monitoring alerts go. Unset leaves the monitor
-     *  observing and recording, but silent. */
     OPS_ALERT_EMAIL?: string;
-    /** Browser approval origin for CLI auth. In production this should be the
-     *  public app origin so approval uses the user's browser session. */
+    /** CLI approval origin; in production the app origin, so the browser session is used. */
     CLI_APPROVAL_ORIGIN?: string;
-    /** Verified session emails allowed to reach the admin control plane,
-     *  comma-separated. A var, not a secret: an allowlist nobody can read is an
-     *  allowlist nobody can audit, and these are addresses rather than
-     *  credentials. Unset or empty ⇒ the control plane is unreachable, which is
-     *  the correct default for a deployment that has not named its operators.
-     *  A `provider: 'dev'` identity is refused whatever this contains.
-     *  It is the INNER half of the gate: `CONTROL_PLANE_ACCESS_*` below is the
-     *  outer one, and both must admit the same address. */
+    /** Admin email allowlist (a var, auditable); unset ⇒ control plane unreachable; `dev` identities are
+     *  refused. Inner half of the gate with `CONTROL_PLANE_ACCESS_*`. */
     CONTROL_PLANE_ADMINS?: string;
-    /** The Cloudflare Access organization guarding `/control*` and
-     *  `/api/control*`: `https://<team-name>.cloudflareaccess.com`. Becomes both
-     *  the JWKS origin the assertion's signature is checked against and the
-     *  pinned `iss` — a signature alone proves only that SOME Access org signed
-     *  the token, so without this any Cloudflare customer's org is a valid signer
-     *  for this admin plane. A var, not a secret: it is a public hostname that
-     *  appears in every token, and one nobody can read is one nobody can audit.
-     *  Unset or empty ⇒ the admin plane answers 404 to everyone, including its
-     *  operators. Read from the Zero Trust dashboard when the Access application
-     *  is created; `scripts/infra-verify.ts` blocks a production deploy without
-     *  it. See control-plane/access-gate.ts. */
+    /** Cloudflare Access org for `/control*`: JWKS origin and pinned `iss`, else any org is a valid signer.
+     *  Unset ⇒ 404 to everyone; `scripts/infra-verify.ts` requires it (control-plane/access-gate.ts). */
     CONTROL_PLANE_ACCESS_TEAM_DOMAIN?: string;
-    /** The audience (AUD) tag of that Access application — the 64-hex value the
-     *  dashboard shows beside it. Pinned as the assertion's `aud`, because within
-     *  one organization a token minted for a DIFFERENT application is still
-     *  validly signed by the same keys; the AUD is the only thing that scopes it
-     *  to this one. A var for the same reason as the team domain: it is an
-     *  identifier carried in the clear by every token, not a credential. Unset or
-     *  empty ⇒ the admin plane answers 404 to everyone. */
+    /** Access application AUD, pinned as `aud`: same-org tokens for other apps share signing keys. Unset ⇒ 404. */
     CONTROL_PLANE_ACCESS_AUD?: string;
   }
 
   namespace Cloudflare {
-    /** What `exports` (the `enable_ctx_exports` loopback bindings) is typed as.
-     *  Only the entrypoint this code reads is declared: naming the whole main
-     *  module would drag every Durable Object class into one recursive type. */
+    /** `enable_ctx_exports` loopback types; only read entrypoints, to avoid a recursive DO type. */
     interface GlobalProps {
       mainModule: {
         CodemodeEgress: typeof CodemodeEgress;

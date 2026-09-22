@@ -1,29 +1,11 @@
-// The two Cloudflare-side ceilings that killed detached work, and the lanes that
-// replace them.
-//
-// Production evidence (owner screenshot, workspace my-ai-engineer-b3b8b792): a
-// tee'd training script through `shell` at `runtime: 'sandbox'` returned
-// `CommandError: … Command timeout after 60000ms`. Core sends no such number,
-// and dropping it is not enough on this SDK, which is what these tests pin:
-//
-//   * The SDK's plain `exec` is bounded whether or not we ask. The container
-//     enforces a command deadline, and the request carrying it rides the
-//     non-streaming path whose own ceiling is 120s — the SDK's git client raises
-//     `requestTimeoutMs` explicitly for a long clone rather than trusting that
-//     default, which is the proof the ceiling is real. So `SandboxHandle.exec`
-//     with no `timeout` must reach the PROCESS lane, not `exec`.
-//   * `@cloudflare/codemode` gives a dynamic Worker a 60s execution deadline by
-//     default, raced against the program as a generated `setTimeout`. An
-//     `eval` program spends its life AWAITING host tool calls, so that
-//     deadline killed the caller of long work — after the 30s detach had already
-//     told the model the work was "still running, not cancelled".
+// Defends: detached work killed by `Command timeout after 60000ms` (owner screenshot). The SDK's
+// plain `exec` is bounded (`sandbox.exec.request_ceiling_ms`), so untimed exec takes the process lane;
+// codemode's default deadline killed `eval` programs awaiting long host tool calls.
 import { describe, test, expect } from "bun:test";
 import type { KinuSandbox } from "../src/kinu-sandbox";
 import { NO_TIMER_DEADLINE_MS } from "@kinu.run/core";
 import { adaptCloudflareSandbox } from "../src/sandbox-exec-lane";
-// codemode reaches `cloudflare:workers` at load; the preload's boundary stub
-// serves it. The exec-lane adapter needs no stub at all, which is the point
-// of it living outside `runtime.ts`.
+// codemode reaches `cloudflare:workers` at load; the preload's boundary stub serves it.
 import { KinuSandboxExecutor } from "../src/codemode-sandbox";
 
 interface ProcessDouble {
@@ -41,15 +23,8 @@ interface BoxCalls {
 }
 
 /**
- * The SDK surface `adaptCloudflareSandbox` consumes, over the process lane.
- * `waitsBeforeExit` models the ONE thing that can interrupt the observation: the
- * process log stream idles out after 300s of silence while the process is still
- * perfectly alive. Each entry is one such interruption.
- *
- * `holdsUntilKilled` is the cancellation case: the command never finishes on its
- * own, so the only thing that can produce an exit code is the kill. That is what
- * makes the ORDER observable — a cancellation reported before `exited` flips
- * would be a cancellation reported over a live process.
+ * `waitsBeforeExit`: log-stream idle-outs while the process is alive. `holdsUntilKilled`: only the
+ * kill yields an exit code, so a cancellation reported before `exited` flips is observable.
  */
 function fakeBox(input: {
   waitsBeforeExit?: number;
@@ -123,22 +98,15 @@ function fakeBox(input: {
     notePortRemoved: async () => undefined,
   };
 
-  // Unchecked and named: `KinuSandbox` is a Durable Object class, so a test
-  // cannot construct one. The double rides the prototype the way
-  // helpers/jsrpc-stub.ts builds stubs — the adapter reaches only methods, and
-  // exactly the members above are reachable, which is the boundary under test.
+  // `KinuSandbox` is a DO class a test cannot construct; only the members above are reachable.
   const sdk: KinuSandbox = Object.create(box);
 
-  // The egress preflight is a no-op here: which LANE a command takes is what
-  // this file measures, and the preflight has its own suite
-  // (unit-egress-interception.test.ts).
+  // No-op egress preflight: tested in unit-egress-interception.test.ts.
   return {
     calls,
-    /** True once the process has an exit code, which is the only evidence a
-     *  cancellation may be reported on. */
+    /** The only evidence a cancellation may be reported on. */
     hasExited: () => exited,
-    // `null`: this box exposes no ports, and the lane refuses to mint a preview
-    // URL it cannot publish for the edge to verify.
+    // `null`: this box exposes no ports, so the lane mints no preview URL.
     handle: adaptCloudflareSandbox(sdk, async () => {}, null),
   };
 }
@@ -160,9 +128,7 @@ describe("adaptCloudflareSandbox — which lane a command gets", () => {
   test("a caller that ASKED for a deadline still gets the bounded exec", async () => {
     const box = fakeBox();
 
-    // A neutral command: the property under test is the LANE (bounded exec vs
-    // process), not the program. A git-shaped string here trips the
-    // no-ambient-git-in-tests rule, whose matcher cannot see this is a fake.
+    // Not git-shaped: that trips no-ambient-git-in-tests, which cannot see this is a fake.
     const res = await box.handle.exec("bun test --changed", { cwd: "/workspace", timeout: 5_000 });
 
     expect(box.calls.exec).toEqual([{ command: "bun test --changed", timeout: 5_000 }]);
@@ -171,8 +137,7 @@ describe("adaptCloudflareSandbox — which lane a command gets", () => {
   });
 
   test("a silent process outlives the log stream's idle window instead of failing", async () => {
-    // Three idle-outs is ~15 minutes of silence. Nothing was killed, so the
-    // adapter looks again; only the process's own exit ends the wait.
+    // Nothing was killed, so the adapter looks again; only the process's own exit ends the wait.
     const box = fakeBox({ waitsBeforeExit: 3, exitCode: 0 });
 
     const res = await box.handle.exec("bash quiet-build.sh", { cwd: "/workspace" });
@@ -199,11 +164,7 @@ describe("adaptCloudflareSandbox — which lane a command gets", () => {
 
 describe("adaptCloudflareSandbox — a pending readiness refuses before dispatch", () => {
   test("a box still restoring answers `unavailable` and the command never exists", async () => {
-    // The CF-side half of the readiness contract: `resolveReadiness` returns
-    // `pending` as DATA (the shape that survives the DO RPC), and the adapter
-    // converts it to the classified refusal BEFORE `run()` — so the reason
-    // reaches the caller as `error.code`, never as prose it would have to
-    // re-parse, and the operation is not attempted at all.
+    // `pending` arrives as data (survives DO RPC) and is refused before `run()` as `error.code`.
     const reason = 'this devbox has no attached work directory: stale owner, retry armed. '
       + 'A retry is already under way; operations are refused until it lands.';
  
@@ -222,8 +183,7 @@ describe("adaptCloudflareSandbox — a pending readiness refuses before dispatch
     });
     expect(calls).toEqual({ exec: [], started: [], killed: [] });
 
-    // A restored box admits the same call — the refusal is the pending kind,
-    // not a blanket gate failure.
+    // The refusal is the pending kind, not a blanket gate failure.
     const ready: KinuSandbox = Object.create({
       resolveReadiness: async () => ({ kind: 'restored' as const }),
       exec: async () => ({ stdout: 'ok', exitCode: 0 }),
@@ -234,18 +194,15 @@ describe("adaptCloudflareSandbox — a pending readiness refuses before dispatch
   });
 });
 
-// KINU-033. An abort has to reach the PROCESS, not just the WAIT: a core that
-// races the signal, returns, and tells the agent the command "may still finish
-// inside the container" leaves a turn moving on while an unwatched build keeps
-// writing to /workspace. The process lane has an id, and an id has a kill.
+// KINU-033. An abort must kill the process, not just end the wait: an unwatched build keeps
+// writing to /workspace otherwise.
 describe("adaptCloudflareSandbox — cancellation reaches the process", () => {
   test("an abort kills THAT process and reports only once it is gone", async () => {
     const box = fakeBox({ holdsUntilKilled: true });
     const controller = new AbortController();
 
     const pending = box.handle.exec("bash forever.sh", { signal: controller.signal });
-    // The kill is what ends this process, so a report that arrives without one
-    // is a report over live work.
+    // Only the kill ends this process, so a report without one is over live work.
     controller.abort();
 
     await expect(pending).rejects.toMatchObject({
@@ -267,8 +224,7 @@ describe("adaptCloudflareSandbox — cancellation reaches the process", () => {
   });
 
   test("a kill that FAILS is reported as itself, never as a cancellation", async () => {
-    // The container refused, so the process is still there. Reporting
-    // `cancelled` over it is the exact defect this replaced.
+    // The container refused, so the process is still there; `cancelled` would be a lie.
     const box = fakeBox({ holdsUntilKilled: true, killFails: true });
     const controller = new AbortController();
 
@@ -288,17 +244,13 @@ describe("adaptCloudflareSandbox — cancellation reaches the process", () => {
   });
 });
 
-// KINU-034 is not covered here: it is enforced in the container object reached
-// by every workspace caller, and its tests live with it —
-// packages/devbox/tests/resource-lane.test.ts. A queue local to an adapter
-// cannot serialize calls arriving through another handle to the same container.
+// KINU-034 is enforced in the container object: packages/devbox/tests/resource-lane.test.ts.
 
 describe("the codemode program carries no execution deadline of its own", () => {
   test("the generated dynamic Worker gets no 60s kill", async () => {
     let generated = "";
 
-    // The real generated program is the evidence: codemode races it against a
-    // `setTimeout(… "Execution timed out")` built from its `timeout` option.
+    // codemode races the program against a `setTimeout(… "Execution timed out")` from its `timeout`.
     const loader = {
       load: (spec: { modules: Record<string, string> }) => {
         generated = spec.modules["executor.js"] ?? "";
@@ -307,17 +259,14 @@ describe("the codemode program carries no execution deadline of its own", () => 
       },
     };
 
-    // Unchecked and named: `WorkerLoader` is a workerd binding with no
-    // constructible form; codemode reaches only `load`. The double rides the
-    // prototype the way helpers/jsrpc-stub.ts builds stubs.
+    // `WorkerLoader` is a workerd binding with no constructible form; codemode reaches only `load`.
     const workerLoader: WorkerLoader = Object.create(loader);
     const executor = new KinuSandboxExecutor({ loader: workerLoader, egress: null });
 
     await executor.execute("return 1", []);
 
     expect(generated).toContain("Execution timed out");
-    // The regression: codemode's own default put 60000 here, so a detached
-    // program died 30s after the model was promised it was still running.
+    // codemode's own default deadline killed detached programs the model was told were running.
     expect(generated).not.toContain("60000");
     expect(generated).toContain(String(NO_TIMER_DEADLINE_MS));
   });

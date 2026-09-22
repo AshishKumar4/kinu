@@ -1,27 +1,7 @@
 /**
- * A HOSTED workspace's `git clone` reaches its facet, and its `npm install`
- * streams.
- *
- * Driven through the production `createHostedWorkspace` — not a shim of it —
- * over a fake Durable Object ctx carrying `.exports` (the REAL `SupervisorRPC`
- * class over the preload's `cloudflare:workers` stub) plus a fake `env.LOADER`
- * that materialises the assembled facet module. The clone's network half is
- * stubbed (the `git-bundle.js` the facet imports), so the suite is hermetic;
- * everything else is real: the workspace, the SqliteVFS the clone writes
- * into, the shell `git` command, the clone driver (`execGitNetwork`), the
- * assembled facet module invoked through `fetch` exactly as `LOADER.load()`
- * hands it back, the supervisor entrypoint, and the W7 write waves.
- *
- * ORDER MATTERS in this file, twice. `@nimbus-sh/platform` holds the fabric
- * composition and the adopted `ctx.exports` in two first-write-wins singletons
- * with no reset. So the Worker entry (`../src/server`) is loaded before any
- * workspace, as production evaluates it: its re-export of `SupervisorRPC` once
- * reached `@nimbus-sh/worker`'s root, whose module scope composes the HOSTED
- * product's fabric — no `hostNamespace`, so `NIMBUS_SESSION` — and that write
- * beat the host's own `HOST_FABRIC_COMPOSITION`; every clone then asked for a
- * namespace this Worker does not bind. Alone, this suite was green over that
- * defect. And the refusal test runs FIRST, before any workspace adopts an
- * exports bag; move it after and the red direction cannot fire.
+ * A hosted workspace's `git clone` reaches its facet and `npm install` streams, through the production `createHostedWorkspace`.
+ * Order matters: `@nimbus-sh/platform` holds first-write-wins singletons with no reset, so `../src/server` loads before any
+ * workspace (defends a `NIMBUS_SESSION` composition beating `HOST_FABRIC_COMPOSITION`), and the refusal test runs first.
  */
 import { afterEach, describe, expect, test } from 'bun:test';
 import { Database } from 'bun:sqlite';
@@ -37,8 +17,7 @@ import { CRED_SESSION_USER } from '@nimbus-sh/core/runtime/os-contracts.js';
 import { SupervisorRPC } from '@nimbus-sh/worker/workspace-host';
 import { mockAgentsSdk } from './helpers/agents-sdk';
 
-// The entry's module graph reaches `agents`, which the harness stands in for;
-// the load is dynamic so the stand-in is registered first.
+// Dynamic so the `agents` stand-in is registered first.
 mockAgentsSdk();
 
 await import('../src/server');
@@ -47,19 +26,12 @@ type SupervisorProps = { doId: string; pid: number; writerId?: string; mutationO
 
 type SupervisorBinding = InstanceType<typeof SupervisorRPC>;
 
-/** The bag workerd hangs on a Durable Object's `ctx`, reduced to the one entry
- *  the fabric reads: the composed supervisor entrypoint, which mints one
- *  binding per hosted program. */
 interface ActorExports {
   readonly SupervisorRPC: (binding: { readonly props: SupervisorProps }) => SupervisorBinding;
 }
 
-/** The two bindings a hosted workspace and its supervisor entrypoint read,
- *  with the host namespace minting the string ids this suite addresses by. */
 type ActorBindings = HostedWorkspaceEnv<string>;
 
-/** What the fabric hands a facet as its env: the supervisor binding it minted,
- *  beside whatever else the assembled boot carries. */
 const FacetEnvSchema = v.looseObject({
   SUPERVISOR: v.optional(v.instance(SupervisorRPC)),
 });
@@ -80,12 +52,7 @@ afterEach(() => {
   for (const database of databases.splice(0)) database.close();
 });
 
-/**
- * One Durable Object as the platform gives it: a real SQLite database with a
- * real `transactionSync`, its key-value half over a fresh map, and every other
- * member refusing by name. `exports` is the bag workerd hangs on `ctx` —
- * present for the actor under test, absent for the red direction.
- */
+/** `exports` is present for the actor under test, absent for the red direction. */
 function actorCtx(exports?: ActorExports): DurableObjectState {
   const database = new Database(':memory:');
   databases.push(database);
@@ -93,8 +60,6 @@ function actorCtx(exports?: ActorExports): DurableObjectState {
   const storage = durableObjectStorage({
     sql: durableSqlStorage(database),
     transactionSync: <T,>(closure: () => T): T => database.transaction(closure)(),
-    // The facet manager's launch journal and port reservations live in the
-    // object's key-value storage; a fresh map per actor, as a fresh object.
     ...durableStorage(new Map()),
   });
 
@@ -115,22 +80,11 @@ interface Actor {
   readonly dispatched: DispatchedOp[];
 }
 
-/**
- * The hosted workspace inside its actor, with the two halves a facet needs:
- * an exports bag minting REAL supervisor bindings, and a LOADER running the
- * REAL assembled facet module against a stubbed git bundle.
- *
- * The host namespace is the deployment's own `OrchestratorAgent` binding —
- * never `NIMBUS_SESSION` — and the object it resolves to mounts the one
- * method production mounts, forwarding to the hosted workspace exactly as
- * `OrchestratorAgent.supervisorOp` does.
- */
+/** The host namespace is the deployment's `OrchestratorAgent` binding, never `NIMBUS_SESSION`. */
 function hostActor(): Actor {
   const facetLoads: { supervisorBound: boolean }[] = [];
   const supervisorBindings: SupervisorProps[] = [];
   const dispatched: DispatchedOp[] = [];
-  // Set by `createHostedWorkspace` below; the namespace object closes over
-  // the cell the way the orchestrator closes over its own hosted workspace.
   let hosted: HostedWorkspace | undefined;
 
   const loader = {
@@ -155,14 +109,10 @@ function hostActor(): Actor {
         }),
       };
     },
-    // The facet manager composes over `LOADER.get` too — the cached-worker
-    // form its isolated esbuild transform uses — and nothing here transforms.
     get() { throw new Error('no cached worker is served by this host'); },
   };
 
-  // Unchecked and named: `WorkerLoader` is a workerd binding with no
-  // constructible form, and the fabric reaches only `load`. The double rides
-  // the prototype the way helpers/jsrpc-stub.ts builds stubs.
+  // Unchecked: `WorkerLoader` is a workerd binding with no constructible form, and the fabric reaches only `load`.
   const LOADER: WorkerLoader = Object.create(loader);
 
   const actorEnv: ActorBindings = {
@@ -189,9 +139,7 @@ function hostActor(): Actor {
     SupervisorRPC: ({ props }: { props: SupervisorProps }) => {
       supervisorBindings.push(props);
 
-      // The supervisor reads the `props` the fabric minted this binding with,
-      // and the two throwing members say what this suite claims: it schedules
-      // no background work and swallows no exception.
+      // The throwing members assert the supervisor schedules no background work and swallows no exception.
       const bindingCtx: ExecutionContext<SupervisorProps> = Object.assign(workerContext(), {
         props,
         waitUntil: () => { throw new Error('unexpected supervisor background work'); },
@@ -202,9 +150,7 @@ function hostActor(): Actor {
     },
   };
 
-  // The ctx the workspace is composed over IS the ctx carrying `.exports` —
-  // in a Durable Object that object is one and the same, and the adoption
-  // reads it off `transactions`.
+  // In a Durable Object the workspace's ctx and the one carrying `.exports` are the same object.
   hosted = createHostedWorkspace({
     ctx: actorCtx(exports),
     env: actorEnv,
@@ -216,12 +162,7 @@ function hostActor(): Actor {
 
 
 
-/**
- * The git bundle the facet imports. Deterministic stand-in for
- * isomorphic-git's network half: it writes a pack, an index, a HEAD and a ref
- * through the facet's own buffered fs adapter, which is what turns into W7
- * waves against the host.
- */
+/** Deterministic stand-in for isomorphic-git's network half, writing through the facet's buffered fs adapter. */
 const GIT_BUNDLE_STUB = `
 const enc = new TextEncoder();
 export const gitHttp = {};
@@ -250,15 +191,13 @@ export const git = {
 };
 `;
 
-/** Bindings for the red direction: nothing may spawn and nothing may reach a host. */
 function refusingBindings(): ActorBindings {
   const spawned = (): never => { throw new Error('no facet may spawn'); };
 
   return {
     NIMBUS_RUNTIME_CACHE: undefined,
     ASSETS: undefined,
-    // `load` is the member the facet manager checks for beside `get`, which
-    // the platform's own `WorkerLoader` declaration omits.
+    // The platform's `WorkerLoader` declaration omits `load`, which the facet manager checks for.
     LOADER: Object.assign({ get: spawned }, { load: spawned }),
     OrchestratorAgent: {
       idFromName: (name) => name,
@@ -276,9 +215,6 @@ describe('hosted workspace facets', () => {
       previewUrl: async () => ({ unavailable: 'no preview host in this test' }),
     });
 
-    // The runtime refuses to compose over an object that exports no supervisor
-    // entrypoint, so nothing runs — not a clone that refuses at spawn time, but
-    // a host whose every command fails naming what is missing.
     await expect(hosted.box('red').exec('git clone https://example.invalid/hello.git /home/user/hello'))
       .rejects.toThrow('supervisor entrypoint');
   });
@@ -290,10 +226,8 @@ describe('hosted workspace facets', () => {
     expect(output).not.toContain(REFUSAL);
     expect(clone.exitCode).toBe(0);
 
-    // The facet path was taken, and it carried a SUPERVISOR binding.
     expect(actor.facetLoads.length).toBe(1);
     expect(actor.facetLoads[0]?.supervisorBound).toBe(true);
-    // Every binding the supervisor minted named this host and this process.
     expect(actor.supervisorBindings.length).toBeGreaterThan(0);
 
     for (const props of actor.supervisorBindings) {
@@ -301,8 +235,6 @@ describe('hosted workspace facets', () => {
       expect(Number.isInteger(props.pid) && props.pid > 0).toBe(true);
     }
 
-    // Every filesystem call arrived through the ONE method the host mounts,
-    // stamped with the process behind it.
     expect(actor.dispatched.length).toBeGreaterThan(0);
 
     for (const call of actor.dispatched) {
@@ -316,15 +248,11 @@ describe('hosted workspace facets', () => {
     const writeOp = actor.dispatched.find((call) => call.op === 'writeBatchStream');
     expect(writeOp?.mutationOwner).toBeString();
 
-    // An operation this host does not serve does not exist. `SUPERVISOR_OPS`
-    // is the table `SupervisorOpName` is derived from, and every one of its
-    // names is served, so the only name that can reach this refusal is one
-    // that arrived as wire data and was never in the type.
+    // Every `SUPERVISOR_OPS` name is served, so only wire data outside the type can reach this refusal.
     const unserved = actor.hosted.supervisorOp({ op: 'somethingElse', args: [] });
     await expect(unserved).rejects.toThrow("supervisor op: 'somethingElse' names no operation this host serves");
     await expect(unserved).rejects.toMatchObject({ code: 'bad_input' });
 
-    // The bytes landed in the actor's OWN filesystem.
     const session = await actor.hosted.bundle.session();
     const vfs = session.vfs.as(CRED_SESSION_USER);
     expect(vfs.readFile('home/user/hello/.git/HEAD')).toEqual(new TextEncoder().encode('ref: refs/heads/main\n'));
@@ -334,10 +262,7 @@ describe('hosted workspace facets', () => {
 
 describe('hosted file reads report absence by code, not by message', () => {
   test('a non-absence failure still throws when its path contains ENOENT', async () => {
-    // The read helper matched the rendered message, so reading a directory
-    // named `/ENOENT-probe` answered `null` (EISDIR's text holds the
-    // substring) while any other directory threw. The tolerance now reads the
-    // VFS `code`.
+    // `/ENOENT-probe` guards reading the VFS `code` rather than matching the message (EISDIR's text holds the substring).
     const actor = hostActor();
     const files = actor.hosted.box('probe').files;
 

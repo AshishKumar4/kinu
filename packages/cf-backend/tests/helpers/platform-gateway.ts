@@ -1,7 +1,4 @@
-// Fixtures for the PLATFORM AI Gateway provider, whose transport is the Workers
-// AI binding (src/providers/gateway-binding-fetch.ts). Availability depends on a
-// parseable gateway URL AND a bound `env.AI`, so every suite that wants
-// `ai-gateway` usable needs both — one place to say so.
+// Fixtures for the platform AI Gateway provider: usable only with a parseable gateway URL and a bound `env.AI`.
 import type { GatewayRunRequest, ProviderEnv, WorkersAIBinding } from '@kinu.run/core';
 
 /** Shape `AI_GATEWAY_URL` must have: {origin}/v1/{account}/{gateway}/{provider}/... */
@@ -18,9 +15,7 @@ export interface StubbedAiBinding {
   runs: RecordedGatewayRun[];
 }
 
-/** An `env.AI` stub that records every universal request and answers with
- *  `respond`. Only `gateway().run()` exists, so a suite that reaches for another
- *  binding method fails loudly instead of getting a silent no-op. */
+/** Only `gateway().run()` exists, so a suite reaching for another binding method fails loudly. */
 export function stubAiBinding(
   respond: (run: RecordedGatewayRun) => Response | Promise<Response> = () => Response.json({ ok: true }),
 ): StubbedAiBinding {
@@ -43,9 +38,7 @@ export function stubAiBinding(
   };
 }
 
-/** An env in which the platform gateway is genuinely usable. Both halves are
- *  required: a URL without the binding, or a binding without a parseable URL,
- *  leaves the provider unavailable. */
+/** URL and binding are both required for the provider to be available. */
 export function platformGatewayEnv(stub: StubbedAiBinding = stubAiBinding()): Partial<ProviderEnv> {
   return { AI_GATEWAY_URL: TEST_GATEWAY_URL, AI: stub.binding };
 }

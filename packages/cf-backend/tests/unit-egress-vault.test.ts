@@ -1,6 +1,4 @@
-// The egress secret vault: what it stores, what it will hand back, and what it
-// refuses. Run against a real bun:sqlite table and the real AES-GCM envelope,
-// so the encryption and the AAD binding are exercised rather than faked.
+// The egress secret vault against real bun:sqlite and the real AES-GCM envelope, so encryption and AAD binding are exercised.
 import { describe, expect, test } from 'bun:test';
 import * as v from 'valibot';
 import { Database } from 'bun:sqlite';
@@ -35,13 +33,11 @@ describe('the vault stores a secret without ever handing it back', () => {
     const binding = await putEgressSecret(deps, STRIPE);
     expect(isEgressPlaceholder(binding.placeholder)).toBe(true);
     expect(binding.placeholder.startsWith(EGRESS_PLACEHOLDER_PREFIX)).toBe(true);
-    // No transform of the secret appears in the placeholder, and the secret
-    // does not appear in it: the placeholder is fresh randomness.
+    // The placeholder is fresh randomness, not a transform of the secret.
     expect(binding.placeholder).not.toContain(SECRET);
     expect(binding.placeholder).not.toContain(SECRET.slice(0, 8));
 
-    // Two bindings holding the SAME secret get different placeholders, so a
-    // container cannot learn that two of its dummies stand for one value.
+    // A container cannot learn that two of its dummies stand for one value.
     const other = await putEgressSecret(deps, { ...STRIPE, id: 'stripe-2' });
     expect(other.placeholder).not.toBe(binding.placeholder);
   });
@@ -101,8 +97,7 @@ describe('add, rotate, revoke', () => {
     const binding = await putEgressSecret(deps, STRIPE);
     revokeEgressSecret(deps.sql, 'stripe');
 
-    // The handler still holds its configured view — this is the window between
-    // revocation and reconfiguration, and it must fail closed.
+    // The window between revocation and reconfiguration must fail closed.
     const resolved = await resolveEgressInjection(
       deps,
       { host: 'api.stripe.com', url: 'https://api.stripe.com/', headers: [['authorization', `Bearer ${binding.placeholder}`]] },
@@ -147,7 +142,6 @@ describe('destination is re-checked on every request', () => {
     );
 
     expect(denied.kind).toBe('refuse');
-    // The refusal must not leak the secret it declined to substitute.
     expect(JSON.stringify(denied)).not.toContain(SECRET);
   });
 
@@ -181,8 +175,7 @@ describe('key rotation', () => {
   });
 
   test('a row that cannot be re-sealed withholds the clean signal', async () => {
-    // The marker asserts the WHOLE store is current, and the documented
-    // rotation drops the retired key on the strength of it.
+    // The documented rotation drops the retired key on the strength of this marker.
     const deps = await vault();
     await putEgressSecret(deps, STRIPE);
 
@@ -195,8 +188,8 @@ describe('key rotation', () => {
 });
 
 describe('reachability', () => {
-  // A UserDO method absent from USER_DO_METHODS is silently unreachable over a
-  // stub. The outbound handler's SAFETY comment rests on this assertion.
+  // A UserDO method absent from USER_DO_METHODS is silently unreachable over a stub; the outbound handler's
+  // SAFETY comment rests on this.
   test('every vault method the egress path calls is on the RPC surface', () => {
     const called = ['resolveEgressInjection', 'listEgressSecrets', 'putEgressSecret', 'revokeEgressSecret'];
     expect(called.length).toBeGreaterThan(0);

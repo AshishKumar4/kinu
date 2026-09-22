@@ -1,24 +1,7 @@
 /**
- * The analytics plane, asserted against a fake Analytics Engine binding.
- *
- * WHY A FAKE BINDING IS THE RIGHT SUBSTITUTION HERE. `writeDataPoint` returns
- * `void` and reports nothing — the platform's own documentation says an
- * oversized, over-budget or malformed point is dropped silently and to go look in
- * tail logs. So there is no return value to assert on and no error to catch: the
- * ONLY observable of this whole subsystem is the data point handed to the
- * binding. Capturing that is not a weaker test than a real one, it is the same
- * test with the sampler removed.
- *
- * WHAT THESE ASSERT that nothing else can:
- *   1. FIELD POSITIONS. `blob7` means one thing forever. A transposition returns
- *      strings, not errors, so a query keeps working and every value in the
- *      column is wrong — the failure with no symptom, pinned here by position.
- *   2. PRIVACY. A workspace name is mission-derived user text and an admin's
- *      address is an address; both must be unrecoverable from the dataset, and a
- *      diagnostic's un-allowlisted fields must not reach it at all.
- *   3. THE PLATFORM'S LIMITS, each of which is silent when exceeded.
- *   4. WEIGHTED SQL. An unweighted aggregate over a sampled dataset returns a
- *      plausible smaller number under a column heading that no longer means it.
+ * The analytics plane against a fake Analytics Engine binding: `writeDataPoint` returns void and
+ * drops bad points silently, so the captured point is the only observable. Defends: slot
+ * transpositions, privacy leaks, silently exceeded platform limits, unweighted SQL over samples.
  */
 import { describe, expect, test } from 'bun:test';
 import {
@@ -50,7 +33,6 @@ import { reportAdminDenial, type AdminDenial } from '../src/control-plane/admin-
 import { cliScopesConnectionTag, rejectOutOfScopeRpc } from '../src/cli/rpc-gate';
 import { requireTier, type OwnerCapabilityEnv } from '@kinu.run/core';
 
-/** One captured data point, in the platform's own shape. */
 interface Captured {
   indexes?: ((ArrayBuffer | string) | null)[];
   blobs?: ((ArrayBuffer | string) | null)[];
@@ -80,8 +62,7 @@ interface FakePlane {
   readonly ops: FakeDataset;
 }
 
-/** A fresh environment per call, because `analyticsPlane` memoises on the object
- *  and a shared one would carry the previous test's spent write budget. */
+/** Fresh env per call: `analyticsPlane` memoises on the object. */
 function fakeEnv(): FakePlane {
   const agent = fakeDataset();
   const feedback = fakeDataset();
@@ -95,40 +76,21 @@ function fakeEnv(): FakePlane {
   };
 }
 
-/** The one point a test expected to be written, or a failure naming what it got
- *  instead — `points[0]!` would report `undefined` reads rather than "nothing was
- *  written", which is the interesting answer. */
+/** Fails naming what was written, rather than an `undefined` read. */
 function onlyPoint(dataset: FakeDataset): Captured {
   expect(dataset.points).toHaveLength(1);
 
   return dataset.points[0];
 }
 
-/** What a blob slot can hold on the wire — the platform's own union. Named so a
- *  reader is not handed `unknown` and made to narrow it again. */
 type BlobValue = string | ArrayBuffer | null | undefined;
 
-/** The value in a named blob slot, resolved by NAME through the schema — so the
- *  assertion still reads correctly if a slot moves, and the POSITION tests below
- *  are the ones that catch a move. */
+/** Resolved by name through the schema; the position tests catch a move. */
 function blobAt(point: Captured, schema: typeof AGENT_METRICS_SCHEMA, name: string): BlobValue {
   return point.blobs?.[schema.blobs.findIndex((slot) => slot.name === name)];
 }
 
-/**
- * Install the real composite sink over this environment, and hand back its
- * restore.
- *
- * THE ONLY WAY IN, deliberately. The Analytics half of the composite is
- * module-private, so every projection assertion below reaches it the way
- * production does: install once at an isolate's entry, then emit through core's
- * `diagnostics` seam from anywhere inside it. Asserting a hand-built logger would
- * have proved the projection over a path no caller takes.
- *
- * The install announces itself THROUGH the sink it just installed, so one real
- * agent row exists before the test emits anything. It is asserted on its own
- * below and dropped here, so a test that expects one data point sees one.
- */
+/** Install the real composite sink (its Analytics half is module-private); drops the install's own announcement row. */
 function installSink(plane: FakePlane): () => void {
   const restore = installAnalyticsDiagnostics(plane.env);
   plane.agent.points.length = 0;
@@ -136,9 +98,7 @@ function installSink(plane: FakePlane): () => void {
   return restore;
 }
 
-/** Emit through the installed sink, and put the previous one back whatever
- *  happens: the sink is module-global, so a leak here is the next test's
- *  mystery. */
+/** Emit through the installed sink, then restore the previous one: the sink is module-global. */
 function throughSink(plane: FakePlane, emit: () => void): void {
   const restore = installSink(plane);
 
@@ -150,12 +110,8 @@ function throughSink(plane: FakePlane, emit: () => void): void {
 }
 
 describe('the slot layout is one declaration', () => {
-  // THE PLATFORM'S NUMBERS ARE WRITTEN OUT here rather than derived from the
-  // constants that hold them, and the constants are private for the same reason:
-  // a refusal test whose INPUT and whose EXPECTATION both come from one constant
-  // proves the guard is self-consistent and nothing about the platform. Twenty-one
-  // blobs refused with "the platform's 20" in the message is the fact pinned from
-  // both ends, and it reds if the number is ever quietly changed.
+  // Platform numbers are written out, not derived from the constants, so these pin the platform
+  // rather than the guard's self-consistency.
 
   interface SchemaCensus {
     dataset: string;
@@ -164,9 +120,6 @@ describe('the slot layout is one declaration', () => {
     indexes: readonly { name: string; maxBytes: number }[];
   }
 
-  /** The census `defineSchema` hands `assertWithinPlatformLimits`, built the way
-   *  it builds it — so refusing one of these is refusing that schema. Only the
-   *  part each test is about is spelled; the rest is a legal minimum. */
   const census = (dataset: string, over: {
     blobBytes?: readonly number[];
     doubles?: number;
@@ -179,12 +132,8 @@ describe('the slot layout is one declaration', () => {
   });
 
   test('every shipped schema fits inside the platform limits, through the guard itself', () => {
-    // `defineSchema` is module-private, so this is both halves at once: every
-    // shipped dataset really is inside every limit, AND the guard the refusals
-    // below exercise is the guard the declaration runs. A declaration that stopped
-    // calling it would leave those refusals passing and nothing protected.
-    // The census first: an empty schema list would run the loop over nothing and
-    // stay green, so the guarded set is pinned here.
+    // `defineSchema` is module-private: this pins every shipped dataset inside every limit through the
+    // same guard the refusals exercise, over a non-empty schema list.
     expect(ANALYTICS_SCHEMAS.map((schema) => schema.dataset).sort()).toEqual([
       'kinu_agent_metrics',
       'kinu_control_plane_ops',
@@ -237,12 +186,7 @@ describe('the slot layout is one declaration', () => {
 
   test('a slot named for a reserved field is refused — the runtime half of core\'s type ban', () => {
     for (const reserved of ['token', 'prompt', 'headers'] as const) {
-      // The slot name goes in through a `string`-typed binding, which is exactly
-      // how a dynamically-assembled schema would reach the guard. The TYPE ban is
-      // the stronger half and refuses the literal spelling —
-      // `ReservedSlotIsNotWritable` is uninhabited — but a type is erased before
-      // anything runs, so widening the name here is what reaches the arm that
-      // still holds at runtime. No assertion is needed to do it.
+      // A `string`-typed name reaches the runtime arm; the type ban (`ReservedSlotIsNotWritable`) is erased.
       const name: string = reserved;
       expect(() => assertPublishableNames(`leaky-${reserved}`, ['workspace', name, 'count']))
         .toThrow(new RegExp(`"${reserved}" is a reserved field name`));
@@ -287,9 +231,7 @@ describe('column resolution is derived, never spelled', () => {
     expect(blobColumn(AGENT_METRICS_SCHEMA, 'model')).toBe('blob9');
     expect(blobColumn(AGENT_METRICS_SCHEMA, 'tool')).toBe('blob10');
     expect(blobColumn(AGENT_METRICS_SCHEMA, 'source')).toBe('blob11');
-    // The two APPENDED slots. Pinned here for the same reason as every slot
-    // above: a slot that is appended and not pinned is the one a later append
-    // can silently move past, and slot order IS the wire format.
+    // Appended slots are pinned too: slot order is the wire format.
     expect(blobColumn(AGENT_METRICS_SCHEMA, 'reason')).toBe('blob12');
     expect(doubleColumn(AGENT_METRICS_SCHEMA, 'count')).toBe('double1');
     expect(doubleColumn(AGENT_METRICS_SCHEMA, 'durationMs')).toBe('double2');
@@ -320,17 +262,12 @@ describe('column resolution is derived, never spelled', () => {
   });
 
   test('an unknown slot name is a named refusal, not an off-by-one column', () => {
-    // The generic instantiated at the BASE schema, where `BlobName` widens to
-    // `string` — so a name outside any one schema's slots is expressible without
-    // asserting anything. The type refuses it for a concrete schema; this is the
-    // runtime arm, for a caller that reached the resolver dynamically.
+    // At the base schema `BlobName` widens to `string`, so an unknown name reaches the runtime arm.
     const resolve: (schema: AnalyticsSchema, name: string) => string = blobColumn;
     expect(() => resolve(AGENT_METRICS_SCHEMA, 'sourc')).toThrow(/no blob slot named "sourc"/);
   });
 
   test('a schema declares no column a resolver cannot name', () => {
-    // The inverse of the position tests above: every declared slot resolves, so
-    // a schema cannot carry a column that no query is able to reach.
     for (const schema of ANALYTICS_SCHEMAS) {
       for (const slot of schema.blobs) expect(blobColumn(schema, slot.name)).toMatch(/^blob\d+$/);
 
@@ -350,13 +287,11 @@ describe('the writer holds the limits the platform enforces silently', () => {
       workspace: 'w', agentKind: 'orchestrator', provider: 'workers-ai', model: long,
       source: 'turn', usage: {}, usd: undefined,
     });
-    // Parsed rather than `typeof`-tested: the wire union admits an ArrayBuffer and
-    // null, and the assertion is that a clamped blob is still a STRING.
+    // Parsed: the wire union admits ArrayBuffer and null; a clamped blob must stay a string.
     const written = v.parse(v.string(), blobAt(onlyPoint(plane.agent), AGENT_METRICS_SCHEMA, 'model'));
     const bytes = new TextEncoder().encode(written);
     expect(bytes.length).toBeLessThanOrEqual(128);
-    // Never mid-character: a re-encode of the decoded text is byte-identical, so
-    // no replacement character was produced by the cut.
+    // Never mid-character: re-encoding the decoded text is byte-identical.
     expect(new TextDecoder().decode(bytes)).toBe(written);
     expect(analyticsPlane(plane.env).agent.stats.clamped).toBe(1);
   });
@@ -401,9 +336,7 @@ describe('the writer holds the limits the platform enforces silently', () => {
   });
 
   test('opening a window replaces the budget rather than topping it up', () => {
-    // Asserted at the SHIPPED capacity rather than a small injected one: the
-    // window a caller can reach is the plane's, and the number that has to be
-    // right is the platform's.
+    // At the shipped capacity: the number that has to be right is the platform's.
     const { window } = analyticsPlane(fakeEnv().env);
     expect(window.take()).toBe(true);
     window.open();
@@ -424,10 +357,8 @@ describe('the writer holds the limits the platform enforces silently', () => {
   });
 
   test('the budget is per invocation, so two invocations write more than one can', () => {
-    // No Durable Object opens its window in a CONSTRUCTOR: once per activation
-    // would give a hot object 250 rows for its whole life and then silence,
-    // with the one `window_exhausted` event refused by the same spent window
-    // that produced it.
+    // No Durable Object opens its window in a constructor: a hot object would get one window for its
+    // whole life, then silence.
     const oneInvocation = fakeEnv();
 
     for (let at = 0; at <= MAX_WRITES_PER_INVOCATION; at += 1) {
@@ -485,9 +416,7 @@ describe('the writer holds the limits the platform enforces silently', () => {
     });
     const point = onlyPoint(plane.agent);
     expect(point.indexes).toHaveLength(1);
-    // Against the SCHEMA's own declared bound, which is what the writer clamps
-    // to. That the bound is itself inside the platform's 96 is the guard's job,
-    // asserted over every shipped schema above.
+    // Against the schema's own declared bound, which the writer clamps to.
     expect(new TextEncoder().encode(v.parse(v.string(), point.indexes?.[0])).length)
       .toBeLessThanOrEqual(AGENT_METRICS_SCHEMA.index.maxBytes);
   });
@@ -507,14 +436,11 @@ describe('nothing a person said reaches the dataset', () => {
   });
 
   test('the digest is stable, distinguishing, and empty for an absent identifier', () => {
-    // Known answers, derived independently of the implementation from the
-    // algorithm `privacy.ts` documents: a stored approval digest must keep
-    // matching, so the value itself is pinned here rather than recomputed.
+    // Known answers per the algorithm `privacy.ts` documents: stored approval digests must keep matching.
     expect(analyticsDigest('alpha')).toBe('a33109d75d8b6dab');
     expect(analyticsDigest('beta')).toBe('f24c3abbaf81e4c7');
     expect(analyticsDigest('alpha')).not.toBe(analyticsDigest('beta'));
-    // Absent stays visibly absent rather than becoming one bucket that looks
-    // like a real workspace.
+    // Absent stays visibly absent, not one bucket that looks like a real workspace.
     expect(analyticsDigest('')).toBe('');
     expect(analyticsDigest('alpha')).toMatch(/^[0-9a-f]{16}$/);
   });
@@ -528,7 +454,7 @@ describe('nothing a person said reaches the dataset', () => {
     const point = onlyPoint(plane.ops);
     expect(JSON.stringify(point)).not.toContain('owner@example.com');
     expect(point.indexes?.[0]).toBe(analyticsDigest('owner@example.com'));
-    // The target is one user's work, so it is a digest for the same reason.
+    // One user's work, so digested too.
     expect(point.blobs?.[6]).toBe(analyticsDigest('change-7'));
   });
 
@@ -536,10 +462,8 @@ describe('nothing a person said reaches the dataset', () => {
     const plane = fakeEnv();
     const restore = installSink(plane);
 
-    // A PARSED PAYLOAD, which is the case the runtime arm exists for and the one
-    // `LoggableFields` cannot see: the declared type names one field, the value
-    // carries four. That is what a spread, an RPC hop or a JSON body looks like
-    // by the time the sink meets it, and it needs no assertion to build.
+    // A parsed payload carrying extra fields (spread, RPC hop, JSON body): the runtime arm
+    // `LoggableFields` cannot see.
     const smuggled: { provider: string } = JSON.parse(JSON.stringify({
       token: 'sk-live-do-not-publish',
       prompt: 'the user asked about their medical results',
@@ -553,7 +477,7 @@ describe('nothing a person said reaches the dataset', () => {
     expect(serialized).not.toContain('sk-live-do-not-publish');
     expect(serialized).not.toContain('medical');
     expect(serialized).not.toContain('hunter2');
-    // The allowlisted field DID arrive, so the row is not empty by accident.
+    // Proves the row is not empty by accident.
     expect(serialized).toContain('workers-ai');
   });
 
@@ -573,10 +497,7 @@ describe('nothing a person said reaches the dataset', () => {
   });
 
   test('a rendered cause chain in the reason slot is dropped, not clamped and kept', () => {
-    // The control plane published `reason: row.detail`, and on a thrown failure
-    // that detail is a rendered chain: an allowlisted NAME carrying prose, which
-    // the name allowlist cannot see. The 48-byte slot then kept the head of the
-    // chain — the upstream message — for three months.
+    // A rendered failure chain under the allowlisted `reason` name is prose; it must not reach the slot.
     const plane = fakeEnv();
     throughSink(plane, () => {
       diagnostics.event('control_plane.workspace_remove', {
@@ -590,7 +511,7 @@ describe('nothing a person said reaches the dataset', () => {
     expect(serialized).not.toContain('sk-live-leaked');
     expect(serialized).not.toContain('my-personal-assistant');
     expect(serialized).not.toContain('Error');
-    // Dropped, not partially kept — and the row still says the action failed.
+    // Dropped, not partially kept; the row still says the action failed.
     expect(point.blobs?.[5]).toBe('');
     expect(point.blobs?.[2]).toBe('failed');
   });
@@ -609,8 +530,7 @@ describe('nothing a person said reaches the dataset', () => {
   });
 
   test('a code field that is not one of core\'s nine codes is dropped', () => {
-    // `code` is the other slot a caller can now fill by name, and its vocabulary
-    // is closed by core rather than by a grammar — so membership is the check.
+    // `code`'s vocabulary is closed by core, so membership is the check.
     const plane = fakeEnv();
     throughSink(plane, () => {
       diagnostics.event('control_plane.workspace_remove', {
@@ -693,18 +613,11 @@ describe('the diagnostics sink routes by event name', () => {
   });
 
   test('a line with no workspace is unattributed, never attributed to another actor', () => {
-    // THE CO-LOCATION CASE. `setDiagnosticsSink` is module-global and Cloudflare
-    // co-locates Durable Objects, so an isolate-level default belonged to
-    // whichever actor installed first — and every line the actors beside it
-    // emitted without a workspace was indexed as that first actor's, taking AE's
-    // per-index sampling isolation with it. One installed sink taking three lines
-    // from different actors IS that isolate: attribution has to come off the LINE,
-    // because the sink is the thing they share.
+    // Cloudflare co-locates Durable Objects and the sink is module-global, so attribution must come
+    // off the line, not from whichever actor installed first.
     const plane = fakeEnv();
     const restore = installSink(plane);
-    // And the second actor to reach the entry re-installs, which must not wrap the
-    // composite in another composite — that is one row per event, not two, and it
-    // is the reason `installAnalyticsDiagnostics` is idempotent per isolate.
+    // A second install must not wrap the composite again: `installAnalyticsDiagnostics` is idempotent per isolate.
     const second = installAnalyticsDiagnostics(plane.env);
 
     try {
@@ -718,17 +631,13 @@ describe('the diagnostics sink routes by event name', () => {
 
     expect(plane.agent.points).toHaveLength(3);
     expect(plane.agent.points[0].indexes?.[0]).toBe(analyticsDigest('first-actor'));
-    // Honestly absent, and specifically NOT the first actor's digest.
+    // Absent, and specifically not the first actor's digest.
     expect(plane.agent.points[1].indexes?.[0]).toBe('');
     expect(plane.agent.points[2].indexes?.[0]).toBe(analyticsDigest('second-actor'));
   });
 
   test('automatic titling is attributed by workspace, and the title is not published', () => {
-    // The titling telemetry named its identifying field `agent`, which is not an
-    // allowlisted slot — so the headline naming feature's rows carried no
-    // per-agent dimension at all while looking, at the call site, as though they
-    // did. The title itself stays out: it is derived from the mission, which is
-    // the person's own sentence.
+    // The title stays out: it is derived from the mission, the person's own sentence.
     const plane = fakeEnv();
     throughSink(plane, () => {
       diagnostics.event('agent.auto_titled', {
@@ -757,10 +666,7 @@ describe('the diagnostics sink routes by event name', () => {
 });
 
 describe('a denial is a row that says denied', () => {
-  /** The async twin of `throughSink`. Drive the REAL emit site through the REAL
-   *  sink: asserting the projection of a hand-written `.event(...)` would prove
-   *  only that this test can spell the fields, and what went wrong was that three
-   *  emit sites did not. */
+  /** Async twin of `throughSink`: drives the real emit site through the real sink. */
   async function throughAsyncSink(plane: FakePlane, emit: () => Promise<void>): Promise<void> {
     const restore = installSink(plane);
 
@@ -772,10 +678,7 @@ describe('a denial is a row that says denied', () => {
   }
 
   test('an admin-plane denial lands as denied, with its reason and no request text', () => {
-    // Every one of these read `outcome: 'ok'` with an empty reason: the denial
-    // was reported under a field name the sink does not publish, so the audit
-    // dataset counted operator probes as successful operations and the
-    // stale-sign-in-versus-probe discriminator did not exist.
+    // A denial must not read as `outcome: 'ok'` with an empty reason.
     const plane = fakeEnv();
     throughSink(plane, () => {
       reportAdminDenial('not_admin', '/api/control/users/help-me-with-my-divorce', 'GET');
@@ -784,22 +687,13 @@ describe('a denial is a row that says denied', () => {
     expect(point.blobs?.[1]).toBe('denied');
     expect(point.blobs?.[2]).toBe('denied');
     expect(point.blobs?.[5]).toBe('not_admin');
-    // The path can name a workspace, and a workspace name is the person's own
-    // sentence. It reaches Workers Logs and stops there.
+    // The path can name a workspace (user text); it reaches Workers Logs only.
     expect(JSON.stringify(point)).not.toContain('divorce');
   });
 
   test('every admin denial reason reaches the slot as itself', () => {
-    // The vocabulary is closed and small, so it is checked whole rather than
-    // sampled: a value the grammar rejected would silently read as no reason.
-    //
-    // The `access_*` arms MATTER MOST HERE and are the reason this list is
-    // exhaustive rather than representative. Every one of them answers an
-    // indistinguishable 404 on the wire by design, so this row is the only place
-    // "somebody probed the admin path", "requests are reaching the origin around
-    // Access", "this deployment never configured Access" and "a token we reject"
-    // are told apart. A value the classification grammar silently dropped would
-    // collapse all four into an empty reason.
+    // Checked whole: every `access_*` arm answers the same 404 by design, so this row is the only
+    // place they are told apart.
     const denials: readonly AdminDenial[] = [
       'unconfigured', 'no_admins_configured', 'not_admin',
       'dev_identity', 'token_identity', 'stale_auth',
@@ -815,9 +709,7 @@ describe('a denial is a row that says denied', () => {
   });
 
   test('an out-of-scope RPC lands as denied, naming the method and the arm that refused', () => {
-    // Both arms, because they are different operator problems: a token whose
-    // scope set is wrong is a client we shipped, and a method no token can reach
-    // is somebody probing the surface.
+    // Both arms: a wrong scope set is our client; a method no token reaches is probing.
     const arms = [
       { method: 'getAgentStatus', scopes: 'ai.proxy', reason: 'scope_missing' },
       { method: 'setModel', scopes: 'workspace.read', reason: 'interactive_only' },
@@ -855,9 +747,8 @@ describe('a denial is a row that says denied', () => {
     expect(blobAt(point, AGENT_METRICS_SCHEMA, 'event')).toBe('capability.denied');
     expect(blobAt(point, AGENT_METRICS_SCHEMA, 'outcome')).toBe('denied');
     expect(blobAt(point, AGENT_METRICS_SCHEMA, 'source')).toBe('workspace_capability');
-    // The arm that decided it. `denied` alone pools `owner_only`, a policy
-    // outcome, with `unrecognized_workspace`, a broken identity — and those two
-    // ask an operator for opposite responses.
+    // The deciding arm: `owner_only` (policy) and `unrecognized_workspace` (broken identity) need
+    // opposite operator responses.
     expect(blobAt(point, AGENT_METRICS_SCHEMA, 'reason')).toBe('no_caller_identity');
     // The refusal MESSAGE names the workspace; the row never does.
     expect(JSON.stringify(point)).not.toContain('capability token');
@@ -878,9 +769,7 @@ describe('the record adapters write the rows their boundaries promise', () => {
       'turn', 'turn', 'turn.settled', 'failed', 'timeout', 'turn.settled',
       'orchestrator', 'workers-ai', 'deepseek-v4', '', '', '',
     ]);
-    // The trailing 0 is `attempts`: a turn is not a delivery and counts none,
-    // and a plausible 1 there would read as a first attempt in every aggregate
-    // over recovery.
+    // The trailing 0 is `attempts`: a turn is not a delivery.
     expect(point.doubles).toEqual([1, 4200, 0, 6, 9, 1200, 340, 900, 12, 45, 7, 0.0031, 1, 0]);
   });
 
@@ -908,8 +797,7 @@ describe('the record adapters write the rows their boundaries promise', () => {
     expect(blobAt(point, AGENT_METRICS_SCHEMA, 'outcome')).toBe('failed');
     expect(point.doubles?.[1]).toBe(91);
     expect(point.doubles?.[4]).toBe(1);
-    // No token report and no price on a tool row: those belong to a model call,
-    // and a plausible-looking zero here would pool into a spend aggregate.
+    // No token report or price on a tool row: a zero would pool into spend aggregates.
     expect(point.doubles?.slice(5)).toEqual([0, 0, 0, 0, 0, 0, 0, 0, 0]);
   });
 
@@ -988,17 +876,12 @@ describe('a feedback marker carries no report', () => {
 
     expect(plane.feedback.points.map((p) => p.blobs?.[2]))
       .toEqual(['too_large', 'storage_unavailable', 'row_write_failed']);
-    // Accepted rows carry '' and rejections never do, so `rejectReason != ''` is
-    // exactly the rejection set without enumerating the arms.
+    // Accepted rows carry '' and rejections never do, so `rejectReason != ''` is the rejection set.
     expect(plane.feedback.points.every((p) => p.blobs?.[2] !== '')).toBe(true);
   });
 
   test('a screenshot-bearing refusal reports the screenshot it carried', () => {
-    // THE UNDER-COUNT. Presence and size are two slots and neither rewrites the
-    // other, so a refusal arm that fires before the bytes are measured still
-    // reports the screenshot the submission sent. Writing "no screenshot, zero
-    // bytes" there leaves the screenshot columns describing every population
-    // except the one they exist for.
+    // Presence and size are separate slots: a refusal before measuring still reports the screenshot sent.
     const plane = fakeEnv();
     writeFeedbackMarker(plane.env, {
       feedbackId: 'fb_reject', outcome: 'rejected', rejectReason: 'bad_content_type',
@@ -1011,8 +894,7 @@ describe('a feedback marker carries no report', () => {
   });
 
   test('a note-only report is distinguishable from one whose screenshot was refused', () => {
-    // The two are the same 0 bytes; only the presence slot tells them apart, and
-    // "how many reports carry a screenshot" is the question that needs it.
+    // Same 0 bytes; only the presence slot tells them apart.
     const plane = fakeEnv();
     writeFeedbackMarker(plane.env, {
       feedbackId: 'fb_note', outcome: 'accepted', rejectReason: '', routeFamily: 'home',
@@ -1039,18 +921,13 @@ describe('a feedback marker carries no report', () => {
 });
 
 describe('every aggregate is weighted, because the dataset is sampled', () => {
-  // The expression builders are module-private, so a panel's SQL is where their
-  // output is observable — and it is the only form a reader of these tests cares
-  // about, because it is what Analytics Engine is actually sent.
+  // The expression builders are module-private; panel SQL is where their output is observable.
 
   test('the four primitives implement the platform\'s own translation table', () => {
-    // Read off the panels that select each one, aliased, so the assertion pins
-    // both the expression and the column it is reported under.
     const { turns, tokens, firstToken } =
       controlPlaneMetricsQueries({ sinceHours: 24 });
 
-    // A weighted count: the sample interval IS the count, one surviving row
-    // standing for `_sample_interval` originals.
+    // Weighted count: each surviving row stands for `_sample_interval` originals.
     expect(turns).toContain('SUM(_sample_interval) AS turns');
     expect(tokens).toContain('SUM(_sample_interval * double6) AS inputTokens');
     expect(turns)
@@ -1060,8 +937,7 @@ describe('every aggregate is weighted, because the dataset is sampled', () => {
   });
 
   test('a ratio divides by a measured denominator, not by the row count', () => {
-    // `usd` is 0 for an unpriced call as well as a free one, so the denominator
-    // has to be the calls that carried a rate — `priced`, not the row count.
+    // `usd` is 0 for unpriced and free calls alike, so the denominator is `priced`, not the row count.
     const { tokens } = controlPlaneMetricsQueries({ sinceHours: 24 });
     expect(tokens).toContain(
       'SUM(_sample_interval * double12) / SUM(_sample_interval * double13) AS usdPerPricedCall',
@@ -1069,9 +945,7 @@ describe('every aggregate is weighted, because the dataset is sampled', () => {
   });
 
   test('a quantile outside (0,1) is refused rather than emitted as SQL', () => {
-    // The mistake is a percentage where a fraction belongs, and AE answers it
-    // with a column of nulls rather than an error — so a p95 panel would read
-    // empty and look correct.
+    // A percentage where a fraction belongs gets a column of nulls from AE, not an error.
     expect(() => assertQuantileLevel(0)).toThrow(/strictly between/);
     expect(() => assertQuantileLevel(1)).toThrow(/strictly between/);
     expect(() => assertQuantileLevel(95)).toThrow(/strictly between/);
@@ -1089,11 +963,7 @@ describe('every aggregate is weighted, because the dataset is sampled', () => {
   });
 
   test('a panel whose group-by has open cardinality carries a row bound', () => {
-    // `model` is a 128-byte slot holding whatever a provider or a user's config
-    // names, and `tool` is the name of the tool the model called, crafted tools
-    // included — one row per distinct value, and nothing caps the count. The
-    // surface renders every row it is handed with no cursor, so the bound is the
-    // panel's own top-N, and each of these already orders by volume descending.
+    // `model` and `tool` values are uncapped and the surface renders every row, so the panel's top-N is the bound.
     const built = controlPlaneMetricsQueries({ sinceHours: 24 });
 
     for (const name of ['latency', 'tokens', 'toolFailures', 'firstToken'] as const) {
@@ -1101,9 +971,7 @@ describe('every aggregate is weighted, because the dataset is sampled', () => {
       expect(built[name]).toMatch(/ORDER BY \w+ DESC/u);
     }
 
-    // And a closed vocabulary takes none: `outcome` and `code` are a four-member
-    // union and core's own error codes, and `operation` is the tail of a declared
-    // `control_plane.*` event. A bound there could only hide a row.
+    // A closed vocabulary takes no bound: it could only hide a row.
     for (const name of ['turns', 'adminOps'] as const) {
       expect(built[name]).not.toContain('LIMIT');
     }
@@ -1113,13 +981,12 @@ describe('every aggregate is weighted, because the dataset is sampled', () => {
     const queries = Object.values(controlPlaneMetricsQueries({ sinceHours: 24 }));
 
     for (const sql of queries) {
-      // The bare forms an unsampled dataset would allow. `SUM(` is legal only in
-      // the weighted shape, which always multiplies by the sample interval.
+      // Bare forms an unsampled dataset would allow; `SUM(` is legal only weighted by the sample interval.
       expect(sql).not.toMatch(/\bCOUNT\s*\(/);
       expect(sql).not.toMatch(/\bAVG\s*\(/);
       expect(sql).not.toMatch(/SUM\((?!_sample_interval)/);
       expect(sql).not.toMatch(/quantileExactWeighted\([^)]*\)\((?![^)]*_sample_interval)/);
-      // An unbounded scan over three months reaches AE's 30-second timeout.
+      // An unbounded scan over three months times out in AE.
       expect(sql).toContain('timestamp > NOW() - INTERVAL');
     }
   });
@@ -1147,8 +1014,7 @@ describe('every aggregate is weighted, because the dataset is sampled', () => {
     expect(queries.turns).toContain(`index1 = '${digest}'`);
     expect(queries.latency).toContain(`index1 = '${digest}'`);
     expect(queries.tokens).toContain(`index1 = '${digest}'`);
-    // A different dataset with a different index: the same string would match
-    // nothing, and a silently empty audit panel is worse than an unfiltered one.
+    // Different dataset and index: the same string would silently match nothing.
     expect(queries.adminOps).not.toContain(digest);
   });
 
@@ -1162,10 +1028,7 @@ describe('every aggregate is weighted, because the dataset is sampled', () => {
   });
 
   test('nothing in the query builders reads an environment or a binding', () => {
-    // Purity is the control plane's requirement: it owns the not-configured arm
-    // and must be able to render it with no secret and no binding present. The
-    // rendered panel is the proof: a builder that needed an environment would
-    // throw before returning one.
+    // The control plane renders the not-configured arm with no secret or binding, so builders are pure.
     const queries = controlPlaneMetricsQueries({ sinceHours: 1 });
     expect(queries.turns).toContain("INTERVAL '1' HOUR");
   });
@@ -1177,10 +1040,7 @@ describe('the composite sink adds a destination instead of replacing one', () =>
     const restore = installAnalyticsDiagnostics(plane.env);
 
     try {
-      // The install announces itself THROUGH the sink it just installed, so this
-      // row existing is the analytics half being inside the composite rather than
-      // instead of it. Every other test here consumes this row; this is where it
-      // is asserted.
+      // The install announces itself through its own sink; the other tests consume this row, asserted here.
       expect(plane.agent.points).toHaveLength(1);
       expect(blobAt(plane.agent.points[0], AGENT_METRICS_SCHEMA, 'event'))
         .toBe('analytics.sink_installed');
@@ -1191,9 +1051,7 @@ describe('the composite sink adds a destination instead of replacing one', () =>
       restore();
     }
 
-    // And the restore really restores: a line after it reaches whatever sink was
-    // there before, not this plane. The sink is module-global, so a restore that
-    // did nothing would make every later test's row count somebody else's.
+    // The restore really restores: the sink is module-global.
     diagnostics.event('turn.settled', { provider: 'workers-ai' });
     expect(plane.agent.points).toHaveLength(2);
   });
@@ -1217,8 +1075,7 @@ describe('the composite sink adds a destination instead of replacing one', () =>
     const after = createRecordingLogger();
     const composite = createCompositeLogger([reached, broken, after]);
     expect(() => composite.event('turn.settled', {})).toThrow('sink is down');
-    // The members either side of the broken one still got the line: a failure in
-    // one destination must not cost the others their copy.
+    // A failing destination must not cost the others their copy.
     expect(reached.emitted).toHaveLength(1);
     expect(after.emitted).toHaveLength(1);
   });

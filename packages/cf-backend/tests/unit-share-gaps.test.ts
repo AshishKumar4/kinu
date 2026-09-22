@@ -1,13 +1,6 @@
 /**
- * The share-gaps rules, asserted end to end through the same surfaces the
- * brief named: the rate bound in `admitViewerRequest` and the exchange, the
- * consent page a credentialed share answers before a viewer reaches it, the
- * per-share per-day spend bound in the viewer's own binding call, the fork
- * flag on a live share, and the public index a blueprint publish lands on.
- *
- * Same harness as `unit-slate-live-shares.test.ts`: a real owner world, and —
- * where the route crosses workspaces — a second user's world behind the same
- * `handleSharedRequest` the app host serves.
+ * Share-gaps rules end to end: rate bound, consent page, per-share daily spend bound, fork flag, and the public index.
+ * Same harness as `unit-slate-live-shares.test.ts`.
  */
 import { afterEach, expect, test } from 'bun:test';
 import * as v from 'valibot';
@@ -40,8 +33,6 @@ const OWNER_ID = '0123456789abcdef0123456789abcdef';
 
 const VIEWER_ID = 'fedcba9876543210fedcba9876543210';
 
-/** The fixture slate `unit-slate-live-shares.test.ts` authors: one credentialed
- *  binding for the consent page to name, one executor for calls to spend. */
 async function authorIssuesSlate(files: AgentRuntime['storage']['vfs']) {
   await files.mkdir('/home/user/slates/issues', { recursive: true });
   await files.writeFile('/home/user/slates/issues/package.json', JSON.stringify({
@@ -68,14 +59,11 @@ interface World {
   readonly close: () => void;
 }
 
-/** One user's world on the shared harness: registry, capability, MCP row. */
 async function userWorld(userId: string, workspace: string, kv: ReturnType<typeof makeKv>): Promise<{ user: TestUserDO; agent: ActorHarness<HarnessOrchestratorAgent> }> {
   const user = createTestUserDO({ durableObjectId: userId });
   const capability = await provisionTestWorkspace(user, workspace);
   const agent = orchestratorHarness(undefined, { userDO: user.userDO, workspace, ownerUserId: userId });
-  // The bindings the share rail reads off the agent's OWN env: the request
-  // bound's KV, the suffix share URLs are minted under, and the signing
-  // secret. Declared before anything touches `slates` — its deps memoize.
+  // Declared before anything touches `slates`: its deps memoize.
   agent.agent.harnessDeclareEnv({
     AUTH_KV: kv, PREVIEW_HOST_SUFFIX: 'share.test',
     CREDENTIAL_ENCRYPTION_KEY: TEST_USER_ENV.CREDENTIAL_ENCRYPTION_KEY,
@@ -83,8 +71,6 @@ async function userWorld(userId: string, workspace: string, kv: ReturnType<typeo
   await agent.agent.installWorkspaceCapability(capability);
   const caller = await testOwner();
 
-  // The catalog reads the MCP row the credentialed binding's capability is
-  // drawn from; the list primes the same read the owner flow makes.
   await user.userDO.userMcp_list(caller);
   user.sql.exec(`INSERT INTO user_mcp_servers (id, name, server_url, transport, headers, allowed_tools, created_at, updated_at)
     VALUES ('connection-id', 'github', 'https://github.example/sse', 'auto', NULL, NULL, 0, 0)`);
@@ -92,16 +78,10 @@ async function userWorld(userId: string, workspace: string, kv: ReturnType<typeo
   return { user, agent };
 }
 
-/**
- * Two users on one env, the way the shared routes actually run: the
- *   `OrchestratorAgent`/`UserDO` stubs dispatch on name, so the owner's object
- *   and the viewer's are the same pair `workspaceOwner` and
- *   `claimOwnedWorkspace` resolve in production.
- */
+/** The `OrchestratorAgent`/`UserDO` stubs dispatch on name, as `workspaceOwner` and `claimOwnedWorkspace` resolve in production. */
 async function twoUserWorld(): Promise<World> {
   resetRecordedMcp();
-  // One KV behind both the edge route and every workspace object: the rail
-  // counts on it from both sides, the way AUTH_KV counts in production.
+  // One KV behind the edge route and every workspace object, as AUTH_KV in production.
   const kv = makeKv();
   const ownerSide = await userWorld(OWNER_ID, 'issues-owner', kv);
   const viewerSide = await userWorld(VIEWER_ID, 'viewer-home', kv);
@@ -116,9 +96,6 @@ async function twoUserWorld(): Promise<World> {
   const controlSql = sqlExec(controlDb);
   initControlPlaneSchema(controlSql);
 
-  // The public index, backed by the real store: the gate is the route's own
-  // caller mint, so a route that forgot to authorize is refused exactly as
-  // the object would refuse it.
   const controlPlane = {
     publicShares_put: async (_caller: UserCaller, row: Parameters<typeof indexRow>[1]) => indexRow(controlSql, row),
     publicShares_forget: async (_caller: UserCaller, key: Parameters<typeof forgetRow>[1]) => forgetRow(controlSql, key),
@@ -194,14 +171,11 @@ test('S2: the per-viewer request bound refuses past its limit, per viewer and on
   expect(refused.status).toBe(429);
   expect(await refused.text()).toBe('Too many requests');
 
-  // A different viewer is a different counter — the bound never pauses the share.
   const other = await host.admitViewerRequest({ handle: created.share.handle, claim: { userId: null, source: 'other', consented: true }, pathname: '/' });
 
   if (other instanceof Response) throw new Error(`another viewer was refused: ${other.status}`);
   other.settle('ok');
 
-  // The exchange is the same rail: the consent mint answers 303 until the same
-  // per-viewer key fills, then the same 429.
   if (created.url === null) throw new Error('the share minted no URL');
   const exchange = (url: string) => handleSlateShareHostRequest(new Request(`${url}__kinu/viewer?consent=1`), world.env);
   const minted = await exchange(created.url);
@@ -262,8 +236,6 @@ test('S2: the per-share per-day spend bound refuses viewer calls as budget and m
 
   expect(await call()).toMatchObject({ ok: true });
 
-  // Spend the day's bound the way a day's worth of calls would: the ledger's
-  // own estimate takes the label over the cap and `guard` stamps it.
   world.owner.agent.budget.declare(shareSpendLabel(created.share.id), { usd: SHARE_SPEND_CAP_USD_PER_DAY });
   world.owner.agent.budget.debit(Math.ceil(SHARE_SPEND_CAP_USD_PER_DAY / 0.003 * 1000) + 1000, { labels: [shareSpendLabel(created.share.id)] });
 
@@ -288,7 +260,6 @@ test('D1: a live share forks for who it names, refuses who it does not, and hono
   const fork = (body: { live: string; ownerWorkspace: string; workspace: string }) => sharedRequest(world.env, forker, post('/api/shared/fork', body));
   const created = await sharePublic(world, 'users');
 
-  // The whole signed-in world is not admitted — only who the share names.
   const unnamed = await fork({ live: created.share.id, ownerWorkspace: 'issues-owner', workspace: 'viewer-home' });
 
   expect(unnamed?.status).toBe(404);
@@ -302,9 +273,7 @@ test('D1: a live share forks for who it names, refuses who it does not, and hono
   expect(result.workspace).toBe('viewer-home');
   expect(result.bindings.map((binding) => binding.name)).toContain('GITHUB');
 
-  // S8 under a live fork too: what lands in the forker's tree is the slate's
-  // own source — none of the owner's is carried, the way a blueprint's admit
-  // already proves.
+  // S8 under a live fork: only the slate's own source lands in the forker's tree.
   const mcpHeader = 'Bearer owner-mcp-header-' + 'a1b2c3d4e5f6';
   world.ownerUser.sql.exec(`UPDATE user_mcp_servers SET headers = ? WHERE id = 'connection-id'`, JSON.stringify({ authorization: mcpHeader }));
   const providerKey = ['sk-ant-', 'owner-provider-key-0123456789'].join('');
@@ -317,14 +286,12 @@ test('D1: a live share forks for who it names, refuses who it does not, and hono
 
   for (const secret of [mcpHeader, providerKey, 'issues-owner']) expect(admittedTree).not.toContain(secret);
 
-  // The flag turns: fork:false shares refuse the same viewer that just forked.
   const closed = await sharePublic(world, 'users', false);
   await world.owner.agent.shareLiveWith(closed.share.id, [{ userId: VIEWER_ID, email: 'pat@example.test' }]);
   const refused = await fork({ live: closed.share.id, ownerWorkspace: 'issues-owner', workspace: 'viewer-home' });
 
   expect(refused?.status).toBe(404);
 
-  // The owner's own share is theirs to fork regardless of the user list.
   const ownerFork = await sharedRequest(world.env, identityOf(OWNER_ID, 'owner@example.test'),
     post('/api/shared/fork', { live: created.share.id, ownerWorkspace: 'issues-owner', workspace: 'issues-owner' }));
 
@@ -335,7 +302,6 @@ test('D2: a public blueprint publish lands on the shared index a stranger reads'
   const world = await twoUserWorld();
   cleanups.push(world.close);
 
-  // A blueprint is cut from a committed version: commit, then publish that id.
   const committed = await world.owner.agent.slate({ op: 'commit', id: 'issues' });
 
   if (!committed.ok) throw new Error(`commit refused: ${committed.reason}: ${committed.error}`);
@@ -361,9 +327,7 @@ test('D2: a public blueprint publish lands on the shared index a stranger reads'
 
   expect(library.public.some((row) => row.id === body.id && row.kind === 'blueprint' && row.title === 'Issue triage')).toBe(true);
 
-  // A share the owner closed to forking is indexed like any other — then
-  // excluded from the list, because a row that cannot be forked is not
-  // something the public page can offer.
+  // A row that cannot be forked is indexed but not something the public page can offer.
   const closedResp = await sharedRequest(world.env, identityOf(OWNER_ID, 'owner@example.test'),
     post('/api/shared/live', { workspace: 'issues-owner', slate: 'issues', visibility: 'public', fork: false }));
 

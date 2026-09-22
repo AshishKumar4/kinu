@@ -1,37 +1,7 @@
 /**
- * The interactive terminal's transport: one WebSocket per attached terminal,
- * carrying raw PTY bytes to and from an environment's shell.
- *
- *   GET /api/workspaces/:agentName/terminal?executor=<id>[&cols=&rows=]
- *   Upgrade: websocket
- *
- * WHY THIS IS ITS OWN SOCKET rather than frames on the agent's chat rail. The
- * client's `rpc(...)` is the agents SDK's chat WebSocket, and it carries JSON
- * text only — every send in `hooks/use-kinu.ts` is a `JSON.stringify`, and the
- * transport's messages are AI-SDK envelopes. `files-routes.ts` records what
- * that rail does to bytes: a 1 MiB frame ceiling against a base64 payload
- * (≈1.37×), which is why file bytes were moved off it and onto HTTP. PTY bytes
- * would need the same base64 inflation plus a demultiplexer inside a
- * vendor-owned protocol, and each keystroke would cross two Durable Objects
- * (orchestrator → container) instead of none. So the terminal follows the
- * precedent this repo already set for bytes: its own endpoint, under the same
- * authentication, ownership and CSRF gates as everything else beneath
- * `/api/workspaces/:agentName/` (server.ts step 10 — a browser WebSocket
- * handshake carries the session cookie and an `Origin`, and
- * `crossSiteRejection` covers upgrades explicitly).
- *
- * The PTY itself is the sandbox SDK's, not ours. `getSandbox(...).terminal()`
- * proxies the upgrade to the container's `/ws/pty`, where a `Bun.Terminal`
- * spawns the shell; the wire protocol is binary frames of PTY bytes each way
- * plus JSON control messages (`{type:'resize'}` in, `ready`/`exit`/`error`
- * out). `@cloudflare/sandbox/xterm`'s `SandboxAddon` is the client half of
- * that same protocol, so the browser speaks it verbatim.
- *
- * The workspace's shell is Nimbus's own, and it lives inside the workspace
- * object with the runtime: the upgrade is forwarded there under
- * `WORKSPACE_TERMINAL_PATH`, the object accepts and tags the socket, and every
- * frame after that is the runtime's (see workspace-terminal.ts). This route
- * stays the auth and ownership boundary; the runtime owns the shell.
+ * Interactive terminal transport: one WebSocket per attached terminal carrying raw PTY bytes,
+ * off the JSON-only chat rail, behind the same auth/ownership/CSRF gates as `/api/workspaces/:agentName/`.
+ * The container PTY is the sandbox SDK's (`/ws/pty`); the workspace shell is the runtime's (workspace-terminal.ts).
  */
 
 import { getSandbox, type PtyOptions } from "@cloudflare/sandbox";
@@ -47,90 +17,46 @@ import { sandboxIdForWorkspace } from "@kinu.run/core";
 import { WORKSPACE_TERMINAL_PATH } from "@kinu.run/core";
 
 /**
- * The PTY entry point the SDK's client proxy adds around the container stub.
- *
- * `PtyOptions` carries `cols`, `rows` and `shell` and nothing else — no cwd, no
- * env — because the container derives both from the SESSION the terminal opens
- * in. `getSession` is a pure wrapper on the container object (no existence
- * check), and the container's PTY handler creates the session it is handed, so
- * naming a session here is how a terminal gets a shell of its own.
- *
- * OPTIONAL because the class the `Sandbox` binding names does not declare it:
- * `getSandbox` returns a Proxy whose `enhancedMethods` add `getSession`,
- * `terminal` and `wsConnect` (verified in the shipped bundle; `terminal` absent
- * from the class), and the SDK's own bridge declares exactly this pair
- * (https://github.com/cloudflare/sandbox-sdk/blob/main/packages/sandbox/src/bridge/routes.ts, `BridgeSandbox`). A property rather than a
- * method, so the one read of it below carries no receiver: the proxy's entries
- * are closures over the stub.
+ * Optional: `getSession` is added by `getSandbox`'s Proxy, not declared on the class. A property,
+ * not a method, since the proxy's entries are closures over the stub. The session sets cwd and env.
  */
 type SandboxPty = {
   getSession?: (sessionId: string) => Promise<{ terminal: (request: Request, options?: PtyOptions) => Promise<Response> }>;
 };
 
-/** The executor name for the owner's own machine. */
 const DEVICE_EXECUTOR = "device";
 
-/** The executor name for the workspace's own runtime. */
 const WORKSPACE_EXECUTOR = "workspace";
 
-/** The window a pane gets when it names none. 80x24 is what a terminal has
- *  been since DEC sold one, and every program still assumes it. */
 const DEFAULT_WINDOW = { cols: 80, rows: 24 } as const;
 
-/** The object that holds a user's device sockets, narrowed to the one thing
- *  this route does with it: hand an upgrade to the DO the machine is attached
- *  to. */
 interface DeviceHolderNamespace {
   idFromName(name: string): DurableObjectId;
   get(id: DurableObjectId): { fetch(request: Request): Promise<Response> };
 }
 
-/** Every call this route makes on the workspace object it addresses. */
 export type TerminalWorkspace = Pick<OrchestratorAgent, 'prepareTerminal' | 'openDeviceTerminal' | 'fetch'>;
 
 /**
- * Every call this route makes on the container client: the lease beat, the
- * shell reset, and the PTY session an attach opens.
- *
- * `noteTerminalActivity` is `KinuSandbox`'s own and `deleteSession` the
- * SDK class's, both reached through the proxy's fall-through to the stub —
- * the same way `runtime.ts` calls `configureEgress`. Only `getSession` is the
- * proxy's addition, and it stays optional for the reason above.
+ * `noteTerminalActivity` and `deleteSession` reach the stub through the proxy's fall-through.
  */
 export interface TerminalSandbox extends SandboxPty {
   noteTerminalActivity(): Promise<void>;
   deleteSession(sessionId: string): Promise<{ success: boolean }>;
 }
 
-/**
- * What this route is handed instead of the Worker's whole Env.
- *
- * The two resolutions are SEAMS rather than bindings because neither is a
- * `namespace.get(namespace.idFromName(name))`: `getAgentByName` also waits on
- * the object's lifecycle startup and retries the platform's own transient
- * failures, and `getSandbox` answers the SDK's client proxy, which is where
- * the PTY surface lives. Re-deriving either here would be a second, unmeasured
- * copy of vendor behaviour, so the entry binds them ({@link terminalRouteDeps})
- * and the lanes below only call them.
- */
+/** Seams, not bindings: `getAgentByName` waits on startup and retries, and `getSandbox` returns the PTY proxy. */
 export interface TerminalRouteDeps {
-  /** The workspace object this request addresses, past its lifecycle startup. */
   resolveWorkspace(name: string): Promise<TerminalWorkspace>;
-  /** The container client for this workspace, or null when the deployment
-   *  binds no Sandbox. Called on the container lane only, so a device or a
-   *  workspace terminal mints no container stub. */
+  /** Called on the container lane only, so device and workspace terminals mint no container stub. */
   resolveSandbox(name: string): TerminalSandbox | null;
   readonly UserDO: DeviceHolderNamespace;
 }
 
-/** The deps as the Worker entry binds them, off its own Env. */
 export function terminalRouteDeps(env: Env): TerminalRouteDeps {
   return {
     resolveWorkspace: (name) => getAgentByName<Env, OrchestratorAgent>(env.OrchestratorAgent, name),
-    // {@link SANDBOX_TRANSPORT}, the one value every Kinu getSandbox call site
-    // passes. The SDK drops in-flight requests when transport changes mid-life
-    // for an id, and it persists the value, so every call site for one sandbox
-    // passes the same options.
+    // Every call site for one sandbox must pass the same transport; the SDK persists it per id.
     resolveSandbox: (name) => env.Sandbox === undefined
       ? null
       : getSandbox(env.Sandbox, sandboxIdForWorkspace(name), { normalizeId: true, transport: SANDBOX_TRANSPORT }),
@@ -138,13 +64,7 @@ export function terminalRouteDeps(env: Env): TerminalRouteDeps {
   };
 }
 
-/**
- * The window the pane asked for, bounded.
- *
- * The numbers reach a real terminal on someone's machine, and a query string
- * is the caller's to write. `Number(null)` and `Number("")` are both 0, which
- * the same bound rejects, so an absent parameter needs no separate arm.
- */
+/** `Number(null)` and `Number("")` are 0, which the bound rejects, so absence needs no separate arm. */
 function paneWindow(url: URL) {
   const axis = (name: "cols" | "rows"): number => {
     const value = Number(url.searchParams.get(name));
@@ -156,30 +76,14 @@ function paneWindow(url: URL) {
 }
 
 /**
- * The session a user's terminal lives in: ONE per workspace, stable, and NOT
- * the session the agent's own exec lane uses.
- *
- * Stable, so a page reload reattaches to the shell that is already there and
- * the container replays its output buffer into it. Separate from the agent's,
- * because a session holds one PTY and one foreground process: on the shared
- * default session a long agent command leaves the user's terminal accepting
- * keystrokes that go into THAT command's stdin — measured, on this route,
- * before it was split. A fresh session also starts where the container says
- * work lives, `/workspace`, rather than wherever the agent last cd'd.
+ * One stable session per workspace, so a reload reattaches; separate from the agent's exec session,
+ * which holds one PTY and foreground process and would feed keystrokes into the agent's command.
  */
 const TERMINAL_SESSION = "kinu-terminal";
 
 /**
- * The handshake, and nothing else, is what the container's PTY endpoint needs.
- *
- * The SDK re-wraps whatever request it is handed (`new Request(ptyUrl, request)`
- * in its `proxyTerminal`), so every header still present at the call below
- * reaches the shell's view of the upgrade — including the browser's
- * `__Host-kinu_session` cookie and the `x-kinu-user-id` header server.ts appends
- * for the DO hop. A container runs agent-chosen code, so it is across a trust
- * boundary from both: an allowlist rather than a strip list, because the set a
- * WebSocket upgrade legitimately carries is closed and the set of credentials a
- * browser might attach is not.
+ * Allowlist: the SDK forwards every header to the container, which runs agent code, so the session
+ * cookie and `x-kinu-user-id` must not reach it.
  */
 const PTY_UPGRADE_HEADERS = {
   "upgrade": true,
@@ -200,8 +104,6 @@ function ptyUpgradeRequest(request: Request): Request {
   return new Request(request, { headers });
 }
 
-/** The client left before the shell opened. A sentinel rather than a rejection:
- *  a departed client is an ordinary outcome, not a failure to classify. */
 const CLIENT_GONE = Symbol("terminal client went away");
 
 function clientGone(signal: AbortSignal): Promise<typeof CLIENT_GONE> {
@@ -213,14 +115,10 @@ function clientGone(signal: AbortSignal): Promise<typeof CLIENT_GONE> {
   return promise;
 }
 
-/** Nobody reads this: the connection it would travel on is already gone. It
- *  exists because a handler must answer, and it says what happened for a log
- *  reader who finds it. */
 function abandonedAttach(): Response {
   return err(503, "terminal attach abandoned: the client disconnected before the shell opened");
 }
 
-/** Which of the route's three verbs a path names, or null when the path is not this route's. */
 function terminalVerb(pathname: string, agentName: string): "attach" | "keepalive" | "reset" | null {
   const base = `/api/workspaces/${agentName}/terminal`;
 
@@ -233,8 +131,6 @@ function terminalVerb(pathname: string, agentName: string): "attach" | "keepaliv
   return null;
 }
 
-/** One terminal request as the lanes read it: settled routing, and the ONE
- *  diagnostic scope every failure below carries. */
 interface TerminalCall {
   readonly request: Request;
   readonly url: URL;
@@ -245,7 +141,6 @@ interface TerminalCall {
   readonly scope: { readonly workspace: string; readonly executor: string };
 }
 
-/** The refusal for an attach that is not a WebSocket upgrade, or null when it is one. */
 function notAnUpgrade(request: Request): Response | null {
   if (request.headers.get("upgrade")?.toLowerCase() !== "websocket") {
     return err(400, "the terminal endpoint is a WebSocket; send an Upgrade: websocket request");
@@ -254,31 +149,14 @@ function notAnUpgrade(request: Request): Response | null {
   return null;
 }
 
-/**
- * THE DEVICE'S OWN LANE, settled before the container is touched at all.
- *
- * A machine's terminal has no container to prepare and no lease to beat: the
- * shell runs on the owner's own computer, reached over the one socket its
- * agent dialled out on. So the workspace opens a session — which is where
- * the grant for that machine and the owner's Sandbox switch are settled —
- * and the pane's socket is then handed to the object that already holds the
- * machine's socket, so the bytes cross between the two inside it. Nothing
- * here opens a port on that machine or dials into it.
- */
+/** The shell runs on the owner's machine: the upgrade is handed to the DO holding its outbound socket. */
 async function deviceTerminal(call: TerminalCall): Promise<Response> {
   const { request, url, deps, agentName, executor, scope } = call;
 
-  // These two verbs are GUARDS, not features. The device pane calls neither
-  // — it has no lease to renew and it restarts by opening a new session —
-  // and their only job is to keep a device request off the container path,
-  // which would beat the lease of a container this terminal is not
-  // running in.
+  // Guards only: they keep a device request off the container path, which would beat a foreign lease.
   if (call.verb !== "attach") {
     if (request.method !== "POST") return err(405, "use POST");
 
-    // A container quiesces when nobody is typing, so it needs telling that
-    // somebody is. A machine is simply on, and its own socket is the
-    // liveness this would have reported.
     return json({ body: { ok: true } });
   }
 
@@ -316,10 +194,7 @@ async function deviceTerminal(call: TerminalCall): Promise<Response> {
   }
 
   if ("error" in opened) {
-    // Already a rendered chain from the other side of the RPC, so it rides
-    // as the cause rather than being restated. A declined grant and a
-    // machine that cannot sandbox are different problems with different
-    // answers, and the pane shows which.
+    // Already a rendered chain from the RPC's other side, so it rides as the cause.
     diagnostics.failure("terminal.device_refused", toKinuError({
       doing: "opening a terminal on this machine",
       cause: opened.error,
@@ -330,11 +205,7 @@ async function deviceTerminal(call: TerminalCall): Promise<Response> {
   }
 
   if (request.signal.aborted) return abandonedAttach();
-  // The upgrade crosses into the Durable Object that holds the machine's
-  // socket. A WebSocket cannot cross an RPC boundary, but an upgrade request
-  // can — the same move the machine's own connect makes. Only the session
-  // name travels: it was minted for this caller a moment ago and the first
-  // attach spends it.
+  // A WebSocket cannot cross an RPC boundary, but an upgrade request can. The session is single-use.
   const socketUrl = new URL(request.url);
   socketUrl.pathname = DEVICE_TERMINAL_PATH;
   socketUrl.search = `?session=${encodeURIComponent(opened.session)}`;
@@ -343,13 +214,7 @@ async function deviceTerminal(call: TerminalCall): Promise<Response> {
   return namespace.get(namespace.idFromName(opened.user)).fetch(new Request(socketUrl, request));
 }
 
-/**
- * THE WORKSPACE'S OWN SHELL. No container and no lease: the shell is the
- * runtime's, inside the workspace object, so the upgrade goes there once the
- * runtime is composed. The keepalive and reset verbs are guards here for the
- * same reason they are for a device — the pane calls neither, and the
- * container path must not be reached for a shell it does not run.
- */
+/** The shell is the runtime's, inside the workspace object; keepalive/reset are guards as for a device. */
 async function workspaceTerminal(call: TerminalCall): Promise<Response> {
   const { request, deps, agentName, executor, scope } = call;
 
@@ -378,9 +243,7 @@ async function workspaceTerminal(call: TerminalCall): Promise<Response> {
     }
 
     if (request.signal.aborted) return abandonedAttach();
-    // The identity headers server.ts appended ride along, so the accepted
-    // socket carries the same session authority a chat socket does and is
-    // closed by the same revocation.
+    // server.ts identity headers ride along, so the socket is closed by the same revocation as chat.
     const socketUrl = new URL(request.url);
     socketUrl.pathname = WORKSPACE_TERMINAL_PATH;
 
@@ -399,13 +262,8 @@ async function workspaceTerminal(call: TerminalCall): Promise<Response> {
 }
 
 /**
- * A terminal's own frames renew the SDK's activity clock — the container
- * proxy calls `renewActivityTimeout()` on every forwarded message — but they
- * never reach the DURABLE lease that `Devbox`'s heartbeat reads to decide
- * whether to quiesce, because a proxied frame is not an operation on the
- * object. Without this beat a container can take its final checkpoint and
- * stop under a user who is typing. The client sends it while a terminal is
- * attached, which is the only evidence that anybody is.
+ * Proxied frames renew the SDK's activity clock but not the durable lease `Devbox` reads before
+ * quiescing; without this beat a container can stop under a typing user.
  */
 async function sandboxKeepalive(sandbox: TerminalSandbox, call: TerminalCall): Promise<Response> {
   if (call.request.method !== "POST") return err(405, "use POST");
@@ -415,11 +273,7 @@ async function sandboxKeepalive(sandbox: TerminalSandbox, call: TerminalCall): P
 
     return json({ body: { ok: true } });
   } catch (cause) {
-    // The whole chain, not the outermost message: a terminal that says only
-    // "renewing the lease failed" leaves the user without the one fact that
-    // explains it (the container is gone, the attach failed, the snapshot is
-    // missing). AGENTS.md § Errors — the chain is never broken at a display
-    // boundary.
+    // The whole chain (AGENTS.md § Errors): it is never broken at a display boundary.
     const error = toKinuError({
       doing: "renewing the container's lease for an attached terminal",
       cause,
@@ -433,24 +287,14 @@ async function sandboxKeepalive(sandbox: TerminalSandbox, call: TerminalCall): P
 }
 
 /**
- * A new shell.
- *
- * The container keeps ONE PTY per session and hands the cached one to every
- * later attach without asking whether it is still alive, so a shell that
- * exited — `exit`, or a program that took the terminal down with it — leaves
- * a session whose every future attach reports `ready` onto a dead shell.
- * Deleting the session destroys its PTY (the container's own
- * `session.destroy()` does), and the next attach opens a fresh one. This is
- * the only way back that does not recycle the whole container.
+ * The container reuses a session's cached PTY even after its shell exits; deleting the session
+ * destroys it so the next attach opens a fresh shell without recycling the container.
  */
 async function sandboxReset(sandbox: TerminalSandbox, call: TerminalCall): Promise<Response> {
   if (call.request.method !== "POST") return err(405, "use POST");
 
   try {
-    // `deleteSession` REPORTS rather than throws for a session that is not
-    // there, and that state already satisfies a reset — the next attach opens
-    // a fresh shell either way. So the outcome is stated (`existed`) instead
-    // of being flattened into a failure or hidden behind a true.
+    // A missing session is reported, not thrown, and already satisfies a reset.
     const deleted = await sandbox.deleteSession(TERMINAL_SESSION);
 
     return json({ body: { ok: true, existed: deleted.success } });
@@ -467,17 +311,7 @@ async function sandboxReset(sandbox: TerminalSandbox, call: TerminalCall): Promi
   }
 }
 
-/**
- * Geometry from the client, so the first frame the shell paints already fits.
- * Bounded: these reach `Bun.Terminal` directly, and a query string is a
- * caller's to write. `Number(null)` and `Number("")` are 0, which the same
- * bound rejects, so an absent parameter needs no separate arm.
- *
- * Typed as the SDK's own `PtyOptions` rather than an anonymous restatement of
- * two of its fields: this value IS that contract, and naming it means a
- * change to the option surface reaches here instead of being absorbed by a
- * local shape that happens to still fit.
- */
+/** Bounded: these reach `Bun.Terminal` directly. */
 function ptySize(url: URL): PtyOptions {
   const size: PtyOptions = {};
 
@@ -491,19 +325,8 @@ function ptySize(url: URL): PtyOptions {
 }
 
 /**
- * The container has to be up and its /workspace attached before a shell opens
- * onto it, and the workspace that owns the egress grants is the only thing
- * that may install them. Both are the sandbox lane's own preflight, so a
- * terminal waits on exactly what an exec waits on — never a second start
- * path, and never a container whose network is still unconfigured.
- *
- * Both halves run inside the SAME tagged scope the attach uses. Routing and
- * the preflight are how a terminal most often fails to open, so they are the
- * failures least affordable to reach the fleet with no workspace and no
- * executor — a refusal rendered to the pane and recorded nowhere, or an
- * unreachable workspace object escaping the handler with no cause chain. The
- * scope stops at the preflight, deliberately — everything past it is the
- * attach's own, under the attach's own cancellation fence.
+ * Same preflight as exec (up, /workspace attached, egress installed), under the attach's diagnostic
+ * scope. Not fenced by cancellation: the start is shared and idempotent.
  */
 async function sandboxPreflight(call: TerminalCall): Promise<Response | null> {
   const { deps, agentName, executor, scope } = call;
@@ -513,9 +336,7 @@ async function sandboxPreflight(call: TerminalCall): Promise<Response | null> {
     const ready = await agent.prepareTerminal(executor);
 
     if ("error" in ready) {
-      // The refusal is ALREADY a rendered chain from the other side of the RPC,
-      // so it rides as the cause rather than being restated. The pane shows that
-      // chain; the fleet row is what this call adds beside it.
+      // Already a rendered chain from the RPC's other side, so it rides as the cause.
       diagnostics.failure("terminal.not_ready", toKinuError({
         doing: "preparing this workspace's container for a terminal",
         cause: ready.error,
@@ -540,17 +361,8 @@ async function sandboxPreflight(call: TerminalCall): Promise<Response | null> {
 }
 
 /**
- * Attach a shell in the container, once the preflight has passed.
- *
- * ONE OWNER, AND IT IS THIS REQUEST — for everything from here down, which is
- * everything that creates container-side state a client has to be present to
- * want: a lease beat, a shell session, a PTY. The fence is the platform's own
- * cancellation rather than a clock: `request.signal` aborts when the client
- * goes away, and an outer deadline would have to be both longer than a cold
- * container start and shorter than a browser tab left open, which is not one
- * number. The preflight is NOT fenced, deliberately: the container is
- * the Durable Object's to start, that start is shared and idempotent, and
- * cancelling it would abandon work another attach is already waiting on.
+ * Fenced by `request.signal`, not a clock: no single deadline exceeds a cold start yet undercuts an
+ * open tab.
  */
 async function sandboxAttach(sandbox: TerminalSandbox, call: TerminalCall, ctx: Pick<ExecutionContext, 'waitUntil'>): Promise<Response> {
   const { request, scope } = call;
@@ -564,29 +376,15 @@ async function sandboxAttach(sandbox: TerminalSandbox, call: TerminalCall, ctx: 
   }
 
   try {
-    // `shell` is deliberately not named: the container's default is `bash`, and
-    // `PtyOptions.shell` is spawned as ONE argv token (`Bun.spawn([shell])`),
-    // so `bash -l` would be an ENOENT rather than a login shell. TERM is
-    // xterm-256color either way — the container sets it on the child, which is
-    // why `top` and `htop` paint instead of refusing.
+    // `shell` is unnamed: `PtyOptions.shell` is spawned as one argv token, so `bash -l` would ENOENT.
     await sandbox.noteTerminalActivity();
     const session = await openSession(TERMINAL_SESSION);
     const upgrade = session.terminal(ptyUpgradeRequest(request), ptySize(call.url));
     const settled = await Promise.race([upgrade, clientGone(request.signal)]);
 
     if (settled === CLIENT_GONE) {
-      // The upgrade is still in flight and nobody wants its socket, so it is
-      // released rather than left pending: a 101 whose WebSocket is never
-      // accepted and never returned leaves the container's end of the PTY
-      // holding an open stream until the edge reaps it for idleness
-      // (PLATFORM_CATALOG `edge.websocket_idle_reap_ms`). `accept()` first
-      // because ownership has to be taken before it can be released.
-      // The response returns NOW, while the container-side upgrade can settle
-      // later. Retain its one cleanup promise in this request's execution
-      // context so isolate teardown cannot discard the only owner of that late
-      // socket. `waitUntil` is retention, not a second owner: the cleanup still
-      // accepts and closes exactly this abandoned upgrade and every failure is
-      // recorded inside the promise rather than left unhandled.
+      // Release the orphaned upgrade, else the PTY stream stays open until the edge idle reap
+      // (PLATFORM_CATALOG `edge.websocket_idle_reap_ms`). `waitUntil` retains it past the response.
       ctx.waitUntil((async () => {
         try {
           const response = await upgrade;
@@ -618,12 +416,7 @@ async function sandboxAttach(sandbox: TerminalSandbox, call: TerminalCall, ctx: 
   }
 }
 
-/** THE CONTAINER'S LANE: the lease beat, the shell reset, and the attach behind its preflight. */
 async function sandboxTerminal(call: TerminalCall, ctx: Pick<ExecutionContext, 'waitUntil'>): Promise<Response> {
-  // `deleteSession` is the class's own and `noteTerminalActivity` is KinuSandbox's,
-  // reached through the same proxy's fall-through to the stub — which is how
-  // `runtime.ts` already calls `configureEgress`. Only {@link SandboxPty} is the
-  // proxy's addition, and `sandboxAttach` reads it before it opens a shell.
   const sandbox = call.deps.resolveSandbox(call.agentName);
 
   if (sandbox === null) return err(503, "no Sandbox binding is configured on this deployment");
@@ -639,12 +432,7 @@ async function sandboxTerminal(call: TerminalCall, ctx: Pick<ExecutionContext, '
   return sandboxAttach(sandbox, call, ctx);
 }
 
-/**
- * Attach a terminal, or say why this environment has none.
- *
- * Auth, CSRF and workspace ownership are settled by the caller (server.ts);
- * this route is reached only for a workspace the identity owns.
- */
+/** Auth, CSRF and ownership are settled by server.ts before this route. */
 export async function handleTerminalRequest(
   request: Request,
   deps: TerminalRouteDeps,
@@ -660,19 +448,12 @@ export async function handleTerminalRequest(
 
   if (!executor) return err(400, "executor query parameter required");
 
-  // ONE diagnostic scope for this request, and every failure below carries it.
-  // These two tags are what make a terminal failure answerable at all: whose
-  // container, and which environment it was asked for. Spelled once here rather
-  // than at the attach, lease and reset sites only, where a readiness refusal —
-  // the most common way a terminal does not open — reaches the fleet with
-  // neither.
+  // One scope for every failure below, including readiness refusals.
   const scope = { workspace: agentName, executor };
 
   const lane = terminalLane(executor);
 
-  // A refusal a UI can render as a labelled mode rather than as a failure. The
-  // body carries the mode and nothing else: what an environment lacks is not a
-  // sentence anyone is shown.
+  // Rendered as a labelled mode, not a failure.
   if (lane.mode === "line") {
     return json({ body: { error: `${executor} has no terminal`, lane: "line" } }, { status: 409 });
   }

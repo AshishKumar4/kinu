@@ -22,8 +22,7 @@ import * as v from 'valibot';
 
 const ErrorResponseSchema = v.object({ error: v.string() });
 
-/** The plane's env around one KV and one account object. Device-code sign-in
- *  reaches neither the published assets nor a workspace object. */
+/** Device-code sign-in reaches neither the published assets nor a workspace object. */
 function testEnv(AUTH_KV: KvStore, UserDO: ObjectNamespace<string, CliRoutesAuthority>): CliRoutesEnv<string> {
   return {
     AUTH_KV,
@@ -48,12 +47,8 @@ function setupEnv() {
   const userDO = cliAccount({
     async ensureProfile(_caller: UserCaller, email: string) { return bootstrappedProfile(email); },
     async mintCliToken(_caller: UserCaller, userId: string, authorizationHash: string, label?: string) {
-      // The real UserDO makes a second mint against one approval impossible
-      // with a unique index (unit-user-authority-races.test.ts drives that
-      // against the real object). This double refuses the same way, in the same
-      // words, so what is exercised HERE is the flow's half of the contract:
-      // that the poll names the approval at all, and that it turns the DO's
-      // refusal into the answer the CLI already understands.
+      // Refuses like the real UserDO's unique index (unit-user-authority-races.test.ts), so this
+      // exercises the flow's half: the poll names the approval and maps the DO's refusal.
       if (claimed.includes(authorizationHash)) {
         throw new Error('That CLI authorization has already been redeemed.');
       }
@@ -74,14 +69,11 @@ function setupEnv() {
   };
 }
 
-/** Every case here starts an auth on the origin it also approves from, so the
- *  two origins move together and only the device and client vary. */
 function startAuth(env: CliRoutesEnv<string>, origin: string, deviceName: string, clientKey = '127.0.0.1') {
   return startCliAuth(env, { origin, approvalOrigin: origin, deviceName, clientKey });
 }
 
-/** A namespace whose writes fail, so a store outage stays a store outage all
- *  the way to the response instead of being read as a code collision. */
+/** A store outage must reach the response as an outage, not be read as a code collision. */
 function brokenKv(): KvStore {
   return {
     async get() { return null; },
@@ -120,12 +112,8 @@ describe('KV-backed CLI auth store', () => {
     expect(second.message).toContain('already delivered');
     expect(minted).toHaveLength(1);
 
-    // ONE APPROVAL, ONE TOKEN, and the claim that holds it to that is the
-    // mint's own: the KV record it was read from cannot enforce this — no
-    // compare-and-swap, and colo-cached reads — so the poll names the approval
-    // and the Durable Object refuses the second redemption. Here the KV record
-    // is deliberately rewound to `approved` first, which is exactly what a
-    // stale colo read looks like.
+    // KV cannot hold one approval to one token (no compare-and-swap, colo-cached reads): the Durable
+    // Object refuses the second redemption. The record is rewound to `approved`, as a stale colo read looks.
     await kv.put(
       `cli-auth:device:${await sha256Hex(started.deviceToken)}`,
       JSON.stringify({
@@ -168,13 +156,12 @@ describe('KV-backed CLI auth store', () => {
     const deadline = Date.parse(started.expiresAt);
 
     try {
-      // Past the deadline, still inside the retention window: readable, expired.
       setSystemTime(new Date(deadline + 1_000));
       expect(await inspectCliAuth(kv, started.userCode)).toMatchObject({ status: 'expired' });
       expect(await pollCliAuth(env, started.deviceToken, '127.0.0.1'))
         .toMatchObject({ status: 'expired', message: 'CLI auth request expired.' });
 
-      // Past retention: the keys are gone, and no sweep ran to remove them.
+      // Past retention the keys are gone with no sweep.
       setSystemTime(new Date(deadline + 10 * 60 * 1000 + 1_000));
       expect(await inspectCliAuth(kv, started.userCode)).toBeNull();
       expect(kv.keys().filter((key) => key.startsWith('cli-auth:'))).toEqual([]);
@@ -273,15 +260,7 @@ describe('CLI auth route status mapping', () => {
   });
 });
 
-// ── The orphaned bearer ─────────────────────────────────────────────────────
-//
-// A CLI session token lives 180 days and the server keeps only its hash. So a
-// logout whose remote revocation never landed — or a token copied off a machine
-// that is gone — left a live bearer that NOTHING could name: the owner had no
-// handle for it, and the only copy of the raw token was on the machine that
-// could not reach the server. These routes are the recovery surface, driven
-// against the real UserDO so the revocation, the generation rise and the socket
-// push are the production ones.
+// Recovery for a bearer nothing could name (server keeps only its hash), against the real UserDO.
 describe('the CLI session inventory', () => {
   const USER_ID = '0123456789abcdef0123456789abcdef';
 
@@ -310,9 +289,7 @@ describe('the CLI session inventory', () => {
   test('another interactive session can name and end a bearer whose raw copy is gone', async () => {
     const { harness, owner, env, device, lost } = await account();
 
-    // The raw token of the lost machine's session is deliberately not used
-    // again below: the recovery has to work from the INVENTORY, because the
-    // raw copy is exactly what no longer exists.
+    // Recovery works from the inventory: the lost machine's raw token is what no longer exists.
     const inventory = v.parse(
       v.object({ sessions: v.array(v.object({ tokenHash: v.string(), label: v.string() })) }),
       await handled(await handleCliRequest(sessionsRequest(device.token), env)).json(),
@@ -328,14 +305,11 @@ describe('the CLI session inventory', () => {
     );
 
     expect(revoked?.status).toBe(200);
-    // Dead by the store's own answer, on the hash alone.
     expect(await harness.userDO.verifyCliToken(owner, lost.token))
       .toMatchObject({ ok: false, error: 'invalid token' });
-    // The revoking session is untouched — this is a revocation, not a reset.
     expect(await harness.userDO.verifyCliToken(owner, device.token)).toMatchObject({ ok: true });
     expect((await harness.userDO.listCliTokens(owner)).map((row) => row.label)).toEqual(['device']);
-    // And the generation rose, so the sockets that bearer holds are closed
-    // rather than left listening until it chooses to speak.
+    // The generation rose, so that bearer's sockets are closed.
     expect(harness.revokedSocketPushes).toContain('workspace-a:1');
     harness.close();
   });
@@ -347,9 +321,7 @@ describe('the CLI session inventory', () => {
 
     expect(v.parse(v.object({ ok: v.boolean(), revoked: v.number() }), await handled(response).json()))
       .toEqual({ ok: true, revoked: 2 });
-    // Every bearer, including the caller's own: an account whose orphan cannot
-    // be named is an account whose every remaining bearer needed to die. One
-    // generation rise covers all of their sockets at once.
+    // Every bearer including the caller's; one generation rise covers all their sockets.
     expect(await harness.userDO.verifyCliToken(owner, device.token)).toMatchObject({ ok: false });
     expect(await harness.userDO.verifyCliToken(owner, lost.token)).toMatchObject({ ok: false });
     expect(await harness.userDO.listCliTokens(owner)).toEqual([]);
@@ -374,7 +346,6 @@ describe('the CLI session inventory', () => {
         .toContain('interactive CLI session token');
     }
 
-    // Nothing was revoked by the refusals.
     expect(await harness.userDO.verifyCliToken(owner, device.token)).toMatchObject({ ok: true });
     harness.close();
   });

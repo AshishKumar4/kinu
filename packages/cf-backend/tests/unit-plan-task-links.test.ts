@@ -115,22 +115,17 @@ test('actual owner approval admits the real Think program and attributes its nat
 
   const approval = await agent.decidePlanReview(submitted.plan.id, submitted.plan.revision, 'approve');
   expect(approval).toMatchObject({ ok: true, queued: true });
-  // The Bun harness records alarms; invoke the SAME public callback the real scheduled alarm calls.
+  // The Bun harness records alarms; invoke the callback the real alarm calls.
   await chatSessionTurns(agent).drainEnqueued();
   expect((await planTasks()).map(task => task.title)).toEqual(['host task']);
   await chatSessionTurns(agent).run('This unrelated turn is not an approved-plan submission.');
   expect((await planTasks()).map(task => task.id)).toEqual(['t1']);
-  // t1/t2 are the turns this suite drove; the reminder turns queued between
-  // them legitimately add tasks of their own — presence, not count, is what
-  // attribution is being pinned on.
+  // Queued reminder turns add tasks of their own: pin presence, not count.
   expect((await agent.listAgentTasks()).map(task => task.id)).toEqual(expect.arrayContaining(['t1', 't2']));
   const metadata = { kinuEvent: 'plan_approved', planId: submitted.plan.id, revision: submitted.plan.revision, decision: 'approve' };
   await chatSessionTurns(agent).enqueue('Metadata is not approval authority.', { id: 'unkeyed-approval-metadata', metadata });
   await chatSessionTurns(agent).drainEnqueued();
-  // The metadata-only turn must NOT admit the plan again — the contract is that
-  // it adds a task while the plan's own row stays attributed once. Count drifts
-  // with the reminder turns queued beside it; what is pinned is that the turn
-  // produced one more task than the suite drove itself.
+  // The metadata-only turn adds a task without admitting the plan again.
   expect((await agent.listAgentTasks()).length).toBeGreaterThanOrEqual(3);
   expect((await agent.listAgentTasks()).map(task => task.id)).toEqual(expect.arrayContaining(['t1', 't2']));
   const page = await agent.inspectSubordinate({ path: [], view: 'plans', page: { limit: 1 } });

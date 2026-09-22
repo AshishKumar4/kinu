@@ -1,22 +1,6 @@
 /**
- * Every broadcast channel must be read by somebody.
- *
- * `BackendHost.broadcast` is a fire-and-forget fan-out to connected clients,
- * and it is typed `{ type: string; [key: string]: unknown }` — so a channel
- * nobody listens to is not a type error, not a runtime error, and not visible
- * in any log. It is a feature that is fully built, fully tested, and does
- * nothing.
- *
- * The defect this locks: `broadcast({ type: 'background_event_injected', … })`
- * shipped with zero consumers repo-wide. It even had a test —
- * `unit-agent-orchestrator.test.ts` asserted the broadcast fired — which is the
- * part worth sitting with. The test passed, the assertion was true, and the
- * feature was dead. Asserting that a producer produced is not evidence that
- * anything happens; only the other end is.
- *
- * So this walks both ends. It is a source-level gate on purpose: producer and
- * consumer are in different processes (a Durable Object and a browser), so no
- * runtime test can span them, and the failure is precisely an absence.
+ * Defends: a `broadcast` channel with zero consumers (`background_event_injected` shipped dead);
+ * the payload type cannot catch it. Source-level because producer (DO) and consumer (browser) never share a process.
  */
 
 import { describe, expect, test } from 'bun:test';
@@ -25,11 +9,8 @@ import { join, relative, resolve } from 'node:path';
 
 const REPO = resolve(import.meta.dir, '../../..');
 
-/** Where broadcasts are produced: the core loop and the CF backend. */
 const PRODUCER_ROOTS = ['packages/core/src', 'packages/cf-backend/src'] as const;
 
-/** Where they are consumed: the browser client and the CLI, the two surfaces a
- *  `BackendHost` fans out to. */
 const CONSUMER_ROOTS = ['packages/cf-backend/src', 'packages/cli/src'] as const;
 
 function sourceFiles(root: string, exts: readonly string[]): string[] {
@@ -52,7 +33,6 @@ function sourceFiles(root: string, exts: readonly string[]): string[] {
   return out.sort();
 }
 
-/** The balanced argument text of a call whose `(` is at `open`. */
 function callArgument(text: string, open: number): string {
   let depth = 0;
 
@@ -70,9 +50,7 @@ function callArgument(text: string, open: number): string {
   return '';
 }
 
-/** Discriminants declared at the TOP level of a broadcast argument's object
- *  literal. Depth matters: `parts: [{ type: 'text' }]` is a message part, not a
- *  channel, and counting it would make the gate assert nonsense. */
+/** Top-level discriminants only: `parts: [{ type: 'text' }]` is a message part, not a channel. */
 function channelsIn(argument: string): string[] {
   const found: string[] = [];
   let depth = 0;
@@ -87,8 +65,6 @@ function channelsIn(argument: string): string[] {
   return found;
 }
 
-/** Records one broadcast argument's channels against the file it was found in.
- *  A file that broadcasts the same channel twice is still one producer. */
 function recordProducers(channels: Map<string, string[]>, argument: string, file: string): void {
   for (const name of channelsIn(argument)) {
     const at = channels.get(name) ?? [];
@@ -98,7 +74,6 @@ function recordProducers(channels: Map<string, string[]>, argument: string, file
   }
 }
 
-/** channel name → the files that broadcast it. */
 function broadcastChannels(): Map<string, string[]> {
   const channels = new Map<string, string[]>();
 
@@ -117,15 +92,8 @@ function broadcastChannels(): Map<string, string[]> {
 
 const CHANNELS = broadcastChannels();
 
-/**
- * Consumer evidence must be COMPARISON-shaped: `.type === 'x'`, `!== 'x'`,
- * `case 'x':`. A bare quoted-substring match is not evidence — producers
- * construct `{ type: 'x' }` (colon form, also via helpers this scan cannot
- * trace), type declarations declare `type: 'x';`, and SQL DDL can contain the
- * same word as a table name. Under the old substring match every one of those
- * counted as a consumer, so the gate was passing for the wrong reason: a
- * channel whose real handler was deleted stayed green off its own producer.
- */
+/** Consumer evidence must be comparison-shaped (`=== 'x'`, `case 'x':`); a bare substring also matches
+ *  producers, type declarations and SQL DDL. */
 function readsChannel(text: string, channel: string): boolean {
   const name = channel.replace(/[.*+?^${}()|[\]\\-]/g, '\\$&');
 
@@ -136,9 +104,7 @@ function readsChannel(text: string, channel: string): boolean {
   ).test(text);
 }
 
-/** The AI chat hook owns this framework protocol frame internally. Its
- * registration against the same Agent connection is the consumer evidence;
- * application code does not receive the frame through its own switch. */
+/** The AI chat hook consumes this protocol frame internally; its registration is the evidence. */
 function readsFrameworkChannel(text: string, channel: string): boolean {
   return channel === 'cf_agent_chat_messages'
     && /\buseAgentChat\s*\(\s*\{\s*agent\s*,/.test(text);
@@ -146,20 +112,16 @@ function readsFrameworkChannel(text: string, channel: string): boolean {
 
 describe('broadcast channels reach a consumer', () => {
   test('the scan finds the broadcast surface at all', () => {
-    // Guards the guard: if `broadcast(` is renamed or the object shape changes,
-    // every per-channel assertion below would silently vanish and this file
-    // would pass while checking nothing.
+    // Guards the guard: a rename of `broadcast(` must not let every assertion vanish.
     expect(CHANNELS.size).toBeGreaterThanOrEqual(8);
     expect([...CHANNELS.keys()]).toContain('signal_card');
   });
 
   test('the consumer predicate can fail (canaries)', () => {
-    // Producer/declaration shapes must NOT count as consumption…
     expect(readsChannel(`broadcast({ type: 'ghost_channel', x: 1 })`, 'ghost_channel')).toBe(false);
     expect(readsChannel(`interface P { type: 'ghost_channel'; }`, 'ghost_channel')).toBe(false);
     expect(readsChannel(`CREATE TABLE ghost_channel (id TEXT)`, 'ghost_channel')).toBe(false);
 
-    // …and no file in the consumer roots reads a channel nobody broadcasts.
     const readers = CONSUMER_ROOTS
       .flatMap((root) => sourceFiles(root, ['.ts', '.tsx']))
       .filter((file) => readsChannel(readFileSync(file, 'utf8'), 'channel_nobody_ever_broadcast'));
@@ -179,8 +141,6 @@ describe('broadcast channels reach a consumer', () => {
         })
         .map((file) => relative(REPO, file));
 
-      // The failure names the channel and where it is broadcast from, because
-      // the fix is always one of two things: wire it up, or delete it.
       expect({
         channel,
         broadcastFrom: producers.map((p) => relative(REPO, p)),
@@ -194,18 +154,8 @@ describe('broadcast channels reach a consumer', () => {
   }
 });
 
-/**
- * `head_activity` is a socket frame, and a reader that misses one has to have a
- * way back. `useNodeTranscript` provides it — a slow fallback re-read, armed
- * only while the node is still working — but the arming is the CALLER's, and a
- * caller that omits it gets the push and nothing under it. The branch chip
- * omitted it, and it is the one reader that cannot recover by hand: the panel
- * reader can click another node and re-key the fetch, a chip has one node.
- *
- * Source-level for the same reason as the scan above: the failure is an absent
- * argument in a browser component, and the frame it depends on comes from a
- * Durable Object.
- */
+/** Every `useNodeTranscript` caller must arm the fallback re-read after a missed `head_activity`
+ *  frame; a branch chip has one node and cannot recover by hand. */
 describe('every open node transcript can recover a missed head_activity frame', () => {
   const READERS = sourceFiles('packages/cf-backend/src', ['.ts', '.tsx'])
     .flatMap((file) => {
@@ -216,13 +166,11 @@ describe('every open node transcript can recover a missed head_activity frame', 
         calls.push({ file: relative(REPO, file), argument: callArgument(text, text.indexOf('(', at)) });
       }
 
-      // The hook's own declaration is `useNodeTranscript({ … }: { … })`, not a call.
+      // The hook's own declaration is not a call.
       return calls.filter((call) => !call.argument.includes(': {'));
     });
 
   test('the scan finds the readers at all', () => {
-    // Guards the guard: renaming the hook must fail here, not silently stop
-    // checking every caller of it.
     expect(READERS.length).toBeGreaterThanOrEqual(2);
     expect(READERS.map((r) => r.file)).toContain('packages/cf-backend/src/components/AlternateTakes.tsx');
   });

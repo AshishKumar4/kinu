@@ -1,16 +1,6 @@
 /**
- * The generated runner's own contract: the process is the NimbusProcess
- * instance's state, so a FRESH instance — one that never saw spawn's
- * `startProcess` call — must materialize it before serving. Measured on
- * production 2ee3f7c92 (~/kinu-logs/slate-cold/REPORT.md): a routed request
- * reached a re-created facet instance that answered
- * `404 x-slate-runner: unstarted` because `#slate` was never set.
- *
- * The module text under test is `slateRunnerSource` verbatim; only the
- * imports change. `cloudflare:workers` does not exist under bun, so the DO
- * base class comes from a stub; `server.js` is the real
- * `SLATE_SERVER_MODULE` and `capnweb.js` the real package, so the batch RPC
- * arm below exercises the runner's actual forwarder.
+ * A fresh NimbusProcess instance that never saw `startProcess` must materialize the process before serving; measured on
+ * production 2ee3f7c92 (~/kinu-logs/slate-cold/REPORT.md) as `404 x-slate-runner: unstarted`. Runs `slateRunnerSource` verbatim.
  */
 import { describe, expect, test } from 'bun:test';
 import { writeFileSync } from 'node:fs';
@@ -21,13 +11,10 @@ import { SLATE_SERVER_MODULE } from '@kinu.run/core/slates';
 import { slateRunnerSource } from '../src/slates/resident';
 import { slateBatchStub } from '../src/slates/rpc-transport';
 
-/** The `ctx` the platform hands a Durable Object — only `storage.sql` and
- *  `waitUntil` are read before `startProcess`, so the stub needs no more. */
+/** Only `storage.sql` and `waitUntil` are read before `startProcess`. */
 interface RunnerCtx { readonly storage: { readonly sql: Record<string, never> }; waitUntil(task: Promise<void>): void }
 
-/** The bindings the host plants on the facet: `__storage` and `__host` are
- *  raw RPC handles the generated code only forwards through. */
-/** The host RPC envelope the generated code checks: `{ok, value}` on success. */
+/** `{ok, value}` on success. */
 interface HostCallResult { readonly ok: boolean; readonly value?: JsonInput; readonly reason?: string; readonly error?: string }
 
 interface RunnerEnv {
@@ -54,9 +41,7 @@ declare global {
 
 const slateStarts = () => globalThis.__slateStarts ?? 0;
 
-/** Write `slateRunnerSource` and its module map into `dir`, then import the
- *  runner the way the dynamic worker loads it. Dynamic import is required:
- *  the module is generated at runtime, so no static specifier can name it. */
+/** Dynamic import: the runner module is generated at runtime. */
 async function loadRunner(dir: string, application: string): Promise<RunnerClass> {
   writeFileSync(join(dir, 'cf-stub.js'), [
     'export class DurableObject {',
@@ -64,8 +49,7 @@ async function loadRunner(dir: string, application: string): Promise<RunnerClass
     '}',
   ].join('\n'));
 
-  // Scratch dirs live outside the repo, so sibling stubs resolve capnweb by
-  // absolute path — a bare specifier would walk /tmp for it.
+  // Scratch dirs live outside the repo, so capnweb resolves by absolute path.
   writeFileSync(join(dir, 'capnweb.js'), `export { newWorkersRpcResponse, newWebSocketRpcSession, RpcTarget } from ${JSON.stringify(import.meta.resolve('capnweb'))};`);
   writeFileSync(join(dir, 'vendor.js'), 'export const react = ""; export const capnweb = ""; export const slateClient = "";');
   writeFileSync(join(dir, 'server.js'), SLATE_SERVER_MODULE);
@@ -78,8 +62,6 @@ async function loadRunner(dir: string, application: string): Promise<RunnerClass
   return present(mod.NimbusProcess, "the runner module's NimbusProcess export");
 }
 
-/** The `ctx`/`env` the fabric hands the object: `ctx.storage` for `this.sql`,
- *  a `__storage` stub answering an in-memory KV, and `__host` for releases. */
 function instanceOf(Runner: RunnerClass): RunnerInstance {
   const kv = new Map<JsonInput, JsonInput>();
 
@@ -129,14 +111,12 @@ describe('a re-created runner instance', () => {
     const runner = instanceOf(Runner);
     const base = slateStarts();
 
-    // No startProcess call — exactly the shape of an instance re-created
-    // behind an already-running process row.
+    // No startProcess call: an instance re-created behind an already-running process row.
     const first = await runner.fetch(get('/ping'));
 
     expect(first.status).toBe(200);
     expect(first.headers.get('x-slate-runner')).toBeNull();
-    // SAFETY: `PING_APP` above is the fixture this test file constructs —
-    // its fetch answers `Response.json({ message: 'pong' })` on /ping.
+    // SAFETY: `PING_APP` answers `Response.json({ message: 'pong' })` on /ping.
     expect(await first.json<{ message: string }>()).toEqual({ message: 'pong' });
     expect(slateStarts()).toBe(base + 1);
 
@@ -145,7 +125,6 @@ describe('a re-created runner instance', () => {
     expect(second.status).toBe(200);
     expect(slateStarts()).toBe(base + 1);
 
-    // Concurrent requests on one cold instance share the one boot.
     const cold = instanceOf(Runner);
     const answers = await Promise.all([cold.fetch(get('/ping')), cold.fetch(get('/ping'))]);
 
@@ -158,8 +137,6 @@ describe('a re-created runner instance', () => {
     const runner = instanceOf(Runner);
     const base = slateStarts();
 
-    // The normal path — spawn's startProcess lands first, requests second —
-    // and the cold-start path see the same single boot per instance.
     expect((await runner.startProcess()).ok).toBe(true);
     expect((await runner.startProcess()).ok).toBe(true);
     expect((await runner.fetch(get('/ping'))).status).toBe(200);
@@ -183,8 +160,7 @@ describe('a re-created runner instance', () => {
     );
 
     try {
-      // One authored method over capnweb's HTTP batch transport, issued
-      // against a cold instance: requires the memo AND a rebuilt forwarder.
+      // capnweb HTTP batch against a cold instance: needs the memo and a rebuilt forwarder.
       const before = slateStarts();
 
       expect((await stub.ping()).starts).toBe(before + 1);
@@ -197,13 +173,9 @@ describe('a re-created runner instance', () => {
   test('a failed start answers 503 x-slate-runner:start-failed and the next request retries', async () => {
     const dir = scratchDir('kinu-runner-failed');
 
-    // The slate publishes a non-class first; `promote` is how the test makes
-    // the same module record succeed on retry.
     const Runner = await loadRunner(dir, [
       'import { SlateObject } from "./server.js";',
-      // `Slate` is a live binding: the first start sees a value that fails the
-      // class contract; `promote` installs the real class so the retry proves
-      // the memo cleared rather than serving a cached refusal.
+      // A live binding: `promote` installs the real class so the retry proves the memo cleared.
       'export let Slate = "not a class";',
       'export function promote() { Slate = class extends SlateObject {',
       '  async fetch() { return new Response("recovered"); }',

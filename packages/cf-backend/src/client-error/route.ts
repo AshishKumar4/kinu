@@ -1,34 +1,7 @@
 /**
- * `POST /api/client-errors` — one browser render failure becomes one line in
- * Workers Logs.
- *
- * ## Where the release identity comes from
- *
- * The browser reports the build it LOADED, and this route does not take its word
- * for it. It reads the build stamp out of the deployed asset bundle — the same
- * read `/api/health` answers with, so there is one source for "which commit is
- * live" — and records both shas plus their relation. A tab held open across a
- * deploy is running code the origin no longer serves, and the resulting render
- * failure is unreproducible against `HEAD`; `releaseMatch: 'stale'` is what
- * turns that from a mystery into a fact.
- *
- * The mismatch is LABELLED, not refused. A stale page's failure is the most
- * interesting report this endpoint receives — it is the whole version-skew
- * failure mode arriving with a stack attached — and rejecting it would discard
- * exactly the evidence the endpoint exists to collect. What refusal is for is a
- * body that is not a report: over the bound, or off the schema.
- *
- * ## What is deliberately not here
- *
- * No row, no object, no data point of its own. The report is a diagnostic, and
- * `diagnostics` already fans out to `console` (which is Workers Logs on workerd)
- * and to the fleet dataset; a second, hand-written mirror would be a second
- * thing to keep consistent and a second retention to reason about.
- *
- * No rate gate either, and that is a decision rather than an omission: this
- * endpoint is reachable only behind the session gate and the CSRF gate, so its
- * callers are signed-in browsers, and one report per caught error per boundary
- * instance is already bounded by the client (`components/ErrorBoundary.tsx`).
+ * `POST /api/client-errors`: one browser render failure becomes one Workers Logs line via `diagnostics`.
+ * The release is read from the deployed bundle, not trusted from the browser; a mismatch is labelled `stale`, never refused.
+ * No rate gate: callers are session+CSRF-gated browsers and `components/ErrorBoundary.tsx` bounds reports client-side.
  */
 
 import * as v from 'valibot';
@@ -46,13 +19,7 @@ import {
 
 const OVER_REQUEST_LIMIT = `a render-failure report is limited to ${String(CLIENT_ERROR_MAX_REQUEST_BYTES >> 10)} KiB`;
 
-/**
- * How the reported build relates to the one this deployment serves.
- *
- * `undeployed` is checked FIRST: when the bundle carries no stamp there is
- * nothing to compare against, whatever the browser claimed, and saying `stale`
- * there would be a fabricated finding on every `vite dev` session.
- */
+/** `undeployed` is checked first: with no bundle stamp, `stale` would be a false finding on every `vite dev` session. */
 function releaseMatch(reported: string | undefined, current: string | undefined): ReleaseMatch {
   if (current === undefined) return 'undeployed';
 
@@ -61,14 +28,7 @@ function releaseMatch(reported: string | undefined, current: string | undefined)
   return reported === current ? 'match' : 'stale';
 }
 
-/**
- * The whole policy. Answers every request that reaches it.
- *
- * `identity` is nullable and refused here even though `server.ts` calls this
- * behind the auth gate. A route whose authorization is performed only by its
- * caller is one refactor away from being unguarded, and this one writes to the
- * operator's log sink: an anonymous writer would be a log-injection endpoint.
- */
+/** Refuses a null `identity` itself even behind server.ts's auth gate: an anonymous writer would be a log-injection endpoint. */
 async function handleClientErrorReport(
   request: Request,
   env: ClientErrorEnv,
@@ -76,10 +36,7 @@ async function handleClientErrorReport(
 ): Promise<Response> {
   if (identity === null) return err(401, 'sign in to report a render failure');
 
-  // `readBounded` owns both halves of the bound — the declared-length pre-filter
-  // and the count of arriving bytes — so this route states the limit and reads
-  // the outcome. The limit is Analytics Engine's per-data-point text budget; see
-  // `contract.ts` for why that is the number and not a choice made here.
+  // The limit is Analytics Engine's per-data-point text budget; see `contract.ts`.
   const bounded = await readBounded(request, CLIENT_ERROR_MAX_REQUEST_BYTES);
 
   if (bounded === 'too_large') return err(413, OVER_REQUEST_LIMIT);
@@ -95,19 +52,14 @@ async function handleClientErrorReport(
     tolerate(() => JSON.parse(new TextDecoder().decode(bounded)), 'malformed-input'),
   );
 
-  // One refusal for every way a body can fail to be a report, and no detail
-  // about which: the sender is our own ErrorBoundary, which has nothing to
-  // correct, and a schema-shaped error message is a map of the accepted fields.
+  // One opaque refusal: a schema-shaped error message would map the accepted fields.
   if (!parsed.success) return err(400, 'not a render-failure report');
   const report = parsed.output;
 
   const build = await readBuildStamp(env, request.url);
   const match = releaseMatch(report.release, build?.sha);
 
-  // Scalars only, and every one either a fixed vocabulary or a coordinate. The
-  // authoritative `release` is this deployment's own stamp; `reportedRelease` is
-  // what the browser claimed, kept separately so the two can be compared in a
-  // query rather than conflated into one field nobody can trust.
+  // Scalars only. `release` is this deployment's stamp; `reportedRelease` is the browser's claim, kept apart for comparison.
   diagnostics.event(CLIENT_RENDER_FAILED, {
     release: build?.sha ?? '',
     version: build?.version ?? '',
@@ -120,14 +72,9 @@ async function handleClientErrorReport(
     componentStack: report.componentStack,
   });
 
-  // The route's verdict, and the only thing it has to say. Accepted rather than
-  // created: nothing was stored.
   return json({ body: { releaseMatch: match } }, { status: 202 });
 }
 
-/** Path and method routing only; the policy is `handleClientErrorReport`. */
-/** The one binding this route reads: the published build stamp a report is
- *  matched against. */
 export type ClientErrorEnv = Parameters<typeof readBuildStamp>[0];
 
 export async function handleClientErrorRequest(

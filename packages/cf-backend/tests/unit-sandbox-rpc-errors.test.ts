@@ -1,35 +1,7 @@
 /**
- * The rpc lane re-raises the SDK's file-error shape — the transport the
- * product actually uses (`SANDBOX_TRANSPORT = "rpc"`, one capnweb session).
- *
- * THE FAILURE THIS LOCKS DOWN SHIPPED TWICE. First as an untranslated miss
- * (a create through the mount refused `io`); then, with the core taxonomy in
- * place, the deployed first-run case `sandbox-mount-write` (build ac73ffc5e,
- * which contains that fix) STILL answered `write
- * /sandbox/workspace/first-run-mount.mjs failed: FileNotFoundError: File not
- * found: /workspace/first-run-mount.mjs`. The core translation keys on the
- * SDK's `name`/`errorResponse`, and over rpc neither crosses:
- *
- *   - capnweb sends `["error", name, message]`
- *     (node_modules/capnweb/dist/index-workers.js:1526) and re-materializes
- *     with `ERROR_TYPES[name] || Error` (:1698), while `ERROR_TYPES` (:1309)
- *     holds only the platform's seven plus AggregateError — so a
- *     `FileNotFoundError` arrives client-side as a plain `Error`. Own
- *     enumerable props DO cross (:1505-1519 → :1702-1712, measured below),
- *     but the SDK's client wrapper only re-raises `instanceof SandboxError`
- *     (`translateRPCError`, sandbox-CPj2jsbz.js:3671) and the DO hop drops
- *     the custom props with the class — the same loss `sandbox-exec-lane.ts`
- *     already routes around by carrying readiness as data.
- *   - Neither dist concatenates name+message anywhere (verified by grep), the
- *     SDK wrapper preserves the message verbatim, and structuredClone
- *     preserves it verbatim (measured below) — so the `FileNotFoundError: `
- *     token leading the live string is baked in server-side, and it is the
- *     only classification the lane ever sees.
- *
- * The first section measures the wire with a REAL capnweb session against a
- * fake container server, so the shape the lane restores from is observed, not
- * assumed. The second drives the lane with that exact shape — the live string
- * verbatim — and proves core's one translation serves both transports.
+ * The rpc lane re-raises the SDK's file-error shape. Defends `sandbox-mount-write` on build ac73ffc5e answering
+ * `FileNotFoundError` untranslated: capnweb rebuilds unknown error names as plain `Error` (node_modules/capnweb/dist/index-workers.js:1698)
+ * and the DO hop drops custom props, so the `FileNotFoundError: ` message prefix is the only classification left.
  */
 import { describe, expect, test } from 'bun:test';
 import * as v from 'valibot';
@@ -39,10 +11,8 @@ import type { KinuSandbox } from '../src/kinu-sandbox';
 import { adaptCloudflareSandbox } from '../src/sandbox-exec-lane';
 import { present } from '@kinu.run/test-utils';
 
-/** The SDK's thrown shape, structurally: `name` set in the constructor and
- *  `errorResponse` as an own enumerable prop (sandbox-CPj2jsbz.js:15-17 and
- *  the FileNotFoundError ctor at :59-63). The classes themselves are not
- *  exported from the package index, so the double carries the shape. */
+/** The SDK's thrown shape (sandbox-CPj2jsbz.js:15-17, :59-63); the classes are not exported from the package
+ *  index, so the double carries the shape. */
 function sdkThrown(name: string, code: string, message: string): Error {
   const error = new Error(message);
   error.name = name;
@@ -86,11 +56,9 @@ describe('the rpc wire flattens SDK file errors to name plus message', () => {
       }
 
       if (!(caught instanceof Error)) throw new Error('the wire must reject with an Error');
-      // The collapse: FileNotFoundError is not in ERROR_TYPES, so the class is gone.
+      // FileNotFoundError is not in ERROR_TYPES, so the class is gone.
       expect(caught.name).toBe('Error');
-      // No concatenation anywhere on the path: the message is byte-identical.
       expect(caught.message).toBe('File not found: /workspace/x.mjs');
-      // ...while the response object rides along as ordinary props.
       expect(v.parse(WireErrorProps, caught).errorResponse?.code).toBe('FILE_NOT_FOUND');
     } finally {
       port1.close();
@@ -108,16 +76,14 @@ describe('the rpc wire flattens SDK file errors to name plus message', () => {
   });
 });
 
-/** The live string, verbatim (kinu.run build ac73ffc5e): name already
- *  flattened to Error, kind baked into the message, props gone. */
+/** The live string, verbatim (kinu.run build ac73ffc5e). */
 const LIVE_MISS = 'FileNotFoundError: File not found: /workspace/first-run-mount.mjs';
 
 function liveWireError(): Error {
   return new Error(LIVE_MISS);
 }
 
-/** A container that serves files but answers a missing read the way the
- *  deployed one does — the live shape above, not the SDK class. */
+/** A container answering a missing read with the live shape above, not the SDK class. */
 function rpcBox(store: Map<string, string>): KinuSandbox {
   const readFile = async (path: string) => {
     const bytes = store.get(path);

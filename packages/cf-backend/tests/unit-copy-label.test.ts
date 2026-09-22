@@ -1,5 +1,4 @@
-// A clipboard write can reject (denied permission, insecure origin, unfocused
-// document). The label must never claim success for one that did.
+// A clipboard write can reject; the label must never claim success for one that did.
 import { describe, test, expect } from 'bun:test';
 import { copyLabel } from '../src/hooks/use-copy';
 

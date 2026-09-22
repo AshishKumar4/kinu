@@ -1,17 +1,6 @@
 /**
- * The Sandbox switch, as the owner reads it.
- *
- * The sandbox is one per-device setting: the switch itself is a
- * `role="switch"` whose `aria-checked` IS the tier, and the row carries one
- * label per mode. The badge is a machine fact the switch cannot change, so
- * it sits beside the switch rather than inside a sentence.
- *
- * And one thing the client must tolerate: a device row written before the
- * registry recorded a sandbox. It parses as the default — switch on,
- * capability unproven — rather than failing the whole listing.
- *
- * `renderToStaticMarkup` runs the components for real. No effects run and none
- * are needed: every line under test is derived from props.
+ * The Sandbox switch: `aria-checked` is the tier; the badge is a machine fact beside it. A device row written before the
+ * registry recorded a sandbox must parse as the default rather than fail the listing.
  */
 import './helpers/ui-module-globals';
 import { afterEach, describe, expect, test } from 'bun:test';
@@ -40,8 +29,7 @@ const SERVED = '0.3.0+served';
 
 const CURRENT = { version: SERVED, servedVersion: SERVED, update: 'current' } as const;
 
-/** What a reader sees: the markup with its entity escapes resolved, so every
- *  assertion below can quote the product's own words. */
+/** Entity escapes resolved, so assertions quote the product's own words. */
 function readable(markup: string): string {
   return markup
     .replaceAll('&#x27;', "'")
@@ -62,7 +50,6 @@ function renderRow(sandbox: UserDevice['sandbox'], update?: Pick<UserDevice, 've
   })));
 }
 
-/** The switch's own state, read off the one `role="switch"` in the row. */
 function switchState(markup: string) {
   const switches = [...markup.matchAll(/<button[^>]*role="switch"[^>]*>/g)].map((match) => match[0]);
   const checked = switches[0]?.match(/aria-checked="(true|false)"/)?.[1] ?? null;
@@ -142,8 +129,6 @@ describe('the bind card asks one question and offers one binding', () => {
   });
 });
 
-/** The update badge: the one `role="status"` in the row, read by its data
- *  attribute and its text. */
 function updateBadge(markup: string): { state: string; text: string } | null {
   const match = markup.match(/<span role="status" data-device-update="([a-z]+)"[^>]*>([^<]*)<\/span>/);
 
@@ -156,7 +141,7 @@ describe('the device row shows the machine\'s software state beside its link sta
   test('behind the served build: a badge with the update-available copy', () => {
     const html = renderRow(sandboxed, { version: '0.2.0+older', servedVersion: SERVED, update: 'behind' });
     expect(updateBadge(html)).toEqual({ state: 'behind', text: DEVICE_UPDATE_COPY.behind });
-    // Beside the connected badge, not a new row: both sit in the header line.
+    // Beside the connected badge, in the header line, not a new row.
     const header = html.slice(0, html.indexOf('role="switch"'));
     expect(header).toContain('>connected<');
     expect(header).toContain('data-device-update="behind"');
@@ -190,13 +175,11 @@ describe('a device row written before the registry recorded a sandbox', () => {
       { preconnect: realFetch.preconnect },
     );
     const devices = await listDevices();
-    // `withSandbox` carries no `detail`: a hub that does not send the field
-    // lists as having said nothing beyond the reason.
+    // A hub that omits `detail` lists as having said nothing beyond the reason.
     expect(devices.map((row) => row.sandbox)).toEqual([
       { tier: 'sandboxed', capability: 'files_only', reason: null, detail: null, gpu: [] },
       { tier: 'raw', capability: 'sandboxed', reason: null, detail: null, gpu: [] },
     ]);
-    // Nor a software state: such a row lists as a daemon that named no build.
     expect(devices.map((row) => row.update)).toEqual(['unreported', 'unreported']);
   });
 });

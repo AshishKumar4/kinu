@@ -1,14 +1,5 @@
-// One cache policy for authenticated JSON, applied at the `json()` boundary.
-//
-// The defect this locks down: `json()` set `content-type` and nothing else, so
-// every account surface — the workspace roster, the credential summary, the MCP
-// server list — was answered with no `cache-control` at all. Two CLI endpoints
-// remembered to pass `no-store`; the whole of `/api/user/*` did not. A shared
-// cache or a browser's disk cache is then free to keep a signed-in body and
-// replay it after the session ends.
-//
-// Public, cacheable answers must keep working: naming a policy is how a route
-// opts out, so the default is the safe direction.
+// One cache policy for authenticated JSON at the `json()` boundary, so a shared or disk cache cannot replay a
+// signed-in body after the session ends. A route opts out by naming a policy.
 import { describe, expect, test } from 'bun:test';
 import { TEST_CREDENTIAL_ENCRYPTION_KEY } from './helpers/user-do';
 import { handleUserRequest, type UserRoutesEnv } from '../src/user/routes';
@@ -37,7 +28,6 @@ function userEnv(): UserRoutesEnv<string> {
   return {
     UserDO: { idFromName: (name) => name, get: () => stub },
     CREDENTIAL_ENCRYPTION_KEY: TEST_CREDENTIAL_ENCRYPTION_KEY,
-    // A credential-summary read fans nothing out.
     OrchestratorAgent: unreachableNamespace('OrchestratorAgent'),
   };
 }

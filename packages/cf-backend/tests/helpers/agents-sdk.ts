@@ -16,21 +16,15 @@ function registerSynchronousMock(id: string, factory: ModuleMockFactory): void {
   }
 }
 
-/** Fiber ids, monotonic per process so a test can read them in creation order.
- *  The real SDK uses `nanoid()`; only uniqueness is contractual. */
+/** Fiber ids, monotonic per process so a test can read them in creation order. */
 let harnessFiberSeq = 0;
 
-/** Schedule row ids, monotonic per process. The real SDK uses `nanoid()`; only
- *  uniqueness is contractual. */
 let harnessScheduleSeq = 0;
 
-/** Fibers RUNNING in this process, so the interrupted scan skips them exactly
- *  as `_runFiberActiveFibers` does. Dynamic membership, hence a Set. */
+/** Fibers running in this process; the interrupted scan skips them, as `_runFiberActiveFibers` does. */
 const harnessActiveFibers = new Set<string>();
 
-/** The live bodies of those fibers, so a test can JOIN what the production
- *  code detaches on purpose instead of guessing at its clock. Dynamic
- *  membership, hence a Set. */
+/** Live fiber bodies, so a test can join what production detaches on purpose. */
 const harnessFiberBodies = new Set<Promise<unknown>>();
 
 /** `cf_agents_runs`, as `agents/dist/index.js:663` declares it. */
@@ -41,7 +35,6 @@ interface RunRow {
   created_at: number;
 }
 
-/** One managed fiber as `listFibers` reports it. */
 interface HarnessFiber {
   fiberId: string;
   name: string;
@@ -49,7 +42,6 @@ interface HarnessFiber {
   createdAt: number;
 }
 
-/** The row schemas, beside the interfaces they parse into. */
 const RUN_ROW_SCHEMA = v.object({
   id: v.string(),
   name: v.string(),
@@ -64,8 +56,6 @@ const MANAGED_ROW_SCHEMA = v.object({
   created_at: v.number(),
 });
 
-/** One `cf_agents_schedules` row, as the production sweep and `armTimer` read
- *  it. */
 const SCHEDULE_ROW_SCHEMA = v.object({
   id: v.string(),
   callback: v.string(),
@@ -76,41 +66,22 @@ const SCHEDULE_ROW_SCHEMA = v.object({
 
 export type HarnessScheduleRow = Omit<v.InferOutput<typeof SCHEDULE_ROW_SCHEMA>, 'payload'> & { payload: JsonValue };
 
-/** What a recovery hook may hand back. `undefined` is the pre-`FiberRecoveryResult`
- *  shape the SDK still accepts (a `void` return), so the harness must too. */
+/** `undefined` is the legacy `void` return the SDK still accepts. */
 type FiberRecoveryOutcome = { status: string } | undefined;
 
-/**
- * Rows of a harness-owned fiber table, parsed rather than cast.
- *
- * The two tables are created by {@link mockAgentsSdk} itself, so the column
- * shape is this file's own and not outside-controlled input — the schema here
- * is the same fact said in a form the compiler and the gate can both check.
- */
 function fiberRows<Row extends object>(
   schema: v.GenericSchema<Row>, sql: SqlStorage, query: string, ...bindings: SqlValue[]
 ): Row[] {
   return sql.exec(query, ...bindings).toArray().map((row) => v.parse(schema, row));
 }
 
-/**
- * The row a DEAD activation left: a `cf_agents_runs` row with no live fiber
- * behind it.
- *
- * This is the one state an eviction cannot be simulated without, and it cannot
- * be produced by running a fiber in-process: `runFiber` removes its id from the
- * active set and deletes its row in a `finally`, and the active set is
- * in-memory, so a real isolate loses the set and keeps the row. Seeding the row
- * directly reproduces exactly that pair — the same INSERT `runFiber` performs
- * (`agents/dist/index.js:2899`), minus the body the isolate took with it.
- */
-
-/** Resolves when every `runFiber` body started so far has settled — the
- *  deterministic join for a lane the production code detaches on purpose. */
+/** Resolves when every `runFiber` body started so far has settled. */
 export async function joinHarnessFibers(): Promise<void> {
   while (harnessFiberBodies.size > 0) await Promise.all(harnessFiberBodies);
 }
 
+/** Seeds the row a dead activation leaves: the isolate lost the in-memory active set but kept the
+ *  `cf_agents_runs` row (same INSERT as `agents/dist/index.js:2899`). */
 export function seedOrphanFiberRow(
   storage: DurableObjectStorage, name: string, snapshot: JsonValue, createdAt = Date.now(),
 ): string {
@@ -129,9 +100,6 @@ export function seedOrphanFiberRow(
   return id;
 }
 
-/** The recovery context the interrupted scan hands a hook, built from the row
- *  the dead activation left. `snapshot` is parsed here — the boundary between
- *  the stored JSON text and the domain value the hook reads. */
 function recoveryContextOf(row: RunRow, managed: boolean): FiberRecoveryContext {
   const ctx: FiberRecoveryContext = {
     id: row.id,
@@ -146,9 +114,7 @@ function recoveryContextOf(row: RunRow, managed: boolean): FiberRecoveryContext 
   return ctx;
 }
 
-/** Hook throws the interrupted scan retained rows for, in scan order. The
- *  retained-row path records here rather than failing silently — the same
- *  observability the span list gives tracing. */
+/** Hook throws the interrupted scan retained rows for, in scan order. */
 const retainedHookErrors: { fiberId: string; error: unknown }[] = [];
 
 /** Retained-row hook failures since process start, for a retention assertion. */
@@ -156,8 +122,7 @@ export function recordedRetainedHookErrors(): readonly { fiberId: string; error:
   return retainedHookErrors;
 }
 
-/** What a registered sub-agent name answers with here: the facet it stands for
- *  is workerd-only, so every property throws naming the lookup that minted it. */
+/** Sub-agent facets are workerd-only, so every property throws naming the lookup. */
 function facetOnlyStub(lookup: string, cls: { name: string }, name: string) {
   return new Proxy({}, {
     get: (_target, prop) => {
@@ -171,27 +136,17 @@ function facetOnlyStub(lookup: string, cls: { name: string }, name: string) {
 }
 
 /**
- * Stub the Agent SDK so bun can import the DO-layer src modules that depend on
- * it — the real `agents` dist imports `cloudflare:*` modules that exist only
- * inside workerd.
- *
- * bun keeps ONE mock per specifier for the whole run (the first registration
- * wins), so every test that needs it must go through this single shape.
- * Call it before importing the module under test.
+ * Stub the Agent SDK: the real `agents` dist imports workerd-only `cloudflare:*` modules.
+ * bun keeps one mock per specifier (first registration wins); call before importing the module under test.
  */
 export function mockAgentsSdk(): void {
   registerSynchronousMock('agents', () => ({
-    /** Base-class token. Used as a `subAgent` class key, and as the real base
-     *  for DO classes a test instantiates directly (UserDO) — hence the ctx/env
-     *  assignment the real Agent constructor also performs. */
+    /** Also the real base for DO classes a test instantiates directly (UserDO), hence the ctx/env assignment. */
     Agent: class {
       readonly ctx: AgentContext | undefined;
       readonly env: Env | undefined;
-      /** The vendor base builds the ONE manager in its constructor
-       *  (`agents/dist/src-5W6JNKVb.js:821`) and installs it on its lifecycle,
-       *  which is the only way a manager reaches storage since
-       *  cloudflare/agents#1897 — so it is the manager UserDO's plane runs on,
-       *  and the one whose activation-time restore UserDO retires. */
+      /** The vendor base builds the one manager in its constructor (`agents/dist/src-5W6JNKVb.js:821`);
+       *  since cloudflare/agents#1897 that is the only way a manager reaches storage. */
       readonly mcp = new FakeMCPClientManager();
       constructor(ctx?: AgentContext, env?: Env) {
         this.ctx = ctx;
@@ -217,24 +172,8 @@ export function mockAgentsSdk(): void {
         }
       }
       /**
-       * The vendor's own migration, at the moment the vendor runs it.
-       *
-       * The real `Agent._ensureSchema` is called BY THE CONSTRUCTOR on every wake
-       * and is documented as protected precisely so a test agent can re-run the
-       * real migration path; `cf_agents_schedules` is one of the tables it
-       * creates. Creating it here rather than lazily inside the schedule
-       * helpers is an ORDER requirement: an actor's activation sweep
-       * (`orchestrator.ts` — the unrunnable-row DELETE) runs before any
-       * schedule helper, so a lazily created table fails with `no such table`
-       * and sweeps nothing, while a subordinate never observes the table at
-       * all — a production-present table outside the conformance census on one
-       * root and invisible on the other.
-       *
-       * Only the schedules table is mirrored, because the schedule registry is
-       * what this stand-in implements and what the timer chain reads. The SDK's
-       * other internal tables (`cf_agents_state`, `cf_agents_queues`,
-       * `cf_agents_mcp_servers`) have no reader here, and manifesting an
-       * observation nothing exercises would be worse than not observing it.
+       * Mirrors the vendor's constructor-time migration (schedules table only): the actor activation
+       * sweep (`orchestrator.ts`) runs before any schedule helper, so a lazy table fails `no such table`.
        */
       protected _ensureSchema(): void {
         this.ctx?.storage.sql.exec(`CREATE TABLE IF NOT EXISTS cf_agents_schedules (
@@ -255,7 +194,6 @@ export function mockAgentsSdk(): void {
         )`);
       }
 
-      /** Platform hooks wrapped by ActorAgent's authenticated chat transport. */
       onConnect(_connection: Connection, _ctx: ConnectionContext): void {}
       onMessage(_connection: Connection, _message: WSMessage): void {}
       onClose(_connection: Connection, _code: number, _reason: string, _wasClean: boolean): void {}
@@ -263,23 +201,14 @@ export function mockAgentsSdk(): void {
         return new Response('Not implemented', { status: 404 });
       }
 
-      /** The SDK's DO heartbeat. Production uses it for work that outlives the
-       *  call that started it (the drain timer, the genesis turn), so the stand-in
-       *  runs the body — without it those paths throw here and are untestable. */
+      /** Runs the body: production uses it for work that outlives its call (drain timer, genesis turn). */
       async keepAliveWhile<Result>(fn: () => Promise<Result>): Promise<Result> {
         return fn();
       }
 
       /**
-       * `cf_agents_schedules` — the SDK's schedule registry, copied rather than
-       * approximated, for the same reason the sub-agent registry below is: in
-       * the real SDK it is pure SQL over the DO's own storage, and the timer
-       * chain is decided by WHICH ROWS EXIST. A test about the chain that ran
-       * against a stand-in registry would prove things about the stand-in.
-       *
-       * The ALARM is not faked here and cannot be: workerd owns it, and
-       * `tests/workerd/do-alarm.test.ts` fires a real one. What this covers is
-       * the row bookkeeping around it.
+       * `cf_agents_schedules` copied, not approximated: the timer chain is decided by which rows exist.
+       * The alarm itself is workerd's (`tests/workerd/do-alarm.test.ts`).
        */
       async schedule(when: Date | number, callback: string, payload?: JsonValue): Promise<{
         id: string; callback: string; payload: JsonValue; type: string; time: number;
@@ -308,8 +237,7 @@ export function mockAgentsSdk(): void {
           .map((raw) => {
             const row = v.parse(SCHEDULE_ROW_SCHEMA, raw);
 
-            // The SDK hands the payload back parsed; the harness stores it as
-            // the JSON string the insert wrote.
+            // The SDK returns the payload parsed; the harness stores the JSON string.
             const payload: JsonValue = row.payload === null
               ? null
               : parseJsonValue(row.payload);
@@ -324,9 +252,7 @@ export function mockAgentsSdk(): void {
           .toArray().length > 0;
       }
 
-      /** The storage the registry lives in. The table itself is created by
-       *  `_ensureSchema` at construction, exactly as the vendor does it, so a
-       *  schedule call cannot be the thing that brings it into existence. */
+      /** The table is created by `_ensureSchema` at construction, never by a schedule call. */
       #scheduleTable(): SqlStorage {
         const sql = this.ctx?.storage.sql;
 
@@ -335,31 +261,14 @@ export function mockAgentsSdk(): void {
         return sql;
       }
 
-      /** The recovery hook. The vendor's base declares none and a subclass
-       *  overrides it as a prototype method — so this stand-in declares a
-       *  METHOD, not an optional field: an instance-field declaration would
-       *  shadow the subclass's prototype method with `undefined` under class-
-       *  field semantics, and recovery would find no hook at all. */
+      /** A method, not an optional field: a field would shadow the subclass's prototype hook with `undefined`. */
       async onFiberRecovered(_ctx: FiberRecoveryContext): Promise<FiberRecoveryOutcome> {
         return undefined;
       }
 
       /**
-       * The durable-fiber lifecycle, reproduced rather than faked — the same
-       * decision the sub-agent registry below records, and for the same reason:
-       * the recovery contract IS the SQL, so a stand-in that only pretended to
-       * hold a row could not tell a released row from a retained one, which is
-       * the whole difference between recovery that converges and recovery that
-       * re-enters until an age bound discards it.
-       *
-       * Copied from `agents/dist/index.js`: the `cf_agents_runs` DDL at 663, the
-       * insert at 2899, the snapshot update at 2917, the delete-in-finally at
-       * 2979, and the interrupted-fiber scan at 3022 including its deletion rule
-       * — a row is released when the hook RETURNS and retained when it THROWS.
-       *
-       * What cannot exist here is the facet half (`_cf_registerFacetRun` needs
-       * `ctx.facets`) and `keepAlive`'s alarm, which has no clock outside
-       * workerd. Neither is observable from the recovery contract: the row is.
+       * Copied from `agents/dist/index.js` (DDL 663, insert 2899, stash 2917, delete-in-finally 2979,
+       * interrupted scan 3022): a row is released when the hook returns, retained when it throws.
        */
       async runFiber<Result>(
         name: string,
@@ -368,10 +277,8 @@ export function mockAgentsSdk(): void {
         return await this._runFiberWithStashWrapper(name, fn, {});
       }
 
-      /** The SDK's protected stash wrapper, with its load-bearing property
-       *  replicated: `initialSnapshot` lands in the SAME synchronous prefix as
-       *  the row insert, so no interruption can find a recoverable lane with a
-       *  null payload. */
+      /** `initialSnapshot` lands in the same synchronous prefix as the row insert, so no interruption
+       *  finds a recoverable lane with a null payload. */
       async _runFiberWithStashWrapper<Result>(
         name: string,
         fn: (ctx: { id: string; signal: AbortSignal; stash(data: JsonValue): void; snapshot: JsonValue | null }) => Promise<Result>,
@@ -409,16 +316,8 @@ export function mockAgentsSdk(): void {
           sql.exec(`DELETE FROM cf_agents_runs WHERE id = ?`, id);
         }
       }
-      /**
-       * The alarm's housekeeping pass, which is where the interrupted-fiber scan
-       * runs when NOTHING is connected: with no request and no socket the
-       * persisted keepAlive alarm fires on its own and the SDK reaches
-       * `_checkRunFibers` from here (`agents/dist/index.js:3022`, called by
-       * `_onAlarmHousekeeping`). Modelled at the PUBLIC entry point so a test
-       * drives the path production drives, rather than the private scan or — far
-       * worse — the hook itself, which would assert a decision and nothing about
-       * the row the decision releases.
-       */
+      /** The public entry that runs `_checkRunFibers` (`agents/dist/index.js:3022`) when nothing is
+       *  connected; tests drive it rather than the private scan or the hook. */
       async _onAlarmHousekeeping(): Promise<void> {
         const sql = this.#fiberTables();
 
@@ -446,16 +345,11 @@ export function mockAgentsSdk(): void {
           let result: FiberRecoveryOutcome;
 
           try {
-            // The base mock declares a no-op hook; the subclass under test
-            // overrides it. The harness IS the dispatcher the real
-            // `_checkRunFibers` is and has the same reach into `this`.
             result = await this.onFiberRecovered(recoveryContextOf(row, managed !== undefined));
             recovered = true;
           } catch (error) {
-            // The retained-row path. The SDK keeps the row so the hook is
-            // re-offered on the next activation, bounded only by
-            // `fiberRecoveryMaxAgeMs`; nothing here shortens that. Recorded so
-            // a retained row says WHY it survived instead of failing silently.
+            // The SDK keeps the row so the hook is re-offered next activation,
+            // bounded only by `fiberRecoveryMaxAgeMs`.
             retainedHookErrors.push({ fiberId: row.id, error });
             recovered = false;
           }
@@ -471,10 +365,7 @@ export function mockAgentsSdk(): void {
           if (recovered) sql.exec(`DELETE FROM cf_agents_runs WHERE id = ?`, row.id);
         }
       }
-      /** Managed-fiber acceptance. Nothing in production starts one today, so
-       *  this exists for the ONE reason its absence would be a lie: `listFibers`
-       *  answers "is durably-accepted work still open", and a test that seeds
-       *  such work must seed it through the ledger the answer reads. */
+      /** Managed-fiber acceptance: a test seeding open work must seed the ledger `listFibers` reads. */
       async startFiber(
         name: string,
         fn: (ctx: { id: string; signal: AbortSignal; stash(data: JsonValue): void; snapshot: JsonValue | null }) => Promise<void>,
@@ -564,36 +455,14 @@ export function mockAgentsSdk(): void {
 
         return sql;
       }
-      /** WebSocket fan-out to connected clients. Think's own `broadcast`
-       *  override delegates here, so a stand-in without it turns every
-       *  broadcasting path — signal cards, roster updates — into a TypeError;
-       *  with no connections the real one is a no-op, which is what this is. A
-       *  test that observes broadcasts overrides it on the instance
-       *  (unit-mcts-broadcast.test.ts). */
+      /** Think's `broadcast` delegates here; with no connections the real one is a no-op.
+       *  Tests observing broadcasts override it on the instance (unit-mcts-broadcast.test.ts). */
       broadcast(_message: string | ArrayBuffer | ArrayBufferView, _without?: string[]): void {}
-      /** The connection set, which this stand-in has none of: workerd owns
-       *  hibernating sockets and a bun process holds no `acceptWebSocket`
-       *  state at all. The real one (`agents/dist/src-5W6JNKVb.js:3175`) is a
-       *  generator over the lifecycle's manager, so a stand-in that omitted it
-       *  turned every per-actor fan-out into a TypeError — which is how the
-       *  chat-room scoping first went red here. The RECIPIENT-SET behaviour it
-       *  feeds is measured where connections are real, in
-       *  `tests/workerd/public-surface.test.ts`. */
+      /** Empty: workerd owns hibernating sockets (real one: `agents/dist/src-5W6JNKVb.js:3175`).
+       *  Recipient-set behaviour is measured in `tests/workerd/public-surface.test.ts`. */
       *getConnections(_tag?: string): Iterable<Connection> {}
-      /** The sub-agent registry, reproduced rather than faked. `subAgent` and
-       *  `hasSubAgent` are the pair the parent facet gate is built on, and in
-       *  the real SDK the registry half of both is pure SQL over the DO's own
-       *  storage (`agents/dist/index.js`: the table at 5803, the row
-       *  `_cf_resolveSubAgent` writes at 5737, the count `hasSubAgent` reads
-       *  at 5870). A gate that admits a registered child is only meaningful
-       *  against the registry the SDK actually keeps, so that SQL is copied
-       *  rather than approximated.
-       *
-       *  What genuinely cannot exist here is the facet: `ctx.facets` and
-       *  `ctx.exports` are workerd-only, and the real `subAgent` refuses
-       *  without them. So the stub returned here throws on every call —
-       *  registration is the observable half, and it is the half the gate
-       *  reads. */
+      /** Registry SQL copied from `agents/dist/index.js` (table 5803, `_cf_resolveSubAgent` 5737,
+       *  `hasSubAgent` 5870); the facet (`ctx.facets`) is workerd-only, so the stub throws. */
       async subAgent(cls: { name: string }, name: string): Promise<object> {
         this.#subAgentRegistry().exec(
           `INSERT OR IGNORE INTO cf_agents_sub_agents (class, name, created_at) VALUES (?, ?, ?)`,
@@ -602,16 +471,8 @@ export function mockAgentsSdk(): void {
 
         return facetOnlyStub('subAgent', cls, name);
       }
-      /** The read half of the same registry, and the ONLY facet lookup that is
-       *  allowed not to create one. The real SDK returns `null` the moment
-       *  `_existingSubAgentIdentity` finds no row and reaches `ctx.facets` only
-       *  after that (`agents/dist/index.js`, `async getExistingSubAgent`) — so
-       *  an owner reading a retained path can never mint the child it was asked
-       *  about, and a stale reference resolves to nothing rather than to a fresh
-       *  empty actor. That NON-insertion is the observable half here, so the
-       *  registry SELECT is copied and the INSERT `subAgent` performs is
-       *  deliberately absent; the facet itself is workerd-only, so a registered
-       *  name answers with the same throwing stub `subAgent` hands back. */
+      /** Never inserts: the real SDK returns `null` when `_existingSubAgentIdentity` finds no row,
+       *  so reading a retained path cannot mint the child. */
       async getExistingSubAgent(cls: { name: string }, name: string): Promise<object | null> {
         await Promise.resolve();
 
@@ -630,16 +491,8 @@ export function mockAgentsSdk(): void {
           createdAt: Number(row.created_at),
         }));
       }
-      /** The registry half of `deleteSubAgent`, which in the real SDK is
-       *  `_cf_cleanupFacetPrefix` + `ctx.facets.delete` + `_forgetSubAgent`
-       *  (`agents/dist/index.js`, `async deleteSubAgent`). Only the last of the
-       *  three has an observable here, and it is the one every reclamation sweep
-       *  is read through: a facet whose row is gone from
-       *  `cf_agents_sub_agents` no longer occupies the root's quota.
-       *
-       *  Idempotent for the reason the SDK's is — it swallows a delete of an
-       *  already-gone facet — so a raced abort and settle both landing here is
-       *  safe. */
+      /** Only `_forgetSubAgent` of the real `deleteSubAgent` is observable here: a facet whose row is
+       *  gone no longer occupies the root's quota. Idempotent, as the SDK's is. */
       async deleteSubAgent(cls: { name: string }, name: string): Promise<void> {
         await Promise.resolve();
         this.#subAgentRegistry().exec(
@@ -647,17 +500,12 @@ export function mockAgentsSdk(): void {
           cls.name, name,
         );
       }
-      /** The SDK's `destroy()` (`agents/dist/src-5W6JNKVb.js:5447`), scoped to
-       *  what is observable here: the alarm slot freed, durable storage —
-       *  KV and every SQLite table — gone, the isolate abort deferred past the
-       *  returning call. The facets half is absent for the same reason
-       *  `subAgent` is: this stand-in is always the root. */
+      /** The SDK's `destroy()` (`agents/dist/src-5W6JNKVb.js:5447`) minus facets: always the root here. */
       async destroy(): Promise<void> {
         if (!this.ctx) throw new Error('harness Agent: destroy needs a ctx');
         await this.ctx.storage.deleteAlarm();
         await this.ctx.storage.deleteAll();
-        // Deferred past the returning call, as the SDK defers it: a turn of
-        // the loop, not a duration.
+        // Deferred past the returning call (a loop turn), as the SDK defers it.
         setImmediate(() => this.ctx?.abort('destroyed'));
       }
 
@@ -670,12 +518,8 @@ export function mockAgentsSdk(): void {
         if (!child) throw new Error('The descendant path is empty.');
         await this.deleteSubAgent({ name: child.className }, child.name);
       }
-      /** The SDK declares a second overload taking the class, and reduces it
-       *  to `cls.name` (:5868); the registry key is the class NAME either way.
-       *  Only the name form is modelled, because that is the form the code
-       *  under test uses (`actor-agent.ts` passes `child.className`). A
-       *  class-form call added later would miss every row and turn the facet
-       *  gate red rather than pass quietly. */
+      /** Name form only (the SDK reduces the class overload to `cls.name`, :5868); a class-form
+       *  call would miss every row and turn the facet gate red. */
       hasSubAgent(className: string, name: string): boolean {
         const rows = this.#subAgentRegistry().exec(
           `SELECT COUNT(*) AS n FROM cf_agents_sub_agents WHERE class = ? AND name = ?`,
@@ -699,61 +543,39 @@ export function mockAgentsSdk(): void {
 
         return sql;
       }
-      /** Ancestor chain + self, root-first. Copied from the SDK's own getter
-       *  (`agents/dist/index.js:4205`: `[...this._parentPath, { className:
-       *  this.constructor.name, name: this.name }]`) rather than approximated,
-       *  because the tracing seam renders it into every span's
-       *  `kinu.self_path` and it is the ONLY discriminator that exists — a
-       *  facet's `ctx.id` reports under its root's `durableObjectId`. A
-       *  stand-in that answered `[]` would make every span read `root`, which
-       *  is the one value that cannot occur in production. Top-level here, so
-       *  `_parentPath` is empty. */
+      /** Copied from `agents/dist/index.js:4205`: tracing renders it into `kinu.self_path`, the only
+       *  discriminator (a facet's `ctx.id` reports its root's). Top-level here, so `_parentPath` is empty. */
       get selfPath(): ReadonlyArray<{ className: string; name: string }> {
         return [{ className: this.constructor.name, name: String(this.name) }];
       }
-      /** Present for the same reason `selfPath` is: the SDK exposes it, and a
-       *  missing member is an `undefined` at use rather than a load error. */
       get parentPath(): ReadonlyArray<{ className: string; name: string }> {
         return [];
       }
       readonly name: string = '';
     },
-    /** The real decorator only attaches RPC metadata. */
     callable: () => <Method>(method: Method): Method => method,
     getAgentByName: async (namespace: DurableObjectNamespace, name: string) =>
       namespace.get(namespace.idFromName(name)),
-    /** The Worker entry's transport for `/agents/*`. Returning undefined is the
-     *  SDK's "not my path" answer, which drops the request to the SPA fallback. */
+    /** Undefined is the SDK's "not my path", which drops the request to the SPA fallback. */
     routeAgentRequest: async (): Promise<Response | undefined> => undefined,
   }));
-  // UserDO imports these at module load; the real ones reach `cloudflare:*`.
-  // The double records the manager's WRITABLE state — its server rows and its
-  // live connections — because that state is a second truth beside
-  // `user_mcp_servers`, and the reconciliation and credential-seam contracts are
-  // statements about it (see `recordedMcpServers`).
+  // UserDO imports these at module load; the double records the manager's writable state
+  // (server rows, live connections), a second truth beside `user_mcp_servers`.
   registerSynchronousMock('agents/mcp/client', () => ({ MCPClientManager: FakeMCPClientManager }));
-  // The provider the add flow builds: what `connectToServer` returns while a
-  // server needs sign-in is READ OFF this object, so the stub carries the two
-  // fields the real flow sets — `authUrl` (queued per add by
-  // `queueMcpAuthUrl`, consumed by the next constructed provider) and
-  // `clientId`.
+  // `connectToServer` reads `authUrl` (queued by `queueMcpAuthUrl`) and `clientId` off the provider.
   registerSynchronousMock('agents/mcp/do-oauth-client-provider', () => ({
     DurableObjectOAuthClientProvider: class {
       serverId = '';
       clientId: string | null = null;
       authUrl: string | null = pendingMcpAuthUrl;
-      /** The URL `auth()` checks for an interactive flow — the real one keeps
-       *  it off the constructor's third argument, so the stub does the same. */
+      /** `auth()` reads this off the constructor's third argument, as the real one does. */
       readonly redirectUrl: string;
       constructor(_storage: DurableObjectStorage, _clientName?: string, baseRedirectUrl = '') {
         this.redirectUrl = baseRedirectUrl;
         pendingMcpAuthUrl = null;
       }
 
-      // The rest of the OAuthClientProvider surface, answered the way a
-      // storage with nothing written answers: no grant, no verifier, no
-      // registration. The subclass under test overrides the registration
-      // half; these exist so the REAL SDK auth flow runs against it.
+      // Answered as empty storage answers, so the real SDK auth flow runs against it.
       get clientMetadata() { return {}; }
       async clientInformation(): Promise<undefined> { return undefined; }
       async saveClientInformation(): Promise<void> {}
@@ -766,29 +588,9 @@ export function mockAgentsSdk(): void {
       async invalidateCredentials(): Promise<void> {}
     },
   }));
-  // The DO layer reaches the runtime + codemode module graph (a head builds a
-  // CF runtime and an eval tool), both of which import this
-  // workerd-only module at load. So does `@cloudflare/sandbox`, and its import
-  // list grew in 0.12.0: it now names `tracing` as well as `RpcTarget`, and an
-  // ES named import that the mock does not provide is a SyntaxError at module
-  // load, not an undefined at use — which is why omitting one takes out every
-  // suite whose graph reaches the SDK rather than just the code that calls it.
-  // So the preload's boundary stub (`scripts/test-preload.ts`) is spread whole
-  // and only `tracing` is replaced: a second hand-written class list here once
-  // carried a bare `WorkerEntrypoint` that dropped `ctx`, and `SupervisorRPC`
-  // read `this.ctx.props` off it in whichever process loaded this mock first.
-  // `enterSpan(name, fn)` is what the SDK invokes, and it hands `fn` a span it
-  // stamps attributes on. The stub runs the body and accepts the attributes, so
-  // the traced path is the one under test — the SDK also has a no-tracer
-  // fallback, and a mock that triggered it would leave that path unexercised.
-  //
-  // The stub RECORDS, and that placement is the point: `tracing.enterSpan` is the
-  // platform boundary, so everything above it — `createWorkersTracer`,
-  // `createAgentTracing`, the call sites — is production code running unmodified.
-  // A test that substituted our own `Tracer` would be asserting about the
-  // substitute. Nesting comes from the call stack, with a span held open until an
-  // async body SETTLES, exactly as workerd holds it, so the recorded `parent` is
-  // the one the runtime would nest under.
+  // Spread the preload's boundary stub (`scripts/test-preload.ts`) whole: a named import the mock
+  // lacks (sandbox 0.12.0 imports `tracing`) is a SyntaxError at load for every suite reaching it.
+  // Recording at `tracing.enterSpan` keeps everything above it production code.
   registerSynchronousMock('cloudflare:workers', () => ({
     ...workersModule,
     tracing: {
@@ -804,11 +606,7 @@ export function mockAgentsSdk(): void {
 
           if (result instanceof Promise) {
             closesLater = true;
-            // `then(ok, err)` and not `finally`: `finally` derives a promise that
-            // rejects whenever `result` does, and nothing awaits this one — an
-            // unhandled rejection from inside the stub, which surfaced the moment
-            // a traced production path first rejected (unit-head-fork). Both arms
-            // settle it; `result` still rejects for the test that awaits it.
+            // `then(ok, err)`, not `finally`: `finally` derives an unawaited promise that rejects unhandled.
             void result.then(close, close);
           }
 
@@ -818,11 +616,7 @@ export function mockAgentsSdk(): void {
         }
       },
       /**
-       * The Agents SDK's own entry point (`RuntimeTracer.activate`). Records
-       * into the same span log as `enterSpan`, so a test reads ONE trace
-       * regardless of which native API opened a span. The writer's `end()` is
-       * caller-owned, exactly as the platform's is; a body that never ends its
-       * span leaves it open, which is what a nesting assertion should see.
+       * `RuntimeTracer.activate`'s entry, into the same span log; `end()` is caller-owned, as on the platform.
        */
       startActiveSpan: <T>(
         name: string,
@@ -845,7 +639,6 @@ interface NativeSpanStub {
   setAttribute(key: string, value: string | number | boolean): void;
 }
 
-/** One span the platform stub was asked to open. */
 export interface NativeSpanRecord {
   readonly name: string;
   /** Index in `nativeSpans` of the span this opened inside, or null at a root. */
@@ -857,8 +650,6 @@ const nativeSpans: NativeSpanRecord[] = [];
 
 const openSpans: number[] = [];
 
-/** Record one opened span and hand back the attribute map it collects into plus
- *  its own close, which retires THIS span wherever it sits in the open stack. */
 function openNativeSpan(name: string) {
   const index = nativeSpans.length;
   const attributes = new Map<string, string | number | boolean>();
@@ -875,10 +666,8 @@ function openNativeSpan(name: string) {
   };
 }
 
-/** Spans opened since the last `resetNativeSpans`, in open order. An EMPTY array
- *  is the shape of instrumentation that was never reached, which is the defect a
- *  tracing test exists to catch — so assert a non-zero length before anything
- *  else. */
+/** Spans opened since the last `resetNativeSpans`. Empty means instrumentation was never reached:
+ *  assert a non-zero length first. */
 export function recordedNativeSpans(): readonly NativeSpanRecord[] {
   return nativeSpans;
 }
@@ -888,9 +677,6 @@ export function resetNativeSpans(): void {
   openSpans.length = 0;
 }
 
-/** The recorded spans as an indented tree, parents before children. What a
- *  reader actually needs from a trace, and what a flat list of names cannot
- *  show. */
 export function renderNativeSpanTree(): string {
   const lines: string[] = [];
 
@@ -913,26 +699,7 @@ export function renderNativeSpanTree(): string {
   return lines.join('\n');
 }
 
-/**
- * The transport option bag `registerServer` is handed, NAMED.
- *
- * The SDK accepts whatever it is given, so this was a `Record<string, unknown>`
- * and every caller that wanted to read `fetch` asserted a signature it had not
- * established. Naming it costs nothing and buys the two facts every test here
- * asks about: the credential arrives as a CLOSURE (`fetch`, the one option the
- * SDK's persistence whitelist does not keep), and the credential never arrives
- * as DATA (`headers` / `requestInit`, which it does keep). `fetch` reuses the
- * production contract rather than restating it.
- *
- * The remaining fields are the rest of `persistTransportOptions`' whitelist
- * (agents/dist/client-zqKcsyFa.js:1022-1035); the mock inspects none of them,
- * they exist so a test can assert what a row WOULD persist.
- */
-/** What a transport's `authProvider` is to this plane: the three fields the
- *  fake's `connectToServer` and `seedMcpAuthContinuation` actually read or
- *  write. The real providers — `DurableObjectOAuthClientProvider` and the
- *  `oauth-app` subclass — satisfy it structurally, so a recorded transport
- *  can carry either without the seam pretending they are the same object. */
+/** The fields the fake's `connectToServer` and `seedMcpAuthContinuation` read or write. */
 export interface RecordedMcpAuthProvider {
   authUrl?: string | null;
   clientId?: string | null;
@@ -944,11 +711,8 @@ export interface RecordedMcpTransport {
   type?: string;
   headers?: Record<string, string>;
   requestInit?: RequestInit;
-  /** Not on the current whitelist, and here because a row a PLAINTEXT-era build
-   *  wrote can carry it: `buildMcpHeaderTransportOpts`
-   *  (`7ba56550e^:src/user/mcp.ts:270-287`) returned this beside
-   *  `requestInit: { headers }`, and the credential-shaped half of it survives
-   *  whatever that day's whitelist kept. */
+  /** Off the current whitelist, but a plaintext-era row can carry it
+   *  (`7ba56550e^:src/user/mcp.ts:270-287`). */
   eventSourceInit?: { fetch?: McpCredentialTransport['fetch'] };
   authProvider?: RecordedMcpAuthProvider;
   reconnectionOptions?: { maxRetries?: number };
@@ -959,8 +723,7 @@ export interface RecordedMcpTransport {
   protocolVersion?: string;
 }
 
-/** A row of the SDK's own `cf_agents_mcp_servers` table — the state that is
- *  DERIVED from `user_mcp_servers` and must never disagree with it. */
+/** A `cf_agents_mcp_servers` row: derived from `user_mcp_servers` and must never disagree with it. */
 export interface RecordedMcpServer {
   readonly id: string;
   readonly name: string;
@@ -968,32 +731,21 @@ export interface RecordedMcpServer {
   readonly callbackUrl: string;
   readonly clientId: string | null;
   readonly authUrl: string | null;
-  /** Exactly what was handed to `registerServer`, closure included — which is
-   *  how a test asks whether the credential travelled as one. */
   readonly transport: RecordedMcpTransport;
-  /** The bytes the SDK's own column holds — `encodeMcpServerOptions` applied to
-   *  the transport above (`:1036-1046`). This is what
-   *  `restoreConnectionsFromStorage` rebuilds a live transport FROM, so it is
-   *  the state a credential-custody question has to be asked of; the object a
-   *  register call was handed answers a different question. */
+  /** `encodeMcpServerOptions` of the transport (`:1036-1046`); `restoreConnectionsFromStorage`
+   *  rebuilds from this, so credential-custody questions are asked of it. */
   readonly server_options: string | null;
 }
 
-/** The SDK's persistence whitelist — `persistTransportOptions`,
- *  agents/dist/client-zqKcsyFa.js:1022-1035 — plus `eventSourceInit`, which a
- *  plaintext-era row can carry. `fetch` is deliberately absent: it is the one
- *  option the whitelist DROPS, which is the whole reason a credential travels
- *  as a closure. */
+/** `persistTransportOptions`' whitelist (agents/dist/client-zqKcsyFa.js:1022-1035) plus `eventSourceInit`.
+ *  `fetch` is absent: the whitelist drops it, which is why a credential travels as a closure. */
 const SDK_PERSISTED_TRANSPORT_KEYS = [
   'type', 'headers', 'requestInit', 'eventSourceInit', 'reconnectionOptions',
   'skipIssuerMetadataValidation', 'onInsufficientScope', 'maxStepUpRetries',
   'sessionId', 'protocolVersion',
 ] as const;
 
-/** `encodeMcpServerOptions` (`:1036-1046`), as much of it as this plane's
- *  contracts observe: the whitelist projection of the transport, as JSON text,
- *  in whitelist order. Built by PICKING, so a key the SDK would not keep — a
- *  credential closure above all — cannot reach the row. */
+/** `encodeMcpServerOptions` (`:1036-1046`) by picking, so a key the SDK would not keep cannot reach the row. */
 function encodeSdkServerOptions(transport: RecordedMcpTransport): string {
   return JSON.stringify({
     transport: Object.fromEntries(
@@ -1011,9 +763,7 @@ export interface RecordedMcpConnection {
   options: { transport: RecordedMcpTransport };
 }
 
-/** What the manager was asked to do, and how often. `established` /
- *  `discovered` are server ids; `restored` / `waited` are call counts, which is
- *  what proves a read did NOT touch the connection machinery. */
+/** `restored` / `waited` are call counts: they prove a read did not touch the connection machinery. */
 export interface RecordedMcpLifecycle {
   established: readonly string[];
   discovered: readonly string[];
@@ -1027,8 +777,6 @@ const mcpEstablished: string[] = [];
 
 const mcpDiscovered: string[] = [];
 
-/** The failure the next `callTool` throws. An `Error`, because that is what the
- *  SDK's transports raise and what the classification under test reads. */
 let mcpCallToolFailure: Error | null = null;
 
 let mcpCallToolAnswer: CallToolResult | undefined;
@@ -1037,22 +785,13 @@ export function seedMcpAnswer(answer: CallToolResult): void {
   mcpCallToolAnswer = answer;
 }
 
-/** The failure the next discovery PROBE runs into. The SDK's reauthorization
- *  path sends its own request when `discoverIfConnected` re-probes a live
- *  connection, and a revoked grant refuses that probe too — the refusal the
- *  real connection's catch reads (`client-zqKcsyFa.js:762-764`). Queued
- *  separately from the dispatch failure because in production they are two
- *  different requests failing, not one error seen twice. */
+/** Queued apart from the dispatch failure: in production the probe (`client-zqKcsyFa.js:762-764`)
+ *  and the dispatch are two different requests failing. */
 let mcpDiscoveryFailure: Error | null = null;
 
-/** The failure the next `removeServer` throws, exercising the credential-seam
- * teardown boundary rather than letting a test model it as a successful remove. */
 let mcpRemoveFailure: Error | null = null;
 
-/** The authorize URL the next add's OAuth provider lands on — what the real
- *  flow writes on the provider while a server asks for sign-in. `userMcp_add`
- *  constructs the provider itself, so the test queues the URL here and the
- *  provider stub picks it up at construction. */
+/** `userMcp_add` constructs the provider itself, so the provider stub picks this up at construction. */
 let pendingMcpAuthUrl: string | null = null;
 
 export function queueMcpAuthUrl(authUrl: string): void {
@@ -1065,42 +804,30 @@ let mcpRestored = 0;
 
 let mcpWaited = 0;
 
-/** Set while establishment is gated: `establishConnection` blocks on it. */
 let mcpEstablishGate: Promise<void> | null = null;
 
-/** Called the first time a caller reaches the gate — the arrival signal
- *  `hangMcpEstablish` hands back, so a test awaits the real event. */
 let mcpEstablishArrived: (() => void) | null = null;
 
-/** Remember the manager a UserDO's plane runs on, so a test can ask what it
- *  holds. Every stand-in Agent carries a manager of its own, so the one to
- *  remember is named by the harness that built the UserDO rather than by
- *  construction order — an orchestrator built after it must not shadow it. */
+/** Named by the harness, not construction order: every stand-in Agent has its own manager. */
 export function rememberMcpManager(manager: { mcpConnections: Record<string, RecordedMcpConnection> }): void {
   liveMcpManager = manager;
 }
 
-/** The manager's server rows, in registration order. */
 export function recordedMcpServers(): readonly RecordedMcpServer[] {
   return [...mcpServers.values()];
 }
 
-/** The credential CLOSURE on a transport, or null when the seam is absent —
- *  which is the other fact these tests ask about. Typed by the production
- *  contract, so nothing here narrows or asserts. */
 function credentialClosure(
   transport: RecordedMcpTransport | undefined,
 ): McpCredentialTransport['fetch'] | null {
   return transport?.fetch ?? null;
 }
 
-/** The closure `registerServer` was HANDED for this server. */
 export function recordedMcpFetch(id: string): McpCredentialTransport['fetch'] | null {
   return credentialClosure(mcpServers.get(id)?.transport);
 }
 
-/** The closure the LIVE connection is running on — a different question from
- *  what the row was handed, and the cold-start ordering invariant. */
+/** The closure the live connection runs on, as opposed to what the row was handed. */
 export function liveMcpFetch(id: string): McpCredentialTransport['fetch'] | null {
   return credentialClosure(liveMcpManager?.mcpConnections[id]?.options.transport);
 }
@@ -1109,24 +836,14 @@ export function recordedMcpLifecycle(): RecordedMcpLifecycle {
   return { established: mcpEstablished, discovered: mcpDiscovered, restored: mcpRestored, waited: mcpWaited };
 }
 
-/** A gate held over `establishConnection`: `entered` settles when a caller
- *  reaches it, `release` lets that caller through. */
 export interface McpEstablishGate {
   entered: Promise<void>;
   release: () => void;
 }
 
 /**
- * Block every `establishConnection` until `release` is called — a third party
- * that accepts the socket and never finishes. The real one awaits
- * `_connectWithRetry` with no bound here (`client-zqKcsyFa.js:2046,2073`).
- *
- * `entered` settles when a caller ACTUALLY reaches the gate. A test needs that
- * signal rather than a delay: the lane opens a sealed header before it gets
- * here, so a check taken synchronously after dispatch observes it before it has
- * begun and would read "not yet started" as "never started" — which turns a
- * gate assertion vacuous instead of merely early. Awaiting the arrival is
- * awaiting the real event.
+ * Blocks every `establishConnection` until `release` (the real one awaits `_connectWithRetry` unbounded,
+ * `client-zqKcsyFa.js:2046,2073`). Await `entered`, not a delay: a synchronous check reads "not yet" as "never".
  */
 export function hangMcpEstablish(): McpEstablishGate {
   const gate = Promise.withResolvers<void>();
@@ -1137,33 +854,21 @@ export function hangMcpEstablish(): McpEstablishGate {
   return { entered: arrival.promise, release: () => { gate.resolve(); } };
 }
 
-/** Make the next `callTool` fail, the way a server whose session stopped being
- *  authorized does. An `Error` because every failure this seam classifies is
- *  one — the SDK's transports raise `StreamableHTTPError`, `SseError` and
- *  `UnauthorizedError`, all of them `Error` subclasses. */
+/** Every failure this seam classifies is an `Error` subclass, as the SDK's transports raise. */
 export function failNextMcpToolCall(error: Error): void {
   mcpCallToolFailure = error;
 }
 
-/** Make the next discovery probe fail the way a revoked grant does. The probe
- *  is the SDK's own request inside `discoverIfConnected`, not the dispatch
- *  `failNextMcpToolCall` breaks — a test queues both because a mid-session
- *  revocation refuses both. */
+/** Fails the SDK's own probe in `discoverIfConnected`; a mid-session revocation refuses both it and dispatch. */
 export function failNextMcpDiscovery(error: Error): void {
   mcpDiscoveryFailure = error;
 }
 
-/** Make the next SDK-server teardown fail. */
 export function failNextMcpRemove(error: Error): void {
   mcpRemoveFailure = error;
 }
 
-/** Seed an SDK server row directly — the manager's own storage as some earlier
- *  activation left it. With no config row behind it that is an ORPHAN (what a
- *  failed rollback or a dropped name twin leaves); with `transport` it is
- *  whatever a previous build persisted there. `row` fills the columns a row
- *  left mid-authorization actually carries — the callback URL that makes the
- *  rewrite install an auth provider, and the client the sign-in ran under. */
+/** Seeds the manager's own storage as an earlier activation left it; with no config row it is an orphan. */
 export function seedSdkMcpServer(
   id: string,
   transport: RecordedMcpTransport = {},
@@ -1176,26 +881,17 @@ export function seedSdkMcpServer(
   });
 }
 
-/** Remove the live credential closure, the state a cold activation presents
- * before hydration re-registers a credentialed row. Test-only because the
- * production seam creates this state through activation eviction. */
+/** The state a cold activation presents before hydration re-registers a credentialed row. */
 export function dropLiveMcpFetch(id: string): void {
   delete liveMcpManager?.mcpConnections[id]?.options.transport.fetch;
 }
 
-/** The transport options the LIVE connection is running on, which is a
- *  different question from what the row persisted. */
 export function liveMcpTransport(id: string): RecordedMcpTransport | undefined {
   return liveMcpManager?.mcpConnections[id]?.options.transport;
 }
 
-/** Give a live connection the OAuth continuation a completed authorization
- *  leaves on its transport — the `authUrl` the SDK reads back while
- *  AUTHENTICATING (`client-zqKcsyFa.js:1704-1706`) and the same field
- *  `userMcp_list` renders as the reconnect link. A stand-in for the
- *  authorization redirect the harness cannot perform; without it a converged
- *  connection renders the state with no link, exactly as a server the user
- *  never authorized does. */
+/** Stands in for the authorization redirect: the `authUrl` the SDK reads while authenticating
+ *  (`client-zqKcsyFa.js:1704-1706`) and `userMcp_list` renders as the reconnect link. */
 export function seedMcpAuthContinuation(id: string, authUrl: string): void {
   const manager = liveMcpManager;
 
@@ -1208,12 +904,7 @@ export function seedMcpAuthContinuation(id: string, authUrl: string): void {
   };
 }
 
-/**
- * The manager the Agent BASE built for this instance — the one the SDK's
- *  lifecycle restores on start, and the one UserDO's plane runs on. Asked for
- *  by identity rather than asserted: an instance that is not on this stand-in
- *  has nothing to say about the inherited restore.
- */
+/** The manager the Agent base built for this instance, the one the SDK's lifecycle restores on start. */
 export function inheritedMcpManager(agent: { mcp: unknown }): {
   mcpConnections: Record<string, RecordedMcpConnection>;
   restoreConnectionsFromStorage(clientName: string): Promise<void>;
@@ -1227,9 +918,7 @@ export function inheritedMcpManager(agent: { mcp: unknown }): {
   return manager;
 }
 
-/** Give a configured server a live connection with tools, the way discovery
- *  does. Reaches the manager UserDO built, which is private to it — the state
- *  under test is what the manager holds, not who holds a reference. */
+/** Gives a configured server a live connection with tools, as discovery does. */
 export function seedMcpTools(id: string, tools: RecordedMcpConnection['tools']): void {
   const manager = liveMcpManager;
 
@@ -1258,30 +947,8 @@ export function resetRecordedMcp(): void {
   mcpEstablishGate = null;
   mcpEstablishArrived = null;
 }
-/**
- * The MCP client manager, faithful in the five respects the per-user plane's
- * contracts are about:
- *
- *  - `registerServer` records what it was handed and does NOT connect, leaving
- *    the connection in `connecting` exactly as the real one does
- *    (`client-zqKcsyFa.js:478`) — which is what makes the restore skip it.
- *  - `createConnection`'s reuse rule: registering over a live connection leaves
- *    that connection's transport untouched (`:1719-1720`).
- *  - `restoreConnectionsFromStorage` connects only rows with no connection yet.
- *  - `removeServer` drops the row AND the connection (`:2299-2305`).
- *  - `discoverIfConnected` re-probes the live connection the way the real one
- *    does: a queued probe failure moves the state the way the connection's own
- *    catch would (`:762-764`) — AUTHENTICATING for an unauthorized probe,
- *    CONNECTED otherwise — and never clears the cached tools, which the real
- *    one reassigns only on the success paths.
- */
 
-/** The numeric status the pinned SDK reads off a probe failure
- *  (`client-zqKcsyFa.js:204-210`): a numeric `code`, else a numeric `status`,
- *  else a numeric `data.status`. Shapes read with the schema validator, not
- *  casts — a probe failure is an `Error` until proven otherwise, and every
- *  failure this seam queues is one, because the SDK's transports raise
- *  `Error` subclasses. */
+/** The pinned SDK's probe status read (`client-zqKcsyFa.js:204-210`). */
 function mcpProbeStatus(error: Error): number | undefined {
   const code = v.safeParse(v.object({ code: v.number() }), error);
 
@@ -1296,9 +963,7 @@ function mcpProbeStatus(error: Error): number | undefined {
   return undefined;
 }
 
-/** The next link of the pinned SDK's cause walk
- *  (`client-zqKcsyFa.js:211-214`): `cause`, else `data.cause`, followed while
- *  it is an `Error` for the same reason as above. */
+/** The pinned SDK's cause walk (`client-zqKcsyFa.js:211-214`). */
 function mcpProbeCause(error: Error): Error | undefined {
   const direct = v.safeParse(v.object({ cause: v.unknown() }), error);
 
@@ -1310,13 +975,8 @@ function mcpProbeCause(error: Error): Error | undefined {
   return undefined;
 }
 
-/** Whether the pinned SDK would read a probe failure as unauthorized
- *  (`client-zqKcsyFa.js:215-222`) — the model for what the fake's probe does
- *  to the connection state. This is the DEPENDENCY's predicate, deliberately
- *  not the production `isMcpTransportUnauthorized`: the fake answers what the
- *  SDK does with the probe, and the tests assert what production does with
- *  the dispatch failure. Sharing one predicate would make the tests agree
- *  with production by construction instead of by observation. */
+/** The pinned SDK's unauthorized predicate (`client-zqKcsyFa.js:215-222`), deliberately not production's
+ *  `isMcpTransportUnauthorized`: sharing it would make tests agree with production by construction. */
 function isMcpDiscoveryUnauthorized(error: Error): boolean {
   if (mcpProbeStatus(error) === 401) return true;
   const cause = mcpProbeCause(error);
@@ -1326,11 +986,13 @@ function isMcpDiscoveryUnauthorized(error: Error): boolean {
   return error.message.includes('Unauthorized') || error.message.includes('401');
 }
 
+/**
+ * Mirrors the real manager (`client-zqKcsyFa.js`): register does not connect (`:478`), reuse keeps a live
+ * transport (`:1719-1720`), remove drops row and connection (`:2299-2305`), probe failure keeps cached tools.
+ */
 class FakeMCPClientManager {
   mcpConnections: Record<string, RecordedMcpConnection> = {};
-  /** The vendor's restore-once flag, private to its class and written by a host
-   *  that keeps its rows out of this manager. Mirrored because the write is the
-   *  contract under test. */
+  /** The vendor's restore-once flag; the host's write to it is the contract under test. */
   _isRestored = false;
 
   async registerServer(id: string, options: {
@@ -1346,8 +1008,7 @@ class FakeMCPClientManager {
       clientId: options.clientId ?? null,
       authUrl: options.authUrl ?? null,
       transport,
-      // The register call is what re-persists the column, which is what makes a
-      // rewrite the way a credential leaves the SDK's own storage.
+      // Register re-persists the column: that is how a rewrite removes a credential.
       server_options: encodeSdkServerOptions(transport),
     });
     this.mcpConnections[id] ??= {
@@ -1357,11 +1018,7 @@ class FakeMCPClientManager {
     return id;
   }
 
-  /** The real `listServers` returns `cf_agents_mcp_servers` row shape —
-   *  snake_case columns, `callback_url`/`client_id`/`server_options` — not the
-   *  camelCase map `recordedMcpServers` exposes to assertions. A test that
-   *  wants the camelCase read uses `recordedMcpServers()`; this answers what
-   *  production code sees. */
+  /** `cf_agents_mcp_servers` row shape (snake_case), as production sees it. */
   listServers(): {
     id: string; name: string; server_url: string; callback_url: string;
     client_id: string | null; auth_url: string | null; server_options: string | null;
@@ -1389,9 +1046,7 @@ class FakeMCPClientManager {
     mcpServers.delete(id);
   }
 
-  /** The real one returns immediately once it has restored (`_isRestored`,
-   *  `client-zqKcsyFa.js:1533-1534`) — the flag a host sets to keep its rows
-   *  out of a manager that has no credentials for them. */
+  /** Returns early once restored (`_isRestored`, `client-zqKcsyFa.js:1533-1534`). */
   async restoreConnectionsFromStorage(): Promise<void> {
     if (this._isRestored) return;
     mcpRestored += 1;
@@ -1408,8 +1063,7 @@ class FakeMCPClientManager {
   async establishConnection(id: string): Promise<void> {
     mcpEstablished.push(id);
 
-    // The real one awaits `_connectWithRetry` with no bound, so a gated server
-    // holds its caller here for as long as the test wants.
+    // The real one awaits `_connectWithRetry` unbounded.
     if (mcpEstablishGate) {
       mcpEstablishArrived?.();
       await mcpEstablishGate;
@@ -1424,11 +1078,7 @@ class FakeMCPClientManager {
     mcpWaited += 1;
   }
 
-  /** The real `connectToServer` (`client-zqKcsyFa.js`): a registered server
-   *  connects, and a connection that needs authorization answers
-   *  AUTHENTICATING with the URL the provider's redirect flow produced. The
-   *  fake's provider carries that URL because the test queued it — a provider
-   *  with no `authUrl` models a server that needed no sign-in and connects. */
+  /** A provider with no queued `authUrl` models a server that needed no sign-in. */
   async connectToServer(id: string): Promise<
     | { state: 'failed'; error: string }
     | { state: 'authenticating'; authUrl: string; clientId?: string }
@@ -1455,12 +1105,8 @@ class FakeMCPClientManager {
     return { state: 'connected' };
   }
 
-  /** Re-probe the live connection, the way the SDK's own reauthorization path
-   *  does: the probe runs only against a connection that exists (the real one
-   *  returns early otherwise, `client-zqKcsyFa.js:1991-2001`), and a queued
-   *  probe failure lands the way the connection's own catch lands it
-   *  (`:762-764`) — the tools are NOT cleared, so a converged connection keeps
-   *  presenting the catalog the grant no longer authorizes. */
+  /** Early return without a connection (`client-zqKcsyFa.js:1991-2001`); a probe failure lands as the
+   *  connection's catch does (`:762-764`) and does not clear tools. */
   async discoverIfConnected(id: string): Promise<void> {
     mcpDiscovered.push(id);
     const connection = this.mcpConnections[id];
@@ -1478,7 +1124,6 @@ class FakeMCPClientManager {
     connection.connectionState = isMcpDiscoveryUnauthorized(probe) ? 'authenticating' : 'connected';
   }
 
-  /** A real MCP result, including protocol error state and permitted extension fields. */
   async callTool(): Promise<CallToolResult> {
     const failure = mcpCallToolFailure;
 

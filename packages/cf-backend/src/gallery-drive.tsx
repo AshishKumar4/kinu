@@ -1,24 +1,6 @@
 /**
- * Gallery frames for the Drive.
- *
- *   /gallery.html?frame=drive[&path=/projects/ops]
- *     → the Drive page behind the shipped chrome over a seeded tenant: a
- *       skill folder outside `/skills`, a folder that is not one, plain
- *       files, and one skill already linked. The root also draws the tile
- *       sections over a fixture library; a folder deeper in draws none.
- *   /gallery.html?frame=drive-empty
- *     → the same page over a tenant nothing has landed on, and a library
- *       holding nothing: every section shows its own quiet line.
- *   /gallery.html?frame=shared and ?frame=shared-empty
- *     → the Drive's `/blueprints` folder, which draws the shared library.
- *
- * The tenant is the in-memory Mossaic the core suites run over, driven by
- * the SAME core rules the Durable Object runs (`listDrive`, `markAsSkill`,
- * `receiveDriveUpload`, …), so what a gate observes in the browser — a
- * non-skill folder refused with its reason, a pasted SKILL.md landing under
- * `/skills` — is the product's rule, not a fixture's restatement of it. The
- * fixture wraps whatever `fetch` the gallery installed and answers only
- * `/api/drive/*`; everything else passes through.
+ * Gallery Drive frames: `drive[&path=]`, `drive-empty`, `shared`, `shared-empty`.
+ * The in-memory Mossaic tenant runs the same core Drive rules the Durable Object runs, so gates observe product rules.
  */
 import { lazy, Suspense, type ReactNode } from "react";
 import { Loader } from "@cloudflare/kumo";
@@ -39,7 +21,6 @@ const DrivePage = lazy(() => import("@/pages/DrivePage"));
 
 const SKILL = (name: string, description: string): string => `---\nname: ${name}\ndescription: ${description}\n---\n# ${name}\n\nSteps.\n`;
 
-/** The seeded tenant every `drive` frame opens on. */
 async function seededDrive(): Promise<MossaicVfs> {
   const drive = mossaicVfs(fakeMossaic().tenant("gallery-owner"));
   const write = (path: string, text: string) => drive.writeFile(path, text);
@@ -61,7 +42,6 @@ const STATUS: Readonly<Record<ErrorCode, number>> = {
   bad_input: 400, denied: 403, missing: 404, unsupported: 415, budget: 413, unavailable: 503, timeout: 504, cancelled: 400, oom: 507, io: 500,
 };
 
-/** Every JSON body this stub answers with. */
 type DriveAnswerBody = DriveListing | DriveUploadOutcome | MarkedSkill | { error: string };
 
 function answer(body: DriveAnswerBody, status = 200): Response {
@@ -82,7 +62,6 @@ async function bodyJson<Schema extends v.GenericSchema>(request: Request, schema
   return parsed.output;
 }
 
-/** What a PUT to /files lands as, from its query. */
 function uploadTarget(url: URL): DriveUploadTarget {
   const folder = url.searchParams.get("folder");
 
@@ -178,7 +157,6 @@ export function installDriveFixture(seeded: boolean): void {
   }, { preconnect: next.preconnect });
 }
 
-/** The shipped chrome around the Drive page: the rail, then the page. */
 export function DrivePageFrame({ library, workspaces }: { library?: SharedLibrary; workspaces?: readonly WorkspaceEntry[] }) {
   const fixture: SharedLibraryProps | undefined = library === undefined ? undefined : { fixture: library, workspaces };
 
@@ -197,7 +175,6 @@ export function DrivePageFrame({ library, workspaces }: { library?: SharedLibrar
   );
 }
 
-/** A frame's Drive page for the app-shell frame's `/drive` route. */
 export function DriveRoute({ children }: { children?: ReactNode }) {
   return (
     <Suspense fallback={<div className="flex h-full items-center justify-center"><Loader size="base" /></div>}>

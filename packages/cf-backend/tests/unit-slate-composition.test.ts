@@ -16,20 +16,10 @@ import { ROOT_SLATE_CALLER, type SlateCaller } from '../src/slates/bindings';
 import { CRED_KERNEL, type SqlDatabase, type SqlRow, type SqlValue as VendorSqlValue } from '@nimbus-sh/core/runtime/os-contracts.js';
 import { toolExecute } from '@kinu.run/test-utils';
 
-/** A hosted child's slate caller: the hop path names the registered actor, and
- *  the credential is the child's own provisioned identity — looked up, never
- *  allocated here. Hiring provisioned the home and its uid row, so this is a
- *  read of the same row the child's file plane acts as, and `agentCred` is the
- *  production constructor for the per-call credential rather than a test
- *  re-declaration of it. The old facet caller carried an SDK class hop; a class
- *  name was never an identity, so the new shape is just the directory name. */
+/** The credential is the child's provisioned identity, looked up (hiring provisioned it), never allocated here. */
 async function childCaller(db: Database, agentName: string, actorName: string): Promise<SlateCaller> {
-  // The identity lookup reads through the VENDOR's `SqlDatabase`, whose row and
-  // binding vocabulary is narrower than this repo's `SqlValue` — it carries no
-  // boolean, because SQLite has none. So the adapter is built the way
-  // `unit-facet-tmp-confinement.test.ts` builds its owner's sql: parse each
-  // binding into the vendor's union rather than assert across the seam, and
-  // answer rows straight from the statement the way a host does.
+  // The vendor's `SqlDatabase` vocabulary has no boolean (SQLite has none): parse each binding into its union
+  // rather than assert across the seam.
   const sql: SqlDatabase = {
     exec(query: string, ...bindings: VendorSqlValue[]) {
       const statement = db.prepare<SqlRow, SQLQueryBindings[]>(query);
@@ -137,7 +127,6 @@ test('an MCP binding follows connection identity, binding scope and the owner al
     const protocolFailure = { isError: true, content: [{ type: 'text', text: 'remote execution failed' }] } satisfies Parameters<typeof seedMcpAnswer>[0];
     seedMcpAnswer(protocolFailure);
     expect(await call('read_issue')).toEqual({ ok: true, value: protocolFailure });
-    // Outside the owner's allowlist the tool is not on this actor's surface at all.
     expect(await call('create_issue')).toMatchObject({ ok: false, reason: 'missing' });
 
     await user.userDO.userMcp_update(owner, 'connection-id', { name: 'renamed-github' });
@@ -157,12 +146,7 @@ test('an MCP binding follows connection identity, binding scope and the owner al
     await user.userDO.userMcp_update(owner, 'connection-id', { allowedTools: [] });
     expect(await call('read_issue')).toMatchObject({ ok: false, reason: 'missing' });
 
-    // The owner's allowlist is not the caller's surface. A hosted actor
-    // connects no MCP servers of its own — those are workspace-level surfaces
-    // reached through the main actor — so the same binding it could watch the
-    // owner call refuses for the child with the surface reason, not the role
-    // one. Role narrowing of what a child CAN reach is pinned by the namespace
-    // test below, where the route exists for both.
+    // A hosted actor connects no MCP servers of its own, so it refuses with the surface reason, not the role one.
     await user.userDO.userMcp_update(owner, 'connection-id', { allowedTools: ['read_issue'] });
 
     const child = await hostedSubordinateHarness(actor, {
@@ -258,8 +242,7 @@ test('a hosted actor cannot restore source that its own filesystem authority can
     roleId: 'task', mission: 'Work inside the assigned private home',
   });
 
-  // The authority itself, on the child's own file plane: the same uid the
-  // binding below acts as, so an EACCES here and a denial there are one fact.
+  // Same uid as the binding below, so an EACCES here and a denial there are one fact.
   await expect(child.actor.runtime.storage.vfs.writeFile(path, 'blocked'))
     .rejects.toThrow(expect.objectContaining({ code: 'EACCES' }));
   const asChild = await childCaller(parent.db, subordinateAgentName(child.actor.handle.storageKey), 'slate-author');
@@ -291,18 +274,16 @@ test('a binding held by a hosted actor reaches its own files and role, never the
 
   expect(await call(asChild, 'writeFile', [`${childHome}/note.md`, 'mine'])).toMatchObject({ ok: true });
   expect(await rootFiles.readFile(`${childHome}/note.md`, { encoding: 'utf8' })).toBe('mine');
-  // The origin's tree: readable (homes are 0o755) but a write is the child's own EACCES.
+  // Readable (homes are 0o755), but a write is the child's own EACCES.
   expect(await call(asChild, 'readFile', ['/home/user/private.md'])).toEqual({ ok: true, value: 'root only' });
   expect(await call(asChild, 'writeFile', ['/home/user/private.md', 'stolen'])).toMatchObject({ ok: false, reason: 'denied' });
   expect(await rootFiles.readFile('/home/user/private.md', { encoding: 'utf8' })).toBe('root only');
-  // The same binding for the root writes the origin's tree, as the root does —
-  // under the root's own read-before-overwrite guard, which a blind write trips.
+  // Under the root's own read-before-overwrite guard, which a blind write trips.
   expect(await call(ROOT_SLATE_CALLER, 'writeFile', ['/home/user/private.md', 'blind'])).toMatchObject({ ok: false, reason: 'bad_input' });
   expect(await call(ROOT_SLATE_CALLER, 'readFile', ['/home/user/private.md'])).toEqual({ ok: true, value: 'root only' });
   expect(await call(ROOT_SLATE_CALLER, 'writeFile', ['/home/user/private.md', 'root wrote'])).toMatchObject({ ok: true });
   expect(await rootFiles.readFile('/home/user/private.md', { encoding: 'utf8' })).toBe('root wrote');
 
-  // A role that names no workspace-reaching capability loses the namespace on the next call.
   const scribe = {
     roles: { scribe: { description: 'Writes prose only.', instructions: 'Write.', tier: 'default', preset: 'ideate', allowedTools: ['memory'] } },
     tiers: { default: { model: DEFAULT_WORKERS_AI_MODEL_SPEC } },
@@ -314,10 +295,7 @@ test('a binding held by a hosted actor reaches its own files and role, never the
   changeRole('scribe');
   expect(await call(asChild, 'readFile', ['/home/user/private.md'])).toMatchObject({ ok: false, reason: 'denied' });
 
-  // No turn choreography: a hosted actor holds no chat session, so there is no
-  // resolved profile cached across turns to test. The binding resolves the
-  // actor's CURRENT role on every call — which is why the revocation above
-  // bites immediately, and why restoring the role restores the reach.
+  // The binding resolves the actor's current role on every call, so revocation and restoration bite immediately.
   changeRole('task');
   expect(await call(asChild, 'readFile', ['/home/user/private.md'])).toEqual({ ok: true, value: 'root wrote' });
   changeRole('scribe');
@@ -368,8 +346,6 @@ test('a slate cannot bind the agent, delegate through a tool alias, or widen a p
   }));
 
   const call = (member: string, args: JsonValue[] = []) => actor.agent.slateBindingCallAs(ROOT_SLATE_CALLER, 'limited', 'CAP', { member, args, invocation: null });
-  // The agent binding is the inbox, not a delegation surface: `hire` is not
-  // a member it offers.
   await bind({ kind: 'agent' });
   expect(await call('hire')).toMatchObject({ ok: false, reason: 'denied' });
   await bind({ kind: 'tool', name: 'agents' });
@@ -444,9 +420,7 @@ test('source capture does not retain a previous caller supplementary group', asy
   await files.writeFile('/home/user/slates/group-source/package.json', JSON.stringify({ main: 'server.ts' }));
   await files.writeFile('/home/user/slates/group-source/server.ts', 'export default { fetch() { return new Response("group source"); } };');
 
-  // Arranged as kernel, without the box: the permission bits are VFS state,
-  // and the removed `workspaceBoxOp` monomorphic RPC was only ever a shell
-  // around chown/chmod. Host-stamped through the harness, never agent-chosen.
+  // Permission bits are VFS state; host-stamped through the harness, never agent-chosen.
   const protectedFile = await parent.agent.harnessBoxExec(
     'group-source-fixture',
     'chown 0:3000 /home/user/slates/group-source/server.ts && chmod 640 /home/user/slates/group-source/server.ts',
@@ -548,12 +522,7 @@ test('a slate agent binding delivers one inbox signal naming the slate', async (
     main: 'server.ts', slate: { bindings: { AGENT: { kind: 'agent' } } },
   }));
 
-  // The agent binding is `send` on the actor's own inbox. The public effect a
-  // slate producer sees is the turn the inbox admits: an idle actor has none
-  // in flight, so `send` queues one on the loop, which runs it. The
-  // observation is that turn's own durable trace — the user row it leaves,
-  // carrying the slate's words and its metadata — with the model scripted so
-  // the turn answers and commits.
+  // The observable effect of `send` is the turn the inbox admits; the model is scripted so the turn commits.
   actor.agent.modelFactory = () => scriptedTurnModel({ doGenerate: () => ({
     content: [{ type: 'text', text: 'paged' }],
     finishReason: { unified: 'stop', raw: undefined },
@@ -566,8 +535,6 @@ test('a slate agent binding delivers one inbox signal naming the slate', async (
 
   expect(await call([{ text: 'done', data: { count: 2 } }])).toEqual({ ok: true, value: { outcome: 'queued' } });
   await actor.agent.harnessChatLoop.pumpPromise;
-  // The delivered turn carries the slate's words and names it — the same row
-  // the binding wrote through `send`.
   const admitted = (await actor.agent.harnessTranscript.history()).filter((message) => message.role === 'user');
   expect(admitted).toHaveLength(1);
   expect(admitted[0]).toMatchObject({
@@ -575,8 +542,6 @@ test('a slate agent binding delivers one inbox signal naming the slate', async (
     metadata: expect.objectContaining({ slate: 'pager', data: { count: 2 }, kinuEvent: 'slate' }),
   });
 
-  // A hosted caller holds no inbox of its own: the refusal says where the
-  // route belongs rather than failing on a mechanism.
   const child = await hostedSubordinateHarness(actor, {
     name: 'pager-1', displayName: 'Pager', nameOrigin: 'user', roleId: 'task', mission: 'Page',
   });
@@ -631,7 +596,6 @@ test('a slate ai binding runs one model call under the caller authority, as a sl
   expect(operations.map((row) => row.source)).toEqual(['slate', 'slate']);
   expect(operations.map((row) => row.phase)).toEqual(['start', 'end']);
 
-  // A tier the catalog never published is bad input, not an io failure.
   expect(await call([{ prompt: 'p', tier: 'imaginary' }])).toMatchObject({ ok: false, reason: 'bad_input' });
 });
 

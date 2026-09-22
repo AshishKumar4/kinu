@@ -1,10 +1,6 @@
 /**
- * A retained memory or tool shows what it is, from its row.
- *
- * A fact entry carries its stored text, its source, its scope, its timestamp
- * and its status; a crafted-tool entry carries its name, purpose and EMA
- * score over N uses. Buttons render only where an RPC exists: `revert` where
- * the entry offers it, and no Edit/Remove anywhere — no UI RPC exposes them.
+ * A retained memory or tool renders from its row. Buttons render only where an RPC exists: `revert`
+ * where offered, never Edit/Remove.
  */
 import './helpers/ui-module-globals';
 import { describe, expect, test } from 'bun:test';

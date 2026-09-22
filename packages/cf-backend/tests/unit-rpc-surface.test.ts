@@ -1,21 +1,6 @@
 /**
- * The Durable Object RPC boundary.
- *
- * `requireTier` gates every public `UserDO` method, but TypeScript `private` is
- * erased at compile time and Cloudflare resolves `stub.foo(...)` against the
- * receiver's prototype chain — so before `sealRpcSurface`, any Durable Object
- * holding a `UserDO` stub could call `sqlx` or `readCredential` directly and
- * never meet a gate. The first test here performs exactly that theft against a
- * real `UserDO` holding a real credential, and then shows the same call denied.
- *
- * Reachability is modelled below by the suite's own statement of workerd's
- * rule, verified against real workerd 1.20260601.1 with one Durable Object
- * calling another. Members anywhere on the prototype chain resolve, including
- * superclass members and TypeScript `private` ones. Own instance properties do
- * not resolve. Workerd rejects those with `The RPC receiver does not implement
- * the method "x".`, the same error it gives for a name that was never
- * declared. The mechanism tests pin that model against `sealRpcSurface` from
- * both directions, so the two cannot drift silently.
+ * The Durable Object RPC boundary: TS `private` is erased and workerd resolves `stub.foo()` on the prototype chain.
+ * Measured on workerd 1.20260601.1, DO to DO: prototype members resolve; own instance properties reject with `The RPC receiver does not implement the method "x".`
  */
 import { createTestUserDO, provisionTestWorkspace, testOwner } from './helpers/user-do';
 import { describe, expect, test } from 'bun:test';
@@ -36,13 +21,7 @@ type UserDOInstance = ReturnType<typeof createTestUserDO>['userDO'];
 type RpcTarget = UserDOInstance | Leaf | Middle2;
 
 
-/**
- * The suite states workerd's stub-resolution rule on its own side. Every member
- * on the prototype chain below `Object.prototype` resolves, minus anything an
- * own instance property shadows. `sealRpcSurface` works from the same rule on
- * the module side. The mechanism tests at the bottom pin the two against each
- * other. A change to one that the other does not share goes red there.
- */
+/** workerd's stub-resolution rule, stated independently of `sealRpcSurface`; the mechanism tests pin the two together. */
 function rpcReachableNames(target: RpcTarget): string[] {
   const own = new Set(Object.getOwnPropertyNames(target));
   const reachable = new Set<string>();
@@ -58,13 +37,7 @@ function rpcReachableNames(target: RpcTarget): string[] {
   return [...reachable].sort();
 }
 
-/**
- * The platform and facet name lists, read as data out of the one declaration
- * in src/rpc-surface.ts. The drift guards below already read class sources
- * this way, so the suite checks that declaration instead of restating it. A
- * rename or reformat that the pattern no longer matches throws loudly here. It
- * never passes against an empty list.
- */
+/** Read from the one declaration in src/rpc-surface.ts; a pattern that stops matching throws rather than passing on an empty list. */
 function surfaceLiteral(constName: string): string[] {
   const body = source('rpc-surface.ts').match(
     new RegExp(`const ${constName}[^=]*= \\[([\\s\\S]*?)\\] as const`),
@@ -102,9 +75,7 @@ async function callOverRpc(target: RpcTarget, method: string, args: JsonValue[])
   throw new Error(`The RPC receiver does not implement the method "${method}".`);
 }
 
-/** Undo the seal on one instance — drops exactly the own properties that shadow
- *  a prototype member, restoring the pre-fix class. Sabotage in a function, so
- *  "the guard is what stops this" is asserted rather than assumed. */
+/** Undo the seal on one instance, so "the guard is what stops this" is asserted rather than assumed. */
 function unsealRpcSurface(instance: UserDOInstance): void {
   const prototype = Object.getPrototypeOf(instance);
 
@@ -122,18 +93,13 @@ describe('the UserDO capability gate is reachable-surface enforced, not advisory
     await provisionTestWorkspace(harness, 'alpha');
     await harness.userDO.setCredential(await testOwner(), 'github', { kind: 'bearer', token: 'ghp_the_owners_pat' });
 
-    // The hole, demonstrated. `sqlx` is `private` in TypeScript and therefore an
-    // ordinary prototype method at runtime; every `requireTier` check sits in a
-    // public method above it. Encryption at rest means the stolen row is a
-    // sealed envelope rather than the token — but `readCredential` opens it,
-    // so the reachable surface is still what has to hold.
+    // `sqlx` is TS-private, so an ordinary prototype method at runtime, outside every `requireTier` check.
     unsealRpcSurface(harness.userDO);
     const stolenBySql = await callOverRpc(harness.userDO, 'sqlx', ['SELECT value FROM user_credentials WHERE key = ?', 'github']);
     expect(JSON.stringify(stolenBySql)).not.toContain('ghp_the_owners_pat');
     const stolenByRow = await callOverRpc(harness.userDO, 'readCredential', ['github']);
     expect(stolenByRow).toMatchObject({ token: 'ghp_the_owners_pat' });
 
-    // The same two calls, once the class's declared surface is enforced.
     sealRpcSurface(harness.userDO, USER_DO_RPC_SURFACE);
     await expect(callOverRpc(harness.userDO, 'sqlx', ['SELECT value FROM user_credentials']))
       .rejects.toThrow('The RPC receiver does not implement the method "sqlx".');
@@ -157,19 +123,14 @@ describe('the UserDO capability gate is reachable-surface enforced, not advisory
     const harness = createTestUserDO();
     const token = await provisionTestWorkspace(harness, 'alpha');
 
-    // A worker route acting for the owner.
     expect(await callOverRpc(harness.userDO, 'listWorkspaces', [await testOwner()]))
       .toMatchObject({ entries: [{ name: 'alpha' }], total: 1 });
-    // A workspace presenting its capability token — same transport, still gated.
     await expect(callOverRpc(harness.userDO, 'listCredentials', [{ workspaceToken: token }]))
       .resolves.toEqual([]);
     harness.close();
   });
 
   test('the seal leaves the class working from the inside', async () => {
-    // Every credential path below runs through the sealed `sqlx`, `ensureInit`,
-    // `requireTier` and `readCredential` — proving the shadowing changed
-    // reachability and nothing else.
     const harness = createTestUserDO();
     await harness.userDO.setCredential(await testOwner(), 'github', { kind: 'bearer', token: 'ghp_internal' });
     expect(await harness.userDO.listCredentials(await testOwner())).toMatchObject([{ key: 'github' }]);
@@ -181,20 +142,14 @@ describe('the UserDO capability gate is reachable-surface enforced, not advisory
   });
 });
 
-// ── Completeness ────────────────────────────────────────────────────────────
-// An allowlist is only fail-closed if it cannot drift from the class. These read
-// the source, so a member added tomorrow is either declared on the surface on
-// purpose or unreachable — never quietly reachable.
+// An allowlist is only fail-closed if it cannot drift from the class, so these read the source.
 
 const declaredMembers = declaredClassMembers(
   readFileSync(join(import.meta.dir, '..', 'src', 'user', 'user-do.ts'), 'utf8'),
 );
 
-/** Public because the SDK base declares them public and calls them in
- *  process — `Agent` wires `createMcpOAuthProvider` into its manager's
- *  `createAuthProvider` (`agents/dist/src-5W6JNKVb.js:823`) — so the override
- *  cannot be narrowed to `protected`. Not on the surface: the seal shadows
- *  each, and the test below holds it to that rather than exempting it. */
+/** Public because the SDK base calls them in process (`agents/dist/src-5W6JNKVb.js:823`), so they cannot be
+ *  `protected`. Not on the surface: the seal shadows each. */
 const SDK_HOOK_OVERRIDES = ['createMcpOAuthProvider'];
 
 describe('the UserDO RPC surface cannot drift from the class', () => {
@@ -239,8 +194,7 @@ describe('the UserDO RPC surface cannot drift from the class', () => {
   });
 
   test('the check sees the member shapes someone might actually add', () => {
-    // Guards the guard: a regex that only matched `async foo(` would let a
-    // getter, a generic, a plain method, or a `private` one through unnoticed.
+    // A regex matching only `async foo(` would miss getters, generics, plain and `private` methods.
     const named = (name: string) => declaredMembers.some((m) => m.name === name);
     expect(named('getAuthHeaders')).toBe(true);   // async, no modifier
     expect(named('fetch')).toBe(true);            // override async
@@ -258,21 +212,7 @@ describe('the UserDO RPC surface cannot drift from the class', () => {
   });
 });
 
-// ── The agent family ────────────────────────────────────────────────────────
-// ONE actor root, where there were two. `SubordinateAgent` hosted four modes
-// behind three exported allowlists, and containment had to be a runtime
-// re-seal per family because a stub could reach any method on the class. A
-// hosted actor is not addressable over a stub at all — no object to hold a stub
-// TO — so `SUBORDINATE_RPC_SURFACE`, `EXPLORATION_RPC_SURFACE` and
-// `SUBORDINATE_AGENT_BOOT_SURFACE` are gone with the class they narrowed, and
-// containment rides the actor's `actor_id`-scoped rows instead of a seal over a
-// wire.
-//
-// `OrchestratorAgent` cannot be constructed under bun — its base chain reaches
-// cloudflare:* through agents and @cloudflare/sandbox. Its
-// surface is plain data though, and the class sources are readable, so the same
-// two questions get answered: does every class seal itself, and does its
-// surface hold only what the class actually declares?
+// `OrchestratorAgent` cannot be constructed under bun (its base chain reaches cloudflare:*), so its surface is checked as data against the class sources.
 
 const SRC = join(import.meta.dir, '..', 'src');
 
@@ -289,10 +229,7 @@ const SEALED_CLASSES = [
   { file: 'orchestrator.ts', klass: 'OrchestratorAgent', constant: 'ORCHESTRATOR_RPC_SURFACE', surface: ORCHESTRATOR_RPC_SURFACE },
 ] as const;
 
-/** The inherited members that make an unsealed Durable Object a liability: the
- *  SDK's query runner over the receiver's own storage, its storage-wiping
- *  teardown, its state writer, and the universal method bridges (and their
- *  in-process worker) that would re-open every name this module closes. */
+/** Inherited members that make an unsealed DO a liability: the SDK's sql runner, storage teardown, state writer and method bridges. */
 const MUST_STAY_DENIED = [
   'sql', 'destroy', 'setState', 'stash',
   '_cf_invokeSubAgent', '_cf_invokeSubAgentPath', '_cf_invokeAgentPath', '_cf_invokeStubMethod',
@@ -334,20 +271,14 @@ describe('every Durable Object that holds something worth stealing is sealed', (
   });
 
   test('KinuSandbox is knowingly left open', () => {
-    // Its whole RPC surface is @cloudflare/sandbox's, which the preview proxy
-    // and the executor call broadly; it holds no owner credentials — the
-    // sandbox is where untrusted code was always meant to run. Sealing it
-    // would mean pinning a third-party API we do not own.
+    // Its surface is @cloudflare/sandbox's and it holds no owner credentials; sealing it would pin a third-party API.
     const src = source('kinu-sandbox.ts');
     expect(src).toContain('export class KinuSandbox extends Devbox<Env>');
     expect(src).not.toContain('sealRpcSurface');
   });
 
   test('no other Durable Object class slipped in unsealed', () => {
-    // `Devbox<` is in the alternation because KinuSandbox stopped extending
-    // `Sandbox<` directly: without it the class this guard was written for
-    // dropped out of the scan entirely, and so would any future Durable Object
-    // built on the same base.
+    // `Devbox<` too: KinuSandbox extends it rather than `Sandbox<` directly.
     const known = new Set([...SEALED_CLASSES.map((c) => c.klass), 'ActorAgent', 'KinuSandbox']);
 
     const classes = readdirSync(SRC, { recursive: true, encoding: 'utf8' })
@@ -356,9 +287,7 @@ describe('every Durable Object that holds something worth stealing is sealed', (
         .map((m) => m[1]));
 
     expect(classes.filter((name) => !known.has(name))).toEqual([]);
-    // The scan must actually SEE the class it was written for. An alternation
-    // that no longer matches any base is a guard that passes by finding
-    // nothing.
+    // The scan must match the class it was written for; matching nothing would pass vacuously.
     expect(classes).toContain('KinuSandbox');
   });
 });
@@ -366,10 +295,7 @@ describe('every Durable Object that holds something worth stealing is sealed', (
 describe('the agent surfaces cannot drift from their classes', () => {
   const actorMembers = declaredClassMembers(source('actor-agent.ts'));
 
-  /** Reached by a stub inside this Worker and never dispatched for a client:
-   *  the MCP adapter's scaffold run. The run-event and trigger reads the same
-   *  adapter uses are client RPC by design (`AGENT_RPC_ACCESS` rows
-   *  `workspace.read` / `interactive`), so they are not listed here. */
+  /** Reached by a stub inside this Worker, never for a client: the MCP adapter's scaffold run. */
   const internalOrchestratorRpc = ['runScaffoldOnce'] as const;
 
   test('the orchestrator keeps every method the CLI transport dispatches onto it', () => {
@@ -379,18 +305,7 @@ describe('the agent surfaces cannot drift from their classes', () => {
     expect(missing.sort()).toEqual([]);
   });
 
-  /**
-   * THERE IS NO SUBORDINATE SNAPSHOT HOP, and its absence is a property rather
-   * than a gap.
-   *
-   * `subordinateView` reads the display name and the role through
-   * `actorHost().bindStores(...).stores.config` — `actor_id`-scoped rows in the
-   * one database, no stub, no allowlist entry, nothing to drift. Reaching them
-   * over a stub instead makes the seal's own list load-bearing for identity: a
-   * name the seal does not carry costs every roster row its real identity. The
-   * behaviour is a hosting question and is asserted where the roster is driven,
-   * not against a surface it does not cross.
-   */
+  /** No subordinate snapshot hop: `subordinateView` reads `actor_id`-scoped config rows, so there is no stub or allowlist entry to drift. */
 
   test('worker routes call only methods on the orchestrator surface', () => {
     const called = ['terminal-route.ts', 'files-routes.ts'].flatMap((file) =>
@@ -411,15 +326,6 @@ describe('the agent surfaces cannot drift from their classes', () => {
       .toEqual([]);
   });
 
-  /**
-   * ONE ROW, where a `test.each` carried four.
-   *
-   * Three of them named `SUBORDINATE_RPC_SURFACE`, `EXPLORATION_RPC_SURFACE`
-   * and `SUBORDINATE_AGENT_BOOT_SURFACE` over `subordinate-agent.ts`; all four
-   * names are gone with the facet class. What is left is a single question
-   * about a single surface, so it is asked as a plain test — a one-row
-   * `test.each` would be a table pretending to be a matrix.
-   */
   test('the orchestrator surface names only members it or ActorAgent declares', () => {
     const declared = new Set(
       [...declaredClassMembers(source('orchestrator.ts')), ...actorMembers].map((m) => m.name),
@@ -442,24 +348,8 @@ describe('the agent surfaces cannot drift from their classes', () => {
   });
 
   /**
-   * The control plane lives on the substrate, once.
-   *
-   * All four of the original members were declared on BOTH roots over the same
-   * core implementation, and nothing was red while they drifted: the
-   * orchestrator's setModel and getStoredModelSpec skipped the `ensureSchema()`
-   * its twin ran, so the two roots disagreed about whether their own tables had
-   * to exist before a config write. A copy reappearing on the root is exactly
-   * how that returns, so it is red here rather than left to review.
-   *
-   * `getChatHistoryPage` is the fifth and arrived the other way round: it was
-   * declared on the workspace root ONLY, so a subordinate had no way to be
-   * asked for a page of its own history. Both defects were shapes of one
-   * mistake — a plane with two implementations — and there is one root now, so
-   * what this refuses is the root re-declaring a member of a plane the
-   * substrate owns for every actor hosted over it.
-   *
-   * Behaviour is pinned separately, through a hosted actor as well as the root,
-   * in unit-actor-control-plane.test.ts and unit-actor-transcript-page.test.ts.
+   * The control plane lives on the substrate once; a copy on the root lets two implementations drift.
+   * Behaviour is pinned in unit-actor-control-plane.test.ts and unit-actor-transcript-page.test.ts.
    */
   test('the shared control plane is declared on ActorAgent and not on the root', () => {
     const shared = [
@@ -477,13 +367,7 @@ describe('the agent surfaces cannot drift from their classes', () => {
   });
 });
 
-// ── The SDK's half, derived from the installed artifact ─────────────────────
-// The facet protocol and the stub entry point are the SDK's to rename, and
-// the seal is fail-closed, so a rename lands as "does not implement the
-// method" inside the SDK's own bookkeeping — a facet schedule, a root alarm
-// owner, every `getAgentByName`. Both lists are therefore held to the
-// installed `agents/dist` rather than to memory: the same reading the module
-// header describes, performed here on every run.
+// The facet protocol and stub entry point are the SDK's to rename and the seal is fail-closed, so both lists derive from installed `agents/dist`.
 
 const AGENTS_DIST = join(import.meta.dir, '..', '..', '..', 'node_modules', 'agents', 'dist');
 
@@ -494,9 +378,7 @@ function installedAgentsSources(): string[] {
     .map((file) => readFileSync(join(AGENTS_DIST, file), 'utf8'));
 }
 
-/** The `_cf_` names the SDK invokes on a receiver other than `this`. A
- *  receiver is `this` when the expression before `._cf_` ends in the `this`
- *  token, or is an identifier the same file declares as `const x = this`. */
+/** `_cf_` names the SDK invokes on a receiver other than `this` (or a same-file `const x = this` alias). */
 function crossStubFacetNames(sources: readonly string[]): string[] {
   const names = new Set<string>();
 
@@ -563,47 +445,9 @@ describe('the SDK half of the surface is derived from the installed agents packa
   });
 });
 
-/**
- * THE FACET-TO-ROOT SCAN IS GONE, AND WHAT IT GUARDED IS NOW MEASURED INSTEAD
- * OF DERIVED.
- *
- * A describe block stood here that read `subordinate-agent.ts` and
- * `obs/facet-operations.ts`, collected every `parent.x(` in them, and required
- * each name to be on ORCHESTRATOR_RPC_SURFACE. It existed because the seal is
- * fail-closed: a facet calling a parent method nobody listed failed at RUNTIME,
- * with workerd's "does not implement the method", inside a background head
- * where nothing but a console line saw it. That is how the four `headJournal*`
- * routing calls and `recordHeadStep` came to be declared, called, typechecked
- * and unreachable at once — `head_steps` stayed empty and a depth-2 head stayed
- * unreadable while every test passed.
- *
- * Both of its input files are deleted, and so is every call it scanned for. A
- * hosted head runs in the root's own isolate over the root's own database:
- * `recordHeadStep` and the journal writes are `seams.recordStep` and the
- * workspace's own `HeadJournal`, `nodeArbitrate` is the closure it always was,
- * and `provisionFacetHome` is `facetHomeProvisioner` called in process. There is
- * no stub to scan for, which is why this is a removal and not a re-pointing:
- * re-pointing it at the callers that DO still hold a root stub (the owner's
- * UserDO, the worker routes, the CLI transport) means a name-keyed scan over
- * four different local spellings and two chained calls bound to no local at
- * all — and the one failure mode a derived list has is shrinking silently,
- * which that instrument would do on its first day.
- *
- * The guarantee itself is in better shape than the scan left it. `tests/workerd/
- * plan-announce-probe.ts` now hops a real Durable Object stub against a real
- * sealed root and reports what the RUNTIME did with each name: a listed one
- * resolving, a listed one refused by the callee's own rule, and the inherited
- * `broadcast` and `setState` rejected by workerd itself. The two tests above
- * still check the CLI table and the worker routes against the surface, so the
- * two callers with a stable call spelling keep their derived guard.
- */
+// Facet-to-root reachability is measured by tests/workerd/plan-announce-probe.ts against a real sealed root.
 
-// ── The mechanism ───────────────────────────────────────────────────────────
-// `UserDO`'s base classes are stubbed under bun, so the inherited half of the
-// surface — the half that carries the agents SDK's `sql` — is exercised here on
-// a hierarchy shaped like the real one: a third-party base with a tagged
-// template query runner and a protected member, an abstract middle class, and a
-// leaf that overrides.
+// `UserDO`'s bases are stubbed under bun, so the inherited half of the surface is exercised on a hierarchy shaped like the real one.
 
 class ThirdPartyBase {
   sql(strings: TemplateStringsArray, ...values: unknown[]): string {
@@ -671,7 +515,6 @@ describe('sealRpcSurface', () => {
 
   test('nothing about the instance changes from the inside', () => {
     const leaf = new Leaf();
-    // Reached through the sealed `selfCheck` itself, so the call proves the point twice.
     expect(leaf.selfCheck()).toEqual({
       internal: 'hidden',
       protectedViaThis: 'protected value',

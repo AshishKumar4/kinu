@@ -1,18 +1,6 @@
 /**
- * The incident ledger — what turns probe results into at most one email per
- * thing that broke.
- *
- * A probe runs every few minutes; a broken deploy stays broken for hours. The
- * ledger's whole job is that difference: a failing probe OPENS an incident
- * (one alert), stays open silently however long it keeps failing, and CLOSES
- * when the probe passes again (one recovery notice). Alert fatigue is not a
- * tuning parameter here — a tick can never produce an email for an incident
- * that already has one.
- *
- * Delivery is the existing mission-inbox path: `sendOwnerEmail` over the
- * `EmailOutbox`, so an alert is written ahead of the send, carries a stable
- * Message-ID, and is re-driven by the outbox's own reconciliation if the send
- * fails — the ledger never has to own retries.
+ * Incident ledger: a failing probe opens an incident (one alert), stays open silently, closes on pass (one recovery).
+ * Delivery is `sendOwnerEmail` over `EmailOutbox`, which owns retries.
  */
 
 import { argumentDigest, type SqlExec } from '@kinu.run/core';
@@ -21,8 +9,7 @@ import type { EmailOutbox } from '@kinu.run/core';
 import type { ProbeOutcome } from '@kinu.run/core';
 import * as v from 'valibot';
 
-/** The From identity of alert mail. A dot is not legal in a workspace name, so
- *  this address can never be confused for a workspace's mission inbox. */
+/** A dot is illegal in a workspace name, so this sender never collides with a mission inbox. */
 const MONITOR_SENDER = 'ops.monitor';
 
 const MONITOR_DISPLAY_NAME = 'Kinu Monitor';
@@ -54,28 +41,21 @@ const IncidentRowSchema = v.object({
 });
 
 export interface MonitorRunResult {
-  /** Probes failing at the end of this tick. */
   failing: string[];
-  /** Incidents still owed an alert when the mail step ran — newly opened ones,
-   *  plus any whose earlier alert never got sent. */
+  /** Newly opened incidents plus any whose earlier alert never got sent. */
   alerting: string[];
-  /** Incidents closed by this tick — what the recovery email covers. */
   recovered: string[];
-  /** Emails handed to the outbox by this tick (0, 1 or 2). */
   emails: number;
-  /** Why nothing was emailed, when something would otherwise have been. */
   skipped?: 'email not configured';
 }
 
 export interface MonitorDeps {
   sql: SqlExec;
   outbox: EmailOutbox;
-  /** The `send_email` binding, when the platform has one. */
   email: SendEmail | undefined;
   emailDomain: string | undefined;
-  /** Where alerts go. Unset leaves the monitor observing but silent. */
+  /** Unset leaves the monitor observing but silent. */
   alertEmail: string | null;
-  /** The origin that was probed — named in every alert. */
   origin: string;
   now: number;
 }
@@ -84,9 +64,6 @@ export function ensureMonitorSchema(sql: SqlExec): void {
   sql.exec(MONITOR_INCIDENTS_DDL);
 }
 
-/**
- * Fold one probe run into the ledger and send whatever the transitions earned.
- */
 export async function recordProbeRun(deps: MonitorDeps, outcomes: ProbeOutcome[]): Promise<MonitorRunResult> {
   ensureMonitorSchema(deps.sql);
   const open = new Map(listIncidents(deps.sql).map((row) => [row.probe, row]));
@@ -97,8 +74,7 @@ export async function recordProbeRun(deps: MonitorDeps, outcomes: ProbeOutcome[]
     const existing = open.get(outcome.probe);
 
     if (existing) {
-      // Still broken. Record what it looks like now, but never re-alert: the
-      // owner already has the mail that says this check is down.
+      // Still broken: record the latest state but never re-alert.
       deps.sql.exec(
         `UPDATE monitor_incidents SET detail = ?, failures = failures + 1, seen_at = ? WHERE probe = ?`,
         outcome.detail, deps.now, outcome.probe,
@@ -118,7 +94,6 @@ export async function recordProbeRun(deps: MonitorDeps, outcomes: ProbeOutcome[]
 
   const unalerted = listIncidents(deps.sql).filter((row) => row.alerted_at === null);
 
-  // Only incidents the owner was told about are worth a recovery notice.
   const announced = recovered.filter((row) => row.alerted_at !== null);
   const canEmail = Boolean(deps.email && deps.emailDomain && deps.alertEmail);
   let emails = 0;
@@ -139,8 +114,7 @@ export async function recordProbeRun(deps: MonitorDeps, outcomes: ProbeOutcome[]
     deps.sql.exec(`DELETE FROM monitor_incidents WHERE probe = ?`, row.probe);
   }
 
-  // Re-drive any alert whose send failed earlier. Delivery retries belong to
-  // the outbox; the ledger only decides what deserves an email.
+  // Delivery retries belong to the outbox.
   if (deps.email) await deps.outbox.reconcile(deps.email, deps.now);
 
   const result: MonitorRunResult = {
@@ -188,9 +162,7 @@ function openedNotice(deps: MonitorDeps, rows: IncidentRow[]): Notice {
 
   return {
     subject: `Health: ${what}`,
-    // Keyed on the incidents themselves (probe + when it opened), so a retry
-    // of this exact alert is recognizably the same message, and the next
-    // distinct failure keys apart.
+    // Keyed on probe + opened_at so a retry of this alert is the same message.
     key: argumentDigest({ kind: 'opened', rows: rows.map((r) => [r.probe, r.opened_at]) }),
     text: body,
   };
@@ -212,8 +184,6 @@ function recoveredNotice(deps: MonitorDeps, rows: IncidentRow[]): Notice {
   };
 }
 
-/** What a user hits when this probe is red — the part that makes an alert
- *  worth reading at 2am. */
 const IMPACT = new Map([
   ['health', 'the API is down, or the worker and its assets are from different deploys.'],
   ['downloads', 'a new install and every `kinu update` fail on the checksum.'],

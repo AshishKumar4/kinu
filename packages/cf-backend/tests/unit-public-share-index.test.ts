@@ -1,9 +1,4 @@
-/**
- * The public share index as data: a projection the Shared page's "Public" list
- * reads and every reader verifies against the owner's object. What is pinned
- * here is the store's own contract — upsert by (owner, workspace, share),
- * newest first, forget by key — and that a row never carries visibility.
- */
+/** Store contract: upsert by (owner, workspace, share), newest first, forget by key; rows never carry visibility. */
 import { expect, test } from 'bun:test';
 import { Database } from 'bun:sqlite';
 import { forgetPublicShare, indexPublicShare, initControlPlaneSchema, listPublicShares } from '@kinu.run/core/control-plane';

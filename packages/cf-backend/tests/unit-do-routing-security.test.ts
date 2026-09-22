@@ -11,20 +11,9 @@ import {
 import { deriveUserId } from '../src/auth/store';
 
 /**
- * F1 account-takeover regression.
- *
- * `routeAgentRequest` (partyserver) maps EVERY Durable Object namespace binding
- * by slug, and userId = sha256(email).slice(0,32) is both derivable and a legal
- * workspace name. Unguarded, an attacker who registered a victim's userId
- * as a workspace name could reach GET /agents/user-d-o/<victimId> — the victim's
- * UserDO @callable surface (getAuthHeaders / mintCliToken → full account
- * takeover), plus worker-only facet namespaces / KinuSandbox / Nimbus*.
- *
- * Two lines of defense are asserted:
- *   1. the `/agents/*` transport is pinned to the orchestrator namespace
- *      (isForeignAgentNamespacePath → 404 before routing);
- *   2. UserDO carries no @callable surface, and neither do the worker-only
- *      privileged orchestrator methods — so even a routed request exposes no RPC.
+ * F1 account-takeover regression: partyserver routes every DO namespace by slug, and a derivable
+ * userId is a legal workspace name, so /agents/user-d-o/<victimId> reached the victim's UserDO.
+ * Defenses: the /agents/* transport is pinned to the orchestrator namespace; UserDO exposes no @callable.
  */
 
 const ROOT = join(import.meta.dir, '..');
@@ -33,8 +22,6 @@ const source = (p: string): string => readFileSync(join(ROOT, p), 'utf8');
 
 describe('F1 defense 1 — the /agents/* transport is pinned to the orchestrator', () => {
   test('the concrete exploit path is a foreign-namespace request (→ rejected)', async () => {
-    // The exact primitive: userId derived from a victim email, used as the
-    // workspace-name segment under the UserDO slug.
     const victimId = await deriveUserId('victim@example.com');
     expect(victimId).toMatch(/^[0-9a-f]{32}$/);
     expect(isForeignAgentNamespacePath(`/agents/user-d-o/${victimId}`)).toBe(true);
@@ -56,11 +43,7 @@ describe('F1 defense 1 — the /agents/* transport is pinned to the orchestrator
     expect(isForeignAgentNamespacePath('/agents/orchestrator-agent/my-workspace/actor/researcher')).toBe(false);
     expect(isForeignAgentNamespacePath('/agents/orchestrator-agent/my-workspace/actor/researcher/get-messages')).toBe(false);
 
-    // Every `/sub/` facet hop now names nothing and stays unroutable: the root
-    // serves a hosted actor itself under `/actor/<name>`, so a physical storage
-    // key never appears in a client-visible address again. A literal `sub`
-    // segment anywhere stays foreign, and so does any other tail the closed
-    // grammar does not name.
+    // The root serves hosted actors under `/actor/<name>`; any `sub` segment or unnamed tail stays foreign.
     expect(isForeignAgentNamespacePath('/agents/orchestrator-agent/my-workspace/sub/subordinate-agent/researcher')).toBe(true);
     expect(isForeignAgentNamespacePath('/agents/orchestrator-agent/my-workspace/sub/subordinate-agent/researcher/websocket')).toBe(true);
     expect(isForeignAgentNamespacePath('/agents/orchestrator-agent/my-workspace/actor/researcher/websocket')).toBe(true);
@@ -73,49 +56,28 @@ describe('F1 defense 1 — the /agents/* transport is pinned to the orchestrator
   });
 
   /**
-   * Pinning BOTH directions of one regex, because closing the F1 hole
-   * accidentally closed the chat with it.
-   *
-   * `useAgentChat` fetches initial messages over HTTP, not the socket, by
-   * appending this segment to the agent URL. The grammar allowed the agent name
-   * followed by end-of-string or `/actor/<name>/…` and nothing else, so the
-   * SDK's own `/get-messages` matched nothing, `isForeignAgentNamespacePath`
-   * called it foreign, and the worker answered 404. The socket still connected,
-   * so the live turn streamed while every prior message was missing — which
-   * reads as total data loss and was not: `getChatHistory` returned 100 messages
-   * throughout, the last of them the one on screen.
-   *
-   * A wildcard segment would have fixed the symptom and re-opened the hole. The
-   * endpoint set is enumerated, and the negative half below is the thing that
-   * stops either direction regressing.
-   */
+     * Both directions of one regex: the F1 fix once 404'd the SDK's own `/get-messages`. A wildcard
+     * segment would re-open the hole, so the endpoint set is enumerated.
+     */
   test('every client builds a hosted actor\'s address through the one helper the edge admits', () => {
-    // The defect the owner met on build cba44dcb9: the browser built its
-    // socket path from the Agents SDK's `sub` option, which renders
-    // `/sub/<class>/<name>` — a facet hop this transport refuses, so the
-    // socket 404'd and every RPC on it timed out at 30 s ("Disconnected ·
-    // Untitled agent" over a skeleton). One helper now answers the address,
-    // and it is the admitted one.
+    // The SDK's `sub` option renders `/sub/<class>/<name>`, a facet hop this transport refuses;
+    // one helper answers the admitted address.
     const path = `/agents/orchestrator-agent/my-workspace/${hostedActorSocketPath('researcher')}`;
     expect(path).toBe('/agents/orchestrator-agent/my-workspace/actor/researcher');
     expect(isForeignAgentNamespacePath(path)).toBe(false);
     expect(hostedActorRoute(path)).toEqual({ name: 'researcher', suffix: '' });
-    // A name with a slash or a space cannot escape its own segment.
     const odd = `/agents/orchestrator-agent/my-workspace/${hostedActorSocketPath('a/b c')}`;
     expect(isForeignAgentNamespacePath(odd)).toBe(false);
     expect(hostedActorRoute(odd)).toEqual({ name: 'a/b c', suffix: '' });
 
-    // No client builds the address by hand: with SUBORDINATE_AGENT_SLUG gone
-    // from core, reintroducing the facet hop needs a new constant, which the
-    // compiler and gate:wired surface. The helper is the one definition.
+    // No client builds the address by hand; the helper is the one definition.
   });
 
   test("the transport's own chat-history endpoint is admitted at the workspace root", () => {
     expect(isForeignAgentNamespacePath('/agents/orchestrator-agent/my-workspace/get-messages')).toBe(false);
     expect(extractOrchestratorAgentName('/agents/orchestrator-agent/my-workspace/get-messages')).toBe('my-workspace');
 
-    // Admitting it does NOT open the tail: the endpoint list is named, and a
-    // connect ticket still only buys the root socket.
+    // Admitting it does not open the tail: the endpoint list is named, and a connect ticket buys only the root socket.
     expect(isForeignAgentNamespacePath('/agents/orchestrator-agent/my-workspace/get-messages/extra')).toBe(true);
     expect(isForeignAgentNamespacePath('/agents/orchestrator-agent/my-workspace/get-messages/sub/user-d-o/victim')).toBe(true);
     expect(extractTicketOrchestratorAgentName('/agents/orchestrator-agent/my-workspace/get-messages')).toBeNull();
@@ -136,8 +98,7 @@ describe('F1 defense 1 — the /agents/* transport is pinned to the orchestrator
 
   test('server.ts rejects foreign namespaces with a 404 before ownership + routing', () => {
     const src = source('src/server.ts');
-    // The pin runs, returns 404, and does so ahead of the ownership claim and
-    // the partyserver route — so no privileged code runs on a foreign path.
+    // The pin 404s ahead of the ownership claim and the partyserver route, so no privileged code runs on a foreign path.
     const pin = src.indexOf('if (isForeignAgentNamespacePath(url.pathname)) {');
     const claim = src.indexOf('claimOwnedWorkspace(env, identity.userId, agentName)');
     const route = src.indexOf('routeAgentRequest(reqWithId, env)');
@@ -150,26 +111,9 @@ describe('F1 defense 1 — the /agents/* transport is pinned to the orchestrator
 });
 
 describe('F1 defense 2 — @callable surface reduction (worker-side stubs preserved)', () => {
-  // The exposure half of this defense lives in
-  // `tests/workerd/decorated-agent.test.ts`, which reads the SDK's own callable
-  // registry off the real class prototypes after the real transform.
-  //
-  // A source-text oracle cannot hold it. `not.toContain('@callable')` over
-  // `src/user/user-do.ts`, or a `not.toContain('@callable()\n  async <name>')`
-  // per method, matches one exact spelling — so putting the decorator on the
-  // same line as the signature, inserting a blank line or a doc comment between
-  // them, or renaming the method all stop the string from matching while
-  // leaving the method exposed, and nothing fails when a decorator appears in a
-  // shape the pattern does not describe. KINU-065 made the registry readable in
-  // workerd, so the exposure decision is asserted where dispatch actually reads
-  // it.
-  //
-  // WHAT STAYS HERE is the half that is not about exposure: these methods must
-  // still EXIST, because a worker-side stub holder calls them by name over
-  // native Durable Object RPC, which needs no decorator. The workerd layer
-  // asserts the same existence through the prototype, so this file keeps only
-  // the declaration shape that a stub caller depends on and that no runtime
-  // read can express: that each one is declared `async` on the class.
+  // Exposure is asserted in `tests/workerd/decorated-agent.test.ts` (the SDK registry, KINU-065); a
+  // source-text oracle cannot hold it. Here: the methods must stay declared `async`, since stub holders
+  // call them over native Durable Object RPC.
 
   test('every UserDO method is preserved for worker-side stub callers', () => {
     const src = source('src/user/user-do.ts');
@@ -180,14 +124,8 @@ describe('F1 defense 2 — @callable surface reduction (worker-side stubs preser
   });
 
   test('worker-only privileged methods are preserved on both actor roots', () => {
-    // `installWorkspaceCapability` installs this workspace's proof of identity to
-    // the owner's UserDO. It is declared once on ActorAgent (the orchestrator's
-    // override folded into it when the capability push became recursive down a
-    // subordinate tree), so both roots get the one implementation and the one
-    // exposure decision. The two subordinate-tree calls moved the same way and
-    // for the same reason: a subordinate is now the parent in that relationship
-    // too. That no browser socket can reach any of them is asserted in
-    // `tests/workerd/decorated-agent.test.ts`.
+    // Declared once on ActorAgent so both roots share one implementation and exposure decision;
+    // unreachability is asserted in `tests/workerd/decorated-agent.test.ts`.
     const orchestrator = source('src/orchestrator.ts');
 
     for (const m of [

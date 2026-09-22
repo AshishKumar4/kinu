@@ -2,40 +2,19 @@ import { buildSync, type Metafile } from 'esbuild';
 import * as reactNs from 'react';
 import type { Plugin } from 'vite';
 
-/** The vendored react/capnweb byte strings the slate runner hands the dynamic
- *  worker. `src/slate-vendor.d.ts` gives `virtual:kinu-slate-vendor` this same
- *  shape, so the served module and the factory cannot drift. */
+/** Vendored react/capnweb bytes for the slate runner; `src/slate-vendor.d.ts` mirrors this shape. */
 export interface SlateVendor {
   readonly react: string;
   readonly reactStub: string;
   readonly capnweb: string;
   readonly capnwebWorkers: string;
-  /** External specifiers each bundle still imports — from the metafile, so
-   *  a test asserts the real edges, not a substring guess. */
+  /** External specifiers per bundle, from the metafile. */
   readonly imports: { readonly react: readonly string[]; readonly capnweb: readonly string[]; readonly capnwebWorkers: readonly string[] };
-  /** The export names `react` publishes, parsed from the bundle's metafile:
-   *  the stub and the test assert against the real set, not a hand list. */
+  /** `react` export names, from the metafile. */
   readonly reactExports: readonly string[];
 }
 
-/**
- * The bytes a slate's two halves run on: the browser React bundle the import
- * map serves, the same export list as an all-undefined stub for the server
- * build, and capnweb twice — once for the browser (`import` condition,
- * `dist/index.js`) and once for the dynamic worker (`workerd`, keeping
- * `cloudflare:workers` external).
- *
- * Built once per process: these bytes change with dependency versions, not
- * per slate, so every caller memoizes on this module.
- */
-
-/**
- * React 19 ships CJS only, so `export * from "react"` is invisible to
- * esbuild's name analysis (the index forwards through `require()`). The names
- * are enumerated off the INSTALLED module's namespace instead — the bundle
- * can never publish a name the package does not carry, and the stub below can
- * never declare one the bundle does not publish.
- */
+/** React ships CJS, so esbuild cannot see `export *` names; enumerate them off the installed module. */
 const REACT_ENTRY = [
   'import * as __react from "react";',
   ...Object.keys(reactNs)
@@ -64,15 +43,12 @@ function bundle(stdin: string, conditions: readonly string[], external: readonly
   return { text, metafile: result.metafile };
 }
 
-/** The export names of the bundle's single output, in the metafile's order. */
 function exportNames(metafile: Metafile): string[] {
   for (const output of Object.values(metafile.outputs)) return [...output.exports];
 
   return [];
 }
 
-/** The external specifiers the bundle's inputs still import — the real
- *  module graph's edges out of this bundle. */
 function importSpecifiers(metafile: Metafile): string[] {
   const specifiers = new Set<string>();
 
@@ -110,24 +86,19 @@ export function buildSlateVendor(): SlateVendor {
 
 let vendor: SlateVendor | undefined;
 
-/** One build per process: `slateVendor()` (both configs) and the bun preload
- *  share this memoization, so the metafile exports the test reads are the
- *  same bytes the runner serves. */
+/** One build per process, shared by both Vite configs and the bun preload. */
 function slateVendorBundle(): SlateVendor {
   vendor ??= buildSlateVendor();
 
   return vendor;
 }
 
-/** The id `vite.config.ts`'s plugin answers with generated data — a module
- *  with no imports of its own, which is how a graph walk outside Vite must
- *  read it too. */
+/** A generated module with no imports; graph walks outside Vite must treat it that way too. */
 export const SLATE_VENDOR_ID = 'virtual:kinu-slate-vendor';
 
 const RESOLVED_ID = '\0virtual:kinu-slate-vendor';
 
-/** The Vite half of the virtual module — vite.config.ts and vitest.config.ts
- *  both register it so dev, build and the workerd pool resolve the same id. */
+/** Registered by vite.config.ts and vitest.config.ts so dev, build and the workerd pool resolve one id. */
 export function slateVendor(): Plugin {
   return {
     name: 'kinu:slate-vendor',

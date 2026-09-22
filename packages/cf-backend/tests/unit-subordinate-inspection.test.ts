@@ -24,28 +24,17 @@ interface InspectionFixture {
   readonly access: SubordinateInspectionAccess;
   child(parent: ActorHandle, name: string): ActorHandle;
   roster(parent: ActorHandle): SubordinateRosterStore;
-  /** That actor's own canonical session store, over this one database. */
   history(actor: ActorHandle): SessionHistory;
 }
 
-/**
- * One workspace database, one directory, and real actor handles.
- *
- * Every actor's rows live in this one database, and the directory walk is the
- * only traversal authority. A fixture that gave each actor its own database and
- * reached the next hop through a per-child RPC port — SDK parent-path rows
- * deciding whether the traversal was allowed — would be testing a boundary the
- * product does not have.
- */
+/** One database for every actor, and the directory walk is the only traversal authority, as in the product. */
 function workspaceFixture(): InspectionFixture {
   const created = createTestWorkspace();
   const raw = makeSqlExec(created.db);
   const actors = createTestActorsOver(created.db, { name: 'workspace' });
   const histories = new Map<string, SessionHistory>();
 
-  // One store per actor, memoized: the inspection walk reaches the same
-  // transcript twice for one request, and two stores over one actor would be
-  // two readers of the same rows.
+  // Memoized: the walk reaches one transcript twice per request, and two stores would be two readers of one row set.
   const history = (actor: ActorHandle): SessionHistory => {
     const existing = histories.get(actor.actorId);
 

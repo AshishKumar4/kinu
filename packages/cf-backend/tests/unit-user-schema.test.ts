@@ -87,9 +87,7 @@ describe('UserDO schema bootstrap', () => {
   });
 
   test('every column a writer names is in the CREATE that owns the table', () => {
-    // The CREATE is the only place that can be wrong — and a writer
-    // naming a column the CREATE lacks fails with `no such column` at runtime,
-    // where nothing catches it.
+    // A writer naming a column the CREATE lacks fails with `no such column` at runtime, uncaught.
     const db = new Database(':memory:');
     initUserTables(sqlExec(db));
 
@@ -100,9 +98,7 @@ describe('UserDO schema bootstrap', () => {
       'consented_root', 'device_home', 'sandbox_capability', 'sandbox_reason', 'sandbox_detail', 'sandbox_gpu',
       'agent_root', 'tier', 'unstopped_at',
     ]);
-    // The build a daemon reported lives one table over — `user_devices` is
-    // shipped storage, and a column added to it never reaches the accounts
-    // created before the lane.
+    // `user_devices` is shipped storage: a column added to it never reaches pre-existing accounts.
     expect(columns(db, 'user_device_builds')).toEqual([
       'device_id', 'version', 'update_check', 'reported_at',
     ]);
@@ -110,21 +106,16 @@ describe('UserDO schema bootstrap', () => {
       'request_id', 'device_id', 'workspace', 'turn_id', 'background_job_id',
       'cancel_claim', 'cancel_outcome',
     ]);
-    // A binding row, not a tier: the sandbox switch on the device row replaced
-    // the per-grant scope column when the tiers collapsed.
     expect(columns(db, 'device_consent')).toEqual([
       'agent_name', 'device_id', 'policy', 'last_method',
       'last_summary', 'updated_at',
     ]);
-    // The preset a server was added from lives one table over — `user_mcp_servers`
-    // is shipped storage, and a column added to it never reaches the accounts
-    // created before the lane.
+    // `user_mcp_servers` is shipped storage: a column added to it never reaches pre-existing accounts.
     expect(columns(db, 'user_mcp_servers')).toEqual([
       'id', 'name', 'server_url', 'transport', 'headers', 'allowed_tools',
       'created_at', 'updated_at',
     ]);
     expect(columns(db, 'user_mcp_server_presets')).toEqual(['server_id', 'preset_id']);
-    // NOT NULL with a default.
     expect(columns(db, 'user_workspaces')).toContain('name_origin');
     db.close();
   });
@@ -142,13 +133,8 @@ describe('UserDO schema bootstrap', () => {
   });
 
   test('a database already holding two case-colliding names still opens', () => {
-    // The whole per-user plane rides on this. `initUserTables` runs inside
-    // `ensureInit` before `_initialized`, ahead of every `sqlx` read, and
-    // `CREATE UNIQUE INDEX` over rows that already collide RAISES — so an
-    // unconditional build would fail profile, workspaces, credentials, sessions
-    // and devices for that user on every activation, unrecoverably. The pair is
-    // reachable: a write path that SELECTs, awaits a header seal, then INSERTs
-    // lets two concurrent adds both land, and such rows are already stored.
+    // `initUserTables` runs before every `sqlx` read, and `CREATE UNIQUE INDEX` over colliding rows raises,
+    // failing every activation for that user. Concurrent adds can already have stored such rows.
     const db = new Database(':memory:');
     initUserTables(sqlExec(db));
     db.run(`DROP INDEX idx_user_mcp_servers_name_unique`);
@@ -162,16 +148,14 @@ describe('UserDO schema bootstrap', () => {
 
     expect(() => { initUserTables(sqlExec(db)); }).not.toThrow();
 
-    // Skipped rather than built, and the rows are untouched: repairing a user's
-    // server names is not something a schema pass decides.
+    // Skipped, rows untouched: repairing a user's server names is not a schema pass's decision.
     const indexes = db.prepare<{ name: string }, []>(`PRAGMA index_list(user_mcp_servers)`).all()
       .map((row) => row.name);
 
     expect(indexes).not.toContain('idx_user_mcp_servers_name_unique');
     expect(db.prepare<{ n: number }, []>(`SELECT COUNT(*) AS n FROM user_mcp_servers`).get()?.n).toBe(2);
 
-    // And a THIRD activation over the same rows behaves the same way, so the
-    // condition is read every time rather than remembered.
+    // The condition is read every activation, not remembered.
     expect(() => { initUserTables(sqlExec(db)); }).not.toThrow();
     db.close();
   });

@@ -1,16 +1,6 @@
 /**
- * The hosted /tmp rewrite, applied where the workspace lives.
- *
- * A facet's `/tmp` is private only if `confinePrincipal` ran on the owner's
- * own `SqliteVFS`: the method has no RPC, so the provisioner runs ON the
- * owning object, through the same three host members the local backend hands
- * core's one provisioner. A command hardcoding `/tmp/x` then resolves
- * per-credential on every plane the session serves, with no mount copy and
- * no second filesystem.
- *
- * Proved against the real substrate: the same `NimbusWorkspace` and
- * `rpcExec` a facet reaches, with the owner's own members as the host —
- * exactly what the owning Durable Object hands over.
+ * A facet's `/tmp` is private only if `confinePrincipal` ran on the owner's own `SqliteVFS`; the method has no RPC,
+ * so the provisioner runs on the owning object. Proved against the real `NimbusWorkspace` and `rpcExec`.
  */
 import { describe, expect, test } from 'bun:test';
 import { Database, type SQLQueryBindings } from 'bun:sqlite';
@@ -58,8 +48,7 @@ interface OwnerFixture {
   readonly sql: SqlDatabase;
   readonly box: NimbusSandboxHandle;
   readonly databases: Database[];
-  /** The owner's three members, as `WorkspaceBundle.privileged()` plus its sql
-   *  hand them to core's provisioner. */
+  /** The owner's three members, as `WorkspaceBundle.privileged()` plus its sql hand them to the provisioner. */
   readonly homeHost: NodeHomeHost;
 }
 
@@ -89,9 +78,7 @@ async function openOwner(): Promise<OwnerFixture> {
 
   await ensureProgrammaticReady(host);
 
-  // The owner's own box: every option the session accepts rides through,
-  // because the provisioner roots its layout command with the kernel
-  // credential and a facet's file plane pins its own.
+  // Every option rides through: the provisioner roots its layout command with the kernel credential.
   const box: NimbusSandboxHandle = {
     ready: async () => undefined,
     exec: async (command, options) => {
@@ -124,7 +111,6 @@ async function openOwner(): Promise<OwnerFixture> {
   };
 }
 
-/** The session addressed as one node, for the credentialed file plane. */
 function sessionBoxFor(f: OwnerFixture, cred: VfsCred): NimbusSandboxHandle {
   return credentialedSessionBox(f.runtime, cred);
 }
@@ -150,7 +136,6 @@ describe('a hosted node hardcoding /tmp stays private', () => {
 
       expect(await rpcExec(f.host, 'echo a > /tmp/x', { cred: a })).toMatchObject({ exitCode: 0 });
 
-      // The sibling sees no such file, through the shell AND the substrate.
       expect((await rpcExec(f.host, 'cat /tmp/x', { cred: b })).exitCode).not.toBe(0);
       expect(f.workspace.vfs.as(ROOT).exists('tmp/x')).toBe(false);
       expect(f.workspace.vfs.as(ROOT).readFileString('tmp/head-aX9/x')).toBe('a\n');
@@ -169,13 +154,11 @@ describe('a hosted node hardcoding /tmp stays private', () => {
       const asA = nimbusSessionFiles(sessionBoxFor(f, a), a);
       const asB = nimbusSessionFiles(sessionBoxFor(f, b), b);
 
-      // The whole write path, including the stage-and-rename commit, which
-      // resolves through the same rewrite as every other operation.
+      // Includes the stage-and-rename commit, which resolves through the same rewrite.
       await asA.writeFile('/tmp/y', 'from a');
 
       expect(await asA.readFile('/tmp/y', { encoding: 'utf8' })).toBe('from a');
-      // Absent for the sibling is ENOENT, and stat answers null — a
-      // boundary reads as an empty space, never as a refusal.
+      // Absent for the sibling is ENOENT and stat null: a boundary reads as empty space, never a refusal.
       await expect(asB.readFile('/tmp/y')).rejects.toThrow(expect.objectContaining({ code: 'ENOENT' }));
       expect(await asB.stat('/tmp/y')).toBeNull();
     } finally {
@@ -192,9 +175,7 @@ describe('a hosted node hardcoding /tmp stays private', () => {
       expect(await rpcExec(f.host, 'echo a > /tmp/gone', { cred: a })).toMatchObject({ exitCode: 0 });
       await facetHomeReleaser(f.homeHost)('head-aX9');
       expect(f.workspace.vfs.as(ROOT).exists('tmp/head-aX9')).toBe(false);
-      // The mapping is gone with the bytes: the same credential no longer
-      // reaches a private root, and the shared scratch refuses it — dropped
-      // confinement fails closed, never open.
+      // Dropped confinement fails closed: the shared scratch refuses the credential.
       const refused = await rpcExec(f.host, 'echo z > /tmp/z', { cred: a });
       expect(refused.exitCode).not.toBe(0);
       expect(refused.stderr.toLowerCase()).toContain('permission denied');
@@ -219,8 +200,6 @@ describe('every facet kind is one home namespace on the owner', () => {
       expect(root.isDirectory('/home/head-h1')).toBe(true);
 
       expect(await rpcExec(f.host, 'echo s > /tmp/x && echo s > "$HOME/own"', { cred: sub, env: { HOME: '/home/sub-worker-1' } })).toMatchObject({ exitCode: 0 });
-      // The head's `/tmp/x` is a different file, and the subordinate's home is
-      // readable but not writable to it.
       expect((await rpcExec(f.host, 'cat /tmp/x', { cred: head })).exitCode).not.toBe(0);
       expect((await rpcExec(f.host, 'echo h > /home/sub-worker-1/theirs', { cred: head })).exitCode).not.toBe(0);
       expect(root.readFileString('/home/sub-worker-1/own')).toBe('s\n');
@@ -228,10 +207,9 @@ describe('every facet kind is one home namespace on the owner', () => {
       await release('sub-worker-1');
       expect(root.exists('/home/sub-worker-1')).toBe(false);
       expect(root.exists('tmp/sub-worker-1')).toBe(false);
-      // Released means released: the head's home and rewrite are untouched.
       expect(await rpcExec(f.host, 'echo h > /tmp/y', { cred: head })).toMatchObject({ exitCode: 0 });
       expect(root.readFileString('tmp/head-h1/y')).toBe('h\n');
-      // The uid row outlives the bytes, so a facet that comes back is itself.
+      // The uid row outlives the bytes, so a returning facet is itself.
       expect(credOf(await provision('sub-worker-1')).uid).toBe(sub.uid);
     } finally {
       for (const database of f.databases) database.close();
@@ -245,8 +223,7 @@ describe('every facet kind is one home namespace on the owner', () => {
       const sub = credOf(await facetHomeProvisioner(f.homeHost)('sub-worker-1'));
       expect(await rpcExec(f.host, 'echo s > /tmp/x', { cred: sub })).toMatchObject({ exitCode: 0 });
 
-      // The registry is isolate memory: a second filesystem over the same
-      // database starts with none of it.
+      // The registry is isolate memory: a second filesystem over the same database starts with none of it.
       const reopened = await NimbusWorkspace.create({
         sql: f.sql,
         transactions: { storage: { transactionSync: <T,>(fn: () => T): T => fn() } },
@@ -255,8 +232,6 @@ describe('every facet kind is one home namespace on the owner', () => {
 
       const before = reopened.vfs.as(sub);
       expect(() => before.writeFile('/tmp/again', 'x')).toThrow(expect.objectContaining({ code: 'EACCES' }));
-      // Restored from the durable layout, the same credential resolves the
-      // same private root again.
       restoreAgentTmpConfinements(f.sql, reopened.vfs.as(CRED_KERNEL), reopened.vfs);
       before.writeFile('/tmp/again', 'x');
       expect(reopened.vfs.as(ROOT).readFileString('tmp/sub-worker-1/again')).toBe('x');
@@ -267,7 +242,6 @@ describe('every facet kind is one home namespace on the owner', () => {
   });
 });
 
-/** The origin's own files, for the uncredentialed plane below. */
 function originFilesBox(f: OwnerFixture): NimbusSandboxHandle {
   const view = f.workspace.vfs.as(ORIGIN);
 
@@ -304,11 +278,7 @@ describe('one box answers both surfaces with the same bytes', () => {
     try {
       const files = nimbusSessionFiles(originFilesBox(f));
 
-      // The workspace tree is the one view: a relative shell path and its
-      // `/home/user` spelling name the same file the file plane reads. Paths
-      // at the filesystem root are outside that view — each surface keeps
-      // its own root — so the coherent contract is stated here, where it
-      // holds, rather than there.
+      // A relative shell path and its `/home/user` spelling name the same file; root paths are per-surface.
       expect(await rpcExec(f.host, 'echo live-bytes > tree-probe.md', {}))
         .toMatchObject({ exitCode: 0 });
       expect(await files.readFile('tree-probe.md', { encoding: 'utf8' })).toBe('live-bytes\n');

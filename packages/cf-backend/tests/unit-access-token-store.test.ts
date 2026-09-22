@@ -1,6 +1,4 @@
-// CI access tokens (`pta_…`) — store-level behavior: hashed at rest, scoped,
-// revocable, listed with last-used. Run against real SQLite through the same
-// SqlExec seam the UserDO provides.
+// CI access tokens (`pta_…`) against real SQLite through the UserDO's SqlExec seam.
 import { describe, expect, test } from 'bun:test';
 import { Database } from 'bun:sqlite';
 import { sqlExec } from './helpers/user-do';

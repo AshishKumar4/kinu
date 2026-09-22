@@ -1,46 +1,7 @@
 /**
- * KINU-065. The workerd layer loads the real decorated Kinu Agent classes.
- *
- * WHAT THE PREMISE IS. `@callable()` is a TC39 standard decorator. This
- * repository sets `target: ES2022` and never sets `experimentalDecorators`, so
- * every `@callable()` in `src/` is emitted by whichever bundler transforms the
- * Worker. The `agents` SDK's decorator is
- *
- *     function callable(metadata = {}) {
- *       return function callableDecorator(target, _context) {
- *         if (!callableMetadata.has(target)) callableMetadata.set(target, metadata);
- *         return target;
- *       };
- *     }
- *
- * `callableMetadata` is a WeakMap keyed by the METHOD FUNCTION, and dispatch is
- * `callableMetadata.has(this[method])`. Under standard decorator semantics
- * `target` is the method function and that key matches. Under legacy decorator
- * semantics `target` would be the prototype, every key would be wrong, and
- * `getCallableMethods()` would return an empty map. The browser would then get
- * "Method X is not callable" for all 127 declared RPCs, and nothing else in this
- * repository would notice: `bun test` does not load these classes, and a
- * purpose-built probe class exercises its own decorators, not the shipped ones.
- *
- * WHY THIS FILE IS IN THE WORKERD LAYER AND NOT IN `bun test`. The assertion is
- * about the SHIPPED transform. `bun test` runs its own TypeScript pipeline, so a
- * green run there says nothing about the bundle wrangler publishes. This layer
- * is transformed by the same vite/esbuild path the Worker build uses, at the
- * compatibility date `wrangler.jsonc` pins, so the class definitions here really
- * did execute their decorators inside workerd.
- *
- * HARNESS BOUNDARY. The oracle is the SDK's own public `getCallableMethods()`,
- * read through the real class prototypes. Nothing is instantiated: an Agent
- * constructor seals its RPC surface, opens SQLite and installs diagnostics, all
- * of which need bindings this layer deliberately does not declare, and none of
- * which is the premise. `getCallableMethods` walks `Object.getPrototypeOf(this)`
- * upward and reads the WeakMap, so an object whose prototype is the real class
- * prototype gives exactly the registry answer a live instance would give.
- *
- * BLIND SPOT. No browser client and no WebSocket. This proves the metadata
- * survived the transform and that dispatch would resolve; it does not prove the
- * wire protocol, the connection lifecycle, or hibernation. It also cannot see a
- * method that is callable and broken.
+ * KINU-065: `@callable()` is a TC39 standard decorator (no `experimentalDecorators`); the SDK keys its registry
+ * by the method function, so a legacy transform empties `getCallableMethods()`. Runs in workerd because only
+ * the shipped vite/esbuild transform matters. Does not cover the wire protocol, connections or hibernation.
  */
 import { describe, expect, test } from 'vitest';
 import { Agent } from 'agents';
@@ -50,28 +11,11 @@ import { UserDO } from '../../src/user/user-do';
 
 /** What one real class prototype answers about its own browser RPC surface. */
 interface CallableSurface {
-  /** The names the SDK's registry answers for, sorted. */
   readonly callable: readonly string[];
-  /** Whether the prototype chain resolves `name` to a callable function. */
   resolvesToFunction(name: string): boolean;
 }
 
-/**
- * The SDK's own reader, applied to a real class prototype.
- *
- * One accessor rather than a cast at each use site. The three earlier reads each
- * cast the same object again, twice into an index-signature type, which is how a
- * test grows a private copy of the thing it is measuring.
- *
- * The function-name walk is INSIDE, so nothing here takes a bare prototype or
- * hands back an unknown value. The chain is walked because a method declared on
- * `ActorAgent` is reached from `OrchestratorAgent` through inheritance, and
- * `getOwnPropertyDescriptors` reads one level. `src/rpc-surface.ts` keeps a
- * private `inheritedDescriptor` doing a similar walk for `sealRpcSurface`, and it
- * is deliberately not shared: that one implements a production authority policy,
- * this one answers a question about a prototype, and exporting production
- * internals into a test would couple them for no gain.
- */
+/** The SDK's own `getCallableMethods`, read through the real prototype chain (inherited RPCs included). */
 function callableSurface(cls: { readonly prototype: object }): CallableSurface {
   const functions = new Set<string>();
 
@@ -81,20 +25,12 @@ function callableSurface(cls: { readonly prototype: object }): CallableSurface {
     }
   }
 
-  // Checked here, so the assertion below rests on an observation rather than on
-  // the class hierarchy being what this file expects.
   if (!functions.has('getCallableMethods')) {
     throw new Error('the class prototype chain exposes no getCallableMethods');
   }
 
-  // SAFETY: constructed, then checked. `Object.create(cls.prototype)` returns an
-  // object whose prototype IS `cls.prototype` by construction, and the guard on
-  // the line above has just observed `getCallableMethods` as a function on that
-  // chain. That one member is all this receiver is used for: the SDK declares it
-  // to start at `Object.getPrototypeOf(this)` and to read its own WeakMap, so it
-  // returns the registry answer a live instance returns. Nothing further is
-  // constructed on purpose, because an Agent constructor seals its RPC surface,
-  // opens SQLite and installs diagnostics, none of which is the premise.
+  // SAFETY: the prototype is `cls.prototype` by construction and the guard just observed `getCallableMethods` on it;
+  // no Agent is constructed because its constructor needs bindings this layer does not declare.
   const receiver: Agent<never> = Object.create(cls.prototype);
 
   return {
@@ -104,23 +40,8 @@ function callableSurface(cls: { readonly prototype: object }): CallableSurface {
 }
 
 /**
- * Every Durable Object class in this Worker that carries `@callable()`, with the
- * floor its surface must clear. A floor rather than an exact list: the exact set
- * moves whenever a feature adds an RPC, and a test that has to be edited for
- * every feature gets edited without being read. What must never happen is the
- * surface COLLAPSING, which is what a broken decorator transform does.
- *
- * `witness` is one method whose presence is checked by name, so an empty-map
- * regression cannot be hidden by a floor of zero. The numbers were read off a
- * real run of this layer, never guessed.
- *
- * TWO decorated classes, and only two: a hired subordinate, a head, a node and
- * a rollout branch are logical actors hosted over the root's one database, and
- * their chat surface IS the orchestrator's own `@callable` surface bound to an
- * actor by the request path. So there is no second decorated root whose
- * transform could break independently — which also means the inherited-surface
- * check below is the only witness that `getCallableMethods` still walks a
- * prototype CHAIN rather than one class's own registry.
+ * Floors, not exact lists: the defect is the surface collapsing. `witness` stops a floor of zero hiding an empty map.
+ * Only two decorated classes: hosted actors share the orchestrator's `@callable` surface.
  */
 const DECORATED = [
   { name: 'OrchestratorAgent', cls: OrchestratorAgent, floor: 100, witness: 'branchTurn' },
@@ -131,26 +52,15 @@ describe('KINU-065 — the real decorated classes load and keep their callable m
   test('the standard-decorator transform survives into workerd', () => {
     for (const { name, cls, floor, witness } of DECORATED) {
       const { callable } = callableSurface(cls);
-      // The collapse assertion. Zero here is the whole defect.
       expect(callable.length, `${name} exposes no @callable RPC at all`).toBeGreaterThanOrEqual(floor);
       expect(callable, `${name} lost its witness RPC`).toContain(witness);
     }
   });
 
-  // There is no positive "every REGISTERED name resolves to a function" test
-  // here: the SDK's `getCallableMethods` only records a name when `typeof
-  // prototype[name] === "function"` already holds, so such an assertion would
-  // restate its own oracle and could not fail. `resolvesToFunction` exists for
-  // the NEGATIVE describe below, which genuinely needs it: there, a method's
-  // absence and a method's non-exposure are different defects and only one of
-  // them is acceptable.
+  // No "every registered name resolves" test: the SDK only registers function-valued names, so it could not fail.
 
   test('the one actor root inherits the shared surface rather than redeclaring it', () => {
-    // ActorAgent declares the chat, approval and steering RPCs once, and the
-    // orchestrator reaches them through the prototype chain. `getCallableMethods`
-    // walks that chain, so this is the half of the transform a single-class
-    // check cannot see: a per-class registry would still pass the floor above
-    // and lose every inherited name here.
+    // ActorAgent's RPCs reach the orchestrator through inheritance; a per-class registry would lose them.
     const actor = callableSurface(ActorAgent).callable;
     expect(actor.length).toBeGreaterThan(0);
     const root = callableSurface(OrchestratorAgent);
@@ -161,23 +71,10 @@ describe('KINU-065 — the real decorated classes load and keep their callable m
   });
 });
 
-/**
- * The negative direction, and the reason it is asserted against the registry
- * rather than against our own source text.
- *
- * Reading the TypeScript and matching the literal `'@callable()\n  async <name>'`
- * passes for the wrong reasons: reformat the decorator onto one line,
- * insert a blank line, add a JSDoc block between decorator and signature, or
- * rename the method, and the string stops matching while the method stays
- * exposed. It also cannot fail when a decorator is added somewhere the pattern
- * does not describe. The registry is the thing dispatch actually consults, so it
- * is the thing to assert.
- */
+/** Asserted against the runtime registry, not source text, which drifts with formatting. */
 describe('KINU-065 — the privileged surface is absent from the runtime registry', () => {
   test('UserDO exposes no callable RPC', () => {
-    // A browser holding a UserDO socket would reach account-level authority.
-    // Native worker-side stub RPC does not need `@callable`, so the correct
-    // surface here is empty, not reduced.
+    // A browser holding a UserDO socket would reach account-level authority; native stub RPC needs no `@callable`.
     expect(callableSurface(UserDO).callable).toEqual([]);
   });
 
@@ -196,20 +93,16 @@ describe('KINU-065 — the privileged surface is absent from the runtime registr
       const surface = callableSurface(cls);
 
       for (const method of names) {
-        // Preserved: a worker-side stub holder still calls it by name over
-        // native Durable Object RPC, which needs no decorator.
+        // Preserved for worker-side stub RPC, which needs no decorator.
         expect(surface.resolvesToFunction(method), `${method} was deleted, not just unexposed`)
           .toBe(true);
-        // Unexposed: no browser socket may dispatch it.
         expect(surface.callable, `${method} became browser-callable`).not.toContain(method);
       }
     }
   });
 
   test('the privileged names are checked against a surface that really exists', () => {
-    // Non-vacuity. Every assertion above is a `not.toContain`, which an empty
-    // registry satisfies. This is the guard that stops the whole describe from
-    // passing on a collapsed transform.
+    // Non-vacuity: every assertion above is `not.toContain`, which an empty registry satisfies.
     expect(callableSurface(OrchestratorAgent).callable.length).toBeGreaterThan(90);
     expect(callableSurface(ActorAgent).callable.length).toBeGreaterThan(10);
   });

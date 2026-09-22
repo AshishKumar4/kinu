@@ -1,25 +1,8 @@
 /**
- * Browser-side screenshot capture for the feedback dialog.
- *
- * `modern-screenshot` (MIT, no runtime dependencies) rasterises a CLONE of the
- * page into an SVG `foreignObject`, so the browser draws the real CSS rather
- * than a reimplementation of it. It is loaded through a dynamic `import()` and
- * nowhere else, so the 186 KB it unpacks to is a separate chunk that a session
- * which never opens the dialog never fetches.
- *
- * WHY THE CLONE MATTERS, from its source rather than its README: `cloneNode`
- * copies computed styles inline and — at dist/index.mjs:821 — copies a live
- * input's `value` into the clone as an ATTRIBUTE. A password field therefore
- * arrives in the clone with its secret spelled out. `onCloneNode`, awaited at
- * dist/index.mjs:1509 after cloning and before font embedding and
- * rasterisation, is the one place that can be undone, and undoing it there is
- * what keeps the live DOM untouched: the reporter never sees their own page
- * flicker, and a capture that throws half-way leaves nothing to restore.
- *
- * EVERY CAPTURE IS RE-ENCODED through a canvas on the way out, annotated or
- * not. The canvas holds decoded pixels and nothing else, so the PNG it emits
- * cannot carry a text chunk, an EXIF block or a timestamp — the strip is a
- * property of the pipeline rather than a step that could be skipped.
+ * Browser-side screenshot capture for the feedback dialog, via `modern-screenshot` loaded only by
+ * dynamic `import()`. Its clone copies a live input's `value` as an attribute (dist/index.mjs:821), so
+ * redaction runs in `onCloneNode` (dist/index.mjs:1509), leaving the live DOM untouched. Every capture
+ * is re-encoded through a canvas, so no text chunk, EXIF or timestamp can survive.
  */
 
 import {
@@ -29,45 +12,25 @@ import {
   FEEDBACK_SCREENSHOT_TYPE,
 } from '@kinu.run/core';
 
-/** Opaque near-black, so a blocked-out field reads as deliberately removed in
- *  both themes rather than as a rendering failure. */
+/** Opaque, so a blocked-out field reads as deliberately removed in both themes. */
 const REDACTION_FILL = '#111111';
 
-/** Marks what the redaction actually replaced. Module-private: the count below
- *  is what leaves this file, and the attribute is how it is counted. */
 const REDACTED_MARKER = 'data-feedback-redacted';
 
-/**
- * Total pixels a capture is scaled to fit. Device pixel ratio is honoured up to
- * this bound: past it a retina full-page shot of a long transcript spends
- * seconds in the PNG encoder and lands over the upload limit anyway, and a
- * report nobody can send is worth less than a slightly softer one.
- */
+/** Device pixel ratio is honoured up to this bound; past it, encoding is slow and exceeds the upload limit. */
 const MAX_CAPTURE_PIXELS = 12_000_000;
 
 export interface Capture {
-  /** PNG bytes, re-encoded through a canvas. */
   blob: Blob;
   width: number;
   height: number;
-  /** How many nodes were blocked out — surfaced to the reporter so redaction
-   *  is visible rather than merely promised. */
+  /** Shown to the reporter so redaction is visible rather than merely promised. */
   redacted: number;
 }
 
 /**
- * Blank every secret-bearing node in a cloned tree, and drop the feedback UI's
- * own nodes. Returns how many were blanked.
- *
- * Password inputs are included WITHOUT being annotated. An opt-in list is only
- * as good as the last person who remembered it, and the failure is silent and
- * permanent — the secret is already in the image by the time anyone looks.
- *
- * Module-private, and the property is still held to: `scripts/feedback-ux.test.ts`
- * drives the real components through `capturePage` and reads the rasteriser's own
- * serialization of the clone this produces, which covers text, attributes and the
- * field values the rasteriser copies in — more than a direct call on a
- * hand-built tree could.
+ * Blanks secret-bearing nodes and drops the feedback UI's own; returns the count. Password inputs are
+ * included without annotation because a forgotten opt-in leaks silently. Covered by `scripts/feedback-ux.test.ts`.
  */
 function redactClone(root: Element): number {
   for (const omit of root.querySelectorAll(`[${FEEDBACK_OMIT_ATTR}]`)) omit.remove();
@@ -77,24 +40,16 @@ function redactClone(root: Element): number {
   );
 
   for (const node of targets) {
-    // The confirmed leak: dist/index.mjs:821 wrote the live value here.
+    // dist/index.mjs:821 writes the live value here.
     node.removeAttribute('value');
     node.removeAttribute('placeholder');
     node.removeAttribute('title');
     node.removeAttribute('aria-label');
-    // Text children, and any <img> inside a marked region, go with them.
     node.textContent = '';
-    // Pseudo-element `content` is hoisted into a generated stylesheet keyed by
-    // a class on the clone, so it survives an emptied element. Dropping the
-    // classes drops that too; the geometry is already inline by this point.
+    // Pseudo-element `content` is keyed by a class on the clone; dropping classes drops it.
     node.removeAttribute('class');
-    // `background` shorthand rather than `background-color`: it resets the
-    // image and gradient layers a copied style may have put underneath. Border,
-    // outline and shadow go with it, so what lands is a SOLID BLOCK rather than
-    // an empty-looking field — which matters twice over: a bordered blank reads
-    // as "nothing was there", and any surviving edge is a pixel the block did
-    // not cover. `box-sizing: border-box` is global here, so dropping the
-    // border does not move the box.
+    // The shorthand resets image/gradient layers; border, outline and shadow go too so no edge survives
+    // (`box-sizing: border-box` is global, so the box does not move).
     node.style.background = REDACTION_FILL;
     node.style.border = '0';
     node.style.outline = 'none';
@@ -106,24 +61,14 @@ function redactClone(root: Element): number {
   return root.querySelectorAll(`[${REDACTED_MARKER}]`).length;
 }
 
-/** Honour the display's pixel ratio, but never past the pixel bound. */
 function captureScale(width: number, height: number): number {
   const area = Math.max(1, width * height);
 
   return Math.min(window.devicePixelRatio || 1, Math.sqrt(MAX_CAPTURE_PIXELS / area));
 }
 
-/**
- * Cancels the DOCUMENT's own scroll offset, and only that one.
- *
- * The rasteriser restores a scroll position by translating the children of
- * every scrolled element by that element's offsets, and it counts
- * `documentElement` among them. This capture already spans the whole document,
- * so translating the page by where the reader happens to be scrolled cuts that
- * much off the top and leaves the same blank at the bottom — measured, not
- * feared. A transform on the captured root puts the document's share back and
- * leaves every nested container's alone.
- */
+/** The rasteriser translates `documentElement` by its scroll offset, cropping a whole-document capture;
+ *  this cancels only the document's share. */
 function unscrollDocument(root: Element): { transform: string } | undefined {
   const { scrollLeft, scrollTop } = root;
 
@@ -132,8 +77,6 @@ function unscrollDocument(root: Element): { transform: string } | undefined {
   return { transform: `translate(${String(scrollLeft)}px, ${String(scrollTop)}px)` };
 }
 
-/** A canvas is the re-encode: it holds decoded pixels, so what comes out
- *  carries no chunk that was not drawn. */
 async function encode(canvas: HTMLCanvasElement): Promise<Blob> {
   const encoded = await new Promise<Blob | null>((resolve) => {
     canvas.toBlob(resolve, FEEDBACK_SCREENSHOT_TYPE);
@@ -144,20 +87,9 @@ async function encode(canvas: HTMLCanvasElement): Promise<Blob> {
   return encoded;
 }
 
-/**
- * Photograph `document.documentElement` — the whole page, at whatever size the
- * document lays out to, which is the viewport for this app's fixed shell and
- * the full scroll height for a page that scrolls.
- *
- * Throws on failure rather than returning a degraded capture: the caller offers
- * a note-only report, and a blank or half-drawn image would be worse than none.
- */
+/** The whole document. Throws rather than degrading: the caller offers a note-only report instead. */
 export async function capturePage(): Promise<Capture> {
-  // DYNAMIC ON PURPOSE, and a static import cannot express it: this is the one
-  // reference to the rasteriser in the app, so `import()` is what puts its
-  // 186 KB in a chunk of its own. A static import would bundle it into the
-  // authenticated app's entry and charge every session that never sends
-  // feedback for it.
+  // Dynamic on purpose: the only reference, so the rasteriser stays out of the entry chunk.
   const { domToCanvas } = await import('modern-screenshot');
   const root = document.documentElement;
   const width = root.clientWidth;
@@ -168,16 +100,9 @@ export async function capturePage(): Promise<Capture> {
     width,
     height,
     scale: captureScale(width, height),
-    // The page's own ground, so a capture of a dark theme is not matted onto
-    // white where the document background does not paint.
+    // Dark themes must not be matted onto white where the document background does not paint.
     backgroundColor: getComputedStyle(document.body).backgroundColor,
-    // A pane the reader scrolled is photographed WHERE THEY LEFT IT. Off by
-    // default in the rasteriser, and the default is wrong for a bug report: a
-    // transcript scrolled to the failure, or a table scrolled to the wrong
-    // column, came back at the top and showed none of what was being reported.
-    // Per-container and deterministic — each scrolled element translates its
-    // own children — so no second layout tree is built and nothing is measured
-    // twice.
+    // Off by default in the rasteriser; a bug report must show panes where the reader scrolled them.
     features: { restoreScrollPosition: true },
     style: unscrollDocument(root),
     onCloneNode: (cloned) => {
@@ -188,8 +113,7 @@ export async function capturePage(): Promise<Capture> {
   return { blob: await encode(source), width: source.width, height: source.height, redacted };
 }
 
-/** A drawn annotation, in image pixel coordinates so it survives any zoom the
- *  editor renders at. */
+/** In image pixel coordinates, so it survives any editor zoom. */
 export interface Annotation {
   kind: 'box' | 'hide';
   x: number;
@@ -198,19 +122,13 @@ export interface Annotation {
   h: number;
 }
 
-/** Accent used to point at something. Read off the app's own token so the
- *  annotation belongs to this product rather than to a screenshot tool. */
 function accent(): string {
   const token = getComputedStyle(document.documentElement).getPropertyValue('--c-accent').trim();
 
   return token.length > 0 ? token : '#E0A458';
 }
 
-/**
- * Draw `annotations` over `image` and re-encode. `hide` paints an opaque block,
- * which is how a reporter removes something the automatic redaction could not
- * know about; `box` outlines without covering.
- */
+/** `hide` paints an opaque block (manual redaction); `box` outlines without covering. */
 export function paint(
   context: CanvasRenderingContext2D,
   image: CanvasImageSource,
@@ -234,8 +152,7 @@ export function paint(
   }
 }
 
-/** Re-encode a capture with its annotations burned in. Called on send, so the
- *  bytes that leave are the bytes the reporter approved. */
+/** Called on send, so the bytes that leave are the bytes the reporter approved. */
 export async function flatten(capture: Capture, annotations: readonly Annotation[]): Promise<Blob> {
   if (annotations.length === 0) return capture.blob;
   const bitmap = await createImageBitmap(capture.blob);
@@ -255,9 +172,7 @@ export async function flatten(capture: Capture, annotations: readonly Annotation
   }
 }
 
-/** Whether these bytes can be sent at all. The client refuses the same number
- *  the server refuses, so an over-limit capture is reported here rather than
- *  after an 8 MiB upload. */
+/** Mirrors the server's limit, so an over-limit capture is refused before upload. */
 export function tooLarge(bytes: number): boolean {
   return bytes > FEEDBACK_MAX_SCREENSHOT_BYTES;
 }

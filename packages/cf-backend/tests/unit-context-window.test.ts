@@ -1,7 +1,5 @@
-// Per-model context windows — the static fallback table, the catalog lookup,
-// and the INPUT ALLOCATION the two compose into. The table answers only for a
-// model somebody measured; for anything else it stands in, and a stand-in is
-// marked as one so no gate downstream can spend it as a fact.
+// Per-model context windows and the input allocation they compose into. The table answers only for
+// measured models; anything else is a marked stand-in no gate may spend as a fact.
 import { describe, test, expect } from "bun:test";
 import type { ModelMessage } from "ai";
 import { userCredentialSource } from './helpers/user-credentials';
@@ -42,23 +40,19 @@ describe("contextWindowForModel", () => {
     expect(contextWindowForModel("codex/gpt-5.5").window).toBe(272_000);
     expect(contextWindowForModel("openai/gpt-5.1").window).toBe(256_000);
     expect(contextWindowForModel("google/gemini-2.5-pro").window).toBe(1_000_000);
-    // Every match is a figure read off a published catalog, so it is allowed to
-    // gate a request.
+    // Every match is a figure read off a published catalog, so it may gate a request.
     expect(contextWindowForModel("openai/gpt-5.1").measured).toBe(true);
   });
 
   test("the families this product's own catalogs serve are measured, not stood in for", () => {
-    // #20 was reported on this model: a 1M-window model whose spec matched no
-    // entry, so the table stood in with 128k and the turn was refused against
-    // half of that.
+    // #20: a spec matching no entry got the stand-in window and was refused against half of it.
     expect(contextWindowForModel("opencode-go/muse-spark-1.3-contributor"))
       .toEqual({ measured: true, window: 1_048_576 });
     expect(contextWindowForModel("workers-ai/@cf/nvidia/nemotron-3-120b-a12b"))
       .toEqual({ measured: true, window: 256_000 });
     expect(contextWindowForModel("workers-ai/@cf/google/gemma-4-26b-a4b-it"))
       .toEqual({ measured: true, window: 256_000 });
-    // Workers AI publishes 128k for both GPT-OSS sizes; the gpt-5 rule above
-    // used to answer 256k for them, which is not a figure anybody measured.
+    // Not the gpt-5 rule's figure: nobody measured that for GPT-OSS.
     expect(contextWindowForModel("workers-ai/@cf/openai/gpt-oss-120b"))
       .toEqual({ measured: true, window: 128_000 });
   });
@@ -69,10 +63,7 @@ describe("contextWindowForModel", () => {
   });
 
   test("a default-configured agent resolves to the real DeepSeek V4 Pro window", () => {
-    // The C3 regression: sizing from the RAW stored spec gave "" → the 128k
-    // default window could drift from the selected model. The
-    // orchestrator resolves the EFFECTIVE spec first (the same
-    // normalizeSpecSync resolution getModel() uses) before sizing.
+    // C3: size from the effective spec (normalizeSpecSync, as getModel() uses), not the raw stored one.
     const userDOStub = userCredentialSource({
       getAuthHeaders: async () => null,
       listCredentials: async () => [],
@@ -86,14 +77,9 @@ describe("contextWindowForModel", () => {
   });
 });
 
-// #20. The window, the answer reserve and the input allocation are three
-// different numbers, and the defect was in their COMPOSITION rather than in any
-// one of them: an unanswered catalog read as "the answer may take the whole
-// window", which halved a window nobody had measured and refused a 124,644-token
-// request against 64,000.
+// #20: the defect was the composition. An unanswered catalog read as "the answer may take the whole
+// window", halving an unmeasured window and refusing a 124,644-token request against 64,000.
 describe("the input allocation a resolved model leaves", () => {
-  /** A catalog session whose lookup answers nothing — an isolate that has just
-   *  started, or a provider with no catalogue at all. */
   function unanswered(spec: string): ModelCatalogSession {
     const session = new ModelCatalogSession({ effectiveSpec: () => spec, lookup: async () => null });
     session.info();
@@ -121,8 +107,7 @@ describe("the input allocation a resolved model leaves", () => {
     const session = unanswered("opencode-go/unlisted-model-9");
     await Promise.resolve();
 
-    // The stand-in window may still SIZE a budget — something has to — but it
-    // is spent whole rather than halved by an allowance nobody reported.
+    // The stand-in window may size a budget, but is spent whole rather than halved by an unreported allowance.
     expect(allocation(session)).not.toBe(64_000);
     expect(allocation(session)).toBe(session.contextWindow());
   });
@@ -140,18 +125,14 @@ describe("the input allocation a resolved model leaves", () => {
   });
 });
 
-// #20, the other half: the admission that spends that allocation. PROVENANCE
-// ALONE decides whether a request may be refused — the two cases below differ
-// in nothing else, and the refusing one carries the 64,000-token allocation and
-// the 124,644-token request the owner reported.
+// #20, the admission: provenance alone decides whether a request may be refused; the two cases
+// below differ in nothing else.
 describe("admission on an unmeasured window", () => {
   const HISTORY: ModelMessage[] = [
     { role: "user", content: "the long conversation this turn continues" },
   ];
 
-  /** The turn of #20: a 124,644-token request against a 128k window whose
-   *  answer allowance nothing reported, already force-compacted so the one
-   *  compaction it was entitled to is spent. */
+  /** The turn of #20, already force-compacted so its one compaction is spent. */
   async function admit(windowMeasured: boolean): Promise<ModelMessage[] | Error> {
     try {
       return await assembleTurnMessages({
@@ -175,8 +156,7 @@ describe("admission on an unmeasured window", () => {
   });
 
   test("the same request on a MEASURED window is still refused before submission", async () => {
-    // The negative control for the case above: without it, an admission that
-    // refuses nothing at all would pass.
+    // Negative control: an admission that refuses nothing would otherwise pass.
     const refused = await admit(true);
     expect(refused).toBeInstanceOf(Error);
     expect(refused instanceof Error ? refused.message : "").toContain("refused before submission");
@@ -185,10 +165,8 @@ describe("admission on an unmeasured window", () => {
   test("the refusal is not a transient blip the client should retry through", async () => {
     const refused = await admit(true);
     expect(refused).toBeInstanceOf(Error);
-    // The class itself is pinned where the policy lives
-    // (packages/core/tests/unit-turn-admission.test.ts); what belongs here is
-    // that the composition above produces a refusal the client can act on
-    // rather than one it should quietly try again.
+    // The class is pinned in packages/core/tests/unit-turn-admission.test.ts; here, the refusal must be one
+    // the client acts on rather than retries.
     expect(classifyTurnFailure(refused instanceof Error ? refused.message : "")).not.toBe("transient");
   });
 });
@@ -217,11 +195,8 @@ describe("catalogModelInfo", () => {
     expect(await catalogModelInfo(undefined, deps, "x")).toBeNull();
     const noMatch = { listModels: async () => [{ id: "other" }] };
     expect(await catalogModelInfo(noMatch, deps, "x")).toBeNull();
-    // Null for a failed READ would be the same answer as "no such model", which
-    // is how every model silently ends up on a static context window. The
-    // degraded path is kept where it can say so instead: the lookup seam
-    // (ModelCatalogSession.armLookup) records the reason and leaves the static
-    // fallbacks authoritative.
+    // Null for a failed read would equal "no such model"; the lookup seam (ModelCatalogSession.armLookup)
+    // records the reason and leaves the static fallbacks authoritative.
     const throws = { listModels: async () => { throw new Error("offline"); } };
     await expect(catalogModelInfo(throws, deps, "x")).rejects.toThrow("offline");
   });

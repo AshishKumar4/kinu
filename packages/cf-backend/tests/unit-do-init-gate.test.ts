@@ -18,12 +18,8 @@
  * hypothesis this disproves — an object parked inside a turn awaiting the model
  * answers it in 1 ms, because the DO input gate only closes around storage ops.
  *
- * So the invariant is not "onStart may await these things". It is that `onStart`
- * awaits nothing: every override is declared to return `void`, which makes an
- * `await` added there a compile error (TS1308). The annotation is not
- * self-enforcing — the base declares `void | Promise<void>`, so widening the
- * signature to `async` typechecks — which is what this pins, and what
- * `scripts/do-init-gate.ts` generalises to any DO class added later.
+ * So `onStart` awaits nothing: overrides return `void` (an added `await` is TS1308), and since the base declares
+ * `void | Promise<void>` this pins it; `scripts/do-init-gate.ts` generalises to later DO classes.
  */
 import { describe, expect, test } from 'bun:test';
 import { readFileSync } from 'node:fs';
@@ -33,20 +29,11 @@ import { mockAgentsSdk } from './helpers/agents-sdk';
 
 mockAgentsSdk();
 
-// Dynamic on purpose, exactly as tests/helpers/actor-harness.ts:24-27 does: the
-// real `agents` dist reaches `cloudflare:*`, so the SDK mock must be registered
-// before these modules evaluate, and a static import would hoist above it.
+// Dynamic, as in tests/helpers/actor-harness.ts: the SDK mock must register before `agents` reaches `cloudflare:*`.
 const { OrchestratorAgent } = await import('../src/orchestrator');
 
-/** Every Kinu class whose `onStart` runs inside `blockConcurrencyWhile`,
- *  with the shape its gate is ALLOWED to have. The orchestrator is async by
- *  the owner's 2026-08-31 ruling — bounded once-per-start work stays in the
- *  gate, concretely the workspace boot — and `gate:do-init` holds every await
- *  in it to the pinned admitted list. The inventory is ONE class — hired
- *  children are hosted actors with no activation of their own — and a second
- *  Durable Object class added later must add its entry here. UserDO declares
- *  no override, MonitorDO is a plain DurableObject with no partyserver gate,
- *  and KinuSandbox is a third-party base. */
+/** Every Kinu class whose `onStart` runs inside `blockConcurrencyWhile`, with its allowed gate shape. The orchestrator
+ *  is async by the owner's 2026-08-31 ruling, its awaits held by `gate:do-init`; a new DO class must add its entry. */
 const GATED_CLASSES = [
   ['OrchestratorAgent', OrchestratorAgent, 'AsyncFunction'],
 ] as const;
@@ -54,17 +41,13 @@ const GATED_CLASSES = [
 describe('no Durable Object awaits anything unadmitted inside its init gate', () => {
   for (const [name, Actor, allowedConstructor] of GATED_CLASSES) {
     test(`${name}.onStart has its allowed gate form`, () => {
-      // The real prototype member, not its source: an async override reports
-      // 'AsyncFunction' here however it was written.
+      // The real prototype member: an async override reports 'AsyncFunction' however it was written.
       expect(Actor.prototype.onStart.constructor.name).toBe(allowedConstructor);
     });
   }
 
   test('a cold activation answers a pure read, and the boot cannot wedge it', async () => {
-    // The harness NIMBUS_SESSION binding is `{}` — the runtime cache is
-    // unusable. The awaited boot composes the workspace over this object's own
-    // SQLite regardless, and a boot FAILURE is classified rather than thrown,
-    // so the activation always completes and a pure read always answers.
+    // NIMBUS_SESSION is `{}` here; a boot failure is classified rather than thrown, so a pure read still answers.
     const harness = orchestratorHarness();
     expect(await harness.agent.listAgentTasks()).toEqual([]);
   });
@@ -74,10 +57,7 @@ describe('the scaffold precondition moved to the turn, and is still reached', ()
   const actor = readFileSync(join(import.meta.dir, '..', 'src', 'actor-agent.ts'), 'utf8');
 
   test('prepareTurn awaits it, so every turn path is covered', () => {
-    // Through `readTurnInputs`, the reads every turn path awaits before the
-    // turn's profile is bound, and before the first thing that reads the
-    // workspace. `prepareTurn` is the loop's one preparation seam: every
-    // turn — a client's, a wake's, a rerun's — is prepared through it.
+    // `prepareTurn` is the loop's one preparation seam, so every turn path awaits `readTurnInputs` through it.
     const prepareTurn = actor.slice(
       actor.indexOf('protected async prepareTurn(item: ChatTurnInput, lease: ActorTurnLease)'),
       actor.indexOf('this.actorSession.bindProfile(lease, assembled.profile, assembled.profileInputs);'),
@@ -94,8 +74,6 @@ describe('the scaffold precondition moved to the turn, and is still reached', ()
   });
 
   test('it is declared once on the shared actor base, not per root', () => {
-    // Two `onStart` copies collapsed into one call on the turn path; a second
-    // declaration would be the duplication that produced them.
     expect(actor.match(/ensureOwnedScaffold\(\): Promise<void>/g)).toHaveLength(1);
     const orchestrator = readFileSync(join(import.meta.dir, '..', 'src', 'orchestrator.ts'), 'utf8');
     expect(orchestrator).not.toContain('ensureOwnedScaffold(): Promise<void>');

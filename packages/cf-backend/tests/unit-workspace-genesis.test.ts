@@ -1,15 +1,5 @@
-// The workspace's first turn.
-//
-// The owner's complaint (2026-08-16): "the initial prompt I give in the 'New
-// workspace' dialog is not really an initial prompt but rather the agent's
-// mission, which is fine, but then the user needs to reprompt it again to get it
-// going… the agent should have the first turn."
-//
-// So creation delivers ONE signal through the existing seam, and that signal
-// becomes a programmatic turn. These tests drive the real path — real
-// workspaceGenesisSignal, real Inbox, real BackendHost.enqueueTurn, the real
-// loop's admission and its slot-time yield — and park the turn at its model
-// call, the one boundary a suite scripts.
+// Defends the owner's complaint (2026-08-16): the creation prompt was only a mission and the agent
+// never took the first turn. Creation delivers one signal that becomes a programmatic turn.
 import { describe, expect, test } from 'bun:test';
 import type { Database } from 'bun:sqlite';
 import * as v from 'valibot';
@@ -28,8 +18,7 @@ const TurnProvenanceSchema = v.looseObject({
   [SIGNAL_ID_METADATA_KEY]: v.optional(v.string()),
 });
 
-/** The turns the loop ran, as their durable user rows read: the text the turn
- *  was opened for and the provenance its metadata carries. */
+/** The loop's turns as durable user rows: opening text and metadata provenance. */
 async function turnsRun(agent: HarnessOrchestratorAgent): Promise<Array<{ text: string; provenance: v.InferOutput<typeof TurnProvenanceSchema> }>> {
   return (await agent.harnessTranscript.history())
     .filter((message) => message.role === 'user')
@@ -39,7 +28,6 @@ async function turnsRun(agent: HarnessOrchestratorAgent): Promise<Array<{ text: 
     }));
 }
 
-/** The user lines of a parked request — what the model was handed — as text. */
 function requestText(prompt: readonly ModelMessage[]): string {
   return prompt
     .filter((message) => message.role === 'user')
@@ -47,18 +35,14 @@ function requestText(prompt: readonly ModelMessage[]): string {
     .join('\n');
 }
 
-/** The activity ledger's rows for this actor — the durable half of the
- *  `genesis.yielded_to_message` record, beside the diagnostics event. */
+/** Activity rows for this actor: the durable half of `genesis.yielded_to_message`. */
 function activityEvents(db: Database): string[] {
   return db.prepare<{ event: string }, []>(
     'SELECT event FROM activity_log ORDER BY created_at, rowid',
   ).all().map((row) => row.event);
 }
 
-/** Seed the identity row creation writes, carrying the mission `setSoul` would
- *  have refreshed onto it. `workspace_identity` has no primary key and `onStart`
- *  seeds a row of its own after its first await, so this replaces rather than
- *  updates: exactly one row, whichever order the two land in. */
+/** Replace, not update: `workspace_identity` has no primary key and `onStart` seeds its own row after its first await. */
 function seedMission(db: Database, mission: string): void {
   db.prepare('DELETE FROM workspace_identity').run();
   db.prepare(
@@ -141,9 +125,7 @@ describe('the workspace takes its own first turn', () => {
       if (parsed.success && parsed.output.state === 'undelivered') cardGone();
     });
 
-    // The operator's message reaches the loop before the offer does, as a
-    // send the transport hands the idle loop: it IS the first turn, opened
-    // and parked at its model call, its row durable before the offer arrives.
+    // The operator's message is the first turn, durable before the offer arrives.
     const turns = chatSessionTurns(harness.agent);
     const request = await turns.prepare({ messages: [{ role: 'user', content: 'Summarize the incident timeline first.' }] });
     expect(requestText(request.prompt)).toContain('Summarize the incident timeline first.');
@@ -154,8 +136,7 @@ describe('the workspace takes its own first turn', () => {
     await harness.agent.harnessChatLoop.pumpPromise;
     await cardWithdrawn;
 
-    // The offer yielded at its slot: nothing of it ran, and the ledger says
-    // why. The operator's message is the one turn that ran.
+    // The offer yielded at its slot and the ledger records why.
     expect((await turnsRun(harness.agent)).map((turn) => turn.provenance.kinuEvent)).toEqual([undefined]);
     expect((await turnsRun(harness.agent)).map((turn) => turn.text)).toEqual(['Summarize the incident timeline first.']);
     expect(activityEvents(harness.db)).toContain('genesis.yielded_to_message');
@@ -189,10 +170,7 @@ describe('the workspace takes its own first turn', () => {
     expect(await harness.agent.beginGenesisTurn()).toEqual({ started: true });
     expect(requestText((await genesis).prompt)).toContain('first turn');
 
-    // Late, while the offer's turn holds the slot: a steer the model never
-    // sees, which the settle reruns as the operator's own next turn — on the
-    // same scripted model, answered as the offer was. The send says so once
-    // that turn has run: it landed as a turn, not in the genesis turn's step.
+    // A late message while the offer holds the slot reruns as the operator's own next turn.
     const late = harness.agent.harnessChatLoop.send('Late but admitted.');
     await turns.settle({ messageId: 'a-genesis', text: 'ok' });
     expect(await late).toBe('turn');
@@ -207,12 +185,7 @@ describe('the workspace takes its own first turn', () => {
   });
 });
 
-/**
- * The naming a mission-only create leaves to the genesis turn (#18). The
- * create stores the mission's first line as an 'auto' stand-in; only the
- * genesis turn's `auto_title` row may replace it, and it keeps that right
- * through the ledger's retries, so a failed naming call is asked again.
- */
+/** #18: only the genesis turn's `auto_title` row may replace the 'auto' stand-in, across ledger retries. */
 describe('the genesis turn names the workspace over its stand-in', () => {
   const STAND_IN = 'Audit the OAuth callback flow';
 

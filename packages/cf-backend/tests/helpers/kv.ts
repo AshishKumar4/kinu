@@ -6,16 +6,11 @@ interface Entry {
 }
 
 export interface FakeKv extends KvStore {
-  /** Every key still readable now, for assertions about what a flow left behind. */
   keys(): string[];
-  /** Seconds of TTL the last write for `key` asked KV for. */
   ttlOf(key: string): number | null;
 }
 
-/** In-memory KV honouring the one behaviour these tests depend on: a key stops
- *  being readable once its TTL is up. Reads the wall clock, so a suite moves
- *  time with `setSystemTime` and the store and the records it holds expire
- *  together. */
+/** Keys expire on their TTL against the wall clock, so `setSystemTime` moves store and records together. */
 export function makeKv(): FakeKv {
   const entries = new Map<string, Entry>();
   const ttls = new Map<string, number>();

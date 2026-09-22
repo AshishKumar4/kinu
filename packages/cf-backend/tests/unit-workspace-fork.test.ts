@@ -11,8 +11,7 @@ const caller = { workspaceToken: 'source-token' } satisfies UserCaller;
 
 async function source(): Promise<CloudForkSource> {
   const ws = createTestWorkspace();
-  // The conversation store is actor-private, so the source transcript is
-  // seeded under the actor the fork reads it as — its workspace's main.
+  // The conversation store is actor-private: seed the source under the actor the fork reads as.
   const actor = createTestActor(ws.sql, ws.execRaw, 'SRC', 'source');
   await writeSoul(ws.vfs, ws.sql, 'p');
   await new ForkConversation(ws, SOURCE_ARTIFACTS).say({ id: 'm1', role: 'user', text: 'hello' });
@@ -113,9 +112,8 @@ describe('cloud fork ownership transaction', () => {
   });
 
   test('each staged frame renews the reservation, so a live transfer keeps its name', async () => {
-    // A source-side eviction is what strands the reservation: the loop holding
-    // it lives in the sender's memory, so nothing else can report that the
-    // transfer has stopped. The renewals are that report.
+    // Only the renewals report a source-side eviction: the holding loop lives in the sender's
+    // memory.
     const src = await source();
     const h = harness();
     await deliverCloudFork({
@@ -128,7 +126,6 @@ describe('cloud fork ownership transaction', () => {
     expect(staged.length).toBeGreaterThan(0);
     expect(renewals).toHaveLength(staged.length);
     expect(renewals[0]).toBe('renew:source-fork:1');
-    // The commit is followed by the publish, not by another renewal.
     expect(h.calls.at(-1)).toBe('publish:source-fork:1:cap');
   });
 

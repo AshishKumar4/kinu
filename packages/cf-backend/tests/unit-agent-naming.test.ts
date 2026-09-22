@@ -1,6 +1,4 @@
-// Agent naming — the P1a single-prompt-box flow: a deterministic provisional
-// title, and the roster title-precedence rule. The DO id's slug is core's, and
-// its only caller-visible form is `mintSubordinateName`, tested there
+// P1a naming: deterministic provisional title and roster title precedence. The slug is core's
 // (packages/core/tests/unit-agent-identity-naming.test.ts).
 import { describe, test, expect } from "bun:test";
 import { deriveWorkspaceTitle, resolveWorkspaceTitle } from '@kinu.run/core';

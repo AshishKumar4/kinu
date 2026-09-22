@@ -1,13 +1,6 @@
 /**
- * Preview-origin containment.
- *
- * A previewed app is HTML the agent wrote from sources it does not control. The
- * invariant under test is that it never runs as the Kinu app: not on the
- * app's origin and not with the app's session cookie. Cross-preview cookie-site
- * isolation remains an explicit deployment prerequisite below.
- *
- * Sandbox containers and Nimbus sessions both get a capability hostname per
- * exposed port, so each preview is its own origin and may keep it.
+ * Preview-origin containment: agent-written HTML never runs on the app's origin or with its session
+ * cookie. Cross-preview cookie-site isolation remains a deployment prerequisite (below).
  */
 import { afterAll, describe, expect, test } from 'bun:test';
 import { readFileSync } from 'node:fs';
@@ -40,42 +33,31 @@ import type { SandboxPreviewEnv } from '../src/preview-proxy';
 import type { SandboxOptions } from '@cloudflare/sandbox';
 import { present } from '@kinu.run/test-utils';
 
-// The SDK's entry point pulls in `cloudflare:workers`, which only exists inside
-// workerd. proxyToSandbox is the seam the Worker delegates preview routing to,
-// so standing in for it here leaves everything Kinu owns under test.
+// The SDK entry pulls in `cloudflare:workers`, which only exists inside workerd; proxyToSandbox is
+// the seam the Worker delegates to, so everything Kinu owns stays under test.
 let sdkResponse: Response | null = null;
 
 let sdkRequest: Request | null = null;
 
-// Successive answers, for the one test shape a repair needs: a BEFORE and an
-// AFTER. Empty means every forward gets `sdkResponse`.
+// Successive answers (before/after a repair); empty means every forward gets `sdkResponse`.
 let sdkQueue: Response[] = [];
 
 let sdkForwards = 0;
 
-// What the repair path did. The stale-preview repair is the one caller in this
-// suite that reaches `getSandbox`, and WHICH object it reaches is the property
-// that matters most.
-/** The id the repair addressed and the options it passed. Every Kinu call
- *  site passes the same ones or the SDK drops in-flight requests for that id. */
+// Which object the stale-preview repair reaches via `getSandbox` is the property that matters most.
+/** Every Kinu call site passes the same options or the SDK drops in-flight requests for that id. */
 let repairs: Array<{ id: string; options?: SandboxOptions }> = [];
 
 let repairFailure: Error | null = null;
 
-// The suite's doubles for the preview forward and the stale-preview repair:
-// the shared stand-in owns the module, this file only points it. Reset in
-// `afterAll`, so a later file meets the real SDK.
+// Reset in `afterAll`, so a later file meets the real SDK.
 await installSandboxSdkMock();
 
 setSandboxSdk({
   proxyToSandbox: async (request: Request) => {
     sdkRequest = request;
     sdkForwards += 1;
-    // Within the suite, a Response is one-shot and the real SDK mints a new
-    // one per forward, so the recorder hands out a CLONE and keeps the
-    // scripted original pristine — returning the same instance twice arrives
-    // disturbed. A scripted null stays null: that is the SDK's own "no
-    // exposed port" answer.
+    // A Response is one-shot, so hand out a clone; a scripted null is the SDK's "no exposed port".
     const scripted = sdkQueue.shift() ?? sdkResponse;
 
     return scripted === null ? null : scripted.clone();
@@ -102,8 +84,6 @@ const APP = 'https://kinu.example.com';
 
 const SUFFIX = 'previews.example';
 
-/** The three parts of one exposed port, named because both the hostname under
- *  test and the published record are built from them. */
 const PREVIEW_SANDBOX_ID = 'kinu-hello';
 
 const PREVIEW_PORT = 8080;
@@ -117,14 +97,8 @@ const PREVIEW_URL = `https://${PREVIEW_HOST}/`;
 const OWNER = '0123456789abcdef0123456789abcdef';
 
 /**
- * The exposures this deployment has published.
- *
- * The rail proves every preview hostname against this record before the SDK may
- * resolve a container object, so a suite that forwards has to publish the port
- * it forwards for — through the real writer, exactly as the workspace's own
- * executor lane does when it exposes one. The refusal directions (a label
- * nobody minted, a guessed token, a withdrawn or revoked exposure) are proven
- * end to end against the real SDK in `unit-preview-forgery.test.ts`.
+ * Publishes exposures through the real writer: the rail proves every preview hostname against this record
+ * before the SDK resolves a container. Refusals are proven in `unit-preview-forgery.test.ts`.
  */
 const PREVIEW_STORE = makeKv();
 
@@ -137,14 +111,9 @@ const ENV = {
   CREDENTIAL_ENCRYPTION_KEY: TEST_CREDENTIAL_ENCRYPTION_KEY,
 };
 
-/** Every binding the workspace-preview rail reads, across the deployment shapes
- *  this suite drives: with and without the preview host, with and without a
- *  signing secret, with and without a rotation's retired secrets. */
 type NimbusTestEnv = NimbusPreviewEnv<string>;
 
-/** The workspace object a preview is served from, with the call this case did
- *  not build refusing: a preview that took the socket path must not also be
- *  able to answer over RPC. */
+/** A preview that took the socket path must not also be able to answer over RPC. */
 function previewHost(built: Partial<WorkspacePreviewHost>): WorkspacePreviewHost {
   return {
     fetch: () => { throw new Error('OrchestratorAgent.fetch: not reachable in this test'); },
@@ -155,8 +124,6 @@ function previewHost(built: Partial<WorkspacePreviewHost>): WorkspacePreviewHost
   };
 }
 
-/** The nimbus rail's env, with the workspace object refusing unless a case
- *  builds one: most of these cases are refused before any object is addressed. */
 function testEnv(bindings: Omit<NimbusTestEnv, 'OrchestratorAgent'> & {
   OrchestratorAgent?: NimbusTestEnv['OrchestratorAgent'];
 }): NimbusTestEnv {
@@ -171,9 +138,7 @@ if (!configuredNimbusUrl) throw new Error('Nimbus preview test URL is not config
 
 const NIMBUS_URL = configuredNimbusUrl;
 
-/** The container namespace a deployment that HAS one carries. The SDK is
- *  mocked in this file, so nothing resolves through it: what it stands for is
- *  the binding being PRESENT, which is what the rail checks. */
+/** The SDK is mocked, so this stands only for the binding being present, which the rail checks. */
 const CONTAINERS: SandboxPreviewEnv = { ...ENV, Sandbox: unreachableObjects('Sandbox') };
 
 async function serve(url: string, response: Response | null): Promise<Response> {
@@ -187,8 +152,6 @@ async function serve(url: string, response: Response | null): Promise<Response> 
   return servePreviewRequest(new Request(url), CONTAINERS);
 }
 
-/** One request against a deployment that HAS a container, with successive SDK
- *  answers: the before and the after of a repair. */
 async function serveWithRepair(
   request: Request,
   answers: Response[],
@@ -205,19 +168,13 @@ async function serveWithRepair(
 }
 
 function stalePreview(): Response {
-  // The transcription of the SDK's `stalePreviewURLResponse`, fixed here so a
-  // change on either side fails loudly instead of following the other.
+  // A transcription of the SDK's `stalePreviewURLResponse`, so a change on either side fails loudly.
   return new Response(
     '{"error":"Preview URL is stale because the sandbox runtime is not active","code":"STALE_PREVIEW_URL"}',
     { status: 410, headers: { 'content-type': 'application/json' } },
   );
 }
 
-/** The OrchestratorAgent binding a Nimbus routing case hands its request to:
- *  `record` receives what the workspace preview RPC was forwarded, and the
- *  stub answers 204. */
-/** The workspace namespace whose one object records the preview request it
- *  was handed and answers 204. */
 function recordingOrchestrator(record: (request: Request) => void): NimbusTestEnv['OrchestratorAgent'] {
   return {
     idFromName(name: string) { return name; },
@@ -281,8 +238,7 @@ describe('preview sandbox policy', () => {
   });
 
   test('the port token lives in the hostname, so Referer is muzzled', () => {
-    // The browser's default policy sends the origin cross-origin — and under
-    // this scheme the origin is the credential.
+    // The default policy sends the origin cross-origin, and here the origin is the credential.
     expect(containPreviewResponse(new Response('x')).headers.get('referrer-policy'))
       .toBe('no-referrer');
   });
@@ -307,11 +263,8 @@ describe('preview host resolution', () => {
   });
 
   test('a workspace whose name no hostname label can carry is told why it has no URL', async () => {
-    // `validateWorkspaceName` admits uppercase, dots, underscores and 64
-    // characters; the label grammar is lowercase, hyphens, 31. A workspace's
-    // name is its Durable Object address, so the mismatch is permanent for
-    // that workspace, and the Ports surface reads the reason rather than an
-    // empty list.
+    // `validateWorkspaceName` admits names the label grammar rejects; the name is the DO address, so the
+    // mismatch is permanent and the Ports surface reads the reason.
     for (const name of ['MyAgent', 'my_agent', 'my.agent', 'a'.repeat(32)]) {
       const answer = await nimbusPreviewUrl(testEnv(ENV), name, 4321, NIMBUS_CAPABILITY);
       expect(answer.url).toBeUndefined();
@@ -341,7 +294,6 @@ describe('preview host resolution', () => {
     const wrangler = source('wrangler.jsonc');
     const configured = /"PREVIEW_HOST_SUFFIX":\s*"([^"]+)"/.exec(wrangler)?.[1];
     expect(configured).toBe('kinu.run');
-    // Comment line wrapping is not the contract; the recorded prerequisite is.
     const prose = wrangler.replace(/^\s*\/\/ ?/gmu, '').replace(/\s+/gu, ' ');
     expect(prose).toContain('A PSL-backed suffix is required before this can be claimed');
   });
@@ -349,7 +301,6 @@ describe('preview host resolution', () => {
   test('unconfigured or unusable means no preview host at all', () => {
     expect(previewHostSuffix({})).toBeNull();
     expect(previewHostSuffix({ ...ENV, PREVIEW_HOST_SUFFIX: '  ' })).toBeNull();
-    // A single label would claim a whole TLD, the app's host included.
     expect(previewHostSuffix({ ...ENV, PREVIEW_HOST_SUFFIX: 'example' })).toBeNull();
     expect(previewHostSuffix({ ...ENV, PREVIEW_HOST_SUFFIX: 'bad host.example' })).toBeNull();
   });
@@ -371,7 +322,6 @@ describe('preview host resolution', () => {
   test('everything under the suffix is preview territory, and the app never is', () => {
     expect(isPreviewHostRequest(new URL(PREVIEW_URL), ENV)).toBe(true);
     expect(isPreviewHostRequest(new URL(`https://${PREVIEW_HOST.toUpperCase()}/`), ENV)).toBe(true);
-    // Not a well-formed preview label, but still not the app: it gets a 404.
     expect(isPreviewHostRequest(new URL(`https://anything.${SUFFIX}/`), ENV)).toBe(true);
     expect(isPreviewHostRequest(new URL(`https://${SUFFIX}/`), ENV)).toBe(false);
     expect(isPreviewHostRequest(new URL(`${APP}/`), ENV)).toBe(false);
@@ -451,10 +401,7 @@ describe('serving the preview host', () => {
   });
 
   test('an unpublished label never reaches the SDK at all', async () => {
-    // The label is well-formed and names a real container; what it does not
-    // name is an exposure this deployment published. `sdkForwards` is the whole
-    // assertion: `proxyToSandbox` is where a Durable Object gets resolved, so
-    // not calling it is what makes a guess cost nothing.
+    // `proxyToSandbox` is where a DO gets resolved; not calling it makes a guess cost nothing.
     const res = await serve(`https://8080-${PREVIEW_SANDBOX_ID}-p8080_forged1.${SUFFIX}/`, null);
     expect(sdkForwards).toBe(0);
     expect(res.status).toBe(404);
@@ -462,11 +409,7 @@ describe('serving the preview host', () => {
   });
 
   test('a published label still gets the object\'s own verdict, unchanged', async () => {
-    // The two gates are independent, and this is the case where they disagree:
-    // the exposure is published, and the container object nevertheless refuses
-    // the token (its own store is the authority — a port unexposed inside the
-    // object, or a record this deployment has not caught up with). The object's
-    // answer is passed through rather than reinterpreted.
+    // Independent gates disagreeing: the container's own store is the authority, and its answer passes through.
     const res = await serve(PREVIEW_URL, new Response(
       JSON.stringify({ error: 'Access denied', code: 'INVALID_TOKEN' }),
       { status: 404, headers: { 'content-type': 'application/json' } },
@@ -487,7 +430,6 @@ describe('serving the preview host', () => {
   });
 
   test("the SDK's forward-failure response is still the shape we match", () => {
-    // If an upgrade renames it, the friendly page silently stops appearing.
     const sdk = readFileSync(join(root, '../../node_modules/@cloudflare/sandbox/dist/index.js'), 'utf8');
     expect(sdk.includes('Proxy routing error')).toBe(true);
   });
@@ -505,9 +447,8 @@ describe('serving the preview host', () => {
   });
 });
 
-// KINU-035. A container recycle replaces the runtime that owned each port's
-// activation, and the durable token survives it, so a preview URL that is still
-// perfectly valid answers 410 until something re-exposes the port. Nothing did.
+// KINU-035. A container recycle keeps the durable token but loses the port's activation, so a valid
+// preview URL answers 410 until something re-exposes the port.
 describe('repairing a stale preview', () => {
   test('a stale GET is repaired once and re-issued, and the visitor sees the app', async () => {
     const res = await serveWithRepair(new Request(PREVIEW_URL), [
@@ -518,8 +459,6 @@ describe('repairing a stale preview', () => {
     expect(res.status).toBe(200);
     expect(await res.text()).toContain('hello');
     expect(sdkForwards).toBe(2);
-    // The object that ANSWERED the request, addressed the way every other Kinu
-    // call site addresses it.
     expect(repairs).toEqual([
       { id: 'kinu-hello', options: { normalizeId: true, transport: 'rpc' } },
     ]);
@@ -588,9 +527,7 @@ describe('repairing a stale preview', () => {
   });
 
   test('a deployment with no container binding serves no preview at all', async () => {
-    // Nothing to forward to and nothing to re-drive. The rail says so, the same
-    // way it does with no exposure store, instead of handing the SDK an
-    // `undefined` namespace to resolve a container out of.
+    // No namespace: the rail refuses rather than hand the SDK `undefined` to resolve.
     sdkResponse = stalePreview();
     sdkQueue = [];
     sdkForwards = 0;
@@ -604,8 +541,7 @@ describe('repairing a stale preview', () => {
   });
 
   test("the SDK's stale-preview response is still the shape we match", () => {
-    // The whole classification rests on this body. An upgrade that rewords it
-    // must fail here rather than silently retiring the repair.
+    // The classification rests on this body; an upgrade that rewords it must fail here.
     const sdk = readFileSync(
       join(root, '../../node_modules/@cloudflare/sandbox/dist/sandbox-CPj2jsbz.js'),
       'utf8',
@@ -669,9 +605,7 @@ describe('serving a Nimbus preview host', () => {
 
     if (!response || !forwarded) throw new Error('Nimbus preview request was not forwarded');
     expect(response.status).toBe(200);
-    // The workspace's OWN name: the Durable Object that holds the filesystem is
-    // the OrchestratorAgent addressed by name, which is why the hostname carries
-    // the name rather than a one-way digest a router could not invert.
+    // The hostname carries the workspace name because the OrchestratorAgent is addressed by name.
     expect(durableObjectName).toBe('hello');
     expect(routedPort).toBe(4321);
     expect(routedCapability).toBe(NIMBUS_CAPABILITY.slice(0, 10));
@@ -714,9 +648,7 @@ describe('serving a Nimbus preview host', () => {
       OrchestratorAgent: recordingOrchestrator((request) => { forwarded = request; }),
     });
 
-    // The other token kind the CLI authenticator routes; the POST case above
-    // carries the scoped `pta_` kind. A device token is not a bearer format
-    // and has no case here: the daemon presents it in a request body.
+    // A device token is not a bearer format: the daemon presents it in a request body.
     const response = await handleNimbusPreviewHostRequest(new Request(`${NIMBUS_URL}private`, {
       headers: { authorization: `Bearer ptc_${OWNER}_${'c'.repeat(44)}` },
     }), env);
@@ -798,17 +730,12 @@ describe('serving a Nimbus preview host', () => {
     expect(touched).toBe(false);
   });
 
-  /** Tokens keyed DIRECTLY by the master secret, in the shape the edge accepted
-   *  while it was keyed that way. The values stay frozen. v3 digests
-   *  b107b7…14583a and reads `wed3oyud2twt3et`; v4 digests e73cab…af273e and
-   *  reads `446kx4mrl653aua` (HMAC-SHA256 over
-   *  `kinu:workspace-preview:<version>:hello:4321:0123456789` under the test
-   *  seal key, RFC-4648 base32 without padding). A computed value would follow
-   *  an alphabet change along. These break loudly instead. */
+  /** Frozen tokens keyed directly by the master secret (HMAC-SHA256 over
+   *  `kinu:workspace-preview:<version>:hello:4321:0123456789`, base32 no padding); literal so an
+   *  alphabet change breaks loudly. */
   const RAW_KEY_V3_TOKEN = 'wed3oyud2twt3et';
   const RAW_KEY_V4_TOKEN = '446kx4mrl653aua';
 
-  /** An env whose Durable Object namespace records whether it was touched. */
   function untouchableEnv(bindings: Omit<NimbusTestEnv, 'OrchestratorAgent'>) {
     let touched = false;
 
@@ -832,16 +759,14 @@ describe('serving a Nimbus preview host', () => {
   }
 
   test('the token is keyed by a subkey nothing else holds, never by the master secret itself', () => {
-    // The same secret seals the owner's stored credentials. A signature keyed
-    // by it directly shares key material with that cipher; the subkey does not.
+    // The same secret seals stored credentials; keying signatures by it directly would share key material.
     const token = new URL(NIMBUS_URL).hostname.split('-')[2];
     expect(token).not.toBe(RAW_KEY_V3_TOKEN);
     expect(token).not.toBe(RAW_KEY_V4_TOKEN);
   });
 
   test('a v3 URL minted before the key changed fails closed and touches no object', async () => {
-    // A preview URL has no expiry of its own, so every v3 link outlives the
-    // change; the edge answers each the same 404 a forged label gets.
+    // A preview URL has no expiry, so every v3 link gets the same 404 a forged label gets.
     const { env, touched } = untouchableEnv(ENV);
     const label = `${(4321).toString(36)}-${NIMBUS_CAPABILITY.slice(0, 10)}-${RAW_KEY_V3_TOKEN}-hello`;
     const response = await handleNimbusPreviewHostRequest(new Request(`https://${label}.${SUFFIX}/`), env);
@@ -875,11 +800,9 @@ describe('serving a Nimbus preview host', () => {
       },
     });
 
-    // The URL minted under the OLD secret, and the one minted under the new.
     expect((await handleNimbusPreviewHostRequest(new Request(NIMBUS_URL), env))?.status).toBe(204);
     expect((await handleNimbusPreviewHostRequest(new Request(String(minted)), env))?.status).toBe(204);
     expect(routed).toBe(2);
-    // Dropped from the list, the old secret's URLs stop resolving.
     const dropped = untouchableEnv({ ...rotated, CREDENTIAL_ENCRYPTION_KEY_PREVIOUS: '' });
     expect((await handleNimbusPreviewHostRequest(new Request(NIMBUS_URL), dropped.env))?.status).toBe(404);
     expect(dropped.touched()).toBe(false);
@@ -897,7 +820,6 @@ describe('what the app is willing to frame', () => {
   test('rejects anything that is not one', () => {
     expect(isPreviewUrl(`http://${PREVIEW_HOST}/`, SUFFIX)).toBe(false);
     expect(isPreviewUrl(`https://user:pw@${PREVIEW_HOST}/`, SUFFIX)).toBe(false);
-    // The label has to be the whole first label, not buried in a longer one.
     expect(isPreviewUrl(`https://evil.example/${PREVIEW_HOST}/`, SUFFIX)).toBe(false);
     expect(isPreviewUrl(`https://x8080-kinu-hello-tok.${SUFFIX}/`, SUFFIX)).toBe(false);
     expect(isPreviewUrl(`https://8080-kinu.${SUFFIX}/`, SUFFIX)).toBe(false);
@@ -933,7 +855,6 @@ describe('what the app is willing to frame', () => {
   });
 });
 
-/** The CSP the app document policy sets, read off a document response. */
 function cspOf(previewOrigin: string | null): string {
   const res = withAppSecurityHeaders(
     new Response('<!doctype html>', { headers: { 'content-type': 'text/html; charset=utf-8' } }),
@@ -974,9 +895,7 @@ describe('the app document policy', () => {
     expect(cspOf(null)).toContain("connect-src 'self' wss://kinu.example.com");
   });
 
-  // KaTeX_Size3-Regular.woff2 is under Vite's inline threshold, so the bundle
-  // carries it as `data:font/woff2;base64,…`. Unset, `font-src` falls back to
-  // `default-src 'self'` and the browser refuses it.
+  // KaTeX_Size3-Regular.woff2 is inlined by Vite as `data:font/woff2`; without `font-src` the browser refuses it.
   test('the inlined maths font survives the font-src rule', () => {
     expect(cspOf(null)).toContain("font-src 'self' data:");
   });
@@ -1031,8 +950,7 @@ describe('CSRF on cookie-authenticated requests', () => {
   });
 
   test('token-authenticated clients are unaffected', () => {
-    // No session cookie means no ambient credential to abuse — the CLI posts
-    // with a bearer token and no Origin header at all.
+    // No session cookie means no ambient credential: the CLI posts with a bearer token and no Origin.
     expect(crossSiteRejection(post({ authorization: 'Bearer pta_x' }))).toBeNull();
   });
 });
@@ -1040,21 +958,17 @@ describe('CSRF on cookie-authenticated requests', () => {
 describe('worker wiring', () => {
   const server = source('src/server.ts');
 
-  /** Each gate the worker runs ahead of a route: the gate appears, the route it
-   *  fronts appears, and the gate is written first. */
   const SOURCE_ORDER_GATES = [
     {
       name: 'the preview host serves previews and nothing else',
       gate: 'isPreviewHostRequest(url, env)',
       answers: 'return servePreviewRequest(request, env)',
-      // Ahead of every other route, so nothing on that host can mint a session.
       before: 'handlePcRequest(request, env)',
     },
     {
       name: 'the CSRF gate runs before any authenticated route',
       gate: 'crossSiteRejection(request)',
-      // The account routes are composed under one `firstResponse`; the gate
-      // must still come first in source order, whatever the call shape.
+      // The gate must come first in source order, whatever the call shape.
       answers: 'handleUserRequest(req, env, identity, ctx)',
       before: 'handleUserRequest(req, env, identity, ctx)',
     },
@@ -1069,7 +983,6 @@ describe('worker wiring', () => {
   }
 
   test('no route on the app host serves previews', () => {
-    // A path-style proxy there bypasses the auth gate by design; nothing may.
     expect(source('src/auth/session.ts')).not.toContain('_preview');
     expect(server).not.toContain('_preview');
   });
@@ -1090,8 +1003,7 @@ describe('worker wiring', () => {
   });
 
   test('production enables preview subdomains below the app host', () => {
-    // Comments are stripped: the note above the var shows an example zone, and
-    // it must not be mistaken for the configured one.
+    // Comments are stripped: the example zone above the var is not the configured one.
     const wrangler = source('wrangler.jsonc').replace(/^\s*\/\/.*$/gm, '');
 
     const first = (key: string): string =>

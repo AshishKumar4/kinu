@@ -1,49 +1,9 @@
 /**
- * Kinu MCP server surface.
- *
- *   GET /mcp/v1/<agentName> / POST / DELETE → MCP streamable-HTTP transport
- *
- * Auth (handled here, before the transport — server.ts routes /mcp/v1/*
- * straight to this handler, bypassing the browser-session gate external
- * clients can never pass):
- *   • `Authorization: Bearer ptc_…` — the caller's CLI token (the per-user
- *     credential external MCP clients obtain via `kinu auth`).
- *   • Otherwise the browser session / DEV_USER_EMAIL identity.
- * Every request then runs the same ownership claim as the rest of the
- * per-agent API (registry membership + claimOwner).
- *
- * Stateless server per request (per the @modelcontextprotocol/sdk
- * "WebStandardStreamableHTTPServerTransport" pattern in
- * external/agents/examples/mcp-server). Each request:
- *   1. Builds a fresh McpServer instance
- *   2. Registers Kinu tools that proxy back to the OrchestratorAgent DO
- *      by `agentName` via getAgentByName (using @callable RPCs already
- *      defined on the orchestrator)
- *   3. Connects the transport, handles the request, returns the response
- *
- * This makes Kinu a real MCP server — external clients (Cursor, Claude
- * Code, browser AI, other agents) can connect, list tools, invoke them,
- * read memory, test scaffolds, and drive release changes. The distribution
- * play: Kinu becomes a tool other agents can use, not just a chat app.
- *
- * v1 read tools:
- *   • search_memory      — FTS over agent memory
- *   • save_note          — append to agent memory
- *   • list_skills        — list crafted tools + their quality scores
- *   • run_scaffold_once  — fire the current scaffold for a test task
- *   • get_shadow_status  — pending scaffold rollout + decision
- *   • list_run_events    — paginated query of the event log
- *   • list_runs          — recent runs
- *
- * v1 write/act tools — thin wrappers over existing @callable orchestrator RPCs
- * (no new execution path; the same seams the built-in tools and reactor use):
- *   • run_task           — enqueue a turn into the agent's serialized loop
- *   • send_peer          — message one of the owner's other agents (agents `send`)
- *   • list_peers         — the owner's other agents (send_peer roster helper)
- *   • release     — list / create / advance a release request
- *
- * v1 resources:
- *   • kinu://workspace/<name>/memory       — full memory content
+ * Kinu MCP server: GET/POST/DELETE /mcp/v1/<agentName>, streamable HTTP, one stateless
+ * McpServer per request proxying to the workspace DO's @callable RPCs.
+ * Auth runs here because server.ts routes /mcp/v1/* past the browser-session gate:
+ * `Bearer ptc_…` CLI token, else browser session / DEV_USER_EMAIL, then the same
+ * ownership claim as the per-agent API.
  */
 
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
@@ -88,25 +48,16 @@ const corsHeaders = {
 interface PeerMessageInput { agent: string; message: string; topic?: string }
 
 /**
- * How the MCP surface reaches the workspace object it addresses.
- *
- * A function rather than the namespace binding, because resolving one is not
- * `get(idFromName(name))`: the deployment binds the Agents SDK's own
- * `getAgentByName` (agents@0.22.0, `dist/agent-routing.js:176-183`, read
- * 2026-09-22), which resolves the stub and then awaits
- * `__unsafe_ensureInitialized` on it — the lifecycle gate that runs `onStart`
- * before the first RPC — under the SDK's own retry. Injecting the resolver
- * leaves all of that to the vendor and lets a test hand over its own object.
+ * A resolver, not the namespace binding: the SDK's `getAgentByName` (agents@0.22.0,
+ * `dist/agent-routing.js:176-183`, read 2026-09-22) awaits `__unsafe_ensureInitialized`
+ * so `onStart` runs before the first RPC.
  */
 export type McpResolver = (name: string) => Promise<McpAgentClient>;
 
-/** The deployment's resolver: the SDK's own, over this Worker's binding. */
 export const mcpAgentResolver = (env: Env): McpResolver =>
   (name) => getAgentByName<Env, OrchestratorAgent>(env.OrchestratorAgent, name);
 
-/** The callable surface this HTTP adapter uses. Keeping the boundary explicit
- * avoids asking the Agents SDK to recursively serialize the entire agent class
- * (including recursive run-event JSON) at each method access. */
+/** Explicit boundary so the Agents SDK does not recursively serialize the whole agent class per method access. */
 export interface McpAgentClient {
   searchMemoryHybrid(query: string, limit: number): Promise<HybridHit[]>;
   saveNoteFromMcp(content: string): Promise<{ ok: true }>;
@@ -134,7 +85,6 @@ function withCors(response: Response): Response {
   return response;
 }
 
-/** The property-access boundary above, over the resolved object. */
 async function mcpClient(resolveAgent: McpResolver, agentName: string): Promise<McpAgentClient> {
   const stub = await resolveAgent(agentName);
 
@@ -161,8 +111,6 @@ function buildServer(resolveAgent: McpResolver, agentName: string): McpServer {
     name: `kinu-${agentName}`,
     version: "1.0.0",
   });
-
-  // ── Tools ────────────────────────────────────────────────────────
 
   server.registerTool(
     "search_memory",
@@ -306,8 +254,6 @@ function buildServer(resolveAgent: McpResolver, agentName: string): McpServer {
         const lines = page.items.map((r) => `- ${r.runId} — ${r.eventCount} events @ ${r.lastTs}`);
 
         if (lines.length === 0) return { content: [{ type: "text", text: "(no runs yet)" }] };
-        // A model reading a truncated list as the whole history is the same
-        // defect as a surface doing it, so the boundary is stated in words.
         lines.push(page.status === 'more'
           ? `(more runs before these — call again with after: ${JSON.stringify(page.next.after)})`
           : "(that is every run)");
@@ -346,11 +292,7 @@ function buildServer(resolveAgent: McpResolver, agentName: string): McpServer {
     },
   );
 
-  // ── Write / act tools ────────────────────────────────────────────
-  // Each proxies an existing @callable on the orchestrator. Ownership is
-  // already enforced at the transport gate (claimOwnedWorkspace); the peer/turn
-  // seams re-check the owner + same-owner roster inside the DO, so a caller
-  // can never reach an agent or peer they do not own.
+  // Ownership is enforced at the transport gate (claimOwnedWorkspace); peer/turn seams re-check it inside the DO.
 
   server.registerTool(
     "run_task",
@@ -467,15 +409,11 @@ function buildServer(resolveAgent: McpResolver, agentName: string): McpServer {
           return { content: [{ type: "text", text: `Created change ${change.id} (${change.status}) for binding ${change.bindingId}.` }] };
         }
 
-        // advance
         if (!changeId || !status) {
           return { content: [{ type: "text", text: "release advance requires changeId and status." }] };
         }
 
-        // Same governance gate as the builtin release tool: on this
-        // backend the execution engine owns validating/preview_ready/applying/
-        // deployed/rolled_back — those states are earned by real execution,
-        // never asserted by an external MCP actor.
+        // Same gate as the builtin release tool: execution-owned states are never asserted by an external MCP actor.
         if (isEngineOwnedTransitionTarget(status)) {
           return {
             content: [{
@@ -495,8 +433,6 @@ function buildServer(resolveAgent: McpResolver, agentName: string): McpServer {
       }
     },
   );
-
-  // ── Resources ────────────────────────────────────────────────────
 
   server.registerResource(
     "memory",
@@ -521,28 +457,18 @@ function buildServer(resolveAgent: McpResolver, agentName: string): McpServer {
   return server;
 }
 
-/**
- * Every call the MCP surface makes on the asking user's own object: the CLI
- * bearer check on the external-client path, the browser session check on the
- * other, and the registry half of the ownership gate.
- */
 export type McpAuthority = CliAuthAuthority & SessionAuthority & WorkspaceRegistry;
 
-/** Every binding the MCP surface reads. */
 export interface McpEnv<Id> extends
   Pick<Env, 'CREDENTIAL_ENCRYPTION_KEY' | 'DEV_USER_EMAIL' | 'DEV_IDENTITY_SECRET'> {
-  /** Read on the cookie path — where the browser session lives — and read
-   *  again as the bindings check that turns "no session" into a 401 rather
-   *  than a 500. Never read on the bearer path. */
+  /** Cookie path only; checked so "no session" is a 401 rather than a 500. */
   AUTH_KV: KvStore;
   UserDO: ObjectNamespace<Id, McpAuthority>;
-  /** The ownership gate's own `get(idFromName)`, not the tool surface's: the
-   *  claim runs before any resolver does. */
+  /** The ownership gate's own binding: the claim runs before any resolver does. */
   OrchestratorAgent: ObjectNamespace<Id, WorkspaceOwnerClaim>;
 }
 
-/** Resolve the calling user: CLI bearer token first (the external-client
- *  path), then browser session / DEV_USER_EMAIL. */
+/** CLI bearer token first, then browser session / DEV_USER_EMAIL. */
 async function authenticateMcpCaller<Id>(
   request: Request,
   env: McpEnv<Id>,
@@ -553,8 +479,7 @@ async function authenticateMcpCaller<Id>(
     if (!result.ok) return withCors(Response.json({ error: result.error }, { status: 401 }));
 
     if (result.identity.kind !== 'session') {
-      // Scoped CI access tokens are CLI-API-only; the MCP surface stays
-      // bound to interactive session tokens.
+      // Scoped CI access tokens are CLI-API-only; MCP accepts interactive session tokens only.
       return withCors(Response.json({ error: 'MCP requires an interactive CLI session token. Sign in with: kinu auth' }, { status: 403 }));
     }
 
@@ -584,7 +509,6 @@ export async function handleMcpRequest<Id>(
     return new Response(null, { headers: corsHeaders });
   }
 
-  // /mcp/v1/<agentName>[/...] — agentName is the second segment after /mcp/v1/
   const segments = url.pathname.replace(/^\/mcp\/v1\//, "").split("/").filter(Boolean);
   const agentName = segments[0] ? decodeURIComponent(segments[0]) : '';
 

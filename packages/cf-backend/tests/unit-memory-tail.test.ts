@@ -1,6 +1,4 @@
-// The cf Memory adapter's tail answers off the workspace plane it indexes,
-// over the real SQLite-backed filesystem: the newest bytes as whole code
-// points, and null for a file that is not there.
+// The cf Memory adapter's tail over the real SQLite-backed plane: newest bytes as whole code points, null for a missing file.
 import { describe, test, expect } from 'bun:test';
 import { Database } from 'bun:sqlite';
 import { createWorkspaceBundle, createTestActor, makeExecRaw, makeSql } from '../../core/tests/helpers';
@@ -39,7 +37,6 @@ describe('cf adaptMemory.tail', () => {
     // The 3-byte 好 opens whole at 12 and is cut at 11.
     expect(await memory.tail(PATH, 12)).toBe('好 🎉 end');
     expect(await memory.tail(PATH, 11)).toBe(' 🎉 end');
-    // Wider than the file is the file.
     expect(await memory.tail(PATH, 1 << 20)).toBe('héllo 你好 🎉 end');
   });
 

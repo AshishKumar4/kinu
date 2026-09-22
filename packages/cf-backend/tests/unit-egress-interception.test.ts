@@ -1,12 +1,5 @@
-// Egress interception: the secret reaches the upstream and nothing the
-// container can read ever carries it, and the one RPC this path depends on is
-// actually reachable.
-//
-// The reachability test is derived from the SOURCE of the handler rather than a
-// hardcoded name, because five cross-DO calls a head makes on its root spent an
-// unknown period rejecting fail-closed inside `console.warn`-only background
-// work, invisible to a passing suite. A method missing from the surface is not
-// a compile error and not a test failure; it is a silent no-op.
+// Defends: the secret reaches the upstream and nothing the container reads carries it; a method
+// missing from the RPC surface is a silent no-op, so reachability is derived from handler source.
 import { describe, expect, test } from 'bun:test';
 import { readFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
@@ -15,9 +8,7 @@ import {
   EGRESS_PLACEHOLDER_PREFIX, refusedHostname, type EgressSecretBinding,
 } from '@kinu.run/core';
 import type { KinuSandbox } from '../src/kinu-sandbox';
-// Static: neither module reaches `cloudflare:email`, so neither needs the mock
-// below. That `sandbox-exec-lane` can be imported here without one is the point
-// of it living outside `runtime.ts`.
+// Static: neither module reaches `cloudflare:email`, so neither needs the mock below.
 import { kinuEgressParams } from '../src/egress/configure';
 import { adaptCloudflareSandbox } from '../src/sandbox-exec-lane';
 import type { EgressInjectionResult } from '@kinu.run/core';
@@ -31,26 +22,16 @@ import {
 import { KINU_USER_AGENT, kinuUserAgent, reoriginateRequest } from '@kinu.run/core';
 import { present } from '@kinu.run/test-utils';
 
-// The gate's own resolver of the shipped SDK copy, loaded rather than repeated:
-// `bun run gate:egress-interception` and this test must read one copy, and two
-// copies of Containers are installed at two versions. `require` and not `import`
-// because the gate's module chain reaches `scripts/sources.ts`, whose `.ts`
-// import paths need `allowImportingTsExtensions`, which this package does not
-// set; a static import puts three TS5097 errors in this package's typecheck.
-// Narrowed at the boundary, the way cli-backend loads the pc-agent daemon.
+// The gate's own resolver, so gate and test read one of the two installed Containers copies.
+// `require`: the gate's `.ts` import paths need `allowImportingTsExtensions` (TS5097 otherwise).
 const egressGate = v.parse(
   v.object({ boundContainers: v.function() }),
   createRequire(import.meta.url)('../../../scripts/egress-interception'),
 );
 
-/** What the gate's resolver answers: the Containers module the deployed artifact
- *  binds, and the version of the copy it belongs to. */
 const BoundContainers = v.object({ module: v.string(), version: v.string() });
 
-// `outbound.ts` imports `getAgentByName` from `agents`, whose module graph
-// reaches `cloudflare:email`. One shared mock, then dynamic imports — the same
-// ordering every cf-backend DO test uses. The type import above is erased, so
-// it loads nothing.
+// `agents` reaches `cloudflare:email`: mock first, then dynamic imports.
 mockAgentsSdk();
 
 const { ORCHESTRATOR_RPC_SURFACE } = await import('../src/rpc-surface');
@@ -62,8 +43,6 @@ const {
 
 const root = new URL('../', import.meta.url).pathname;
 
-/** The handler context the SDK passes: `containerId` and `className` are
- *  platform-supplied, `params` is whatever the owning DO configured. */
 function ctx(params: OutboundHandlerContext['params']): OutboundHandlerContext {
   return { containerId: 'container-1', className: 'KinuSandbox', params };
 }
@@ -82,12 +61,7 @@ const PARAMS: KinuEgressParams = {
   workspaceName: 'kinu-main', ownerUserId: 'user-1', bindings: [BINDING],
 };
 
-/** The two bindings an intercepted request reads: the owner's vault object,
- *  and the root secret the owner capability derives from.
- *
- *  `get` returns a `jsrpcStub`, not an object literal: the real binding returns a
- *  Proxy whose methods are not own enumerable properties, and a literal double
- *  hid a production TypeError in this exact handler behind a passing test. */
+/** `get` returns a `jsrpcStub`: the real binding is a Proxy, and a literal double hid a TypeError here. */
 function fakeEnv(resolve: () => EgressInjectionResult): ContainerEgressEnv<string> {
   return {
     UserDO: {
@@ -103,7 +77,6 @@ interface FetchCapture {
   readonly restore: () => void;
 }
 
-/** Capture what actually left toward the upstream. */
 function captureFetch(response: () => Response): FetchCapture {
   const seen: Request[] = [];
   const original = globalThis.fetch;
@@ -123,11 +96,7 @@ function captureFetch(response: () => Response): FetchCapture {
   return { seen, restore: () => { globalThis.fetch = original; } };
 }
 
-/** A box whose only exercised members are the readiness gate and one operation.
- *  Unchecked and named: `KinuSandbox` is a Durable Object class, so a test
- *  cannot construct one; the double rides the prototype the way
- *  helpers/jsrpc-stub.ts builds stubs, and implements exactly what the
- *  adapter's preflight reaches. */
+/** `KinuSandbox` is a DO class a test cannot construct; implements only what the preflight reaches. */
 function execOnlyBox(): KinuSandbox {
   return Object.create({
     resolveReadiness: async () => ({ kind: 'restored' as const }),
@@ -157,8 +126,7 @@ describe('the secret reaches the upstream and comes back scrubbed', () => {
       expect(response.status).toBe(200);
       expect(upstream.seen).toHaveLength(1);
       expect(upstream.seen[0].headers.get('authorization')).toBe(`Bearer ${SECRET}`);
-      // Redirects must not be followed: the default would replay the injected
-      // credential against whatever host the upstream names.
+      // Following redirects would replay the injected credential to whatever host the upstream names.
       expect(upstream.seen[0].redirect).toBe('manual');
     } finally { upstream.restore(); }
   });
@@ -252,17 +220,11 @@ describe('what the container is configured with', () => {
 
   test('the event host is bound BEFORE the catch-all, by the object that owns the container',
     () => {
-      // Per-host handlers take precedence over the catch-all, so binding the
-      // catch-all first would leave a window in which a container event went to
-      // the egress handler, found no placeholder in it, and was forwarded to a
-      // `.internal` name that resolves nowhere. Read from the source of the ONE
-      // writer: with this ordering spelled in TWO places, the live path calls
-      // whichever copy it happens to reach, including one that never pins the
-      // workspace name.
+      // Catch-all first leaves a window where a container event is forwarded to an unresolvable
+      // `.internal` name. Read from the one writer's source.
       const sandbox = read('src/kinu-sandbox.ts');
       const body = sandbox.slice(sandbox.indexOf('async configureEgress('));
       expect(body.indexOf('setOutboundByHost')).toBeLessThan(body.indexOf('setOutboundHandler'));
-      // And the name is pinned in the same call, because both host hooks read it.
       expect(body.indexOf('WORKSPACE_NAME_KEY')).toBeLessThan(body.indexOf('setOutboundByHost'));
     });
 
@@ -280,8 +242,7 @@ describe('configuration is awaited before the container runs', () => {
 
     const gate = new Promise<void>((resolve) => { released = resolve; });
 
-    // `null`: an exec-only box publishes no previews, and the lane refuses to
-    // mint one it cannot publish — see `adaptCloudflareSandbox`'s exposePort.
+    // `null`: an exec-only box publishes no previews (see `adaptCloudflareSandbox`'s exposePort).
     const handle = adaptCloudflareSandbox(
       execOnlyBox(),
       async () => { configured += 1; await gate; },
@@ -314,11 +275,7 @@ describe('configuration is awaited before the container runs', () => {
 
   test('EVERY operation that can start the container waits for it — including the file lanes',
     async () => {
-      // The old wrapper carried a hand-maintained allowlist that the file lanes
-      // were never added to, so a cold `readFile` started the container itself
-      // and read a blank disk, and a `writeFile` landed under the overlay a
-      // moment later — written by the caller, invisible to the caller and to
-      // every checkpoint after it.
+      // A cold file op must not start the container itself and read a blank disk.
       const order: string[] = [];
 
       const box: KinuSandbox = Object.create({
@@ -356,7 +313,6 @@ describe('configuration is awaited before the container runs', () => {
       await handle.listFiles('/workspace');
       await handle.deleteFile('/workspace/a');
 
-      // Egress once, then readiness before each operation, never after.
       expect(order).toEqual([
         'configureEgress', 'resolveReadiness', 'readFile',
         'resolveReadiness', 'writeFile',
@@ -367,8 +323,7 @@ describe('configuration is awaited before the container runs', () => {
 });
 
 describe('reachability of the container event channel', () => {
-  // Derived from the handler's own source, not restated: the point is that
-  // adding a call here without allowlisting it must fail.
+  // Derived from handler source so a new call without allowlisting fails.
   test('every OrchestratorAgent method the egress layer calls is on the RPC surface', () => {
     const handler = read('src/egress/outbound.ts');
     const called = [...handler.matchAll(/\bagent\.(\w+)\(/g)].map(([, name]) => name);
@@ -377,8 +332,7 @@ describe('reachability of the container event channel', () => {
   });
 
   test('the method the channel calls actually exists on the orchestrator', async () => {
-    // Dynamic like the imports above: orchestrator reaches cloudflare:email
-    // through agents, so it loads only after the SDK mock installs.
+    // Dynamic: orchestrator reaches cloudflare:email, so load after the SDK mock.
     const { OrchestratorAgent } = await import('../src/orchestrator');
     const handler = Object.getOwnPropertyDescriptor(OrchestratorAgent.prototype, 'acceptContainerEvent');
 
@@ -392,53 +346,35 @@ describe('reachability of the container event channel', () => {
 
 describe('the posture the whole design rests on', () => {
   test('ContainerProxy is exported from the Worker entry', () => {
-    // Without it `applyOutboundInterception` throws and NOTHING is intercepted,
-    // while the vault still believes it is substituting.
+    // Without it `applyOutboundInterception` throws and nothing is intercepted.
     expect(read('src/server.ts')).toMatch(/export\s*\{[^}]*\bContainerProxy\b[^}]*\}/);
   });
 
   test('the container class denies non-HTTP egress and intercepts HTTPS', () => {
     const source = read('src/kinu-sandbox.ts');
     expect(source).toContain('enableInternet = false');
-    // The SDK does NOT default this on, whatever its docs say.
+    // The SDK does not default this on, whatever its docs say.
     expect(source).toContain('interceptHttps = true');
   });
 
   test('the SDK still leaves HTTPS interception off by default', () => {
-    // Re-measured so the comments asserting it cannot quietly rot. If upstream
-    // fixes the default this fails and the comments get updated. The copy read is
-    // the one the artifact binds, resolved by the gate rather than named here.
+    // Re-measured on the copy the artifact binds, so the comments asserting it cannot rot.
     const shipped = v.parse(BoundContainers, egressGate.boundContainers());
     expect(readFileSync(shipped.module, 'utf8')).toContain('interceptHttps = false');
   });
 });
 
-// A JSRPC stub is a Proxy: its methods come from a `get` trap, so they are not
-// own enumerable properties and `Object.assign`/spread copy NOTHING off it.
-//
-// Three sites did that and were measured throwing on production
-// (`resolveEgressInjection`, `listEgressSecrets`, `acceptContainerEvent`); the
-// fourth, `runtime.ts`'s `rootView`, is the same pattern and was never observed
-// firing.
-//
-// The detector for this is the `anti-slop/no-copy-rpc-stub` oxlint rule: matched
-// on the AST across the whole repo and gated by `bun run lint`, rather than a
-// source-level regex scoped to two files. What stays here is the one thing a
-// linter cannot assert — that the double these tests run against really does
-// behave like a stub.
+// A JSRPC stub is a Proxy: `Object.assign`/spread copy nothing off it. The lint
+// `anti-slop/no-copy-rpc-stub` detects copies; this pins that the double behaves like a stub.
 describe('a stub is used, never copied', () => {
   test('the double is faithful in the way that matters: copying it loses everything', () => {
-    // The premise, asserted rather than described. If a future runtime made
-    // spreading a stub work, this fails and the doubles above stop being
-    // evidence about production.
+    // If a runtime made spreading a stub work, the doubles above stop being evidence.
     const stub = jsrpcStub({ method: () => 'value' });
     expect(Object.keys({ ...stub })).toEqual([]);
-    // ...while the stub itself answers, so the double is not merely broken.
     expect(stub.method()).toBe('value');
   });
 });
 
-/** Capture what the diagnostic sink was told while `body` ran. */
 async function recordDiagnostics(body: () => Promise<void>): Promise<readonly RecordedLog[]> {
   const logger = createRecordingLogger();
   const restore = setDiagnosticsSink(logger);
@@ -448,8 +384,7 @@ async function recordDiagnostics(body: () => Promise<void>): Promise<readonly Re
   return logger.emitted;
 }
 
-/** The same two bindings, with the vault call throwing the way a Durable Object
- *  under load or mid-eviction answers a cross-object RPC. */
+/** The vault call throws, as a DO under load or mid-eviction answers a cross-object RPC. */
 function throwingVaultEnv(thrown: { cause: unknown }): ContainerEgressEnv<string> {
   return {
     UserDO: {
@@ -460,16 +395,11 @@ function throwingVaultEnv(thrown: { cause: unknown }): ContainerEgressEnv<string
   };
 }
 
-/** A resolver whose workspace object refuses the event RPC — the one call the
- *  channel makes before the RPC this case is here to fail. */
 function throwingEventResolver(thrown: { cause: unknown }): ContainerEventResolver {
   return async () => jsrpcStub({ acceptContainerEvent: async () => { throw thrown.cause; } });
 }
 
-// KINU-055. Every request leaving a container says Kinu, and says it FIRST.
-// Before this, whatever the agent's HTTP client called itself was the only
-// identity an upstream ever saw, so a rate limit or a block aimed at Kinu
-// could not be aimed at all.
+// KINU-055. Every request leaving a container says Kinu, first.
 describe('one User-Agent for everything a container sends', () => {
   test('traffic with no placeholder carries the Kinu identity', async () => {
     const upstream = captureFetch(() => new Response('ok'));
@@ -524,19 +454,14 @@ describe('one User-Agent for everything a container sends', () => {
   });
 });
 
-// KINU-017 at this boundary. The workerd layer measures the wire
-// (`tests/workerd/egress-framing.test.ts`); what belongs here is that the
-// handler hands the runtime the body it was given, since that is the only
-// thing the runtime derives the framing from.
+// KINU-017: the handler hands the runtime the body it was given, which framing derives from
+// (wire measured in `tests/workerd/egress-framing.test.ts`).
 describe('the forwarded body is the container\'s own, not a copy of it', () => {
   test('the request that leaves carries the inbound body object itself', async () => {
     const upstream = captureFetch(() => new Response('ok'));
 
     try {
-      // `duplex` is absent from the Workers `RequestInit` type and required by
-      // the fetch specification for a stream body — the same intersection
-      // `reoriginateRequest` declares, so the test states the type instead of
-      // asserting past it.
+      // `duplex` is required by fetch for a stream body but absent from the Workers `RequestInit` type.
       const init: RequestInit & { duplex: 'half' } = {
         method: 'POST',
         body: new ReadableStream<Uint8Array>({
@@ -565,10 +490,7 @@ describe('the forwarded body is the container\'s own, not a copy of it', () => {
   });
 });
 
-// KINU-037. An outbound handler that THROWS returns no HTTP response at all,
-// so the container's client prints "Empty reply from server" and nothing says
-// whether the request was refused, delivered, or never attempted. Both halves
-// of this boundary now answer.
+// KINU-037. A throwing outbound handler returns no HTTP response ("Empty reply from server").
 describe('a throw at the boundary becomes a classified answer', () => {
   test('an unreachable vault answers 503 and names the class, not the request', async () => {
     let response: Response | undefined;
@@ -589,7 +511,6 @@ describe('a throw at the boundary becomes a classified answer', () => {
     expect(emitted).toHaveLength(1);
     expect(emitted[0].event).toBe('egress.authority_unreachable');
     expect(emitted[0].code).toBe('unavailable');
-    // The chain is retained, both what we were doing and what threw.
     expect(emitted[0].cause).toContain('asking the owner vault');
     expect(emitted[0].cause).toContain('durable object reset');
   });
@@ -626,9 +547,7 @@ describe('a throw at the boundary becomes a classified answer', () => {
   });
 
   test('an upstream failure quoting the substituted URL never records the secret', async () => {
-    // workerd's own fetch failure reads `Fetch API cannot load: <url>`, and by
-    // then the URL is the REVEALED one. Wrapping that error would have put the
-    // owner's credential in Workers Logs on every DNS failure.
+    // workerd's fetch failure quotes the revealed URL; wrapping it would log the credential.
     const upstream = captureFetch(() => {
       throw new Error(`Fetch API cannot load: https://api.stripe.com/v1/charges?key=${SECRET}`);
     });
@@ -647,8 +566,7 @@ describe('a throw at the boundary becomes a classified answer', () => {
       expect(response?.status).toBe(502);
       expect(await present(response, 'the egress response').text()).not.toContain(SECRET);
       expect(emitted[0].cause).not.toContain(SECRET);
-      // Scrubbed, not deleted: the placeholder the container already holds is
-      // what an operator correlates the failure with.
+      // Scrubbed, not deleted: operators correlate on the placeholder.
       expect(emitted[0].cause).toContain(PLACEHOLDER);
     } finally { upstream.restore(); }
   });
@@ -667,19 +585,15 @@ describe('a throw at the boundary becomes a classified answer', () => {
     });
 
     expect(response?.status).toBe(503);
-    // The container has to know the event is NOT recorded, or it drops it.
+    // The container must know the event is not recorded, or it drops it.
     expect(await present(response, 'the egress response').text()).toContain('send it again');
     expect(emitted[0].event).toBe('egress.event_channel_unreachable');
     expect(emitted[0].cause).toContain('object evicted mid-write');
   });
 });
 
-// KINU-086 at the CF boundary. The JUDGMENT lives in core
-// (`safety/egress-destination.ts`, judged in core's own suite); what belongs
-// here is the ENFORCEMENT this adapter owns: the handler refuses private
-// destinations before the vault call, the refusal is the classified payload on
-// the wire, and every redirect hop is handed back so it re-enters the handler
-// and is judged like the first.
+// KINU-086 enforcement (judgment lives in core's `safety/egress-destination.ts`): refuse
+// before the vault call, and hand back every redirect hop so it is re-judged.
 describe('private destinations are refused at the one place requests leave', () => {
   test.each([
     ['RFC1918 10/8', 'http://10.0.0.5/'],
@@ -706,9 +620,7 @@ describe('private destinations are refused at the one place requests leave', () 
       );
 
       expect(refusal.status).toBe(403);
-      // The classified payload, on the wire in the shared shape.
       expect(await refusal.json()).toMatchObject({ reason: 'denied' });
-      // The refused destination is never contacted, and its body never read.
       expect(upstream.seen).toHaveLength(0);
     } finally { upstream.restore(); }
   });
@@ -723,9 +635,7 @@ describe('private destinations are refused at the one place requests leave', () 
 
     expect(emitted[0].event).toBe('egress.private_destination');
     expect(emitted[0].code).toBe('denied');
-    // Host only — no path, no query in the diagnostic — and the seam named, so
-    // one event name carries one shape across the three enforcement points of
-    // the shared classifier (see unit-codemode-egress.test.ts).
+    // Host only; one shape across the shared classifier's seams (see unit-codemode-egress.test.ts).
     expect(emitted[0].fields).toEqual({ host: '169.254.169.254', seam: 'container' });
   });
 
@@ -744,8 +654,6 @@ describe('private destinations are refused at the one place requests leave', () 
   });
 
   test('the classifier shares one judgment with core, at the CF boundary', () => {
-    // The handler refuses through the SAME function core's suite judges, so
-    // this boundary assertion pins the adapter seam, not a second copy.
     expect(refusedHostname('[fe80::1]')).toMatchObject({ reason: 'denied' });
     expect(refusedHostname('2606:4700:4700::1111')).toBeNull();
   });
@@ -764,16 +672,12 @@ describe('every redirect hop is judged, not trusted', () => {
       );
 
       expect(first.status).toBe(302);
-      // The request left with redirect manual, so the hop's next request is
-      // the CONTAINER's, and it re-enters the handler.
+      // Manual redirect: the hop's next request is the container's and re-enters the handler.
       expect(hop.seen[0].redirect).toBe('manual');
     } finally { hop.restore(); }
   });
 
   test('the redirected request re-enters the handler and is refused at the hop', async () => {
-    // Hop 1 passes (public), hands the 3xx back; hop 2 is the container's
-    // request to the private Location, and the guard refuses it before the
-    // vault call — the refused destination is never contacted.
     const refused = captureFetch(() => new Response('should not happen'));
 
     try {

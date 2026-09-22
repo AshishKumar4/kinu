@@ -1,51 +1,10 @@
 /**
- * The chat rooms of one workspace object.
- *
- * The root's is {@link ChatWireTransport}: core's {@link ChatTransport} over the
- * Agents SDK's chat protocol, composed from the SDK's own exports.
- *
- * Inbound, it is the `cf_agent_*` protocol the React hook speaks
- * (`parseProtocolMessage`): a chat request is one `ChatSession.send` per
- * message the client has not sent before; a cancel is an interrupt; a resume
- * request or ack runs the SDK's {@link ResumeHandshake} over the SDK's
- * {@link ResumableStream} store. Outbound, it is the loop's events and the
- * model stream: each UIMessage chunk of a turn's answer is stored for resume
- * and broadcast as a `cf_agent_use_chat_response` frame under the request that
- * started the turn, accumulated into the assistant row the transcript store
- * persists ({@link StreamAccumulator}), and closed with the `done` frame the
- * hook waits on.
- *
- * THE TRANSPORT WRITES NO ROW. The loop is the one writer of a user row, and
- * it decides where a message lands before anything is durable: a message
- * that opens a turn is that turn's opening row, written by the loop at the
- * turn's start; a message spliced into a running turn is written by the drain
- * that lands it, with the stamps that say which step it landed in; a message
- * the loop refuses leaves nothing behind. A row this transport wrote ahead of
- * that decision was a second writer of the same fact, and the two disagreed —
- * about the stamps, about a rerun, about a refusal.
- *
- * What it deliberately does not carry from Think: the stall watchdog (no
- * elapsed deadline ends a turn here), the client-tool continuation lanes (no
- * Kinu client tool exists), the session token-estimate frame (no client reads
- * it), and chat-fiber recovery — an interrupted turn continues from the loop's
- * own step ledger, not from a fiber snapshot.
- *
- * ── ONE ROOM PER ADDRESSED ACTOR ─────────────────────────────────────────
- *
- * A workspace is ONE Durable Object, so every pane's socket lands on this
- * object and `broadcast` reaches all of them. Which actor a socket addressed
- * is its `/actor/<name>` path, recorded as a connection tag
- * (`actorConnectionTag`). {@link ActorChatRooms} is the one place that turns a
- * connection into the room that serves it, and each room is given a wire whose
- * recipient set, transcript and driver are that actor's — so no frame builder
- * here ever asks whose actor it is.
- *
- * A hosted actor's room is the same transport over that actor's own wire, with
- * one measured difference: no resume store. The SDK's {@link ResumableStream}
- * keeps ONE active stream per database (`cf_ai_chat_stream_chunks`, restored in
- * its constructor), so a second store over this object's tables would read the
- * root's live turn as the actor's. A hosted turn therefore streams live and,
- * across a reconnect, lands as its transcript row at turn end.
+ * The chat rooms of one workspace object: core's {@link ChatTransport} over the Agents
+ * SDK's `cf_agent_*` chat protocol. The transport writes no row: the loop is the one
+ * writer and decides where a message lands.
+ * One room per addressed actor, chosen by the socket's `actorConnectionTag`. A hosted
+ * actor's room has no resume store: {@link ResumableStream} keeps one active stream per
+ * database, so a second store would read the root's live turn as the actor's.
  */
 import type { Connection } from 'agents';
 import {
@@ -61,59 +20,38 @@ import {
 } from '@kinu.run/core';
 import { diagnostics, KinuError, refusalOf, toKinuError } from '@kinu.run/core/obs';
 
-/** A socket as a chat room reads one outside the SDK's own handshake: the id
- *  its frames are answered under, and nothing else. The frame paths below
- *  still take the whole `Connection`, because the SDK's `ResumeHandshake`
- *  declares it and is handed the socket unchanged. */
+/** The frame paths take the whole `Connection` because the SDK's `ResumeHandshake` declares it. */
 export type ChatSocket = Pick<Connection, 'id'>;
 
-/** What the transport asks of the actor: the connection set, and the loop.
- *  A connection is the SDK's: its resume handshake takes the full type. */
 export interface ChatWire {
-  /** The resume store's database; null for a wire whose turns stream live
-   *  only (the header says why a hosted actor's is). */
+  /** Null for a wire whose turns stream live only (hosted actors; see header). */
   readonly sql: SqlExecutor | null;
   broadcast(message: string, exclude?: string[]): void;
-  /** Whether the socket that owns an interrupted stream is still here: the
-   *  handshake asks by id before it replays to a replacement. */
+  /** The handshake asks by id before it replays to a replacement. */
   getConnection(id: string): ChatSocket | undefined;
-  /** The transcript as the client should see it, oldest first — the SDK
-   *  session's own rows, which the SDK's clients render as UI messages. */
   history(): Promise<UIMessage[]>;
-  /** Whether the loop already holds a message under this id — a durable row,
-   *  or the reservation an accepted send keeps until its row lands. The hook
-   *  sends its whole message list with every request, so a message sent
-   *  while an earlier one is still landing arrives beside it, and only the
-   *  loop knows the earlier one was taken. */
+  /** A durable row or an accepted send's reservation: the hook resends its whole list per request. */
   admitted(id: string): boolean;
-  /** The driver API the request maps onto. Rejects when the loop refuses the
-   *  message — nothing was written and no turn ran. */
+  /** Rejects when the loop refuses the message: nothing was written and no turn ran. */
   send(input: { readonly text: string; readonly files: readonly PromptFile[]; readonly id: string; readonly mode: WorkMode }): Promise<SendLanding>;
   interrupt(): void;
   clear(): Promise<void>;
 }
 
-/** Where one socket's chat frames go. Both rooms answer it, and
- *  {@link ActorChatRooms} is what picks between them. */
 export interface ChatRoom {
   onConnect(connection: Connection): Promise<void>;
   onClose(connection: ChatSocket): void;
-  /** Handle one socket frame if it is chat protocol; false when it is not. */
   onMessage(connection: Connection, raw: string): Promise<boolean>;
 }
 
-/** A message as the hook sends it: the SDK's UIMessage, admitted by its
- *  three load-bearing fields — the reconciler and the store read the rest. */
 const UIMessageSchema = v.custom<UIMessage>((value) =>
   v.is(v.object({ id: v.string(), role: v.picklist(['user', 'assistant', 'system']), parts: v.array(v.unknown()) }), value));
 
-/** The body of a `chat-request` frame: the hook's messages and trigger. */
 const ChatRequestBodySchema = v.object({
   messages: v.array(UIMessageSchema),
   trigger: v.optional(v.string()),
 });
 
-/** The parts and metadata the loop reads off a user message. */
 const ChatInputSchema = v.object({
   parts: v.array(v.looseObject({
     type: v.string(), text: v.optional(v.string()), url: v.optional(v.string()),
@@ -124,31 +62,19 @@ const ChatInputSchema = v.object({
 
 interface LiveStream {
   readonly requestId: string;
-  /** The requests of the other messages this turn carried — a rerun runs
-   *  every leftover as one turn — answered when it closes. */
+  /** Requests of the other messages a rerun carried, answered when it closes. */
   readonly carried: readonly string[];
   readonly streamId: string;
-  /** The SDK's reconstruction of the answer. ONE PER PROVIDER CALL — a
-   *  continuation renews it against the parts the turn already holds, so the
-   *  object never reads a second stream on the first stream's state while the
-   *  answer stays one message under one id. */
+  /** Renewed per provider call against the turn's parts, so the answer stays one message under one id. */
   accumulator: StreamAccumulator;
-  /** What the client's own reader would have open by now — see {@link OpenParts}. */
   readonly open: OpenParts;
   readonly cadence: PartialFlushCadence;
-  /** The transcript spent this answer before `turn-end` closed the stream. */
   taken: boolean;
-  /** The relay broke before the stream ended: the parts accumulated so far
-   *  stop where it broke, so they are not the answer and no reader gets them. */
+  /** The relay broke before the stream ended, so the accumulated parts are not the answer. */
   broken: boolean;
 }
 
-/**
- * What a wire chunk means to the loop's own flush cadence
- * (`partialFlushCadence`): a settled tool result, content, or nothing. The
- * cadence itself is the loop's, so a reconnecting client and a continuing
- * turn read the same amount of the interrupted answer.
- */
+/** A chunk's meaning to the loop's `partialFlushCadence`, so reconnects and continuations read the same amount. */
 function flushSignal(chunk: UIMessageChunk): PartialFlushSignal {
   if (chunk.type === 'tool-output-available' || chunk.type === 'tool-output-error' || chunk.type === 'tool-output-denied') return 'settled';
 
@@ -156,27 +82,14 @@ function flushSignal(chunk: UIMessageChunk): PartialFlushSignal {
 }
 
 /**
- * The part ids this relay has seen OPENED, mirroring the state the client's
- * own stream reader keeps.
- *
- * The reader (`ai`'s `processUIMessageStream`) THROWS on a continuation of a
- * part it never saw open — `Received text-delta for missing text part with ID
- * "…"`, the same for `reasoning-delta`, `reasoning-end`, `text-end`, and
- * `Received tool-input-delta for missing tool call with ID "…"` — and that
- * throw ends the tab's whole answer, which is how an owner sees an unexplained
- * tool-call error (#15) and reasoning that appears and then vanishes (#14).
- * The SDK's SERVER-side builder is forgiving about all of it, so the relay
- * cannot learn this from the accumulator: it has to keep the reader's rule.
- *
- * `text`/`reasoning` ids are scoped to the STEP, because the reader clears
- * `activeTextParts` and `activeReasoningParts` on every `finish-step`; tool
- * call ids are not, because it never clears `partialToolCalls`.
+ * Part ids seen opened, mirroring the client's reader: `ai`'s `processUIMessageStream` throws
+ * on a delta for a part it never saw open, ending the tab's answer. Text/reasoning ids reset
+ * on `finish-step`; tool call ids never do.
  */
 class OpenParts {
   private readonly step = new Set<string>();
   private readonly calls = new Set<string>();
 
-  /** Take this chunk in, and answer whether the client could follow it. */
   admits(chunk: UIMessageChunk): boolean {
     if (chunk.type === 'text-start' || chunk.type === 'reasoning-start') {
       this.step.add(`${chunk.type === 'text-start' ? 'text' : 'reasoning'}:${chunk.id}`);
@@ -204,21 +117,11 @@ class OpenParts {
   }
 }
 
-/** The frame a tab draws its whole transcript from: the seed one socket reads
- *  on connect, and the redraw every socket reads when the conversation moved
- *  outside its own stream (a turn opening, a turn closing, a walk-back). */
 function transcriptFrame(history: readonly UIMessage[]): string {
   return JSON.stringify({ type: MessageType.CF_AGENT_CHAT_MESSAGES, messages: history });
 }
 
-/**
- * The frame that CLOSES one chat request, as both rooms send it: the hook's
- * send resolves on it and stops waiting for a stream.
- *
- * `error` and `landed` are present only when they are facts — an absent key
- * and a key holding `undefined` read differently to the client, which treats
- * the first as "the request finished" and would paint the second as a failure.
- */
+/** `error` and `landed` only when they are facts: the client paints a present `undefined` key as a failure. */
 function doneFrame(requestId: string, extra: { landed?: SendLanding; error?: string }): string {
   return JSON.stringify({
     type: MessageType.CF_AGENT_USE_CHAT_RESPONSE, id: requestId, body: extra.error ?? '', done: true,
@@ -227,22 +130,15 @@ function doneFrame(requestId: string, extra: { landed?: SendLanding; error?: str
 }
 
 export class ChatWireTransport implements ChatTransport, ChatRoom {
-  /** The SDK's chunk store and the resume handshake over it, built on FIRST
-   *  USE rather than in the constructor: the store declares its table as it
-   *  is built, and this transport is reached through a getter on the actor
-   *  that the SDK's own callable enumeration (`getCallableMethods`) evaluates
-   *  against a bare prototype with no storage behind it. A transport that
-   *  touched storage to exist would turn that enumeration into an SQL error
-   *  and take the whole RPC surface with it. */
+  /** Built on first use: `getCallableMethods` evaluates this getter on a bare prototype, and
+   *  touching storage there would break the whole RPC surface. */
   private _resume: { readonly resumable: ResumableStream; readonly handshake: ResumeHandshake } | null = null;
   private readonly pendingResume = new Set<string>();
   private readonly continuation = new ContinuationState<Connection>();
-  /** The request each admitted user turn answers under, by its opening row's id. */
   private readonly requests = new Map<string, string>();
   private live: LiveStream | null = null;
-  /** Answers whose stream closed before the transcript took them, by message
-   *  id. The loop persists the row BEFORE it emits `turn-end`, so production
-   *  reads the live accumulator; this holds the other order. */
+  /** Answers whose stream closed before the transcript took them. Production persists before
+   *  `turn-end`; this holds the other order. */
   private readonly answers = new Map<string, UIMessage>();
 
   constructor(private readonly wire: ChatWire) {}
@@ -262,15 +158,13 @@ export class ChatWireTransport implements ChatTransport, ChatRoom {
         continuation: this.continuation,
         pendingResumeConnections: this.pendingResume,
         pendingChatTerminal: () => Promise.resolve(null),
-        // An orphaned stream is the loop's to continue from its ledger, never a
-        // row this transport reconstructs from chunks.
+        // An orphaned stream is the loop's to continue from its ledger.
         persistOrphanedStream: () => Promise.resolve(),
         isConnectionPresent: (id) => this.wire.getConnection(id) !== undefined,
       }),
     };
   }
 
-  /** The answer the transcript persists under this id, once. */
   answer(id: string): UIMessage | null {
     const message = this.streamed(id);
 
@@ -283,9 +177,7 @@ export class ChatWireTransport implements ChatTransport, ChatRoom {
     return message;
   }
 
-  /** The same answer, read without spending it: the roster declares the
-   *  turn-end announcement over it before the transcript persists it. The
-   *  stream has finished by then, so the live accumulator IS the answer. */
+  /** Read without spending: the roster declares turn-end over it before the transcript persists it. */
   streamed(id: string): UIMessage | null {
     const live = this.live;
 
@@ -294,12 +186,7 @@ export class ChatWireTransport implements ChatTransport, ChatRoom {
     return this.answers.get(id) ?? null;
   }
 
-  // ── Connections ─────────────────────────────────────────────────────
-
-  /** A socket that opens while a turn is running is told what is resuming
-   *  AND reads the transcript as it is now: the seed and the socket connect
-   *  are separate fetches, and a turn that started between them would
-   *  otherwise leave the tab without the opening row until the turn ends. */
+  /** A socket opening mid-turn also reads the current transcript: seed and connect are separate fetches. */
   async onConnect(connection: Connection): Promise<void> {
     const resume = this.resume;
     const history = await this.wire.history();
@@ -313,7 +200,6 @@ export class ChatWireTransport implements ChatTransport, ChatRoom {
     this.continuation.releaseConnection(connection.id);
   }
 
-  /** Handle one socket frame if it is chat protocol; false when it is not. */
   async onMessage(connection: Connection, raw: string): Promise<boolean> {
     const event = parseProtocolMessage(raw);
 
@@ -328,8 +214,7 @@ export class ChatWireTransport implements ChatTransport, ChatRoom {
       case 'stream-resume-request': {
         const resume = this.resume;
 
-        // `idle` is load-bearing: the hook keeps waiting on a probe answered
-        // with anything weaker.
+        // `idle` is load-bearing: the hook keeps waiting on a probe answered with anything weaker.
         if (resume === null) {
           sendIfOpen(connection, JSON.stringify({ type: MessageType.CF_AGENT_STREAM_RESUME_NONE, reason: 'idle', probeId: event.probeId }));
 
@@ -369,21 +254,11 @@ export class ChatWireTransport implements ChatTransport, ChatRoom {
       case 'tool-result':
       case 'tool-approval':
       case 'messages':
-        // No Kinu client tool exists and the transcript is server-authoritative.
         diagnostics.event('chat.protocol_frame_ignored', { frame: event.type });
     }
   }
 
-  /**
-   * The chat request: the hook's messages reconciled against what is stored
-   * (`reconcileMessages`, the SDK's own rule for what is new), then ONE send
-   * per message the loop does not already hold, each under the id the client
-   * renders it by. The loop decides the landing and writes the row; this
-   * answers the request accordingly, and only once the landing is decided —
-   * the request is the client's one question about the message, and the
-   * turn that answers it is not known at admission. A regenerate carries
-   * nothing new and is answered as done.
-   */
+  /** One send per message the loop does not hold (`reconcileMessages`); answered only once the landing is decided. */
   private async admitChatRequest(requestId: string, body: string | undefined): Promise<void> {
     const parsed = body === undefined ? null : v.safeParse(v.pipe(v.string(), v.parseJson(), ChatRequestBodySchema), body);
 
@@ -412,13 +287,8 @@ export class ChatWireTransport implements ChatTransport, ChatRoom {
       try {
         landed = await this.wire.send({ ...chatInput(message), id: message.id });
       } catch (cause) {
-        // The loop REFUSED the message — nothing to say, another driver holds
-        // the conversation, a plan turn this surface cannot review — and wrote
-        // nothing. A refusal is the loop's own classified error; anything
-        // else is a fault in the send itself and is not the client's to read
-        // as a refusal. The request is closed with the refusal: the hook's
-        // send rejects with it instead of waiting on a turn-end that will
-        // never come.
+        // The loop refused and wrote nothing; close the request with the refusal so the hook's send
+        // rejects instead of waiting on a turn-end that never comes.
         if (!(cause instanceof KinuError)) throw new Error('the loop failed to take a client message', { cause });
         this.requests.delete(message.id);
         this.done(requestId, { error: refusalOf(cause).error });
@@ -427,13 +297,8 @@ export class ChatWireTransport implements ChatTransport, ChatRoom {
       }
     }
 
-    // A message the running turn read is answered by that turn: the request
-    // is spent with the landing, and the absorbing turn's own stream is where
-    // the reply goes. A message that opened a turn — at once, or as the rerun
-    // of words the running turn ended before reading — kept its id as that
-    // turn's id, so the turn streamed under this request and its `turn-end`
-    // closed it; a rerun that carried other leftovers named them at its open,
-    // and their requests closed with it too.
+    // A spliced message is answered by the absorbing turn's stream; an opening message's id is
+    // the turn id, so its `turn-end` closes the request.
     if (landed === 'mid-turn') {
       for (const message of fresh) this.requests.delete(message.id);
       this.done(requestId, { landed });
@@ -444,17 +309,7 @@ export class ChatWireTransport implements ChatTransport, ChatRoom {
     this.wire.broadcast(doneFrame(requestId, extra));
   }
 
-  // ── The loop's events ───────────────────────────────────────────────
-
-  /**
-   * One turn opens: its stream answers under the request that admitted the
-   * message (`turnId` is the opening row's id), else under a minted id — a
-   * wake, a rerun, a delegated turn. The entry is deleted either way: a
-   * steer's own id is the turn id of its rerun, and a rerun that carries
-   * other leftovers takes their requests with it, to answer at its close. A
-   * user turn's opening row is durable before this, so every tab reads the
-   * transcript with it.
-   */
+  /** The stream answers under the admitting request (`turnId` is the opening row id), else a minted id. */
   async openTurn(turn: { readonly turnId: string; readonly messageId: string; readonly userTurn: boolean; readonly carried: readonly string[] }): Promise<void> {
     const requestId = this.requests.get(turn.turnId) ?? crypto.randomUUID();
     this.requests.delete(turn.turnId);
@@ -475,8 +330,7 @@ export class ChatWireTransport implements ChatTransport, ChatRoom {
     if (turn.userTurn) this.wire.broadcast(transcriptFrame(await this.wire.history()));
   }
 
-  /** The turn's answer row is durable before this: the done frame and the
-   *  transcript broadcast read the finished turn's rows. */
+  /** The answer row is durable before this. */
   async closeTurn(): Promise<void> {
     const live = this.live;
 
@@ -511,10 +365,7 @@ export class ChatWireTransport implements ChatTransport, ChatRoom {
 
         if (live === null) return;
 
-        // A Stop is the operator's own act, not a failure: the abort chunk
-        // the model stream carried is the whole report, and an `error` frame
-        // here is what the SDK's client surfaces as the stream's error (the
-        // hook painted an error card on every Stop after the switch).
+        // A Stop is not a failure: an `error` frame here makes the SDK client paint an error card.
         if (event.message === INTERRUPTED_TURN) return;
 
         this.resume?.resumable.markError(live.streamId);
@@ -530,9 +381,7 @@ export class ChatWireTransport implements ChatTransport, ChatRoom {
 
         return;
 
-      // The walk-back moved the durable head, so what each tab holds is a
-      // conversation that no longer exists. The stored transcript reaches all
-      // of them over the same frame a turn's close sends.
+      // The walk-back moved the durable head; every tab needs the stored transcript.
       case 'history-reverted':
         this.wire.broadcast(transcriptFrame(await this.wire.history()));
 
@@ -544,26 +393,13 @@ export class ChatWireTransport implements ChatTransport, ChatRoom {
       case 'evolution':
       case 'background':
       case 'run-event':
-        // The answer's chunks reach the client from the model stream below;
-        // the side channels have no wire frame on this backend.
     }
   }
 
-  // ── The model stream ────────────────────────────────────────────────
-
   /**
-   * One PROVIDER CALL's UIMessage chunks, from the SDK's own stream
-   * conversion, each stored for resume and broadcast under the live request.
-   * Runs beside the loop's own consumption of the same result; the loop
-   * settles the turn once this has drained, so the answer row carries every
-   * part the client saw.
-   *
-   * A turn can take a second call — an answer the provider cut at its output
-   * limit is continued — and each call is its own SDK stream. The accumulator
-   * is renewed for it, seeded with what the turn already holds: the object
-   * reads one stream, as it is built to, and the answer stays one message
-   * under the id the row is persisted with, which a second stream's `start`
-   * would otherwise rename.
+   * One provider call's UIMessage chunks, stored for resume and broadcast. The loop settles
+   * the turn after this drains. A continuation call renews the accumulator seeded with the
+   * turn's parts, so a second `start` cannot rename the answer.
    */
   async observe(stream: ReadableStream<UIMessageChunk>, call: ObservedCall): Promise<void> {
     const live = this.live;
@@ -593,9 +429,7 @@ export class ChatWireTransport implements ChatTransport, ChatRoom {
           return;
         }
 
-        // The client builds the streamed message under the id the row is
-        // persisted under, as Think stamped it: a provider that emits no
-        // `start.messageId` would otherwise leave the tab with two copies.
+        // Stamp the persisted row id: a provider emitting no `start.messageId` leaves the tab two copies.
         if (chunk.type === 'start' && action?.type === 'start' && action.messageId === undefined) chunk.messageId = live.accumulator.messageId;
 
         const body = JSON.stringify(chunk);
@@ -616,19 +450,7 @@ export class ChatWireTransport implements ChatTransport, ChatRoom {
     }
   }
 
-  /**
-   * The relay broke; the turn did not.
-   *
-   * The loop consumes its own copy of the stream and commits the answer from
-   * it. Three things read the relay as if it were the answer — the accumulator
-   * the transcript would persist, the chunk store a reconnect replays, and the
-   * tab watching the request — so each is told, here, that it is not.
-   *
-   * The tab reads OUR classification of what broke and never a raw sentence
-   * from underneath: the SDK's own words for a chunk it could not take belong
-   * on the diagnostics record, where the cause chain is kept whole, not in a
-   * chat bubble telling an operator to send a different kind of chunk.
-   */
+  /** The relay broke; the turn did not. The tab gets our classification; the SDK's words go to diagnostics. */
   private degradeRelay(live: LiveStream, error: KinuError): void {
     diagnostics.failure('chat.stream_observe_failed', error);
     live.broken = true;
@@ -639,7 +461,6 @@ export class ChatWireTransport implements ChatTransport, ChatRoom {
   }
 }
 
-/** The loop's input for one client message: its text, its files, its mode. */
 function chatInput(message: UIMessage) {
   const { parts, metadata } = v.parse(ChatInputSchema, message);
   const text = parts.flatMap((part) => part.type === 'text' ? [part.text ?? ''] : []).join('');
@@ -656,14 +477,8 @@ function chatInput(message: UIMessage) {
 }
 
 /**
- * WHICH ROOM SERVES THIS SOCKET — the one decision that keeps a workspace's
- * panes apart on a shared object.
- *
- * Keyed by the connection's actor tag, so a socket restored from hibernation
- * resolves the same room it opened on. A tag naming an actor this workspace no
- * longer hosts resolves to NO room, and the caller refuses the frame rather
- * than falling back to the root's — a dismissed actor's pane must not become a
- * second window onto the workspace's own chat.
+ * Which room serves this socket, keyed by the actor tag so hibernation restores it.
+ * An actor no longer hosted resolves to no room; never fall back to the root's.
  */
 export class ActorChatRooms {
   private readonly hosted = new Map<string, ChatWireTransport>();
@@ -673,16 +488,12 @@ export class ActorChatRooms {
     private readonly wireFor: (name: string) => ChatWire | null,
   ) {}
 
-  /** The room a connection addressed, or null when it named an actor this
-   *  workspace does not host. */
   for(actor: string | null): ChatWireTransport | null {
     if (actor === null) return this.root();
 
     return this.hostedRoom(actor);
   }
 
-  /** That actor's transport if one is already open, or one built now — the
-   *  same wire the root's chat rides, over that actor's own transcript. */
   hostedRoom(actor: string): ChatWireTransport | null {
     const held = this.hosted.get(actor);
 

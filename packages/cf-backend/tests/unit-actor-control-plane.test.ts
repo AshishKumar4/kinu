@@ -1,17 +1,6 @@
 /**
- * The control plane the workspace root exposes, plus the per-actor stores a
- * hosted child keeps for itself.
- *
- * These four RPCs — getStoredModelSpec, setModel, send, cancelCurrentWork —
- * are declared ONCE, on the one Durable Object: a hosted subordinate has no
- * Think turn queue to steer or stop. What is per actor is the durable state the
- * surface reads — the model row, the turn queue rows, and the activity rows —
- * so this suite keeps the root's behaviour and then proves the child's rows are
- * its own.
- *
- * Behaviour through the public classes, not source text: the source-level ratchet
- * that stops a second copy of the surface appearing lives in
- * unit-rpc-surface.test.ts, where the declared-member machinery already is.
+ * The root's four control RPCs are declared once, on the one DO; what is per actor is the durable state they read,
+ * so this proves a child's rows are its own. The no-second-copy ratchet lives in unit-rpc-surface.test.ts.
  */
 
 import { describe, expect, test } from 'bun:test';
@@ -21,8 +10,7 @@ import { TURN_AUTHOR_METADATA_KEY } from '@kinu.run/core';
 import { hostedSubordinateHarness, orchestratorHarness, chatSessionTurns, type HarnessOrchestratorAgent } from './helpers/actor-harness';
 import type { Database } from 'bun:sqlite';
 
-/** Activity rows for one actor. Scoped by handle: an unscoped read would let a
- * sibling's cancellation satisfy — or pollute — this actor's assertion. */
+/** Scoped by handle: an unscoped read would let a sibling's cancellation satisfy or pollute this assertion. */
 function cancelActivity(db: Database, actorId: string): unknown[] {
   return db.prepare("SELECT detail FROM activity_log WHERE event = 'work_cancelled' AND actor_id = ?").all(actorId);
 }
@@ -55,21 +43,15 @@ describe('the workspace root answers the actor control plane', () => {
   });
 
   /**
-   * The turn ended before the steer arrived. The old contract answered 'idle'
-   * and left the text with the caller to re-send — the race KINU-N026 closes:
-   * another turn could start first and file the guidance as some later turn.
-   * Now the actor commits the text to its own turn queue in the same slice as
-   * the decision and answers 'queued'. A subordinate chat is a chat, so it
-   * answers the same way.
+   * A steer after the turn ended is committed to the actor's own queue in the same slice as the decision and answers
+   * 'queued' (KINU-N026: answering 'idle' let another turn file the guidance). Subordinates answer the same way.
    */
   test('steering with no turn running queues the text as the next ordinary turn', async () => {
     const { agent } = orchestratorHarness();
     const turns = chatSessionTurns(agent);
     const next = turns.park();
 
-    // The send is the turn: the loop admits it as the operator's own next
-    // turn, under the operator's stamp and the mode it was typed in, and the
-    // caller hears it landed as one once it has.
+    // The send is admitted as the operator's own next turn, under their stamp and typed mode.
     const landing = agent.harnessChatLoop.send('use the other parser');
     await next;
     await turns.settle({ messageId: 'a-parser', text: 'ok' });
@@ -89,11 +71,8 @@ describe('the workspace root answers the actor control plane', () => {
   });
 
   /**
-   * The kept difference. The orchestrator owns the composer's Stop path, so it
-   * settles that path and files the line the Activity view reads under its own
-   * actor id. A hosted child interrupts only its own ActorSession: with no live
-   * turn there is nothing to drop and, crucially, nothing for it to file on
-   * the root's behalf.
+   * The kept difference: the orchestrator owns the composer's Stop path and files the Activity line under its own id;
+   * a hosted child with no live turn has nothing to drop and must file nothing on the root's behalf.
    */
   test('only the workspace root files its own cancellation, under its own actor id', async () => {
     const orchestrator = orchestratorHarness();
@@ -115,20 +94,14 @@ describe('the workspace root answers the actor control plane', () => {
 });
 
 /**
- * The walk-back — "revert to before this turn", as the operator presses it.
- *
- * The twin of cli-backend's `LocalAgentSession — the walk-back`: one core
- * method under both transports, one observable. The refusal is core's too —
- * the queue and the running turn belong to the loop — so each backend states
- * the same sentence because neither one owns it.
+ * The walk-back, twin of cli-backend's `LocalAgentSession — the walk-back`: one core method and refusal under both transports.
  */
 describe('the workspace root answers the walk-back', () => {
   const lines = (messages: readonly UIMessage[]): string[] => messages.map(
     (message) => message.parts.flatMap((part) => part.type === 'text' ? [part.text] : []).join(''),
   );
 
-  /** The transcript frames this object fanned out, by the ids each named. A tab
-   *  that was open before the revert has no other way to learn of it. */
+  /** A tab open before the revert has no other way to learn of it. */
   const captureTranscriptFrames = (agent: HarnessOrchestratorAgent): string[][] => {
     const sent: string[][] = [];
 

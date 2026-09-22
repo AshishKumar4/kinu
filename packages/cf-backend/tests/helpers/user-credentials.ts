@@ -1,11 +1,5 @@
-// Adapter from a plain credential double to the gated UserDO surface the
-// provider registry consumes.
-//
-// The real UserDO takes a `UserCaller` as the first argument of every
-// privileged method. Tests are about credentials, not about the gate, so they
-// describe the store in its natural shape and this wraps it with a caller —
-// owner-session by default, or a workspace capability token when the test is
-// specifically about attenuation.
+// Wraps a plain credential double with the `UserCaller` every privileged UserDO method takes:
+// owner-session by default, a workspace capability token for attenuation tests.
 import type { UserCredentialSource } from '../../src/providers/agent-registry';
 import type { CredentialSummary } from '../../src/user/user-do';
 import { ownerCaller, type UserCaller } from '@kinu.run/core';

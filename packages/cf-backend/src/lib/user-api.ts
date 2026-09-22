@@ -1,8 +1,4 @@
-/**
- * Typed client for the `/api/user/*` HTTP API. The Kinu browser session is
- * attached automatically by the HttpOnly cookie (or local dev's DEV_USER_EMAIL
- * is synthesized server-side), so these fetches are bare.
- */
+/** Typed client for `/api/user/*`; the session rides the HttpOnly cookie (dev synthesizes DEV_USER_EMAIL server-side). */
 import {
   DEVICE_SANDBOX_CAPABILITIES, DEVICE_SANDBOX_REASONS, DEVICE_TIERS, DEVICE_UPDATE_STATES,
   ProfileCatalogEnvelopeSchema, REASONING_EFFORTS,
@@ -25,16 +21,10 @@ export interface UserProfile {
   displayName: string | null;
   createdAt: number;
   lastSeenAt: number;
-  /** First-run setup's completion stamp: `null` until the wizard's finish. */
   onboardedAt: number | null;
-  /** How many workspaces the account owns. The gate reads it beside the
-   *  stamp: an established account — one that already has a workspace — is
-   *  never sent through the wizard. */
+  /** An account that already has a workspace is never sent through the wizard. */
   workspaceCount: number;
-  /** True when this session's email is on the control-plane operator list.
-   *  Decided server-side by the same function that guards `/api/control/*`, so
-   *  it drives the nav entry's visibility and nothing else — the gate answers
-   *  for itself on every request. */
+  /** Nav visibility only, decided by the function that guards `/api/control/*`; that gate answers for itself every request. */
   controlPlane?: boolean;
 }
 
@@ -66,14 +56,11 @@ export interface ModelMenuEntry {
   provider: string;
   capabilities?: string[];
   contextWindow?: number;
-  /** The effort levels the model accepts, in the provider's order. Absent
-   *  when the catalog could not say; empty when the model takes none. */
+  /** Absent when the catalog could not say; empty when the model takes none. */
   reasoningEfforts?: ReasoningEffort[];
 }
 
-/** A provider the server could not reach while building the menu (revoked
- *  OAuth grant, unreachable endpoint). Surfaced next to the models so one
- *  broken provider reads as a notice rather than an empty picker. */
+/** A provider unreachable while building the menu, shown as a notice rather than an empty picker. */
 export interface ProviderFailure {
   provider: string;
   label?: string;
@@ -92,9 +79,7 @@ const OkSchema = v.object({ ok: v.boolean() });
 const UserProfileSchema = v.nullable(v.object({
   email: v.string(), displayName: v.nullable(v.string()), createdAt: v.number(), lastSeenAt: v.number(),
   onboardedAt: v.nullable(v.number()), workspaceCount: v.number(),
-  /** Whether this session may reach the admin control plane. Optional so a
-   *  client running against an older Worker reads `undefined` and hides the nav
-   *  entry, rather than failing to parse a profile it otherwise understands. */
+  /** Optional so a client against an older Worker hides the nav entry instead of failing to parse. */
   controlPlane: v.optional(v.boolean()),
 }));
 
@@ -146,17 +131,14 @@ export interface PollResult {
   error?: string;
 }
 
-/** The server's `{error}` detail for a failed response, or '' when the body is
- *  not a JSON error envelope. */
+/** '' when the body is not a JSON `{error}` envelope. */
 async function errorDetail(res: Response): Promise<string> {
   const parsed = v.safeParse(ErrorBodySchema, await tolerateAsync(() => res.json(), 'malformed-input'));
 
   return parsed.success ? parsed.output.error ?? '' : '';
 }
 
-/** What a mutation sends. Most routes take a field map; the four whose payload
- *  has a declared shape are named here, because a TypeScript interface never
- *  satisfies an index signature however JSON-shaped its fields are. */
+/** The shaped payloads are named because a TypeScript interface never satisfies an index signature. */
 type RequestBody =
   | Record<string, JsonValue | undefined>
   | Credential
@@ -171,11 +153,7 @@ async function api<Schema extends v.GenericSchema>(
     method,
     headers: { 'content-type': 'application/json' },
     body: body !== undefined ? JSON.stringify(body) : undefined,
-    // The same deadline every agent RPC already runs under — the agents SDK's
-    // own call backstop, imported rather than restated. Bound reads only: an
-    // aborted mutation may already have landed server-side, which would turn
-    // an honest timeout into an ambiguous retry. A stalled read instead settles
-    // as a failure its surface can show and retry (KINU-073).
+    // Reads only: an aborted mutation may already have landed server-side, making a timeout an ambiguous retry (KINU-073).
     signal: method === 'GET' ? AbortSignal.timeout(DEFAULT_CALL_TIMEOUT_MS) : undefined,
   });
 
@@ -184,25 +162,21 @@ async function api<Schema extends v.GenericSchema>(
   return v.parse(schema, await res.json());
 }
 
-// ── Profile ────────────────────────────────────────────────────────
 export const getProfile = () => api(UserProfileSchema, 'GET', '/profile');
 
 export const completeOnboarding = () => api(v.object({ onboardedAt: v.number() }), 'POST', '/onboarding/complete');
 
 export const setDisplayName = (displayName: string) => api(UserProfileSchema, 'PATCH', '/profile', { displayName });
 
-/** The one write that deletes the account itself — the confirmation phrase is
- *  the account's own email, checked again server-side. */
+/** The confirmation phrase is the account's own email, checked again server-side. */
 export const deleteAccount = (confirm: string) =>
   api(v.object({ deleted: v.literal(true) }), 'DELETE', '/account', { confirm });
 
 export const getCliSetup = () => api(CliSetupSchema, 'GET', '/cli');
 
-// ── Agents ─────────────────────────────────────────────────────────
 export const listWorkspaces     = () => api(v.object({ entries: v.array(WorkspaceEntrySchema), total: v.number() }), 'GET', '/workspaces');
 
-// `purpose` is the initial mission. When `name` is omitted the server creates
-// the agent identity using the user's connected model.
+// `purpose` is the initial mission; omitting `name` lets the server create the identity with the user's model.
 export const registerWorkspace  = (name?: string, purpose?: string, displayName?: string) =>
   api(WorkspaceEntrySchema, 'POST', '/workspaces', { name, displayName, purpose });
 
@@ -212,7 +186,6 @@ export const touchWorkspace     = (name: string) =>
 export const removeWorkspace    = (name: string) =>
   api(OkSchema, 'DELETE', `/workspaces/${encodeURIComponent(name)}`);
 
-// ── Devices (user-level device/PC tunnel) ──────────────────────────
 export interface UserDevice {
   id: string;
   label: string;
@@ -221,29 +194,18 @@ export interface UserDevice {
   connected: boolean;
   createdAt: number;
   lastSeenAt: number | null;
-  /** When this device's link lapses. Measured from its last ROTATION, which
-   *  happens on every accepted connect, so a machine in use never reaches it
-   *  and a copy that stopped connecting does. */
+  /** Measured from the last rotation (every accepted connect), so a machine in use never reaches it. */
   expiresAt: number | null;
-  /** Where the newest accepted connection came from, and whether a SECOND
-   *  socket ever took this device's slot. A stolen `device.json` shows up
-   *  here: an address the owner does not recognise, or a replacement they did
-   *  not cause. */
+  /** A stolen `device.json` shows up here: an unrecognised address or an uncaused replacement. */
   lastIp: string | null;
   lastAgent: string | null;
   replacedAt: number | null;
-  /** Revoked device rows with an unconfirmed-stop incident stay visible until acknowledged. */
   revokedAt: number | null;
-  /** The owner revoked this device while a command lacked confirmed termination. */
   unstoppedAt: number | null;
-  /** The build the daemon last reported, the build this deployment serves,
-   *  and the one word the row shows about the two. */
   version: string | null;
   servedVersion: string | null;
   update: DeviceUpdateState;
-  /** The Sandbox switch the owner set and what the daemon proved about the
-   *  machine. The registry knows nothing per workspace, so the workspace's
-   *  own home and roots are not here — they live on the runtime status. */
+  /** Workspace-specific home and roots live on the runtime status, not here. */
   sandbox: UserDeviceSandbox;
 }
 
@@ -262,9 +224,7 @@ const DeviceSandboxSchema = v.object({
   gpu: v.pipe(v.array(v.string()), v.readonly()),
 });
 
-/** A row written before the registry recorded a sandbox: the switch is on by
- *  default, and a machine that has not proved it can sandbox has not proved
- *  it can sandbox — the same reading `parseSandboxCapability` gives silence. */
+/** Pre-sandbox rows: switch on by default, capability unproved (the same reading `parseSandboxCapability` gives silence). */
 const UNREPORTED_SANDBOX: v.InferOutput<typeof DeviceSandboxSchema> =
   { tier: 'sandboxed', capability: 'files_only', reason: null, detail: null, gpu: [] };
 
@@ -274,7 +234,6 @@ const UserDeviceSchema = v.object({
   lastIp: v.nullable(v.string()), lastAgent: v.nullable(v.string()), replacedAt: v.nullable(v.number()),
   revokedAt: v.nullable(v.number()), unstoppedAt: v.nullable(v.number()),
   sandbox: v.optional(DeviceSandboxSchema, UNREPORTED_SANDBOX),
-  // A hub that reports no software state lists as a daemon that named none.
   version: v.optional(v.nullable(v.string()), null),
   servedVersion: v.optional(v.nullable(v.string()), null),
   update: v.optional(v.picklist(DEVICE_UPDATE_STATES), 'unreported'),
@@ -296,15 +255,11 @@ export const revokeDevice   = (id: string) =>
 export const acknowledgeUnstoppedDevice = (id: string) =>
   api(OkSchema, 'DELETE', `/devices/${encodeURIComponent(id)}/unstopped`);
 
-/** Set a device's Sandbox switch. Owner-session only; the server answers 403
- *  to anyone else. What a command may then reach is decided by the machine,
- *  not by any workspace's binding. */
+/** Owner-session only (403 otherwise). What a command may reach is decided by the machine, not a workspace binding. */
 export const setDeviceSandboxTier = (deviceId: string, tier: DeviceTier) =>
   api(OkSchema, 'PUT', `/devices/${encodeURIComponent(deviceId)}/sandbox`, { tier });
 
-/** Per-(workspace, device) remembered binding: whether that workspace may use
- *  the machine at all. It carries no tier — the device's Sandbox switch decides
- *  what a command may reach. */
+/** Per-(workspace, device) binding: may that workspace use the machine at all. No tier: the device switch decides reach. */
 const DeviceConsentSchema = v.object({
   agentName: v.string(), deviceId: v.string(), policy: v.string(),
   lastMethod: v.nullable(v.string()), lastSummary: v.nullable(v.string()),
@@ -314,12 +269,10 @@ export type DeviceConsent = v.InferOutput<typeof DeviceConsentSchema>;
 
 export const listDeviceConsents = () => api(v.array(DeviceConsentSchema), 'GET', '/devices/consents');
 
-/** Revoke a workspace's binding on a device. The row is deleted, so the next
- *  device call asks again rather than reading as a standing refusal. */
+/** The row is deleted, so the next device call asks again instead of reading as a standing refusal. */
 export const revokeDeviceConsent = (deviceId: string, agentName: string) =>
   api(OkSchema, 'DELETE', `/devices/${encodeURIComponent(deviceId)}/consent?agentName=${encodeURIComponent(agentName)}`);
 
-// ── Credentials ────────────────────────────────────────────────────
 export const listCredentials  = () => api(v.array(CredentialSummarySchema), 'GET', '/credentials');
 
 export const setCredential    = (key: string, value: Credential) =>
@@ -334,7 +287,6 @@ export const deleteCredential = (key: string) =>
 
  return r; });
 
-// ── Codex device flow ──────────────────────────────────────────────
 const DeviceFlowStartSchema = v.object({
   userCode: v.string(), deviceAuthId: v.string(), pollIntervalSec: v.number(), portalURL: v.string(),
 });
@@ -362,7 +314,6 @@ export const disconnectCodex  = () => api(OkSchema, 'DELETE', '/codex')
 
  return r; });
 
-// ── Account roles and model tiers ─────────────────────────────────
 export const getProfileCatalog = (): Promise<ProfileCatalogEnvelope> =>
   api(ProfileCatalogEnvelopeSchema, 'GET', '/profile-catalog');
 
@@ -372,9 +323,7 @@ export const updateProfileCatalog = (
 ): Promise<ProfileCatalogEnvelope> =>
   api(ProfileCatalogEnvelopeSchema, 'PUT', '/profile-catalog', { catalog, expectedVersion });
 
-// ── Models + providers ─────────────────────────────────────────────
-// The model menu only changes when a provider is connected/disconnected, so it
-// is cached for the SPA session and invalidated by the provider mutators above.
+// Cached for the SPA session; the provider mutators above invalidate it.
 let _modelsCache: Promise<ModelMenu> | null = null;
 
 export function listAvailableModels(): Promise<ModelMenu> {
@@ -392,7 +341,6 @@ export function listAvailableModels(): Promise<ModelMenu> {
 
 function invalidateModelsCache(): void { _modelsCache = null; }
 
-/** One connectable provider (BYO API key) from the models.dev catalog. */
 export interface ProviderCatalogEntry {
   id: string;
   credKey: string;
@@ -408,7 +356,6 @@ export const listProviderCatalog = () =>
     envVar: v.optional(v.string()), connected: v.boolean(),
   })), 'GET', '/providers/catalog');
 
-// ── Cloudflare account (which account serves Workers AI) ───────────
 export interface CloudflareAccountSummary {
   id: string;
   name: string;
@@ -426,8 +373,6 @@ export const listCloudflareAccounts = () =>
     accounts: v.array(v.object({ id: v.string(), name: v.string() })),
   }), 'GET', '/cloudflare/accounts');
 
-/** Either Cloudflare choice, stored and then dropped from the model menu the
- *  account and the gateway both feed. */
 const putCloudflareSelection = (path: string, id: string | null) =>
   api(OkSchema, 'PUT', path, { id })
     .then((r) => { invalidateModelsCache();
@@ -436,7 +381,6 @@ const putCloudflareSelection = (path: string, id: string | null) =>
 
 export const selectCloudflareAccount = (id: string) => putCloudflareSelection('/cloudflare/account', id);
 
-// ── Cloudflare AI Gateway (the user's own gateway) ─────────────────
 export interface CloudflareGatewaySummary {
   id: string;
   authenticated: boolean;
@@ -467,8 +411,6 @@ export function cloudflareReconnectPath(returnTo: string): string {
 
   return `/auth/cloudflare/start?${params.toString()}`;
 }
-
-// ── MCP servers ────────────────────────────────────────────────────
 
 export type McpTransport = 'auto' | 'sse' | 'streamable-http';
 
@@ -512,8 +454,7 @@ export const McpServerSummarySchema = v.object({
 
 export const listMcpServers = () => api(v.array(McpServerSummarySchema), 'GET', '/mcp/servers');
 
-/** One preset's deploy-time availability, as UserDO reports it — whether its
- *  registered OAuth app is configured, which decides sign-in vs fallback. */
+/** Whether the preset's OAuth app is configured, which decides sign-in vs fallback. */
 export interface McpPresetAvailability {
   id: string;
   appConfigured: boolean;
@@ -528,8 +469,6 @@ export const addMcpServer   = (input: McpServerInput) =>
 export const removeMcpServer = (id: string) =>
   api(OkSchema, 'DELETE', `/mcp/servers/${encodeURIComponent(id)}`);
 
-// ── EventsHub: triggers + events (per-agent endpoints) ─────────────
-
 export interface CreateWebhookOpts {
   label: string;
   auth_mode: 'hmac' | 'bearer' | 'mtls';
@@ -542,11 +481,9 @@ export interface CreateWebhookResult {
   trigger_id: string;
   url: string;
   auth_mode: 'hmac' | 'bearer' | 'mtls';
-  secret: string | null;       // returned once at creation; never again
+  secret: string | null;       // Returned once at creation; never again.
 }
 
-/** One agent-scoped call: the workspace it names, the route under it, and the
- *  schema its answer is read through. */
 interface AgentRequest<Schema extends v.GenericSchema> {
   schema: Schema;
   method: string;
@@ -555,7 +492,6 @@ interface AgentRequest<Schema extends v.GenericSchema> {
   body?: RequestBody;
 }
 
-/** Agent-scoped HTTP fetch; same auth as the user routes. */
 async function agentApi<Schema extends v.GenericSchema>(
   { schema, method, agentName, path, body }: AgentRequest<Schema>,
 ): Promise<v.InferOutput<Schema>> {
@@ -588,8 +524,6 @@ export const cancelTrigger = (agentName: string, trigger_id: string) =>
     path: `/triggers/${encodeURIComponent(trigger_id)}`,
   });
 
-// ── Workspace overview (the home card's one read) ─────────────────
-// Agent-scoped like the triggers above: the route re-proves ownership against
-// the stamped session id before answering.
+// Agent-scoped: the route re-proves ownership against the session id.
 export const getWorkspaceOverview = (agentName: string) =>
   agentApi({ schema: WorkspaceOverviewSchema, method: 'GET', agentName, path: '/overview' });

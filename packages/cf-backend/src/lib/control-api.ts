@@ -1,20 +1,6 @@
 /**
- * Typed client for `/api/control/*`.
- *
- * EVERY READ IS PARSED, not asserted. A response body is raw JSON from the
- * network, so a cast would fabricate its shape and then render it — and the
- * shapes here are exactly the ones an operator makes a destructive decision
- * from. The row schemas are declared once, below, and every fetcher names the
- * one it expects.
- *
- * The row TYPES are inferred from those schemas rather than restated, and the
- * schemas mirror the store's own row declarations. That keeps one shape per row
- * on this side of the wire without importing the Durable Object's module graph
- * into the browser bundle.
- *
- * The Kinu session rides along as an HttpOnly cookie, so the fetches are bare —
- * same as `user-api.ts`, whose `api()` helper this mirrors in behaviour and
- * deliberately does not share: that one hard-codes the `/api/user` prefix.
+ * Typed client for `/api/control/*`. Every read is parsed, never cast: operators make destructive decisions from these.
+ * Schemas mirror the store rows without importing the DO module graph into the browser bundle.
  */
 import { JsonValueSchema, pageSchema, type JsonValue, type Page } from '@kinu.run/core';
 import { tolerateAsync } from '@kinu.run/core/obs';
@@ -22,8 +8,6 @@ import * as v from 'valibot';
 import type { ControlAction } from '../control-plane/actions';
 
 const ErrorBodySchema = v.object({ error: v.optional(v.string()) });
-
-/* ── The shapes the plane answers with ───────────────────────────────────── */
 
 const ControlUserRowSchema = v.object({
   userId: v.string(),
@@ -72,8 +56,7 @@ const ControlAuditRowSchema = v.object({
   operation: v.string(),
   targetKind: v.string(),
   target: v.string(),
-  /** `pending` is an attempt whose outcome was never recorded — the row the
-   *  two-phase write leaves behind when a settlement is lost. */
+  /** `pending`: the two-phase write's outcome was never recorded. */
   outcome: v.picklist(['pending', 'ok', 'denied', 'failed']),
   detail: v.string(),
 });
@@ -105,16 +88,7 @@ export type MonitorIncident = v.InferOutput<typeof MonitorIncidentSchema>;
 
 const IncidentsSchema = v.object({ incidents: v.array(MonitorIncidentSchema) });
 
-/**
- * One panel of the workspace drilldown.
- *
- * The value is `JsonValue` and that is deliberate rather than lazy: the drilldown
- * renders each panel as a count plus its raw JSON, because re-implementing the
- * seven renderers the workspace page already has would be a second view of the
- * same data that drifts from the first. `JsonValue` is the honest domain type for
- * "whatever that RPC returned, rendered generically" — and it is a parsed type,
- * so a malformed body is refused rather than rendered.
- */
+/** `JsonValue` on purpose: panels render as count plus raw JSON rather than duplicating the workspace page's renderers. */
 const PanelSchema = v.variant('status', [
   v.object({ status: v.literal('ok'), value: JsonValueSchema }),
   v.object({ status: v.literal('failed'), reason: v.string() }),
@@ -124,9 +98,7 @@ export type Panel = v.InferOutput<typeof PanelSchema>;
 
 const WorkspaceDetailSchema = v.object({
   workspace: v.string(),
-  /** The account the server resolved this read through. Every action button
-   *  binds to THIS, not to the address bar, so a control can only act on the
-   *  pair the read already proved. */
+  /** Action buttons bind to this, not the address bar, so a control acts only on the pair the read proved. */
   userId: v.string(),
   runs: PanelSchema,
   activity: PanelSchema,
@@ -139,16 +111,7 @@ const WorkspaceDetailSchema = v.object({
 
 export type WorkspaceDetail = v.InferOutput<typeof WorkspaceDetailSchema>;
 
-/**
- * The two panels the drilldown renders as ROWS rather than as raw JSON, because
- * they are the two an operator ACTS on.
- *
- * Narrow on purpose: each names exactly the fields a row and its buttons need,
- * and valibot ignores the rest, so the orchestrator can add a field without this
- * page caring. Declared here beside the other row schemas rather than in the
- * component, because everything the browser parses off this plane is parsed in
- * one module.
- */
+/** The two panels an operator acts on, rendered as rows. Narrow on purpose: valibot ignores extra fields. */
 export const BackgroundJobRowSchema = v.object({
   id: v.string(),
   kind: v.string(),
@@ -157,10 +120,7 @@ export const BackgroundJobRowSchema = v.object({
   error: v.nullable(v.string()),
   createdAt: v.number(),
   settledAt: v.nullable(v.number()),
-  // OPTIONAL, both of them, and that is a contract rather than laziness: this
-  // page parses answers from an orchestrator it does not deploy with, so a
-  // required field here would make every older workspace's job panel render
-  // "the control plane answered in a shape this page cannot read".
+  // Optional by contract: this page parses answers from orchestrators it does not deploy with.
   resumeAttempts: v.optional(v.number()),
   resumeAfter: v.optional(v.nullable(v.number())),
 });
@@ -179,10 +139,7 @@ export const DeferredApprovalRowSchema = v.object({
 
 export type DeferredApprovalRow = v.InferOutput<typeof DeferredApprovalRowSchema>;
 
-/** Read a settled panel as typed rows, or answer `null` when it is down or in a
- *  shape this page does not know. `null` is the honest answer for both: the
- *  panel still renders its own reason, and a row view that invented an empty
- *  list would say "no jobs" about a workspace whose job list failed to load. */
+/** `null` when down or unknown-shaped: an invented empty list would say "no jobs" about a failed load. */
 export function panelRows<Row>(
   panel: Panel, schema: v.GenericSchema<Row>,
 ): Row[] | null {
@@ -192,10 +149,7 @@ export function panelRows<Row>(
   return parsed.success ? parsed.output : null;
 }
 
-/** What a drilldown page did about the index it is showing. Three states, not a
- *  boolean: "reconciled", "the registry could not be read" and "page four of a
- *  walk that reconciled at page one" are three different things to tell an
- *  operator who is deciding whether to remove a workspace. */
+/** Three states (reconciled, registry unreadable, reconciled on an earlier page), not a boolean. */
 const ReconcileSchema = v.variant('status', [
   v.object({ status: v.literal('ok') }),
   v.object({ status: v.literal('failed'), reason: v.string() }),
@@ -240,16 +194,9 @@ export type ActionAnswer = v.InferOutput<typeof ActionAnswerSchema>;
 
 export type { ControlAction, JsonValue };
 
-/* ── The transport ───────────────────────────────────────────────────────── */
-
 /**
- * A control-plane request's answer, or why there is none.
- *
- * The admin surface answers 404 to a non-operator on purpose, so the client has
- * to keep "you are not an operator" apart from "that record does not exist" —
- * and the page renders the first as a sentence rather than as an empty table.
- * Collapsing them into a thrown error would make the page show "no users" to
- * somebody who simply is not allowed to ask.
+ * The admin surface answers 404 to non-operators, so "not an operator" stays apart from "no such record";
+ * throwing would show "no users" to someone not allowed to ask.
  */
 export type ControlAnswer<Value> =
   | { status: 'ok'; value: Value }
@@ -258,9 +205,6 @@ export type ControlAnswer<Value> =
   | { status: 'unconfigured'; reason: string }
   | { status: 'failed'; reason: string };
 
-/** What a control call sets beyond its path. The content type is this client's
- *  own — every route here speaks JSON both ways — so a caller names only the
- *  method and the serialized body. */
 interface ControlRequest {
   method?: string;
   body?: string;
@@ -283,9 +227,7 @@ async function control<Schema extends v.GenericSchema>(
 
     return parsed.success
       ? { status: 'ok', value: parsed.output }
-      // Named rather than thrown: a body this client cannot read is a version
-      // skew between the page and the Worker, and saying so is more useful than
-      // an exception with a valibot path in it.
+      // A body this client cannot read is page/Worker version skew; say so rather than throw a valibot path.
       : { status: 'failed', reason: 'the control plane answered in a shape this page cannot read' };
   }
 
@@ -303,7 +245,6 @@ async function control<Schema extends v.GenericSchema>(
   return { status: 'failed', reason };
 }
 
-/** Build a `?cursor=&limit=` query from a cursor the previous page returned. */
 function pageQuery(cursor: string | null, limit?: number): string {
   const params = new URLSearchParams();
 
@@ -325,9 +266,7 @@ export function fetchUsers(
   return control(pageSchema(ControlUserRowSchema), `/users${pageQuery(cursor, limit)}`);
 }
 
-/** One account's profile plus a PAGE of the workspaces it owns. Cursored like
- *  every other list here: an account with more than the page ceiling had every
- *  row past it unreachable while the page said the table was reconciled. */
+/** Cursored: rows past the page ceiling must stay reachable. */
 export function fetchUserDetail(
   userId: string, cursor: string | null = null, limit?: number,
 ): Promise<ControlAnswer<UserDetail>> {
@@ -337,8 +276,7 @@ export function fetchUserDetail(
   );
 }
 
-/** Which workspaces a list should carry. Mirrors the store's own filter so the
- *  query string and the store agree on what an absent `userId` means. */
+/** Mirrors the store's filter so both agree on what an absent `userId` means. */
 export interface WorkspaceListQuery {
   cursor?: string | null;
   limit?: number;
@@ -366,9 +304,7 @@ export function fetchWorkspaces(
   );
 }
 
-/** One workspace, named by the account that owns it. The `userId` is required
- *  because a workspace name is unique inside one UserDO and `OrchestratorAgent`
- *  is addressed globally — the pair is the address, the name alone is a guess. */
+/** `userId` is required: names are unique only per UserDO and `OrchestratorAgent` is addressed globally. */
 export function fetchWorkspaceDetail(
   userId: string, name: string,
 ): Promise<ControlAnswer<WorkspaceDetail>> {
@@ -397,8 +333,7 @@ export function fetchAudit(
 export function fetchMetrics(
   hours: number,
   workspace?: string,
-  /** Re-run the queries rather than answering from the 30-second batch cache.
-   *  The view's refresh button is the one caller. */
+  /** Bypass the batch cache; the view's refresh button is the one caller. */
   refresh?: boolean,
 ): Promise<ControlAnswer<ControlMetrics>> {
   const params = new URLSearchParams({ hours: String(hours) });
@@ -410,13 +345,7 @@ export function fetchMetrics(
   return control(ControlMetricsSchema, `/metrics?${params.toString()}`);
 }
 
-/**
- * Run one admin action.
- *
- * A `stale-auth` answer is the expected path rather than an error: the step-up
- * window is five minutes and an operator who left the tab open will hit it, so
- * the page turns it into "sign in again" instead of a red box.
- */
+/** `stale-auth` is expected (step-up window lapses with the tab open); the page turns it into "sign in again". */
 export function runAction(action: ControlAction): Promise<ControlAnswer<ActionAnswer>> {
   return control(ActionAnswerSchema, '/actions', {
     method: 'POST', body: JSON.stringify(action),

@@ -10,8 +10,6 @@ import slateVendor from 'virtual:kinu-slate-vendor';
 import { slateCredentialKey } from './bindings';
 import { SLATE_CLIENT_MODULE, SLATE_SERVER_MODULE } from '@kinu.run/core/slates';
 
-/** The bundle texts a booted slate serves — `client` and `shell` only when
- *  the slate declares a browser surface. */
 export interface SlateBootArtifacts {
   application: string;
   client?: string;
@@ -22,7 +20,6 @@ export interface ResidentSlateProcess extends SlateProcess {
   /** The port the durable application listens on; null for a caller's private process, which is reached by RPC alone. */
   readonly port: number | null;
   request(request: Request): Promise<Response>;
-  /** The browser's WebSocket upgrade against the process's own entrypoint. */
   connect(request: Request): Promise<Response>;
   /** The method names `startProcess` published — the forwarder's allow list. */
   readonly methods: readonly string[];
@@ -31,27 +28,17 @@ export interface ResidentSlateProcess extends SlateProcess {
 
 export interface ResidentSlateDeps {
   session: () => Promise<Pick<WorkspaceSession, 'vfs' | 'processes'>>;
-  /**
-   * The workspace's one facet manager: every resident spawn goes through its
-   * `spawnWorker`, which journals a durable application's launch, binds its
-   * reserved port and re-adopts the port's capability, and every end of life
-   * goes through its `kill`, the one owner of a resident's teardown.
-   */
+  /** Every resident spawn goes through its `spawnWorker` and every teardown through its `kill`. */
   facetManager: () => Promise<ComposedFacetManager>;
 }
 
 export interface ResidentSlateBoot {
   readonly key: string;
-  /** Logical identity independent of source revision and process incarnation: the slate id. */
+  /** The slate id, independent of source revision and process incarnation. */
   readonly owner: string;
   readonly root: string;
   readonly project: SlateProject;
-  /**
-   * Set when this process IS the slate's durable application: it binds the
-   * reserved port and boots into the facet pinned for the owner, whose SQLite
-   * is kept across every launch. Null spawns a private process — no port, an
-   * ephemeral facet wiped on release.
-   */
+  /** Set for the durable application (reserved port, owner-pinned facet whose SQLite persists); null spawns a private ephemeral process. */
   readonly app: { readonly port: number } | null;
   /** Whose file plane compiles the authored tree: the caller's, never the origin's on its behalf. */
   readonly cred: VfsCred;
@@ -60,8 +47,7 @@ export interface ResidentSlateBoot {
   readonly globalOutbound: Fetcher | null;
 }
 
-/** Kernel-owned runtime files every slate's VFS holds, written only when the
- *  bytes differ so a start never churns the file ledger. */
+/** Written only when the bytes differ, so a start never churns the file ledger. */
 const RUNTIME_FILES = {
   'server.js': SLATE_SERVER_MODULE,
   'react-stub.js': slateVendor.reactStub,
@@ -69,18 +55,11 @@ const RUNTIME_FILES = {
 
 const RUNTIME_DIR = '/usr/lib/kinu/slate';
 
-/** The dynamic worker's main module — `slateRunnerSource`'s text, booted by name. */
 const MAIN_MODULE = 'runner.js';
 
-/** The authored bundle's module, the other half of a durable launch's image. */
 const APPLICATION_MODULE = 'application.js';
 
-/** The ES module text of `runner.js`, the dynamic worker's main module. Its
- *  `vfsTextModules` siblings — `application.js`, `capnweb.js`, `server.js`,
- *  `react-stub.js`, `vendor.js` — arrive content-addressed; only this text
- *  is generated. Exported because the runner's own contract — a re-created
- *  instance starts its process before it serves — is asserted on the module
- *  text itself. */
+/** The generated `runner.js`; exported because its contract (a re-created instance starts before it serves) is asserted on the text. */
 export function slateRunnerSource(assets: readonly { readonly path: string; readonly contents: string }[], shell: string | undefined): string {
   const raw: Record<string, { body: string; immutable: boolean }> = {};
 
@@ -122,10 +101,7 @@ export function slateRunnerSource(assets: readonly { readonly path: string; read
     '  "/__kinu/capnweb.js": { body: capnweb, immutable: true },',
     '  "/__kinu/slate.js": { body: slateClient, immutable: true },',
     '});',
-    // The invocation is async context, not a parameter: a binding is a method's
-    // to call while the method runs, and only there. `undefined` is "no method
-    // running" (module top level, the constructor, a stray timer); `null` is
-    // the root lineage the browser socket and uninvoked fetch run under.
+    // Invocation is async context: `undefined` means no method is running; `null` is the root lineage.
     'const invocations = new AsyncLocalStorage();',
     'function bindingProxy(name, stub, needsInvocation) {',
     '  return new Proxy(Object.create(null), {',
@@ -143,9 +119,7 @@ export function slateRunnerSource(assets: readonly { readonly path: string; read
     '    },',
     '  });',
     '}',
-    // The reserved `__storage` stub answers the slate's own KV. Storage needs
-    // no lineage — the rows are this slate's own either way — so it passes the
-    // root invocation always and unwraps the { value } envelope on get.
+    // `__storage` needs no lineage, so it always passes the root invocation.
     'function storageProxy(stub) {',
     '  return Object.freeze({',
     '    get: async (key) => {',
@@ -172,12 +146,8 @@ export function slateRunnerSource(assets: readonly { readonly path: string; read
     'export class NimbusProcess extends DurableObject {',
     '  #slate;',
     '  #forwarder;',
-    // The process is this instance's own state: the platform can re-create the
-    // object under an already-"running" process row (eviction, re-drive), and
-    // spawn's one startProcess call belongs to the instance it ran on. Every
-    // request path therefore starts through the memo — the spawn call and a
-    // first fetch share one boot; a failed boot clears it so the next request
-    // retries rather than serving a stale refusal forever.
+    // The platform can re-create the object under a "running" process row, so every request starts through
+    // this memo; a failed boot clears it so the next request retries.
     '  #started;',
     '  constructor(ctx, env) { super(ctx, env); }',
     '  startProcess() { return this.#ensureStarted(); }',
@@ -218,12 +188,7 @@ export function slateRunnerSource(assets: readonly { readonly path: string; read
     '        .join(", ");',
     '      return { ok: false, error: "package.json main must export class Slate extends SlateObject from kinu:slate (the Slate export or the default export); found " + (found === "" ? "no exports at all" : found) };',
     '    }',
-    // `__storage` is the runner's own handle on the reserved binding, never
-    // part of the guest's binding map: the slate reaches it as `this.storage`.
-    // `__host` is the process's channel back to its host — likewise reserved.
-    // `PORT` and `NIMBUS_APP` are the strings the facet manager stamps on a
-    // durable launch's env for a server that reads them; a slate binds no
-    // port of its own, so neither is a binding it declared.
+    // `__storage` and `__host` are reserved; string env values (`PORT`, `NIMBUS_APP`) are not bindings.
     '    const env = {};',
     '    for (const [name, stub] of Object.entries(this.env)) {',
     '      if (name === "__storage" || name === "__host" || typeof stub !== "object") continue;',
@@ -274,16 +239,12 @@ export function slateRunnerSource(assets: readonly { readonly path: string; read
     '  }',
     '  async respond(request) {',
     '    const started = await this.#ensureStarted();',
-    // A start that failed is retried by the next request (the memo cleared
-    // itself); THIS request reports it the way the host's previewUnavailable
-    // does — the failure is the slate's, not the route's.
     '    if (!started.ok) return Response.json({ reason: started.error, error: started.error }, { status: 503, headers: { "cache-control": "no-store", "retry-after": "3", "x-slate-runner": "start-failed" } });',
     '    const url = new URL(request.url);',
     '    const path = url.pathname;',
     '    if (path === "/__rpc") {',
     '      if (request.headers.get("upgrade")?.toLowerCase() === "websocket") {',
-    // The socket session's invocation rides `x-slate-call` — one invocation,
-    // held by this process until `release`, not settled when the 101 returns.
+    // The socket's invocation is held until `release`, not settled when the 101 returns.
     '        const invocation = request.headers.get("x-slate-call");',
     '        const pair = new WebSocketPair();',
     '        const server = pair[0];',
@@ -326,9 +287,6 @@ function escapeHtml(text: string): string {
   return text.replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;').replaceAll('"', '&quot;');
 }
 
-/** The HTML the slate root serves: the import map every external specifier
- *  in the client bundle resolves through, the root element `mount` renders
- *  into, and one link per emitted stylesheet. */
 function slateShell(input: { readonly title: string; readonly assets: readonly { readonly path: string }[] }): string {
   const styles = input.assets
     .filter((asset) => asset.path.endsWith('.css'))
@@ -375,9 +333,7 @@ async function compileSlate(bundler: EsbuildService, entry: string, options: Par
   }
 }
 
-/** Where each bare specifier the server bundle keeps lands in the dynamic
- *  worker's module map — map keys must end `.js`, so `kinu:slate` and `react`
- *  cannot be map names; the emitted imports are rewritten onto these paths. */
+/** Module-map keys must end `.js`, so kept bare specifiers are rewritten onto these paths. */
 const SERVER_MODULE_PATHS = {
   'kinu:slate': './server.js',
   'react': './react-stub.js',
@@ -386,8 +342,6 @@ const SERVER_MODULE_PATHS = {
   'capnweb': './capnweb.js',
 } as const;
 
-/** `startProcess`'s payload: `ok` on boot, `error` when the authored module
- *  fails the class contract, `methods` the callable surface it published. */
 const StartedResult = v.object({ ok: v.literal(false), error: v.string() });
 
 const StartedSurface = v.object({ ok: v.literal(true), methods: v.array(v.string()) });
@@ -402,9 +356,7 @@ function isMappedSpecifier(specifier: string): specifier is keyof typeof SERVER_
   return specifier in SERVER_MODULE_PATHS;
 }
 
-/** Where a captured specifier lands. Both patterns are built from the map's own
- *  keys, so a capture the map cannot answer means the two have been edited
- *  apart — a rewrite that guessed a path would emit an import of nothing. */
+/** A capture the map cannot answer means the patterns and map drifted apart; never guess a path. */
 function mappedModulePath(specifier: string): string {
   if (!isMappedSpecifier(specifier)) {
     throw new KinuError('unsupported', `Slate bundle imports ${specifier}, which the module map does not name`);
@@ -413,9 +365,7 @@ function mappedModulePath(specifier: string): string {
   return SERVER_MODULE_PATHS[specifier];
 }
 
-/** Point the application bundle's surviving bare imports at the module-map
- *  paths above. Anchored to statement position so a quoted `kinu:slate` inside
- *  authored data is never rewritten. */
+/** Anchored to statement position so a quoted `kinu:slate` in authored data is never rewritten. */
 function rewriteModuleSpecifiers(source: string): string {
   return source
     .replace(STATIC_SPECIFIER, (_match, head: string, quote: string, specifier: string) => `${head}${quote}${mappedModulePath(specifier)}${quote}`)
@@ -424,9 +374,7 @@ function rewriteModuleSpecifiers(source: string): string {
 
 export class ResidentSlateProcesses {
   private readonly bundlers = new Map<string, EsbuildService>();
-  /** The image digests each process this activation started still names,
-   *  by pid: the set a sweep keeps beside the boot it is running for. A
-   *  restart the manager drives from its recipe reads these paths again. */
+  /** Image digests per pid that a sweep must keep; a manager-driven restart reads these paths again. */
   private readonly imagesInUse = new Map<number, ReadonlySet<string>>();
 
   constructor(private readonly deps: ResidentSlateDeps) {}
@@ -450,12 +398,8 @@ export class ResidentSlateProcesses {
 
     this.provisionRuntimeFiles(session);
 
-    // The entries esbuild opens are kernel-generated files under the runtime
-    // directory — NEVER inside the slate root, where they would surface in
-    // authored listings, snapshots, restores and revision bumps. Absolute
-    // imports reach back into the authored tree. The client entry is always
-    // generated: it wraps the default export in `mount` even when the same
-    // file is main and browser. Named by the slate id — the root's basename.
+    // Generated entries live under the runtime dir, never the slate root, where they would surface in listings,
+    // snapshots and revision bumps.
     const slateId = input.root.slice(input.root.lastIndexOf('/') + 1);
     const entriesDir = `${RUNTIME_DIR}/entries/${slateId}`;
     const kernelVfs = session.vfs.as(CRED_KERNEL);
@@ -473,9 +417,7 @@ export class ResidentSlateProcesses {
     let serverEntry = `${input.root}/${main}`;
 
     if (browser === main) {
-      // One file authored for both runtimes: the server entry picks out only
-      // the class, so the client-only half of that file never reaches the
-      // server bundle's class-contract check.
+      // Re-export only the class so the file's client half never reaches the server bundle.
       serverEntry = `${entriesDir}/server.js`;
       provision('server.js', `export { Slate } from "${input.root}/${main}";\n`);
     }
@@ -489,10 +431,7 @@ export class ResidentSlateProcesses {
 
     const server = await compileSlate(bundler, serverEntry, {
       bundle: true, format: 'esm', platform: 'neutral', outfile: '/application.js',
-      // `kinu:slate`, `react*` and `capnweb` stay imports in the bundle and
-      // arrive as same-named dynamic-worker modules — the nimbus-vfs resolver
-      // sees a specifier before esbuild ever applies `alias`, so an alias here
-      // could never land.
+      // Not `alias`: the nimbus-vfs resolver sees a specifier before esbuild applies it.
       external: ['cloudflare:*', 'node:*', 'capnweb', 'kinu:slate', 'react', 'react-dom/client', 'react/jsx-runtime'],
       tsconfigRaw: JSON.stringify({ compilerOptions: { jsx: 'react-jsx', jsxImportSource: 'react' } }),
     });
@@ -507,8 +446,6 @@ export class ResidentSlateProcesses {
     if (clientEntry !== undefined) {
       const client = await compileSlate(bundler, clientEntry, {
         bundle: true, format: 'esm', platform: 'browser', outfile: '/__kinu/client.js',
-        // `kinu:slate` stays an import in the client bundle; the shell's
-        // import map resolves it to /__kinu/slate.js.
         external: ['react', 'react-dom/client', 'react/jsx-runtime', 'capnweb', 'kinu:slate'],
         tsconfigRaw: JSON.stringify({ compilerOptions: { jsx: 'react-jsx', jsxImportSource: 'react' } }),
       });
@@ -520,8 +457,6 @@ export class ResidentSlateProcesses {
 
     const modules = {
       [MAIN_MODULE]: slateRunnerSource(assets, shell),
-      // The application bundle's surviving bare specifiers are rewritten onto
-      // these module-map paths — the map's names must end `.js`.
       [APPLICATION_MODULE]: rewriteModuleSpecifiers(application.contents),
       'capnweb.js': slateVendor.capnwebWorkers,
       'server.js': SLATE_SERVER_MODULE,
@@ -529,11 +464,7 @@ export class ResidentSlateProcesses {
       'vendor.js': `export const react = ${JSON.stringify(slateVendor.react)};\nexport const capnweb = ${JSON.stringify(slateVendor.capnweb)};\nexport const slateClient = ${JSON.stringify(SLATE_CLIENT_MODULE)};\n`,
     };
 
-    // Every module but the main one travels by VFS path: the manager's own
-    // loader reads each as the kernel at the content-addressed path fabric
-    // names, verifying the bytes against the digest in the name. The texts
-    // are written here, kernel-owned, once per digest — a restart of the same
-    // source resolves to the images already there.
+    // Non-main modules travel by content-addressed VFS path; the loader verifies bytes against the digest.
     const images: Record<string, string> = {};
     const textModules: Record<string, string> = {};
     kernelVfs.mkdir(`/${FACET_IMAGE_DIR}`, { recursive: true, mode: 0o755 });
@@ -550,10 +481,6 @@ export class ResidentSlateProcesses {
 
     const manager = (await this.deps.facetManager()).manager;
 
-    // A durable application's launch is journalled under its owner with the
-    // digests of the two images it was built from; the manager binds the
-    // reserved port and re-adopts the capability the URL carries. A private
-    // process is plain: no port, no journal, an ephemeral facet.
     const launch: LongRunningWorkerSpawnOptions = {
       mainModule: MAIN_MODULE,
       compatibilityDate: '2025-12-01',
@@ -564,8 +491,6 @@ export class ResidentSlateProcesses {
     };
 
     if (input.app !== null) {
-      // The two images a durable launch is journalled by: a slate without its
-      // runner or its application module has nothing to re-drive from.
       const runner = images[MAIN_MODULE];
       const applicationImage = images[APPLICATION_MODULE];
 
@@ -579,8 +504,6 @@ export class ResidentSlateProcesses {
     const spawned = await manager.spawnWorker(modules[MAIN_MODULE], `slate ${slateId}`, input.root, launch);
 
     const pid = spawned.pid;
-    // The runner reports the authored surface's contract violation as data,
-    // and on success publishes the callable method list the host pre-checks.
     const refusal = v.safeParse(StartedResult, spawned.boot);
     const surface = v.safeParse(StartedSurface, spawned.boot);
 
@@ -594,9 +517,7 @@ export class ResidentSlateProcesses {
     const methods = surface.output.methods;
 
     session.processes.setTerminator(pid, () => {
-      // The one door a resident leaves by: whoever ends the pid is on the
-      // stack here, which is what the event records. The teardown itself is
-      // the manager's, which released the process before terminating it.
+      // Every resident exit passes here; the stack records who ended the pid.
       diagnostics.event('slate.resident.terminated', {
         pid, owner: input.owner, port: input.app?.port ?? 0,
         state: session.processes.get(pid)?.state ?? 'absent',
@@ -604,7 +525,6 @@ export class ResidentSlateProcesses {
       });
     });
 
-    // The bundle texts this boot serves, so callers can read the real bytes.
     const artifacts: SlateBootArtifacts = { application: modules[APPLICATION_MODULE] };
     const clientBundle = assets.find((asset) => asset.path === '/__kinu/client.js');
 
@@ -613,13 +533,7 @@ export class ResidentSlateProcesses {
       artifacts.shell = shell;
     }
 
-    // The images this boot wrote are kernel-owned files that nothing else
-    // sweeps: fabric's own sweep covers only images it persisted itself, and
-    // `application.js` changes with every source edit, so a workspace that
-    // iterates on a slate accumulated one image per edit for the life of its
-    // SQLite. Swept here, after a boot that succeeded, keeping what every
-    // process this activation started still names — a re-drive after a
-    // hibernation rewrites its images through this same boot.
+    // Nothing else sweeps these images (fabric sweeps only its own), and every source edit writes a new one.
     this.imagesInUse.set(pid, new Set(Object.values(images)));
     this.sweepFacetImages(kernelVfs);
 
@@ -632,10 +546,6 @@ export class ResidentSlateProcesses {
     };
   }
 
-  /** Remove every facet image no process this activation started still
-   *  names. Content-addressed, so a boot of the same source finds its images
-   *  in place and an edited source's old image goes with the process that
-   *  ran it. */
   private sweepFacetImages(kernelVfs: ReturnType<WorkspaceSession['vfs']['as']>): void {
     const keep = new Set<string>();
 
@@ -648,8 +558,6 @@ export class ResidentSlateProcesses {
     }
   }
 
-  /** The kernel-owned `kinu:slate` modules every slate's VFS carries. Written
-   *  as CRED_KERNEL with fixed modes, only when the bytes differ. */
   private provisionRuntimeFiles(session: Pick<WorkspaceSession, 'vfs' | 'processes'>): void {
     const vfs = session.vfs.as(CRED_KERNEL);
 

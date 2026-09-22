@@ -1,11 +1,5 @@
-// The unified remote-RPC policy: ONE table (AGENT_RPC_ACCESS) names every
-// remotely invokable agent method and its credential class, and BOTH
-// transports enforce it — the websocket frame gate here, the HTTP
-// /workspaces/:name/rpc dispatcher in cli/routes.ts. Regression for the
-// scope-model bypass where every @callable (consent self-approval, approval
-// mode, config, fork) was reachable from an exec-scoped CI token, and for the
-// pre-unification drift where the REST router and the websocket gate kept two
-// mirrored copies of the scope policy.
+// One table (AGENT_RPC_ACCESS) names every remotely invokable agent method and its credential class, and both
+// transports enforce it: the websocket frame gate here and the /workspaces/:name/rpc dispatcher in cli/routes.ts.
 import { describe, expect, test } from 'bun:test';
 import * as v from 'valibot';
 import { readdirSync, readFileSync } from 'node:fs';
@@ -143,9 +137,7 @@ describe('rpc gate on scoped connections', () => {
       'latestAlternateTakes', 'listFileCheckpoints', 'listMounts', 'planFileRestore',
     ] as const) {
       expect(AGENT_RPC_ACCESS[method]).toBe('interactive');
-      // Denied to a read-only token (the regression this guards) AND to a
-      // read+exec token (the strict, non-widening approximation of the old
-      // "needs read allowlist + exec to open the socket" requirement).
+      // Denied to read-only and read+exec tokens: the strict, non-widening class.
       expect(rejectOutOfScopeRpc([scopeTag('workspace.read')], rpcFrame(method))).not.toBeNull();
       expect(rejectOutOfScopeRpc(READ_EXEC, rpcFrame(method))).not.toBeNull();
     }
@@ -174,12 +166,8 @@ describe('rpc gate on scoped connections', () => {
   });
 
   test('instruction-trust RPCs are interactive-only — a scoped token cannot grant system placement', () => {
-    // KINU-N028's whole point is that agent-written bytes cannot authorise
-    // themselves. Approving is what grants those bytes system placement, so
-    // classing it 'workspace.write' (or the listing 'workspace.read') would
-    // hand a CI token — or anything that reached one — the ability to promote a
-    // file the agent just wrote. The listing is interactive too because it
-    // carries file content previews.
+    // KINU-N028: agent-written bytes cannot authorise themselves, so approving (and the listing, which previews
+    // content) is interactive rather than a CI-reachable workspace scope.
     expect(AGENT_RPC_ACCESS.approveInstruction).toBe('interactive');
     expect(AGENT_RPC_ACCESS.revokeInstruction).toBe('interactive');
     expect(AGENT_RPC_ACCESS.listInstructionApprovals).toBe('interactive');
@@ -199,9 +187,7 @@ describe('wiring invariants (edge → ticket → DO, one policy table)', () => {
     expect(server).toContain('next.delete(CLI_SCOPES_HEADER)');
     expect(server).toContain('next.set(CLI_SCOPES_HEADER, identity.cliScopes');
     expect(server).toContain('if (verified.scopes) identity.cliScopes = verified.scopes');
-    // Tickets remain scoped to one workspace. They admit its root and one
-    // hosted actor beneath it, but never a nested or foreign namespace — a
-    // `/sub/` hop names nothing.
+    // Tickets admit the root and one hosted actor beneath it; a `/sub/` hop names nothing.
     expect(extractTicketOrchestratorAgentName('/agents/orchestrator-agent/workspace')).toBe('workspace');
     expect(extractTicketOrchestratorAgentName(
       '/agents/orchestrator-agent/workspace/actor/researcher',
@@ -233,9 +219,7 @@ describe('wiring invariants (edge → ticket → DO, one policy table)', () => {
     const routes = source('src/cli/routes.ts');
     expect(routes).toContain("from './rpc-gate'");
     expect(routes).toContain('requiredRpcAccess(');
-    // The old mirrored copies are gone: no per-agent-method scope map may
-    // exist outside rpc-gate.ts (the catch-all GET /workspaces/:name/*
-    // read rule was that mirror on the REST side).
+    // No per-agent-method scope map may exist outside rpc-gate.ts.
     expect(routes).not.toContain('SCOPED_RPC_ALLOWLIST');
     expect(routes).not.toContain(String.raw`/^\/workspaces\/[^/]+\/[^/]+/`);
   });
@@ -248,13 +232,10 @@ describe('wiring invariants (edge → ticket → DO, one policy table)', () => {
 });
 
 describe('the table is the CLI dispatch allowlist, not documentation', () => {
-  // cli/routes.ts dispatches ONLY the keys of AGENT_RPC_ACCESS, so an
-  // orchestrator @callable the CLI calls but the table omits is a command that
-  // fails against every cloud workspace while passing every local test. Found
-  // exactly that way once, for the outcome-calibration RPCs.
+  // cli/routes.ts dispatches only AGENT_RPC_ACCESS keys, so a @callable the CLI calls but the table omits
+  // fails against every cloud workspace while passing every local test.
   const CLI_SRC = join(root, '../cli/src');
 
-  /** Method names the CLI passes to an `…Rpc(…)` call, anywhere in its source. */
   function cliInvokedNames(): string[] {
     const files = readdirSync(CLI_SRC, { recursive: true, encoding: 'utf8' })
       .filter((file) => file.endsWith('.ts') || file.endsWith('.tsx'));
@@ -272,7 +253,6 @@ describe('the table is the CLI dispatch allowlist, not documentation', () => {
     return [...names];
   }
 
-  /** Every @callable on the orchestrator — the only names that are RPCs at all. */
   function orchestratorCallables(): Set<string> {
     return new Set([...source('src/orchestrator.ts')
       .matchAll(/@callable\([^)]*\)\s*(?:async\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*\(/g)]
@@ -287,8 +267,6 @@ describe('the table is the CLI dispatch allowlist, not documentation', () => {
   });
 
   test('the calibration flow is reachable at the class each step needs', () => {
-    // Reads of turn text and of the report; the write is an owner action and
-    // stays interactive, like every other mutation here.
     expect(AGENT_RPC_ACCESS.getOutcomeCalibration).toBe('workspace.read');
     expect(AGENT_RPC_ACCESS.sampleOutcomeLabeling).toBe('workspace.read');
     expect(AGENT_RPC_ACCESS.recordOutcomeLabeling).toBe('interactive');
@@ -296,8 +274,7 @@ describe('the table is the CLI dispatch allowlist, not documentation', () => {
   });
 
   test('reading the judge panel is a read; running it is not', () => {
-    // Running it spends the owner's model budget across two providers and
-    // writes verdicts, so it sits with the mutations rather than the reports.
+    // It spends the owner's model budget and writes verdicts, so it sits with the mutations.
     expect(AGENT_RPC_ACCESS.getOutcomeEnsemble).toBe('workspace.read');
     expect(AGENT_RPC_ACCESS.runOutcomeEnsemble).toBe('interactive');
     expect(rejectOutOfScopeRpc(READ_EXEC, rpcFrame('runOutcomeEnsemble'))).not.toBeNull();

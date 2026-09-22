@@ -1,14 +1,5 @@
-// The dynamic-context planes only the orchestrator's own stores can answer —
-// its subordinate roster and the two kinds of decision parked on the user —
-// rendered through the ONE shared assembler, not a backend splice.
-//
-// There is no override that hand-splices `delegates`/`approvals` over the
-// result of `collectDynamicContext`: the extras ride typed source callbacks
-// into the assembler itself. Splicing them on afterwards is what makes a plane
-// added to the shared assembler not exist for an actor that does not re-splice
-// it, and leaves the approvals plane unreachable on anything but the
-// orchestrator — the exact drift the shared assembler exists to close. What is
-// pinned here is that the assembled block actually carries them.
+// Roster and parked-decision planes ride typed source callbacks into the one shared assembler; a backend
+// splice after `collectDynamicContext` would drop planes for actors that do not re-splice.
 import { describe, expect, test } from 'bun:test';
 import { DeferredApprovalStore, formatApproval } from '@kinu.run/core';
 import { orchestratorHarness, type ActorHarness, type HarnessOrchestratorAgent } from './helpers/actor-harness';
@@ -53,8 +44,7 @@ describe('the orchestrator dynamic context reads its own planes', () => {
   test('a raised device consent waits on the user in the block', async () => {
     const agent = harness().agent;
 
-    // The prompt is observable before its owner answers. Settle the caller's
-    // promise afterward so this fixture does not leave work detached.
+    // Settle the caller's promise afterward so this fixture leaves no work detached.
     const consent = agent.awaitDeviceConsent({
       deviceId: 'dev-1',
       deviceLabel: 'device',

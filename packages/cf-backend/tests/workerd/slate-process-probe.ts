@@ -17,11 +17,8 @@ import { ResidentSlateProcesses, type ResidentSlateProcess } from '../../src/sla
 import { slateBatchStub } from '../../src/slates/rpc-transport';
 import { codemodeEgress } from '../../src/codemode-egress';
 
-/**
- * Stands in for the host's binding entrypoint, using the host's OWN resolution
- * so this probe cannot pass while `SlateHost` would refuse: it holds the same
- * `invocation -> { id, chain }` record and calls `issuedSlateInvocation`.
- */
+/** Uses the host's own `issuedSlateInvocation`, so this probe cannot pass while `SlateHost`
+ *  would refuse. */
 export class SlateChainProbe extends WorkerEntrypoint {
   async call(member: string, args: JsonValue[], invocation: string | null): Promise<SlateCallResult> {
     const project = parseSlateProject({ main: 'server.ts', slate: { bindings: { PEER: { kind: 'app', id: 'peer' } } } });
@@ -55,7 +52,6 @@ const DEFAULT_SLATE_SOURCE = [
   '}',
 ].join('\n');
 
-/** What a probe run varies about the authored slate it boots. */
 interface SlateStart {
   readonly source?: string;
   readonly bindChain?: boolean;
@@ -66,12 +62,9 @@ interface SlateStart {
 }
 
 export class SlateProcessProbeDO extends DurableObject<Cloudflare.Env> {
-  /** The live app invocations, exactly as `SlateHost` keeps them. Static
-   *  because `SlateChainProbe` answers outside this object. */
+  /** Static because `SlateChainProbe` answers outside this object. */
   static readonly invocations = new Map<string, SlateInvocation>();
 
-  /** The probe DO's own `slate_state` rows — the same table the workspace
-   *  object's schema carries, so the KV path is real. */
   private readonly state = new SqliteSlateStateStore(this.ctx.storage.sql);
 
   private readonly vfs = new SqliteVFS(this.ctx.storage.sql, this.ctx);
@@ -93,12 +86,8 @@ export class SlateProcessProbeDO extends DurableObject<Cloudflare.Env> {
     initSlateStateTable((ddl: string) => ctx.storage.sql.exec(ddl));
   }
 
-  /** The reserved `__storage` arm. A WorkerEntrypoint runs in the CALLER's
-   *  request context, where this DO's `ctx.storage` is not usable — the exact
-   *  I/O-context error the real binding path never sees because `SlateHost`
-   *  answers inside the workspace object's own call. So `__storage` binds this
-   *  DO's own stub and `call` routes by member name, validated by the same
-   *  `routeSlateStorageCall`. */
+  /** A WorkerEntrypoint runs in the caller's request context, where this DO's `ctx.storage` is
+   *  unusable: `__storage` binds this DO's own stub and routes via `routeSlateStorageCall`. */
   private storageCall(member: string, args: JsonValue[]): SlateCallResult {
     try {
       const operation: SlateStorageOp = routeSlateStorageCall({ member, args, invocation: null });
@@ -121,8 +110,7 @@ export class SlateProcessProbeDO extends DurableObject<Cloudflare.Env> {
     }
   }
 
-  /** `__storage`'s stub calls `call(member, args, invocation)`; the tests call
-   *  `call(method, args, chain)` — the third parameter tells them apart. */
+  /** The third parameter tells `__storage`'s stub calls apart from the tests' calls. */
   async call(member: string, args: JsonValue[], invocation: string | null): Promise<SlateCallResult>;
   async call(method: string, args?: JsonValue[], chain?: string[]): Promise<{ ok: true; value: string } | { ok: false; error: string }>;
   async call(member: string, args: JsonValue[] = [], third: string | null | string[] = []) {
@@ -131,13 +119,6 @@ export class SlateProcessProbeDO extends DurableObject<Cloudflare.Env> {
     return this.storageCall(member, args);
   }
 
-  /**
-   * `start()` takes the authored server source, compiles it into the resident
-   * facet's application bundle, and boots the process. The `bindChain` arm is
-   * what a slate the user previewed runs: it gets the SAME binding map the
-   * host mints — the declared `PEER` plus the reserved `__storage` every slate
-   * carries whether it declares one or not, bound to this DO's own stub.
-   */
   async start({
     source = DEFAULT_SLATE_SOURCE, bindChain = true, cred = CRED_SESSION_USER,
     browser, project = { main: 'server.ts' }, app = { port: 8789 },
@@ -154,8 +135,7 @@ export class SlateProcessProbeDO extends DurableObject<Cloudflare.Env> {
 
     const owner = JSON.stringify([this.ctx.id.toString(), root, cred]);
 
-    // A durable spawn starts only under a reservation its owner holds — the
-    // slate host reserves before it launches, and so does the probe.
+    // A durable spawn starts only under a reservation its owner holds.
     if (app !== null) await probeDurableApps(this.facets, this.ctx).ensure({ owner, preferredPort: app.port });
 
     const boot = {
@@ -169,7 +149,6 @@ export class SlateProcessProbeDO extends DurableObject<Cloudflare.Env> {
       : { ...boot, bindings: { __storage: storageStub } });
   }
 
-  /** The kernel-owned facet images on disk right now, by digest name. */
   async facetImages(): Promise<string[]> {
     const kernel = this.vfs.as(CRED_KERNEL);
 
@@ -205,12 +184,8 @@ export class SlateProcessProbeDO extends DurableObject<Cloudflare.Env> {
     return { ok: true };
   }
 
-  /** One app call: mint the invocation id the host would, refuse names the
-   *  class never published exactly as `SlateHost.call` does, then open the
-   *  batch RPC session the runner exposes at `/__rpc` and retire the id when
-   *  it settles — the same lifetime `SlateHost.call` gives it. The value
-   *  crosses this RPC boundary as a string: the `JsonValue` union would send
-   *  `Rpc.Result`'s `Serializable` check into unbounded recursion (TS2589). */
+  /** The value crosses as a string: `JsonValue` sends `Rpc.Result`'s `Serializable` check into
+   *  unbounded recursion (TS2589). */
   private async appCall(method: string, args: JsonValue[], chain: string[]): Promise<{ ok: true; value: string } | { ok: false; error: string }> {
     const invocation = crypto.randomUUID();
     SlateProcessProbeDO.invocations.set(invocation, { id: 'probe', chain });
@@ -230,10 +205,7 @@ export class SlateProcessProbeDO extends DurableObject<Cloudflare.Env> {
 
         return { ok: true, value };
       } finally {
-        // Shut the session down once the call settles: disposing the main stub
-        // aborts the read-loop, and doing it here — not at transport end — is
-        // the difference between a rejection capnweb observes and one workerd
-        // reports as unhandled.
+        // Dispose here, not at transport end: otherwise workerd reports the rejection as unhandled.
         stub[Symbol.dispose]();
       }
     } catch (cause) {
@@ -243,13 +215,10 @@ export class SlateProcessProbeDO extends DurableObject<Cloudflare.Env> {
     }
   }
 
-  /** The bundle texts this boot produced, for assertions on real bytes. */
   artifacts() {
     return this.started().artifacts;
   }
 
-  /** What the agent's own file view sees: absence of tooling inside the slate
-   *  root, and the kernel-owned generated entries under the runtime dir. */
   paths() {
     return {
       kinuInSlateRoot: this.vfs.as(CRED_SESSION_USER).exists('/home/user/slates/notes/.kinu'),
@@ -257,10 +226,7 @@ export class SlateProcessProbeDO extends DurableObject<Cloudflare.Env> {
     };
   }
 
-  /** The browser arm of `call`: the same method over a WebSocket session routed
-   *  through the port registry — the path a real browser takes — with the
-   *  `x-slate-call` header stamped as the host would stamp it. The minted id
-   *  retires when the socket closes: session lineage never outlives its call. */
+  /** The minted id retires when the socket closes: session lineage never outlives its call. */
   async socket(method: string, args: JsonValue[] = []): Promise<{ ok?: boolean; value?: string; error?: string }> {
     const process = this.started();
     const invocation = crypto.randomUUID();
@@ -290,9 +256,8 @@ export class SlateProcessProbeDO extends DurableObject<Cloudflare.Env> {
     }
   }
 
-  /** HTTP through the port registry, exactly as a caller's fetch arrives: the
-   *  minted id is retired when the response is read, so a replayed header names
-   *  a dead invocation. */
+  /** The minted id retires when the response is read, so a replayed header names a dead
+   *  invocation. */
   async route(path = '/', chain: string[] = []) {
     const process = this.started();
     const invocation = crypto.randomUUID();

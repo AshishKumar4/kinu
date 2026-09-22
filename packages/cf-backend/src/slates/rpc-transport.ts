@@ -1,13 +1,7 @@
 import { RpcSession, type RpcTransport } from 'capnweb';
 import type { ResidentSlateProcess } from './resident';
 
-/**
- * The transport for one HTTP-batch Cap'n Web session against a resident facet:
- * frames POST to the guest's `/__rpc` through the process handle's loopback
- * request, mirroring capnweb's own `BatchClientTransport` — one settled
- * request per batch — with the invocation id the host issued carried on
- * `x-slate-call` so the guest's bindings resolve to this call's lineage.
- */
+/** Mirrors capnweb's `BatchClientTransport` over the facet's `/__rpc`; `x-slate-call` carries the invocation lineage. */
 class FacetBatchTransport implements RpcTransport {
   readonly #promise: Promise<void>;
   #aborted: unknown;
@@ -41,9 +35,7 @@ class FacetBatchTransport implements RpcTransport {
   }
 
   receive(): Promise<string> {
-    // Once the batch is drained the session's read-loop must wait forever, not
-    // error out: an ended receive makes capnweb abort and re-reject every
-    // import — a second, unobserved rejection for a call that already settled.
+    // After draining, wait forever: an ended receive makes capnweb re-reject every import unobserved.
     if (this.#batchToReceive === null) return this.#promise.then(() => this.receive());
     const message = this.#batchToReceive.shift();
 
@@ -64,7 +56,6 @@ class FacetBatchTransport implements RpcTransport {
   }
 }
 
-/** An HTTP-batch session stub for one resident process call. */
 export function slateBatchStub<T>(process: Pick<ResidentSlateProcess, 'request'>, invocation: string) {
   return new RpcSession<T>(new FacetBatchTransport(process, invocation)).getRemoteMain();
 }

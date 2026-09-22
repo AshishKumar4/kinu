@@ -3,19 +3,9 @@ import { mockAgentsSdk } from './helpers/agents-sdk';
 import { workerContext, workerEnv } from './helpers/bindings';
 
 /**
- * Transport security at the Worker entry.
- *
- * Both gaps this covers were live against the then-production origin on
- * 2026-08-16: `http://<host>/api/health` answered 200 in cleartext, and no
- * HTTPS response carried `Strict-Transport-Security`. Cloudflare closes neither
- * by default — a zone has no "Always Use HTTPS" rule unless one is added, and a
- * Workers custom domain does not add one — so the Worker is the only place that
- * can, and these are the behaviours that prove it does.
- *
- * Everything here goes through the real `server.ts` fetch entry rather than the
- * helpers, because the ordering is the substance: the redirect has to happen
- * before the preview route, and the pin has to survive every route's own
- * response rewriting.
+ * Transport security at the Worker entry. Measured 2026-08-16 on the production origin: cleartext
+ * `/api/health` answered 200 and no HTTPS response carried HSTS; Cloudflare closes neither by default.
+ * Through the real `server.ts` entry: redirect precedes the preview route, and the pin survives rewrites.
  */
 
 mockAgentsSdk();
@@ -26,13 +16,10 @@ const { default: worker } = await import('../src/server');
 
 const APP_HOST = 'app.example.com';
 
-/** Production shape: the preview suffix IS the app host, so every preview
- *  hostname is a strict subdomain of it (wrangler.jsonc PREVIEW_HOST_SUFFIX). */
+/** The preview suffix is the app host (wrangler.jsonc PREVIEW_HOST_SUFFIX). */
 const PREVIEW_HOST = `3000-workspace-tok.${APP_HOST}`;
 
-/** Reachable over TLS but not claimed: neither the canonical origin nor under
- *  the preview suffix. Proves the upgrade and the pin follow what this
- *  deployment declares itself to be, not any host that arrives encrypted. */
+/** Reachable over TLS but not claimed: upgrade and pin follow what this deployment declares. */
 const FOREIGN_HOST = 'unrelated.example.net';
 
 function harness(assetResponse: () => Response) {
@@ -68,8 +55,7 @@ describe('plain HTTP is redirected, not served', () => {
 
     expect(response.status).toBe(301);
     expect(response.headers.get('location')).toBe(`https://${APP_HOST}/assets/main.js?v=2`);
-    // The point of redirecting before routing: the cleartext request never
-    // reached a handler, so nothing was disclosed over it.
+    // Redirected before routing: no handler saw the cleartext request.
     expect(assetRequests).toEqual([]);
   });
 
@@ -127,8 +113,7 @@ describe('HTTPS responses are pinned', () => {
       new Request(`https://${APP_HOST}/assets/socket`), env, ctx,
     );
 
-    // Identity, not equality: a WebSocket handshake does not survive being
-    // rebuilt into a new Response, so the pin must skip it entirely.
+    // Identity, not equality: a WebSocket handshake does not survive being rebuilt.
     expect(response).toBe(upgrade);
     expect(response.headers.get('strict-transport-security')).toBeNull();
   });
@@ -146,8 +131,7 @@ describe('a host this deployment does not claim is left alone', () => {
       new Request(`https://${FOREIGN_HOST}/assets/main.js`), env, ctx,
     );
 
-    // Not a 301: the redirect would send a browser to a hostname this
-    // deployment never claimed, and the pin would outlive the claim by a year.
+    // Not a 301: the pin would outlive a claim this deployment never made.
     expect(cleartext.status).toBe(200);
     expect(secure.headers.get('strict-transport-security')).toBeNull();
   });
@@ -161,11 +145,8 @@ describe('the preview route still runs before app auth', () => {
       new Request(`https://${PREVIEW_HOST}/`), env, ctx,
     );
 
-    // Not the status or body: `@cloudflare/sandbox` is mocked process-wide by
-    // unit-preview-origin.test.ts, whose stub response is per-test mutable, so
-    // which preview branch answers depends on file order. Every branch of
-    // servePreviewRequest returns through containPreviewResponse, so
-    // containment is the invariant worth asserting here.
+    // Not status or body: unit-preview-origin.test.ts mocks `@cloudflare/sandbox` per test, so the branch
+    // depends on file order; every branch returns through containPreviewResponse.
     expect(response.headers.get('content-security-policy')).toStartWith('sandbox ');
     expect(response.headers.get('strict-transport-security')).toBe('max-age=31536000; includeSubDomains');
     expect(response.headers.get('referrer-policy')).toBe('no-referrer');

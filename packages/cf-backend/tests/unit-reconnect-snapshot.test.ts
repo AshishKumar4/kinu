@@ -1,31 +1,6 @@
 /**
- * KINU-N018: what a reconnecting tab is told about queued steers and running
- * branches, driven through the mount round trip itself.
- *
- * `getWorkspaceSnapshot` is the ONE call a tab makes when it opens or
- * reconnects, and the client REPLACES its steer and branch chips from it
- * (`hooks/use-kinu.ts`, `loadAllData`) rather than merging. Replacing is only
- * correct if the payload comes from the durable authorities: a tab that was
- * disconnected must both LEARN the queue it never saw and DROP the chips for
- * work that settled while it was away, and no live broadcast repeats either fact
- * for a socket that was not there.
- *
- * WHAT MAKES EACH CASE BELOW LOAD-BEARING is which source could NOT have
- * answered it:
- *
- *   - the running branch is read on a WARM instance whose `_pendingBranches` is
- *     empty, and beside a branch declared in RAM alone. A payload built from
- *     those handles — the shape the field's own comment warns against — returns
- *     the wrong set both ways round.
- *   - the queued steer is read on a FRESH activation over the storage that
- *     survived, where the RAM drain is empty by construction. That is what an
- *     eviction, a deploy supersede and a corpse redial all leave behind, and a
- *     payload assembled from the drain answers nothing there.
- *
- * `unit-snapshot-contract.test.ts` holds the other half of this seam by
- * derivation: the client's declared field set against the server's returned
- * keys, and the gallery stub against both. It reads source, so it cannot say
- * where a value came from — which is what this file measures.
+ * KINU-N018: a reconnecting tab replaces its steer and branch chips from `getWorkspaceSnapshot`, so the
+ * payload must come from durable rows, never RAM (`_pendingBranches`, the steer drain).
  */
 
 import { describe, expect, test, vi } from 'bun:test';
@@ -40,14 +15,10 @@ const STEER = 'also check staging';
 
 const BRANCH_ID = 'branch-n018';
 
-/** The redirect a branch head answers. The RUN carries `BRANCH_RATIONALE` and
- *  the head carries this, which is why the chip's label below is the former. */
+/** The run carries `BRANCH_RATIONALE`; the chip label is the former. */
 const BRANCH_TASK = 'try the coupon path';
 
-/** The mount payload's two reconnect-only fields, in the shape the client reads
- *  them: `pendingSteers` becomes the steer chips and `branchRuns` the branch
- *  ones. Projected rather than compared whole, so a change to an unrelated
- *  plane — tools, executors, presence — does not rewrite this file. */
+/** Projected, not compared whole, so unrelated planes do not rewrite this file. */
 function chips(snapshot: {
   pendingSteers: readonly { text: string }[];
   branchRuns: readonly { branchId: string; task: string; status: string }[];
@@ -58,37 +29,20 @@ function chips(snapshot: {
   };
 }
 
-/** The one branch chip a running redirect produces. */
 const RUNNING_BRANCH = `${BRANCH_ID}:running:${BRANCH_RATIONALE}`;
 
 /**
- * A workspace with one acknowledged steer and one running branch, both written
- * through the production seams that own them.
- *
- * The steer goes through `send` while a turn is genuinely in flight with a
- * durable identity — the RPC the composer calls — so the row it writes binds
- * to a real turn rather than being inserted beside one. The branch
- * goes through `startBranchHead`, journalled under the DERIVED head id a branch
- * run really uses; a hand-written row would normalise exactly that away.
- * `spawnedAt` states WHEN the branch was spawned, for the one case that turns on
- * it: the activation's orphan sweep is fenced to heads spawned strictly before
- * the activation started, so a suite that seeds and reactivates inside one
- * millisecond would race that fence. The clock is stated rather than slept
- * through — an eviction always has the gap, and a sleep would hide which fact
- * the assertion needs.
+ * Seeded through the production seams. `spawnedAt` is stated: the orphan sweep is fenced to heads spawned
+ * strictly before the activation, and a same-millisecond seed would race that fence.
  */
 async function workspaceWithQueuedWork(
   spawnedAt?: number,
 ): Promise<ActorHarness<HarnessOrchestratorAgent>> {
   const userPlane: RecordedUserPlaneCalls = { warmConnections: [], failWarm: null, titles: [] };
   const seeded = orchestratorHarness(userPlane);
-  // The broadcast channel needs a live socket set the harness has none of, and
-  // the steer's own frames are asserted by `unit-mid-turn-steer`. What matters
-  // here is the row the accept writes.
+  // No live sockets in the harness; the steer's frames are asserted by `unit-mid-turn-steer`.
   Reflect.set(seeded.agent, 'broadcast', () => {});
-  // Production opens a turn through beforeTurn; driving the same entry point
-  // gives beforeStep the prepared snapshot it refuses without, and writes the
-  // durable turn identity the steer row binds to.
+  // beforeStep refuses without the prepared snapshot beforeTurn writes.
   await chatSessionTurns(seeded.agent).prepare({
     messages: [{ role: 'user', content: 'deploy the api' }, { role: 'assistant', content: 'starting' }],
   });
@@ -108,29 +62,19 @@ async function workspaceWithQueuedWork(
   return seeded;
 }
 
-/** The step pipeline's own hook, which is what LANDS a queued steer: the drain
- *  writes the verbatim user row and drops the reservation. Called with the
- *  context `streamText` passes it, so the transition is production's. */
 async function landQueuedSteers(agent: HarnessOrchestratorAgent): Promise<void> {
   const messages: ModelMessage[] = [{ role: 'user', content: 'deploy the api' }];
 
-  // `addMessages` is Think's append-without-a-turn API and needs a live Session,
-  // which the harness has none of. The drain's durable half — the DELETE — runs
-  // either way, and that is the half a reconnect reads.
+  // `addMessages` needs a live Session the harness lacks; the drain's durable DELETE runs either way.
   Reflect.set(agent, 'addMessages', async () => { await Promise.resolve(); });
-  // A step refuses an unprepared turn: open it the way production does, so the
-  // drain reads a real snapshot.
   await chatSessionTurns(agent).prepare({ messages });
   await chatSessionTurns(agent).step(1, messages);
 }
 
 describe('the reconnect snapshot answers from durable rows, not from RAM', () => {
   test('a redial mid-turn is told the queued steer and the running branch', async () => {
-    // The ordinary reconnect: the socket dropped and came back while the object
-    // stayed alive, which is what the corpse detector's forced redial produces.
     const seeded = await workspaceWithQueuedWork();
-    // A branch that exists in RAM ALONE — no journal row — which is what a
-    // handle-derived payload would offer and what the durable read must not.
+    // RAM-only branch with no journal row: the durable read must not offer it.
     seeded.agent.harnessDeclarePendingBranch('branch-ram-only', 'never journalled');
 
     expect(chips(await seeded.agent.getWorkspaceSnapshot()))
@@ -138,10 +82,7 @@ describe('the reconnect snapshot answers from durable rows, not from RAM', () =>
   });
 
   test('a fresh activation still reports the steer, with the RAM drain empty', async () => {
-    // The eviction, the deploy supersede and the cold redial: a new actor
-    // instance over the storage that survived. Nothing in memory can answer
-    // this, so a queue the client would otherwise never see again comes back
-    // from `pending_steers` alone.
+    // A new instance over surviving storage: only `pending_steers` can answer.
     const seeded = await workspaceWithQueuedWork();
 
     const reconnected = await reactivateOrchestratorHarness(seeded.db);
@@ -150,11 +91,8 @@ describe('the reconnect snapshot answers from durable rows, not from RAM', () =>
   });
 
   test('a branch the activation sealed is dropped, not still drawn as running', async () => {
-    // The other direction of staleness. A branch head cannot be resumed, so the
-    // activation's own reconcile seals a reportless one instead of leaving it
-    // claiming to execute — and the tab is told exactly that, rather than being
-    // handed back a chip for work no isolate is doing.
-    // Spawned before this activation starts, which is the fence the sweep reads.
+    // A branch head cannot be resumed, so the reconcile seals a reportless one. Spawned before the activation
+    // starts: the fence the sweep reads.
     const seeded = await workspaceWithQueuedWork(Date.parse('2026-08-31T00:00:00.000Z'));
 
     const reconnected = await reactivateOrchestratorHarness(seeded.db);
@@ -164,9 +102,6 @@ describe('the reconnect snapshot answers from durable rows, not from RAM', () =>
   });
 
   test('a landed steer and a reported branch leave no chips behind', async () => {
-    // Both settled through their own production path — the step drain for the
-    // steer, the head's report for the branch — and both gone from the payload a
-    // tab that was away receives.
     const seeded = await workspaceWithQueuedWork();
     await landQueuedSteers(seeded.agent);
     seeded.agent.harnessReportBranchHead(BRANCH_ID, 'the coupon path worked');
@@ -176,10 +111,7 @@ describe('the reconnect snapshot answers from durable rows, not from RAM', () =>
   });
 
   test('a steer Stop kept stays queued, across the reconnect', async () => {
-    // Stop leaves the operator's words queued — the turn settle path reruns
-    // what the model never saw as the next turn — so the chip survives.
-    // Asserted across the reactivation because the RAM queue is gone by
-    // construction there and only the durable row can answer.
+    // Stop leaves the operator's words queued, so the chip survives; asserted across reactivation.
     const seeded = await workspaceWithQueuedWork();
     await seeded.agent.cancelCurrentWork();
 

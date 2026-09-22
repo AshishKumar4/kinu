@@ -1,17 +1,6 @@
 /**
- * The panes the workspace snapshot seeds may not report absence for a read that
- * never came back.
- *
- * The failure this locks down shipped: an owner opened a workspace, the snapshot
- * RPC rejected with `Network connection lost.`, and the Agent surface drew "No
- * memories yet" and "No tools discovered yet" under a banner that said the load
- * had failed. Both claims were about data nobody had read. The World model
- * section in the same file already got this right, off `useAsyncResource`'s
- * tri-state — the snapshot-seeded panes branched on array length instead.
- *
- * `renderToStaticMarkup` runs the components for real and returns what a reader
- * would see. No effects run, and none are needed: the ladder under test is
- * derived from props.
+ * Snapshot-seeded panes may not report absence for a read that never came back (shipped: a dropped
+ * snapshot RPC drew "No memories yet" under a load-failed banner).
  */
 import { beforeAll, describe, expect, test } from 'bun:test';
 import { createElement } from 'react';
@@ -21,8 +10,7 @@ import type { AgentStatus } from '../src/hooks/use-kinu';
 import type { AsyncResource } from '../src/hooks/use-async-resource';
 import type { Rpc, ToolInfo } from '@kinu.run/core';
 
-/** `Section` persists which sections a reader folded. Server rendering has no
- *  storage, so the suite gives it one rather than the component a branch. */
+/** Server rendering has no storage for `Section`'s fold state, so the suite provides one. */
 beforeAll(() => {
   const store = new Map<string, string>();
   Object.defineProperty(globalThis, 'localStorage', {
@@ -66,14 +54,12 @@ const TOOL: ToolInfo = {
 
 const MEMORY_MD = '## Checkout\n\n- The coupon path goes through `/api/cart/apply`.\n';
 
-/** The reason the transport gives, verbatim, when a cross-object call drops. */
+/** The transport's reason, verbatim, when a cross-object call drops. */
 const CONNECTION_LOST = 'Network connection lost.';
 
-/** No pane may need an answer to draw the state under test. */
 const neverAnswers: Rpc = () => Promise.withResolvers<never>().promise;
 
-/** What a reader sees: the markup with its entity escapes resolved, so every
- *  assertion below can quote the product's own words. */
+/** Markup with entity escapes resolved, so assertions quote the product's own words. */
 function readable(markup: string): string {
   return markup
     .replaceAll('&#x27;', "'")

@@ -1,9 +1,7 @@
 import { expect, test } from 'bun:test';
 import { buildSlateVendor } from '../slate-vendor';
 
-// The names must come from the BUNDLE's metafile — react 19's CJS shape means
-// `import { use } from "react"` only links when the bundle actually publishes
-// it, and a hand list of names drifts silent.
+// From the bundle's metafile: react 19's CJS shape links a named import only if the bundle publishes it.
 test('the vendored react bundle publishes every export the client module and authored components use', () => {
   const vendor = buildSlateVendor();
 

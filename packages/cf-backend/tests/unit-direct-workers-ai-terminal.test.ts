@@ -1,14 +1,6 @@
 /**
- * Terminal lifecycle on the direct Workers AI path: when the translated
- * stream carries `data: [DONE]`, the adapter cancels the upstream binding
- * reader instead of waiting for the producer to close — the same rule as
- * the compat path's terminal watcher, pinned here for this transport.
- *
- * Each case drives `createDirectWorkersAIFetch` with a stub binding whose
- * body the test owns: a producer that stays open behind [DONE] must still
- * end the translated stream with the upstream cancel called, and a
- * rejecting cancel must reach the consumer with the lock released either
- * way (a second reader on the upstream acquires cleanly).
+ * Direct Workers AI path: on `data: [DONE]` the adapter cancels the upstream reader rather than
+ * waiting for the producer to close; a rejecting cancel still releases the lock.
  */
 import { describe, test, expect } from 'bun:test';
 import { createDirectWorkersAIFetch } from '@kinu.run/core';
@@ -22,9 +14,7 @@ function nativeFrame(response: string): string {
 
 const DONE = 'data: [DONE]\n\n';
 
-/** A binding the test owns: scripted frames, then whatever lifecycle the
- *  case leaves it in, with cancel calls counted. The object IS the adapter's
- *  narrow runner contract, passed without a cast. */
+/** Scripted frames with cancel calls counted; typed as the adapter's runner contract, no cast. */
 function scriptedBinding(frames: string[], hangOpen: boolean, onCancel?: () => Promise<void> | void) {
   const cancels: string[] = [];
   let controller: ReadableStreamDefaultController<Uint8Array> | null = null;
@@ -43,9 +33,6 @@ function scriptedBinding(frames: string[], hangOpen: boolean, onCancel?: () => P
   return {
     stream,
     cancels,
-    // The fixture IS the narrow binding contract the adapter calls: one
-    // `shell` answering the shapes workerd can hand back. No cast — the
-    // parameter takes this exactly.
     run: (_model: string, _inputs: JsonObject, _options?: {
       signal?: AbortSignal;
       extraHeaders?: Record<string, string>;

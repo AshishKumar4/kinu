@@ -1,12 +1,4 @@
-/**
- * The outcome-ensemble judges' operation lifecycle, end to end through the
- * real OrchestratorAgent.
- *
- * `runOutcomeEnsemble` wires each judge's completion LLM with BOTH sinks —
- * the cost report and the operation lifecycle. This proves the second lands:
- * every judge call writes a durable start/end pair joined by operationId into
- * the workspace log, beside the `model_call` row that was always there.
- */
+/** Every ensemble judge call writes a durable start/end operation pair beside its `model_call` row. */
 
 import { describe, expect, test } from 'bun:test';
 import type { LanguageModel } from 'ai';
@@ -27,8 +19,6 @@ import { openWorkspaceMainActor } from '@kinu.run/core';
 import { declareShadowCandidate, orchestratorHarness } from './helpers/actor-harness';
 import type { AgentProviderRegistry } from '../src/providers/agent-registry';
 
-/** A scripted model: hands back exactly `text` as its whole answer, and reports
- *  real usage so the cost sink has a number to file. */
 function scriptedModel(text: string): MockLanguageModelV3 {
   return new MockLanguageModelV3({
     doGenerate: async () => ({
@@ -43,14 +33,11 @@ function scriptedModel(text: string): MockLanguageModelV3 {
   });
 }
 
-/** A scripted judge model: answers a valid verdict, reports real usage. */
 function judgeModel(): MockLanguageModelV3 {
   return scriptedModel('{"verdict":"accepted"}');
 }
 
-/** A registry whose fake-family specs resolve to scripted judges. Only
- *  resolveModel + normalizeSpecSync are reached on this path: explicit specs
- *  skip candidate surveying entirely. */
+/** Explicit specs skip candidate surveying, so only resolveModel + normalizeSpecSync are reached. */
 function judgeRegistry(
   models: ReadonlyArray<readonly [spec: string, model: LanguageModel]>,
 ): AgentProviderRegistry {
@@ -70,13 +57,8 @@ function judgeRegistry(
   };
 }
 
-/** `MODEL_ROUTE_POLICY.fast` is the `fast` tier, so the naming pass must resolve
- *  THIS spec and no other. Given a distinct value from the chat and deep tiers
- *  so a wrong route names a different model rather than accidentally agreeing.
- *
- *  The effort is explicit and deliberately implausible for a naming pass: an
- *  assertion against a DEFAULT effort would pass whether or not the tier's own
- *  assignment was read, which is the thing the old hardcoded effort got wrong. */
+/** Distinct from the chat and deep tiers, with a non-default effort, so a wrong route or a hardcoded effort
+ *  cannot agree by accident. */
 const FAST_MODEL = 'fake-a/m1';
 
 const FAST_EFFORT = 'high' as const;
@@ -111,18 +93,14 @@ function titleProfile() {
 
 async function ensembleHarness() {
   const harness = orchestratorHarness();
-  // Instance-level seam override: the production method reads the owned
-  // model services, which under bun have no provider to resolve. Everything
-  // downstream of resolution — the LLM construction, both sinks — is the
-  // real production path.
+  // The production method reads owned model services, which have no provider under bun; everything after
+  // resolution is the real path.
   harness.agent.overrideProviderRegistry(judgeRegistry([
     ['fake-a/m1', judgeModel()],
     ['fake-b/m1', judgeModel()],
   ]));
 
-  // A hand-labeled ledger: what the panel stands in for. The records belong to
-  // the workspace's own actor: outcome rows are actor-scoped precisely so one
-  // actor's grading cannot read or exhaust another's.
+  // Outcome rows are actor-scoped so one actor's grading cannot read or exhaust another's.
   const sql = sqlOver(harness.db);
   const actor = openWorkspaceMainActor(sql);
 
@@ -190,7 +168,6 @@ describe('runOutcomeEnsemble — the judges write their operation lifecycle', ()
     const { harness, sql } = await ensembleHarness();
     const result = await harness.agent.runOutcomeEnsemble(['fake-a/m1', 'fake-b/m1']);
 
-    // The panel actually ran: three turns × two judges.
     expect(result.run?.judged.map((j) => j.stored)).toEqual([3, 3]);
     expect(result.gap).toBeNull();
 
@@ -214,18 +191,14 @@ describe('runOutcomeEnsemble — the judges write their operation lifecycle', ()
       expect(end.usage).toEqual({ input: 41, output: 7 });
       expect(end.source).toBe('judge');
       expect(end.op).toBe('complete');
-      // Both rows of one operation name the same judge spec.
       expect(new Set(rows.map((r) => r.spec))).toEqual(new Set([rows[0].spec]));
     }
 
-    // Both families ran: six of the twelve operation rows name each judge.
     expect(operations.map((r) => r.spec).sort((a, b) => String(a).localeCompare(String(b)))).toEqual([
       'fake-a/m1', 'fake-a/m1', 'fake-a/m1', 'fake-a/m1', 'fake-a/m1', 'fake-a/m1',
       'fake-b/m1', 'fake-b/m1', 'fake-b/m1', 'fake-b/m1', 'fake-b/m1', 'fake-b/m1',
     ]);
 
-    // The cost reporting beside the lifecycle is unchanged: one model_call
-    // per judge call, still filed under the judge label.
     const calls = recorder.read(WORKSPACE_RUN_ID)
       .filter((event): event is Extract<RunEvent, { type: 'model_call' }> => event.type === 'model_call');
 
@@ -241,12 +214,7 @@ describe('suggestWorkspaceTitle — the fast-model naming pass', () => {
 
     const titleModel = scriptedModel('{"title":"Mission Control"}');
 
-    // Only MODEL CONSTRUCTION is substituted. `modelForSource('fast')` runs its
-    // real body — `resolveModelRoute` against the profile below, then this
-    // resolver — so the route and the spec it returns are the production ones.
-    // `resolved` records what the route asked for, which is the assertion with
-    // teeth: the old wiring called `getModelForReview()`, the account-wide DEEP
-    // tier, while filing the spend as `fast`.
+    // Only model construction is substituted: `modelForSource('fast')` runs its real route resolution.
     const resolved: Array<{ spec: string | null | undefined; effort: string }> = [];
     Object.assign(harness.agent, {
       routingProfile: async () => titleProfile(),
@@ -259,12 +227,9 @@ describe('suggestWorkspaceTitle — the fast-model naming pass', () => {
       },
     });
 
-    // Driven through the harness accessor for the same call
-    // maybeAutoTitleWorkspace wires into applyWorkspaceTitle's `suggest` slot.
     const title = await harness.agent.harnessSuggestWorkspaceTitle('track launches');
     expect(title).toBe('Mission Control');
 
-    // `fast` routes to the `fast` tier, and the effort is the tier's own.
     expect(resolved).toEqual([{ spec: FAST_MODEL, effort: FAST_EFFORT }]);
 
     const ensembleSql = sqlOver(harness.db);
@@ -274,10 +239,7 @@ describe('suggestWorkspaceTitle — the fast-model naming pass', () => {
     expect(operations.every((e) => e.source === 'fast' && e.op === 'complete')).toBe(true);
     expect(operations[1].outcome).toBe('ok');
     expect(operations[1].usage).toEqual({ input: 41, output: 7 });
-    // The spec is KNOWN: the route resolved it from the profile, so it is the
-    // same string the model was built from. A seam that resolves a model behind
-    // a cache cannot say which one, which leaves the one row that prices the
-    // call unpriceable.
+    // The route resolved the spec, so the pricing row names the model actually built.
     expect(operations.every((e) => e.spec === FAST_MODEL)).toBe(true);
   });
 });

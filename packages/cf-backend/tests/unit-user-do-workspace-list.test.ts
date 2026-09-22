@@ -1,8 +1,5 @@
-// The workspace listing is bounded per page: the most recently visited active
-// workspaces beside the whole-roster total, with a cursor that walks to the
-// next page — so no roster row is unreachable, and a short page is never
-// mistaken for a complete roster. Server-side fans that must reach every
-// active workspace enumerate through the exact read, not the paged listing.
+// Paged workspace listing: a cursor reaches every row and the total is whole-roster; fans that must
+// reach every active workspace use the exact read.
 import * as v from 'valibot';
 import { describe, expect, test } from 'bun:test';
 import { Database } from 'bun:sqlite';
@@ -66,8 +63,7 @@ describe('listWorkspaces', () => {
 });
 
 describe('a deletion that could not finish', () => {
-  /** The registry row as SQL sees it, marker included — the durable state the
-   *  retry reads, which no wire shape exposes. */
+  /** The registry row with its delete marker, which no wire shape exposes. */
   function pendingRows(harness: TestUserDO): Array<{ name: string; delete_pending: number }> {
     return harness.db.prepare<{ name: string; delete_pending: number }, []>(
       `SELECT name, delete_pending FROM user_workspaces ORDER BY name`,
@@ -75,10 +71,7 @@ describe('a deletion that could not finish', () => {
   }
 
   test('a failed teardown leaves a marked row that no ordinary read shows', async () => {
-    // KINU-024: the teardown failed closed but recorded no intent, so a
-    // workspace could sit with its container destroyed and its registry row
-    // intact, still listed and still openable, with nothing responsible for
-    // finishing the job.
+    // KINU-024: a failed teardown recorded no intent, leaving a destroyed workspace listed and openable.
     const harness = createTestUserDO({
       durableObjectId: USER_ID,
       destroyWorkspaceError: 'the container refused to go',
@@ -91,8 +84,7 @@ describe('a deletion that could not finish', () => {
       .rejects.toThrow('the container refused to go');
 
     expect(pendingRows(harness)).toEqual([{ name: 'half-gone', delete_pending: 1 }]);
-    // Hidden from the list, from the total, and from the ownership gate every
-    // open goes through.
+    // Hidden from the list, the total, and the ownership gate.
     const list = await harness.userDO.listWorkspaces(owner);
     expect(list.entries.map((w) => w.name)).toEqual([]);
     expect(list.total).toBe(0);
@@ -101,12 +93,8 @@ describe('a deletion that could not finish', () => {
   });
 
   test('the next read finishes the cleanup and drops the row', async () => {
-    // The retry has an owner and it is the owner's own next read. No second
-    // timer: this object has no wake of its own, and the marker is what carries
-    // the work across the reset.
-    // Typed rather than inferred: the object is MUTATED below to clear the
-    // failure, and an inferred `destroyWorkspaceError: string` makes that
-    // assignment illegal. The options type already spells the field optional.
+    // The owner's next read is the retry; this object has no wake of its own. Typed so the
+    // mutation below type-checks.
     const options: TestUserDOOptions = {
       durableObjectId: USER_ID, destroyWorkspaceError: 'the container refused to go',
     };
@@ -116,8 +104,6 @@ describe('a deletion that could not finish', () => {
     await harness.userDO.registerWorkspace(owner, 'half-gone');
     await expect(harness.userDO.removeWorkspace(owner, 'half-gone', USER_ID)).rejects.toThrow();
 
-    // The condition that failed is gone — a container that came back, a plane
-    // that answered this time.
     options.destroyWorkspaceError = undefined;
     const list = await harness.userDO.listWorkspaces(owner);
 
@@ -138,8 +124,7 @@ describe('a deletion that could not finish', () => {
     await harness.userDO.registerWorkspace(owner, 'healthy');
     await expect(harness.userDO.removeWorkspace(owner, 'half-gone', USER_ID)).rejects.toThrow();
 
-    // A listing must not fail because an unrelated workspace cannot finish
-    // dying: the row IS the retry, so nothing is lost by answering.
+    // The row is the retry, so the listing answers rather than failing.
     const list = await harness.userDO.listWorkspaces(owner);
 
     expect(list.entries.map((w) => w.name)).toEqual(['healthy']);
@@ -172,21 +157,18 @@ describe('a deletion that could not finish', () => {
     const entry = createdWorkspace(await harness.userDO.registerWorkspace(owner, 'half-gone'));
     await expect(harness.userDO.removeWorkspace(owner, 'half-gone', USER_ID)).rejects.toThrow();
 
-    // Recreating over a marked row would hand the owner a workspace wired to
-    // the Durable Object and the planes this teardown still owes a destroy.
+    // Recreating would wire the owner to a DO and planes still owed a destroy.
     await expect(harness.userDO.registerWorkspace(owner, 'half-gone'))
       .rejects.toThrow('still being deleted');
     await expect(harness.userDO.reserveWorkspace(owner, 'half-gone'))
       .rejects.toThrow('still being deleted');
-    // A fork rollback is not entitled to this row: dropping it would erase the
-    // only record that a destroy is still owed.
+    // A fork rollback must not drop the only record that a destroy is owed.
     expect(await harness.userDO.releaseWorkspaceReservation(owner, 'half-gone', entry.createdAt))
       .toBe(false);
 
     expect(pendingRows(harness)).toEqual([{ name: 'half-gone', delete_pending: 1 }]);
     expect(await harness.userDO.hasWorkspace(owner, 'half-gone')).toBe(false);
     expect(await harness.userDO.getWorkspaceTitle(owner, 'half-gone')).toBeNull();
-    // A workspace being torn down has no title to read and none to commit.
     expect(await harness.userDO.setWorkspaceDisplayName(owner, 'half-gone', 'Renamed', 'user'))
       .toEqual({ applied: false });
     harness.close();
@@ -203,8 +185,6 @@ describe('a deletion that could not finish', () => {
     await expect(harness.userDO.removeWorkspace(owner, 'half-gone', USER_ID)).rejects.toThrow();
     harness.db.prepare(`UPDATE user_workspaces SET last_visited = 1 WHERE name = 'half-gone'`).run();
 
-    // A workspace being torn down is not one the owner can visit, so the visit
-    // finds nothing to stir — the same answer every ordinary read gives.
     await harness.userDO.touchWorkspace(owner, 'half-gone');
 
     expect(harness.db.prepare<{ last_visited: number }, []>(
@@ -223,15 +203,12 @@ describe('a deletion that could not finish', () => {
     await harness.userDO.registerWorkspace(owner, 'reused');
     await expect(harness.userDO.removeWorkspace(owner, 'reused', USER_ID)).rejects.toThrow();
 
-    // The owner deletes, the teardown trips on something transient, and the
-    // owner types the same name again. The create is a read of this registry
-    // too, so it drives the retry: they get their name back, not a dead end.
+    // The create reads this registry too, so it drives the retry and the name is freed.
     options.destroyWorkspaceError = undefined;
     const registered = await harness.userDO.registerWorkspace(owner, 'reused');
 
     expect(harness.destroyedWorkspaces).toEqual(['reused']);
-    // A new workspace, not the old one resurrected — the marked row was dropped
-    // by the teardown that owned it before this insert ran.
+    // A new workspace: the teardown dropped the marked row before this insert.
     expect(registered.status).toBe('created');
     expect(pendingRows(harness)).toEqual([{ name: 'reused', delete_pending: 0 }]);
     expect((await harness.userDO.listWorkspaces(owner)).entries.map((w) => w.name))
@@ -240,8 +217,7 @@ describe('a deletion that could not finish', () => {
   });
 
   test('a reset carries the intent, and the next activation finishes the job', async () => {
-    // The marker is durable state, not a field on a live object, so an eviction
-    // between the failed teardown and the retry loses nothing.
+    // The marker is durable, so an eviction before the retry loses nothing.
     const storage = new Database(':memory:');
 
     const first = createTestUserDO({
@@ -264,10 +240,8 @@ describe('a deletion that could not finish', () => {
   });
 
   test('a workspace whose plane is already gone still converges', async () => {
-    // Two shapes of absence, both of which a retry meets. The agents-SDK
-    // destroy aborts its own isolate after the durable wipe, so that throw IS
-    // completion; and a delete of a name this registry no longer holds has
-    // nothing left to do. Neither may leave a marker nobody will clear.
+    // The agents-SDK destroy aborts its own isolate after the wipe, so that throw is completion;
+    // a name already gone is also done. Neither may leave a marker.
     const harness = createTestUserDO({ durableObjectId: USER_ID, destroyWorkspaceError: 'destroyed' });
     const owner = await testOwner();
     await harness.userDO.registerWorkspace(owner, 'already-gone');
@@ -426,7 +400,6 @@ describe('malformed paging over HTTP', () => {
     provider: 'test',
   };
 
-  /** The roster route over the real registry, recording what reached it. */
   function routeHarness() {
     const harness = createTestUserDO({ durableObjectId: USER_ID });
     const listed: unknown[] = [];
@@ -446,7 +419,6 @@ describe('malformed paging over HTTP', () => {
     const env: UserRoutesEnv<string> = {
       UserDO: { idFromName: (name) => name, get: () => stub },
       CREDENTIAL_ENCRYPTION_KEY: TEST_CREDENTIAL_ENCRYPTION_KEY,
-      // A roster page fans nothing out.
       OrchestratorAgent: unreachableNamespace('OrchestratorAgent'),
     };
 
@@ -496,8 +468,7 @@ describe('malformed paging over HTTP', () => {
       const response = await call('?cursor=%7Bnope');
       expect(response.status).toBe(400);
       const body = v.parse(ErrorBodySchema, await response.json());
-      // The rendered cause chain trails the contract sentence; the sentence
-      // itself is what user-do holds verbatim.
+      // The cause chain trails the contract sentence user-do holds verbatim.
       expect(body.error.startsWith('Invalid workspace roster cursor; start from page one.')).toBe(true);
     } finally {
       harness.close();

@@ -1,23 +1,6 @@
 /**
- * The Supervise altitude's contract, as markup.
- *
- * The owner's report: "the whole 'Supervise' view has soo many unnecessary/
- * stupid things — Curriculum isn't needed, evolution shouldn't be shown unless
- * there actually has been any evolution, automations should be prominent along
- * with run history, remove the 'budget' from that header."
- *
- * What is here: section order and the header's text off the page itself, and
- * the evolution section's only remaining gate — an already-filtered digest
- * renders, an empty one does not. The KINDS filter moved into the changelog
- * read itself (`changesOnly`, covered by unit-evolution-changelog): by the
- * time rows reach `EvolutionSection` every one of them is a change, so this
- * surface's contract is only that loaded rows render and nothing mounts
- * behind an empty list.
- *
- * What is NOT here: the fetch — `useAsyncResource` loads inside `useEffect`,
- * which the static renderer discards. The gate's "no data yet" branch is the
- * same "nothing to show ⇒ nothing mounts" path, and the gallery frames
- * (`supervise`, `supervisefresh`) photograph the settled view.
+ * Supervise as markup: section order, header text, and evolution rendering only a non-empty
+ * digest. The fetch is out of scope: the static renderer discards `useEffect`.
  */
 import './helpers/ui-module-globals';
 import { describe, expect, test } from 'bun:test';
@@ -27,8 +10,7 @@ import { MemoryRouter, Route, Routes } from 'react-router-dom';
 import type { Rpc } from '@kinu.run/core';
 import type { EvolutionEntry } from '../src/components/surfaces/supervise-evolution';
 
-// Namespace imports keep every row reporting when a symbol is absent: the red
-// pass names each failing assertion instead of dying at the import.
+// Namespace imports: a missing symbol fails its own row, not the whole import.
 const page = await import('../src/pages/SupervisePage');
 
 const evolution = await import('../src/components/surfaces/supervise-evolution');
@@ -82,8 +64,7 @@ describe('the supervise view, as markup', () => {
 
     expect(automations).toBeGreaterThanOrEqual(0);
     expect(history).toBeGreaterThan(automations);
-    // No reads have resolved: with nothing to show, Evolution mounts nothing —
-    // so in this pass the two lead sections are also the only headings.
+    // No reads have resolved, so Evolution mounts nothing.
     expect(html.indexOf('Evolution')).toBe(-1);
   });
 

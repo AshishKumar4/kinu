@@ -867,7 +867,7 @@ export const PLATFORM_CATALOG = {
       'Stronger than the claim it was probed against: a Module cannot cross ANY boundary, '
       + 'including a same-isolate structuredClone. Kinu paid for this independently — the '
       + 'device-tunnel upgrade path passed a WebSocket as a DO-RPC argument and 500\'d every '
-      + 'daemon connect in production (packages/cf-backend/tests/unit-device-hub.test.ts:3-5).',
+      + 'daemon connect in production (packages/cf-backend/tests/unit-device-hub.test.ts:1-2).',
   },
 
   'rpc.prototype_chain': {
@@ -878,7 +878,7 @@ export const PLATFORM_CATALOG = {
     origin: 'platform',
     bounds: null,
     evidence: 'proven-by-probe',
-    provenance: 'packages/cf-backend/src/rpc-surface.ts:4-21',
+    provenance: 'packages/cf-backend/src/rpc-surface.ts:2-5',
     date: '2026-08-16',
     trigger: 'any `stub.foo(...)` where foo is anywhere on the prototype chain below Object.prototype',
     onBreach:
@@ -1485,7 +1485,7 @@ export const PLATFORM_CATALOG = {
     origin: 'platform',
     bounds: null,
     evidence: 'proven-by-source',
-    provenance: 'packages/cf-backend/src/cli/rpc-gate.ts:28-31, :44-45; actor-agent.ts:677-679',
+    provenance: 'packages/cf-backend/src/cli/rpc-gate.ts:5-7, :18-19; actor-agent.ts:677-679',
     date: '2026-08-16',
     trigger: 'a Durable Object hibernating with accepted WebSockets, then waking on a message',
     onBreach:

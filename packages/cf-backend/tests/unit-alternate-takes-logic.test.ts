@@ -1,5 +1,3 @@
-// Alternate Takes view logic — the pure half of the chat's takes chip +
-// comparison (cycling, labels, evidence) used by AlternateTakes.tsx.
 import { describe, test, expect } from 'bun:test';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
@@ -64,11 +62,8 @@ describe('alternate-takes view logic', () => {
 
 describe('take-pick schema ordering (lazy-engine hole)', () => {
   test('the boot schema inits the outcome ledger before any pick RPC can run', () => {
-    // The take_pick CHECK-widening rebuild lives in core's ONE workspace schema,
-    // which every root boots through
-    // (core/tests/contract-workspace-schema.test.ts pins that). In the lazy
-    // EvolutionEngine constructor instead, a freshly-woken actor whose first
-    // action is pickAlternateTake hits the narrow CHECK and loses the preference.
+    // In the lazy EvolutionEngine constructor, a freshly-woken actor's first pickAlternateTake
+    // hits the narrow CHECK and loses the preference.
     const schema = readFileSync(
       join(import.meta.dir, '..', '..', 'core', 'src', 'state', 'workspace-schema.ts'), 'utf8',
     );
