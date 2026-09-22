@@ -82,8 +82,6 @@ function reassemble(frames: ForkFrame[]): ForkSnapshot {
     craftedTools: frames.flatMap((frame) => (frame.kind === 'craftedTools' ? frame.rows : [])),
     memoryChunks: frames.flatMap((frame) => (frame.kind === 'memoryChunks' ? frame.rows : [])),
     sessionMessages: frames.flatMap((frame) => (frame.kind === 'sessionMessages' ? frame.rows : [])),
-    messageParts: frames.flatMap((frame) => (frame.kind === 'messageParts' ? frame.rows : [])),
-    messageUpdates: frames.flatMap((frame) => (frame.kind === 'messageUpdates' ? frame.rows : [])),
     conversationEntries: frames.flatMap((frame) => (frame.kind === 'conversationEntries' ? frame.rows : [])),
     conversationEntryParts: frames.flatMap((frame) => (frame.kind === 'conversationEntryParts' ? frame.rows : [])),
     contextMembers: frames.flatMap((frame) => (frame.kind === 'contextMembers' ? frame.rows : [])),
@@ -108,13 +106,8 @@ function rowPayloadBytes(frame: ForkFrame): number {
         + bytes(row.hash) + bytes(row.text), 0);
     case 'sessionMessages':
       return frame.rows.reduce((total, row) => total + bytes(row.message_id) + bytes(row.role)
-        + bytes(row.native_content_kind) + bytes(row.origin), 0);
-    case 'messageParts':
-      return frame.rows.reduce((total, row) => total + bytes(row.message_id) + bytes(row.kind)
-        + bytes(row.reply_to_message_id), 0);
-    case 'messageUpdates':
-      return frame.rows.reduce((total, row) => total + bytes(row.message_id) + bytes(row.operation)
-        + bytes(row.payload_json) + bytes(row.payload_path) + bytes(row.payload_digest), 0);
+        + bytes(row.native_content_kind) + bytes(row.origin) + bytes(row.envelope_json)
+        + bytes(row.content_json) + bytes(row.content_path) + bytes(row.content_digest), 0);
     case 'conversationEntries':
       return frame.rows.reduce((total, row) => total + bytes(row.id) + bytes(row.parent_id) + bytes(row.role)
         + bytes(row.turn_id) + bytes(row.run_id)
@@ -173,8 +166,6 @@ describe('forkTransferFrames source streamer', () => {
       craftedTools: carried.craftedTools.length,
       memoryChunks: carried.memoryChunks.length,
       sessionMessages: carried.sessionMessages.length,
-      messageParts: carried.messageParts.length,
-      messageUpdates: carried.messageUpdates.length,
       conversationEntries: carried.conversationEntries.length,
       conversationEntryParts: carried.conversationEntryParts.length,
       contextMembers: carried.contextMembers.length,
@@ -185,9 +176,9 @@ describe('forkTransferFrames source streamer', () => {
   test('bounds every row batch and file range while sending an oversized row intact', async () => {
     const ws = createTestWorkspace();
     const chat = await seedChain(ws);
-    // The largest payload the store keeps inline is one update row that cannot
-    // be split, so it crosses alone rather than being refused.
-    const inline = 'x'.repeat(INLINE_PAYLOAD_BYTES - 2);
+    // The largest content the store keeps inline is one message row that
+    // cannot be split, so it crosses alone rather than being refused.
+    const inline = 'x'.repeat(INLINE_PAYLOAD_BYTES - 200);
     await chat.say({ id: 'm4', role: 'user', text: inline });
     await ws.vfs.writeFile('memory/large.md', 'y'.repeat(1_000_000));
 
@@ -196,8 +187,8 @@ describe('forkTransferFrames source streamer', () => {
     expect(rowFrames.every((frame) => frame.rows.length === 1 || rowPayloadBytes(frame) <= 2048)).toBe(true);
     expect(frames.filter(isFileFrame).every((frame) => frame.bytes.byteLength <= 2048)).toBe(true);
 
-    const huge = rowFrames.find((frame) => frame.kind === 'messageUpdates'
-      && frame.rows.some((row) => row.payload_json === JSON.stringify(inline)));
+    const huge = rowFrames.find((frame) => frame.kind === 'sessionMessages'
+      && frame.rows.some((row) => row.content_json !== null && row.content_json.includes(inline)));
 
     expect(huge?.rows).toHaveLength(1);
   });
@@ -216,11 +207,11 @@ describe('forkTransferFrames source streamer', () => {
     // receiver re-roots it under its own.
     expect(payloads.every((frame) => !frame.path.startsWith('/'))).toBe(true);
     const bytes = Bun.concatArrayBuffers(payloads.map((frame) => frame.bytes));
-    expect(new TextDecoder().decode(bytes)).toBe(JSON.stringify(spilled));
+    expect(JSON.parse(new TextDecoder().decode(bytes))).toEqual([{ partNo: 0, kind: 'text', streamOrder: 0, replyTo: null, value: { type: 'text', text: spilled } }]);
 
     const referenced = frames.filter(isRowFrame).flatMap(
-      (frame) => (frame.kind === 'messageUpdates' ? frame.rows : []),
-    ).flatMap((row) => (row.payload_path === null ? [] : [row.payload_path]));
+      (frame) => (frame.kind === 'sessionMessages' ? frame.rows : []),
+    ).flatMap((row) => (row.content_path === null ? [] : [row.content_path]));
 
     expect(referenced).toContain(payloads[0]?.path);
   });
@@ -248,7 +239,7 @@ describe('forkTransferFrames source streamer', () => {
     await chat.say({ id: 'm4', role: 'user', text: 'p'.repeat(SPILLED_BYTES) });
     // A reference into another plane: re-rooting it would name a file this
     // fork does not have, copying it verbatim a directory it does not own.
-    void ws.sql`UPDATE message_updates SET payload_path = '/other/plane/escape.json' WHERE payload_path IS NOT NULL`;
+    void ws.sql`UPDATE session_messages SET content_path = '/other/plane/escape.json' WHERE content_path IS NOT NULL`;
 
     await expect(framesFor(ws, 64 * 1024, 'm4')).rejects.toThrow(/outside the artifact directory/);
   });

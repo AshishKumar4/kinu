@@ -696,9 +696,7 @@ export const BACKEND_CONFORMANCE: ConformanceManifest = {
     // snapshot is written at hydration and turn admission — not on first edit —
     // so an actor that never edits anything still has it.
     session_messages: EVERYWHERE,
-    message_parts: EVERYWHERE,
-    message_updates: EVERYWHERE,
-    message_projections: EVERYWHERE,
+    stream_parts: EVERYWHERE,
     actor_contexts: EVERYWHERE,
     actor_context_selection: EVERYWHERE,
     context_revisions: EVERYWHERE,

@@ -40,26 +40,25 @@ const ACTOR = 'a1';
  *  pair, written straight to SQL because this suite is about what the archive
  *  copies, not about how a turn publishes. */
 function seedEntry(db: Database, id: string, text: string, position: number): void {
-  db.query(`INSERT INTO session_messages (actor_id, message_id, role, native_content_kind, origin, recorded_at)
-    VALUES (?, ?, 'user', 'parts', 'input', ?)`).run(ACTOR, id, 100 + position);
-  db.query(`INSERT INTO message_parts (actor_id, message_id, part_no, kind) VALUES (?, ?, 0, 'text')`).run(ACTOR, id);
-  db.query(`INSERT INTO message_updates (actor_id, message_id, sequence, part_no, operation, payload_json)
-    VALUES (?, ?, 0, 0, 'open', ?)`).run(ACTOR, id, JSON.stringify({ type: 'text', text }));
+  const content = JSON.stringify([{ partNo: 0, kind: 'text', streamOrder: 0, replyTo: null, value: { type: 'text', text } }]);
+  db.query(`INSERT INTO session_messages (actor_id, message_id, role, native_content_kind, origin, recorded_at, envelope_json, sealed_at, content_json)
+    VALUES (?, ?, 'user', 'parts', 'input', ?, '{}', ?, ?)`).run(ACTOR, id, 100 + position, 100 + position, content);
   db.query(`INSERT INTO conversation_entries (actor_id, session_id, id, parent_id, role, recorded_at)
     VALUES (?, 'default', ?, NULL, 'user', ?)`).run(ACTOR, id, 100 + position);
-  db.query(`INSERT INTO conversation_entry_parts (actor_id, session_id, entry_id, position, message_id, part_no, through_sequence)
-    VALUES (?, 'default', ?, 0, ?, 0, 0)`).run(ACTOR, id, id);
+  db.query(`INSERT INTO conversation_entry_parts (actor_id, session_id, entry_id, position, message_id, part_no)
+    VALUES (?, 'default', ?, 0, ?, 0)`).run(ACTOR, id, id);
 }
 
 /** The text of one seeded entry, read back the way it was written. */
 function entryText(db: Database, id: string): string {
-  const row = db.query<{ payload_json: string }, [string]>(
-    `SELECT payload_json FROM message_updates WHERE message_id = ?`,
+  const row = db.query<{ content_json: string }, [string]>(
+    `SELECT content_json FROM session_messages WHERE message_id = ?`,
   ).get(id);
 
-  if (!row) throw new Error(`no message payload for ${id}`);
+  if (!row) throw new Error(`no message content for ${id}`);
+  const part = v.parse(v.array(JsonObjectSchema), JSON.parse(row.content_json))[0];
 
-  return v.parse(v.string(), v.parse(JsonObjectSchema, JSON.parse(row.payload_json)).text);
+  return v.parse(v.string(), v.parse(JsonObjectSchema, part?.value).text);
 }
 
 /** A workspace database with the awkward content: text, BLOBs, many rows. */

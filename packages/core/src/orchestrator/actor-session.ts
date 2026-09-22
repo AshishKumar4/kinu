@@ -207,10 +207,8 @@ export class ActorSession {
     let reference: MessageReference;
 
     if (existing === null) {
-      // The reference names the cutoff the preparation will publish; `landInput`
-      // checks the landed row against it.
       prepared = await this.canonical.messages.prepare(steerUserMessage(steers), id);
-      reference = { messageId: id, sequence: prepared.updates.length - 1 };
+      reference = { messageId: id };
     } else {
       reference = existing;
     }
@@ -548,6 +546,7 @@ export class ActorSession {
     let completed = false;
     let program: ActorTurnProgram | null = null;
     let failure: Error | null = null;
+    let durableOutput: SessionStream | null = null;
 
     try {
       active.phase = 'running';
@@ -568,7 +567,8 @@ export class ActorSession {
       });
 
       active.claim = claim;
-      const durableOutput = new SessionStream(this.canonical, lease.turnId, claim.epoch);
+      durableOutput = new SessionStream(this.canonical, lease.turnId, claim.epoch);
+      const stream = durableOutput;
 
       const events = operationProfileStream(startActorTurn({
         runtime: this.runtime, mode: this.mode, task: input.task, loopVersion: input.loopVersion,
@@ -577,8 +577,8 @@ export class ActorSession {
         scaffoldStreamOptions: input.scaffoldStreamOptions,
         chat: { ...input.chat, tools, history: this.messages, signal: active.abort.signal, extensions,
           meter: this.orchestrator.acc.composition,
-          persistStreamPart: part => durableOutput.nativePart(part),
-          persistStep: messages => durableOutput.nativeStep(messages),
+          persistStreamPart: part => stream.nativePart(part),
+          persistStep: messages => stream.nativeStep(messages),
           dynamicContext: { ledger: this.dynamic, snapshot: () => input.dynamic(profile, tools) },
           stepContext: {
             base: async () => {
@@ -589,7 +589,7 @@ export class ActorSession {
             },
             consume: async ({ stepNumber, messages }) => {
               const consumed = await this.options.claims.consume(claim, { index: stepNumber, messages });
-              durableOutput.beginRequest(consumed.requestId, stepNumber);
+              stream.beginRequest(consumed.requestId, stepNumber);
             },
           } } satisfies ChatOptions,
       }), captureOperationProfile({
@@ -599,7 +599,7 @@ export class ActorSession {
 
       for await (const event of events) {
         this.requireTurn(lease);
-        await durableOutput.observe(event);
+        await stream.observe(event);
 
         switch (event.type) {
           case 'text-delta': this.orchestrator.acc.onFirstChunk(); text += event.delta; break;
@@ -673,12 +673,13 @@ export class ActorSession {
       active.phase = 'settling';
 
       if (active.claim !== null) {
+        await durableOutput?.settle();
         const settled = await this.canonical.materialize();
         this.messages.splice(0, this.messages.length, ...settled.messages);
       }
     }
 
-    const output = this.canonical.outputForTurn(lease.turnId);
+    const output = await this.canonical.outputForTurn(lease.turnId);
     const outputReferences = output.messages;
     const finalTextReference = await this.matchTranscriptText(text, outputReferences);
     const admitted = active.claim === null ? null : (await this.options.claims.consumedContext(lease.turnId, 0)) ?? (await this.options.claims.admittedFor(active.claim));
@@ -710,7 +711,7 @@ export class ActorSession {
 
       if (last === undefined) continue;
 
-      if (last.value.text === text) return { messageId: reference.messageId, partNo: last.partNo, throughSequence: reference.sequence };
+      if (last.value.text === text) return { messageId: reference.messageId, partNo: last.partNo };
       break;
     }
 
@@ -728,10 +729,9 @@ export class ActorSession {
 
     return this.runtime.storage.transactionSync(() => {
       this.canonical.assertClaimEpoch(claim.turnId, claim.epoch);
-      const reference = this.canonical.messages.insert(prepared, 'render');
-      this.canonical.messages.seal(reference);
+      this.canonical.messages.insert(prepared, 'render');
 
-      return { messageId: id, partNo: 0, throughSequence: reference.sequence };
+      return { messageId: id, partNo: 0 };
     });
   }
 

@@ -31,9 +31,12 @@ export class SessionHistory {
   readonly context: SessionContext;
   readonly proposals: SessionProposals;
   readonly requests: SessionRequests;
+  /** One SQL transaction; the caller fences it. */
+  readonly atomic: <T>(write: () => T) => T;
 
   constructor(private readonly dependencies: SessionHistoryDependencies) {
     const { sql, actor, transactionSync, files } = dependencies;
+    this.atomic = transactionSync;
     const payloads = new SessionPayloads(files);
     this.messages = new SessionMessages(sql, actor, payloads);
     this.context = new SessionContext(sql, actor, transactionSync);
@@ -41,16 +44,38 @@ export class SessionHistory {
     this.requests = new SessionRequests(sql, actor, this.messages, payloads);
   }
 
-  /** One fenced write to a message the working context already holds: a
-   *  streamed delta extends the message and changes no membership, so it
-   *  mints no context revision. The cutoff the context pins for that message
-   *  moves once, when its step finishes. */
-  extendOutput(turnId: string, epoch: number, write: () => MessageReference): MessageReference {
-    return this.dependencies.transactionSync(() => {
-      this.assertEpoch(turnId, epoch);
+  /** Open messages no live stream owns: their request's turn claim is settled,
+   *  or a later admission of that turn superseded its epoch. Nothing extends
+   *  such a message again, so its accumulated parts are its content, and a
+   *  model-facing one joins the working context as the cut answer it is. A
+   *  message whose claim is admitted at its epoch is a live stream and is
+   *  never touched, whichever admission asks. */
+  async sealAbandoned(): Promise<void> {
+    this.dependencies.actor.assertCurrent();
+    const actorId = this.dependencies.actor.actorId;
 
-      return write();
-    });
+    const abandoned = () => this.dependencies.sql<{ message_id: string; origin: string }>`SELECT m.message_id,m.origin FROM session_messages m
+      JOIN actor_requests r ON r.actor_id=m.actor_id AND r.request_id=m.request_id
+      LEFT JOIN actor_turn_claims c ON c.actor_id=r.actor_id AND c.turn_id=r.turn_id
+      WHERE m.actor_id=${actorId} AND m.sealed_at IS NULL AND (c.turn_id IS NULL OR c.status!='admitted' OR c.epoch!=r.epoch) ORDER BY m.rowid`;
+
+    for (const row of abandoned()) {
+      const parts = await this.messages.openParts(row.message_id);
+
+      if (parts === null) continue;
+      const content = await this.messages.prepareContent(parts);
+      const selected = this.context.selected() ?? this.context.initialize();
+      this.dependencies.transactionSync(() => {
+        if (!abandoned().some(candidate => candidate.message_id === row.message_id)) return;
+        this.context.commit(selected, 'output', null, entries => {
+          this.messages.seal(row.message_id, content);
+
+          if (row.origin !== 'output' || entries.some(entry => entry.messageId === row.message_id)) return entries;
+
+          return [...entries, { messageId: row.message_id, entryId: row.message_id, position: entries.length }];
+        }, () => this.dependencies.actor.assertCurrent());
+      });
+    }
   }
 
   transcript(sessionId: string): SessionTranscript {
@@ -195,7 +220,7 @@ export class SessionHistory {
 
     const committed = this.dependencies.transactionSync(() => {
       const applied = this.proposals.apply(pending.proposal_id, assertOwner, entries => {
-        if (entries.length !== candidate.length || entries.some((entry, index) => entry.entryId !== candidate[index]?.entryId || entry.messageId !== candidate[index]?.messageId || entry.sequence !== candidate[index]?.sequence)) return 'history_rewritten';
+        if (entries.length !== candidate.length || entries.some((entry, index) => entry.entryId !== candidate[index]?.entryId || entry.messageId !== candidate[index]?.messageId)) return 'history_rewritten';
 
         return refusal;
       }, turnId);
@@ -227,33 +252,30 @@ export class SessionHistory {
   }
 
   /** `messages` is the model-facing output; `parts` also carries render-only parts for the public transcript. */
-  outputForTurn(turnId: string): TurnOutput {
+  async outputForTurn(turnId: string): Promise<TurnOutput> {
     this.dependencies.actor.assertCurrent();
 
-    const rows = this.dependencies.sql<{ message_id: string; origin: string; sequence: number; epoch: number; step: number; output_slot: number }>`SELECT m.message_id,m.origin,MAX(u.sequence) AS sequence,r.epoch,COALESCE(r.step_index,m.output_slot/3) AS step,m.output_slot
+    const rows = this.dependencies.sql<{ message_id: string; origin: string; epoch: number; step: number; output_slot: number }>`SELECT m.message_id,m.origin,r.epoch,COALESCE(r.step_index,m.output_slot/3) AS step,m.output_slot
       FROM session_messages m JOIN actor_requests r ON r.actor_id=m.actor_id AND r.request_id=m.request_id
-      JOIN message_updates u ON u.actor_id=m.actor_id AND u.message_id=m.message_id
       WHERE m.actor_id=${this.dependencies.actor.actorId} AND r.turn_id=${turnId} AND m.origin IN ('output','render')
-      GROUP BY m.message_id,m.origin,r.epoch,r.step_index,m.output_slot ORDER BY r.epoch,step,m.output_slot`;
+      ORDER BY r.epoch,step,m.output_slot`;
 
     const parts: (MessagePartReference & { epoch: number; step: number; order: number })[] = [];
 
     for (const row of rows) {
-      const references = this.dependencies.sql<{ part_no: number; stream_order: number | null }>`SELECT part_no,stream_order FROM message_parts WHERE actor_id=${this.dependencies.actor.actorId} AND message_id=${row.message_id} ORDER BY part_no`;
-
-      for (const part of references) parts.push({ messageId: row.message_id, partNo: part.part_no, throughSequence: row.sequence, epoch: row.epoch, step: row.step, order: part.stream_order ?? part.part_no });
+      for (const part of await this.messages.materializeParts({ messageId: row.message_id })) parts.push({ messageId: row.message_id, partNo: part.partNo, epoch: row.epoch, step: row.step, order: part.streamOrder });
     }
 
     parts.sort((a, b) => a.epoch - b.epoch || a.step - b.step || a.order - b.order);
 
-    return { messages: rows.filter(row => row.origin === 'output').map(row => ({ messageId: row.message_id, sequence: row.sequence })), parts: parts.map(({ messageId, partNo, throughSequence }) => ({ messageId, partNo, throughSequence })) };
+    return { messages: rows.filter(row => row.origin === 'output').map(row => ({ messageId: row.message_id })), parts: parts.map(({ messageId, partNo }) => ({ messageId, partNo })) };
   }
 
   admittedInput(ingressId: string): MessageReference | null {
     this.dependencies.actor.assertCurrent();
-    const row = this.dependencies.sql<{ message_id: string; sequence: number }>`SELECT m.message_id,MAX(u.sequence) AS sequence FROM session_messages m JOIN message_updates u ON u.actor_id=m.actor_id AND u.message_id=m.message_id WHERE m.actor_id=${this.dependencies.actor.actorId} AND m.ingress_id=${ingressId} GROUP BY m.message_id`[0];
+    const row = this.dependencies.sql<{ message_id: string }>`SELECT message_id FROM session_messages WHERE actor_id=${this.dependencies.actor.actorId} AND ingress_id=${ingressId}`[0];
 
-    return row === undefined ? null : { messageId: row.message_id, sequence: row.sequence };
+    return row === undefined ? null : { messageId: row.message_id };
   }
 
   async admitInput(input: { readonly id: string; readonly message: ModelMessage; readonly turnId: string; readonly assertOwner: () => void }): Promise<MessageReference> {
@@ -280,10 +302,9 @@ export class SessionHistory {
 
       if (existing === null) {
         if (prepared === null) throw new KinuError('missing', 'landed input was not prepared');
-        const inserted = this.messages.insert(prepared, 'input', { ingressId: reference.messageId });
+        this.messages.insert(prepared, 'input', { ingressId: reference.messageId });
+      }
 
-        if (inserted.sequence !== reference.sequence) throw new KinuError('io', 'landed input cutoff differs from preparation');
-      } else if (existing.sequence !== reference.sequence) throw new KinuError('denied', 'landed input changed during preparation');
       this.activateInput(reference, turnId, assertOwner);
       const selected = this.context.selected();
 
@@ -332,7 +353,7 @@ export class SessionHistory {
     return this.dependencies.transactionSync(() => {
       const reference = this.messages.insert(prepared, input.origin);
       transcript.record({ id: input.id, parentId: input.parentId, role: input.message.role, turnId: null, runId: null, metadata, context: null,
-        parts: prepared.parts.map(part => ({ messageId: reference.messageId, partNo: part.number, throughSequence: reference.sequence })) });
+        parts: prepared.content.parts.map(part => ({ messageId: reference.messageId, partNo: part.partNo })) });
 
       return reference;
     });
@@ -345,11 +366,15 @@ export class SessionHistory {
     if (claim?.epoch !== epoch) throw new KinuError('denied', 'actor claim epoch is no longer current');
   }
 
-  assertEpoch(turnId: string, epoch: number): void {
+  epochCurrent(turnId: string, epoch: number): boolean {
     this.dependencies.actor.assertCurrent();
     const actorId = this.dependencies.actor.actorId;
     const claim = this.dependencies.sql<{ epoch: number; status: string }>`SELECT epoch,status FROM actor_turn_claims WHERE actor_id=${actorId} AND turn_id=${turnId}`[0];
 
-    if (claim?.epoch !== epoch || claim.status !== 'admitted') throw new KinuError('denied', 'actor execution epoch is no longer current');
+    return claim?.epoch === epoch && claim.status === 'admitted';
+  }
+
+  assertEpoch(turnId: string, epoch: number): void {
+    if (!this.epochCurrent(turnId, epoch)) throw new KinuError('denied', 'actor execution epoch is no longer current');
   }
 }

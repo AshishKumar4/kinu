@@ -43,7 +43,7 @@ export class SessionRequests {
       else {
         const prepared = await this.messages.prepare(message, crypto.randomUUID());
         rendered.push(prepared);
-        references.push({ messageId: prepared.id, sequence: prepared.updates.length - 1 });
+        references.push({ messageId: prepared.id });
       }
     }
 
@@ -54,7 +54,7 @@ export class SessionRequests {
     this.actor.assertCurrent();
     assertEpoch();
 
-    for (const message of bundle.rendered) this.messages.seal(this.messages.insert(message, 'render'));
+    for (const message of bundle.rendered) this.messages.insert(message, 'render');
     this.record(bundle.request, assertEpoch);
   }
 
@@ -80,8 +80,8 @@ export class SessionRequests {
       VALUES(${actorId},${request.id},${request.turnId},${request.runId},${request.epoch},${request.step},${request.revision},${request.source.contextId},${request.source.revision},${request.metadata.json},${request.metadata.path},${request.metadata.digest},${Date.now()})`;
 
     for (const [position, message] of request.messages.entries()) {
-      void this.sql`INSERT INTO request_messages(actor_id,request_id,position,message_id,through_sequence)
-        VALUES(${actorId},${request.id},${position},${message.messageId},${message.sequence})`;
+      void this.sql`INSERT INTO request_messages(actor_id,request_id,position,message_id)
+        VALUES(${actorId},${request.id},${position},${message.messageId})`;
     }
   }
 
@@ -99,13 +99,13 @@ export class SessionRequests {
     else if (row.metadata_json === null && row.metadata_path !== null && row.metadata_digest !== null) metadata = { json: null, path: row.metadata_path, digest: row.metadata_digest };
     else throw new KinuError('io', 'invalid prepared request metadata reference');
 
-    const messages = this.sql<{ message_id: string; through_sequence: number }>`SELECT message_id,through_sequence FROM request_messages
+    const messages = this.sql<{ message_id: string }>`SELECT message_id FROM request_messages
       WHERE actor_id=${actorId} AND request_id=${id} ORDER BY position`;
 
     return {
       id: row.request_id, turnId: row.turn_id, runId: row.run_id, epoch: row.epoch, revision: row.revision, step: row.step_index,
       source: { contextId: row.context_id, revision: row.context_revision }, metadata,
-      messages: messages.map(message => ({ messageId: message.message_id, sequence: message.through_sequence })),
+      messages: messages.map(message => ({ messageId: message.message_id })),
     };
   }
 

@@ -492,12 +492,12 @@ describe('the table set an export walks is pinned by its first page', () => {
     expect(pages.some((l) => l.includes('"name":"late_arrival"'))).toBe(false);
 
     // And the archive is RESTORABLE — the property the missing pin destroyed.
-    // The total is the seeded conversation exactly: five messages with their
-    // parts and updates, five entries with their part references, and the one
-    // head pointer. The late table's row is not among them.
+    // The total is the seeded conversation exactly: five messages, five
+    // entries with their part references, and the one head pointer. The late
+    // table's row is not among them.
     const target = fresh();
     const result = await restoreWorkspaceArchive(target.archive, pages);
-    expect(result.rows).toBe(36);
+    expect(result.rows).toBe(16);
   });
 
   test('a WITHOUT ROWID table pages stably under concurrent writes', async () => {

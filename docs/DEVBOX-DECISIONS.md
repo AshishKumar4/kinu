@@ -839,6 +839,18 @@ Deltas now reach the rows in windows of 64 deltas or 4 KB, written ahead of
 the part's next non-delta update or by the step's final text (bun:sqlite,
 30,000 deltas: 7.2 s and 40,051 rows to 0.85 s and 682 rows; the workerd
 gate 256 ms and 297 ms). A cut turn keeps all but its last window.
+Review fixes (commit d8a16a673): a streamed answer joins the working
+context only when it seals, so a context revision names immutable content;
+every container seals before its step advances, so a step cancelled while
+reasoning keeps its buffered tail; a part whose text outgrows one row
+continues in the next `stream_parts` segment (262,144 UTF-16 units, under
+the payload inline bound and the platform row limit) and its descriptor
+follows the spill rule; an abandoned message is one whose request's claim
+is settled or superseded in epoch, sealed after an admission commits and
+never by one the store refuses. The delta window counts UTF-8 bytes.
+Pins: `packages/core/tests/unit-session-stream.test.ts` (five), the fork
+refusal in `packages/core/tests/unit-fork.test.ts`, and the row bound in
+`packages/core/tests/unit-session-context-store.test.ts`.
 Pins: `packages/cli-backend/tests/local-session.test.ts` "a streamed answer
 mints a revision per step" and `packages/core/tests/unit-session-context-store.test.ts`
 "a sealed message is projected once", both red on the old code.
@@ -899,6 +911,61 @@ registers `http` and `https` transports only (`GitRemoteManager.getRemoteHelperF
 in `dist/git-bundle.generated.js`), so `git clone seed/app-a` is a URL parse
 failure rather than a copy. The suite asserts that refusal by its own words,
 so a host failure can never hide behind it.
+D24. A streamed answer accumulates in SQLite in one row per open part and
+is committed once (2026-09-21, commits bef2de9bf through bd383b907 on
+`lane/session-store`). The owner's decision, removing D23's defect at its
+root: `message_updates` (an append-only ledger folded to a cutoff on every
+read), `message_parts` and D23's `message_projections` cache are gone, with
+every `*_sequence` column and FK, `PreparedMessageUpdate`, the two partial
+indexes and `SessionHistory.extendOutput`. A message row holds its envelope
+and, once sealed, its parts array (`content_json`, or `content_path` plus
+digest through the payload spill rule). A streamed answer accumulates in
+`stream_parts`, one row per open part, extended by D23's window of 64
+deltas or 4 KB as ONE `UPDATE ... SET text = text || ?`; the seal at step
+end writes the content row and deletes the stream rows. `MessageReference`
+is `{ messageId }`; every sequence fence is an open-or-sealed check under
+the turn-epoch fence. A turn that ends before its step seals what streamed;
+a message a reset activation left open seals at the next admission; a fork
+refuses an open message. Tool results keep `toolCallId` and `toolName` in
+their value; `replyTo` is data in the parts array. The schema genesis is
+re-locked (a reset deployment; there are no users).
+Measured 2026-09-21 in `/home/mrwhite0racle/Kinu-wt-session-store` with a
+throwaway bench (not committed) driving `SessionStream` over bun:sqlite,
+one streamed text answer, three runs each, median; the base 0104882bb read
+through a `git archive` copy under the same modules. Stream time is the
+whole answer from `text-start` to the step's seal; rows are what the answer
+leaves. 2,000 deltas: base 12 ms, 39 `message_updates` rows plus 2
+`message_parts` and 1 projection per answer; now 9 ms, 1 `stream_parts` row
+while open and 0 after, the answer in its message row. 30,000 deltas: base
+90 ms and 476 update rows; now 68 ms and 1 row while open. The read of a
+context after twenty 2,000-delta answers: base 6.8 ms (projection rows),
+now 5.6 ms (content rows). bun:sqlite in memory is the floor of both
+shapes; the Durable Object statement cost D23 measured is what the row
+counts stand for. The workerd transcript-cost gate
+(`packages/cf-backend/tests/workerd/long/transcript-cost.test.ts`) on this
+tree: a 500-delta turn 219 ms on an empty transcript and 299 ms after twenty
+2,000-delta answers (1.37x, bound 3x). Removed: 3 tables (`message_parts`,
+`message_updates`, `message_projections`; `stream_parts` added), 7
+`*_sequence` columns with their FKs, 4 fork staging columns, 908 source
+lines against 544 added across 22 files (`git diff --numstat 0104882bb
+bd383b907 -- 'packages/*/src/**'`).
+Review fixes (commit d8a16a673): a streamed answer joins the working
+context only when it seals, so a context revision names immutable content;
+every container seals before its step advances, so a step cancelled while
+reasoning keeps its buffered tail; a part whose text outgrows one row
+continues in the next `stream_parts` segment (262,144 UTF-16 units, under
+the payload inline bound and the platform row limit) and its descriptor
+follows the spill rule; an abandoned message is one whose request's claim
+is settled or superseded in epoch, sealed after an admission commits and
+never by one the store refuses. The delta window counts UTF-8 bytes.
+Pins: `packages/core/tests/unit-session-stream.test.ts` (five), the fork
+refusal in `packages/core/tests/unit-fork.test.ts`, and the row bound in
+`packages/core/tests/unit-session-context-store.test.ts`.
+Pins: `packages/cli-backend/tests/local-session.test.ts` "a streamed answer
+holds one stream row per part while open and none once sealed" and
+`packages/core/tests/unit-session-context-store.test.ts` "an open message
+reads its accumulated text and a sealed one its content" and "a message left
+open by a dead stream seals from what it accumulated at the next admission".
 
 ## Measurement contract for a strategy comparison
 
