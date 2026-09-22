@@ -1,24 +1,31 @@
 /**
- * The Drive — the owner's one tenant, the same tree every workspace mounts at
- * `/shared`. One folder at a time under a breadcrumb, each entry on the
- * roster's 56px line with its kind, size and age; the actions a file manager
- * owes — upload, new folder, rename, delete, download — and the two that make
- * this Drive a skills library: "Mark as skill" on any folder that already is
- * one, "Add skill" from a pasted SKILL.md or a picked folder or zip.
+ * The Drive — the owner's one tenant, the same tree every workspace mounts on
+ * its file plane at `/shared`. One folder at a time under a breadcrumb, each
+ * entry on the roster's 56px line with its kind, size and age; the actions a
+ * file manager owes — upload, new folder, rename, delete, download — and the
+ * two that make this Drive a skills library: "Mark as skill" on any folder
+ * that already is one, "Add skill" from a pasted SKILL.md, folder or zip.
  *
- * The URL is the folder: `/shared/projects/ops` lists `/projects/ops` on the
- * tenant, so a folder is a link a reader can hand on. `/shared/blueprints`
+ * The URL is the folder: `/drive/projects/ops` lists `/projects/ops` on the
+ * tenant, so a folder is a link a reader can hand on. `/drive/blueprints`
  * is the one folder whose contents are not bytes: it draws the shared library.
+ *
+ * The root is the page a reader lands on: the slates and blueprints they own
+ * and the shares in both directions, each section a grid of tiles, with the
+ * folder listing under them.
  */
 import { startTransition, useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import { Button, Loader } from "@cloudflare/kumo";
 import {
-  ArrowSquareOutIcon, BookOpenIcon, CaretRightIcon, DownloadSimpleIcon, FileIcon, FileZipIcon, FolderIcon,
-  FolderPlusIcon, FolderSimpleIcon, HardDrivesIcon, LinkSimpleIcon, PencilSimpleIcon, TrashIcon, UploadSimpleIcon,
-  WarningIcon, XIcon,
+  BookOpenIcon, CaretRightIcon, DownloadSimpleIcon, FileIcon, FileZipIcon, FolderIcon,
+  FolderPlusIcon, FolderSimpleIcon, HardDrivesIcon, LinkSimpleIcon, PencilSimpleIcon,
+  TrashIcon, UploadSimpleIcon, WarningIcon, XIcon,
 } from "@phosphor-icons/react";
-import { DRIVE_BLUEPRINTS_DIR, DRIVE_SKILLS_DIR, formatBytes, shortAge, type DriveEntry, type MarkedSkill } from "@kinu.run/core";
+import {
+  APP_ROUTES, DRIVE_BLUEPRINTS_DIR, DRIVE_SKILLS_DIR, formatBytes, shortAge,
+  type DriveEntry, type MarkedSkill,
+} from "@kinu.run/core";
 import { renderThrownChain } from "@kinu.run/core/obs";
 import {
   addSkillArchive, addSkillFolder, addSkillText, deleteEntry, downloadUrl, listDrive, makeFolder, markAsSkill, renameEntry,
@@ -30,11 +37,12 @@ import { LoadFailure } from "@/components/ui/LoadFailure";
 import { Modal } from "@/components/ui/Modal";
 import { FilledButton } from "@/components/ui/FilledButton";
 import { inputCls } from "@/components/ui/form";
+import { DriveSections } from "@/components/drive/DriveSections";
 import { SharedLibraryView, type SharedLibraryProps } from "@/components/shared/SharedLibrary";
 
 /** The Drive's URL for a tenant folder. */
 function folderHref(path: string): string {
-  return path === "/" ? "/shared" : `/shared${path}`;
+  return path === "/" ? APP_ROUTES.drive : `${APP_ROUTES.drive}${path}`;
 }
 
 function childPath(folder: string, name: string): string {
@@ -375,6 +383,7 @@ export default function DrivePage({ library }: { library?: SharedLibraryProps } 
   const navigate = useNavigate();
   const load = useCallback(() => listDrive(path), [path]);
   const listing = useAsyncResource(load, undefined, path);
+  const isRoot = path === "/";
   const [dialog, setDialog] = useState<Dialog | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [transfers, setTransfers] = useState<Transfer[]>([]);
@@ -445,9 +454,15 @@ export default function DrivePage({ library }: { library?: SharedLibraryProps } 
           <h1 className="p-display text-2xl">Drive</h1>
         </header>
         <p className="p-meta p-text-3 -mt-3">
-          Every workspace you own sees this tree at <span className="font-mono p-text-2">/shared</span>. Folders under
-          <span className="font-mono p-text-2"> {DRIVE_SKILLS_DIR}</span> are skills in all of them.
+          Your slates, blueprints and shares, and the files every workspace you own sees at <span className="font-mono p-text-2">/shared</span>.
         </p>
+
+        {isRoot && (
+          <>
+            <DriveSections {...library} onNotice={setNotice} />
+            <h2 className="p-heading text-[15px] p-text -mb-2">Files</h2>
+          </>
+        )}
 
         <div className="flex flex-wrap items-center gap-x-4 gap-y-3">
           <Breadcrumbs path={path} />
@@ -507,10 +522,10 @@ export default function DrivePage({ library }: { library?: SharedLibraryProps } 
           </section>
         )}
 
-        {!isLibrary && path === "/" && (
+        {!isLibrary && isRoot && (
           <p className="p-meta p-text-4 flex items-center gap-1.5">
-            <ArrowSquareOutIcon size={12} />
-            <span>Blueprints shared with you live in <Link to={folderHref(DRIVE_BLUEPRINTS_DIR)} className="p-accent">blueprints</Link>.</span>
+            <BookOpenIcon size={12} />
+            <span>Folders under <Link to={folderHref(DRIVE_SKILLS_DIR)} className="p-accent">skills</Link> are skills in every workspace you own.</span>
           </p>
         )}
       </div>

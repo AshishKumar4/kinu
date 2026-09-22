@@ -362,9 +362,9 @@ interface AsyncTaskOwner {
 }
 
 /** A UserDO stub as this actor sees it: the RPC methods rpc-surface.ts declares
- *  reachable, plus fetch. A method outside that list is a compile error here,
- *  which is the gate's own rule stated once. */
-type UserHubClient = Pick<UserDO, UserDoRpcMethod> & Pick<Fetcher, 'fetch'>;
+ *  reachable. A method outside that list is a compile error here, which is the
+ *  gate's own rule stated once. */
+type UserHubClient = Pick<UserDO, UserDoRpcMethod>;
 
 const ClientRpcFrameSchema = v.object({
   type: v.literal('rpc'), id: v.string(), method: v.string(), args: v.array(JsonValueSchema),

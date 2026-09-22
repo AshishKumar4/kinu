@@ -1,9 +1,23 @@
 import { gzipSync } from 'node:zlib';
+import { gitRepositoryRoute } from './git-http-fake';
 
 /** One package a hosted `npm install` can fetch: its metadata and its tarball. */
 export const REGISTRY_HOST = 'npm-registry.invalid';
 
 export const REGISTRY_PKG = 'host-fixture';
+
+/**
+ * A family wide enough to route the resolver off the coordinator.
+ *
+ * Nimbus resolves a layer of fewer than five packages in the calling object's
+ * own loaders and shards a wider one across sibling Durable Objects
+ * (`@nimbus-sh/fabric/dist/fanout.js:29`, `IN_DO_THRESHOLD = 5`). Six names
+ * therefore make one install prove the sibling leg, which a single-package
+ * install never reaches.
+ */
+export const REGISTRY_FANOUT_PKGS = [
+  REGISTRY_PKG, 'host-fixture-b', 'host-fixture-c', 'host-fixture-d', 'host-fixture-e', 'host-fixture-f',
+] as const;
 
 export const REGISTRY_VERSION = '1.0.0';
 
@@ -43,21 +57,23 @@ function tarFile(name: string, data: string): Uint8Array[] {
 // package.json FIRST in the archive, as npm ships it. The streaming writer
 // holds the manifest back and lands it last, so a tree without one is a tree
 // the next install re-extracts rather than trusts.
-const REGISTRY_TARBALL = (() => {
-  const parts = [
-    ...tarFile('package/package.json', REGISTRY_MANIFEST),
-    ...tarFile('package/lib/index.js', REGISTRY_ENTRY),
-    new Uint8Array(1024),
-  ];
+const REGISTRY_PACKAGES: Record<string, { manifest: string; tarball: Uint8Array<ArrayBuffer> }> =
+  Object.fromEntries(REGISTRY_FANOUT_PKGS.map((name) => {
+    const manifest = `{"name":"${name}","version":"${REGISTRY_VERSION}","main":"lib/index.js"}`;
 
-  const total = parts.reduce((sum, part) => sum + part.length, 0);
-  const out = new Uint8Array(total);
-  let offset = 0;
+    const parts = [
+      ...tarFile('package/package.json', manifest),
+      ...tarFile('package/lib/index.js', REGISTRY_ENTRY),
+      new Uint8Array(1024),
+    ];
 
-  for (const part of parts) { out.set(part, offset); offset += part.length; }
+    const out = new Uint8Array(parts.reduce((sum, part) => sum + part.length, 0));
+    let offset = 0;
 
-  return new Uint8Array(gzipSync(out));
-})();
+    for (const part of parts) { out.set(part, offset); offset += part.length; }
+
+    return [name, { manifest, tarball: new Uint8Array(gzipSync(out)) }];
+  }));
 
 /**
  * The only network a hosted `npm install` may reach under test is this
@@ -70,23 +86,32 @@ export async function registryOutbound(request: Request): Promise<Response> {
     return new Response(`Unmatched test egress is disabled: ${request.url}`, { status: 502 });
   }
 
-  const tarball = `http://${REGISTRY_HOST}/${REGISTRY_PKG}/-/${REGISTRY_PKG}-${REGISTRY_VERSION}.tgz`;
-  const manifest = { name: REGISTRY_PKG, version: REGISTRY_VERSION, main: 'lib/index.js', dist: { tarball } };
+  const repository = gitRepositoryRoute(request, url.pathname);
 
-  if (url.pathname === `/${REGISTRY_PKG}`) {
+  if (repository !== null) return repository;
+
+  const [name] = url.pathname.replace(/^\//, '').split('/');
+  const held = name === undefined ? undefined : REGISTRY_PACKAGES[name];
+
+  if (held === undefined) return new Response('not found', { status: 404 });
+
+  const tarball = `http://${REGISTRY_HOST}/${name}/-/${name}-${REGISTRY_VERSION}.tgz`;
+  const manifest = { name, version: REGISTRY_VERSION, main: 'lib/index.js', dist: { tarball } };
+
+  if (url.pathname === `/${name}`) {
     return Response.json({
-      name: REGISTRY_PKG,
+      name,
       'dist-tags': { latest: REGISTRY_VERSION },
       versions: { [REGISTRY_VERSION]: manifest },
     });
   }
 
-  if (url.pathname === `/${REGISTRY_PKG}/latest` || url.pathname === `/${REGISTRY_PKG}/${REGISTRY_VERSION}`) {
+  if (url.pathname === `/${name}/latest` || url.pathname === `/${name}/${REGISTRY_VERSION}`) {
     return Response.json(manifest);
   }
 
-  if (url.pathname === `/${REGISTRY_PKG}/-/${REGISTRY_PKG}-${REGISTRY_VERSION}.tgz`) {
-    return new Response(REGISTRY_TARBALL, { headers: { 'Content-Type': 'application/octet-stream' } });
+  if (url.pathname === `/${name}/-/${name}-${REGISTRY_VERSION}.tgz`) {
+    return new Response(held.tarball, { headers: { 'Content-Type': 'application/octet-stream' } });
   }
 
   return new Response('not found', { status: 404 });

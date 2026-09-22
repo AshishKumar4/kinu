@@ -154,6 +154,12 @@ export class SlateDurabilityProbeRoot extends Agent<ProbeEnv> {
     await userDO.ensureWorkspaceCapability(workspace, claim.capabilityHash);
   }
 
+  /** A claimed workspace and nothing else, for a suite whose subject is the
+   *  shell rather than a slate. */
+  async openWorkspace(workspace: string, owner: string): Promise<void> {
+    await this.claimWorkspace(await this.workspaceTarget(workspace), workspace, owner);
+  }
+
   /** One authored file onto the workspace's file plane, through the upload
    *  chunk route: a single offset-0 final chunk, which (re)starts and
    *  completes the transfer in one call. */

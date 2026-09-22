@@ -144,29 +144,28 @@ async function measureChatLatency(message: string): Promise<TimingResult> {
           }
 
           // A body chunk is JSON when it carries a typed stream event and plain text otherwise.
-          if (msg.body) {
-            const chunk = tolerate(() => JSON.parse(msg.body), "malformed-input");
+          if (!msg.body) return;
+          const chunk = tolerate(() => JSON.parse(msg.body), "malformed-input");
 
-            if (chunk !== undefined) {
-              if (result.firstContentChunkMs < 0) {
-                result.firstContentChunkMs = performance.now() - t0;
-                result.firstContentPreview = JSON.stringify(chunk).slice(0, 120);
-                console.log(`  [${result.firstContentChunkMs.toFixed(0)}ms] First content chunk: ${result.firstContentPreview}`);
-              }
+          if (chunk === undefined) return;
 
-              // Detect reasoning (thinking) chunks
-              if (chunk.type === "reasoning" && result.firstThinkingMs < 0) {
-                result.firstThinkingMs = performance.now() - t0;
-                const reasoningText = chunk.text ?? chunk.textDelta ?? "";
-                console.log(`  [${result.firstThinkingMs.toFixed(0)}ms] First THINKING chunk: "${String(reasoningText).slice(0, 60)}"`);
-              }
+          if (result.firstContentChunkMs < 0) {
+            result.firstContentChunkMs = performance.now() - t0;
+            result.firstContentPreview = JSON.stringify(chunk).slice(0, 120);
+            console.log(`  [${result.firstContentChunkMs.toFixed(0)}ms] First content chunk: ${result.firstContentPreview}`);
+          }
 
-              // Detect text content chunks
-              if (chunk.type === "text-delta" && result.firstTextMs < 0) {
-                result.firstTextMs = performance.now() - t0;
-                console.log(`  [${result.firstTextMs.toFixed(0)}ms] First TEXT chunk: "${(chunk.textDelta ?? "").slice(0, 60)}"`);
-              }
-            }
+          // Detect reasoning (thinking) chunks
+          if (chunk.type === "reasoning" && result.firstThinkingMs < 0) {
+            result.firstThinkingMs = performance.now() - t0;
+            const reasoningText = chunk.text ?? chunk.textDelta ?? "";
+            console.log(`  [${result.firstThinkingMs.toFixed(0)}ms] First THINKING chunk: "${String(reasoningText).slice(0, 60)}"`);
+          }
+
+          // Detect text content chunks
+          if (chunk.type === "text-delta" && result.firstTextMs < 0) {
+            result.firstTextMs = performance.now() - t0;
+            console.log(`  [${result.firstTextMs.toFixed(0)}ms] First TEXT chunk: "${(chunk.textDelta ?? "").slice(0, 60)}"`);
           }
         }
       } catch (error) {

@@ -182,27 +182,29 @@ describe('dispersion is only dispersion inside one commit and one arm', () => {
 });
 
 describe('an attempt that produced no score is classed by WHY it produced none', () => {
-  test('a trajectory the ledger never closed is an eval defect', () => {
-    const result = triage([loaded({
-      runId: 'inert',
-      observations: [{
-        taskId: 'tool-001', repetition: 0, outcome: 'inert', reason: '0 turns, 12 tool calls',
-      }],
-    })], []);
+  const unscored = [
+    {
+      name: 'a trajectory the ledger never closed is an eval defect',
+      outcome: 'inert', reason: '0 turns, 12 tool calls', cls: 'eval-defect',
+    },
+    {
+      name: 'an attempt that raised out of the code under test is a product defect',
+      outcome: 'errored', reason: 'TypeError: x is not a function', cls: 'product-defect',
+    },
+  ] as const;
 
-    expect(classOf(result, 'behaviour/attempt/inert/tool-001')).toBe('eval-defect');
-  });
+  for (const attempt of unscored) {
+    test(attempt.name, () => {
+      const result = triage([loaded({
+        runId: attempt.outcome,
+        observations: [{
+          taskId: 'tool-001', repetition: 0, outcome: attempt.outcome, reason: attempt.reason,
+        }],
+      })], []);
 
-  test('an attempt that raised out of the code under test is a product defect', () => {
-    const result = triage([loaded({
-      runId: 'errored',
-      observations: [{
-        taskId: 'tool-001', repetition: 0, outcome: 'errored', reason: 'TypeError: x is not a function',
-      }],
-    })], []);
-
-    expect(classOf(result, 'behaviour/attempt/errored/tool-001')).toBe('product-defect');
-  });
+      expect(classOf(result, `behaviour/attempt/${attempt.outcome}/tool-001`)).toBe(attempt.cls);
+    });
+  }
 });
 
 describe('the record is never trusted about itself', () => {

@@ -1,13 +1,12 @@
 diff --git a/packages/core/src/identity/fork-plan.ts b/packages/core/src/identity/fork-plan.ts
-index 12567deca..24807f764 100644
 --- a/packages/core/src/identity/fork-plan.ts
 +++ b/packages/core/src/identity/fork-plan.ts
-@@ -303,7 +303,7 @@ export function planForkConversation(input: {
+@@ -244,7 +244,7 @@
  
    return {
      cut: { entryId: cutEntry.id, recordedAt: cutEntry.recorded_at },
 -    entryIds: chain.map((entry) => entry.id),
 +    entryIds: chain.slice(0, -1).map((entry) => entry.id),
-     messages: ordered,
+     messageIds: ordered,
      members,
      artifacts,

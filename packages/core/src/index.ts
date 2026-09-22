@@ -327,7 +327,7 @@ export {
   LiveShareRecordSchema, LiveShareCreatedSchema, ViewerCallSchema, ViewerRequestRecordSchema, ShareViewerClaimSchema,
   type ShareKind, type LiveShareVisibility, type BlueprintAddress, type BlueprintInspection, type BlueprintView,
   type BlueprintFork, type BlueprintBundle,
-  type PublishedBlueprint, type SharedLibrary, type SharedRow, type SlateShareRecord, type BlueprintEntry, type BlueprintWarning,
+  type PublishedBlueprint, type SharedLibrary, type SharedRow, type OwnedSlate, type SlateShareRecord, type BlueprintEntry, type BlueprintWarning,
   type ShareGrantMember, type ShareGrant, type SlateCapability,
   type SlateGraphMember, type SlateGraphBinding, type SlateCapabilityGraph,
   type LiveShareRecord, type LiveShareCreated, type ViewerCall, type ViewerRequestRecord, type ShareViewerClaim,

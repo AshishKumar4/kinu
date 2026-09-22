@@ -972,8 +972,10 @@ if (import.meta.main) {
 
   const boundary = messageFile === undefined ? conventionBoundary() : undefined;
 
+  const sinceConvention = boundary === undefined ? [] : governedCommits(boundary);
+
   const governed: readonly GovernedCommit[] = messageFile === undefined
-    ? (boundary === undefined ? [] : governedCommits(boundary))
+    ? sinceConvention
     : [{ sha: messageFile, message: cleanMessage(readFileSync(messageFile, 'utf8')) }];
 
   // The size rule dates from its own commit: in the ladder it reads only the
@@ -995,11 +997,9 @@ if (import.meta.main) {
   ].map((violation) => ({ commit, violation })));
 
   if (violations.length === 0) {
-    const scope = messageFile === undefined
-      ? (boundary === undefined
-        ? 'the convention has not landed on this branch yet, so no commit is governed'
-        : `${String(governed.length)} commit(s) since ${boundary.slice(0, 10)}`)
-      : messageFile;
+    const scope = messageFile ?? (boundary === undefined
+      ? 'the convention has not landed on this branch yet, so no commit is governed'
+      : `${String(governed.length)} commit(s) since ${boundary.slice(0, 10)}`);
 
     console.log(`${gate}: ok — ${scope}; ${measured}`);
     console.log(`\n${gate}: what this does NOT catch — review criteria, not gate criteria:`);

@@ -45,11 +45,22 @@
  * were also edited is not reported. `fmtSize` in cf-backend and `formatBytes`
  * in the CLI are the same algorithm over different unit strings, and this gate
  * does not see them.
+ *
+ * WHAT `--lock` MAY WRITE. The lock only shrinks or is re-keyed. A group that
+ * was fixed drops out and a group that lost a copy is recorded with the copies
+ * it has left; a group the lock has never held is refused, and a refused run
+ * writes nothing at all. The one arrival `--lock` accepts is one a departure
+ * pays for at the same copy count or higher, which is the rename and the file
+ * move — both change the key of a duplicate nobody made worse. So the way to
+ * clear a finding here is to delete the copy, never to re-record it.
  */
 
 import { createHash } from 'node:crypto';
 
-import { assertMeasured, reconcile, report, writeLock } from './gate-ratchet';
+import {
+  assertMeasured, readLock, reconcile, refuseLock, report, shrinkOnly, writeLock,
+  type LockRefusal,
+} from './gate-ratchet';
 import { readSources } from './sources';
 import {
   blockBodyOf, declaredName, functionOwner, identifierCalleeName, identifierText,
@@ -266,6 +277,39 @@ export function describe(group: DuplicateGroup): string {
   return [head, ...group.members.map((m) => `    ${m.file}:${m.line} ${m.name}`)].join('\n');
 }
 
+export interface ShrunkGroups {
+  /** What `--lock` writes, or nothing at all when the merge was refused. */
+  readonly keys: readonly string[] | undefined;
+  readonly refusals: readonly LockRefusal[];
+}
+
+/**
+ * The lock `--lock` is allowed to write over the one already recorded: a group
+ * may vanish or lose copies, and a group the lock has never held is refused
+ * unless a vanished group pays for it at the same copy count or higher.
+ *
+ * The number each group is weighed by is its COPY COUNT, read back out of the
+ * key rather than recorded twice: the lock records a group's identity as its
+ * kind plus one `file#name` per copy, so the copies are already in there. That
+ * is what makes a rename cheap and a third copy expensive — a moved pair
+ * re-keys against the pair that left, while a pair that became a trio arrives
+ * needing a three-copy departure that never happened.
+ */
+export function shrinkGroups(
+  previous: readonly string[],
+  candidate: readonly string[],
+): ShrunkGroups {
+  const numbered = (keys: readonly string[]): { key: string; value: number }[] =>
+    keys.map((key) => ({ key, value: key.split(' | ').length }));
+
+  const { merged, refusals } = shrinkOnly(numbered(previous), numbered(candidate));
+
+  return {
+    refusals,
+    keys: refusals.length > 0 ? undefined : merged.map(({ key }) => key),
+  };
+}
+
 /**
  * What this gate cannot see, printed on the GREEN path. A limitation visible
  * only in red output is invisible exactly when the tree is clean, which is
@@ -296,19 +340,27 @@ if (import.meta.main) {
 
   const groups = findDuplicateGroups(sources);
 
+  // `--lock` records the census against the lock it already holds: see
+  // `shrinkGroups` for the merge, which drops and re-keys and nothing else.
   if (process.argv.includes('--lock')) {
-    const count = writeLock(groups.map((g) => g.key), LOCK);
+    const { keys, refusals } = shrinkGroups(readLock(LOCK), groups.map((g) => g.key));
+
+    if (keys === undefined) {
+      process.exit(refuseLock('ast-duplication', refusals, 'delete the copy or call the original'));
+    }
+
+    const count = writeLock(keys, LOCK);
     console.log(`ast-duplication: locked ${count} group(s) over ${measured}`);
   } else {
     const detail = new Map(groups.map((g) => [g.key, describe(g)]));
 
-    const code = report(
-      'ast-duplication',
-      reconcile(groups.map((g) => g.key), LOCK),
+    const code = report({
+      gate: 'ast-duplication',
+      ratchet: reconcile(groups.map((g) => g.key), LOCK),
       detail,
-      'bun scripts/ast-duplication.ts --lock',
+      lockCommand: 'bun scripts/ast-duplication.ts --lock',
       measured,
-    );
+    });
 
     if (code === 0) {
       for (const spot of BLIND_SPOTS) console.log(`  blind: ${spot}`);

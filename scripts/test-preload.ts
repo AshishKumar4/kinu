@@ -6,7 +6,7 @@
 // runner — `bun:test`'s, which throws if called under any other.
 import { afterAll, setDefaultTimeout } from 'bun:test';
 
-import { buildSlateVendor } from '../packages/cf-backend/slate-vendor';
+import { buildSlateVendor, type SlateVendor } from '../packages/cf-backend/slate-vendor';
 import { release } from './test-scratch-home';
 
 // No per-test clock. Bun's 5 s default is a wall clock racing the machine: on
@@ -101,12 +101,14 @@ Bun.plugin({
 Bun.plugin({
   name: 'kinu-slate-vendor-for-bun-test',
   setup(build) {
-    let vendor: ReturnType<typeof buildSlateVendor> | undefined;
+    // One build per process: the bundle is esbuild over react and capnweb, and
+    // every suite that imports the id gets the same bytes.
+    let loaded: { exports: { default: SlateVendor }; loader: 'object' } | undefined;
 
     build.module('virtual:kinu-slate-vendor', () => {
-      vendor ??= buildSlateVendor();
+      loaded ??= { exports: { default: buildSlateVendor() }, loader: 'object' };
 
-      return { exports: { default: vendor }, loader: 'object' };
+      return loaded;
     });
   },
 });

@@ -269,12 +269,12 @@ export async function deployedGraph(
             : `${String(one.location.line)}:${String(one.location.column)}: ${one.text}`))
           : [];
 
+        const thrown = error instanceof Error ? error.message.split('\n')[0] ?? '' : String(error);
+
         unreadable.push({
           file: relative(REPO_ROOT, file),
           specifier: '',
-          reason: located.length > 0
-            ? located.join('; ')
-            : (error instanceof Error ? error.message.split('\n')[0] ?? '' : String(error)),
+          reason: located.length > 0 ? located.join('; ') : thrown,
         });
         continue;
       }

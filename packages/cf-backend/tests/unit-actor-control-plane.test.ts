@@ -16,8 +16,9 @@
 
 import { describe, expect, test } from 'bun:test';
 import * as v from 'valibot';
+import type { UIMessage } from 'ai';
 import { TURN_AUTHOR_METADATA_KEY } from '@kinu.run/core';
-import { hostedSubordinateHarness, orchestratorHarness, chatSessionTurns } from './helpers/actor-harness';
+import { hostedSubordinateHarness, orchestratorHarness, chatSessionTurns, type HarnessOrchestratorAgent } from './helpers/actor-harness';
 import type { Database } from 'bun:sqlite';
 
 /** Activity rows for one actor. Scoped by handle: an unscoped read would let a
@@ -110,5 +111,74 @@ describe('the workspace root answers the actor control plane', () => {
     const rootId = orchestrator.agent.observeRuntime().actor.actorId;
     expect(cancelActivity(orchestrator.db, rootId)).toEqual([{ detail: '0 foreground aborted' }]);
     expect(cancelActivity(orchestrator.db, child.actor.handle.actorId)).toEqual([]);
+  });
+});
+
+/**
+ * The walk-back — "revert to before this turn", as the operator presses it.
+ *
+ * The twin of cli-backend's `LocalAgentSession — the walk-back`: one core
+ * method under both transports, one observable. The refusal is core's too —
+ * the queue and the running turn belong to the loop — so each backend states
+ * the same sentence because neither one owns it.
+ */
+describe('the workspace root answers the walk-back', () => {
+  const lines = (messages: readonly UIMessage[]): string[] => messages.map(
+    (message) => message.parts.flatMap((part) => part.type === 'text' ? [part.text] : []).join(''),
+  );
+
+  /** The transcript frames this object fanned out, by the ids each named. A tab
+   *  that was open before the revert has no other way to learn of it. */
+  const captureTranscriptFrames = (agent: HarnessOrchestratorAgent): string[][] => {
+    const sent: string[][] = [];
+
+    Object.defineProperty(agent, 'broadcast', {
+      configurable: true,
+      value: (payload: string) => {
+        const frame = v.safeParse(
+          v.object({ type: v.literal('cf_agent_chat_messages'), messages: v.array(v.looseObject({ id: v.string() })) }),
+          JSON.parse(payload),
+        );
+
+        if (frame.success) sent.push(frame.output.messages.map((message) => message.id));
+      },
+    });
+
+    return sent;
+  };
+
+  test('the transcript ends before the message the revert names, and every tab is told', async () => {
+    const { agent } = orchestratorHarness();
+    const turns = chatSessionTurns(agent);
+    await turns.run('first ask');
+    await turns.run('second ask');
+    const before = await agent.harnessTranscript.history();
+    const second = before.filter((message) => message.role === 'user').at(-1);
+
+    if (second === undefined) throw new Error('the harness recorded no user message');
+    const frames = captureTranscriptFrames(agent);
+    await agent.revertConversation(second.id);
+
+    const kept = await agent.harnessTranscript.history();
+    expect(lines(kept)).toEqual(['first ask', 'ok']);
+    expect(frames).toEqual([kept.map((message) => message.id)]);
+  });
+
+  test('a turn in flight refuses the walk-back and keeps the conversation', async () => {
+    const { agent } = orchestratorHarness();
+    const turns = chatSessionTurns(agent);
+    await turns.run('first ask');
+    const first = (await agent.harnessTranscript.history()).filter((message) => message.role === 'user').at(-1);
+
+    if (first === undefined) throw new Error('the harness recorded no user message');
+    const parked = turns.park();
+    const landing = agent.harnessChatLoop.send('second ask');
+    await parked;
+
+    await expect(agent.revertConversation(first.id)).rejects.toThrow(/Stop the turn that is running/);
+
+    await turns.settle({ messageId: 'second-answer', text: 'ok' });
+    expect(await landing).toBe('turn');
+    expect(lines(await agent.harnessTranscript.history())).toEqual(['first ask', 'ok', 'second ask', 'ok']);
   });
 });

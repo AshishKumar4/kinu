@@ -416,6 +416,20 @@ interface Cell {
   readonly misses: Record<string, number>;
 }
 
+/** Subgoal → how many of these trials failed to reach it on one task. */
+function countMisses(trials: readonly TrialResult[], task: string): Cell['misses'] {
+  const misses: Record<string, number> = {};
+
+  for (const trial of trials) {
+    for (const subgoal of trial.subgoals.get(task) ?? []) {
+      if (subgoal.reached) continue;
+      misses[subgoal.what] = (misses[subgoal.what] ?? 0) + 1;
+    }
+  }
+
+  return misses;
+}
+
 function aggregate(results: readonly TrialResult[], tasks: readonly string[]): Cell[] {
   const cells: Cell[] = [];
 
@@ -438,14 +452,7 @@ function aggregate(results: readonly TrialResult[], tasks: readonly string[]): C
           .map((score) => 1 - (score.rate ?? 0)));
 
       const durations = scored.map((observation) => observation.ms);
-      const misses: Record<string, number> = {};
-
-      for (const result of mine) {
-        for (const subgoal of result.subgoals.get(task) ?? []) {
-          if (subgoal.reached) continue;
-          misses[subgoal.what] = (misses[subgoal.what] ?? 0) + 1;
-        }
-      }
+      const misses = countMisses(mine, task);
 
       cells.push({
         task, label, trials: mine.length, passes,

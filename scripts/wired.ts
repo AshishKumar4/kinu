@@ -272,13 +272,13 @@ export function createResolver(
     if (cached !== undefined) return cached;
     const manifest = `packages/${pkg}/package.json`;
 
-    const parsed = tracked.has(manifest)
+    const declaredSubpaths = tracked.has(manifest)
       ? v.parse(SubpathSchema, JSON.parse(readRepositoryFile(root, manifest))).exports
       : {};
 
-    manifests.set(pkg, parsed);
+    manifests.set(pkg, declaredSubpaths);
 
-    return parsed;
+    return declaredSubpaths;
   };
 
   /** `['@/', 'packages/cf-backend/src/']` for the package `from` lives in. */
@@ -583,13 +583,17 @@ function spawningCallee(call: SyntaxNode): string | undefined {
   const { raw } = call;
 
   if (raw.type !== 'CallExpression') return undefined;
+  const { callee } = raw;
 
-  const callee = raw.callee.type === 'MemberExpression' && !raw.callee.computed
-    && raw.callee.property.type === 'Identifier'
-    ? raw.callee.property.name
-    : raw.callee.type === 'Identifier' ? raw.callee.name : undefined;
+  let named: string | undefined;
 
-  return callee !== undefined && SPAWNS.test(callee) ? callee : undefined;
+  if (callee.type === 'MemberExpression' && !callee.computed && callee.property.type === 'Identifier') {
+    named = callee.property.name;
+  } else if (callee.type === 'Identifier') {
+    named = callee.name;
+  }
+
+  return named !== undefined && SPAWNS.test(named) ? named : undefined;
 }
 
 /**
@@ -702,6 +706,16 @@ function foreignRooted(
   return rooted;
 }
 
+/** One class declaration, and the tree-wide tables its hooks are read against. */
+interface ClassHookScan {
+  readonly node: SyntaxNode;
+  readonly file: string;
+  readonly module: Module;
+  readonly rooted: ReadonlyMap<string, { file: string; node: SyntaxNode }>;
+  readonly invoked: ReadonlySet<string>;
+  readonly lineAt: (offset: number) => number;
+}
+
 /**
  * The methods of one framework-rooted class that nothing in this tree invokes.
  *
@@ -710,14 +724,7 @@ function foreignRooted(
  * constructor, a computed key, a `private` member and a `#private` member are
  * none of them a hook the platform can reach.
  */
-function platformHooks(
-  node: SyntaxNode,
-  file: string,
-  module: Module,
-  rooted: ReadonlyMap<string, { file: string; node: SyntaxNode }>,
-  invoked: ReadonlySet<string>,
-  lineAt: (offset: number) => number,
-): Entrypoint[] {
+function platformHooks({ node, file, module, rooted, invoked, lineAt }: ClassHookScan): Entrypoint[] {
   const owner = declaredName(node);
 
   if (owner === undefined || !rooted.has(owner)) return [];
@@ -900,7 +907,7 @@ export function findEntrypoints(
       }
 
       if (node.type !== 'ClassDeclaration') return;
-      found.push(...platformHooks(node, file, module, rooted, invoked, lineAt));
+      found.push(...platformHooks({ node, file, module, rooted, invoked, lineAt }));
     });
   }
 
@@ -1042,6 +1049,17 @@ export interface Unwired {
   readonly reason: string;
 }
 
+/** Why an export is unreached: no live file, test-only callers, or nothing at all. */
+function unreachedReason(live: boolean, callers: readonly string[]): string {
+  if (!live) return 'no entrypoint reaches the file that declares it';
+
+  if (callers.length > 0) {
+    return `referenced only by ${String(callers.length)} test file(s): ${callers.slice(0, 3).join(', ')}`;
+  }
+
+  return 'no production reference anywhere; a barrel re-export is not one';
+}
+
 export function findUnreached(
   graph: Graph,
   reach: Reach,
@@ -1088,13 +1106,10 @@ export function findUnreached(
       if (reach.reached.has(`${file}#${name}`)) continue;
       const callers = testReferences.get(name) ?? [];
 
-      const reason = !reach.live.has(file)
-        ? 'no entrypoint reaches the file that declares it'
-        : callers.length > 0
-          ? `referenced only by ${String(callers.length)} test file(s): ${callers.slice(0, 3).join(', ')}`
-          : 'no production reference anywhere; a barrel re-export is not one';
-
-      found.push({ file, line: lines.get(name) ?? 1, name, kind: 'unreached-export', reason });
+      found.push({
+        file, line: lines.get(name) ?? 1, name, kind: 'unreached-export',
+        reason: unreachedReason(reach.live.has(file), callers),
+      });
     }
   }
 
@@ -1349,6 +1364,16 @@ export interface FieldFacts {
   readonly foreignNames: ReadonlySet<string>;
 }
 
+/** One call's callee, and the tables the declaration behind it is looked up in. */
+interface CalleeLookup {
+  readonly callee: string | undefined;
+  readonly file: string;
+  readonly origins: ReadonlyMap<string, string>;
+  readonly parameters: ReadonlyMap<string, string[][]>;
+  readonly signatures: ReadonlyMap<string, string[][]>;
+  readonly typed: ReadonlyMap<string, Typed[]>;
+}
+
 /**
  * The parameter positions the declaration a call NAMES carries.
  *
@@ -1358,12 +1383,7 @@ export interface FieldFacts {
  * identifier at all, so the caller has one answer to test rather than two.
  */
 function calleePositions(
-  callee: string | undefined,
-  file: string,
-  origins: ReadonlyMap<string, string>,
-  parameters: ReadonlyMap<string, string[][]>,
-  signatures: ReadonlyMap<string, string[][]>,
-  typed: ReadonlyMap<string, Typed[]>,
+  { callee, file, origins, parameters, signatures, typed }: CalleeLookup,
 ): string[][] | undefined {
   if (callee === undefined) return undefined;
 
@@ -1517,11 +1537,11 @@ export function measureFields(
         const intersection = node.children.find((child) => child.raw.type === 'TSIntersectionType');
 
         if (intersection !== undefined) {
-          const members = intersection.children
+          const baseNames = intersection.children
             .map((child) => (child.raw.type === 'TSTypeReference' ? identifierText(child.children[0] ?? child) : undefined))
-            .filter((member): member is string => member !== undefined);
+            .filter((base): base is string => base !== undefined);
 
-          if (members.length > 0) bases.set(name, members);
+          if (baseNames.length > 0) bases.set(name, baseNames);
 
           return;
         }
@@ -1574,9 +1594,11 @@ export function measureFields(
         .map((child) => [...annotatedTypes(annotationOf(child))]);
 
       const seen = parameters.get(`${file}#${name}`) ?? [];
-      positions.forEach((types, index) => {
+
+      for (const [index, types] of positions.entries()) {
         seen[index] = [...(seen[index] ?? []), ...types];
-      });
+      }
+
       parameters.set(`${file}#${name}`, seen);
     });
   }
@@ -1641,11 +1663,7 @@ export function measureFields(
         if (bound.imported === NAMESPACE) continue;
         const declaration = declarationSite(target, bound.imported, modules, new Set());
 
-        const at = declaration === undefined
-          ? `${target}#${bound.imported}`
-          : declaration;
-
-        origins.set(bound.local, at);
+        origins.set(bound.local, declaration ?? `${target}#${bound.imported}`);
       }
     }
 
@@ -1790,16 +1808,17 @@ export function measureFields(
 
       if (raw.type !== 'CallExpression') return;
       const callee = identifierText(node.children[0] ?? node);
-      const positions = calleePositions(callee, file, origins, parameters, signatures, typed);
+      const positions = calleePositions({ callee, file, origins, parameters, signatures, typed });
 
       if (positions === undefined) return;
-      node.children.slice(1).forEach((argument, index) => {
+
+      for (const [index, argument] of node.children.slice(1).entries()) {
         const literal = argument.raw.type === 'ObjectExpression'
           ? argument
           : literals.get(identifierText(argument) ?? '');
 
         if (literal !== undefined) site(positions[index] ?? [], literal);
-      });
+      }
     });
   }
 
@@ -2034,7 +2053,10 @@ if (import.meta.main) {
   }
 
   const ratchet = reconcile(keys, LOCK);
-  const code = report('wired', ratchet, detail, 'bun scripts/wired.ts --lock', measured);
+
+  const code = report({
+    gate: 'wired', ratchet, detail, lockCommand: 'bun scripts/wired.ts --lock', measured,
+  });
 
   if (code === 0) {
     console.log(`wired: ${String(keys.length)} recorded unwired export(s)/field(s) remain — `

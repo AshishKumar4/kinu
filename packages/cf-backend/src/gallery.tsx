@@ -36,7 +36,7 @@
  *                                  `&panel=providers|mcp|cli` picks which
  *   /gallery.html?frame=app&path=/ → the SHIPPED shell (`Layout`, its rail,
  *                                  the living background) routed to `path`:
- *                                  `/`, `/user/settings` or `/shared`. What the
+ *                                  `/`, `/user/settings` or `/drive`. What the
  *                                  background's contrast is measured on.
  *   /gallery.html?frame=control  → the admin control plane: every tab, the
  *                                  account drilldown and a workspace drilldown.
@@ -199,14 +199,15 @@ import { lastValue, type AsyncResource } from "@/hooks/use-async-resource";
 import type { ExecutorInfo } from "@kinu.run/core";
 import type { DeploySnapshot } from "@kinu.run/core/deploy";
 import type {
-  ChatHistoryEntry, ContextComposition, DirEntry, ExplorationCanvasRun, ForkRunParams,
+  ChatHistoryEntry, ContextComposition, DirEntry, ExplorationCanvasRun,
+  FileCheckpointEntry, FileCheckpointListing, ForkRunParams,
   ForkRunSummary, HeadRunView, MountInfo, NodeTranscriptView, Page, PageRequest,
   PendingAction, ProducerSpend, RunSummary, SearchNode, Usage, WorkspaceSpend,
 } from "@kinu.run/core";
 import type { McpServerSummary, ModelMenuEntry, UserDevice, WorkspaceEntry } from "@/lib/user-api";
 import { McpServerSummarySchema } from "@/lib/user-api";
 import * as v from "valibot";
-import { galleryServerPush, serveGalleryRpc } from "@/gallery-agent-stub";
+import { galleryServerPush, seedGalleryChat, serveGalleryRpc } from "@/gallery-agent-stub";
 
 const frame = new URLSearchParams(location.search).get("frame") ?? "all";
 
@@ -1783,6 +1784,69 @@ let galleryAgentPlan: PlanReview = {
   decidedAt: null,
 };
 
+/* ── The walk-back ────────────────────────────────────────────────
+
+   Two turns the operator typed, so there is a SECOND user message to walk back
+   to, and the transcript that follows it is what a revert has to remove.
+
+   `?transcript=revert` seeds this into the real WorkspacePage frame; the
+   conversation arrives the way the product's arrives, and the revert's own
+   redraw is the server frame the fixture pushes back.
+
+   `?checkpoints=1` is the other half of the one condition the dialog carries:
+   with a device connected AND a checkpoint held for the turn, the operator is
+   offered the device files too. Without it — the workspace the owner reported,
+   which has no device at all — that option does not exist, and the revert the
+   product CAN always perform is the only one offered. */
+const REVERT_THREAD: UIMessage[] = [
+  msg({
+    id: "rv-u1", role: "user", createdAt: NOW - 8 * 60e3,
+    parts: [{ type: "text", text: "Add the coupon-kind regression test and run the checkout suite." }],
+  }),
+  msg({
+    id: "rv-a1", role: "assistant", createdAt: NOW - 7 * 60e3,
+    parts: [{ type: "text", text: "Added `tests/coupon-kind.test.ts`. The suite is green: 14 passed." }],
+  }),
+  msg({
+    id: "rv-u2", role: "user", createdAt: NOW - 6 * 60e3,
+    parts: [{ type: "text", text: "Now rewrite the pricing service to read its rules from the campaign table." }],
+  }),
+  msg({
+    id: "rv-a2", role: "assistant", createdAt: NOW - 5 * 60e3,
+    parts: [{ type: "text", text: "Rewrote `pricing-service.ts` against the campaign table and updated eleven call sites." }],
+  }),
+];
+
+const REVERT_DEVICE_CONNECTED = new URLSearchParams(location.search).get("checkpoints") === "1";
+
+const REVERT_CHECKPOINT: FileCheckpointEntry = {
+  id: "c0ffee1", dir: "/pc/ashish-device/work/shop", at: NOW - 6 * 60e3,
+  turnId: "rv-u2", sessionId: "default", reason: "before turn",
+};
+
+/** What the checkpoint store answers for the turn in question. The two fields
+ *  are separate facts: a store nobody can reach says nothing about what a turn
+ *  changed. */
+const REVERT_LISTING: FileCheckpointListing = REVERT_DEVICE_CONNECTED
+  ? { availability: { available: true }, entries: [REVERT_CHECKPOINT] }
+  : { availability: { available: false, reason: "no device connected — connect one with `kinu connect`" }, entries: [] };
+
+/** `?transcript=revert` seeds the walk-back thread into the `workspacepage`
+ *  frame; any other value, or none, mounts the frame on its empty default. */
+function seedFrameTranscript(transcript: string | null): void {
+  if (transcript === "revert") seedGalleryChat(REVERT_THREAD);
+}
+
+/** The conversation after the walk-back, as the Durable Object broadcasts it:
+ *  the entries from the picked message on leave the head's ancestry, and every
+ *  open tab redraws from the transcript frame. */
+function galleryRevertConversation(entryId: string): void {
+  const from = REVERT_THREAD.findIndex((message) => message.id === entryId);
+  const kept = from < 0 ? REVERT_THREAD : REVERT_THREAD.slice(0, from);
+
+  galleryServerPush(JSON.stringify({ type: "cf_agent_chat_messages", messages: kept }));
+}
+
 /* The reads the first-visit inspector policy is decided on, answered in the
    shape the page actually consumes them: a pending plan is what it opens for,
    and the stub's blanket `[]` answered `listSlates` in a shape `slates.map`
@@ -1815,6 +1879,18 @@ const WORKSPACE_PAGE_RPC = new Map(Object.entries({
   // without an answer the strip hid Work on first paint.
   getWorkspaceTabPresence: () => ({ work: true, releases: true, explorations: true }),
   listPendingConsents: () => [],
+  // The frame's whole conversation is its seed, so the walk back through
+  // storage is exhausted at once. A blanket `[]` is not a page and the walk
+  // reported the parse as a failed read of the store.
+  getChatHistoryPage: () => ({ status: "end", items: [] }),
+  listFileCheckpoints: () => REVERT_LISTING,
+  planFileRestore: () => ({
+    dir: REVERT_CHECKPOINT.dir, id: REVERT_CHECKPOINT.id,
+    files: [{ path: "src/pricing-service.ts", kind: "modify" }, { path: "src/campaign-rules.ts", kind: "delete" }],
+  }),
+  restoreFileCheckpoint: () => ({
+    dir: REVERT_CHECKPOINT.dir, id: REVERT_CHECKPOINT.id, files: [], preRestoreId: "5afe70",
+  }),
 }));
 
 /** One gallery RPC answer, or null for a method the surface asked does not own.
@@ -1964,6 +2040,12 @@ const workspacePageRpc: Rpc = async <T,>(method: string, args?: unknown[]): Prom
   const roster = galleryRosterRpc(method, args);
 
   if (roster) return rpcResult(v.parse(JsonValueSchema, roster.value)).json<T>();
+
+  if (method === "revertConversation") {
+    galleryRevertConversation(v.parse(v.string(), args?.[0]));
+
+    return rpcResult(null).json<T>();
+  }
 
   // A preview that arrives after first paint: the gate sets the dataset flag
   // once the page has settled, and the next live refresh lists a port the
@@ -5040,6 +5122,11 @@ const LIVE_SHARE: LiveShareRecord = {
 };
 
 const SHARED_LIBRARY: SharedLibrary = {
+  slates: [
+    { id: "issue-triage", title: "Issue triage", workspace: "checkout-fixes", bindings: 4, visibility: "public" },
+    { id: "lighthouse", title: "Landing perf report", workspace: "perf-audit", bindings: 1 },
+    { id: "standup", title: "Standup notes", workspace: "notes", bindings: 2 },
+  ],
   mine: [
     { id: "live-board-1", kind: "live", share: "live-board-1", title: "Issue triage", description: BLUEPRINT_VIEW.description, createdAt: NOW - 864e5, bindings: 4, visibility: "public", workspace: "checkout-fixes", users: [] },
     { id: BLUEPRINT_ID, kind: "blueprint", share: "k7Qm2pV9xRt3aB4c", title: "Issue triage", description: BLUEPRINT_VIEW.description, createdAt: NOW - 3 * 864e5, bindings: 4, workspace: "checkout-fixes", users: ["pat@example.com"] },
@@ -5057,6 +5144,9 @@ const SHARED_LIBRARY: SharedLibrary = {
     { id: "live-status-2", kind: "live", share: "live-status-2", title: "Deploy status board", description: "Every service, its last deploy and who shipped it.", createdAt: NOW - 5 * 864e5, bindings: 2, visibility: "public", workspace: "ops-board", owner: "lee@example.com" },
   ],
 };
+
+/** A Drive with nothing on it: every section shows its own empty line. */
+const EMPTY_LIBRARY: SharedLibrary = { slates: [], mine: [], received: [], public: [], known: [] };
 
 /** The share dialog over the Issue triage slate: the live mode with the
  *  capability graph and one public share already open, or the blueprint mode
@@ -6933,8 +7023,8 @@ async function appShellFrame(): Promise<{ node: React.ReactNode; entries: string
           <Route index element={<HomePage />} />
           <Route path="/user/settings" element={<UserSettingsPage />} />
           <Route path="/workspace/:agentId" element={<div className="h-full" data-gallery-blank />} />
-          <Route path="/shared" element={<DriveRoute />} />
-          <Route path="/shared/*" element={<DriveRoute />} />
+          <Route path={APP_ROUTES.drive} element={<DriveRoute />} />
+          <Route path={APP_ROUTES.driveFolder} element={<DriveRoute />} />
         </Route>
       </Routes>
     ),
@@ -7111,15 +7201,18 @@ async function mount() {
     ["chat-slate", { node: <ChatSlateFrame />, entries: ["/"] }],
     // The Drive's blueprints folder: the shared library, behind the chrome.
     // On its own route, so the rail's primary nav lights Drive and not Home.
-    ["shared", { node: <DrivePageFrame library={SHARED_LIBRARY} workspaces={STOCK_ROSTER.entries} />, entries: ["/shared/blueprints"] }],
+    ["shared", { node: <DrivePageFrame library={SHARED_LIBRARY} workspaces={STOCK_ROSTER.entries} />, entries: [`${APP_ROUTES.drive}/blueprints`] }],
     // The same folder before anything is shared: every list shows its empty line.
     ["shared-empty", {
-      node: <DrivePageFrame library={{ mine: [], received: [], public: [], known: [] }} workspaces={STOCK_ROSTER.entries} />,
-      entries: ["/shared/blueprints"],
+      node: <DrivePageFrame library={EMPTY_LIBRARY} workspaces={STOCK_ROSTER.entries} />,
+      entries: [`${APP_ROUTES.drive}/blueprints`],
     }],
     // The Drive over a seeded tenant (`&path=/projects/ops` opens a folder), and over an empty one.
-    ["drive", { node: <DrivePageFrame />, entries: [`/shared${new URLSearchParams(location.search).get("path") ?? ""}`] }],
-    ["drive-empty", { node: <DrivePageFrame />, entries: [APP_ROUTES.shared] }],
+    ["drive", {
+      node: <DrivePageFrame library={SHARED_LIBRARY} workspaces={STOCK_ROSTER.entries} />,
+      entries: [`${APP_ROUTES.drive}${new URLSearchParams(location.search).get("path") ?? ""}`],
+    }],
+    ["drive-empty", { node: <DrivePageFrame library={EMPTY_LIBRARY} workspaces={STOCK_ROSTER.entries} />, entries: [APP_ROUTES.drive] }],
     // The task indicator mid-wait: the model call is sleeping out the
     // provider's declared window and the bar names it instead of "working".
     ["providerwait", { node: <ProviderWaitFrame />, entries: ["/"] }],
@@ -7308,6 +7401,8 @@ async function mount() {
   else if (frame === "activitylog") node = <div className="p-6 max-w-2xl"><LogBlock log={ACTIVITY_LOG} /></div>;
   else if (frame === "workspacepage") {
     serveGalleryRpc(workspacePageRpc);
+
+    seedFrameTranscript(new URLSearchParams(location.search).get("transcript"));
     entries = [`/workspace/${WORKSPACE_PAGE_NAME}`];
     scheduleDeviceNotice(new URLSearchParams(location.search).get("devices"));
     // Both app routes, exactly as App.tsx keys them: creating an agent

@@ -1125,7 +1125,7 @@ function arg(name: string, fallback?: string): string {
   const flag = `--${name}`;
   const index = process.argv.indexOf(flag);
 
-  if (index !== -1 && index + 1 < process.argv.length) return process.argv[index + 1]!;
+  if (index !== -1 && index + 1 < process.argv.length) return process.argv[index + 1];
 
   if (fallback !== undefined) return fallback;
   throw new Error(`missing required argument ${flag}`);

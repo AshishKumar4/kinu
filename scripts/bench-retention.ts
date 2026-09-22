@@ -83,7 +83,8 @@ export function resolveArtifactRoot(opts: {
     throw new Error('BENCH_ARTIFACTS is set to an empty value; retention cannot be switched off');
   }
 
-  const root = resolve(flag || fromEnv || join(opts.repoRoot, ARTIFACT_DIRNAME));
+  // Both refused an empty value above, so each is either absent or a real path.
+  const root = resolve(flag ?? fromEnv ?? join(opts.repoRoot, ARTIFACT_DIRNAME));
   assertDurableArtifactRoot(root, opts.runRoot);
 
   return root;

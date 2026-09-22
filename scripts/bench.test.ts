@@ -2,6 +2,7 @@
 // anti-self-scoring guarantees, plus corpus validation. Runs no model and needs
 // no provider — CI can gate on all of it.
 import { scratchDir } from '../packages/test-utils/src/scratch';
+import { present } from '../packages/test-utils/src/present';
 import { describe, test, expect } from 'bun:test';
 import { chmodSync, existsSync, mkdirSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync, lstatSync, readdirSync } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
@@ -128,11 +129,21 @@ describe('bench worker protocol', () => {
 describe('stability pilot gate', () => {
   const taskIds = Array.from({ length: 40 }, (_, index) => `task-${index}`);
 
+  /** The pass counts the stability maths is stated over: one task flaky at 2 of
+   *  3, one at 1 of 3, the next nineteen solid, the rest never passing. */
+  const passesFor = (index: number): number => {
+    if (index === 0) return 2;
+
+    if (index === 1) return 1;
+
+    return index <= 20 ? 3 : 0;
+  };
+
   const taskResults = taskIds.map((taskId, index) => ({
     taskId,
     attempts: 3,
     repeatIndices: [0, 1, 2],
-    passes: index === 0 ? 2 : index === 1 ? 1 : index <= 20 ? 3 : 0,
+    passes: passesFor(index),
     tokens: [12_000, 12_000, 12_000],
     modelCalls: [4, 5, 6],
     errors: 0,
@@ -449,13 +460,15 @@ describe('validation diagnostics', () => {
     checks: [{ id: 'core-tests', command: ['false'] }],
   });
 
-  const outcome = (
-    taskId: string,
-    side: 'broken' | 'oracle',
-    repeat: number,
-    passed: boolean,
-    output: string,
-  ): AttemptOutcome => ({
+  interface Attempt {
+    readonly taskId: string;
+    readonly side: 'broken' | 'oracle';
+    readonly repeat: number;
+    readonly passed: boolean;
+    readonly output: string;
+  }
+
+  const outcome = ({ taskId, side, repeat, passed, output }: Attempt): AttemptOutcome => ({
     taskId,
     variantId: side === 'broken' ? 'null' : 'oracle',
     slot: side === 'broken' ? 'a' : 'b',
@@ -484,8 +497,12 @@ describe('validation diagnostics', () => {
       devTasks: [dev],
       sealed: new SealedSplit([sealed]),
       runAttempt: async (current, repeat) => ({
-        broken: outcome(current.id, 'broken', repeat, false, `${current.id}-broken-${repeat}`),
-        oracle: outcome(current.id, 'oracle', repeat, repeat === 1, `${current.id}-oracle-${repeat}`),
+        broken: outcome({
+          taskId: current.id, side: 'broken', repeat, passed: false, output: `${current.id}-broken-${repeat}`,
+        }),
+        oracle: outcome({
+          taskId: current.id, side: 'oracle', repeat, passed: repeat === 1, output: `${current.id}-oracle-${repeat}`,
+        }),
       }),
       log: (line) => stdout.push(line),
     });
@@ -498,7 +515,7 @@ describe('validation diagnostics', () => {
       { taskId: sealed.id, split: 'sealed', attempt: 1 },
       { taskId: sealed.id, split: 'sealed', attempt: 2 },
     ]);
-    expect(diagnostics.attempts.flatMap(({ broken, oracle }) => [broken.checks[0]!.output, oracle.checks[0]!.output])).toEqual([
+    expect(diagnostics.attempts.flatMap(({ broken, oracle }) => [broken.checks[0].output, oracle.checks[0].output])).toEqual([
       'dev-diagnostic-broken-0', 'dev-diagnostic-oracle-0',
       'dev-diagnostic-broken-1', 'dev-diagnostic-oracle-1',
       'sealed-diagnostic-broken-0', 'sealed-diagnostic-oracle-0',
@@ -568,7 +585,7 @@ describe('sandboxEnv', () => {
 
 describe('createAttemptSandbox', () => {
   const { patches } = loadBenchCorpus(REPO_ROOT);
-  const patch = patches.get('ema-alpha-weights')!;
+  const patch = present(patches.get('ema-alpha-weights'), 'the ema-alpha-weights patch');
   const prepare = (dir: string) => applyPatch(dir, patch, { reverse: false });
   const target = 'packages/core/src/craft/ema.ts';
 
@@ -880,9 +897,10 @@ describe('loadBenchCorpus', () => {
 
   test('tasks carry their suite\'s checks and guarded paths, not per-task copies', () => {
     const { corpus } = loadBenchCorpus(REPO_ROOT);
-    const task = corpus.dev[0]!;
-    expect(task.checks).toBe(BENCH_SUITES.core!.checks);
-    expect(task.guarded).toBe(BENCH_SUITES.core!.guarded);
+    const task = corpus.dev[0];
+
+    expect(task.checks).toBe(BENCH_SUITES.core.checks);
+    expect(task.guarded).toBe(BENCH_SUITES.core.guarded);
   });
 
   function fixtureRoot(line: string, opts: { patch?: string } = {}): string {
@@ -954,10 +972,11 @@ describe('the long-horizon corpus', () => {
 
   test('a task carries its spec in the check argv, so the manifest covers the corpus size', () => {
     for (const task of corpus.dev) {
-      const check = task.checks[0]!;
+      const check = task.checks[0];
+
       expect(check.id).toBe('longhorizon-answers');
       expect(check.command.slice(0, 2)).toEqual(['bun', 'scripts/bench-longhorizon-check.ts']);
-      expect(decodeLongHorizonSpec(check.command[2]!)).toEqual(specs.get(task.id)!);
+      expect(decodeLongHorizonSpec(check.command[2])).toEqual(present(specs.get(task.id), `the spec for ${task.id}`));
     }
   });
 
@@ -969,9 +988,9 @@ describe('the long-horizon corpus', () => {
   });
 
   test('regenerating a task at a different size changes the manifest', () => {
-    const task = corpus.dev[0]!;
-    const spec = specs.get(task.id)!;
-    const check = task.checks[0]!;
+    const task = corpus.dev[0];
+    const spec = present(specs.get(task.id), `the spec for ${task.id}`);
+    const check = task.checks[0];
 
     const changed = {
       ...task,
@@ -1031,13 +1050,18 @@ describe('the long-horizon corpus', () => {
 // would both mean the family measures nothing.
 describe('the long-horizon check scores what was actually materialized', () => {
   const { corpus, specs } = loadLongHorizonCorpus(REPO_ROOT);
-  const task = corpus.dev.find((task_) => specs.get(task_.id)!.mode === 'continuation')!;
-  const spec = specs.get(task.id)!;
+
+  const task = present(
+    corpus.dev.find((candidate) => specs.get(candidate.id)?.mode === 'continuation'),
+    'a continuation task in the dev split',
+  );
+
+  const spec = present(specs.get(task.id), `the spec for ${task.id}`);
 
   function runCheck(dir: string): number {
-    const [, script, encoded] = task.checks[0]!.command;
+    const [, script, encoded] = task.checks[0].command;
 
-    return Bun.spawnSync(['bun', join(REPO_ROOT, script!), encoded!], { cwd: dir, stdout: 'pipe', stderr: 'pipe' }).exitCode;
+    return Bun.spawnSync(['bun', join(REPO_ROOT, script), encoded], { cwd: dir, stdout: 'pipe', stderr: 'pipe' }).exitCode;
   }
 
   test('materializes every part, and the null control fails for want of an answer', () => {
@@ -1162,29 +1186,31 @@ describe('panel arms — only the provider list may differ', () => {
   });
 
   test('self runs the analyst model in every seat — today\'s inherit-the-parent default', () => {
-    const arm = withEnv({ BENCH_PANEL_SIZE: '3' }, () => panelArm('panel:self', analyst));
-    expect(arm!.panel).toHaveLength(3);
+    const arm = present(withEnv({ BENCH_PANEL_SIZE: '3' }, () => panelArm('panel:self', analyst)), 'the self panel arm');
 
-    for (const member of arm!.panel) expect(member.model).toBe('parent');
+    expect(arm.panel).toHaveLength(3);
+
+    for (const member of arm.panel) expect(member.model).toBe('parent');
     // The analyst is held constant across arms, so it is the parent here too.
-    expect(arm!.analyst.model).toBe('parent');
+    expect(arm.analyst.model).toBe('parent');
   });
 
   test('mixed runs one distinct model per seat, and the analyst stays the parent', () => {
-    const arm = withEnv({
+    const arm = present(withEnv({
       BENCH_PANEL_SIZE: '3',
       BENCH_PANEL: 'http://a|k1|vendor-a;http://b|k2|vendor-b;http://c|k3|vendor-c',
-    }, () => panelArm('panel:mixed', analyst));
+    }, () => panelArm('panel:mixed', analyst)), 'the mixed panel arm');
 
-    expect(arm!.panel.map((m) => m.model)).toEqual(['vendor-a', 'vendor-b', 'vendor-c']);
-    expect(arm!.analyst.model).toBe('parent');
+    expect(arm.panel.map((m) => m.model)).toEqual(['vendor-a', 'vendor-b', 'vendor-c']);
+    expect(arm.analyst.model).toBe('parent');
   });
 
   test('both arms are the same size, so the comparison is not confounded by panel width', () => {
     const env = { BENCH_PANEL_SIZE: '2', BENCH_PANEL: 'http://a|k1|vendor-a;http://b|k2|vendor-b' };
-    const self = withEnv(env, () => panelArm('panel:self', analyst));
-    const mixed = withEnv(env, () => panelArm('panel:mixed', analyst));
-    expect(self!.panel).toHaveLength(mixed!.panel.length);
+    const self = present(withEnv(env, () => panelArm('panel:self', analyst)), 'the self panel arm');
+    const mixed = present(withEnv(env, () => panelArm('panel:mixed', analyst)), 'the mixed panel arm');
+
+    expect(self.panel).toHaveLength(mixed.panel.length);
   });
 
   test('a mixed panel that cannot be built refuses rather than quietly running one model N times', () => {
@@ -1210,11 +1236,14 @@ describe('the evolution-event vocabulary does not drift across languages', () =>
   const readSource = (rel: string) => readFileSync(join(REPO_ROOT, rel), 'utf8');
 
   test('every EvolutionEvent type is classified as evolution by the Python reader', () => {
-    const union = /export interface EvolutionEvent \{\s*type:\s*([^;]+);/
-      .exec(readSource('packages/core/src/evolution/types.ts'));
+    const union = present(
+      /export interface EvolutionEvent \{\s*type:\s*([^;]+);/
+        .exec(readSource('packages/core/src/evolution/types.ts')),
+      "core's EvolutionEvent type union",
+    );
 
-    expect(union).not.toBeNull();
-    const fromCore = [...union![1]!.matchAll(/'([a-z_]+)'/g)].map((m) => m[1]!);
+    const fromCore = [...union[1].matchAll(/'([a-z_]+)'/g)].map((m) => m[1]);
+
     expect(fromCore.length).toBeGreaterThan(5);
 
     // The two shadow-eval outcomes local-session.ts emits directly, not via the
@@ -1225,9 +1254,8 @@ describe('the evolution-event vocabulary does not drift across languages', () =>
     for (const name of direct) expect(session).toContain(`'${name}'`);
 
     const python = readSource('bench/clbench/kinu/events.py');
-    const block = /EVOLUTION_EVENTS = frozenset\(\{([\s\S]*?)\}\)/.exec(python);
-    expect(block).not.toBeNull();
-    const fromPython = [...block![1]!.matchAll(/"([a-z_]+)"/g)].map((m) => m[1]!);
+    const block = present(/EVOLUTION_EVENTS = frozenset\(\{([\s\S]*?)\}\)/.exec(python), "the reader's EVOLUTION_EVENTS set");
+    const fromPython = [...block[1].matchAll(/"([a-z_]+)"/g)].map((m) => m[1]);
 
     expect([...fromPython].sort()).toEqual([...new Set([...fromCore, ...direct])].sort());
   });
@@ -1245,8 +1273,10 @@ describe('the evolution-event vocabulary does not drift across languages', () =>
       mcp: 'packages/cf-backend/src/actor-agent.ts',
     };
 
-    const block = /EVOLUTION_EVENTS = frozenset\(\{([\s\S]*?)\}\)/
-      .exec(readSource('bench/clbench/kinu/events.py'))![1]!;
+    const block = present(
+      /EVOLUTION_EVENTS = frozenset\(\{([\s\S]*?)\}\)/.exec(readSource('bench/clbench/kinu/events.py')),
+      "the reader's EVOLUTION_EVENTS set",
+    )[1];
 
     for (const [notEvolution, emitter] of Object.entries(emitters)) {
       expect(block).not.toContain(`"${notEvolution}"`);

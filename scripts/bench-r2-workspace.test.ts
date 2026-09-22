@@ -8,6 +8,7 @@
 // and a measurement cannot be unit-tested into existence — so what is pinned
 // here is everything that could silently make a real measurement wrong.
 import { describe, expect, test } from 'bun:test';
+import { present } from '@kinu.run/test-utils';
 import {
   REJECTED_S3FS_OPTIONS, SDK_DEFAULT_R2_S3FS_OPTIONS, SDK_FORCED_S3FS_OPTIONS,
   SDK_REFUSED_S3FS_OPTIONS, TUNED_S3FS_OPTIONS, benchKeyPrefix, layoutsFor, mountPrefixFor,
@@ -137,8 +138,8 @@ describe('key scoping is containment, not convention', () => {
     const native = layouts.find((l) => l.id === 'native');
     expect(native?.mount).toBeUndefined();
 
-    for (const layout of layouts.filter((l) => l.mount !== undefined)) {
-      expect(layout.mount?.prefix).toBe(mountPrefixFor(runId));
+    for (const mountedArm of layouts.filter((l) => l.mount !== undefined)) {
+      expect(mountedArm.mount?.prefix).toBe(mountPrefixFor(runId));
     }
   });
 
@@ -154,7 +155,7 @@ describe('key scoping is containment, not convention', () => {
     // of one binding at a different readOnly value, so two arms sharing a
     // signature would mean one silently ran on the other's mount.
     expect(new Set(signatures).size).toBe(signatures.length);
-    expect(mountSignature(layouts[0]!)).toBeNull();
+    expect(mountSignature(layouts[0])).toBeNull();
   });
 });
 
@@ -188,7 +189,7 @@ describe('the option sets say what they do', () => {
     const names = new Set(TUNED_S3FS_OPTIONS.map((option) => option.split('=')[0]));
 
     for (const { option } of REJECTED_S3FS_OPTIONS) {
-      const name = option.split('=')[0]!.split(' ')[0]!;
+      const name = option.split('=')[0].split(' ')[0];
 
       if (name === 'use_cache' || name === 'parallel_count') continue; // rejected at a VALUE, present at another
       expect(names.has(name)).toBe(false);
@@ -351,17 +352,19 @@ describe('the rendered section', () => {
     layout('r2-uncached', [probeRun({ create: 400, stat: 60 })]),
   ]));
 
-  test('states the date, the repetition count and the seed', () => {
-    expect(rendered).toContain('2026-08-24');
-    expect(rendered).toContain('3 repetitions');
-    expect(rendered).toContain('20260824');
-  });
+  const provenance = [
+    { name: 'states the date, the repetition count and the seed', strings: ['2026-08-24', '3 repetitions', '20260824'] },
+    {
+      name: 'records the container facts and the exact versions that produced the numbers',
+      strings: ['MemTotal', '0.12.8', 'abc1234'],
+    },
+  ];
 
-  test('records the container facts and the exact versions that produced the numbers', () => {
-    expect(rendered).toContain('MemTotal');
-    expect(rendered).toContain('0.12.8');
-    expect(rendered).toContain('abc1234');
-  });
+  for (const section of provenance) {
+    test(section.name, () => {
+      for (const expected of section.strings) expect(rendered).toContain(expected);
+    });
+  }
 
   test('prints the option sets and the rejected configurations by name', () => {
     expect(rendered).toContain('stat_cache_expire=60');
@@ -380,7 +383,7 @@ describe('the rendered section', () => {
       layout('r2-uncached', [probeRun({ create: 400, stat: 60 })]),
     ]);
 
-    const ops = withOps.layouts[1]!.ops!;
+    const ops = present(withOps.layouts[1].ops, 'the r2-uncached arm op tally');
     expect(ops.classA).toBe(7);
     expect(ops.classB).toBe(5);
     expect(ops.classFree).toBe(3);

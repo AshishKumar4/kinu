@@ -331,9 +331,25 @@ const SharedRowSchema = v.object({
 
 export type SharedRow = v.InferOutput<typeof SharedRowSchema>;
 
-/** The four lists of the Shared page: the owner's own rows, rows shared with
- *  the owner, public rows, and rows from people the owner knows. */
+/** One slate the owner holds, wherever it lives. There is no user-level index
+ *  of slates: the list is each owned workspace asked for its own, which is why
+ *  a row carries the workspace it was read from. `visibility` is set when a
+ *  live share of that slate is open, and is the only sharing this row knows. */
+const OwnedSlateSchema = v.object({
+  id: v.string(),
+  title: v.string(),
+  workspace: v.string(),
+  bindings: v.number(),
+  visibility: v.optional(LiveShareVisibilitySchema),
+});
+
+export type OwnedSlate = v.InferOutput<typeof OwnedSlateSchema>;
+
+/** The owner's slates, then the four lists of shares: the owner's own rows,
+ *  rows shared with the owner, public rows, and rows from people the owner
+ *  knows. */
 export const SharedLibrarySchema = v.object({
+  slates: v.array(OwnedSlateSchema),
   mine: v.array(SharedRowSchema),
   received: v.array(SharedRowSchema),
   public: v.array(SharedRowSchema),

@@ -163,7 +163,10 @@ if (import.meta.main) {
     process.exit(0);
   }
 
-  const code = report(GATE, reconcile(keys, LOCK), detail, 'bun scripts/core-layering.ts --lock', measured);
+  const code = report({
+    gate: GATE, ratchet: reconcile(keys, LOCK), detail,
+    lockCommand: 'bun scripts/core-layering.ts --lock', measured,
+  });
 
   if (code === 0) {
     const types = violations.filter((v) => v.typeOnly).length;

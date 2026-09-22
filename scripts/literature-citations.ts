@@ -383,6 +383,19 @@ for (const claim of CLAIMS) {
   }
 }
 
+/** Every register claim one number matches, over the works a sentence names. */
+function claimsFor(number: string, mentioned: readonly Work[]): Claim[] {
+  const found: Claim[] = [];
+
+  for (const work of mentioned) {
+    for (const claim of byWork.get(work.id) ?? []) {
+      if (normalise(claim.value) === normalise(number)) found.push(claim);
+    }
+  }
+
+  return found;
+}
+
 /**
  * The register's own obligations. Checked first and separately, because a register
  * that is itself incoherent cannot judge prose — and because these are the fields
@@ -612,24 +625,21 @@ export function auditProse(
       const matched: Claim[] = [];
 
       for (const number of numbers) {
-        if (!allowed.has(normalise(number))) {
-          if (attributed && blame) {
-            findings.push(
-              `${file}: cites ${number} beside ${mentioned.map((work) => work.id).join(', ')} with`
-              + ' no register entry, so it carries no locator'
-              + ` — "${sentence.text.slice(0, 180)}"`,
-            );
-          }
+        const registered = allowed.has(normalise(number));
 
-          continue;
+        if (!registered && attributed && blame) {
+          findings.push(
+            `${file}: cites ${number} beside ${mentioned.map((work) => work.id).join(', ')} with`
+            + ' no register entry, so it carries no locator'
+            + ` — "${sentence.text.slice(0, 180)}"`,
+          );
         }
 
-        for (const work of mentioned) {
-          for (const claim of byWork.get(work.id) ?? []) {
-            if (normalise(claim.value) !== normalise(number)) continue;
-            ledger.set(claimKey(claim), (ledger.get(claimKey(claim)) ?? new Set()).add(file));
-            matched.push(claim);
-          }
+        if (!registered) continue;
+
+        for (const claim of claimsFor(number, mentioned)) {
+          ledger.set(claimKey(claim), (ledger.get(claimKey(claim)) ?? new Set()).add(file));
+          matched.push(claim);
         }
       }
 

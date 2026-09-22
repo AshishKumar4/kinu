@@ -5,7 +5,7 @@ import type { PromptFile } from '../types/backend-host';
 import type { SqlExecutor, VFS } from '../types/primitives';
 import { JsonObjectSchema, type JsonObject, type JsonValue } from '../utils/json';
 import { KinuError } from '../obs/error';
-import { type SessionMessages, SessionMessageReader, type ActorReadAuthority, type MessagePartReference, type MessageReference } from './messages';
+import { type SessionMessages, SessionMessageReader, type ActorReadAuthority, type MessagePartReference, type MessageReference, type StoredPart } from './messages';
 import { type SessionPayloads, SessionPayloadReader, type SessionPayload } from './payload';
 import { turnAuthor } from '../utils/ui-message';
 import { seekPage, StaleCursorError, type Page, type PageRequest } from './page';
@@ -29,7 +29,7 @@ export interface PreparedConversationEntry extends Omit<ConversationEntry, 'reco
 
 interface EntryRow { id: string; parent_id: string | null; role: ConversationEntry['role']; turn_id: string | null; run_id: string | null; recorded_at: number; metadata_json: string | null; metadata_path: string | null; metadata_digest: string | null; context_id: string | null; context_revision: number | null }
 
-interface EntryPartRow { message_id: string; part_no: number; through_sequence: number; text_start: number | null; text_length: number | null }
+interface EntryPartRow { message_id: string; part_no: number; text_start: number | null; text_length: number | null }
 
 export interface ConversationProjection {
   readonly id: string;
@@ -185,12 +185,12 @@ export class SessionTranscriptReader<A extends ActorReadAuthority = ActorReadAut
 
     if (row.metadata_json !== null) metadata = { json: row.metadata_json, path: null, digest: null };
     else if (row.metadata_path !== null && row.metadata_digest !== null) metadata = { json: null, path: row.metadata_path, digest: row.metadata_digest };
-    const parts = this.sql<EntryPartRow>`SELECT message_id,part_no,through_sequence,text_start,text_length FROM conversation_entry_parts WHERE actor_id=${this.actor.actorId} AND session_id=${this.sessionId} AND entry_id=${id} ORDER BY position`;
+    const parts = this.sql<EntryPartRow>`SELECT message_id,part_no,text_start,text_length FROM conversation_entry_parts WHERE actor_id=${this.actor.actorId} AND session_id=${this.sessionId} AND entry_id=${id} ORDER BY position`;
 
     return { id: row.id, parentId: row.parent_id, role: row.role, turnId: row.turn_id, runId: row.run_id, recordedAt: row.recorded_at, metadata,
       context: row.context_id === null || row.context_revision === null ? null : { contextId: row.context_id, revision: row.context_revision },
       parts: parts.map(part => {
-        const reference: ConversationPartReference = { messageId: part.message_id, partNo: part.part_no, throughSequence: part.through_sequence };
+        const reference: ConversationPartReference = { messageId: part.message_id, partNo: part.part_no };
 
         if (part.text_start !== null && part.text_length !== null) reference.textRange = { start: part.text_start, length: part.text_length };
 
@@ -232,25 +232,24 @@ export class SessionTranscriptReader<A extends ActorReadAuthority = ActorReadAut
   }
 
   async parts(references: readonly ConversationPartReference[]): Promise<JsonObject[]> {
-    const cache = new Map<string, readonly { partNo: number; value: JsonObject }[]>();
+    const cache = new Map<string, readonly StoredPart[]>();
     const parts: JsonObject[] = [];
 
     for (const ref of references) {
-      const key = `${ref.messageId}:${ref.throughSequence}`;
-      let message = cache.get(key);
+      let message = cache.get(ref.messageId);
 
-      if (message === undefined) { message = await this.messages.materializeParts({ messageId: ref.messageId, sequence: ref.throughSequence }); cache.set(key, message); }
+      if (message === undefined) { message = await this.messages.materializeParts({ messageId: ref.messageId }); cache.set(ref.messageId, message); }
 
       const part = message.find(value => value.partNo === ref.partNo);
 
-      if (part === undefined) throw new KinuError('io', 'conversation reference names a part outside its cutoff');
+      if (part === undefined) throw new KinuError('io', 'conversation reference names a part its message does not hold');
 
       if (ref.textRange === undefined) parts.push(part.value);
       else {
         const { start, length } = ref.textRange;
         const text = v.parse(v.string(), part.value.text);
 
-        if (part.value.type !== 'text' || !Number.isSafeInteger(start) || !Number.isSafeInteger(length) || start < 0 || length < 0 || start + length > text.length) throw new KinuError('io', 'conversation text range exceeds its recorded cutoff');
+        if (part.value.type !== 'text' || !Number.isSafeInteger(start) || !Number.isSafeInteger(length) || start < 0 || length < 0 || start + length > text.length) throw new KinuError('io', 'conversation text range exceeds its recorded part');
         parts.push({ ...part.value, text: text.slice(start, start + length) });
       }
     }
@@ -432,8 +431,8 @@ export class SessionTranscript extends SessionTranscriptReader<ActorHandle, Sess
     for (const row of rows) {
       const parts: ConversationPartReference[] = [];
 
-      for (const _file of row.files ?? []) parts.push({ messageId: reference.messageId, partNo: filePart++, throughSequence: reference.sequence });
-      parts.push({ messageId: reference.messageId, partNo: textPart, throughSequence: reference.sequence, textRange: { start, length: row.text.length } });
+      for (const _file of row.files ?? []) parts.push({ messageId: reference.messageId, partNo: filePart++ });
+      parts.push({ messageId: reference.messageId, partNo: textPart, textRange: { start, length: row.text.length } });
       entries.push({ id: row.id, parentId, role: 'user', turnId, runId, parts, metadata: await this.payloads.prepare(row.metadata) });
       start += row.text.length + 2;
       parentId = row.id;
@@ -447,7 +446,7 @@ export class SessionTranscript extends SessionTranscriptReader<ActorHandle, Sess
 
     return { id: input.id, parentId: input.parentId, role: 'user', turnId: input.turnId, runId: input.runId ?? null,
       metadata: input.metadata === undefined ? null : await this.payloads.prepare(input.metadata),
-      parts: parts.map(part => ({ messageId: input.message.messageId, partNo: part.partNo, throughSequence: input.message.sequence })) };
+      parts: parts.map(part => ({ messageId: input.message.messageId, partNo: part.partNo })) };
   }
 
   async prepareAssistant(input: { readonly id: string; readonly parentId: string; readonly turnId: string; readonly runId: string; readonly parts: readonly MessagePartReference[]; readonly finalText: MessagePartReference | null; readonly metadata?: JsonObject }): Promise<PreparedConversationEntry> {
@@ -488,8 +487,8 @@ export class SessionTranscript extends SessionTranscriptReader<ActorHandle, Sess
         VALUES(${actorId},${this.sessionId},${entry.id},${parentId},${entry.role},${entry.turnId},${entry.runId},${entry.metadata?.json ?? null},${entry.metadata?.path ?? null},${entry.metadata?.digest ?? null},${Date.now()},${context?.contextId ?? null},${context?.revision ?? null})`;
 
       for (const [position, part] of entry.parts.entries()) {
-        void this.sql`INSERT INTO conversation_entry_parts(actor_id,session_id,entry_id,position,message_id,part_no,through_sequence,text_start,text_length)
-          VALUES(${actorId},${this.sessionId},${entry.id},${position},${part.messageId},${part.partNo},${part.throughSequence},${part.textRange?.start ?? null},${part.textRange?.length ?? null})`;
+        void this.sql`INSERT INTO conversation_entry_parts(actor_id,session_id,entry_id,position,message_id,part_no,text_start,text_length)
+          VALUES(${actorId},${this.sessionId},${entry.id},${position},${part.messageId},${part.partNo},${part.textRange?.start ?? null},${part.textRange?.length ?? null})`;
       }
 
       this.setHead(entry.id);

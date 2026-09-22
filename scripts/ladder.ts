@@ -40,6 +40,7 @@ import * as v from 'valibot';
 import { assertMeasured, finding } from './gate-ratchet';
 import { DEADLINE_EXIT_CODE, runUnderDeadline } from './deadline';
 import { CACHE_BLIND_SPOTS, defaultStoreDirectory, planGate, recordGreen, storeAt, toolVersions } from './ladder-cache';
+import type { GateCacheRequest, Plan } from './ladder-cache';
 import { auditClosure } from './ladder-audit';
 import { deriveClosure, repoAt } from './ladder-closure';
 import type { Inputs } from './ladder-closure';
@@ -934,7 +935,7 @@ export const LADDER: readonly Gate[] = [
     inputs: { kind: 'derived' },
   },
   {
-    run: 'bun test --timeout=0 scripts/gates.test.ts scripts/schema-drift.test.ts scripts/reachability.test.ts scripts/do-init-gate.test.ts scripts/do-init-block-bodies.test.ts scripts/platform-catalog.test.ts scripts/policy-drift.test.ts scripts/scratch-ownership.test.ts scripts/literature-citations.test.ts scripts/commit-hygiene.test.ts scripts/lean-citations.test.ts scripts/infra.test.ts scripts/patch-parity.test.ts scripts/silent-drop.test.ts scripts/test-clocks.test.ts scripts/analytics-datasets.test.ts scripts/release-config.test.ts scripts/release-manifest.test.ts scripts/complexity.test.ts scripts/dead-code.test.ts scripts/undeclared-imports.test.ts scripts/core-layering.test.ts scripts/vendor-schema.test.ts scripts/refuse-linked-install.test.ts scripts/eval-session-mint.test.ts scripts/scanner-bundle-gate.test.ts scripts/coverage-merge.test.ts scripts/test-census.test.ts scripts/capability-parity.test.ts scripts/client-graph.test.ts scripts/install-scripts-gate.test.ts scripts/tracing-gate.test.ts',
+    run: 'bun test --timeout=0 scripts/gates.test.ts scripts/schema-drift.test.ts scripts/reachability.test.ts scripts/do-init-gate.test.ts scripts/do-init-block-bodies.test.ts scripts/platform-catalog.test.ts scripts/policy-drift.test.ts scripts/scratch-ownership.test.ts scripts/literature-citations.test.ts scripts/commit-hygiene.test.ts scripts/lean-citations.test.ts scripts/infra.test.ts scripts/patch-parity.test.ts scripts/silent-drop.test.ts scripts/test-clocks.test.ts scripts/analytics-datasets.test.ts scripts/release-config.test.ts scripts/release-manifest.test.ts scripts/complexity.test.ts scripts/ast-duplication.test.ts scripts/dead-code.test.ts scripts/undeclared-imports.test.ts scripts/core-layering.test.ts scripts/vendor-schema.test.ts scripts/refuse-linked-install.test.ts scripts/eval-session-mint.test.ts scripts/scanner-bundle-gate.test.ts scripts/coverage-merge.test.ts scripts/test-census.test.ts scripts/capability-parity.test.ts scripts/client-graph.test.ts scripts/install-scripts-gate.test.ts scripts/tracing-gate.test.ts',
     label: 'Gate self-tests',
     tier: 'push',
     // Measured 2026-08-24 after analytics dataset parity joined: 11.08s; release
@@ -3091,6 +3092,19 @@ function printMatrix(): void {
   }
 }
 
+/** Record one green run, and name the cache's reason when it declines. */
+function recordProof(
+  plan: Extract<Plan, { kind: 'miss' }>,
+  gate: GateCacheRequest,
+  result: { readonly seconds: number; readonly revision: string },
+): boolean {
+  const refused = recordGreen(plan, gate, result);
+
+  if (refused !== undefined) console.log(`      not recorded: ${refused}`);
+
+  return refused === undefined;
+}
+
 if (import.meta.main) {
   // A CLOSED REPORTING CHANNEL IS NOT A FAILED TIER.
   //
@@ -3402,7 +3416,7 @@ if (import.meta.main) {
 
   for (const [index, gate] of gates.entries()) {
     console.log(`\n── ${tier} ${String(index + 1)}/${String(gates.length)}: ${gate.run}`);
-    const plan = caching ? planGate(gate.run, gate.inputs, repo, tools, store) : undefined;
+    const plan = caching ? planGate({ run: gate.run, inputs: gate.inputs, repo, tools, store }) : undefined;
 
     if (plan?.kind === 'hit') {
       console.log(
@@ -3435,12 +3449,15 @@ if (import.meta.main) {
     if (outcome.exitCode === 0) {
       console.log(`ok  ${gate.run}  (${seconds.toFixed(1)}s)`);
 
-      if (plan?.kind === 'miss') {
-        const refused = recordGreen(plan, gate.run, gate.inputs, repoAt(root, (run, files) => claims(run, files)), tools, store, { seconds, revision });
+      // Only a miss re-enumerates the tree: `recordGreen` re-derives the
+      // closure from what is on disk NOW, and no other path reads it.
+      const proofRecorded = plan?.kind === 'miss' && recordProof(
+        plan,
+        { run: gate.run, inputs: gate.inputs, repo: repoAt(root, (run, files) => claims(run, files)), tools, store },
+        { seconds, revision },
+      );
 
-        if (refused === undefined) recorded.push(gate.run);
-        else console.log(`      not recorded: ${refused}`);
-      }
+      if (proofRecorded) recorded.push(gate.run);
 
       continue;
     }

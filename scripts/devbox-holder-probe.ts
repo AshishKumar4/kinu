@@ -118,16 +118,20 @@ interface ProbeRequest {
   readonly content?: string;
 }
 
+interface ProbePost<TSchema extends v.GenericSchema> {
+  readonly fixture: Fixture;
+  readonly path: string;
+  readonly schema: TSchema;
+  readonly body: ProbeRequest;
+  readonly timeoutMs?: number;
+}
+
 /** Every box-addressed route binds the request to its arm, and the fixture
  *  refuses one that does not: the driver's own helper infers the strategy from
  *  an `ab-<strategy>-…` box name, and these hand-built calls carry it
  *  explicitly for the same reason. */
 async function post<TSchema extends v.GenericSchema>(
-  fixture: Fixture,
-  path: string,
-  schema: TSchema,
-  body: ProbeRequest,
-  timeoutMs = 120_000,
+  { fixture, path, schema, body, timeoutMs = 120_000 }: ProbePost<TSchema>,
 ): Promise<v.InferOutput<TSchema>> {
   const response = await fetch(`${fixture.origin}${path}`, {
     method: 'POST',
@@ -148,12 +152,12 @@ async function post<TSchema extends v.GenericSchema>(
 async function exec(
   fixture: Fixture, box: string, command: string, cwd?: string,
 ): Promise<ExecReply> {
-  return await post(
+  return await post({
     fixture,
-    `/exec?box=${box}`,
-    ExecReplySchema,
-    cwd === undefined ? { command } : { command, cwd },
-  );
+    path: `/exec?box=${box}`,
+    schema: ExecReplySchema,
+    body: cwd === undefined ? { command } : { command, cwd },
+  });
 }
 
 async function scan(fixture: Fixture, box: string, when: string): Promise<string> {
@@ -237,13 +241,23 @@ async function main(): Promise<number> {
     stopWorker = started.stop;
     log(`deployed at ${live.origin}`);
 
-    const cold = await startupOperation(live, box, '/create', 'probe cold attach', ['empty', 'attached']);
+    const cold = await startupOperation({
+      fixture: live,
+      box,
+      path: '/create',
+      operation: 'probe cold attach',
+      allowedKinds: ['empty', 'attached'],
+    });
+
     log(`cold attach: ${cold.attach.kind} — ${cold.attach.detail}`);
 
     // ── the E2E's own open-write arming, verbatim in shape ─────────────────
     await exec(live, box, `mkdir -p ${HARNESS_DIR}`);
-    await post(live, `/write?box=${box}`, AckReplySchema, {
-      path: HARNESS_PATH, content: workloadSource,
+    await post({
+      fixture: live,
+      path: `/write?box=${box}`,
+      schema: AckReplySchema,
+      body: { path: HARNESS_PATH, content: workloadSource },
     });
     await exec(live, box, `mkdir -p ${WORK_ROOT}`);
 
@@ -280,12 +294,12 @@ async function main(): Promise<number> {
       const unmount = `(fusermount -u '${WORKDIR}' 2>&1 || fusermount3 -u '${WORKDIR}' 2>&1); `
         + `echo "rc=$?"; echo "MOUNTED=$(grep -c -F ' ${WORKDIR} ' /proc/mounts)"`;
 
-      for (const arm of [
+      for (const experiment of [
         { label: `A: session cwd INSIDE the mount (${WORKDIR}, the product default)`, cwd: WORKDIR },
         { label: `B: session cwd OUTSIDE the mount (${RUNTIME_DIR})`, cwd: RUNTIME_DIR },
       ]) {
-        const attempt = await exec(live, box, unmount, arm.cwd);
-        log(`── ${arm.label} ──`);
+        const attempt = await exec(live, box, unmount, experiment.cwd);
+        log(`── ${experiment.label} ──`);
 
         for (const line of (attempt.stdout ?? '').trim().split('\n')) log(`  ${line}`);
         const err = (attempt.stderr ?? '').trim();

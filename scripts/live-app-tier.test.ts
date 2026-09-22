@@ -487,7 +487,9 @@ async function openInspector(page: Page): Promise<void> {
  *  chat-tab switch — the same DOM node, the same scroll offset, and no
  *  workspace-scoped read re-sent in either direction. */
 async function measurePanel(newPage: LiveApp['newPage'], origin: string): Promise<PanelVerdict> {
-  const workspace = await createWorkspace(origin, `live-row-panel-${RUN_ID}`, 'panel state probe', SCRIPTED_MODEL_SPEC);
+  const workspace = await createWorkspace(
+    origin, { name: `live-row-panel-${RUN_ID}`, purpose: 'panel state probe', model: SCRIPTED_MODEL_SPEC });
+
   const page = await openWorkspace(newPage, origin, workspace);
 
   await page.evaluate(ClickScripts.newAgent);
@@ -576,7 +578,9 @@ async function measurePanel(newPage: LiveApp['newPage'], origin: string): Promis
  *  filter below it, so the count spans the whole column — its tab strip and
  *  its filter chips — and the strip's labels are reported beside it. */
 async function measurePlanTabs(newPage: LiveApp['newPage'], origin: string): Promise<PlanTabsVerdict> {
-  const workspace = await createWorkspace(origin, `live-row-plan-${RUN_ID}`, 'plan probe', SCRIPTED_MODEL_SPEC);
+  const workspace = await createWorkspace(
+    origin, { name: `live-row-plan-${RUN_ID}`, purpose: 'plan probe', model: SCRIPTED_MODEL_SPEC });
+
   const page = await openWorkspace(newPage, origin, workspace);
 
   await openInspector(page);
@@ -635,7 +639,9 @@ const readStripGeometry = `(() => {
 /** Row 3 (B5): the tab strip's rule is continuous, reaches the column's own
  *  right edge, and the active underline sits on it — dark and light. */
 async function measureGeometry(newPage: LiveApp['newPage'], origin: string): Promise<GeometryVerdict> {
-  const workspace = await createWorkspace(origin, `live-row-geometry-${RUN_ID}`, 'geometry probe', SCRIPTED_MODEL_SPEC);
+  const workspace = await createWorkspace(
+    origin, { name: `live-row-geometry-${RUN_ID}`, purpose: 'geometry probe', model: SCRIPTED_MODEL_SPEC });
+
   const page = await openWorkspace(newPage, origin, workspace);
 
   await openInspector(page);
@@ -708,7 +714,9 @@ const LayoutProbeSchema = v.object({
 const probeLayoutScript = `({ inspectorWidth: ${INSPECTOR_WIDTH}, railLane: ${RAIL_LANE} })`;
 
 async function measureControls(newPage: LiveApp['newPage'], origin: string): Promise<ControlsVerdict> {
-  const workspace = await createWorkspace(origin, `live-row-controls-${RUN_ID}`, 'collapse controls probe', SCRIPTED_MODEL_SPEC);
+  const workspace = await createWorkspace(
+    origin, { name: `live-row-controls-${RUN_ID}`, purpose: 'collapse controls probe', model: SCRIPTED_MODEL_SPEC });
+
   const page = await openWorkspace(newPage, origin, workspace);
 
   const before = v.parse(LayoutProbeSchema, await page.evaluate(probeLayoutScript));
@@ -789,7 +797,9 @@ async function paneHolds(page: Page, phrase: string): Promise<{ carriers: number
  *  through the real flow — a turn on Main, the '+' tab, a turn on the actor —
  *  and measured in both directions with one marker per side. */
 async function measureStampedCard(newPage: LiveApp['newPage'], origin: string): Promise<StampedCardVerdict> {
-  const workspace = await createWorkspace(origin, `live-row-stamp-${RUN_ID}`, 'stamped card probe', SCRIPTED_MODEL_SPEC);
+  const workspace = await createWorkspace(
+    origin, { name: `live-row-stamp-${RUN_ID}`, purpose: 'stamped card probe', model: SCRIPTED_MODEL_SPEC });
+
   const page = await openWorkspace(newPage, origin, workspace);
   const counter = await countRpc(page);
 
@@ -869,7 +879,8 @@ async function measureStampedCard(newPage: LiveApp['newPage'], origin: string): 
  *  the recorder is that drive plus a camera. */
 async function measureWalkthrough(newPage: LiveApp['newPage'], origin: string): Promise<WalkthroughVerdict> {
   const workspace = await createWorkspace(
-    origin, `live-row-plan-flow-${RUN_ID}`, 'plan review walkthrough', SCRIPTED_MODEL_SPEC);
+    origin,
+    { name: `live-row-plan-flow-${RUN_ID}`, purpose: 'plan review walkthrough', model: SCRIPTED_MODEL_SPEC });
 
   const page = await newPage();
 

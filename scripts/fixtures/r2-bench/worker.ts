@@ -112,7 +112,7 @@ interface BenchEnv {
  * when it does not, which is worse than no number at all.
  */
 export class BenchOpCounter extends DurableObject {
-  #calls = new Map<string, number>();
+  readonly #calls = new Map<string, number>();
 
   async add(deltas: Record<string, number>): Promise<void> {
     for (const [method, count] of Object.entries(deltas)) {

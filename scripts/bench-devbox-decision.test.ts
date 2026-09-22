@@ -21,7 +21,7 @@ import {
 
 import * as v from 'valibot';
 import { WRANGLER_FAILED } from './fixtures/r2-bench/deploy-substrate';
-import { scratchDir } from '@kinu.run/test-utils';
+import { present, scratchDir } from '@kinu.run/test-utils';
 import { readFileEvidence, writeC3File, C3_WORKLOAD } from '../packages/devbox/bench/witness-files';
 import { publicationTotals, type PublicationWindow } from '../packages/devbox/bench/publication-meter';
 import {
@@ -84,14 +84,21 @@ const tick = (
 });
 
 describe('startup polling contract', () => {
-  test('waits for this restoration, not a stale durable attach record', () => {
-    expect(startupPollVerdict({
-      state: {
-        restoration: 'unstarted',
-        lastAttach: { kind: 'attached', detail: 'the previous generation' },
-      },
-    })).toEqual({ kind: 'pending' });
-  });
+  const unconfirmedAttachRecords = [
+    { name: 'waits for this restoration, not a stale durable attach record', restoration: 'unstarted', detail: 'the previous generation' },
+    { name: 'an attach record without a running observation remains pending', restoration: 'attached', detail: 'an unconfirmed generation' },
+  ] as const;
+
+  for (const record of unconfirmedAttachRecords) {
+    test(record.name, () => {
+      expect(startupPollVerdict({
+        state: {
+          restoration: record.restoration,
+          lastAttach: { kind: 'attached', detail: record.detail },
+        },
+      })).toEqual({ kind: 'pending' });
+    });
+  }
 
   test('returns only after restoration publishes its durable attach outcome', () => {
     expect(startupPollVerdict({
@@ -117,15 +124,6 @@ describe('startup polling contract', () => {
         },
       })).toEqual({ kind: 'stopped', detail: 'the container stopped' });
     }
-  });
-
-  test('an attach record without a running observation remains pending', () => {
-    expect(startupPollVerdict({
-      state: {
-        restoration: 'attached',
-        lastAttach: { kind: 'attached', detail: 'an unconfirmed generation' },
-      },
-    })).toEqual({ kind: 'pending' });
   });
 
   test('stops polling only on a definitive unattached restoration', () => {
@@ -256,7 +254,7 @@ printf '\\nprobe_status=%s session=alive\\n' "$probe_status"
 
     expect(publicationTotals(window)).toEqual({ objectsPut: 2, bytesPut: 131_072, errors: [] });
     expect(publicationTotals(null).bytesPut).toBeNull();
-    expect(publicationTotals({ ...window, attempts: [{ ...window.attempts[0]!, bytes: null, bodyError: 'stream unobserved' }] }).bytesPut).toBeNull();
+    expect(publicationTotals({ ...window, attempts: [{ ...window.attempts[0], bytes: null, bodyError: 'stream unobserved' }] }).bytesPut).toBeNull();
     expect(publicationTotals({ ...window, closedAt: null }).objectsPut).toBeNull();
   });
 
@@ -278,7 +276,7 @@ printf '\\nprobe_status=%s session=alive\\n' "$probe_status"
     let puts = 0;
 
     const answer = async (input: Parameters<typeof real>[0], init?: Parameters<typeof real>[1]) => {
-      const path = new URL(String(input)).pathname;
+      const path = new URL(v.parse(v.string(), input)).pathname;
 
       if (path === '/checkpoint') {
         puts++;
@@ -295,7 +293,7 @@ printf '\\nprobe_status=%s session=alive\\n' "$probe_status"
       if (path === '/state') return Response.json({ ok: true, state: { running: true, restoration: 'attached', bootId: 'stable' } });
 
       if (path === '/exec') {
-        const body = JSON.parse(String(init?.body ?? '{}'));
+        const body = v.parse(v.looseObject({ command: v.string() }), JSON.parse(v.parse(v.string(), init?.body ?? '{}')));
         const segment = /--segment (\d+)/.exec(body.command)?.[1] ?? 'unknown';
 
         return Response.json({ ok: true, exitCode: 0, stdout: JSON.stringify({
@@ -309,9 +307,14 @@ printf '\\nprobe_status=%s session=alive\\n' "$probe_status"
     globalThis.fetch = Object.assign(answer, { preconnect: real.preconnect });
 
     try {
-      const run = await withFastClock(async () => await runDecisive(BENCH_FIXTURE, 'box', 'snapshot-chain', {
-        id: 'npm', workload: 'npm', excludes: false, args: '--target-mib 400 --segments 4',
-      }, 1, 1));
+      const run = await withFastClock(async () => await runDecisive({
+        fixture: BENCH_FIXTURE,
+        box: 'box',
+        arm: 'snapshot-chain',
+        spec: { id: 'npm', workload: 'npm', excludes: false, args: '--target-mib 400 --segments 4' },
+        seed: 1,
+        repetition: 1,
+      }));
 
       expect(run.ticks).toHaveLength(5);
       expect(run.ticks.every((row) => row.classA === 1 && row.classB === 0 && row.classFree === 0)).toBe(true);
@@ -327,9 +330,14 @@ printf '\\nprobe_status=%s session=alive\\n' "$probe_status"
     globalThis.fetch = Object.assign(async () => Response.json({ ok: false, error: 'startup pending' }), { preconnect: real.preconnect });
 
     try {
-      const run = await runDecisive(BENCH_FIXTURE, 'box', 'snapshot-chain', {
-        id: 'npm', workload: 'npm', excludes: false, args: '--target-mib 400 --segments 4',
-      }, 1, 1);
+      const run = await runDecisive({
+        fixture: BENCH_FIXTURE,
+        box: 'box',
+        arm: 'snapshot-chain',
+        spec: { id: 'npm', workload: 'npm', excludes: false, args: '--target-mib 400 --segments 4' },
+        seed: 1,
+        repetition: 1,
+      });
 
       expect(run.ticks).toHaveLength(0);
       expect(run.segments).toHaveLength(5);
@@ -468,7 +476,7 @@ function rungRestoreFixture(stopOps: number, wakeOps: number, workloadChurn = fa
     input: Parameters<typeof globalThis.fetch>[0],
     init?: Parameters<typeof globalThis.fetch>[1],
   ): Promise<Response> => {
-    const url = new URL(String(input));
+    const url = new URL(v.parse(v.string(), input));
     const route = `${init?.method ?? 'GET'} ${url.pathname}`;
     asked.push(route);
 
@@ -517,7 +525,7 @@ function rungRestoreFixture(stopOps: number, wakeOps: number, workloadChurn = fa
     }
 
     if (route === 'POST /exec') {
-      const posted = v.safeParse(PostedBodySchema, JSON.parse(String(init?.body ?? '{}')));
+      const posted = v.safeParse(PostedBodySchema, JSON.parse(v.parse(v.string(), init?.body ?? '{}')));
       const command = posted.success ? posted.output.command ?? '' : '';
       const marker = /printf %s (devbox-verify-[0-9a-f-]+)/.exec(command)?.[1] ?? '';
       let stdout = marker;
@@ -747,6 +755,7 @@ describe('the preregistered witness cells', () => {
       .find((row) => row.name === 'chunked-absorption');
 
     expect(check(facts)?.observed).toBe(true);
+    const absorption = present(facts.chunkedAbsorption, 'the chunked absorption facts');
 
     for (const changed of [
       { manifest: null }, { markerInMerged: { ...marker, evidence: null } },
@@ -757,7 +766,7 @@ describe('the preregistered witness cells', () => {
       { blockReads: { generation: 'chain-before:boot-new', payloadBytes: 0, indexPages: 1, readRequests: 1 } },
       { nextCheckpoint: { ok: true, outcome: { kind: 'skipped' } } },
     ]) {
-      expect(check({ ...facts, chunkedAbsorption: { ...facts.chunkedAbsorption!, ...changed } })?.observed).toBe(false);
+      expect(check({ ...facts, chunkedAbsorption: { ...absorption, ...changed } })?.observed).toBe(false);
     }
   });
 
@@ -785,7 +794,7 @@ describe('the preregistered witness cells', () => {
     const [, collapse] = controlWitnessChecks('snapshot-chain', {
       ...WITNESSED,
       deltaLayerCollapse: {
-        ...WITNESSED.deltaLayerCollapse!,
+        ...present(WITNESSED.deltaLayerCollapse, 'the delta-layer collapse facts'),
         collapsedChainId: 'chain-7',
         collapsedNamesDelta: true,
       },
@@ -798,7 +807,7 @@ describe('the preregistered witness cells', () => {
   test('a wake with no delta to serve witnesses nothing', () => {
     const [, collapse] = controlWitnessChecks('snapshot-chain', {
       ...WITNESSED,
-      deltaLayerCollapse: { ...WITNESSED.deltaLayerCollapse!, deltaBytes: 0, deltaLayerMounted: false },
+      deltaLayerCollapse: { ...present(WITNESSED.deltaLayerCollapse, 'the delta-layer collapse facts'), deltaBytes: 0, deltaLayerMounted: false },
     }, 'layered');
 
     expect(collapse?.observed).toBe(false);
@@ -809,7 +818,7 @@ describe('the preregistered witness cells', () => {
     const check = (mutableDelta: NonNullable<ControlWitnessFacts['mutableDelta']>) =>
       controlWitnessChecks('snapshot-chain', { mutableDelta })[0];
 
-    const facts = WITNESSED.mutableDelta!;
+    const facts = present(WITNESSED.mutableDelta, 'the mutable delta facts');
 
     expect(check(facts)?.observed).toBe(true);
 
@@ -908,11 +917,11 @@ describe('the rendered report carries no money', () => {
     // The strip removes money, NOT measurement: `class A`/`class B` name the
     // kind of R2 API operation, and those counts plus bytes moved and tick
     // time are what the decision reads.
-    const report = render(
-      [reportArm('snapshot-chain')],
-      reportMeta,
-      { admitted: true, gates: [] },
-    );
+    const report = render({
+      arms: [reportArm('snapshot-chain')],
+      meta: reportMeta,
+      admission: { admitted: true, gates: [] },
+    });
 
     expect(report).toContain('| class A | class B | MiB moved |');
     expect(report).toContain('Σ tick ms');
@@ -972,7 +981,13 @@ describe('restore and backup time versus tree size', () => {
     expect(read.artifact?.schema).toBe('devbox-arm-artifact/1');
     const rows = decodeComplexityRows(read.artifact?.row.complexity);
     expect(rows).toEqual(complexity);
-    const report = render([{ ...arm, complexity: rows }], complexityMeta, { admitted: true, gates: [] });
+
+    const report = render({
+      arms: [{ ...arm, complexity: rows }],
+      meta: complexityMeta,
+      admission: { admitted: true, gates: [] },
+    });
+
     expect(report).toContain('#### Restore and backup time versus tree size');
     expect(report).toContain('| `snapshot-chain` | 65,536 | 120 | 5,100 | 7 | 90,112 | committed; attached |');
     expect(report).toContain('| `snapshot-chain` | 4,259,840 | 120 | 5,100 | 7 | 90,112 | committed; attached |');
@@ -980,7 +995,13 @@ describe('restore and backup time versus tree size', () => {
     // THE SECTION CARRIES THE RUN'S OWN DATE. It carried the literal
     // 2026-09-05, the day the cell was written, so every later run's table
     // would have dated its numbers to a day nobody measured them on.
-    const later = render([{ ...arm, complexity: rows }], { ...complexityMeta, date: '2026-09-06' }, { admitted: true, gates: [] });
+
+    const later = render({
+      arms: [{ ...arm, complexity: rows }],
+      meta: { ...complexityMeta, date: '2026-09-06' },
+      admission: { admitted: true, gates: [] },
+    });
+
     const section = later.slice(later.indexOf('#### Restore and backup time versus tree size'));
     expect(section).toContain('Measured 2026-09-06.');
     expect(section).not.toContain('2026-09-05');
@@ -1182,8 +1203,8 @@ describe('cleanup verification observes; only the teardown replay deletes', () =
   });
 
   test('worker absence is probed by listing, and an unreadable account throws', async () => {
-    const present = cleanupObservationProbes({ wrangler: () => 'Created: yesterday', residue: null });
-    expect(await present.workerAbsent('w')).toBe(false);
+    const deployed = cleanupObservationProbes({ wrangler: () => 'Created: yesterday', residue: null });
+    expect(await deployed.workerAbsent('w')).toBe(false);
 
     const absent = cleanupObservationProbes({
       wrangler: () => `${WRANGLER_FAILED}: workers.api.error.script_not_found [code: 10007]`, residue: null,
@@ -1525,7 +1546,7 @@ describe('the instruments restate nothing unchecked', () => {
 
   test('the probe scope gates the post-wake tail on verify-only', () => {
     const arm = /async function measureArm[\s\S]*?\n\}\n/.exec(driver)?.[0] ?? '';
-    expect(arm).toContain('await runWorkloadPhases(fixture, box, strategy, options, result, notes);');
+    expect(arm).toContain('await runWorkloadPhases({ fixture, box, strategy, run: options, result, notes });');
     expect(arm).toContain('if (options.verifyOnly) {');
     expect(arm).toContain('await releaseArm(fixture, box, result, notes);');
   });

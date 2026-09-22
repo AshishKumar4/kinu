@@ -9,12 +9,20 @@
  * here: an enumerated list whose only legal direction is smaller, which took
  * cross-backend twins from 54 to 9.
  *
- * Two properties make the lock a ledger rather than an ignore list:
+ * Three properties make the lock a ledger rather than an ignore list:
  *   - it is written only by `--lock`, never edited by hand, so it cannot drift
  *     from what the analysis actually finds;
  *   - a lock entry that no longer reproduces is a FAILURE, not a pass. Fixing a
  *     violation therefore forces a re-lock, and the list can never quietly
- *     retain something that has already been cleaned up.
+ *     retain something that has already been cleaned up;
+ *   - `--lock` may only SHRINK or RE-KEY what is already there (`shrinkOnly`
+ *     below). A lock a red run can re-record upward is an ignore list with an
+ *     extra step: it clears today's finding, reads as a routine chore in the
+ *     diff, and the only evidence that the envelope moved is a number nobody
+ *     compares. Measured over the 57 revisions of
+ *     `scripts/complexity.lock.json`: 18 entries were re-recorded HIGHER across
+ *     14 functions between 2026-09-01 and 2026-09-14, `WorkspacePage` 64 to 72
+ *     in one commit (fb62d4c3b) and `measureArm` 92 to 100 over two.
  */
 
 import { readFileSync, writeFileSync } from 'node:fs';
@@ -29,8 +37,12 @@ export interface Ratchet {
 
 const LockSchema = v.array(v.string());
 
+export function readLock(lockPath: string): string[] {
+  return v.parse(LockSchema, JSON.parse(readFileSync(lockPath, 'utf8')));
+}
+
 export function reconcile(keys: readonly string[], lockPath: string): Ratchet {
-  const locked = new Set(v.parse(LockSchema, JSON.parse(readFileSync(lockPath, 'utf8'))));
+  const locked = new Set(readLock(lockPath));
   const found = new Set(keys);
 
   return {
@@ -46,6 +58,102 @@ export function writeLock(keys: readonly string[], lockPath: string): number {
   return sorted.length;
 }
 
+/* ── The shrink-only merge ────────────────────────────────────────────── */
+
+/** One number a lock holds, under the key the lock records it by: a function's
+ *  complexity, a duplicate group's copy count. */
+export interface LockedNumber {
+  readonly key: string;
+  readonly value: number;
+}
+
+/** A key `--lock` will not record. `was` is the number the lock holds for that
+ *  key, or for the vanished key this one replaces; absent when nothing in the
+ *  lock can stand for it. */
+export interface LockRefusal {
+  readonly key: string;
+  readonly was: number | undefined;
+  readonly now: number;
+}
+
+export interface ShrinkVerdict {
+  /** The lock to write: every accepted key at the lower of the two numbers.
+   *  Read only when `refusals` is empty — a refused `--lock` writes nothing. */
+  readonly merged: readonly LockedNumber[];
+  readonly refusals: readonly LockRefusal[];
+}
+
+/** Worst first, and by key on a tie so an equal pair matches the same way on
+ *  every run. */
+const worstFirst = (a: LockedNumber, b: LockedNumber): number =>
+  b.value - a.value || a.key.localeCompare(b.key);
+
+/**
+ * The only merge `--lock` may perform: every number falls to `min(old, new)`, a
+ * key the lock already holds may keep or lower it, and a key the lock has never
+ * seen is refused unless a vanished key pays for it.
+ *
+ * The exception exists because a rename or a file move changes the key of a
+ * violation nobody made worse, and a lock that cannot be re-keyed is a lock
+ * people route around. Pairing worst with worst, one departure per arrival, is
+ * what keeps that exception from carrying growth: an arrival is admitted only at
+ * or below the number of the departure paying for it, so two keys leaving at 50
+ * and 40 cannot cover two arriving at 45 — the second one lands above the 40 it
+ * would have to be paid for by.
+ */
+export function shrinkOnly(
+  previous: readonly LockedNumber[],
+  candidate: readonly LockedNumber[],
+): ShrinkVerdict {
+  const held = new Map(previous.map(({ key, value }) => [key, value]));
+  const present = new Set(candidate.map(({ key }) => key));
+  const refusals: LockRefusal[] = [];
+  const entrants: LockedNumber[] = [];
+
+  for (const entry of candidate) {
+    const was = held.get(entry.key);
+
+    if (was === undefined) entrants.push(entry);
+    else if (entry.value > was) refusals.push({ key: entry.key, was, now: entry.value });
+  }
+
+  const vanished = previous.filter(({ key }) => !present.has(key)).sort(worstFirst);
+
+  for (const [index, entrant] of [...entrants].sort(worstFirst).entries()) {
+    const paidFor = vanished[index];
+
+    if (paidFor === undefined || entrant.value > paidFor.value) {
+      refusals.push({ key: entrant.key, was: paidFor?.value, now: entrant.value });
+    }
+  }
+
+  const refused = new Set(refusals.map(({ key }) => key));
+
+  return {
+    merged: candidate
+      .filter(({ key }) => !refused.has(key))
+      .map(({ key, value }) => ({ key, value: Math.min(held.get(key) ?? value, value) })),
+    refusals,
+  };
+}
+
+/** Prints why `--lock` wrote nothing and returns the process exit code. Each
+ *  line carries both numbers, because the reader's next question after "refused"
+ *  is how far over the entry is. */
+export function refuseLock(
+  gate: string,
+  refusals: readonly LockRefusal[],
+  remedy: string,
+): number {
+  console.error(`${gate}: --lock refused ${String(refusals.length)} entr(ies) and wrote nothing\n`);
+
+  for (const { key, was, now } of refusals) {
+    console.error(`  ${key}\n    ${was === undefined ? 'absent from the lock' : `locked at ${String(was)}`}`
+      + `, measured ${String(now)} — the lock only shrinks; ${remedy}`);
+  }
+
+  return 1;
+}
 
 /** A gate that scanned nothing reports a clean tree, which is the shape of
  *  `assertEventSequence` — a check that could never fail. The ratchet hides it
@@ -90,15 +198,21 @@ export function finding(f: Finding): string {
   ].join('\n');
 }
 
+/** One gate's verdict: what it is called, what its ratchet reconciled, the body
+ *  for each key, the command that records a cleanup, and what it measured. */
+export interface GateVerdict {
+  readonly gate: string;
+  readonly ratchet: Ratchet;
+  readonly detail: ReadonlyMap<string, string>;
+  readonly lockCommand: string;
+  readonly measured: string;
+}
+
 /** Prints the verdict and returns the process exit code. `detail` supplies the
  *  human-readable body for a key; a stale key has no detail by definition. */
-export function report(
-  gate: string,
-  ratchet: Ratchet,
-  detail: ReadonlyMap<string, string>,
-  lockCommand: string,
-  measured: string,
-): number {
+export function report(verdict: GateVerdict): number {
+  const { gate, ratchet, detail, lockCommand, measured } = verdict;
+
   if (ratchet.added.length === 0 && ratchet.stale.length === 0) {
     console.log(`${gate}: ok — ${measured}`);
 

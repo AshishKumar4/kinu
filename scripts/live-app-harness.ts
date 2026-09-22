@@ -64,10 +64,11 @@ function serverAccount(origin: string): string {
  *  it: a live-app caller that gets HTML where it expected JSON has hit the
  *  app, not the API, and a 500 carries the worker's own error. */
 export async function apiJson(origin: string, path: string, init?: RequestInit): Promise<JsonValue> {
-  const response = await fetch(`${origin}${path}`, {
-    ...init,
-    headers: { 'content-type': 'application/json', ...init?.headers },
-  });
+  const headers = new Headers(init?.headers);
+
+  if (!headers.has('content-type')) headers.set('content-type', 'application/json');
+
+  const response = await fetch(`${origin}${path}`, { ...init, headers });
 
   const text = await response.text();
 
@@ -82,17 +83,26 @@ export async function apiJson(origin: string, path: string, init?: RequestInit):
 
 const WorkspaceEntrySchema = v.object({ name: v.string() });
 
+/** What the app's workspace-create route takes: `name` is the URL name asked
+ *  for, `displayName` the title the sidebar shows when it differs. */
+export interface WorkspaceRequest {
+  readonly name: string;
+  readonly purpose: string;
+  readonly model: string;
+  readonly displayName?: string;
+}
+
 /** Create a workspace through the app's own route; the name it answers with is
  *  the one the URL takes, which is not always the one asked for. */
-export async function createWorkspace(
-  origin: string, name: string, purpose: string, model: string,
-  opts?: { displayName?: string },
-): Promise<string> {
+export async function createWorkspace(origin: string, request: WorkspaceRequest): Promise<string> {
   const created = v.parse(
     WorkspaceEntrySchema,
     await apiJson(origin, '/api/user/workspaces', {
       method: 'POST',
-      body: JSON.stringify({ name, purpose, model, displayName: opts?.displayName }),
+      body: JSON.stringify({
+        name: request.name, purpose: request.purpose, model: request.model,
+        displayName: request.displayName,
+      }),
     }),
   );
 
@@ -131,7 +141,7 @@ export async function deleteWorkspace(origin: string, name: string): Promise<voi
 export interface LiveApp {
   readonly browser: Browser;
   /** A page with no clock, as in the gallery harness. */
-  newPage(): Promise<Page>;
+  readonly newPage: () => Promise<Page>;
   /** `http://127.0.0.1:<port>` — this run's dev server. */
   readonly origin: string;
   /** The directory this run's Durable Objects, KV and R2 live in: a scratch

@@ -51,16 +51,34 @@ describe('the shapes that leaked', () => {
     expect(found.problems.map((p) => p.rule)).toEqual(['catalogued']);
   });
 
-  test('a suite that mints and never releases is refused', () => {
-    const found = audit('packages/x/tests/a.test.ts', [
-      "import { mkdtempSync } from 'node:fs';",
-      "import { tmpdir } from 'node:os';",
-      "import { join } from 'node:path';",
-      "const dir = mkdtempSync(join(tmpdir(), 'kinu-thing-'));",
-    ].join('\n'));
+  // Both mint forms, because the gate reads source text: the synchronous
+  // `node:fs` call and the awaited `node:fs/promises` one are two different
+  // shapes, and catching either says nothing about the other.
+  const rawMints = [
+    {
+      name: 'a suite that mints and never releases is refused',
+      imports: "import { mkdtempSync } from 'node:fs';",
+      mint: "const dir = mkdtempSync(join(tmpdir(), 'kinu-thing-'));",
+    },
+    {
+      name: 'an asynchronous raw mint without cleanup is refused',
+      imports: "import { mkdtemp } from 'node:fs/promises';",
+      mint: "const dir = await mkdtemp(join(tmpdir(), 'kinu-thing-'));",
+    },
+  ];
 
-    expect(found.problems.map((p) => p.rule)).toEqual(['released']);
-  });
+  for (const raw of rawMints) {
+    test(raw.name, () => {
+      const found = audit('packages/x/tests/a.test.ts', [
+        raw.imports,
+        "import { tmpdir } from 'node:os';",
+        "import { join } from 'node:path';",
+        raw.mint,
+      ].join('\n'));
+
+      expect(found.problems.map((p) => p.rule)).toEqual(['released']);
+    });
+  }
 
   test('the eager mkdirSync that produced 5,489 directories is refused', () => {
     // `createBranchSpawner` did this at construction and `createCLIRuntime`
@@ -99,17 +117,6 @@ describe('the fixes are accepted', () => {
     ].join('\n'));
 
     expect(found.problems).toEqual([]);
-  });
-
-  test('an asynchronous raw mint without cleanup is refused', () => {
-    const found = audit('packages/x/tests/a.test.ts', [
-      "import { mkdtemp } from 'node:fs/promises';",
-      "import { tmpdir } from 'node:os';",
-      "import { join } from 'node:path';",
-      "const dir = await mkdtemp(join(tmpdir(), 'kinu-thing-'));",
-    ].join('\n'));
-
-    expect(found.problems.map((p) => p.rule)).toEqual(['released']);
   });
 });
 

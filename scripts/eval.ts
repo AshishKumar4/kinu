@@ -31,6 +31,7 @@ import {
 import type {
   EvalCase, ExplorationStrategy, StrategyContext, StrategyResult, JudgeFn, Verdict,
 } from '../packages/core/src/index';
+import { renderThrownChain } from '../packages/core/src/obs/index';
 import { createConfiguredLocalModelResolver } from '../packages/cli/src/local-model-resolver';
 import { createTestRuntime } from '@kinu.run/test-utils';
 
@@ -198,10 +199,6 @@ export interface BenchmarkDeps {
   meta: { modelA?: string; modelB?: string; corpus?: string; ranAt?: number };
 }
 
-function errorMessage<Failure>(error: Failure): string {
-  return error instanceof Error ? error.message : String(error);
-}
-
 /** Run the harness + apply the gate. Pure of model resolution + IO, so tests
  *  drive it with stub strategies + a stub judge (no real LLM). */
 export async function runBenchmark(deps: BenchmarkDeps) {
@@ -238,7 +235,7 @@ async function main(): Promise<void> {
   try {
     cases = parseCorpus(readFileSync(opts.corpus, 'utf8'));
   } catch (err) {
-    console.error(`Failed to load corpus ${opts.corpus}: ${errorMessage(err)}`);
+    console.error(`Failed to load corpus ${opts.corpus}: ${renderThrownChain({ cause: err })}`);
     process.exit(1);
   }
 
@@ -250,7 +247,7 @@ async function main(): Promise<void> {
   try {
     resolver = createConfiguredLocalModelResolver({ model: opts.model ?? undefined }).resolver;
   } catch (err) {
-    console.error(`Cannot run the benchmark: ${errorMessage(err)}`);
+    console.error(`Cannot run the benchmark: ${renderThrownChain({ cause: err })}`);
     process.exit(1);
   }
 

@@ -7,7 +7,9 @@
  * need none of it.
  */
 
-import { useEffect, useMemo, useRef } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import type { UIMessage } from "ai";
+import * as v from "valibot";
 
 interface GalleryConnectionError {
 	readonly code: number;
@@ -60,6 +62,24 @@ let served: GalleryRpc | null = null;
 export function serveGalleryRpc(rpc: GalleryRpc): void {
 	served = rpc;
 }
+
+/** The transcript a page frame opens with, registered the same way and for the
+ * same reason. Empty by default: a frame that asks nothing of the chat reads
+ * the empty conversation it read before. */
+let seededChat: readonly UIMessage[] = [];
+
+export function seedGalleryChat(messages: readonly UIMessage[]): void {
+	seededChat = messages;
+}
+
+/** The server's transcript frame, as the wire carries it. Only the ids are
+ * read: a redraw of this conversation NAMES rows this client already holds —
+ * a walk-back removes rows and adds none — so the client's own copies are what
+ * it draws, and a fixture is spared restating every part of every row. */
+const TranscriptFrameSchema = v.object({
+	type: v.literal("cf_agent_chat_messages"),
+	messages: v.array(v.looseObject({ id: v.string() })),
+});
 
 /** Every gallery connection currently open. A push has no client call to
  *  answer, so it cannot be served through `served`: it has to reach the
@@ -162,19 +182,27 @@ export function useAgent(options: AgentHandlers): GalleryAgent {
  * `useAgentChat`'s gallery surface. The held-send DOM values are transport
  * controls only: real `useKinu` decides whether same-task presses enter it.
  */
-export function useAgentChat(_options: { agent: GalleryAgent }): {
-	messages: never[];
-	sendMessage: () => Promise<void>;
-	regenerate: () => Promise<void>;
-	clearHistory: () => void;
-	stop: () => void;
-	isStreaming: false;
-	status: "ready";
-	error: undefined;
-	connectionError: GalleryConnectionError | null;
-} {
-	return useMemo(() => ({
-		messages: [],
+export function useAgentChat(options: { agent: GalleryAgent }) {
+	const [messages, setMessages] = useState<readonly UIMessage[]>(seededChat);
+	const agent = options.agent;
+
+	useEffect(() => {
+		const onMessage = (event: Event) => {
+			const frame = v.safeParse(TranscriptFrameSchema, event instanceof MessageEvent
+				? v.parse(v.unknown(), JSON.parse(String(event.data)))
+				: null);
+
+			if (!frame.success) return;
+			const named = new Set(frame.output.messages.map((message) => message.id));
+			setMessages((current) => current.filter((message) => named.has(message.id)));
+		};
+
+		agent.addEventListener("message", onMessage);
+
+		return () => { agent.removeEventListener("message", onMessage); };
+	}, [agent]);
+
+	const controls = useMemo(() => ({
 		sendMessage: () => {
 			const root = document.documentElement;
 			root.dataset.galleryChatSends = String(Number(root.dataset.galleryChatSends ?? "0") + 1);
@@ -184,11 +212,13 @@ export function useAgentChat(_options: { agent: GalleryAgent }): {
 			return new Promise<void>(() => {});
 		},
 		regenerate: () => Promise.resolve(),
-		clearHistory: () => {},
+		clearHistory: () => { setMessages([]); },
 		stop: () => {},
-		isStreaming: false,
+		isStreaming: false as const,
 		status: "ready" as const,
 		error: undefined,
 		connectionError: terminalClose,
 	}), []);
+
+	return { ...controls, messages };
 }

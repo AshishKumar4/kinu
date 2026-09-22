@@ -976,7 +976,9 @@ async function cleanup(
   }
 
   try {
-    if (!deleteFixtureWorker(REPO_ROOT, planned.configPath, planned.worker, log)) {
+    if (!deleteFixtureWorker({
+      repoRoot: REPO_ROOT, configPath: planned.configPath, workerName: planned.worker, log,
+    })) {
       evidence.errors.push('Worker deletion failed');
     }
   } catch (error) {

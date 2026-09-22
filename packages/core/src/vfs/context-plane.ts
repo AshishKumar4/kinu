@@ -36,7 +36,7 @@ const RevisionSchema = v.tuple([v.string(), v.nullable(v.string()), v.pipe(v.num
   v.nullable(v.string()), v.nullable(v.string()), v.nullable(v.string()), v.nullable(v.number()), v.nullable(v.string())]);
 
 const EntrySchema = v.union([
-  v.object({ entryId: v.string(), messageId: v.string(), cutoff: v.pipe(v.number(), v.integer(), v.minValue(0)), message: JsonObjectSchema }),
+  v.object({ entryId: v.string(), messageId: v.string(), message: JsonObjectSchema }),
   v.object({ new: v.literal(true), message: JsonObjectSchema }),
 ]);
 
@@ -70,7 +70,7 @@ type PairingView = v.InferOutput<typeof PairingView>;
 
 interface StagedView { readonly entries: readonly ContextEntry[]; readonly blocked: StagedContextDeferral | undefined; readonly staged: boolean }
 
-interface DesiredEntry { readonly entryId: string; readonly messageId: string; sequence: number | null; readonly message: JsonObject; readonly prepare: boolean }
+interface DesiredEntry { readonly entryId: string; readonly messageId: string; readonly message: JsonObject; readonly prepare: boolean }
 
 /** What the working file shows over the selected revision: the pending proposal's preview when one is staged, the revision
  *  itself otherwise. A preview the history has rewritten from under its proposal is shown as the revision, blocked and not staged. */
@@ -140,7 +140,7 @@ function workingLines(data: string | Uint8Array, observed: WorkingView, actorId:
 }
 
 /** The entries a write asks for, matched line by line against the observed ones. A new line gets a fresh identity; an existing line keeps
- *  its entry and cutoff and keeps its message unless the content differs, in which case the message is re-prepared under a new id.
+ *  its entry and keeps its message unless the content differs, in which case the message is re-prepared under a new id.
  *  `originals` holds the projection read for every existing line, so the pairing check does not read it twice. */
 async function desiredEntries(lines: readonly string[], observed: readonly ContextEntry[], messages: SessionMessages): Promise<{ desired: DesiredEntry[]; originals: Map<string, JsonObject> }> {
   const entries = lines.map(line => v.parse(EntrySchema, JSON.parse(line)));
@@ -151,47 +151,39 @@ async function desiredEntries(lines: readonly string[], observed: readonly Conte
   for (const entry of entries) {
     if ('new' in entry) {
       const id = crypto.randomUUID();
-      desired.push({ entryId: id, messageId: id, sequence: null, message: entry.message, prepare: true });
+      desired.push({ entryId: id, messageId: id, message: entry.message, prepare: true });
       continue;
     }
 
     if (originals.has(entry.entryId)) throw new KinuError('bad_input', 'a working entry appears more than once');
     const previous = visible.get(entry.entryId);
 
-    if (previous === undefined || previous.messageId !== entry.messageId || previous.sequence !== entry.cutoff) throw new FileRefusalError('stale', 'entry identity or cutoff differs from the observed context');
+    if (previous === undefined || previous.messageId !== entry.messageId) throw new FileRefusalError('stale', 'entry identity differs from the observed context');
     const original = await messages.projection(previous);
     originals.set(entry.entryId, original);
     const changed = JSON.stringify(original) !== JSON.stringify(entry.message);
-    desired.push({ entryId: entry.entryId, messageId: changed ? crypto.randomUUID() : entry.messageId, sequence: entry.cutoff, message: entry.message, prepare: changed });
+    desired.push({ entryId: entry.entryId, messageId: changed ? crypto.randomUUID() : entry.messageId, message: entry.message, prepare: changed });
   }
 
   return { desired, originals };
 }
 
 /** Prepares every changed or new message in order, resolving each tool result against the tool call that precedes it in the
- *  desired sequence; a kept message contributes its calls from storage. A prepared entry's cutoff is its last update. */
+ *  desired order; a kept message contributes its calls from storage. */
 async function prepareDesired(desired: readonly DesiredEntry[], messages: SessionMessages): Promise<PreparedMessage[]> {
   const calls = new Map<string, { messageId: string; part: number }>();
   const prepared: PreparedMessage[] = [];
 
   for (const entry of desired) {
     if (entry.message.role === 'assistant' && !v.is(v.string(), entry.message.content)) {
-      let parts: readonly { partNo: number; value: JsonObject }[];
-
-      if (entry.prepare) parts = v.parse(v.array(JsonObjectSchema), entry.message.content).map((value, partNo) => ({ partNo, value }));
-      else {
-        if (entry.sequence === null) throw new KinuError('io', 'existing context message has no cutoff');
-        parts = await messages.materializeParts({ messageId: entry.messageId, sequence: entry.sequence });
-      }
+      const parts: readonly { partNo: number; value: JsonObject }[] = entry.prepare
+        ? v.parse(v.array(JsonObjectSchema), entry.message.content).map((value, partNo) => ({ partNo, value }))
+        : await messages.materializeParts({ messageId: entry.messageId });
 
       for (const part of parts) if (part.value.type === 'tool-call') calls.set(v.parse(v.string(), part.value.toolCallId), { messageId: entry.messageId, part: part.partNo });
     }
 
-    if (entry.prepare) {
-      const message = await messages.prepareProjection(entry.message, entry.messageId, calls);
-      prepared.push(message);
-      entry.sequence = message.updates.length - 1;
-    }
+    if (entry.prepare) prepared.push(await messages.prepareProjection(entry.message, entry.messageId, calls));
   }
 
   return prepared;
@@ -215,7 +207,7 @@ async function assertPairsIntact(observed: readonly ContextEntry[], originals: R
 }
 
 /** The change list from the base revision to the desired entries: every base entry the write dropped, then every desired entry whose
- *  identity, cutoff or position differs from the base. Every desired entry has been prepared by now, or the write is broken. */
+ *  identity or position differs from the base. */
 function changesAgainst(base: readonly ContextEntry[], desired: readonly DesiredEntry[]): ContextChange[] {
   const baseById = new Map(base.map(entry => [entry.entryId, entry]));
   const wantedIds = new Set(desired.map(entry => entry.entryId));
@@ -224,10 +216,8 @@ function changesAgainst(base: readonly ContextEntry[], desired: readonly Desired
   for (const [position, entry] of desired.entries()) {
     const previous = baseById.get(entry.entryId);
 
-    if (entry.sequence === null) throw new KinuError('io', 'context message was not prepared');
-
-    if (previous !== undefined && previous.messageId === entry.messageId && previous.sequence === entry.sequence && previous.position === position) continue;
-    changes.push({ entryId: entry.entryId, expected: previous ?? null, replacement: { messageId: entry.messageId, sequence: entry.sequence, position } });
+    if (previous !== undefined && previous.messageId === entry.messageId && previous.position === position) continue;
+    changes.push({ entryId: entry.entryId, expected: previous ?? null, replacement: { messageId: entry.messageId, position } });
   }
 
   return changes;
@@ -287,7 +277,7 @@ function contextFiles(deps: ContextMountDeps): VFS & Pick<VfsNativeReads, 'readR
 
     for (const entry of entries) {
       const message = await view.target.stores.claims.history.messages.projection(entry);
-      const row = { entryId: entry.entryId, messageId: entry.messageId, cutoff: entry.sequence, message };
+      const row = { entryId: entry.entryId, messageId: entry.messageId, message };
 
       if (jsonl) yield `${JSON.stringify(row)}\n`;
       else { yield `${first ? '' : ','}${JSON.stringify(row)}`; first = false; }
@@ -465,7 +455,7 @@ function contextFiles(deps: ContextMountDeps): VFS & Pick<VfsNativeReads, 'readR
       for (const [position, entry] of observed.entries.entries()) {
         const now = latest.entries[position];
 
-        if (now?.entryId !== entry.entryId || now.messageId !== entry.messageId || now.sequence !== entry.sequence) {
+        if (now?.entryId !== entry.entryId || now.messageId !== entry.messageId) {
           throw new FileRefusalError('stale', 'observed context content changed');
         }
       }

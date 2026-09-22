@@ -130,7 +130,7 @@ export function latinSquareOrders(arms: readonly string[], rounds?: number): str
 
   while (out.length < want) {
     for (let offset = 0; offset < full && out.length < want; offset++) {
-      out.push(arms.map((_, at) => arms[(at + offset) % full]!));
+      out.push(arms.map((_, at) => arms[(at + offset) % full]));
     }
   }
 
@@ -140,7 +140,7 @@ export function latinSquareOrders(arms: readonly string[], rounds?: number): str
 /** The property the orders exist for: every arm once per ordinal position. */
 export function latinSquareValid(orders: readonly (readonly string[])[]): boolean {
   if (orders.length === 0) return true;
-  const width = orders[0]!.length;
+  const width = orders[0].length;
 
   for (let position = 0; position < width; position++) {
     const seen = new Set<string>();

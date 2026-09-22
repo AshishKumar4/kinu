@@ -7,7 +7,7 @@ export interface ContextSelection { readonly contextId: string; readonly revisio
 
 export interface ContextEntry extends MessageReference { readonly entryId: string; readonly position: number }
 
-interface MemberRow { entry_id: string; position: number; message_id: string; through_sequence: number }
+interface MemberRow { entry_id: string; position: number; message_id: string }
 
 /** Interval membership is both the current selection and its historical record. */
 export class SessionContext {
@@ -54,13 +54,13 @@ export class SessionContext {
     const head = this.sql<{ revision: number }>`SELECT MAX(revision) AS revision FROM context_revisions WHERE actor_id=${this.actor.actorId} AND context_id=${selection.contextId}`[0];
 
     const rows = head?.revision === selection.revision
-      ? this.sql<MemberRow>`SELECT entry_id,position,message_id,through_sequence FROM context_memberships WHERE actor_id=${this.actor.actorId} AND context_id=${selection.contextId} AND to_revision IS NULL ORDER BY position`
-      : this.sql<MemberRow>`SELECT entry_id,position,message_id,through_sequence FROM context_memberships WHERE actor_id=${this.actor.actorId} AND context_id=${selection.contextId} AND from_revision<=${selection.revision} AND (to_revision IS NULL OR to_revision>${selection.revision}) ORDER BY position`;
+      ? this.sql<MemberRow>`SELECT entry_id,position,message_id FROM context_memberships WHERE actor_id=${this.actor.actorId} AND context_id=${selection.contextId} AND to_revision IS NULL ORDER BY position`
+      : this.sql<MemberRow>`SELECT entry_id,position,message_id FROM context_memberships WHERE actor_id=${this.actor.actorId} AND context_id=${selection.contextId} AND from_revision<=${selection.revision} AND (to_revision IS NULL OR to_revision>${selection.revision}) ORDER BY position`;
 
-    return rows.map(row => ({ entryId: row.entry_id, position: row.position, messageId: row.message_id, sequence: row.through_sequence }));
+    return rows.map(row => ({ entryId: row.entry_id, position: row.position, messageId: row.message_id }));
   }
 
-  /** The mutation callback publishes message updates under the same transaction as their selected cutoffs. */
+  /** The mutation callback publishes message rows under the same transaction as their membership. */
   commit(expected: ContextSelection, cause: string, turnId: string | null,
     mutate: (current: readonly ContextEntry[]) => readonly ContextEntry[], assertEpoch: () => void, proposal?: { readonly id: string; readonly author: string }): ContextSelection {
     return this.atomic(() => {
@@ -91,7 +91,7 @@ export class SessionContext {
       for (const entry of next) {
         const old = prior.get(entry.entryId);
 
-        if (old !== undefined && old.position === entry.position && old.messageId === entry.messageId && old.sequence === entry.sequence) retained.add(entry.entryId);
+        if (old !== undefined && old.position === entry.position && old.messageId === entry.messageId) retained.add(entry.entryId);
       }
 
       // An authored edit is recorded even when it changes nothing: an explicitly
@@ -109,8 +109,8 @@ export class SessionContext {
       }
 
       for (const entry of next) if (!retained.has(entry.entryId)) {
-        void this.sql`INSERT INTO context_memberships(actor_id,context_id,entry_id,from_revision,position,message_id,through_sequence)
-          VALUES(${actorId},${expected.contextId},${entry.entryId},${revision},${entry.position},${entry.messageId},${entry.sequence})`;
+        void this.sql`INSERT INTO context_memberships(actor_id,context_id,entry_id,from_revision,position,message_id)
+          VALUES(${actorId},${expected.contextId},${entry.entryId},${revision},${entry.position},${entry.messageId})`;
       }
 
       return { contextId: expected.contextId, revision };
@@ -134,8 +134,8 @@ export class SessionContext {
       void this.sql`INSERT INTO actor_contexts(actor_id,context_id,fork_context_id,fork_revision) VALUES(${actorId},${contextId},${source?.contextId ?? null},${source?.revision ?? null})`;
       void this.sql`INSERT INTO context_revisions(actor_id,context_id,revision,author,cause,recorded_at) VALUES(${actorId},${contextId},0,${actorId},'fork',${Date.now()})`;
 
-      for (const entry of source === null ? [] : this.entries(source)) void this.sql`INSERT INTO context_memberships(actor_id,context_id,entry_id,from_revision,position,message_id,through_sequence)
-        VALUES(${actorId},${contextId},${entry.entryId},0,${entry.position},${entry.messageId},${entry.sequence})`;
+      for (const entry of source === null ? [] : this.entries(source)) void this.sql`INSERT INTO context_memberships(actor_id,context_id,entry_id,from_revision,position,message_id)
+        VALUES(${actorId},${contextId},${entry.entryId},0,${entry.position},${entry.messageId})`;
 
       return { contextId, revision: 0 };
     });

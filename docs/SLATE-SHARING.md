@@ -222,8 +222,8 @@ it for a `__Host-` cookie scoped to that origin. The cookie names a viewer of
 one slate and nothing else, so hostile slate HTML reading it gains nothing
 the viewer did not already hold there.
 
-**Shared page** at `/shared`, four lists: my shared, shared with me, public,
-from people I know. Each row has one action, "Fork into a workspace". The action
+**Shared page** at `/drive/blueprints`, four lists: my shared, shared with me,
+public, from people I know. Each row has one action, "Fork into a workspace". The action
 picks the target workspace, admits the blueprint, and opens the new slate on
 its unmapped-bindings panel. Each declared binding names what the forker connects:
 an MCP server, a crafted tool, an available executor.
@@ -253,7 +253,7 @@ parser (`packages/cf-backend/src/slate-share-route.ts` `handleSlateShareHostRequ
 then `routeSlateShare(handle, request)` on the workspace object. Workspace RPC
 ops `share`, `unshare`, `publish`, `viewerRequests`, `revoke`, `blueprint*`
 in `packages/core/src/slates/rpc.ts`. App host: `/api/shared` list/fork/open
-in `packages/cf-backend/src/shared/routes.ts`, pages `/shared` and
+in `packages/cf-backend/src/shared/routes.ts`, pages `/drive` and
 `/shared/blueprint/:id`, the viewer ticket mint.
 
 **The host, viewer versus owner, as built.** `SlateHost.routeShare` admits

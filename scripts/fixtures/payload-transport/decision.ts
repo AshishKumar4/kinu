@@ -72,9 +72,15 @@ export const CPU_ACCOUNTING_NOTE =
   + 'arm of one run. Byte volumes are exact because this instrument constructs '
   + 'them; CPU would be inference, so it is reported as unknown instead.';
 
+/** The wall times a cell family actually measured; a cell that never completed
+ *  carries no wall time and contributes nothing. */
+function measuredWallMs(cells: readonly Cell[]): number[] {
+  return cells.flatMap((cell) => (cell.wallMs === null ? [] : [cell.wallMs]));
+}
+
 /** Median wall time of one cell family (all reps of one arm/op/size). */
 function medianWallMs(cells: readonly Cell[]): number | null {
-  const walls = cells.filter((cell) => cell.wallMs !== null).map((cell) => cell.wallMs!);
+  const walls = measuredWallMs(cells);
 
   if (walls.length === 0) return null;
 
@@ -117,7 +123,7 @@ export function rankTier(cells: readonly Cell[], sizeMiB: PayloadSizeMiB): Verdi
     const status = statusOf(own);
 
     if (status !== 'ok') {
-      exclusions.push({ arm, reason: EXCLUSION_REASON[status]! });
+      exclusions.push({ arm, reason: EXCLUSION_REASON[status] });
       continue;
     }
 
@@ -129,15 +135,12 @@ export function rankTier(cells: readonly Cell[], sizeMiB: PayloadSizeMiB): Verdi
       continue;
     }
 
-    const putWalls = own.filter((cell) => cell.op === 'put' && cell.wallMs !== null)
-      .map((cell) => cell.wallMs!);
-
-    const getWalls = own.filter((cell) => cell.op === 'get' && cell.wallMs !== null)
-      .map((cell) => cell.wallMs!);
+    const putWalls = measuredWallMs(own.filter((cell) => cell.op === 'put'));
+    const getWalls = measuredWallMs(own.filter((cell) => cell.op === 'get'));
 
     // Dispersion on EITHER direction disqualifies the arm at this tier.
     if (summarize(putWalls).cv > UNSTABLE_CV || summarize(getWalls).cv > UNSTABLE_CV) {
-      exclusions.push({ arm, reason: EXCLUSION_REASON['unstable']! });
+      exclusions.push({ arm, reason: EXCLUSION_REASON['unstable'] });
       continue;
     }
 

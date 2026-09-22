@@ -543,7 +543,7 @@ const HELPERS_OUTSIDE_TESTS: readonly string[] = ['scripts/gallery-harness.ts'];
 export function readClockCorpus(): Map<string, string> {
   const tests = readTests();
 
-  for (const [file, text] of readMatching((file) => isTestScaffold(file) || HELPERS_OUTSIDE_TESTS.includes(file))) {
+  for (const [file, text] of readMatching((candidate) => isTestScaffold(candidate) || HELPERS_OUTSIDE_TESTS.includes(candidate))) {
     if (file.endsWith('.ts') || file.endsWith('.tsx')) tests.set(file, text);
   }
 

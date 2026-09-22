@@ -91,7 +91,7 @@ export class SessionPayloads extends SessionPayloadReader {
   }
 
   /** Only actual codec binary fields are externalized; existing URL/path references remain references. */
-  async prepareMedia(descriptor: JsonObject): Promise<SessionPayload> {
+  async externalizeMedia(descriptor: JsonObject): Promise<JsonObject> {
     const stored = { ...descriptor };
 
     for (const field of ['image', 'data']) {
@@ -123,7 +123,7 @@ export class SessionPayloads extends SessionPayloadReader {
       stored[field] = { $sessionAttachment: reference };
     }
 
-    return this.prepare(stored);
+    return stored;
   }
 
 

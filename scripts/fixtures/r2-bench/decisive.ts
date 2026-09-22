@@ -70,10 +70,19 @@ interface Segment {
 function arg(name: string, fallback?: string): string {
   const index = process.argv.indexOf(`--${name}`);
 
-  if (index !== -1 && index + 1 < process.argv.length) return process.argv[index + 1]!;
+  if (index !== -1 && index + 1 < process.argv.length) return process.argv[index + 1];
 
   if (fallback !== undefined) return fallback;
   throw new Error(`missing required argument --${name}`);
+}
+
+interface NpmLikeRun {
+  readonly root: string;
+  readonly seed: number;
+  readonly targetMiB: number;
+  readonly segments: number;
+  /** WHICH segment this process runs; `segments` itself is the small-edit tail. */
+  readonly only: number;
 }
 
 /**
@@ -85,7 +94,7 @@ function arg(name: string, fallback?: string): string {
  * which is what distinguishes a tick that pays for the whole tree from one that
  * pays for the last slice.
  */
-function npmLike(root: string, seed: number, targetMiB: number, segments: number, only: number): Segment[] {
+function npmLike({ root, seed, targetMiB, segments, only }: NpmLikeRun): Segment[] {
   const modules = join(root, 'node_modules');
   mkdirSync(modules, { recursive: true });
   // A package manager's bytes are dominated by many small files, not few large
@@ -149,12 +158,23 @@ function npmLike(root: string, seed: number, targetMiB: number, segments: number
   return out;
 }
 
+interface GitLikeRun {
+  readonly root: string;
+  readonly seed: number;
+  readonly files: number;
+  readonly commits: number;
+  readonly touchPercent: number;
+  readonly segments: number;
+  /** WHICH segment this process runs; 0 is the seed, later indices are commits. */
+  readonly only: number;
+}
+
 /**
  * A repository, then `commits` commits each touching about `touchPercent` of the
  * files. Real git, so real index rewrites, real rename churn and real object
  * creation — the metadata shape that collapsed the s3fs floor.
  */
-function gitLike(root: string, seed: number, files: number, commits: number, touchPercent: number, segments: number, only: number): Segment[] {
+function gitLike({ root, seed, files, commits, touchPercent, segments, only }: GitLikeRun): Segment[] {
   const repo = join(root, 'repo');
 
   // Segment 0 seeds; later segments resume against the repository it left.
@@ -232,6 +252,15 @@ function gitLike(root: string, seed: number, files: number, commits: number, tou
   return out;
 }
 
+interface SqliteRewriteRun {
+  readonly root: string;
+  readonly seed: number;
+  readonly sizeMiB: number;
+  readonly segments: number;
+  /** WHICH segment this process runs; 0 fills, later indices rewrite pages. */
+  readonly only: number;
+}
+
 /**
  * One database of `sizeMiB`, then in-place page rewrites.
  *
@@ -240,7 +269,7 @@ function gitLike(root: string, seed: number, files: number, commits: number, tou
  * CAS must re-ship the whole file for any tick that follows, and this measures
  * exactly how much that costs.
  */
-function sqliteRewrite(root: string, seed: number, sizeMiB: number, segments: number, only: number): Segment[] {
+function sqliteRewrite({ root, seed, sizeMiB, segments, only }: SqliteRewriteRun): Segment[] {
   mkdirSync(root, { recursive: true });
   const dbPath = join(root, 'store.sqlite');
 
@@ -318,19 +347,21 @@ async function main(): Promise<number> {
 
   switch (workload) {
     case 'npm':
-      segs = npmLike(root, seed, Number.parseInt(arg('target-mib', '400'), 10), segments, only);
+      segs = npmLike({ root, seed, targetMiB: Number.parseInt(arg('target-mib', '400'), 10), segments, only });
       break;
     case 'git':
-      segs = gitLike(
-        root, seed,
-        Number.parseInt(arg('files', '2000'), 10),
-        Number.parseInt(arg('commits', '200'), 10),
-        Number.parseInt(arg('touch-percent', '5'), 10),
-        segments, only,
-      );
+      segs = gitLike({
+        root,
+        seed,
+        files: Number.parseInt(arg('files', '2000'), 10),
+        commits: Number.parseInt(arg('commits', '200'), 10),
+        touchPercent: Number.parseInt(arg('touch-percent', '5'), 10),
+        segments,
+        only,
+      });
       break;
     case 'sqlite':
-      segs = sqliteRewrite(root, seed, Number.parseInt(arg('size-mib', '64'), 10), segments, only);
+      segs = sqliteRewrite({ root, seed, sizeMiB: Number.parseInt(arg('size-mib', '64'), 10), segments, only });
       break;
     default:
       process.stdout.write(JSON.stringify({ schema: 'r2-bench/decisive@1', error: `unknown workload ${workload}` }));

@@ -94,6 +94,16 @@ function issueText(issues: readonly v.GenericIssue[]): string {
   return issues.map((issue) => issue.message).join('; ').slice(0, 300);
 }
 
+/** One arm's security cell run: the fixture that answers it, the box it runs
+ *  against, and the strategy and nonce that identify this attempt. */
+export interface SecurityCellsRun {
+  readonly fixture: SecurityFixture;
+  readonly box: string;
+  readonly strategy: string;
+  readonly nonce: string;
+  readonly timeoutMs?: number;
+}
+
 /**
  * Fetch one arm's live observation. One attempt with an explicit deadline:
  * the caller wraps this in its own transient retry, the same way every other
@@ -102,12 +112,10 @@ function issueText(issues: readonly v.GenericIssue[]): string {
  * security number goes on to publish it.
  */
 export async function runSecurityFaultCells(
-  fixture: SecurityFixture,
-  box: string,
-  strategy: string,
-  nonce: string,
-  timeoutMs = 120_000,
+  run: SecurityCellsRun,
 ): Promise<{ observation: SecurityCellsObservation; notes: string[] }> {
+  const { fixture, box, strategy, nonce, timeoutMs = 120_000 } = run;
+
   const path = `/security?box=${encodeURIComponent(box)}`;
 
   const response = await fetch(`${fixture.origin}${path}`, {

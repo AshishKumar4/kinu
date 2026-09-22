@@ -186,9 +186,11 @@ const SHARED_TRANSPORTS = {
   // the actor's own profile inputs, the CLI's local profile authority.
   routingProfile: 'resolveRoutingProfile',
   // The walk-back: head, context selection, woven blocks and working history
-  // move together inside core's one ActorSession method. What each backend
-  // adds is the one idle condition only it can see — its own turn queue.
-  revertConversation: '.revertConversation',
+  // move together inside core's one ActorSession method, and the refusal that
+  // governs it reads core's own turn queue. Each backend spelled that queue
+  // question for itself until ChatSession.revertTo took it; what is left per
+  // backend is the transport — a cf `@callable`, a local method.
+  revertConversation: '.revertTo',
   // The claimed tier, else the stored spec, through the backend's own
   // normalizer — ONE spelling, because every model_call row is priced against
   // it and every analytics row grouped by it. The CLI's copy read its cached

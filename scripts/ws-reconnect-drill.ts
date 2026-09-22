@@ -41,7 +41,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import * as v from "valibot";
 import { parseJsonValue, type JsonValue } from "@kinu.run/core";
-import { tolerate } from "@kinu.run/core/obs";
+import { renderCauseChain, tolerate } from "@kinu.run/core/obs";
 import puppeteer, { type Browser, type HTTPRequest, type Page } from "puppeteer";
 
 /* ── configuration ─────────────────────────────────────────────────────────── */
@@ -192,8 +192,8 @@ async function createCorpseProxy(upstreamPort: number, port: number): Promise<Co
 
             log(`proxy: ${pipe.kind} upstream closed — client held for redial`);
           },
-          error(cause) {
-            log(`proxy: upstream socket error: ${String(cause)}`);
+          error(_upstream, cause) {
+            log(`proxy: upstream socket error: ${renderCauseChain(cause)}`);
           },
         },
       });
@@ -280,8 +280,8 @@ async function createCorpseProxy(upstreamPort: number, port: number): Promise<Co
         pipes.delete(pipe);
         endQuietly("a client close", pipe.upstream);
       },
-      error(cause) {
-        log(`proxy: client socket error: ${String(cause)}`);
+      error(_client, cause) {
+        log(`proxy: client socket error: ${renderCauseChain(cause)}`);
       },
     },
   });
@@ -407,10 +407,6 @@ interface DevServer {
   kill(): Promise<void>;
 }
 
-function isStartupProbeFailure<ErrorValue>(cause: ErrorValue): boolean {
-  return cause instanceof TypeError || cause instanceof DOMException;
-}
-
 /** The port must be genuinely bindable before vite spawns: a name-based
  *  pkill cannot catch every orphan shape, and a ghost answering /api/health
  *  makes the readiness poll pass against the WRONG server. Probe-bind until
@@ -418,13 +414,13 @@ function isStartupProbeFailure<ErrorValue>(cause: ErrorValue): boolean {
 async function waitForPortFree(port: number): Promise<void> {
   for (let attempt = 0; attempt < 30; attempt += 1) {
     try {
-      const probe = Bun.listen({
+      const listener = Bun.listen({
         hostname: "127.0.0.1",
         port,
         socket: { data() {}, close() {}, error() {} },
       });
 
-      probe.stop(true);
+      listener.stop(true);
 
       return;
     } catch (cause) {
@@ -484,7 +480,9 @@ async function startDevServer(label: string): Promise<DevServer> {
 
       if (res.ok) break;
     } catch (cause) {
-      if (!isStartupProbeFailure(cause)) throw cause;
+      // A server that is not listening yet rejects the fetch with a TypeError,
+      // and the 2s deadline with a DOMException. Anything else is not startup.
+      if (!(cause instanceof TypeError) && !(cause instanceof DOMException)) throw cause;
     }
 
     await Bun.sleep(500);
@@ -555,9 +553,13 @@ function startFailureServer(port: number): Promise<FailureServer> {
 /* ── REST helpers (direct to upstream — never through the proxy) ───────────── */
 
 async function api(path: string, init?: RequestInit): Promise<JsonValue | undefined> {
+  const headers = new Headers(init?.headers);
+
+  if (!headers.has("content-type")) headers.set("content-type", "application/json");
+
   const res = await fetch(`${UPSTREAM_ORIGIN}${path}`, {
     ...init,
-    headers: { "content-type": "application/json", ...init?.headers },
+    headers,
     signal: AbortSignal.timeout(10_000),
   });
 
@@ -608,7 +610,7 @@ let mockedSha = MOCK_SHA_A;
 
 /** Rolling capture of what the browser said — dumped on every failure. */
 class BrowserLog {
-  private lines: string[] = [];
+  private readonly lines: string[] = [];
   record(kind: string, text: string): void {
     this.lines.push(`${kind}: ${text}`.slice(0, 400));
 

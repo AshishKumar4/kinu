@@ -191,7 +191,7 @@ function retryAfterMs(res: Response, body: string): number {
 
 function sleep(ms: number): Promise<void> {
   const { promise, resolve } = Promise.withResolvers<void>();
-  setTimeout(resolve, ms);
+  setTimeout(() => { resolve(); }, ms);
 
   return promise;
 }
@@ -303,11 +303,11 @@ function configureUser(c: Case): string {
 
 // ── phase 2: correct ────────────────────────────────────────────────────────
 
-function correctUser(v: Validation): string {
-  const errors = v.violations.map((x) => `- ${refusalText(x)}`).join('\n');
+function correctUser(validation: Validation): string {
+  const errors = validation.violations.map((x) => `- ${refusalText(x)}`).join('\n');
 
   return 'That call was refused.\n\n'
-    + `{ "reason": "bad_input", "error": "${v.violations.map(refusalText).join(' ').replace(/"/g, "'")}" }\n\n`
+    + `{ "reason": "bad_input", "error": "${validation.violations.map(refusalText).join(' ').replace(/"/g, "'")}" }\n\n`
     + `${errors}\n\n`
     + 'Answer again, in the same JSON shape, with a call that would be accepted.';
 }
@@ -326,7 +326,7 @@ function forwardNameUser(axis: AxisName): string {
 /** The 28 values, flat and unlabelled by axis, so the reverse probe cannot be
  *  answered by elimination within an axis. */
 const FLAT_VALUES: readonly string[] = AXIS_NAMES.flatMap(
-  (a) => AXIS_VALUES[a].map((v) => `${a}:${v}`),
+  (a) => AXIS_VALUES[a].map((value) => `${a}:${value}`),
 );
 
 function reverseNameUser(mechanism: string): string {
@@ -396,13 +396,19 @@ const VARIANTS: readonly SurfaceVariant[] = ['bare', 'glossed'];
 
 const ALL_VARIANTS: readonly SurfaceVariant[] = ['bare', 'glossed', 'zoo'];
 
-async function runConfigure(
-  spec: ModelSpec,
-  variants: readonly SurfaceVariant[],
-  only: readonly string[],
-  remedyOrder: RemedyOrder,
-  record: (r: ConfigureResult) => void,
-): Promise<void> {
+/** One arm of the configure phase: the model, the surfaces to put it through,
+ *  the case filter, the remedy order under test, and where each result goes. */
+interface ConfigureRun {
+  readonly spec: ModelSpec;
+  readonly variants: readonly SurfaceVariant[];
+  readonly only: readonly string[];
+  readonly remedyOrder: RemedyOrder;
+  readonly record: (r: ConfigureResult) => void;
+}
+
+async function runConfigure(run: ConfigureRun): Promise<void> {
+  const { spec, variants, only, remedyOrder, record } = run;
+
   for (const variant of variants) {
     const system = configureSystem(variant);
     // The zoo variant carries two post-hoc cases the pre-registered 20 cannot
@@ -622,7 +628,7 @@ async function main(): Promise<void> {
     process.stderr.write(`\n[${spec.id}] configure\n`);
 
     try {
-      await runConfigure(spec, variants, only, remedyOrder, record);
+      await runConfigure({ spec, variants, only, remedyOrder, record });
     } catch (error) {
       // One arm dying is a hole in the roster, not the end of the study. Named
       // loudly, and whatever it did measure is already on disk.

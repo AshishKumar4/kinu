@@ -310,7 +310,7 @@ export const servedBy = (manifest: string, reach: readonly string[] = []): ((fil
   if (manifest === 'package.json') return () => true;
   const directory = manifest.slice(0, -'package.json'.length);
 
-  return (file) => file.startsWith(directory) || reach.some((root) => file.startsWith(root));
+  return (file) => file.startsWith(directory) || reach.some((reached) => file.startsWith(reached));
 };
 
 const TsconfigPaths = v.looseObject({
@@ -344,9 +344,9 @@ export function compileReach(manifest: string, files: readonly string[], read: (
         else if (segment !== '.' && segment !== '*' && segment !== '') resolved.push(segment);
       }
 
-      const root = `${resolved.join('/')}/`;
+      const aliased = `${resolved.join('/')}/`;
 
-      if (!root.startsWith(directory)) roots.add(root);
+      if (!aliased.startsWith(directory)) roots.add(aliased);
     }
   }
 
@@ -398,9 +398,8 @@ export function typedRuntime(name: string): string | undefined {
  * that happens to spell an import: on 2026-09-10 a text match held `react` and
  * `commander` alive at the root on a comment in this file and a synthetic source
  * inside a wired-gate fixture. An import that names the installed path counts,
- * which is how cf-backend's suites reach
- * `node_modules/@nimbus-sh/worker/dist/session/rpc.js`, a package that publishes
- * no subpath for it. A SPAWN of the package's installed binary counts, which is
+ * for a package whose published subpaths do not cover what a caller needs. A
+ * SPAWN of the package's installed binary counts, which is
  * the only reference `knip` has: `scripts/dead-code.ts` runs
  * `node_modules/.bin/knip` and imports nothing. A `.json` counts a quoted value
  * (a plugin named in `.oxlintrc.json`, a binding in `wrangler.jsonc`), a `.sh`
@@ -555,13 +554,17 @@ export function manifestCommands(text: string): string {
  *  serves. `files` is the enumeration; `read` supplies text; `binaries` names
  *  the command words a package installs; `peers` names the installed packages
  *  that peer-require a given name. */
-export function unusedDependencies(
-  manifests: readonly string[],
-  files: readonly string[],
-  read: (file: string) => string,
-  binaries: (name: string) => readonly string[],
-  peers: (name: string) => readonly string[],
-): DeadDependency[] {
+export interface DependencyCensus {
+  readonly manifests: readonly string[];
+  readonly files: readonly string[];
+  readonly read: (file: string) => string;
+  readonly binaries: (name: string) => readonly string[];
+  readonly peers: (name: string) => readonly string[];
+}
+
+export function unusedDependencies(census: DependencyCensus): DeadDependency[] {
+  const { manifests, files, read, binaries, peers } = census;
+
   const corpus = files.filter((file) => (isTextSource(file) || isStylesheet(file))
     && !isLockfile(file));
 
@@ -680,11 +683,11 @@ if (import.meta.main) {
   const manifests = tracked.filter((file) => isManifest(file) && !isVendoredSource(file));
   const installed = readInstalled(read(tracked.filter(isLockfile)[0] ?? 'bun.lock'));
 
-  const dependencies = unusedDependencies(
-    manifests, tracked, read,
-    (name) => installed.binaries.get(name) ?? [],
-    (name) => installed.peerRequirers.get(name) ?? [],
-  );
+  const dependencies = unusedDependencies({
+    manifests, files: tracked, read,
+    binaries: (name) => installed.binaries.get(name) ?? [],
+    peers: (name) => installed.peerRequirers.get(name) ?? [],
+  });
 
   // Both knip runs, the declaration parser and the dependency census have to
   // have done work. A knip misconfiguration that analyses nothing, a parser
@@ -771,9 +774,9 @@ if (import.meta.main) {
     for (const fault of faults) console.error(fault);
   }
 
-  const verdict = report(
-    'dead-code', ratchet, detail, 'bun scripts/dead-code.ts --lock', measured,
-  );
+  const verdict = report({
+    gate: 'dead-code', ratchet, detail, lockCommand: 'bun scripts/dead-code.ts --lock', measured,
+  });
 
   const code = faults.length > 0 ? 1 : verdict;
 

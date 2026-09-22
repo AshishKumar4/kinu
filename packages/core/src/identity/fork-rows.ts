@@ -28,12 +28,18 @@ export const ForkSnapshotHeadSchema = v.object({
 });
 
 /**
- * One carried message identity.
+ * One carried message, whole: its identity, its envelope and its sealed
+ * content.
  *
  * `request_id`, `output_slot` and `ingress_id` are deliberately absent: a
  * request is a source-side execution record that does not cross, and an ingress
  * id is the admission identity of a turn the fork never ran. The target row
  * carries null for all three.
+ *
+ * `content_path` crosses RELATIVE to the source actor's artifact directory and
+ * is re-rooted under the target's, because an absolute path names a directory
+ * that belongs to the workspace it came from. Only a sealed message crosses: an
+ * open one still streams, and a fork requires an idle source.
  */
 export const ForkSessionMessageRowSchema = v.object({
   message_id: v.string(),
@@ -41,41 +47,11 @@ export const ForkSessionMessageRowSchema = v.object({
   native_content_kind: v.picklist(['string', 'parts']),
   origin: v.picklist(['input', 'output', 'edit', 'context_transform', 'render']),
   recorded_at: v.number(),
-});
-
-/** One part identity of one carried message. A tool result names the call it
- *  answers, and the closure that picks carried messages guarantees the call is
- *  carried too — so the reply edge survives the crossing. */
-export const ForkMessagePartRowSchema = v.object({
-  message_id: v.string(),
-  part_no: v.number(),
-  kind: v.string(),
-  reply_to_message_id: v.nullable(v.string()),
-  reply_to_part_no: v.nullable(v.number()),
-  stream_order: v.nullable(v.number()),
-});
-
-/**
- * One immutable update of one carried message, up to that message's cutoff.
- *
- * `payload_path` crosses RELATIVE to the source actor's artifact directory and
- * is re-rooted under the target's, because an absolute path names a directory
- * that belongs to the workspace it came from.
- *
- * `seals` marks the update that IS the message's `sealed_sequence`. The seal
- * travels with the update rather than with the message identity because
- * `session_messages.sealed_sequence` references `message_updates`: a seal
- * declared on the identity row would name a row that has not crossed yet.
- */
-export const ForkMessageUpdateRowSchema = v.object({
-  message_id: v.string(),
-  sequence: v.number(),
-  part_no: v.nullable(v.number()),
-  operation: v.picklist(['open', 'append', 'envelope-metadata', 'metadata', 'content-end', 'replace-content']),
-  payload_json: v.nullable(v.string()),
-  payload_path: v.nullable(v.string()),
-  payload_digest: v.nullable(v.string()),
-  seals: v.boolean(),
+  envelope_json: v.string(),
+  sealed_at: v.number(),
+  content_json: v.nullable(v.string()),
+  content_path: v.nullable(v.string()),
+  content_digest: v.nullable(v.string()),
 });
 
 /**
@@ -98,14 +74,12 @@ export const ForkConversationEntryRowSchema = v.object({
   recorded_at: v.number(),
 });
 
-/** One part reference of one carried entry: which message, which part, and the
- *  cutoff the entry was recorded against. */
+/** One part reference of one carried entry: which message, which part. */
 export const ForkConversationEntryPartRowSchema = v.object({
   entry_id: v.string(),
   position: v.number(),
   message_id: v.string(),
   part_no: v.number(),
-  through_sequence: v.number(),
   text_start: v.nullable(v.number()),
   text_length: v.nullable(v.number()),
 });
@@ -117,7 +91,6 @@ export const ForkContextMemberRowSchema = v.object({
   entry_id: v.string(),
   position: v.number(),
   message_id: v.string(),
-  through_sequence: v.number(),
 });
 
 /** One row of the FTS content table behind memory search. */
@@ -165,8 +138,6 @@ export const ForkFileSchema = v.object({ path: v.string(), content: v.string() }
 export const ForkSnapshotSchema = v.object({
   ...ForkSnapshotHeadSchema.entries,
   sessionMessages: v.array(ForkSessionMessageRowSchema),
-  messageParts: v.array(ForkMessagePartRowSchema),
-  messageUpdates: v.array(ForkMessageUpdateRowSchema),
   conversationEntries: v.array(ForkConversationEntryRowSchema),
   conversationEntryParts: v.array(ForkConversationEntryPartRowSchema),
   contextMembers: v.array(ForkContextMemberRowSchema),
@@ -182,10 +153,6 @@ export type ForkSnapshotHead = v.InferOutput<typeof ForkSnapshotHeadSchema>;
 export type ForkSnapshot = v.InferOutput<typeof ForkSnapshotSchema>;
 
 export type ForkSessionMessageRow = v.InferOutput<typeof ForkSessionMessageRowSchema>;
-
-export type ForkMessagePartRow = v.InferOutput<typeof ForkMessagePartRowSchema>;
-
-export type ForkMessageUpdateRow = v.InferOutput<typeof ForkMessageUpdateRowSchema>;
 
 export type ForkConversationEntryRow = v.InferOutput<typeof ForkConversationEntryRowSchema>;
 

@@ -105,7 +105,7 @@ describe('official Pi baseline worker', () => {
     const result = await runWorker(false);
     expect(result.output).toMatchObject({ tokens: 9, steps: 1, modelCalls: 1, hadError: false });
     expect(result.requests).toHaveLength(1);
-    expect(result.requests[0]!.tools.map((tool) => tool.function.name).sort())
+    expect(result.requests[0].tools.map((tool) => tool.function.name).sort())
       .toEqual(['bash', 'edit', 'read', 'write']);
     expect(result.authorizations).toEqual(['Bearer exact-bench-auth']);
   });
@@ -115,7 +115,7 @@ describe('official Pi baseline worker', () => {
     expect(result.output).toMatchObject({ tokens: 18, steps: 2, modelCalls: 2, hadError: false });
     expect(result.requests).toHaveLength(2);
 
-    const retryMessages = result.requests[1]!.messages
+    const retryMessages = result.requests[1].messages
       .filter((message) => message.role === 'user')
       .map((message) => JSON.stringify(message.content));
 

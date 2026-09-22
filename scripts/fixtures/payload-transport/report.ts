@@ -59,8 +59,11 @@ function availabilitySection(artifact: Artifact): string[] {
 
 function cellLine(cell: Cell): string {
   if (cell.status !== 'ok') return `| ${cell.op} | ${cell.status} | ${cell.reason ?? ''} |`;
+  const { wallMs } = cell;
 
-  return `| ${cell.op} | ok | ${cell.wallMs!.toFixed(0)} ms |`;
+  if (wallMs === null) return `| ${cell.op} | ok | no wall time recorded |`;
+
+  return `| ${cell.op} | ok | ${wallMs.toFixed(0)} ms |`;
 }
 
 function tierSection(artifact: Artifact, sizeMiB: number): string[] {

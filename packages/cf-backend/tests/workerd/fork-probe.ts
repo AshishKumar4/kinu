@@ -416,7 +416,7 @@ export class ForkSourceProbeDO extends DurableObject<Cloudflare.Env> {
 
       transcript.record({
         id: turn.id, parentId, role: turn.role, turnId: null, runId: null, metadata: null,
-        parts: [{ messageId: reference.messageId, partNo: 0, throughSequence: reference.sequence }],
+        parts: [{ messageId: reference.messageId, partNo: 0 }],
       });
 
       parentId = turn.id;

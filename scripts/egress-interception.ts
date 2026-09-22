@@ -219,8 +219,6 @@ function fieldValue(member: SyntaxNode): string | undefined {
     const literal = literalText(child);
 
     if (literal !== undefined) return literal;
-
-    if (child.type === 'Literal') return String(child.raw);
   }
 
   return undefined;
@@ -464,7 +462,10 @@ if (import.meta.main) {
   if (violations.length > 0) {
     console.error(`egress-interception: ${violations.length} un-intercepted egress path(s)`);
 
-    for (const v of violations) console.error(`  ${v.file}:${v.line} ${v.owner} — ${v.reason}`);
+    for (const violation of violations) {
+      console.error(`  ${violation.file}:${violation.line} ${violation.owner} — ${violation.reason}`);
+    }
+
     process.exit(1);
   }
 

@@ -52,6 +52,14 @@ export interface ModuleEdges {
 const attributeName = (attribute: { key: { type: string; name?: string; value?: unknown } }): string =>
   attribute.key.type === 'Identifier' ? attribute.key.name ?? '' : String(attribute.key.value);
 
+/** A type-only import is erased; Markdown read `with { type: 'text' }` is data;
+ *  everything else loads a module. */
+function importEdgeKind(erased: boolean, asText: boolean): EdgeKind {
+  if (erased) return 'type';
+
+  return asText ? 'text' : 'value';
+}
+
 /** Every module reference in one parsed file, with its kind and line. */
 export function moduleEdges(parsed: Parsed): ModuleEdges {
   const edges: ModuleEdge[] = [];
@@ -66,7 +74,7 @@ export function moduleEdges(parsed: Parsed): ModuleEdges {
       const asText = raw.source.value.endsWith('.md')
         && raw.attributes.some((attribute) => attributeName(attribute) === 'type' && attribute.value.value === 'text');
 
-      const kind: EdgeKind = raw.importKind === 'type' ? 'type' : asText ? 'text' : 'value';
+      const kind = importEdgeKind(raw.importKind === 'type', asText);
 
       edges.push({ specifier: raw.source.value, line, kind });
 
@@ -223,7 +231,19 @@ function found(path: string): Resolution {
   return isParseable(path) ? { kind: 'file', path } : { kind: 'asset', path };
 }
 
-function probe(base: string, from: string, specifier: string, universe: ReadonlySet<string>, strict: boolean): Resolution {
+/** One specifier to resolve, and the corpus it is resolved against. Strict
+ *  resolution refuses what loose resolution is willing to call a leaf. */
+export interface ResolutionRequest {
+  readonly specifier: string;
+  readonly from: string;
+  readonly universe: ReadonlySet<string>;
+  readonly workspace: ReadonlyMap<string, PackageDir>;
+  readonly aliases: readonly Alias[];
+  readonly strict?: boolean;
+}
+
+function probe(base: string, request: ResolutionRequest): Resolution {
+  const { from, specifier, universe, strict = false } = request;
   const collapsed = collapsePath(base);
   const candidate = IMPORT_CANDIDATES.map((suffix) => collapsed + suffix).find((path) => universe.has(path));
 
@@ -235,14 +255,9 @@ function probe(base: string, from: string, specifier: string, universe: Readonly
 }
 
 /** Resolve one specifier from one importing file. */
-export function resolveSpecifier(
-  specifier: string,
-  from: string,
-  universe: ReadonlySet<string>,
-  workspace: ReadonlyMap<string, PackageDir>,
-  aliases: readonly Alias[],
-  strict = false,
-): Resolution {
+export function resolveSpecifier(request: ResolutionRequest): Resolution {
+  const { specifier, from, workspace, aliases, universe, strict = false } = request;
+
   // A path into `node_modules` is a dependency: the lock stands for it, so it
   // is a leaf under both readings. A query or fragment is a bundler feature
   // the resolver does not model, and a closure must not guess at it.
@@ -258,7 +273,7 @@ export function resolveSpecifier(
   // treating it as a package name drops the whole aliased subgraph as leaves.
   const alias = aliases.find((entry) => specifier.startsWith(entry.prefix) && from.startsWith(entry.under));
 
-  if (alias !== undefined) return probe(`${alias.target}/${specifier.slice(alias.prefix.length)}`, from, specifier, universe, strict);
+  if (alias !== undefined) return probe(`${alias.target}/${specifier.slice(alias.prefix.length)}`, request);
 
   if (specifier.startsWith('@') || (!specifier.startsWith('.') && !specifier.startsWith('/') && !specifier.includes(':'))) {
     // A scoped name is two segments (`@kinu.run/core`); an unscoped one is
@@ -293,7 +308,7 @@ export function resolveSpecifier(
 
   if (!specifier.startsWith('.')) return { kind: 'leaf' };
 
-  return probe(`${from.slice(0, from.lastIndexOf('/') + 1)}/${specifier}`, from, specifier, universe, strict);
+  return probe(`${from.slice(0, from.lastIndexOf('/') + 1)}/${specifier}`, request);
 }
 
 /** Shared cycle-safe traversal. The visitor chooses whether an edge belongs

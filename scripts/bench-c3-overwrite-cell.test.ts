@@ -1,7 +1,7 @@
 import { expect, test } from 'bun:test';
 import { writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { scratchDir } from '@kinu.run/test-utils';
+import { present, scratchDir } from '@kinu.run/test-utils';
 import { C3_WORKLOAD, C3_OVERWRITE_SHA256 } from '../packages/devbox/bench/witness-files';
 import { evaluateLiveC3, type LiveC3Observation } from '../packages/devbox/bench/c3-result';
 import { measureLiveC3 } from './bench-devbox-strategies';
@@ -55,30 +55,38 @@ function check(record: LiveC3Observation, encoded = JSON.stringify(record)) {
 
 test('the C3 checker refuses an object-count increase even within the byte bound', () => {
   const record = c3Fixture();
-  const round = record.rounds[0]!;
+  const round = record.rounds[0];
+  const window = present(round.accounting.window, 'the publication window');
+
   round.published.transport = { puts: 2, putUploadBytes: 131_072 };
   round.accounting.afterOps = { calls: { put: 2 } };
-  round.accounting.window!.attempts.push({ ...round.accounting.window!.attempts[0]!, id: 'put-2', startedAt: 14, finishedAt: 15 });
+  window.attempts.push({ ...window.attempts[0], id: 'put-2', startedAt: 14, finishedAt: 15 });
   expect(check(record).exitCode).toBe(1);
 });
 
 test('the C3 byte bound is strict, not inclusive', () => {
   const record = c3Fixture();
-  const round = record.rounds[0]!;
+  const round = record.rounds[0];
+  const attempt = present(round.accounting.window, 'the publication window').attempts[0];
+
   round.published.transport.putUploadBytes = 196_608;
-  round.accounting.window!.attempts[0]!.bytes = 196_608;
-  round.accounting.window!.attempts[0]!.observedBytes = 196_608;
+  attempt.bytes = 196_608;
+  attempt.observedBytes = 196_608;
   expect(check(record).exitCode).toBe(1);
 });
 
 const invalidC3: Array<{ name: string; change: (row: LiveC3Observation) => void }> = [
   { name: 'missing build identity', change: (row) => { row.identity = null; } },
   { name: 'unacknowledged baseline', change: (row) => { row.baselineCheckpoint = { ok: true, outcome: { kind: 'failed' } }; } },
-  { name: 'uncommitted overwrite', change: (row) => { row.rounds[0]!.checkpoint = { ok: true, outcome: { kind: 'failed' } }; } },
-  { name: 'missing publication window', change: (row) => { row.rounds[0]!.accounting.window = null; } },
-  { name: 'missing accounting bracket', change: (row) => { row.rounds[0]!.accounting.afterOps = null; } },
+  { name: 'uncommitted overwrite', change: (row) => { row.rounds[0].checkpoint = { ok: true, outcome: { kind: 'failed' } }; } },
+  { name: 'missing publication window', change: (row) => { row.rounds[0].accounting.window = null; } },
+  { name: 'missing accounting bracket', change: (row) => { row.rounds[0].accounting.afterOps = null; } },
   { name: 'missing restore probe', change: (row) => { row.restoreProbe = null; } },
-  { name: 'warm boot reuse', change: (row) => { row.restoration!.state.state!.bootId = 'before'; } },
+  { name: 'warm boot reuse', change: (row) => {
+    const restored = present(row.restoration, 'the cold restoration');
+
+    present(restored.state.state, 'the restored box state').bootId = 'before';
+  } },
   { name: 'unconfirmed destruction', change: (row) => { row.destroyReceipt = { ok: true, destroyed: false }; } },
   { name: 'refused file observer', change: (row) => { row.file = { path: '/workspace/vol/dense.bin', reply: { ok: false, error: 'pending' }, error: 'pending', evidence: null }; } },
 ];
@@ -125,8 +133,8 @@ async function driverC3Proof(publishDuringOverwrite: boolean) {
   };
 
   const answer = async (input: Parameters<typeof real>[0], init?: Parameters<typeof real>[1]) => {
-    const url = new URL(String(input));
-    const body = v.parse(Body, JSON.parse(String(init?.body ?? '{}')));
+    const url = new URL(v.parse(v.string(), input));
+    const body = v.parse(Body, JSON.parse(v.parse(v.string(), init?.body ?? '{}')));
 
     if (url.pathname === '/destroy') { events.push('destroy');
 
@@ -218,7 +226,13 @@ async function driverC3Proof(publishDuringOverwrite: boolean) {
     const identity = c3Fixture().identity;
 
     if (identity === null) throw new Error('fixture identity is missing');
-    const row = await measureLiveC3({ origin: 'https://bench.invalid', token: 'test', identity }, 'box', 'test-run', null);
+
+    const row = await measureLiveC3({
+      fixture: { origin: 'https://bench.invalid', token: 'test', identity },
+      box: 'box',
+      runId: 'test-run',
+      preparation: null,
+    });
 
     return { row, events, installed };
   } finally {

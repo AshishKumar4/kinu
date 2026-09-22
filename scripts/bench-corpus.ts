@@ -74,10 +74,10 @@ export function loadBenchCorpus(repoRoot: string, opts: PartitionOptions = {}): 
   const tasks: BenchTask[] = [];
   const patches = new Map<string, string>();
 
-  raw.split('\n').forEach((line, i) => {
+  for (const [i, line] of raw.split('\n').entries()) {
     const text = line.trim();
 
-    if (!text || text.startsWith('#')) return;
+    if (!text || text.startsWith('#')) continue;
     let parsedJson: unknown;
 
     try {
@@ -116,7 +116,7 @@ export function loadBenchCorpus(repoRoot: string, opts: PartitionOptions = {}): 
 
     if (line_.tags) task.tags = line_.tags;
     tasks.push(task);
-  });
+  }
 
   if (tasks.length === 0) throw new Error(`${path}: no tasks — an empty corpus proves nothing`);
 

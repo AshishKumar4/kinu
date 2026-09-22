@@ -98,6 +98,17 @@ interface Signal {
   readonly evidence: string;
 }
 
+/** A finding as the site that found it states it; `signalsOf` supplies the
+ *  record and family every signal of one record shares. */
+interface Finding {
+  readonly kind: SignalKind;
+  readonly subject: string;
+  readonly slot: string;
+  readonly attempt: string | null;
+  readonly count: number;
+  readonly evidence: string;
+}
+
 export interface Group {
   readonly key: string;
   readonly kind: SignalKind;
@@ -211,11 +222,8 @@ function signalsOf({ path, record }: Loaded): Signal[] {
   const at = shortPath(path);
   const signals: Signal[] = [];
 
-  const push = (
-    kind: SignalKind, subject: string, slot: string, attempt: string | null,
-    count: number, evidence: string,
-  ): void => {
-    signals.push({ kind, subject, slot, family, recordPath: path, attempt, count, evidence });
+  const push = (finding: Finding): void => {
+    signals.push({ ...finding, family, recordPath: path });
   };
 
   const today = assessAdmissibility(record.declaredTasks, record.observations);
@@ -231,12 +239,18 @@ function signalsOf({ path, record }: Loaded): Signal[] {
     // record can reach this branch — but `bench-artifacts/` still holds the ones
     // written before, and this is what names them. Removing the branch would
     // leave those records reporting four admissibility failures each instead.
-    push('run', 'the run attempted nothing and still wrote a record', '*', null, 1,
-      `${at}: 0 observations over ${String(record.declaredTasks.length)} declared task(s), `
-      + `${String(record.spend.calls)} model call(s)`);
+    push({
+      kind: 'run', subject: 'the run attempted nothing and still wrote a record',
+      slot: '*', attempt: null, count: 1,
+      evidence: `${at}: 0 observations over ${String(record.declaredTasks.length)} declared task(s), `
+        + `${String(record.spend.calls)} model call(s)`,
+    });
   } else {
     for (const failure of today.failures) {
-      push('run', admissibilityFinding(failure), '*', null, 1, `${at}: ${failure}`);
+      push({
+        kind: 'run', subject: admissibilityFinding(failure), slot: '*', attempt: null, count: 1,
+        evidence: `${at}: ${failure}`,
+      });
     }
   }
 
@@ -256,26 +270,37 @@ function signalsOf({ path, record }: Loaded): Signal[] {
     const transcripts = storedField(record, 'transcripts');
 
     if (transcripts === null) {
-      push('run', 'the record names no transcripts directory', '*', null, 1,
-        `${at}: the field is absent, so no failure in this run can be opened`);
+      push({
+        kind: 'run', subject: 'the record names no transcripts directory',
+        slot: '*', attempt: null, count: 1,
+        evidence: `${at}: the field is absent, so no failure in this run can be opened`,
+      });
     } else if (!existsSync(transcripts)) {
-      push('run', 'the named transcripts directory is gone', '*', null, 1,
-        `${at}: names ${transcripts}, which does not exist`);
+      push({
+        kind: 'run', subject: 'the named transcripts directory is gone',
+        slot: '*', attempt: null, count: 1,
+        evidence: `${at}: names ${transcripts}, which does not exist`,
+      });
     }
   }
 
   if (today.admissible !== record.admissibility.admissible) {
-    push('run', 'stored admissibility verdict is stale', '*', null, 1,
-      `${at}: the record says admissible=${String(record.admissibility.admissible)} and `
-      + `today's policy says ${String(today.admissible)}`);
+    push({
+      kind: 'run', subject: 'stored admissibility verdict is stale',
+      slot: '*', attempt: null, count: 1,
+      evidence: `${at}: the record says admissible=${String(record.admissibility.admissible)} and `
+        + `today's policy says ${String(today.admissible)}`,
+    });
   }
 
   for (const observation of record.observations) {
     const key = observationKey(observation);
 
     if (observation.outcome === 'errored' || observation.outcome === 'inert') {
-      push('attempt', observation.outcome, observation.taskId, key, 1,
-        `${at} ${key}: ${observation.reason}`);
+      push({
+        kind: 'attempt', subject: observation.outcome, slot: observation.taskId, attempt: key, count: 1,
+        evidence: `${at} ${key}: ${observation.reason}`,
+      });
       continue;
     }
 
@@ -283,15 +308,20 @@ function signalsOf({ path, record }: Loaded): Signal[] {
 
     for (const score of observation.scores) {
       if (score.eligible === 0 || score.passed >= score.eligible) continue;
-      push('scorer', score.name, observation.taskId, key, score.eligible - score.passed,
-        `${at} ${key} ${score.name} `
-        + `${String(score.passed)}/${String(score.eligible)}: ${score.detail}`);
+      push({
+        kind: 'scorer', subject: score.name, slot: observation.taskId, attempt: key,
+        count: score.eligible - score.passed,
+        evidence: `${at} ${key} ${score.name} `
+          + `${String(score.passed)}/${String(score.eligible)}: ${score.detail}`,
+      });
     }
 
     for (const [failureKey, count] of failureMixOf(observation, at)) {
       if (toolFailurePartOfKey(failureKey) === 'refused') continue;
-      push('tool-failure', failureKey, observation.taskId, key, count,
-        `${at} ${key}: ${failureKey}×${String(count)}`);
+      push({
+        kind: 'tool-failure', subject: failureKey, slot: observation.taskId, attempt: key, count,
+        evidence: `${at} ${key}: ${failureKey}×${String(count)}`,
+      });
     }
   }
 

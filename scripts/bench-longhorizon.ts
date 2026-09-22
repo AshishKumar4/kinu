@@ -58,10 +58,10 @@ export function loadLongHorizonCorpus(repoRoot: string, opts: PartitionOptions =
   const tasks: BenchTask[] = [];
   const specs = new Map<string, LongHorizonSpec>();
 
-  raw.split('\n').forEach((line, i) => {
+  for (const [i, line] of raw.split('\n').entries()) {
     const text = line.trim();
 
-    if (!text || text.startsWith('#')) return;
+    if (!text || text.startsWith('#')) continue;
     let parsedJson: unknown;
 
     try {
@@ -89,7 +89,7 @@ export function loadLongHorizonCorpus(repoRoot: string, opts: PartitionOptions =
     tasks.push({
       id: line_.id,
       title: line_.title,
-      prompt: asks[0]!,
+      prompt: asks[0],
       editable: [LONGHORIZON_ANSWER_FILE],
       guarded: LONGHORIZON_GUARDED,
       // The encoded spec rides in the argv, so it rides in the task hash: a
@@ -97,7 +97,7 @@ export function loadLongHorizonCorpus(repoRoot: string, opts: PartitionOptions =
       checks: [{ id: 'longhorizon-answers', command: [...CHECK_COMMAND, encodeLongHorizonSpec(spec)], timeoutMs: 60_000 }],
       tags: [line_.mode, ...(line_.tags ?? [])],
     });
-  });
+  }
 
   if (tasks.length === 0) throw new Error(`${path}: no tasks — an empty corpus proves nothing`);
 
