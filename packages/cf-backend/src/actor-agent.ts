@@ -164,7 +164,7 @@ import {
   // Heads support (inherited-context digest)
   inheritedContextFromTranscript,
   type ReleaseToolDeps,
-  PlanReviewActions, planHandoffKey, planHandoffTurn,
+  PlanReviewActions, type PlanDecisionOutcome,
   type PlanEdit, type PlanReview, type PlanReviewAnnotation,
   type PlanReviewDecision, type PlanReviewResult, type SubmitPlanToolDeps,
   isVfsError,
@@ -902,68 +902,14 @@ export abstract class ActorAgent extends Agent<Env> {
     return this.planActions.saveAnnotations(id, revision, { value: annotations });
   }
 
-  /** Persist the verdict before starting the next turn. The queued handoff
-   * keeps implementation outside the Plan tool surface. */
   @callable()
   async decidePlanReview(
     id: string,
     revision: number,
     decision: PlanReviewDecision,
     feedback?: string,
-  ): Promise<PlanReviewResult | {
-    readonly ok: true;
-    readonly plan: PlanReview;
-    readonly queued: boolean;
-    readonly queueError?: string;
-  }> {
-    const result = this.planActions.decide(id, revision, decision, feedback);
-
-    if (!result.ok) return result;
-
-    if (result.plan.handoffAccepted) {
-      return { ok: true, plan: result.plan, queued: true };
-    }
-
-    const plan = result.plan;
-    const { text, metadata } = planHandoffTurn(plan, decision);
-
-    const enqueue = (attempt: number) => this.host.enqueueTurn({
-      text,
-      metadata,
-      idempotencyKey: planHandoffKey(plan, decision, attempt),
-    });
-
-    try {
-      let attempt = this.stores.planReviews.handoffAttempt(plan.id, plan.revision);
-      let queued = await enqueue(attempt);
-
-      if (queued.status === 'skipped'
-        && queued.durable
-        && !queued.durable.accepted
-        && (queued.durable.status === 'aborted'
-          || queued.durable.status === 'skipped'
-          || queued.durable.status === 'error')) {
-        attempt = this.stores.planReviews.advanceHandoffAttempt(plan.id, plan.revision, attempt);
-        queued = await enqueue(attempt);
-      }
-
-      if (queued.status !== 'queued') {
-        return { ok: true, plan, queued: false, queueError: 'the durable turn submission was skipped' };
-      }
-
-      const accepted = this.planActions.markHandoffAccepted(plan.id, plan.revision);
-
-      if (!accepted.ok) return accepted;
-
-      return { ok: true, plan: accepted.plan, queued: true };
-    } catch (error) {
-      return {
-        ok: true,
-        plan,
-        queued: false,
-        queueError: renderThrownChain({ cause: error }),
-      };
-    }
+  ): Promise<PlanDecisionOutcome> {
+    return this.planActions.decideAndHandOff({ id, revision, decision, feedback }, (turn) => this.host.enqueueTurn(turn));
   }
 
   // ── The subordinate tree ────────────────────────────────────────────
@@ -1613,21 +1559,15 @@ export abstract class ActorAgent extends Agent<Env> {
             : { status: 'completed', detail: refusal };
         },
       }),
-      overflow_retry: overflowRetryTerminalEffect(this.orch.inbox),
-      // The other follow-up a settled turn can owe, and the shape is identical
-      // because the obligation is: one signal, keyed on this response, still
-      // owed until it is delivered. What differs is which turn earns it — the
-      // retry answers a context-length FAILURE, this one an answer the provider
-      // cut at its output limit while the model had more to say.
-      output_continuation: outputLimitContinuationTerminalEffect(this.orch.inbox),
+      // The follow-up turns a settled turn can owe — a context-length retry, the
+      // continuation of an answer cut at its output limit, a reminder of open
+      // tasks — each owed until its own turn is on disk.
+      overflow_retry: overflowRetryTerminalEffect(() => this.chatLoop),
+      output_continuation: outputLimitContinuationTerminalEffect(() => this.chatLoop),
+      task_reminder: taskReminderTerminalEffect(() => this.chatLoop),
 
       turn_record: turnRecordTerminalEffect(this.orch),
       event_drain: eventDrainTerminalEffect(this.orch),
-
-      // The third signal a settled turn can owe: it ended while its task list
-      // still held open items. One queued turn, keyed on this response — the
-      // ledger, not RAM, says the once.
-      task_reminder: taskReminderTerminalEffect(this.orch.inbox),
 
       improvement_lanes: terminalEffect({
         input: v.object({
@@ -2040,30 +1980,9 @@ export abstract class ActorAgent extends Agent<Env> {
           await close();
         });
       } catch (cause) {
-        // RELEASED on a handled rejection. An eviction needs no cleanup — nothing
-        // runs after it — but a rejection that leaves this isolate alive with the
-        // sequence still marked in flight makes every retry alarm and recovery
-        // fiber skip it forever, which is the one way this design can wedge.
-        this.terminal.leave(transition);
-        diagnostics.failure('turn.terminal_transition_close_failed', toKinuError({
-          doing: "recording that a settled turn's effects had all reported",
-          cause,
-          otherwise: 'io',
-        }), { turnId: transition.turnId, messageId: transition.messageId });
-
-        // RE-ARMED, for the reason the initial arm is. The close carries the
-        // ledger's own final wake, so this rejection can BE that wake failing —
-        // and the fiber is about to be disposed. Without this the rows stay owed
-        // with the alarm that would have carried them already spent.
-        try {
-          await this.terminal.armRecovery(transition, { cause });
-        } catch (recoveryCause) {
-          diagnostics.failure('turn.terminal_transition_recovery_failed', toKinuError({
-            doing: 're-arming the terminal transition after its close failed',
-            cause: recoveryCause,
-            otherwise: 'io',
-          }), { turnId: transition.turnId, messageId: transition.messageId });
-        }
+        // An eviction needs no cleanup — nothing runs after it; a rejection
+        // that leaves this isolate alive does.
+        await this.terminal.closeFailed(transition, { cause });
       } finally {
         if (this._terminalReportedOwner === owner) {
           this._terminalReportedOwner = null;
@@ -4508,7 +4427,7 @@ export abstract class ActorAgent extends Agent<Env> {
         throw new KinuError('denied', `a hosted actor has no ${route.kind} surface; that route belongs to the workspace actor`);
       }
 
-      const surface = hostedActorSurface(actor, this.getWebSearchProvider());
+      const surface = hostedActorSurface(actor, this.ownedModelServices.getWebSearchProvider());
       const providers = providersInWorkMode(mode, surface.providers);
       // NARROWED BY THE CHILD'S OWN ROLE, which is what the header above has
       // always promised and what this path did not do: it went straight from the
@@ -4695,7 +4614,7 @@ export abstract class ActorAgent extends Agent<Env> {
 
     const factory = createCodemodeToolFactory({
       loader: this.env.LOADER, egress: codemodeEgress(), rt,
-      sql: rt.storage.sql, workspace: this.workspaceName(), webSearch: this.getWebSearchProvider(), reach,
+      sql: rt.storage.sql, workspace: this.workspaceName(), webSearch: this.ownedModelServices.getWebSearchProvider(), reach,
       extraProviders: () => providers.filter((provider) => !executorNames.has(provider.name) && provider.name !== 'web'),
     });
 
@@ -4822,7 +4741,7 @@ export abstract class ActorAgent extends Agent<Env> {
   protected slateNamespaces(): CodemodeProvider[] {
     return [
       ...(this.rt.executionRouter?.getProviders() ?? []),
-      createWebCodemodeProvider(this.getWebSearchProvider()),
+      createWebCodemodeProvider(this.ownedModelServices.getWebSearchProvider()),
       createAgentsCodemodeProvider(() => this.getAgentsToolDeps('build')),
       ...this.turnCodemodeProviders('build'),
     ];
@@ -4848,7 +4767,7 @@ export abstract class ActorAgent extends Agent<Env> {
         reach: narrowing,
         sql: this.boundSql,
         workspace: this.workspaceName(),
-        webSearch: this.getWebSearchProvider(),
+        webSearch: this.ownedModelServices.getWebSearchProvider(),
         // `agents.*` in the sandbox — the same deps the top-level tool holds,
         // so a script delegates through the one path with the one action gate.
         agents: () => this.getAgentsToolDeps(mode),
@@ -5020,14 +4939,6 @@ export abstract class ActorAgent extends Agent<Env> {
 
       return shell.exec(command);
     });
-  }
-
-  /** The web search + fetch provider — built once per DO lifetime. Key-less by
-   *  default (DuckDuckGo + Markdown-for-Agents); a stored `tavily` credential,
-   *  resolved through the registry's getAuth seam, upgrades search. HTML→markdown
-   *  routes through env.AI.toMarkdown when the AI binding is present. */
-  private getWebSearchProvider(): WebSearchProvider {
-    return this.ownedModelServices.getWebSearchProvider();
   }
 
   /** Stored model spec, or null when unset (registry will pick the default). */
@@ -5555,7 +5466,7 @@ export abstract class ActorAgent extends Agent<Env> {
         // The release lane is codemode-only now (release.* — see
         // getCodemodeToolFactory below), not a BuiltinToolDeps field.
         // Web research — key-less default, codemode web.* wired below.
-        webSearch: this.getWebSearchProvider(),
+        webSearch: this.ownedModelServices.getWebSearchProvider(),
       };
 
       if (actorDeps.report) builtinDeps.report = actorDeps.report;
