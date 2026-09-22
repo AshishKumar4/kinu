@@ -1,5 +1,5 @@
 {
-  "measured": "38c001fee: 1143 test files, 1008 runnable suites, 13045 tests, 40 runners, 91 non-public product members",
+  "measured": "83cd1fd49: 1143 test files, 1008 runnable suites, 13050 tests, 40 runners, 91 non-public product members",
   "entries": [
     {
       "key": "mirror :: packages/cf-backend/tests/unit-codemode-sandbox.test.ts :: (file scope) :: declared mirror",
@@ -42,23 +42,19 @@
       "count": 1
     },
     {
-      "key": "mirror :: packages/core/tests/contract-cache-markers.test.ts :: (file scope) :: declared mirror",
-      "count": 1
-    },
-    {
       "key": "mirror :: packages/core/tests/unit-core-adapter-seams.test.ts :: (file scope) :: declared mirror",
-      "count": 3
+      "count": 1
     },
     {
       "key": "mirror :: packages/core/tests/unit-craft-executor.test.ts :: (file scope) :: declared mirror",
       "count": 1
     },
     {
-      "key": "mirror :: packages/core/tests/unit-memory-tail.test.ts :: (file scope) :: mirrored constant",
+      "key": "mirror :: packages/core/tests/unit-experience.test.ts :: (file scope) :: declared mirror",
       "count": 1
     },
     {
-      "key": "mirror :: packages/core/tests/unit-mission-budget-seams.test.ts :: a TOOLLESS node charges its one call too, so removing the lump under-charges nothing :: declared mirror",
+      "key": "mirror :: packages/core/tests/unit-memory-tail.test.ts :: (file scope) :: mirrored constant",
       "count": 1
     },
     {
@@ -68,10 +64,6 @@
     {
       "key": "mirror :: packages/core/tests/unit-run-events.test.ts :: step_finish is the turn loop; every other producer names itself :: declared mirror",
       "count": 1
-    },
-    {
-      "key": "mirror :: packages/core/tests/unit-subordinates.test.ts :: (file scope) :: declared mirror",
-      "count": 2
     },
     {
       "key": "mirror :: packages/core/tests/unit-usage.test.ts :: an unreported cache write is ABSENT, not the zero the SDK fabricates :: declared mirror",

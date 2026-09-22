@@ -340,14 +340,14 @@
       "file": "packages/core/src/craft/in-episode.ts",
       "kind": "hand-parser",
       "owner": "stripNonCode",
-      "sourceSha256": "dc51e9dfa12f6baa3261f93a4c1cf0a12f37deab5b64fb1ee7dc108438cc3b7b",
+      "sourceSha256": "64e41131795761abb07ac1a49bf0fbc3f3d5172d57755fb5166a60f7b59252e9",
       "decision": "sourceGate"
     },
     {
       "file": "packages/core/src/craft/source.ts",
       "kind": "hand-parser",
       "owner": "stripExports",
-      "sourceSha256": "8b8b75d037c7bd58b0da999d073b591ea93014bcdc995d0a3f699e9b7ef1a3d1",
+      "sourceSha256": "27dbc5b3c034e81ed4952a8a97ad1c92150422fd4f0054dc8b416249b243592b",
       "decision": "traversal"
     },
     {

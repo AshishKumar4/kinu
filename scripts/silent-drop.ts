@@ -277,6 +277,16 @@ function headOf(use: SyntaxNode): SyntaxNode {
   return index?.raw.type === 'Literal' && index.raw.value === 0 && parent !== undefined ? parent : use;
 }
 
+/** A rejection handler's error binding: its first parameter, or the tuple of a
+ *  rest parameter, whose head is the error. */
+function handlerBinding(handler: SyntaxNode) {
+  if (handler.children.length < 2) return { name: undefined, tuple: false };
+  const first = handler.children[0];
+  const rest = first?.type === 'RestElement' ? first.children[0] : undefined;
+
+  return { name: identifierText(rest ?? first ?? handler), tuple: rest !== undefined };
+}
+
 function fateOf(scope: SyntaxNode, binding: string, tuple = false): Fate {
   let forwarded = false;
   const projections: SyntaxNode[] = [];
@@ -670,16 +680,11 @@ export function auditFile(file: string, text: string): readonly Drop[] {
         const block = blockBodyOf(handler);
         const scope = block ?? handler.children.at(-1);
 
-        const first = handler.children[0];
-        const rest = first?.type === 'RestElement' ? first.children[0] : undefined;
-
-        const parameter = handler.children.length > 1
-          ? identifierText(rest ?? first ?? handler)
-          : undefined;
+        const parameter = handlerBinding(handler);
 
         const own = block === undefined ? [] : ownNodes(block);
         const rethrows = own.some((statement) => statement.type === 'ThrowStatement');
-        const forwarded = scope === undefined ? false : auditHandler(scope, parameter, rest !== undefined);
+        const forwarded = scope === undefined ? false : auditHandler(scope, parameter.name, parameter.tuple);
 
         // A body that is empty, or a bare sentinel return, is `no-sentinel-catch`'s.
         // What is left — a handler that runs statements, forwards nothing and
