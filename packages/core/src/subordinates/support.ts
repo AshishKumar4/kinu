@@ -1,15 +1,4 @@
-/**
- * Subordinates — roster, identity, admission and the one orchestration policy
- * behind them.
- *
- * Platform-neutral by construction: nothing here touches a Durable Object, a
- * facet or a local process. A backend supplies the SqlExec primitive and a
- * SubordinateRuntime (how a subordinate is actually spawned and addressed on
- * that platform); everything else — status transitions, rollback semantics,
- * the inherited-context digest, event admission — is the same policy wherever
- * it runs. Core already owned the vocabulary (delegation/agents-tool.ts); this is
- * the logic that belongs beside it.
- */
+/** Subordinates: roster, identity, admission and the one orchestration policy, platform-neutral. */
 
 import * as v from 'valibot';
 import type { EventLog, PublishResult } from '../events/hub/log';
@@ -94,42 +83,18 @@ export function readSubordinateLiveStatus(
   };
 }
 
-/**
- * The immutable lineage of one subordinate — the facts nothing may retarget
- * after the facet exists. Everything MUTABLE about how the agent presents
- * (title, role selection, tier) lives only in its own `actor_config`, read
- * through {@link SubordinateDescriptorSource}; this row never mirrors it.
- */
+/** Immutable lineage; everything mutable lives only in the child's `actor_config` ({@link SubordinateDescriptorSource}). */
 export interface SubordinateIdentity {
   name: string;
   mission: string;
-  /** The WORKSPACE this subordinate belongs to — its exec planes, credentials
-   *  and capability all present this name. Inherited unchanged down a nested
-   *  tree, so it is never the immediate parent's name past depth 1. */
+  /** Inherited unchanged down a nested tree, so never the immediate parent's name past depth 1. */
   parentWorkspace: string;
   ownerUserId: string;
   /** Durable tree depth (1 = hired by the orchestrator); the cap's backbone. */
   depth: number;
-  /**
-   * How long this child is MEANT to live — immutable lineage, like `depth`, and
-   * here for the same kind of reason: it is a fact the child must KNOW about
-   * itself and must never be able to change.
-   *
-   * The child is the only party that sees its own turn end, and a `task` child
-   * owes its blocked caller exactly one report for every way that turn can end
-   * (`terminalTaskReport`). Reading it off this row is what makes that true after
-   * an eviction as well as on the first turn.
-   */
+  /** Immutable so a `task` child still owes exactly one report per turn end after an eviction (`terminalTaskReport`). */
   lifetime: SubordinateLifetime;
-  /**
-   * The identity this subordinate's commands and file tools run as, when its
-   * workspace allocated one: the uid the workspace's registry handed out for
-   * `sub-<name>` at seeding. Immutable lineage like the rest, because a home is
-   * uid/gid/mode on real inodes and a facet that came back as a different uid
-   * could not write the home it already owns. Absent where the workspace is
-   * reached in-process and re-provisions at open, and for a subordinate seeded
-   * before homes existed.
-   */
+  /** The uid allocated for `sub-<name>`; immutable because a home is owned by uid on real inodes. Absent where the workspace re-provisions at open. */
   cred?: AgentIdentity;
 }
 
@@ -171,8 +136,7 @@ function mapIdentityRow(row: IdentityRow): SubordinateIdentity {
     lifetime: row.lifetime,
   };
 
-  // Assigned rather than spread: a row with no credential leaves the key
-  // ABSENT, because a reader decides whose identity to run as by presence.
+  // Assigned, not spread: a row with no credential leaves the key absent, and readers decide by presence.
   if (row.uid !== null && row.gid !== null) identity.cred = { uid: row.uid, gid: row.gid };
 
   return identity;
@@ -193,19 +157,11 @@ function identitiesEqual(stored: SubordinateIdentity, attempted: SubordinateIden
   return stored.depth === attempted.depth;
 }
 
-/** Immutable facet identity. The parent may retry the exact seed after an RPC
- * interruption, but no caller can retarget an initialized facet to another
- * workspace, owner or DEPTH. */
+/** The parent may retry the exact seed, but nothing can retarget an initialized facet's workspace, owner or depth. */
 export class SubordinateIdentityStore {
   private readonly actorId: string;
 
-  /** Bind the identity row to ONE actor.
-   *
-   *  One workspace database holds every hired subordinate, so the singleton is
-   *  per ACTOR, not per database: `PRIMARY KEY (actor_id, id)` leads with the
-   *  actor and the `id = 1` CHECK keeps each actor's row unique. A bare
-   *  `id INTEGER PRIMARY KEY CHECK (id = 1)` would mean one identity per
-   *  DATABASE — one row for the whole workspace. */
+  /** Per actor, not per database: `PRIMARY KEY (actor_id, id)` plus the `id = 1` CHECK. */
   constructor(private readonly sql: SqlExec, private readonly actor: ActorHandle) {
     this.actorId = actor.actorId;
   }
@@ -277,15 +233,7 @@ export class SubordinateIdentityStore {
     return this.read()?.parentWorkspace ?? null;
   }
 
-  /**
-   * This subordinate's delegation budget, read from storage on every call.
-   *
-   * Fails CLOSED on an unseeded facet: no identity row means nothing has told
-   * this actor where it is, and the honest answer to "how much tree may you
-   * build" is none. Defaulting to depth 0 would hand an unseeded facet the
-   * orchestrator's own budget, which is precisely the resumed-child bug one
-   * level over.
-   */
+  /** Fails closed on an unseeded facet: no identity row means no delegation budget. */
   delegationBudget(): DelegationBudget {
     const identity = this.read();
 
@@ -293,30 +241,20 @@ export class SubordinateIdentityStore {
   }
 }
 
-/**
- * Everything MUTABLE about how one subordinate presents, read from ITS OWN
- * `actor_config` — the single authority. Nothing here is persisted anywhere
- * else; a parent that needs to show or prompt with this data asks the child
- * (or its local config store) through {@link SubordinateDescriptorSource}.
- */
+/** Read from the child's own `actor_config`, the single authority; never persisted elsewhere. */
 export interface SubordinateDescriptor {
   displayName: string;
   nameOrigin: NameOrigin;
-  /** The catalog role id. */
   role: RoleId;
-  /** The tier a parent pinned at hire; null derives from the role. */
+  /** Null derives from the role. */
   tier: TierId | null;
 }
 
-/**
- * Read-side view of one child's descriptor. Answers null when the child
- * cannot be asked — callers render unavailable rather than stale.
- */
+/** Null when the child cannot be asked; callers render unavailable rather than stale. */
 export interface SubordinateDescriptorSource {
   read(): SubordinateDescriptor | null;
 }
 
-/** The concrete source over a subordinate's own config store. */
 export function subordinateDescriptorSource(config: AgentConfigStore): SubordinateDescriptorSource {
   return {
     read: () => ({
@@ -396,14 +334,7 @@ export function admitSubordinateTask(log: EventLog, input: {
   });
 }
 
-/**
- * The sender-visible half of an admission.
- *
- * `turnInFlight` is the subordinate's live-turn flag read at admission time.
- * Delegated work carries a trusted Plan/Build mode and therefore gets its own
- * turn instead of being spliced into unrelated live work. A duplicate
- * admission schedules no drain of its own and lands with the existing backlog.
- */
+/** Delegated work carries a trusted Plan/Build mode, so it gets its own turn rather than splicing into live work. A duplicate schedules no drain. */
 export function describeSubordinateHandoff(input: {
   admission: PublishResult;
   turnInFlight: boolean;
@@ -420,45 +351,18 @@ export function describeSubordinateHandoff(input: {
   };
 }
 
-/** The exact report text admission stores. Producers normalize with this
- *  before spilling, so a cited spill file can never disagree with the brief
- *  it completes. */
+/** Producers normalize with this before spilling, so a cited spill file matches the brief. */
 export function normalizeReportContent(content: string): string {
   return requiredText(content, 'content');
 }
 
-/**
- * Where a subordinate's outbound message came from, and therefore who it is
- * for.
- *
- * `report_tool` is a deliberate report and `turn_end` is the automatic relay
- * of a finished assigned turn. The parent still admits either only while it
- * has an open assignment for that subordinate.
- */
+/** Either source is admitted only while the parent has an open assignment for this subordinate. */
 export type SubordinateReportOrigin = 'report_tool' | 'turn_end';
 
-/**
- * Subordinate side: does this finished turn's answer go up to the parent?
- *
- * Yes when a queued signal drove the turn — the parent's assignment, or a
- * background job that assignment detached. That relay is the "or its
- * completion" half of reporting, and it is why an assigned subordinate need
- * not remember to call `report`.
- *
- * No when the owner drove the turn by typing into the subordinate's own chat.
- * That answer is the owner's. Relaying it would spend the parent's turns on a
- * conversation it is not part of and paste someone else's dialogue into its
- * context. The parent can still read the subordinate's state whenever it wants
- * (`agents` status, the roster in its dynamic context) — visibility on request,
- * not push. And the subordinate may always choose to speak up: the `report`
- * tool does not come through here.
- */
+/** Relays only turns a queued signal drove; an owner-typed turn's answer is the owner's. The `report` tool does not come through here. */
 export function subordinateRelaysTurnEnd(input: {
   /** The `report` tool already spoke for this turn; a relay would duplicate it. */
   reportedThisTurn: boolean;
-  /** True when the owner typed this turn's driving message, false when a queued
-   *  signal did (an event drain carrying a parent assignment, a background-job
-   *  wake, a timer). */
   ownerDriven: boolean;
   assistantText: string;
 }): boolean {
@@ -467,41 +371,23 @@ export function subordinateRelaysTurnEnd(input: {
     && input.assistantText.trim().length > 0;
 }
 
-/**
- * Parent side: does an arriving report enter the parent's event rail — the rail
- * that wakes it, bills a turn and writes into its history?
- *
- * The subordinate cannot answer this, because only the parent knows whether it
- * is waiting for anything. With no open assignment, neither an explicit tool
- * call nor an automatic relay may create a parent turn. This also blocks a
- * background job detached from the owner's private chat from smuggling that
- * conversation upward on its later programmatic wake.
- */
+/** Only the parent knows whether it is waiting: with no open assignment, no report may create a parent turn. */
 export function parentAdmitsSubordinateReport(input: {
   entry: SubordinateRosterEntry;
 }): boolean {
   return input.entry.currentTask !== null;
 }
 
-/** `spilled` is where the caller already spilled this exact content
- *  (`spillEventContent`), letting the parent's brief cite a report longer than
- *  the brief budget instead of dropping its tail, or say why it could not.
- *  Producers spill BEFORE admission: the VFS write is async and admission runs
- *  inside the DO's synchronous storage transaction. */
+/** Producers spill before admission: the VFS write is async and admission runs in a synchronous storage transaction. */
 export function admitSubordinateReport(log: EventLog, input: {
   fromSubordinate: string;
   status: SubordinateReportStatus;
   content: string;
-  /** The sender's terminal sequence. Stated by the sender, never minted here:
-   *  it is the key this admission is idempotent on, and a key the receiving
-   *  side invented would be new on every replay. */
+  /** Stated by the sender, never minted here: it is the idempotency key. */
   sequenceId: string;
   task?: string;
   spilled?: SpilledContent;
-  /** The structured handoff the `report` tool parsed, already trimmed and
-   *  bounded there. Merged verbatim: this function does not re-shape it,
-   *  because a second normalization is a second place for the stored payload
-   *  and the refused input to disagree. */
+  /** Merged verbatim; a second normalization could disagree with the refused input. */
   handoff?: SubordinateReportHandoff;
   mode: WorkMode;
   now: number;
@@ -548,9 +434,7 @@ export interface SubordinateRuntime {
   }): Promise<SubordinateHandoff>;
   status(name: string): Promise<SubordinateLiveStatus>;
   message(name: string, content: string, mode: WorkMode): Promise<SubordinateHandoff>;
-  /** Write the child's own naming state. Called with `user` for an owner's
-   *  rename, which is what makes the refusal in `planWorkspaceTitle` durable
-   *  on the side that runs the title policy. */
+  /** Called with `user` for an owner rename, which makes `planWorkspaceTitle`'s refusal durable. */
   rename(name: string, displayName: string, nameOrigin: NameOrigin): Promise<void>;
   dismiss(name: string, keepHistory: boolean, reference: ActorReference): Promise<void>;
 }
@@ -560,10 +444,7 @@ export interface SubordinatesChangedEvent {
   subordinates: SubordinateRosterEntry[];
 }
 
-/** The catalog role an additional agent gets when the owner named none. It is
- *  the same default `AgentConfigStore.getRoleSelection` answers with, so an
- *  agent created with nothing said about it runs as the workspace's own kind
- *  of agent rather than a specialist nobody asked for. */
+/** Same default as `AgentConfigStore.getRoleSelection`. */
 const DEFAULT_SUBORDINATE_ROLE_ID = 'task';
 
 function displayNameForRole(role: string): string {
@@ -608,53 +489,32 @@ interface SubordinateStatusView {
 }
 
 
-/** The one orchestration policy behind both the LLM agents tool and the future
- * user RPCs. Roster transitions happen before facet admission and are restored
- * exactly if admission fails. Broadcasts happen only after both sides settle. */
+/** Roster transitions precede facet admission and are restored exactly if it fails; broadcasts follow both. */
 export function createTeamToolDeps(deps: {
-  /** The hiring actor's own place in the tree — derived by ITS parent, never
-   *  chosen here. */
+  /** Derived by its parent, never chosen here. */
   delegation: DelegationBudget;
   roster: SubordinateRosterStore;
   runtime: SubordinateRuntime;
   createName(role: string): string;
   now(): number;
   inheritedContext(): Promise<SerializedMessage[]>;
-  /** The live conversation the swarm dispatch reads, including this turn. */
   originContext?(): Promise<readonly ModelMessage[]>;
-  /** THIS actor's own mission — the workspace's purpose as it knows it. What
-   *  an owner-created additional agent inherits when the owner gave it none,
-   *  because an agent added to a workspace is there for what the workspace is
-   *  for. Read at create time rather than captured, so an agent added after
-   *  the mission was edited inherits the current one. */
+  /** Inherited by an owner-created agent given none; read at create time, not captured. */
   ownMission(): string;
   broadcast(event: SubordinatesChangedEvent): void;
   broadcastTask(event: { subordinate: string; content: string; timestamp: number }): void;
   /**
-   * The temporary-agent port, built ONCE per actor by its composition root.
-   *
-   * Not a store this function turns into a port, and the reason is the waiter:
-   * the port holds the live `shell` promises, and these deps are rebuilt per call
-   * (owner state resolves late), so building the port here would hand the report
-   * ingress a second one whose waiter map is empty — a run that could never be
-   * answered. Lifetime belongs to whoever outlives a turn, which is the actor.
-   *
-   * Absent leaves an actor with the two durable rungs and no role-targeted ask —
-   * structurally, in the schema, the sandbox namespace and the prompt alike.
+   * Built once per actor: the port holds the live `shell` waiters, and these deps are rebuilt per call.
+   * Absent: no role-targeted ask, structurally.
    */
   temporary?: TemporaryAgentPort;
 }): TeamToolDeps {
-  /** One roster refresh per settled operation — the ONLY payload is the
-   *  lifecycle roster; task content travels on its own task event. */
+  /** The only payload is the lifecycle roster; task content travels on its own event. */
   const changed = () => {
     deps.broadcast({ type: 'subordinates_changed', subordinates: deps.roster.list() });
   };
 
-  /** The durable verbs' one gate on the roster: a task-lifetime row is owned by
-   *  the asking call that created it — its report resolves the port's waiter on
-   *  `task_event_id` — so a durable assign/message/dismiss that retargeted it
-   *  would orphan that waiter. Refused before anything is tried, classified
-   *  `bad_input`: the name addresses no durable operation. */
+  /** A task-lifetime row belongs to the asking call's waiter; durable verbs refuse it as `bad_input`. */
   const requireDurable = (entry: SubordinateRosterEntry): SubordinateRosterEntry => {
     if (entry.lifetime !== 'durable') {
       throw new KinuError(
@@ -670,7 +530,7 @@ export function createTeamToolDeps(deps: {
   const provision = async (input: {
     name?: string;
     displayName?: string;
-    /** The caller's resolved role id. Absent only for an owner who said nothing. */
+    /** Absent only for an owner who said nothing. */
     role?: RoleId;
     tier?: TierId;
     mission?: string;
@@ -686,9 +546,7 @@ export function createTeamToolDeps(deps: {
     if (input.role !== undefined) {
       selection = input.role;
     } else if (ownerCreated) {
-      // The owner may say nothing at all. `spawn` has already refused an empty
-      // mission by the time it reaches here, so this default is only ever the
-      // owner's.
+      // `spawn` already refused an empty mission, so this default is only ever the owner's.
       selection = DEFAULT_SUBORDINATE_ROLE_ID;
     } else {
       throw new Error('role must be non-empty');
@@ -706,13 +564,8 @@ export function createTeamToolDeps(deps: {
 
     if (deps.roster.get(name)) throw new Error(`subordinate "${name}" already exists`);
 
-    // Whose title this is, decided by what the caller actually supplied. A
-    // typed title is the owner's and final. A role — theirs or the model's —
-    // yields the deterministic role name, which nobody chose but which says
-    // something true, so it is `auto` and stands. Nothing said gives the
-    // slug's codename: a real name on every surface from the first frame,
-    // and the one the shared title policy reads as a placeholder it may
-    // claim once, from the first thing the owner actually says to this agent.
+    // A typed title is the owner's and final; a role yields `auto`; nothing gives the slug's codename,
+    // which the title policy may claim once.
     const chosen = optionalText(input.displayName);
     const provisional = ownerCreated && input.role === undefined;
     const displayName = chosen ?? (provisional ? codenameFor(name) : displayNameForRole(roleLabel));
@@ -724,9 +577,7 @@ export function createTeamToolDeps(deps: {
       nameOrigin,
       mission,
       role: selection,
-      // Every child this path creates is DURABLE. The task lifetime has ONE
-      // producer, `createTemporaryAgentPort`, so no caller of `hire` or `create`
-      // can seed a child that retires itself.
+      // Every child created here is durable; the task lifetime has one producer, `createTemporaryAgentPort`.
       lifetime: 'durable',
     };
 
@@ -775,8 +626,7 @@ export function createTeamToolDeps(deps: {
       return { name, displayName, subordinate };
     },
 
-    // The child's own actor_config is the only naming authority: a rename
-    // delegates to it and refreshes the roster listeners once it settles.
+    // The child's own actor_config is the only naming authority.
     rename: async (input) => {
       const displayName = requiredText(input.displayName, 'displayName');
       await deps.runtime.rename(input.name, displayName, 'user');
@@ -788,8 +638,6 @@ export function createTeamToolDeps(deps: {
       };
     },
 
-    /** The child already settled this title on its own naming state; the
-     *  parent holds no mirror, so this only refreshes roster listeners. */
     recordTitle: async (input) => {
       const displayName = requiredText(input.displayName, 'displayName');
       changed();
@@ -822,13 +670,9 @@ export function createTeamToolDeps(deps: {
 
         if (deliverable) Object.assign(assignment, { deliverable });
 
-        // NO inherited context. A later assignment adds no new prefix: the
-        // child already holds its own working conversation, and the digest this
-        // used to build reached no reader on either backend.
+        // No inherited context: later assignments add no new prefix.
         handoff = await deps.runtime.assign(input.name, assignment);
-        // Inside the rollback scope, not after it: this write compensates the
-        // transition above, so its own failure must restore `before` too —
-        // otherwise the row stays assigned with nothing its report can cite.
+        // Inside the rollback scope: this write compensates the transition, so its failure must restore `before` too.
         deps.roster.recordAssignmentEvent(input.name, handoff.eventId);
       } catch (error) {
         rollback({ cause: error }, () => deps.roster.restore(before), 'subordinate assignment');
@@ -872,9 +716,7 @@ export function createTeamToolDeps(deps: {
         throw new Error(`subordinate "${input.name}" was created by the owner and only the owner can dismiss it`);
       }
 
-      // Archive by default: the facet and its context are kept (merely no
-      // longer addressed), so a dismissal is never silent data loss. Wiping
-      // the subordinate's storage requires an explicit keepHistory=false.
+      // Archive by default so a dismissal is never silent data loss; wiping requires keepHistory=false.
       const keepHistory = input.keepHistory ?? true;
       const reference = before.actorReference;
 
@@ -899,10 +741,7 @@ export function createTeamToolDeps(deps: {
     },
   };
 
-  // Attached only when the backend built one. Assigned rather than spread from a
-  // conditional empty object: an absent port has to be an ABSENT key, because
-  // every gate on this rung — the schema, the sandbox declaration, the prompt —
-  // reads its presence.
+  // Assigned, not spread: an absent port must be an absent key, because every gate reads its presence.
   if (deps.temporary) Object.assign(team, { temporary: deps.temporary });
 
   return team;

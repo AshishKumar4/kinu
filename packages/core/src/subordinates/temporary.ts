@@ -1,40 +1,7 @@
 /**
- * TASK-LIFETIME AGENTS — one full child agent, run to completion inside the
- * call that asked for it, and released when it answers.
- *
- * `agents({action:'hire', lifetime:'task', role, mission})` is the cheap half of
- * the hire rung, and the only delegation whose answer arrives as the tool
- * RESULT. A `lifetime:'durable'` hire stays in the roster; a hire naming an
- * agent that already exists is a handoff whose report wakes the caller turns
- * later; this one creates an agent for exactly this question, waits for its
- * single answer, and retires it.
- *
- * IT IS THE SAME CHILD, IN THE SAME ROSTER. There is no second child substrate,
- * no second loop, no second facet builder — and no second table. A temporary run
- * is provisioned through the very {@link SubordinateRuntime} a hire goes
- * through, and it is booked in `actor_subordinates` like every other helper.
- * What distinguishes it there is ONE non-derivable column, `lifetime`, plus the
- * `task_event_id` of the assignment it is working on:
- *
- *   lifetime='task'   — listed while it works, and RELEASED (archived, history
- *                       kept) the moment it answers. A durable row with an open
- *                       assignment is the same shape; only the lifetime says
- *                       which of them is retired on the answer.
- *   task_event_id     — the EventLog id of the open assignment, which is the id
- *                       the report cites. Correlation is therefore the one this
- *                       surface already documents (`SubordinateHandoff.eventId`)
- *                       rather than a private scheme beside it.
- *
- * DURABILITY IS THE EVENT LOG AND THE CHILD'S OWN TRANSCRIPT — not a mirror.
- * The assignment is a `subordinate_task` event; the answer is a
- * `subordinate_report`; the working record is the child actor's own history,
- * which a release keeps. The in-memory waiter is only the fast path that lets
- * the asking call return the answer directly: WITH a live waiter the report is
- * consumed inline (publishing it too would wake a turn to read an answer the
- * caller already has), and WITHOUT one — the asking activation died — it stays a
- * normal correlated `subordinate_report` event that wakes the parent, exactly
- * like any other delegated answer. Nothing is lost either way, and nothing is
- * stored twice.
+ * Task-lifetime agents: a full child run inside the calling tool call, answered as the tool
+ * result, then released. Same {@link SubordinateRuntime} and roster as a durable hire.
+ * The in-memory waiter is only a fast path; without it the report stays a `subordinate_report` event.
  */
 
 import type { SubordinateReportStatus } from '../events/hub/types';
@@ -55,25 +22,12 @@ export {
   type TemporaryRunRefusal, type TemporaryRunRequest,
 } from '../types/subordinates';
 
-/**
- * How long a roster row is meant to live. The one non-derivable fact `hire`'s
- * `lifetime` field writes onto the roster, and the reason it is a column rather
- * than an inference: a task-lifetime row working on its question and a durable
- * row working on an assignment are indistinguishable by state.
- */
+/** How long a roster row lives; a column because task and durable rows are indistinguishable by state. */
 export const SUBORDINATE_LIFETIMES = ['durable', 'task'] as const;
 
 export type SubordinateLifetime = (typeof SUBORDINATE_LIFETIMES)[number];
 
-/**
- * HOW A TASK CHILD'S TURN ENDED, in the vocabulary the report carries.
- *
- * Named per END STATE rather than passed as free text, because the whole
- * guarantee rests on the set being CLOSED: a temporary agent's caller is
- * blocked on one report, so a terminal state with no entry here is a caller
- * that waits forever. The compiler holds the map total, so a new end state
- * cannot reach a child without a decision about what it reports.
- */
+/** How a task child's turn ended. The set must stay closed: the caller blocks on exactly one report. */
 export const TASK_TURN_ENDINGS = [
   'answered',
   'silent',
@@ -107,23 +61,8 @@ const TASK_ENDING_REPORT = {
 } as const satisfies Record<TaskTurnEnding, string | null>;
 
 /**
- * THE ONE REPORT A TASK CHILD OWES ITS CALLER, for every way a turn can end.
- *
- * This exists because the temporary rung's caller is BLOCKED on a report, which
- * a durable subordinate's caller never is. The durable relay policy is
- * deliberately selective — `subordinateRelaysTurnEnd` withholds an owner-driven
- * turn and an empty one, because an answer nobody asked for is not progress —
- * and applying that selectivity to a task child turned three ordinary endings
- * (a provider error, an interruption, a turn that finished with nothing to say)
- * into a hire that never returned.
- *
- * So the rule inverts for this lifetime: a task child ALWAYS reports, exactly
- * once, and the status is what differs. `completed` is the answer; `blocked`
- * carries every non-answer, because from the caller's side a child that errored
- * and a child that gave up are the same event — no answer, with a reason.
- *
- * Returns null for a DURABLE child, so one call site can serve both lifetimes
- * and the durable behaviour is provably untouched.
+ * The one report a task child owes its caller, for every way a turn can end: always exactly
+ * once, `completed` for an answer, `blocked` for any non-answer. Null for a durable child.
  */
 export function terminalTaskReport(input: {
   readonly lifetime: SubordinateLifetime;
@@ -135,9 +74,7 @@ export function terminalTaskReport(input: {
   const text = input.assistantText.trim();
 
   if (input.ending === 'answered') {
-    // An `answered` ending with nothing in it is a `silent` one that mislabelled
-    // itself; the CONTENT decides, so no caller can produce an empty answer by
-    // naming the wrong ending.
+    // An empty `answered` is `silent`: the content decides.
     return text.length > 0
       ? { status: 'completed', content: text }
       : { status: 'blocked', content: TASK_ENDING_REPORT.silent };
@@ -151,19 +88,8 @@ export function terminalTaskReport(input: {
 }
 
 /**
- * DOES THIS REPORT END THE RUN?
- *
- * One predicate, exported, because TWO paths ask it and they must not answer
- * differently: the port's `settle` (which hands the answer to a waiting call)
- * and the roster's `applyReport` (which releases the row when nobody was
- * waiting). They disagreed once — `settle` treated a `turn_end` relay as the
- * answer while the roster released only on `completed`/`blocked`, and the
- * turn-end relay reports `progress` — so an evicted run answered by a finished
- * turn left its row listed as `working` forever.
- *
- * The rule: only a DELIBERATE mid-work note is progress. A temporary agent gets
- * one question, so everything else is its answer — a terminal report, or the
- * automatic relay of the turn that finished the work.
+ * Whether this report ends the run. Shared by the port's `settle` and the roster's
+ * `applyReport`; only a deliberate mid-work note is progress.
  */
 export function temporaryRunSettles(input: {
   readonly status: SubordinateReportStatus;
@@ -172,15 +98,8 @@ export function temporaryRunSettles(input: {
   return !(input.status === 'progress' && input.origin === 'report_tool');
 }
 
-/**
- * A task-lifetime hire's brief.
- *
- * Three facts, in the order they change what gets written: what it is being
- * asked, which paths hold the material, and that its NEXT MESSAGE is the whole
- * deliverable. The last one is the difference between the two lifetimes — a
- * durable subordinate can come back for more, and this one cannot, so a partial
- * first answer is the only answer.
- */
+/** A task-lifetime hire's brief: the question, the material paths, and that the next
+ *  message is the whole deliverable. */
 export function renderTemporaryTaskBrief(input: {
   readonly task: string;
   readonly contextRefs?: readonly string[];
@@ -204,19 +123,8 @@ export function renderTemporaryTaskBrief(input: {
 }
 
 /**
- * THE TASK-LIFETIME POLICY, over the SAME roster and the SAME child substrate.
- *
- * Every durable step here is one the roster and the event log already own:
- * `provision` writes the row (with `lifetime:'task'`), `runtime.assign` admits
- * the `subordinate_task` event, the report comes back through the ordinary
- * ingress, and `dismiss(keepHistory)` archives the row. This function adds
- * exactly one thing that is not already durable — the in-memory WAITER that
- * lets the asking call return the answer instead of being woken by it.
- *
- * WHICH IS WHY IT NEVER STORES THE ANSWER. The answer's durable home is the
- * child's own transcript, plus the `subordinate_report` event the ingress
- * publishes when nobody is waiting. Recording it on the parent as well would be
- * the mirror this repository deletes, and it would be the copy that goes stale.
+ * Task-lifetime policy over the shared roster and child substrate. Adds only the in-memory
+ * waiter; never stores the answer (the child's transcript and the report event hold it).
  */
 export function createTemporaryAgentPort(deps: {
   roster: SubordinateRosterStore;
@@ -257,9 +165,7 @@ export function createTemporaryAgentPort(deps: {
     settle: (input) => {
       const entry = deps.roster.get(input.name);
 
-      // Only a TASK-lifetime row's report is a return value. A durable
-      // subordinate's report is its parent's event however it arrives, which is
-      // the behaviour this rung must not touch.
+      // Only a task-lifetime row's report is a return value; durable reports stay parent events.
       if (!entry || entry.lifetime !== TEMPORARY_LIFETIME) return false;
 
       if (input.taskEventId !== entry.taskEventId) return false;
@@ -299,8 +205,7 @@ export function createTemporaryAgentPort(deps: {
         reason,
       });
 
-      /** Archive the row and retire the actor. History is ALWAYS kept: a
-       *  temporary agent is not a temporary transcript. */
+      /** Archive the row and retire the actor; history is always kept. */
       const release = async (): Promise<void> => {
         const actor = deps.roster.requireExisting(name).actorReference;
 

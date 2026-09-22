@@ -1,8 +1,4 @@
-/**
- * `report.*` — the subordinate → parent progress spine, projected into the
- * codemode sandbox. One member, mirroring the native `report` tool's one
- * action shape; calls the SAME ReportToolDeps.report the native tool does.
- */
+/** `report.*` in the codemode sandbox; calls the same `ReportToolDeps.report` as the native tool. */
 import * as v from 'valibot';
 import type { CodemodeProvider } from '../tools/sandbox-contract';
 import type { ReportToolDeps } from '../tools/builtins';
@@ -14,19 +10,12 @@ import { TOOL_REACH } from '../tools/registry';
 import { branchableToolCall } from '../tools/outcome';
 import { KinuError } from '../obs';
 
-/** Positional args arrive untyped from the sandbox; narrowing them is this
- *  surface's only job. Which statuses exist, what an empty body is refused
- *  with and how big a handoff may be belong to the one dispatcher both
- *  surfaces call — not to a second picklist here, which is what would let the
- *  two disagree. */
+/** Positional sandbox args are untyped; this surface only narrows them. Validation
+ *  belongs to the shared dispatcher. */
 const PositionalSchema = v.tuple([v.string(), v.string()]);
 
-/** The third argument: the handoff fields as one object, keyed by the same
- *  vocabulary the native tool declares, so a name the sandbox invents is
- *  refused here instead of arriving as a field nobody reads. SHAPE only —
- *  which fields exist and that each holds strings. What a handoff may WEIGH,
- *  and what an over-budget one is refused with, stay with the one dispatcher
- *  both surfaces call. */
+/** Third argument: handoff fields keyed by the native vocabulary. Shape only; budget
+ *  checks stay in the dispatcher. */
 const HandoffSchema = v.optional(
   v.record(v.picklist(SUBORDINATE_REPORT_HANDOFF_FIELDS), v.array(v.string())),
 );
@@ -47,8 +36,7 @@ const TYPES = `export declare const report: {
 };
 `;
 
-/** `deps` is a thunk, read per call — subordinate-only, so it never toggles
- *  mid-session, but the convention matches every other provider here. */
+/** `deps` is a thunk, read per call. */
 export function createReportCodemodeProvider(deps: () => ReportToolDeps): CodemodeProvider {
   return {
     name: TOOL_REACH.report.codemode,

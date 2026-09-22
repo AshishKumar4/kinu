@@ -1,28 +1,7 @@
 /**
- * Owner-authorized inspection of a subordinate's own rows, in the ONE workspace
- * database.
- *
- * ONE DATABASE, ONE MEMBERSHIP AUTHORITY over it: `workspace_actors`, read
- * through {@link WorkspaceActorDirectory}. So the walk is a directory walk from
- * the CALLER's own actor, each hop issued by that directory, and the read is
- * taken as the actor the walk arrived at. No RPC per hop, no per-facet identity
- * row, no class-name comparison — and no way to reach an actor that is not a
- * descendant of the caller, because `resolveChild` only answers for children of
- * the handle it is given.
- *
- * WHY A DIRECTORY AND NOT A STORED CHAIN. Give every actor its own database and
- * inspecting a grandchild costs an RPC per hop, each hop proving its own lineage
- * from rows only it can see: a stored parent path of SDK class names
- * (`OrchestratorAgent`, then `SubordinateAgent` per level), a stored physical
- * key, and a per-facet identity row. Such a chain authenticates an actor's own
- * account of who its parents are, and a class name is not an identity. The
- * directory is ONE shared membership table, so no actor is asked to vouch for
- * its own lineage.
- *
- * The owner check stays and stays FIRST: the transport authenticated an owner
- * and addressed a workspace by name, and this verifies both against the
- * workspace's own identity row before any actor is resolved. A request that
- * names an owner this database does not belong to reads nothing.
+ * Owner-authorized inspection of a subordinate's own rows in the workspace database.
+ * The owner check runs first; the walk goes through {@link WorkspaceActorDirectory} from
+ * the caller, so only the caller's descendants are reachable.
  */
 
 import { missingSubordinateHistory, readSubordinateInspection, SubordinateInspectionRequestSchema, type SubordinateInspectionRequest, type SubordinateInspectionResult } from './inspection';
@@ -41,13 +20,10 @@ export interface SubordinateInspectionAuthority {
 }
 
 export interface SubordinateInspectionAccess {
-  /** The ONE workspace database every actor's rows live in. */
+  /** The workspace database every actor's rows live in. */
   readonly sql: SqlExecutor;
   readonly raw: SqlExec;
-  /**
-   * The actor the request is made AS. The walk starts here, so a subordinate
-   * asking about `['a','b']` reaches its own descendants and nobody else's.
-   */
+  /** The actor the request is made as; the walk starts here. */
   readonly actor: ActorHandle;
   /** Membership authority: which actors exist, and whose children they are. */
   readonly directory: WorkspaceActorDirectory;

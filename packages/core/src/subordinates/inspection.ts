@@ -84,7 +84,7 @@ export function missingSubordinateHistory(path: string[]): SubordinateInspection
 
 /** Where one inspected actor's rows are read from. */
 export interface SubordinateInspectionSource {
-  /** The ONE workspace database every actor's rows live in. */
+  /** The workspace database every actor's rows live in. */
   readonly sql: SqlExecutor;
   readonly raw: SqlExec;
   /** The actor the views are read for: the resolved target of the walk, not the caller. */
