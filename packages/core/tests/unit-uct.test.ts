@@ -115,7 +115,7 @@ describe('UCT selection', () => {
         VALUES (${actor.actorId}, 'r', 'shallow', 'test', 0.1, 1, 'open', 1)`;
     // Old behavior aborted the whole search on the deep argmax. Now selection
     // skips it and returns the shallower node so the budget keeps flowing.
-    const node = present(selectNode(sql, actor, 'r', undefined, 3), 'the selected node');
+    const node = present(selectNode(sql, actor, 'r', { maxDepth: 3 }), 'the selected node');
     expect(node.id).toBe('shallow');
   });
 
@@ -123,8 +123,8 @@ describe('UCT selection', () => {
     const { sql, actor } = setup();
     void sql`INSERT INTO search_nodes (actor_id, root_id, id, task, value, visits, status, depth)
         VALUES (${actor.actorId}, 'r', 'capped', 'test', 0.9, 1, 'open', 5)`;
-    expect(selectNode(sql, actor, 'r', undefined, 5)).toBeNull();
-    expect(present(selectNode(sql, actor, 'r', undefined, 6), 'the selected node').id).toBe('capped');
+    expect(selectNode(sql, actor, 'r', { maxDepth: 5 })).toBeNull();
+    expect(present(selectNode(sql, actor, 'r', { maxDepth: 6 }), 'the selected node').id).toBe('capped');
   });
 
   test('exploration bonus favors less-visited nodes', () => {
@@ -169,7 +169,7 @@ describe('UCT log base — observed through selectNode, not re-derived', () => {
     void sql`INSERT INTO search_nodes (actor_id, root_id, id, parent_id, task, value, visits, status, depth)
         VALUES (${actor.actorId}, 'r', 'explore', 'root', 't', 0.1, ${exploreVisits}, 'open', 1)`;
 
-    return present(selectNode(sql, actor, 'r', W), 'the selected node').id;
+    return present(selectNode(sql, actor, 'r', { explorationWeight: W }), 'the selected node').id;
   }
 
   test('a 20-visit low-value sibling still out-explores the exploited node (log₁₀ would not)', () => {

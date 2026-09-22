@@ -159,7 +159,7 @@ const CALL = {
 /** Entry zero after the boundary: the camelCase objective the search is written
  *  over. Derived from the parse rather than hand-written beside it, so the two
  *  spellings cannot drift into disagreeing about the same field. */
-const PARSED = parseAgentsToolInput(CALL);
+const PARSED = parseAgentsToolInput({ input: CALL });
 
 const OBJECTIVE = v.parse(
   v.custom<ScalarObjective>((input) => v.is(v.object({ kind: v.literal('scalar') }), input)),
@@ -198,9 +198,9 @@ describe('entry zero crosses a JSON tool boundary, or it is not a call', () => {
     // And the half that matters: the live parser refuses it too, so the arm is
     // unauthorable at the SURFACE rather than merely against a JSON schema this
     // fixture checks on its own.
-    expect(() => parseAgentsToolInput({
+    expect(() => parseAgentsToolInput({ input: {
       ...CALL, objective: { ...WIRE_OBJECTIVE, verify: TASK.verify },
-    })).toThrow();
+    } })).toThrow();
   });
 
   test('verify is a VerifierSpec whose kind is closed and whose spec is whole', () => {
@@ -258,10 +258,10 @@ describe('entry zero crosses a JSON tool boundary, or it is not a call', () => {
     // And the collision itself is refused rather than dropped, which is the whole
     // reason the spelling had to be decided: camelCase for a snake_case field is the
     // measured model error on this surface.
-    expect(() => parseAgentsToolInput({
+    expect(() => parseAgentsToolInput({ input: {
       ...CALL,
       objective: { ...WIRE_OBJECTIVE, floor: { ...WIRE_FLOOR, bestKnownHonest: 2992 } },
-    })).toThrow();
+    } })).toThrow();
   });
 });
 
@@ -417,7 +417,7 @@ describe('resolve(custom): `config` overrides `from`\'s row, and only where it s
 
 describe('what the live tool surface does with entry zero', () => {
   test('swarm IS an action, and the call parses', () => {
-    // `swarm` is on `AGENTS_TOOL_ACTIONS` and `parseAgentsToolInput(CALL)` returns
+    // `swarm` is on `AGENTS_TOOL_ACTIONS` and `parseAgentsToolInput({ input: CALL })` returns
     // it. The parse is asserted field for field so the action cannot sit on the enum
     // without its fields reaching the dispatcher.
     expect(AGENTS_TOOL_ACTIONS).toContain('swarm');
@@ -433,7 +433,7 @@ describe('what the live tool surface does with entry zero', () => {
     // `objective`, `branches` and `depth` reach the dispatcher as ABSENT —
     // indistinguishable from a caller who never sent them. The property is asserted
     // through `hire`, an action that IS on the picklist and reads none of them.
-    const smuggle = () => parseAgentsToolInput({
+    const smuggle = () => parseAgentsToolInput({ input: {
       action: 'hire',
       role: 'researcher',
       mission: CALL.task,
@@ -441,7 +441,7 @@ describe('what the live tool surface does with entry zero', () => {
       objective: CALL.objective,
       branches: 8,
       depth: 4,
-    });
+    } });
 
     expect(smuggle).toThrow(/field "preset" does not apply to action "hire"/);
     expect(smuggle).toThrow(/it is read by swarm/);
@@ -466,18 +466,18 @@ describe('what the live tool surface does with entry zero', () => {
     // (`floor.best_known_honest` beside `merge_strategy`): camelCase-for-snake_case
     // is the EXPECTED model error on this surface, not an exotic one — which is why
     // the refusal has to name the snake_case spelling and not merely reject the key.
-    const camelCase = () => parseAgentsToolInput({
+    const camelCase = () => parseAgentsToolInput({ input: {
       action: 'swarm', preset: PARSED.preset, task: CALL.task, budgetUsd: 5, budgetLabel: 'zero',
-    });
+    } });
 
     expect(camelCase).toThrow(/unknown field "budgetUsd" — did you mean "budget_usd"\?/);
     expect(camelCase).toThrow(/unknown field "budgetLabel" — did you mean "budget_label"\?/);
 
     // Both spellings of the same request: one is heard, and the other is TOLD.
     // Dropped instead, the two would be indistinguishable.
-    expect(parseAgentsToolInput({
+    expect(parseAgentsToolInput({ input: {
       action: 'swarm', preset: PARSED.preset, task: CALL.task, budget_usd: 5,
-    })).toEqual({ action: 'swarm', preset: PARSED.preset, task: CALL.task, budget_usd: 5 });
+    } })).toEqual({ action: 'swarm', preset: PARSED.preset, task: CALL.task, budget_usd: 5 });
   });
 });
 

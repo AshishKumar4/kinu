@@ -960,7 +960,7 @@ describe('agents delegation — role/tier/preset precedence', () => {
 
     if (!row) throw new Error('swarm did not persist its resolved config');
     const config = v.parse(v.object({ profile: v.unknown() }), JSON.parse(row.config_json));
-    expect(validateSwarmProfileSnapshot(config.profile).sources.presetSource).toBe('role_default');
+    expect(validateSwarmProfileSnapshot({ value: config.profile }).sources.presetSource).toBe('role_default');
   });
 
   test('without a wired catalog, swarm demands an explicit preset and hire refuses', async () => {
@@ -1009,12 +1009,12 @@ describe('swarm profile snapshot codec', () => {
     };
 
     const frozen = JSON.parse(JSON.stringify(snapshot));
-    const readBack = validateSwarmProfileSnapshot(frozen);
+    const readBack = validateSwarmProfileSnapshot({ value: frozen });
     expect(readBack.profile.role.id).toBe('researcher');
     expect(readBack.profile.tier.id).toBe('fast');
     expect(readBack.profile.tier.source).toBe('role');
     expect(readBack.sources.presetSource).toBe('role_default');
-    expect(() => validateSwarmProfileSnapshot({ ...frozen, sources: { ...frozen.sources, tierSource: 'bogus' } }))
+    expect(() => validateSwarmProfileSnapshot({ value: { ...frozen, sources: { ...frozen.sources, tierSource: 'bogus' } } }))
       .toThrow(/snapshot/);
   });
 });

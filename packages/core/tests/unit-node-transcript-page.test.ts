@@ -111,7 +111,7 @@ describe('node transcript paging', () => {
     const wsActor = createTestActors(ws.sql, ws.execRaw).main;
     void ws.sql`INSERT INTO search_nodes (actor_id, root_id, id, parent_id, task, action, observation, value, visits, depth, status)
       VALUES (${wsActor.actorId}, 'r', 'roll-1', null, ${'the task'}, ${'proposal one'}, ${'a proposal'}, 0.5, 1, 1, 'open')`;
-    const view = present(readNodeTranscript(ws.sql, wsActor, 'r', 'roll-1'), 'the rollout transcript');
+    const view = present(readNodeTranscript(ws.sql, wsActor, { runId: 'r', nodeId: 'roll-1' }), 'the rollout transcript');
 
     expect(view.origin).toBe('rollout');
     expect(view.steps).toEqual({ status: 'end', items: [] });
@@ -143,7 +143,7 @@ describe('the search path names the run it belongs to', () => {
 
   test('an unlabelled root wears the name the run list shows', () => {
     const { sql, actor } = seedSearch('');
-    const view = present(readNodeTranscript(sql, actor, 'r', 'n1'), 'the branch transcript');
+    const view = present(readNodeTranscript(sql, actor, { runId: 'r', nodeId: 'n1' }), 'the branch transcript');
 
     expect(view.path.map((crumb) => crumb.label))
       .toEqual(['Audit every reader of coupon.kind', 'Walk the cart serializer']);
@@ -151,7 +151,7 @@ describe('the search path names the run it belongs to', () => {
 
   test('a root the caller named keeps that name', () => {
     const { sql, actor } = seedSearch('coupon.kind readers');
-    const view = present(readNodeTranscript(sql, actor, 'r', 'n1'), 'the branch transcript');
+    const view = present(readNodeTranscript(sql, actor, { runId: 'r', nodeId: 'n1' }), 'the branch transcript');
 
     expect(view.path[0].label).toBe('coupon.kind readers');
   });

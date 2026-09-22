@@ -892,16 +892,16 @@ describe('bulk material travels by path, not by field', () => {
 
   test('the retired fields are refused by name before any agent is created', () => {
     const scene = makeScene();
-    expect(() => parseAgentsToolInput({
+    expect(() => parseAgentsToolInput({ input: {
       action: 'hire', lifetime: 'task', role: 'auditor', mission: 'Summarise', context_ref: ['/spill/missing.txt'],
-    })).toThrow('unknown field "context_ref"');
+    } })).toThrow('unknown field "context_ref"');
     // `deadline_hint` reached `admission.deadlineHint` and an event payload and
     // nothing acted on either, which is the accepted-and-ignored defect the
     // field list is written against. Gone, and refused by name rather than
     // dropped.
-    expect(() => parseAgentsToolInput({
+    expect(() => parseAgentsToolInput({ input: {
       action: 'hire', agent: 'researcher', message: 'Survey auth', deadline_hint: 'today',
-    })).toThrow('unknown field "deadline_hint"');
+    } })).toThrow('unknown field "deadline_hint"');
     expect(scene.calls).toEqual([]);
     expect(scene.roster.list()).toEqual([]);
   });
@@ -975,11 +975,11 @@ describe('the rung is structural, and so is its absence', () => {
     expect(remedy).toContain('config:{context:"inherit"}');
     expect(remedy).toContain('`hire` naming `agent`');
     expect(remedy).not.toContain('ask by');
-    expect(parseAgentsToolInput({ action: 'hire', agent: 'a', message: 'm' }))
+    expect(parseAgentsToolInput({ input: { action: 'hire', agent: 'a', message: 'm' } }))
       .toMatchObject({ action: 'hire', agent: 'a', message: 'm' });
-    expect(parseAgentsToolInput({ action: 'swarm', task: 't', config: { context: 'inherit' } }))
+    expect(parseAgentsToolInput({ input: { action: 'swarm', task: 't', config: { context: 'inherit' } } }))
       .toMatchObject({ action: 'swarm', task: 't', config: { context: 'inherit' } });
-    expect(() => parseAgentsToolInput({ action: 'swarm', task: 't', context: 'fork' })).toThrow();
+    expect(() => parseAgentsToolInput({ input: { action: 'swarm', task: 't', context: 'fork' } })).toThrow();
   });
 
   test('a task child is a real agent: it can hire a role of its own until the cap', () => {
