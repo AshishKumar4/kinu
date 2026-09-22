@@ -685,16 +685,6 @@ export class ChatSession {
       if (refusal !== null) return Promise.reject(new Error(refusal));
     }
 
-    // A reminder signal is admitted only while the ledger still says its row is
-    // owed. `hasAnnounced` dedupes a re-delivery of a turn that already ran; a
-    // signal whose row closed some other way — the turn's commit rolled back,
-    // or a replay that lands after the sequence settled — is answered 'queued'
-    // so the producer's row completes, but no turn starts for it.
-    if (input.metadata?.kinuEvent === TASK_REMINDER_EVENT
-      && !this.ports.terminal().ledger.hasOwed('task_reminder')) {
-      return Promise.resolve({ status: 'queued' });
-    }
-
     // A job settling during shutdown must not start a turn the ending session
     // will never drain: 'skipped' sends the caller down its durable-breadcrumb
     // path instead, and the next run drains it from the event log.

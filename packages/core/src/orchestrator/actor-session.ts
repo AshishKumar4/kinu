@@ -27,7 +27,10 @@ import { USER_MESSAGE_SIGNAL_KIND } from '../types/signals';
 import type { VFS } from '../types/primitives';
 import type { AgentConfigStore } from '../config/store';
 import type { CompletedTurn } from '../evolution/types';
-import { reviewRecordedTurn, type AdvisorRecoverySnapshot, type AdvisorDisposition } from '../advisor/review';
+import {
+  reviewRecordedTurn, startAdvisorLane,
+  type AdvisorLaneStart, type AdvisorRecoverySnapshot, type AdvisorDisposition,
+} from '../advisor/review';
 import { advisorWorkspaceGuidance } from '../prompting/agents-md';
 import { resolveModelRoute } from '../profiles/model-route';
 import { contextWindowForModel } from '../context-window';
@@ -253,6 +256,14 @@ export class ActorSession {
       minSeverity: (this.options.advisor?.config ?? this.runtime.actor.config).getAdvisorMinSeverity(),
       model: profile === null || !this.advisorEnabled ? undefined : resolveModelRoute('advisor', profile).model,
     };
+  }
+
+  /** This turn's advisor lane, when this actor has an advisor that is on
+   *  (`startAdvisorLane`: one lane per turn, answered at its checkpoint). */
+  startAdvisorLane(lane: AdvisorLaneStart): Promise<void> {
+    if (this.runtime.advisorLlm === undefined || !this.advisorEnabled) return Promise.resolve();
+
+    return startAdvisorLane({ sql: this.runtime.storage.sql, actor: this.runtime.actor }, lane);
   }
 
   /** Per-turn feedback never calls recordTurn or changes the learning window. */

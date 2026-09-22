@@ -164,3 +164,21 @@ export function changeActiveRole(input: {
 
   return { kind: 'applied', from, to: input.to, catalogVersion: envelope.version };
 }
+
+/**
+ * The owner's own role change, the one body both backends' `setRole` run:
+ * applied from the next turn, or refused in words that name the role staying
+ * active (`active`, as the backend reports it).
+ */
+export function changeRoleAsOwner(input: {
+  envelope: ProfileCatalogEnvelope;
+  config: RoleStateStore;
+  to: RoleId;
+  active: string;
+}) {
+  const changed = changeActiveRole({ config: input.config, envelope: input.envelope, to: input.to, actor: 'user' });
+
+  if (changed.kind !== 'applied') throw new Error(roleChangeOutcomeText(input.to, changed, input.active));
+
+  return { role: changed.to };
+}
