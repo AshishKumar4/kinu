@@ -1,9 +1,10 @@
 diff --git a/packages/core/src/orchestrator/turn-accumulator.ts b/packages/core/src/orchestrator/turn-accumulator.ts
+index 693515ac3..cf3ef80e5 100644
 --- a/packages/core/src/orchestrator/turn-accumulator.ts
 +++ b/packages/core/src/orchestrator/turn-accumulator.ts
-@@ -288,7 +288,7 @@ export class TurnAccumulator {
-    * turn has.
-    */
+@@ -168,7 +168,7 @@ export class TurnAccumulator {
+ 
+   /** A step that reported nothing leaves the previous value standing; a reported 0 overwrites. */
    private noteLastRequest(ctx: StepLike, usage: Usage): void {
 -    if (usage.input !== undefined) this.lastPromptTokens = usage.input;
 +    this.lastPromptTokens = usage.input;

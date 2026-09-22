@@ -1,8 +1,8 @@
 diff --git a/packages/core/src/orchestrator/agent-orchestrator.ts b/packages/core/src/orchestrator/agent-orchestrator.ts
-index 2c5f0d2c4..833bfe750 100644
+index 0e95ad660..d5ca8230a 100644
 --- a/packages/core/src/orchestrator/agent-orchestrator.ts
 +++ b/packages/core/src/orchestrator/agent-orchestrator.ts
-@@ -834,8 +834,8 @@ export class AgentOrchestrator {
+@@ -523,8 +523,8 @@ export class AgentOrchestrator {
  
      const signal: AgentSignal = {
        kind: 'event_drain',
@@ -11,5 +11,5 @@ index 2c5f0d2c4..833bfe750 100644
 +      text: batch.midTurnText,
 +      stepText: batch.text,
        replyTurnId: turnId,
-       // The drain's own durable identity, offered as the admission key.
-       //
+       // The rows are already bound to `turnId`, so it routes the queued half through the host's durable
+       // admission ledger; a re-delivery of the same drain collapses to one turn.

@@ -1,13 +1,13 @@
 diff --git a/packages/core/src/craft/consolidation.ts b/packages/core/src/craft/consolidation.ts
-index 7457f9a..d8bbbda 100644
+index fa7acac82..cf68571ad 100644
 --- a/packages/core/src/craft/consolidation.ts
 +++ b/packages/core/src/craft/consolidation.ts
-@@ -51,7 +51,7 @@ export async function periodicCraftConsolidation(rt: AgentRuntime): Promise<void
+@@ -43,7 +43,7 @@ export async function periodicCraftConsolidation(rt: AgentRuntime): Promise<void
  
-   // BUG-2 GUARD: don't retire ALL tools — that would empty the CraftStore
+   // Never empty the store; mean effective score is non-decreasing only while non-empty.
    // Formal spec: Evolution/FullCraftLifecycle.lean:consolidation_never_empties
 -  if (toRetire.length >= allTools.length) {
 +  if (toRetire.length > allTools.length) {
-     // All tools are stale — skip consolidation, keep what we have
      return;
    }
+ 

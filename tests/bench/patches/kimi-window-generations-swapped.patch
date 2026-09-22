@@ -1,15 +1,15 @@
 diff --git a/packages/core/src/context-window.ts b/packages/core/src/context-window.ts
-index 6c792e878..a23897e45 100644
+index 318889574..dc0fe3c01 100644
 --- a/packages/core/src/context-window.ts
 +++ b/packages/core/src/context-window.ts
-@@ -27,8 +27,8 @@ const WINDOWS: Array<[RegExp, number]> = [
-   // Per developers.cloudflare.com/workers-ai/models/glm-5.3 (read 2026-08-31):
-   // 1M-token context, same as its 5.2 sibling.
+@@ -12,8 +12,8 @@ const WINDOWS: Array<[RegExp, number]> = [
+   [/deepseek-v4-pro-0813/i, 1_048_576],
+   // developers.cloudflare.com/workers-ai/models/glm-5.3 (read 2026-08-31): 1M-token context.
    [/glm-5\.[23]/i, 1_048_576],
 -  [/kimi-k3/i, 1_048_576],
 -  [/kimi-k2/i, 262_144],
 +  [/kimi-k3/i, 262_144],
 +  [/kimi-k2/i, 1_048_576],
    [/llama-4/i, 131_072],
-   // The Meta line this product's OpenCode routing serves. models.dev (read
-   // 2026-09-22) reports limit.context 1_048_576 for muse-spark 1.1/1.2/1.3
+   // models.dev (read 2026-09-22): muse-spark 1.1-1.3 report 1_048_576 at every provider; glimmer 131_072.
+   [/muse-spark/i, 1_048_576],

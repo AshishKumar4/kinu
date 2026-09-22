@@ -1,8 +1,8 @@
 diff --git a/packages/core/src/orchestrator/turn-accumulator.ts b/packages/core/src/orchestrator/turn-accumulator.ts
-index aa6bce494..ec8e4ef0f 100644
+index 693515ac3..eb2de6cb0 100644
 --- a/packages/core/src/orchestrator/turn-accumulator.ts
 +++ b/packages/core/src/orchestrator/turn-accumulator.ts
-@@ -259,7 +259,10 @@ export class TurnAccumulator {
+@@ -186,7 +186,10 @@ export class TurnAccumulator {
      const textLen = (ctx.text ?? '').length;
      const usage: Usage = ctx.usage ?? {};
      const reported = usageReported(usage);
@@ -12,5 +12,5 @@ index aa6bce494..ec8e4ef0f 100644
 +      : usage;
 +    this.usage = addUsage(this.usage, discounted);
  
-     // The model-call debit, taken from the provider's own report of the step
-     // just paid for — and taken ONLY when there is a report: a step nothing was
+     // Debit only a real report. `cacheRead`/`cacheWrite` are subsets of `input`.
+     if (reported) this.budget?.debit(usageTotal(usage) ?? 0, { calls: 1, usage });

@@ -1,13 +1,13 @@
 diff --git a/packages/core/src/config/store.ts b/packages/core/src/config/store.ts
-index c47f50d..2d0b005 100644
+index d21d94aa7..d40cd99a8 100644
 --- a/packages/core/src/config/store.ts
 +++ b/packages/core/src/config/store.ts
-@@ -187,7 +187,7 @@ export const DEFAULT_GEPA_EVAL_BUDGET = 24;
-  *  disjoint split possible at all (2 failures + 2 guards); the ceiling is the
-  *  most an operator can spend on one pass. */
+@@ -177,7 +177,7 @@ export const DEFAULT_GEPA_EVAL_BUDGET = 24;
+ 
+ /** Floor keeps a disjoint split possible (2 failures + 2 guards). */
  export function clampGepaEvalBudget(n: number): number {
 -  return Number.isFinite(n) ? Math.min(Math.max(Math.floor(n), 4), 64) : DEFAULT_GEPA_EVAL_BUDGET;
 +  return Number.isFinite(n) ? Math.max(Math.min(Math.floor(n), 4), 64) : DEFAULT_GEPA_EVAL_BUDGET;
  }
  
- /** Validate a rate/share setting. Rejects rather than clamps: an out-of-range
+ /** Rejects rather than clamps: an out-of-range probability is a caller bug. */
