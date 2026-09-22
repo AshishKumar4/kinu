@@ -403,11 +403,14 @@ async function runModelProfileCommand(cmd: JsonObject): Promise<JsonValue> {
   return decodeJsonValue({ value: { spec: envelope.catalog.tiers.default.model } });
 }
 
+/** The command word an RPC frame carries; a frame with none matches no case. */
+const commandType = (cmd: JsonObject): string => stringField(cmd, 'type') ?? '';
+
 async function runCloudRpcCommand(origin: string, token: string, name: string, cmd: JsonObject): Promise<JsonValue> {
   const rpc = async (method: string, args: JsonValue[] = []): Promise<JsonValue> =>
     callAgentRpc({ origin, token, name, method, schema: JsonValueSchema, args });
 
-  const type = stringField(cmd, 'type') ?? '';
+  const type = commandType(cmd);
 
   switch (type) {
     case 'get_state':
@@ -506,7 +509,7 @@ async function runCloudRpcCommand(origin: string, token: string, name: string, c
 }
 
 async function runLocalRpcCommand(name: string, cmd: JsonObject, client: AgentClient): Promise<JsonValue> {
-  const type = stringField(cmd, 'type') ?? '';
+  const type = commandType(cmd);
 
   switch (type) {
     case 'get_state':
