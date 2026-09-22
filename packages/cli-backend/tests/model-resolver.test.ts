@@ -27,10 +27,11 @@ describe('createLocalModelResolver', () => {
       async fetch(request) {
         const body = v.parse(JsonObjectSchema, await request.json());
         bodies.push(body);
+        const model = v.parse(v.string(), body.model);
 
         if (body.stream === true) {
           const chunk = (delta: JsonObject, finish: JsonValue): string => `data: ${JSON.stringify({
-            id: 'chatcmpl-1', object: 'chat.completion.chunk', created: 0, model: String(body.model),
+            id: 'chatcmpl-1', object: 'chat.completion.chunk', created: 0, model,
             choices: [{ index: 0, delta, finish_reason: finish }],
             usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 },
           })}\n\n`;
@@ -42,7 +43,7 @@ describe('createLocalModelResolver', () => {
         }
 
         return Response.json({
-          id: 'chatcmpl-1', object: 'chat.completion', created: 0, model: String(body.model),
+          id: 'chatcmpl-1', object: 'chat.completion', created: 0, model,
           choices: [{ index: 0, message: { role: 'assistant', content: 'ok' }, finish_reason: 'stop' }],
           usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 },
         });
@@ -95,7 +96,7 @@ describe('createLocalModelResolver', () => {
         const body = v.parse(JsonObjectSchema, await request.json());
 
         const reply: JsonObject = {
-          id: 'chatcmpl-1', object: 'chat.completion', created: 0, model: String(body.model),
+          id: 'chatcmpl-1', object: 'chat.completion', created: 0, model: v.parse(v.string(), body.model),
           choices: [{ index: 0, message: { role: 'assistant', content: ' graded ' }, finish_reason: 'stop' }],
         };
 
@@ -289,7 +290,7 @@ function proxyLLMConfig(origin = CLOUD_ORIGIN): LLMProviderConfig {
 
 function cloudMenuFetch(origin = CLOUD_ORIGIN): typeof fetch {
   return asFetchFunction(async (input: RequestInfo | URL, init?: RequestInit) => {
-    const url = String(input);
+    const url = input instanceof Request ? input.url : input.toString();
 
     if (url === `${origin}/api/cli/models`) {
       expect(new Headers(init?.headers).get('authorization')).toBe(`Bearer ${CLOUD_TOKEN}`);
@@ -345,7 +346,7 @@ describe('createLocalModelResolver — signed in (cloud proxy)', () => {
       llm: proxyLLMConfig(),
       credentials: {},
       cloud: { origin: CLOUD_ORIGIN, token: CLOUD_TOKEN },
-      fetch: asFetchFunction(async (input) => String(input).endsWith('/api/cli/models')
+      fetch: asFetchFunction(async (input) => (input instanceof Request ? input.url : input.toString()).endsWith('/api/cli/models')
         ? Response.json({
           models: [
             { spec: DEFAULT_WORKERS_AI_MODEL_SPEC, provider: 'workers-ai', capabilities: ['tools', 'invented'], reasoningEfforts: ['low'] },
@@ -424,7 +425,7 @@ describe('createLocalModelResolver — signed in (cloud proxy)', () => {
         });
 
         return Response.json({
-          id: 'chatcmpl-1', object: 'chat.completion', created: 0, model: String(body.model),
+          id: 'chatcmpl-1', object: 'chat.completion', created: 0, model: v.parse(v.string(), body.model),
           choices: [{ index: 0, message: { role: 'assistant', content: 'ok' }, finish_reason: 'stop' }],
           usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 },
         });
@@ -569,33 +570,26 @@ describe('createLocalModelResolver — claude subscription provider', () => {
     expect(resolver.normalizeSpecSync('claude/claude-opus-4-x')).toBe('claude/claude-opus-4-x');
   });
 
-  test('stays visible but unavailable with the install hint when the binary is absent', async () => {
-    const resolver = createLocalModelResolver({
-      llm: openaiLlm,
-      credentials: {},
-      fetch: asFetchFunction(async () => new Response('{}')),
-      claudeCli: { probe: async () => ({ binary: false, loggedIn: false }) },
+  const loggedOut = [
+    { name: 'stays visible but unavailable with the install hint when the binary is absent', binary: false, hint: /Install Claude Code/i },
+    { name: 'unavailable with a sign-in hint when the binary is present but logged out', binary: true, hint: /sign in to your Claude subscription/i },
+  ];
+
+  for (const c of loggedOut) {
+    test(c.name, async () => {
+      const resolver = createLocalModelResolver({
+        llm: openaiLlm,
+        credentials: {},
+        fetch: asFetchFunction(async () => new Response('{}')),
+        claudeCli: { probe: async () => ({ binary: c.binary, loggedIn: false }) },
+      });
+
+      const providers = await resolver.listProviders();
+      const claude = providers.find((p) => p.id === 'claude');
+      expect(claude?.available).toBe(false);
+      expect(claude?.unavailableReason).toMatch(c.hint);
     });
-
-    const providers = await resolver.listProviders();
-    const claude = providers.find((p) => p.id === 'claude');
-    expect(claude?.available).toBe(false);
-    expect(claude?.unavailableReason).toMatch(/Install Claude Code/i);
-  });
-
-  test('unavailable with a sign-in hint when the binary is present but logged out', async () => {
-    const resolver = createLocalModelResolver({
-      llm: openaiLlm,
-      credentials: {},
-      fetch: asFetchFunction(async () => new Response('{}')),
-      claudeCli: { probe: async () => ({ binary: true, loggedIn: false }) },
-    });
-
-    const providers = await resolver.listProviders();
-    const claude = providers.find((p) => p.id === 'claude');
-    expect(claude?.available).toBe(false);
-    expect(claude?.unavailableReason).toMatch(/sign in to your Claude subscription/i);
-  });
+  }
 });
 
 describe('createLocalModelResolver — signed out', () => {

@@ -512,34 +512,35 @@ describe('OpenCode provider', () => {
     expect(requests).toEqual(['https://opencode.example.com/openai/v1/responses']);
   });
 
-  test('cold metadata routes OpenAI reasoning families to Responses (resumed sessions)', async () => {
-    // A resumed session resolves its stored model BEFORE any listModels call,
-    // so the metadata map is cold. Defaulting gpt-5.x to Chat Completions
-    // breaks it outright ("use /v1/responses") — the family fallback must win.
-    const { fetchImpl, requests } = makeRoutingFetch();
-    const provider = createOpenCodeProvider(makeProviderOpts({ fetch: fetchImpl }));
+  // A resumed session resolves its stored model BEFORE any listModels call, so
+  // the metadata map is cold. Defaulting gpt-5.x to Chat Completions breaks it
+  // outright ("use /v1/responses") — the family fallback must win, and it must
+  // not drag the non-reasoning families onto Responses with it.
+  const cold = [
+    {
+      name: 'cold metadata routes OpenAI reasoning families to Responses (resumed sessions)',
+      id: 'openai/gpt-5.6-sol', endpoint: 'https://opencode.example.com/openai/v1/responses',
+    },
+    {
+      name: 'cold metadata keeps non-reasoning families on Chat Completions',
+      id: 'openai/gpt-4.1-mini', endpoint: 'https://opencode.example.com/openai/v1/chat/completions',
+    },
+  ];
 
-    const model = provider.createModel('openai/gpt-5.6-sol', {
-      env: {}, getAuth: async () => null, hasCredential: async () => false,
+  for (const c of cold) {
+    test(c.name, async () => {
+      const { fetchImpl, requests } = makeRoutingFetch();
+      const provider = createOpenCodeProvider(makeProviderOpts({ fetch: fetchImpl }));
+
+      const model = provider.createModel(c.id, {
+        env: {}, getAuth: async () => null, hasCredential: async () => false,
+      });
+
+      await tryCall(model);
+
+      expect(requests).toEqual([c.endpoint]);
     });
-
-    await tryCall(model);
-
-    expect(requests).toEqual(['https://opencode.example.com/openai/v1/responses']);
-  });
-
-  test('cold metadata keeps non-reasoning families on Chat Completions', async () => {
-    const { fetchImpl, requests } = makeRoutingFetch();
-    const provider = createOpenCodeProvider(makeProviderOpts({ fetch: fetchImpl }));
-
-    const model = provider.createModel('openai/gpt-4.1-mini', {
-      env: {}, getAuth: async () => null, hasCredential: async () => false,
-    });
-
-    await tryCall(model);
-
-    expect(requests).toEqual(['https://opencode.example.com/openai/v1/chat/completions']);
-  });
+  }
 
   test('createModel throws on invalid model id (no slash)', () => {
     const provider = createOpenCodeProvider(makeProviderOpts());

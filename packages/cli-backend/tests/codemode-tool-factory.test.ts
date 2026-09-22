@@ -185,11 +185,11 @@ function makeToolWithFailingProvider(error: Error) {
     extraProviders: [provider],
   });
 
-  const tool = toolExecute<{ code: string }, ExecuteToolResult>(
+  const execute = toolExecute<{ code: string }, ExecuteToolResult>(
     factory({ native: {}, craftedTools: () => ({}), providers: [] }),
   );
 
-  return { tool, calls };
+  return { execute, calls };
 }
 
 describe('createNodeCodemodeToolFactory — a failing host call can never kill the process', () => {
@@ -198,11 +198,11 @@ describe('createNodeCodemodeToolFactory — a failing host call can never kill t
     // rejects with ENOENT, nothing is handling that promise, and Bun kills the
     // CLI mid-turn. bun:test fails this test if the rejection escapes, which is
     // exactly the signal we want.
-    const { tool, calls } = makeToolWithFailingProvider(
+    const { execute, calls } = makeToolWithFailingProvider(
       new Error("ENOENT: no such file or directory, scandir '/app'"),
     );
 
-    const out = await tool({ code: 'workspace.readdir("/app");\n"kept going"' });
+    const out = await execute({ code: 'workspace.readdir("/app");\n"kept going"' });
 
     expect(calls).toEqual(['/app']);
     expect(out.result).toBe('kept going');
@@ -211,19 +211,19 @@ describe('createNodeCodemodeToolFactory — a failing host call can never kill t
   });
 
   test('an AWAITED rejecting provider call still returns the real error to the model', async () => {
-    const { tool } = makeToolWithFailingProvider(
+    const { execute } = makeToolWithFailingProvider(
       new Error("ENOENT: no such file or directory, scandir '/app' — workspace.* is the agent's own virtual filesystem"),
     );
 
-    const pending = tool({ code: 'const e = await workspace.readdir("/app");\ne' });
+    const pending = execute({ code: 'const e = await workspace.readdir("/app");\ne' });
     await expect(pending).rejects.toThrow('ENOENT');
     await expect(pending).rejects.toThrow("workspace.* is the agent's own virtual filesystem");
   });
 
   test('a host rejection is an inspectable failure value; recovery preserves the inner census', async () => {
-    const { tool } = makeToolWithFailingProvider(new Error('ENOENT: nope'));
+    const { execute } = makeToolWithFailingProvider(new Error('ENOENT: nope'));
 
-    const out = await tool({
+    const out = await execute({
       code: 'const failure = await workspace.readdir("/app"); if (failure.success === false) return "caught:" + failure.error; throw new Error("missing failure discriminant");',
     });
 
@@ -292,15 +292,15 @@ describe('createNodeCodemodeToolFactory — crafted tools, on the episode clock'
 
   test('a tool crafted mid-turn is callable on the very next execute', async () => {
     const store = new Map<string, CraftedToolSet[string]['execute']>();
-    const tool = makeToolOverStore(store);
+    const execute = makeToolOverStore(store);
 
-    const before = await tool({ code: 'return typeof tools.double;' });
+    const before = await execute({ code: 'return typeof tools.double;' });
     expect(before.result).toBe('undefined');
 
     // What workspace.createTool does to the store, mid-turn.
     store.set('double', async (n) => Number(n) * 2);
 
-    const after = await tool({ code: 'return await tools.double(21);' });
+    const after = await execute({ code: 'return await tools.double(21);' });
     expect(after.result).toBe(42);
   });
 

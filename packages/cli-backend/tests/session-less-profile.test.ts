@@ -28,6 +28,19 @@ const DUMMY_LLM: LLMProviderConfig = {
   name: 'fake', baseURL: 'http://localhost:0', headers: {}, model: 'fake-model',
 };
 
+/** Every route a lane resolved, with the operation that issued each stream. */
+function recordRoutes(rt: CLIRuntime) {
+  const seen: ModelRouteResolution[] = [];
+  const issuer: Array<string | null> = [];
+
+  rt.setModelForRoute?.(resolution => ({
+    async *stream() { issuer.push(currentOperationProfile(rt.actor)?.turnId ?? null); seen.push(resolution); yield 'streamed'; },
+    complete: async () => 'stub answer',
+  }));
+
+  return { seen, issuer };
+}
+
 /** A workspace on disk, exactly as `kinu evolve` finds one: an identity row, a
  *  SOUL, and whatever model the operator stored. No session is ever built. */
 async function workspace(storedModel?: string): Promise<{ db: Database; dbPath: string }> {
@@ -159,12 +172,7 @@ describe('a local runtime opened without a session', () => {
     if (!profileB) throw new Error('runtime profile resolution is required');
     const operationB = captureOperationProfile({ actor: rt.actor, profile: profileB, inputs: null, runId: 'turn-B', turnId: 'turn-B' });
 
-    const seen: ModelRouteResolution[] = [];
-    const issuer: Array<string | null> = [];
-    rt.setModelForRoute?.(resolution => ({
-      async *stream() { issuer.push(currentOperationProfile(rt.actor)?.turnId ?? null); seen.push(resolution); yield 'streamed'; },
-      complete: async () => 'stub answer',
-    }));
+    const { seen, issuer } = recordRoutes(rt);
 
     const stream = runOperationProfile(operationA, () =>
       rt.llm.stream({ system: 's', messages: [{ role: 'user', content: 'issued under A' }] }));
@@ -190,12 +198,7 @@ describe('a local runtime opened without a session', () => {
 
     rt.profiles?.refine({ plane: staticModelPlane() });
 
-    const seen: ModelRouteResolution[] = [];
-    const issuer: Array<string | null> = [];
-    rt.setModelForRoute?.(resolution => ({
-      async *stream() { issuer.push(currentOperationProfile(rt.actor)?.turnId ?? null); seen.push(resolution); yield 'streamed'; },
-      complete: async () => 'stub answer',
-    }));
+    const { seen, issuer } = recordRoutes(rt);
 
     // No ambient operation at issue time: nothing owns this stream yet, so it
     // must not pick up whoever happens to consume it.
