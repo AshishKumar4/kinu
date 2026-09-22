@@ -91,31 +91,31 @@ export interface ProviderConnections {
 
 const INSTALL_HINT_OPENCODE = 'Install opencode: https://opencode.ai';
 
-const LOGIN_HINT_OPENCODE = 'Run `opencode auth login` to authenticate opencode, then run `kinu setup` again.';
+const LOGIN_HINT_OPENCODE = 'Sign in to opencode with `opencode auth login`, then run `kinu setup` again.';
 
 const CLAUDE_LOGIN_HINT = 'Run `claude` once to sign in to your Claude subscription.';
 
 const CLAUDE_INSTALL_HINT = 'Install Claude Code: https://docs.claude.com/en/docs/claude-code/setup';
 
-const CLAUDE_READY = 'Claude subscription ready. Use kinu create --model claude/claude-opus-4-x';
+const CLAUDE_READY = 'Your Claude subscription is ready. Use it with: kinu create --model claude/claude-opus-4-x';
 
 export const PROVIDER_CONNECTORS: readonly ProviderDescriptor[] = Object.freeze(([
   {
     id: 'cloudflare',
     label: 'Cloudflare',
-    blurb: 'Browser sign-in attaches your Cloudflare account for Workers AI and AI Gateway.',
+    blurb: 'Sign in with your browser to use Workers AI and AI Gateway in your Cloudflare account.',
     credential: 'browser',
   },
   {
     id: 'claude',
     label: 'Claude subscription',
-    blurb: 'Drives the `claude` binary with your Claude Code login. Local workspaces only.',
+    blurb: 'Runs the `claude` command with your Claude Code sign-in. Local workspaces only.',
     credential: 'binary',
   },
   {
     id: 'codex',
     label: 'Codex',
-    blurb: 'Your ChatGPT Codex subscription, through the device login.',
+    blurb: 'Your ChatGPT Codex subscription. You sign in with a code in your browser.',
     credential: 'device-code',
   },
   { id: 'openai', label: 'OpenAI', blurb: 'An OpenAI API key.', credential: 'api-key' },
@@ -124,13 +124,13 @@ export const PROVIDER_CONNECTORS: readonly ProviderDescriptor[] = Object.freeze(
   {
     id: 'openai-compatible',
     label: 'OpenAI-compatible',
-    blurb: 'Any OpenAI-shaped endpoint — Ollama, vLLM, a proxy of your own.',
+    blurb: 'Any endpoint that speaks the OpenAI API: Ollama, vLLM, or your own proxy.',
     credential: 'api-key',
   },
   {
     id: 'opencode',
     label: 'OpenCode',
-    blurb: 'Reuses the model providers and auth tokens from your local opencode CLI.',
+    blurb: 'Uses the providers and sign-ins from the opencode CLI on this computer.',
     credential: 'binary',
   },
 ] satisfies readonly ProviderDescriptor[]).map((descriptor) => Object.freeze(descriptor)));
@@ -324,7 +324,7 @@ export async function connectProvider(
 }
 
 async function connectCloudflare(port: ProviderConnectPort, origin: string | undefined): Promise<ProviderConnectOutcome> {
-  port.report('The OAuth consent must include User Details, Account Settings, Workers AI, and AI Gateway scopes.');
+  port.report('On the Cloudflare consent page, keep the User Details, Account Settings, Workers AI and AI Gateway scopes ticked.');
   let email = 'your Cloudflare account';
   await authenticateCli(origin === undefined ? {} : { origin }, {
     started(flow) {
@@ -351,13 +351,13 @@ async function connectClaude(port: ProviderConnectPort): Promise<ProviderConnect
     // probes. A resident session has no other way to learn that.
     bumpProviderRevision();
 
-    return { kind: 'connected', summary: CLAUDE_READY, detail: 'Cloud workspaces cannot use the subscription. Connect an Anthropic API key for those.' };
+    return { kind: 'connected', summary: CLAUDE_READY, detail: 'Cloud workspaces cannot use this subscription. Connect an Anthropic API key for them.' };
   }
 
-  if (binary) return { kind: 'blocked', reason: CLAUDE_LOGIN_HINT, hint: 'Cloud workspaces cannot use the subscription. Connect an Anthropic API key for those.' };
+  if (binary) return { kind: 'blocked', reason: CLAUDE_LOGIN_HINT, hint: 'Cloud workspaces cannot use this subscription. Connect an Anthropic API key for them.' };
   port.report('Then run `claude` once to sign in.');
 
-  return { kind: 'blocked', reason: CLAUDE_INSTALL_HINT, hint: 'Cloud workspaces cannot use the subscription. Connect an Anthropic API key for those.' };
+  return { kind: 'blocked', reason: CLAUDE_INSTALL_HINT, hint: 'Cloud workspaces cannot use this subscription. Connect an Anthropic API key for them.' };
 }
 
 async function connectCodex(port: ProviderConnectPort, requestedModel: string | undefined): Promise<ProviderConnectOutcome> {

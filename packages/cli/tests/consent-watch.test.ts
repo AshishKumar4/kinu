@@ -228,7 +228,7 @@ describe('watchDeviceConsents', () => {
     await noted.promise;
     watcher.stop();
 
-    expect(notes).toEqual([{ kind: 'stale', message: 'That PC access request is no longer pending.' }]);
+    expect(notes).toEqual([{ kind: 'stale', message: 'That request is no longer waiting for an answer.' }]);
   });
 
   test('listPending failures are swallowed and polling continues', async () => {

@@ -80,7 +80,7 @@ export function watchDeviceConsents(
         try {
           await consents.resolve(consent.consentId, 'deny');
         } catch (err) {
-          opts.note('error', `Could not withdraw the PC access request. The device waits out its timeout: ${renderThrownChain({ cause: err })}`);
+          opts.note('error', `Could not withdraw the request to use ${consent.deviceLabel}. It expires on its own: ${renderThrownChain({ cause: err })}`);
         }
 
         return;
@@ -92,7 +92,7 @@ export function watchDeviceConsents(
       if (abort.signal.aborted) return;
 
       if (result.ok) opts.note('resolved', decisionFeedback(outcome));
-      else opts.note('stale', 'That PC access request is no longer pending.');
+      else opts.note('stale', 'That request is no longer waiting for an answer.');
     } catch (err) {
       if (!abort.signal.aborted) {
         opts.note('error', renderThrownChain({ cause: err }));
@@ -152,7 +152,7 @@ export function watchTerminalConsents(
   return watchDeviceConsents(consents, {
     present: (consent, signal) => {
       if (!tty) {
-        console.log(`\n${WARN('PC access requested')} (${consent.method} on ${consent.deviceLabel}: ${consent.command || 'command'}).`);
+        console.log(`\n${WARN(`The agent wants to use ${consent.deviceLabel}`)} (${consent.method}: ${consent.command || 'command'}).`);
         console.log(MUTED(`  Approve or deny from the Kinu app, or run: kinu chat ${agentName}`));
 
         return Promise.resolve(null);
@@ -191,10 +191,10 @@ export function watchHeadlessConsents(
           deviceLabel: consent.deviceLabel,
           method: consent.method,
           command: consent.command,
-          message: `PC access denied (headless run). ${instructions}`,
+          message: `Denied: nobody was at the terminal to approve it. ${instructions}`,
         })}\n`);
       } else {
-        console.error(`\n${WARN('PC access denied (headless run)')} ${consent.method} on ${consent.deviceLabel}: ${consent.command || '(command)'}`);
+        console.error(`\n${WARN('Denied: nobody was at the terminal to approve it')} ${consent.method} on ${consent.deviceLabel}: ${consent.command || '(command)'}`);
         console.error(MUTED(`  ${instructions}`));
       }
 
@@ -213,7 +213,7 @@ async function promptConsentDecision(
   askLine: ConsentAskLine,
   signal: AbortSignal,
 ): Promise<DeviceConsentDecision | 'cancelled'> {
-  console.log(`\n${WARN('PC access request')} from this agent:`);
+  console.log(`\n${WARN(`This agent wants to use ${consent.deviceLabel}`)}`);
   console.log(`  ${DIM('Device:')}  ${consent.deviceLabel}`);
   console.log(`  ${DIM('Method:')}  ${consent.method}`);
   console.log(`  ${DIM('Command:')} ${consent.command || '(command)'}`);
@@ -231,7 +231,7 @@ async function promptConsentDecision(
     if (normalized === 'a' || normalized === 'always') return 'always';
 
     if (normalized === 'n' || normalized === 'no') return 'deny';
-    console.log(DIM('  Please answer y, a, or n.'));
+    console.log(DIM('  Answer y, a or n.'));
   }
 
   return 'cancelled';

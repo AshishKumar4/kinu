@@ -135,7 +135,7 @@ export async function stopCommand(name: string, opts: InspectOpts = {}): Promise
   }
 
   if (cancelled.length > 0) console.log(`${OK('cancelled')} ${plural(cancelled.length, 'background job')}`);
-  console.log(`${WARN('local foreground turns are process-local')} use Ctrl+C in the terminal running that turn.`);
+  console.log(`${WARN('!')} A running local turn can only be stopped from its own terminal: press Ctrl+C there.`);
 }
 
 /**

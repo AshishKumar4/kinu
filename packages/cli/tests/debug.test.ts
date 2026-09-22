@@ -270,7 +270,7 @@ describe('kinu debug — local backend', () => {
     // the operator to compute from a bare created_at timestamp.
     expect(r.stdout).toContain('took 2m');
     expect(r.stdout).toContain('fork(settle=mcts): pick a migration-backfill approach');
-    expect(r.stdout).toMatch(/job-2 agents running — running \d+d(?: \d+h)?/);
+    expect(r.stdout).toMatch(/job-2 agents running for \d+d(?: \d+h)?/);
     expect(r.stdout).not.toContain(SECRET_TOKEN);
     // The leaderboard line carries the UNIT and the direction's arrow. A bare real
     // is the defect: 25.4% read as a reward level when it was a delta.
@@ -462,7 +462,7 @@ describe('kinu debug — cloud backend', () => {
       expect(r.stdout).toContain('skywriter');
       // The identity fields the bundle wrote still read back onto the summary
       // through the shared field helpers: name, purpose, version and model.
-      expect(r.stdout).toContain('identity  skywriter — p');
+      expect(r.stdout).toContain('identity  skywriter: p');
       expect(r.stdout).toContain('scaffold  v1  x');
       expect(r.stdout).toContain('Runs (1)');
 

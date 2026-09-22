@@ -65,6 +65,8 @@ export function renderCliReference(program: Command): string {
 
       lines.push('');
     }
+
+    if (entry.example !== undefined) lines.push('```bash', entry.example, '```', '');
   }
 
   lines.push('## Environment', '');

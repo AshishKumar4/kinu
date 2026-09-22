@@ -435,12 +435,12 @@ async function maybeOfferDeviceConnect(rl: readline.Interface, tty: boolean): Pr
   if (!(await shouldOfferDeviceConnect())) return;
 
   if (!tty) {
-    console.log(MUTED('No PC connected. Connect one with: kinu connect'));
+    console.log(MUTED('No computer is connected. Connect this one with: kinu connect'));
 
     return;
   }
 
-  console.log(`${WARN('Let this agent use this PC?')}`);
+  console.log(`${WARN('Let this agent use this computer?')}`);
   console.log(MUTED(`  Linking installs the Kinu daemon and registers this machine as "${defaultDeviceName()}".`));
   console.log(MUTED('  A workspace you approve runs commands here in a sandbox.'));
   console.log(MUTED('  You approve each workspace once, and revoke it in Account settings → Devices.'));
@@ -450,8 +450,8 @@ async function maybeOfferDeviceConnect(rl: readline.Interface, tty: boolean): Pr
 
 async function promptDeviceConnect(rl: readline.Interface, opts: { allowDismiss: boolean }): Promise<void> {
   const choices = opts.allowDismiss
-    ? `[c] connect & keep connected · [s] this session only · [n] not now · [d] don't ask again ›`
-    : `[c] connect & keep connected · [s] this session only · [n] not now ›`;
+    ? `[c] connect and stay connected · [s] this session only · [n] not now · [d] don't ask again ›`
+    : `[c] connect and stay connected · [s] this session only · [n] not now ›`;
 
   for (;;) {
     const answer = (await ask(rl, `${DIM(choices)} `))?.trim().toLowerCase();
@@ -466,12 +466,12 @@ async function promptDeviceConnect(rl: readline.Interface, opts: { allowDismiss:
 
     if (opts.allowDismiss && answer === 'd') {
       dismissDeviceConnectPrompt();
-      console.log(DIM(`  Won't ask again. Reconnect anytime with /connect or kinu connect`));
+      console.log(DIM(`  Kinu won't ask again. Connect later with /connect or kinu connect.`));
 
       return;
     }
 
-    console.log(DIM(opts.allowDismiss ? '  Please answer c, s, n, or d.' : '  Please answer c, s, or n.'));
+    console.log(DIM(opts.allowDismiss ? '  Answer c, s, n or d.' : '  Answer c, s or n.'));
   }
 }
 
@@ -563,7 +563,7 @@ async function applySlashOutcome(client: AgentClient, rl: readline.Interface, ou
       if (menu.models.length > 0) {
         console.log(DIM('Available (set with /model <spec>):'));
 
-        for (const model of menu.models.slice(0, 40)) console.log(`  ${ACCENT(model.spec)} ${DIM('—')} ${model.label}`);
+        for (const model of menu.models.slice(0, 40)) console.log(`  ${ACCENT(model.spec)}  ${DIM(model.label)}`);
 
         if (menu.models.length > 40) console.log(DIM(`  … ${menu.models.length - 40} more`));
       }
@@ -583,7 +583,7 @@ async function applySlashOutcome(client: AgentClient, rl: readline.Interface, ou
       if (process.stdin.isTTY === true && process.stdout.isTTY === true) {
         await promptDeviceConnect(rl, { allowDismiss: false });
       } else {
-        console.log(MUTED('Connect this PC with: kinu connect'));
+        console.log(MUTED('Connect this computer with: kinu connect'));
       }
 
       console.log('');

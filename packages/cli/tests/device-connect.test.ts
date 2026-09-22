@@ -366,7 +366,7 @@ describe('device-connect prompt policy', () => {
     expect(stub.hits.list).toBe(1);
   });
 
-  test("another machine's connected device still leaves this PC to offer", async () => {
+  test("another machine's connected device still leaves this computer to offer", async () => {
     // The card asks about THIS PC. A person whose other laptop is linked has
     // as much to link here as one with nothing connected, and suppressing on
     // any connected row is how the offer vanished for every session on a
@@ -1124,8 +1124,8 @@ describe('classic cloud chat connect prompt', () => {
     const home = makeHome(cloudAgentConfig(stub.origin));
 
     const chat = spawnChatInPty(home);
-    await chat.waitFor('Let this agent use this PC?');
-    await chat.waitFor("[c] connect & keep connected · [s] this session only · [n] not now · [d] don't ask again");
+    await chat.waitFor('Let this agent use this computer?');
+    await chat.waitFor("[c] connect and stay connected · [s] this session only · [n] not now · [d] don't ask again");
     await chat.send('s');
     await chat.waitFor('Connected for this session.');
     // The daemon claims the machine's pidfile itself, whoever started it.
@@ -1162,7 +1162,7 @@ describe('classic cloud chat connect prompt', () => {
     ]);
 
     expect(exitCode).toBe(0);
-    expect(stdout).toContain('No PC connected. Connect one with: kinu connect');
+    expect(stdout).toContain('No computer is connected. Connect this one with: kinu connect');
     expect(stub.hits.register).toBe(0);
   });
 });

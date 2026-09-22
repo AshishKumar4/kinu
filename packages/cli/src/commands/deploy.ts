@@ -39,7 +39,7 @@ export async function deployCommand(
   }
 
   if (door !== 'cloudflare') {
-    console.log(`${WARN('!')} Name a door: ${ACCENT('kinu deploy cloudflare')} or ${ACCENT('kinu deploy local')}`);
+    console.log(`${WARN('!')} Say where to deploy: ${ACCENT('kinu deploy cloudflare')} or ${ACCENT('kinu deploy local')}`);
 
     return;
   }

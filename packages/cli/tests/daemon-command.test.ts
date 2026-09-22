@@ -128,7 +128,7 @@ describe('kinu daemon restart', () => {
     const proc = runDaemon(makeHome(), 'bounce');
 
     expect(proc.exitCode).toBe(1);
-    expect(proc.stderr).toContain('start|stop|restart|status|logs|run');
+    expect(proc.stderr).toContain('start|stop|restart|status|logs|tick');
   });
 });
 

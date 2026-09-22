@@ -175,7 +175,7 @@ function headModel(input: HeadInput, deps: CLIHeadRuntimeDeps): LanguageModel {
     diagnostics.failure(
       'head.model_resolve_failed',
       toKinuError({
-        doing: "resolving the model this head named — running the session's model instead",
+        doing: "resolving the model this head named, so it runs on the session's model instead",
         cause: err,
         otherwise: 'bad_input',
       }),

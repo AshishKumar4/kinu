@@ -32,9 +32,9 @@ export async function authenticateCli(
     return poll.status === 'pending' ? undefined : poll;
   }, { intervalMs: Math.max(1, flow.intervalSeconds) * 1000, onWaiting: () => callbacks.pending?.() });
 
-  if (status.status === 'expired') throw new Error(status.message ?? 'CLI auth expired.');
+  if (status.status === 'expired') throw new Error(status.message ?? 'The sign-in code expired. Run kinu auth again.');
 
-  if (!status.token || !status.user) throw new Error('Auth approved but no token returned.');
+  if (!status.token || !status.user) throw new Error('Sign-in was approved, but the server sent no token. Run kinu auth again.');
   updateConfigFile((config) => {
     config.origin = status.origin ?? origin;
     config.accessToken = status.token;
@@ -103,8 +103,8 @@ export async function logoutCommand(opts: { origin?: string }): Promise<void> {
 
     if (!revoked) {
       bumpProviderRevision();
-      console.log(`${OK('✓')} Logged out locally. Session NOT revoked`);
-      console.log(DIM(`Run \`kinu logout\` again when reachable, or \`kinu sessions\` from any machine to revoke by inventory.`));
+      console.log(`${WARN('!')} Not signed out: the session is still valid, and this computer keeps its token so a later logout can revoke it.`);
+      console.log(DIM(`Run \`kinu logout\` again once ${origin} is reachable, or revoke it with \`kinu sessions revoke\` from any computer.`));
 
       return;
     }
@@ -118,7 +118,7 @@ export async function logoutCommand(opts: { origin?: string }): Promise<void> {
   });
   // The inverse of sign-in: every account-held provider just became unreachable.
   bumpProviderRevision();
-  console.log(`${OK('✓')} Logged out`);
+  console.log(`${OK('✓')} Signed out`);
 }
 
 /** Revoke a session by the hash the inventory prints. */

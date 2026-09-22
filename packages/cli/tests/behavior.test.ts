@@ -198,12 +198,12 @@ describe("CLI behavior", () => {
     const stdout = toText(proc.stdout);
 
     expect(proc.exitCode).toBe(0);
-    expect(stdout).toContain("Local model provider");
+    expect(stdout).toContain("Model provider for local workspaces");
     // Native Workers AI is the recommendation and the default answer; Skip is 8.
     expect(stdout).toContain("1 Cloudflare Workers AI through your Kinu account");
     expect(stdout).toContain("(recommended)");
     expect(stdout).toContain("Choice [1]");
-    expect(stdout).toContain("Skipped local model setup");
+    expect(stdout).toContain("Skipped choosing a model provider");
   });
 
   test("setup --local-model keeps local provider setup explicit", () => {
@@ -219,8 +219,8 @@ describe("CLI behavior", () => {
     const stdout = toText(proc.stdout);
 
     expect(proc.exitCode).toBe(0);
-    expect(stdout).toContain("Skipped local model setup");
-    expect(stdout).toContain("Cloud workspaces remain ready");
+    expect(stdout).toContain("Skipped choosing a model provider");
+    expect(stdout).toContain("Cloud workspaces are ready");
   });
 
   test("provider list summarizes connected providers without leaking credentials", () => {
@@ -241,7 +241,7 @@ describe("CLI behavior", () => {
     const stdout = toText(proc.stdout);
 
     expect(proc.exitCode).toBe(0);
-    expect(stdout).toContain("Kinu providers");
+    expect(stdout).toContain("Model providers");
     expect(stdout).toContain("Kinu account");
     expect(stdout).toContain("Codex");
     expect(stdout).toContain("OpenAI");
@@ -307,7 +307,7 @@ describe("CLI behavior", () => {
     const stderr = toText(proc.stderr);
 
     expect(proc.exitCode).toBe(0);
-    expect(stderr).not.toContain("No agents found");
+    expect(stderr).not.toContain("No workspaces");
   });
 });
 

@@ -63,7 +63,7 @@ describe('inline shell approval', () => {
     const agent = fakeClient({ name: 'shell' });
     const screen = await mountChat(agent.client);
     const answer = agent.requestShellApproval({ ...shellRequest, command: 'sudo '.repeat(400) });
-    await screen.waitFor('resize warning', () => screen.frame().includes('Resize to inspect'));
+    await screen.waitFor('resize warning', () => screen.frame().includes('Enlarge the terminal'));
     screen.mockInput.pressKey('a');
     await screen.renderOnce();
     expect(screen.frame()).toContain('Run this command?');
@@ -100,7 +100,7 @@ describe('ChatApp consent ownership', () => {
     screen.mockInput.pressEnter();
     await screen.waitFor('settings below consent', () => screen.frame().includes('Filter settings'));
     controlled.emit({ type: 'turn-start', kind: 'user', text: 'run the suite' });
-    await screen.waitFor('the consent overlay', () => screen.frame().includes('Use your PC?'));
+    await screen.waitFor('the consent overlay', () => screen.frame().includes('Use your computer?'));
     await screen.mockInput.typeText('hidden draft');
     screen.mockInput.pressKey('l', { ctrl: true });
     screen.mockInput.pressTab();
@@ -140,7 +140,7 @@ describe('ChatApp consent ownership', () => {
     screen.mockInput.pressEnter();
     await screen.waitFor('settings below consent', () => screen.frame().includes('Filter settings'));
     controlled.emit({ type: 'turn-start', kind: 'user', text: 'run the suite' });
-    await screen.waitFor('consent above settings', () => screen.frame().includes('Use your PC?'));
+    await screen.waitFor('consent above settings', () => screen.frame().includes('Use your computer?'));
     screen.mockInput.pressEnter();
     await screen.waitFor('the one-time approval', () => decisions.length === 1);
     expect(decisions).toEqual(['once']);
@@ -170,7 +170,7 @@ describe('ChatApp consent ownership', () => {
     const screen = await mountChat(controlled.client);
     controlled.emit({ type: 'turn-start', kind: 'user', text: 'run it' });
     await screen.waitFor('the unapprovable consent warning', () =>
-      screen.frame().includes('Resize to inspect the full command'));
+      screen.frame().includes('Enlarge the terminal to read it all'));
     screen.mockInput.pressKey('a');
     screen.mockInput.pressKey('y');
     screen.mockInput.pressEnter();

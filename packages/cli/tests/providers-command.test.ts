@@ -76,7 +76,7 @@ describe('providers command — Claude subscription', () => {
   test('connect claude reports ready and the create command when installed + logged in', () => {
     const res = runProviders(['connect', 'claude'], { claude: 'ready', home: freshHome() });
     expect(res.exitCode).toBe(0);
-    expect(res.stdout).toContain('Claude subscription ready');
+    expect(res.stdout).toContain('Your Claude subscription is ready');
     expect(res.stdout).toContain('claude/claude-opus-4-x');
     // Compliance note: cloud agents need an Anthropic API key, not the sub.
     expect(res.stdout).toContain('Anthropic API key');
@@ -86,7 +86,7 @@ describe('providers command — Claude subscription', () => {
     const res = runProviders(['connect', 'claude'], { claude: 'logged-out', home: freshHome() });
     expect(res.exitCode).toBe(0);
     expect(res.stdout).toContain('Run `claude` once to sign in');
-    expect(res.stdout).not.toContain('Claude subscription ready');
+    expect(res.stdout).not.toContain('Your Claude subscription is ready');
   });
 
   test('connect claude prints install guidance when the binary is absent', () => {
@@ -94,7 +94,7 @@ describe('providers command — Claude subscription', () => {
     const res = runProviders(['connect', 'claude'], { home: freshHome() });
     expect(res.exitCode).toBe(0);
     expect(res.stdout).toContain('Install Claude Code');
-    expect(res.stdout).not.toContain('Claude subscription ready');
+    expect(res.stdout).not.toContain('Your Claude subscription is ready');
   });
 
   test('list shows the Claude subscription status inline', () => {
