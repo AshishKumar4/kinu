@@ -43,31 +43,52 @@ function store(scope = OWNER) {
 }
 
 describe('instructionDigest', () => {
-  test('binds the exact bytes — one character apart is a different digest', () => {
-    // Known answers. Each digest is the platform sha256 over the documented
-    // serialization, worked out without calling the function under test.
-    expect(instructionDigest('Use bun.')).toBe('18fed13b9d40c9e3e9f9a1e0f99d096f659aa6360c3362a2e5d65a28d2fe2e52');
-    expect(instructionDigest('Use bun!')).toBe('520e9a00614bb46dbfe43280180ca3eb7f2d50b3fc42c5308b3c3c8c6ae431c7');
-  });
+  // Known answers. Each digest is the platform sha256 over the documented
+  // serialization, worked out without calling the function under test.
+  const DIGESTS = [
+    {
+      name: 'binds the exact bytes — one character apart is a different digest',
+      pairs: [
+        ['Use bun.', '18fed13b9d40c9e3e9f9a1e0f99d096f659aa6360c3362a2e5d65a28d2fe2e52'],
+        ['Use bun!', '520e9a00614bb46dbfe43280180ca3eb7f2d50b3fc42c5308b3c3c8c6ae431c7'],
+      ],
+    },
+    {
+      name: 'whitespace is content — an invisible edit still demotes',
+      pairs: [
+        ['rule', '440cdbbc00cdd3d21ac5594e15591dbe8ac4b702009644815b3a1420db2b9143'],
+        ['rule ', '08e33eeb1de3d31afad6493b8fb651f3f76bc1cd0911d136a337143f88e89546'],
+      ],
+    },
+  ];
+
+  for (const known of DIGESTS) {
+    test(known.name, () => {
+      for (const [content, digest] of known.pairs) expect(instructionDigest(content)).toBe(digest);
+    });
+  }
 
   test('is a full-length SHA-256, not a fast fingerprint', () => {
     // The adversary writes the file, so a 64-bit non-cryptographic hash would
     // be forgeable and therefore no boundary. 64 hex chars is the contract.
     expect(instructionDigest('anything')).toMatch(/^[0-9a-f]{64}$/);
   });
-
-  test('whitespace is content — an invisible edit still demotes', () => {
-    expect(instructionDigest('rule')).toBe('440cdbbc00cdd3d21ac5594e15591dbe8ac4b702009644815b3a1420db2b9143');
-    expect(instructionDigest('rule ')).toBe('08e33eeb1de3d31afad6493b8fb651f3f76bc1cd0911d136a337143f88e89546');
-  });
 });
 
 describe('InstructionApprovalStore — approval binds path AND digest', () => {
-  test('unknown bytes at an unknown path are unverified', () => {
-    const { store: s } = store();
-    expect(s.trustOf(PATH, 'anything')).toBe('unverified');
-    expect(s.get(PATH)).toBeNull();
-  });
+  const UNTOUCHED_STORE = [
+    { name: 'unknown bytes at an unknown path are unverified', bytes: 'anything' },
+    { name: 'trustOf stays a pure read and creates no rows', bytes: 'bytes' },
+  ];
+
+  for (const untouched of UNTOUCHED_STORE) {
+    test(untouched.name, () => {
+      const { store: s } = store();
+
+      expect(s.trustOf(PATH, untouched.bytes)).toBe('unverified');
+      expect(s.get(PATH)).toBeNull();
+    });
+  }
 
   test('an approved digest is approved, and only at the path it was approved for', () => {
     const { store: s } = store();
@@ -216,11 +237,5 @@ describe('no carry-over — a discovered file starts unverified', () => {
     expect(s.get(PATH)?.decision).toBe('grandfathered');
     expect(s.trustOf(PATH, content)).toBe('approved');
     expect(s.trustOf(PATH, `${content} changed`)).toBe('unverified');
-  });
-
-  test('trustOf stays a pure read and creates no rows', () => {
-    const { store: s } = store();
-    expect(s.trustOf(PATH, 'bytes')).toBe('unverified');
-    expect(s.get(PATH)).toBeNull();
   });
 });

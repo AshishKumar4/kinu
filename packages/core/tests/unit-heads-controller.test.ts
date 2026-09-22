@@ -915,11 +915,11 @@ describe('HeadJournal.listRuns — grouping (the #179 quirk fix)', () => {
 
   test('child budget is derived from parent: depth-1, envelope undivided', async () => {
     const { journal } = newJournal();
-    let observed: HeadInput | null = null;
+    const spawns: HeadInput[] = [];
 
     const runtime: HeadRuntime = {
       async spawnHead(input) {
-        observed ??= input;
+        spawns.push(input);
 
         return {
           id: input.id,
@@ -940,7 +940,7 @@ describe('HeadJournal.listRuns — grouping (the #179 quirk fix)', () => {
       parentBudget: { maxDepth: 3, maxWallClockMs: 60_000, spawnedAt: Date.now() },
     });
 
-    const firstSpawn = present(observed, 'the first spawned head input');
+    const firstSpawn = present(spawns[0], 'the first spawned head input');
 
     expect(firstSpawn.budget.maxDepth).toBe(2);     // depth - 1
     expect(firstSpawn.depth).toBe(1);               // 3 - 2 = 1

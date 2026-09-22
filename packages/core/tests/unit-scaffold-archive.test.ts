@@ -293,11 +293,11 @@ describe('selectEvolutionBase — clade-metaproductivity', () => {
   });
 
   test('the same injected RNG always yields the same base', () => {
-    const first = present(selectEvolutionBase(lineage, { exploreShare: 0.5, random: seq(0.1, 0.42) }), 'the first replayed base');
+    const first = selectEvolutionBase(lineage, { exploreShare: 0.5, random: seq(0.1, 0.42) });
     const second = selectEvolutionBase(lineage, { exploreShare: 0.5, random: seq(0.1, 0.42) });
 
     expect(first).toEqual(second);
-    expect(first.mode).toBe('explore');
+    expect(present(first, 'the first replayed base').mode).toBe('explore');
   });
 });
 

@@ -8,7 +8,7 @@
 import { describe, test, expect } from 'bun:test';
 import * as v from 'valibot';
 import { toolExecute } from '@kinu.run/test-utils';
-import { answeredRefusal, formatExecResult, refusalText, type CommandResult } from '../src/execution/exec-result';
+import { answeredRefusal, formatExecResult, refusalText, type CommandResult, type ExecOutcome } from '../src/execution/exec-result';
 import { KinuError, refusalOf } from '../src/obs/index';
 import { parseJsonValue } from '../src/utils/json';
 import { createInlineExecutor } from '../src/execution/inline';
@@ -47,35 +47,49 @@ describe('formatExecResult', () => {
     expect(out).toContain('1 failed, 2 passed');
   });
 
-  test('a failing command with both streams keeps both, stdout labelled first', () => {
-    const out = formatExecResult({ stdout: 'OUT', stderr: 'ERR', exitCode: 2 });
-    expect(out).toBe('Error (exit 2)\n--- stdout ---\nOUT\n--- stderr ---\nERR');
-  });
+  const FORMATTED: ReadonlyArray<{ name: string; result: ExecOutcome; text: string }> = [
+    {
+      name: 'a failing command with both streams keeps both, stdout labelled first',
+      result: { stdout: 'OUT', stderr: 'ERR', exitCode: 2 },
+      text: 'Error (exit 2)\n--- stdout ---\nOUT\n--- stderr ---\nERR',
+    },
+    {
+      name: 'a failing command that printed nothing says so instead of trailing an empty label',
+      result: { stdout: '', stderr: '', exitCode: 127 },
+      text: 'Error (exit 127)\n(no output)',
+    },
+    {
+      name: 'a quiet success is exactly its stdout — the common case is unchanged',
+      result: { stdout: 'hello\n', stderr: '', exitCode: 0 },
+      text: 'hello\n',
+    },
+    {
+      name: 'a successful command that wrote to stderr keeps the warnings too',
+      result: { stdout: 'built', stderr: 'warning: deprecated', exitCode: 0 },
+      text: 'built\n--- stderr ---\nwarning: deprecated',
+    },
+    {
+      name: 'a successful command with output only on stderr is not reported as silent',
+      result: { stdout: '', stderr: 'progress: 100%', exitCode: 0 },
+      text: 'progress: 100%',
+    },
+    {
+      name: 'a silent success still reads as no output',
+      result: { stdout: '', stderr: '', exitCode: 0 },
+      text: '(no output)',
+    },
+    {
+      name: 'a missing exit code is a success — transports that omit it never read as failures',
+      result: { stdout: 'ok' },
+      text: 'ok',
+    },
+  ];
 
-  test('a failing command that printed nothing says so instead of trailing an empty label', () => {
-    expect(formatExecResult({ stdout: '', stderr: '', exitCode: 127 })).toBe('Error (exit 127)\n(no output)');
-  });
-
-  test('a quiet success is exactly its stdout — the common case is unchanged', () => {
-    expect(formatExecResult({ stdout: 'hello\n', stderr: '', exitCode: 0 })).toBe('hello\n');
-  });
-
-  test('a successful command that wrote to stderr keeps the warnings too', () => {
-    const out = formatExecResult({ stdout: 'built', stderr: 'warning: deprecated', exitCode: 0 });
-    expect(out).toBe('built\n--- stderr ---\nwarning: deprecated');
-  });
-
-  test('a successful command with output only on stderr is not reported as silent', () => {
-    expect(formatExecResult({ stdout: '', stderr: 'progress: 100%', exitCode: 0 })).toBe('progress: 100%');
-  });
-
-  test('a silent success still reads as no output', () => {
-    expect(formatExecResult({ stdout: '', stderr: '', exitCode: 0 })).toBe('(no output)');
-  });
-
-  test('a missing exit code is a success — transports that omit it never read as failures', () => {
-    expect(formatExecResult({ stdout: 'ok' })).toBe('ok');
-  });
+  for (const formatted of FORMATTED) {
+    test(formatted.name, () => {
+      expect(formatExecResult(formatted.result)).toBe(formatted.text);
+    });
+  }
 
   test('a refusal round-trip keeps the exit the error carried', () => {
     // Both channels — the text a refusal serialises to and the object a member

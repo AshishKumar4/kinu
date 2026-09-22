@@ -6,6 +6,7 @@ import {
   type MemoryToolInput, type VectorStore,
 } from '../src/index';
 import { storesFor } from './helpers';
+import type { AgentRuntime } from '../src/types/agent-runtime';
 
 const unavailableIndex: VectorStore = {
   available: false,
@@ -32,14 +33,20 @@ const BACKENDS: ReadonlyArray<readonly [string, VectorStore | null]> = [
   ['cf live empty', emptyIndex],
 ];
 
+/** A note index with one hit: the query `needle` answers one chunk carrying
+ *  `snippet`, and every other query answers nothing. */
+function needleIndex(snippet: string): AgentRuntime['memory']['search'] {
+  return async (query) => query === 'needle'
+    ? [{ path: 'memory.md', startLine: 1, endLine: 1, score: 1, snippet }]
+    : [];
+}
+
 describe('memory search coverage across backend capabilities', () => {
   for (const [backend, vectorStore] of BACKENDS) {
     test(`${backend}: native and codemode report hits and misses`, async () => {
       const { rt, testSql } = createTestRuntime();
       initAllTables(testSql.execRaw, testSql.sql);
-      rt.memory.search = async (query) => query === 'needle'
-        ? [{ path: 'memory.md', startLine: 1, endLine: 1, score: 1, snippet: 'needle' }]
-        : [];
+      rt.memory.search = needleIndex('needle');
       const { history } = storesFor(rt);
       const native = toolExecute<MemoryToolInput, string>(buildBuiltinTools({ rt, vectorStore, history }).memory);
 
@@ -122,9 +129,7 @@ describe('memory search coverage across backend capabilities', () => {
       const { rt, testSql } = createTestRuntime();
       initAllTables(testSql.execRaw, testSql.sql);
       initFactsTable(testSql.execRaw);
-      rt.memory.search = async (query) => query === 'needle'
-        ? [{ path: 'memory.md', startLine: 1, endLine: 1, score: 1, snippet: 'the needle note' }]
-        : [];
+      rt.memory.search = needleIndex('the needle note');
       const facts = createFactsStore(testSql.sql, rt.actor);
 
       const native = toolExecute<MemoryToolInput, string>(
@@ -144,9 +149,7 @@ describe('memory search coverage across backend capabilities', () => {
       const { rt, testSql } = createTestRuntime();
       initAllTables(testSql.execRaw, testSql.sql);
       initFactsTable(testSql.execRaw);
-      rt.memory.search = async (query) => query === 'needle'
-        ? [{ path: 'memory.md', startLine: 1, endLine: 1, score: 1, snippet: 'needle' }]
-        : [];
+      rt.memory.search = needleIndex('needle');
       const facts = createFactsStore(testSql.sql, rt.actor);
 
       const native = toolExecute<MemoryToolInput, string>(
@@ -172,9 +175,7 @@ describe('memory search coverage across backend capabilities', () => {
     // answers from the note index alone, with the same header and row shape.
     const { rt, testSql } = createTestRuntime();
     initAllTables(testSql.execRaw, testSql.sql);
-    rt.memory.search = async (query) => query === 'needle'
-      ? [{ path: 'memory.md', startLine: 1, endLine: 1, score: 1, snippet: 'needle' }]
-      : [];
+    rt.memory.search = needleIndex('needle');
     const native = toolExecute<MemoryToolInput, string>(buildBuiltinTools({ rt, vectorStore: null, history: storesFor(rt).history }).memory);
 
     expect(await native({ action: 'search', query: 'needle' })).toBe(

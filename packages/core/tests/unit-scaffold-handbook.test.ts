@@ -5,6 +5,7 @@
 // (never a second copy of it), it is deterministic, and its scan of the live
 // scaffold source reads code rather than prose.
 import { describe, expect, test } from 'bun:test';
+import { present } from '@kinu.run/test-utils';
 import { indexScaffoldSites, renderScaffoldHandbook } from '../src/evolution/scaffold-handbook';
 import { LAYERS } from '../src/layergate/layers';
 import { SUBJECT_SOURCE } from '../src/layergate/subjects';

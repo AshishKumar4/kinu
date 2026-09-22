@@ -4,6 +4,7 @@
 // RPC payload ceiling, and nothing here trusts a caller-supplied offset or
 // length.
 import { describe, expect, test } from "bun:test";
+import { present } from "@kinu.run/test-utils";
 import {
   ExecutorFileDownload, ExecutorFileUpload, FILE_CHUNK_BYTES, FILE_TRANSFER_MAX_BYTES,
   statExecutorFile, writeExecutorFileOp, type VFS,

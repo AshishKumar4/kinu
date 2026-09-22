@@ -106,21 +106,26 @@ describe('buildPendingActions', () => {
   // first entry is a graded turn, which is a measurement with no keep and no
   // revert. Promising a decision over a card that offers none is the same lie
   // as pointing at the wrong tab.
-  test('an unseen window of pure measurements is offered as a read, not a decision', () => {
-    const [action] = buildPendingActions({
-      ...EMPTY, unseenChanges: { count: 1, revertable: 0, latestAt: 1 },
+  const UNSEEN_WINDOWS = [
+    {
+      name: 'an unseen window of pure measurements is offered as a read, not a decision',
+      unseenChanges: { count: 1, revertable: 0, latestAt: 1 },
+      detail: 'Read them in the journal below.',
+    },
+    {
+      name: 'a mixed window says how many of them can actually be decided',
+      unseenChanges: { count: 4, revertable: 1, latestAt: 1 },
+      detail: 'Keep or revert 1 of them in the journal below.',
+    },
+  ];
+
+  for (const window of UNSEEN_WINDOWS) {
+    test(window.name, () => {
+      const [action] = buildPendingActions({ ...EMPTY, unseenChanges: window.unseenChanges });
+
+      expect(action.detail).toBe(window.detail);
     });
-
-    expect(action.detail).toBe('Read them in the journal below.');
-  });
-
-  test('a mixed window says how many of them can actually be decided', () => {
-    const [action] = buildPendingActions({
-      ...EMPTY, unseenChanges: { count: 4, revertable: 1, latestAt: 1 },
-    });
-
-    expect(action.detail).toBe('Keep or revert 1 of them in the journal below.');
-  });
+  }
 
   test('only pending curriculum proposals are the owner\'s call', () => {
     const actions = buildPendingActions({

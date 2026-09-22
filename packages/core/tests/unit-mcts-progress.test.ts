@@ -17,10 +17,20 @@ import type { MCTSProgressEvent } from '../src/types/mcts';
 import type { AgentRuntime } from '../src/types/agent-runtime';
 import { createTestRuntime, createMockSession } from './helpers';
 
+/** A branch that answers one candidate and reflects on nothing — the search's
+ *  shape is what these tests read, never the branch's content. */
+function oneCandidateBranch(): AgentRuntime['spawnBranch'] {
+  return async () => ({
+    explore: async () => ({ text: 'a candidate approach' }),
+    generateReflection: async () => ({ text: 'n/a' }),
+    release: async () => {},
+  });
+}
+
 describe('runMCTS reports progress while the search runs', () => {
   test('events arrive per iteration, and the tree has already grown when they do', async () => {
     const { rt } = createTestRuntime();
-    rt.spawnBranch = async () => ({ explore: async () => ({ text: 'a candidate approach' }), generateReflection: async () => ({ text: 'n/a' }), release: async () => {} });
+    rt.spawnBranch = oneCandidateBranch();
     initTables(rt);
 
     const events: MCTSProgressEvent[] = [];
@@ -57,7 +67,7 @@ describe('runMCTS reports progress while the search runs', () => {
 
   test('a call with no sink runs identically — the option is optional', async () => {
     const { rt } = createTestRuntime();
-    rt.spawnBranch = async () => ({ explore: async () => ({ text: 'a candidate approach' }), generateReflection: async () => ({ text: 'n/a' }), release: async () => {} });
+    rt.spawnBranch = oneCandidateBranch();
     initTables(rt);
 
     const result = await runMCTS(rt, createMockSession(), 'pick an approach', {

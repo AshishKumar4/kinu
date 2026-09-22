@@ -13,6 +13,7 @@
 // heads, three reported, one stopped, one still running when the merge landed.
 import { describe, expect, test } from 'bun:test';
 import { Database } from 'bun:sqlite';
+import { present } from '@kinu.run/test-utils';
 import { HeadJournal, UNREPORTED_AT_MERGE_REASON } from '../src/heads/journal';
 import { initHeadsTables } from '../src/heads/schema';
 import { initSearchTables } from '../src/mcts/schemas';

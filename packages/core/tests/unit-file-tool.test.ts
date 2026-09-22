@@ -9,7 +9,7 @@
 import { describe, expect, test } from 'bun:test';
 import { toolExecute } from '@kinu.run/test-utils';
 import * as v from 'valibot';
-import { applyFileEdits, formatFileSlice } from '../src/tools/file-edit';
+import { applyFileEdits, formatFileSlice, type FileEditFailure } from '../src/tools/file-edit';
 import { scanFileWindow } from '../src/tools/file-scan';
 import { TurnFileLedger } from '../src/tools/file-ledger';
 import { createFileTool, type FileToolInput } from '../src/tools/file-tool';
@@ -42,7 +42,13 @@ describe('applyFileEdits', () => {
   /** Every refusal the engine issues: the anchor as the model typed it, the
    *  file it was typed against, and what the message must say for the model to
    *  recover without another read. */
-  const REFUSALS = [
+  const REFUSALS: ReadonlyArray<{
+    name: string;
+    file: string;
+    edits: ReadonlyArray<{ oldText: string; newText: string }>;
+    reason: FileEditFailure;
+    says: readonly string[];
+  }> = [
     {
       name: 'refuses an anchor that appears more than once, naming the count',
       file: 'x\nx\n', edits: [{ oldText: 'x', newText: 'y' }],

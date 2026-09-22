@@ -11,6 +11,7 @@
 //        overrules the classifier without erasing the classifier's row,
 //        which is exactly the row the calibration set labels by id.
 import { describe, test, expect } from 'bun:test';
+import { present } from '@kinu.run/test-utils';
 import { createTestRuntime } from './helpers';
 import { EvolutionEngine } from '../src/evolution/engine';
 import type { CompletedTurn } from '../src/evolution/types';

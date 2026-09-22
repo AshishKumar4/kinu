@@ -125,17 +125,32 @@ describe('forkWorkspace', () => {
     src.workspace.db.close();
   });
 
-  test('a malformed name is refused before anything is created', async () => {
-    const src = await sourceWorkspace();
-    const t = recordingTransport();
+  const REFUSED_BEFORE_ANYTHING = [
+    {
+      name: 'a malformed name is refused before anything is created',
+      cut: 'm1', forkName: 'has spaces', says: 'invalid agent name',
+    },
+    {
+      // The primary-key preflight is bounded: it proves the cut exists without
+      // materialising its ancestry, so no pending target is ever addressed.
+      name: 'an unknown cut point is refused by the bounded preflight',
+      cut: 'nope', forkName: 'my-fork', says: 'fork point not found',
+    },
+  ];
 
-    await expect(forkWorkspace(deps(src, t.transport), 'm1', { name: 'has spaces' }))
-      .rejects.toThrow('invalid agent name');
+  for (const refusal of REFUSED_BEFORE_ANYTHING) {
+    test(refusal.name, async () => {
+      const src = await sourceWorkspace();
+      const t = recordingTransport();
 
-    expect(t.probed).toEqual([]);
-    expect(t.delivered).toEqual([]);
-    src.workspace.db.close();
-  });
+      await expect(forkWorkspace(deps(src, t.transport), refusal.cut, { name: refusal.forkName }))
+        .rejects.toThrow(refusal.says);
+
+      expect(t.probed).toEqual([]);
+      expect(t.delivered).toEqual([]);
+      src.workspace.db.close();
+    });
+  }
 
   test('a requested name no preview hostname can carry is refused with the limit', async () => {
     const src = await sourceWorkspace();
@@ -144,20 +159,6 @@ describe('forkWorkspace', () => {
     await expect(forkWorkspace(deps(src, t.transport), 'm1', { name: 'a'.repeat(32) })).rejects.toThrow('31');
     await expect(forkWorkspace(deps(src, t.transport), 'm1', { name: 'MyFork' })).rejects.toThrow('carries no case');
     expect(t.probed).toEqual([]);
-    expect(t.delivered).toEqual([]);
-    src.workspace.db.close();
-  });
-
-  test('an unknown cut point is refused by the bounded preflight', async () => {
-    const src = await sourceWorkspace();
-    const t = recordingTransport();
-
-    await expect(forkWorkspace(deps(src, t.transport), 'nope', { name: 'my-fork' }))
-      .rejects.toThrow('fork point not found');
-
-    expect(t.probed).toEqual([]);
-    // The primary-key preflight is bounded: it proves the cut exists without
-    // materialising its ancestry, so no pending target is ever addressed.
     expect(t.delivered).toEqual([]);
     src.workspace.db.close();
   });
