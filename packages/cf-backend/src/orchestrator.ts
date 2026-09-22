@@ -110,15 +110,14 @@ import {
   // The scaffold evolution control plane (core owns the drivers; this actor
   // supplies the surface they run against).
   applyScaffoldDecision, getShadowStatus, listScaffoldVersions, shadowTrialPlan, trimTrialContext,
-  previewScaffoldLive, proposeScaffold, runScaffoldCaptureText, runScaffoldGepaOptimization,
+  previewScaffoldLive, runScaffoldCaptureText, runScaffoldGepaOptimization,
   advancePromptSectionLane,
   // Continual refinement — `/refine` opens a request; the lane that runs it
   // lives on the actor beside the other cadence passes.
-  createRefinementStore, decideRefinementRoute, refinementDebt, refinementRequestView,
-  requestRefinement, showRefinementRoute,
+  decideRefinementRoute, listRefinements, refinementPass, requestOwnerRefinement, showRefinementRoute,
   type EvolutionDebt, type RefinementDecisionInput, type RefinementDecisionResult,
   type StagedSkillResult,
-  type RefinementRequestView, type RefinementScope, type RequestRefinementInput,
+  type RefinementRequestView, type RefinementScope,
   runScaffoldOnce, scaffoldRunReport, type ScaffoldRunReport,
   type GepaOptimizationResult, type ScaffoldDecisionResult,
   type ScaffoldVersionView, type ShadowStatus,
@@ -169,9 +168,6 @@ import {
   // The durable answer an interrupted terminal transition still owes a reply
   // for — read from the transcript, because a recovery has no live turn.
   answersForDrainTurns,
-  // Which titling SOURCE this root offers the shared policy. The policy itself
-  // lives on ActorAgent.
-  isPlaceholderMission,
   // The names its own prompt introduces this workspace by, and what it is
   // called before anything names it.
   type PromptIdentity, UNTITLED_WORKSPACE_NAME,
@@ -252,7 +248,7 @@ import {
 import { recordJobSettled, recordSandboxRecovery, type AgentKind } from "@kinu.run/core/analytics";
 import { resolveEnsembleJudgeSelection } from "./providers/judge-model";
 import {
-  createAgentSelfProvider,
+  agentSelfHost, createAgentSelfProvider,
   createReleaseCodemodeProvider,
   DeviceConsentRegistry, DeviceConsentStore,
   type DeviceConsentAnswer, type DeviceConsentDecision,
@@ -285,9 +281,10 @@ import { SANDBOX_TRANSPORT } from "./sandbox-exec-lane";
 import { sandboxIdForWorkspace } from "@kinu.run/core";
 import { sandboxPreviewExposures } from "@kinu.run/core";
 import {
-  terminalEffect, keyedScope, declareTerminalRoster,
+  terminalEffect, keyedScope, declareTerminalRoster, owesShadowTrial,
   takesTerminalEffect, branchesTerminalEffect,
-  type OwedEffect, type OwedTerminalEffectsInput, type TerminalEffectTable, type TerminalTurnParts,
+  type OwedEffect, type OwedTerminalEffectsInput, type TerminalEffectTable, type TerminalTurnFacts,
+  type TerminalTurnParts,
 } from "@kinu.run/core";
 
 const STALE_EVENT_DELIVERY_MS = 10 * 60 * 1000;
@@ -687,7 +684,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
         { path: [{ name: actor.name }], cred: ROOT_SLATE_CALLER.cred, workMode: 'build' }, operation,
       ),
       deferrals: () => this.deferralChannel(),
-      refinementLane: () => () => this.runRefinementLane(),
+      refinementLane: () => async () => { await refinementPass(this.refinementDeps); },
       chosenLoopOrigin: (record: WorkspaceActor) => this._chosenLoopOrigins.get(record.actorId) ?? null,
       chosenWriteObserver: (record: WorkspaceActor) => this._actorWriteObservers.get(record.actorId) ?? null,
     };
@@ -2593,7 +2590,16 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
    *  rebuilding eval. */
   protected extraCodemodeProviders(): CodemodeProvider[] {
     return [
-      createAgentSelfProvider(this),
+      createAgentSelfProvider(agentSelfHost({
+        rt: this.rt,
+        scaffoldControl: () => this.scaffoldControl,
+        triggers: () => this.triggerRegistry,
+        jobs: () => this.jobs,
+        budget: () => this.budget,
+        // The owner's revoke path, which drops the webhook secret with the row.
+        cancelTrigger: (id, caller) => this.cancelTrigger(id, caller),
+        armCompactNow: () => { this.compactionState.armForceCompaction(this.name); },
+      })),
       createReleaseCodemodeProvider(() => this.getReleaseToolDeps() ?? this.unclaimedReleaseDeps()),
     ];
   }
@@ -2687,34 +2693,27 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
    * subordinate facet and the CLI must not answer those questions three ways.
    */
   protected owedTerminalEffects(input: OwedTerminalEffectsInput): OwedEffect[] {
-    const messageId = input.messageId;
-    const completed = input.completed;
-    const turnMode = this.turnWorkMode();
-    // SCOPED once, here: the mission labels the turn ran under have to travel
-    // with every recording, and a cold replay has no active governor scope.
-    const scopedTurn = projectJsonValue({ value: this.orch.scopedTurn(input.turn) });
-    const mission = readMission(this.boundSql);
-
-    // Sampled only for a turn the promotion gate can learn from, and keyed on the
-    // turn rather than rolled — `queueTurnShadowTrial` re-reads the pending
-    // version on every call, so a replay would otherwise score this turn against
-    // a candidate that was not under trial when it ran.
-    const sampledVersion = completed && turnMode !== 'plan'
-      ? shadowTrialPlan(this.scaffoldControl, messageId)
-      : null;
-
-    return declareTerminalRoster({
-      messageId,
+    const facts: TerminalTurnFacts = {
+      messageId: input.messageId,
       status: input.status,
-      workMode: turnMode,
+      workMode: this.turnWorkMode(),
       continuity: this._turnContinuity,
-      completed,
+      completed: input.completed,
       userText: input.userText,
       assistantText: input.assistantText,
-      scopedTurn,
+      // SCOPED once, here: the mission labels the turn ran under have to travel
+      // with every recording, and a cold replay has no active governor scope.
+      scopedTurn: projectJsonValue({ value: this.orch.scopedTurn(input.turn) }),
       recordedAt: Date.now(),
       evolutionEnabled: this._turnEvolutionEnabled,
-    }, this.rosterParts(input, sampledVersion, mission));
+    };
+
+    // Keyed on the turn rather than rolled — `queueTurnShadowTrial` re-reads the
+    // pending version on every call, so a replay would otherwise score this turn
+    // against a candidate that was not under trial when it ran.
+    const sampledVersion = owesShadowTrial(facts) ? shadowTrialPlan(this.scaffoldControl, input.messageId) : null;
+
+    return declareTerminalRoster(facts, this.rosterParts(input, sampledVersion, readMission(this.boundSql)));
   }
 
   /** The optional halves of this root's terminal roster, each present only when
@@ -2742,9 +2741,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       sleepTime: true,
       // The genesis turn owes the naming the create left to it: the title the
       // create stored is a stand-in, and no other turn replaces one.
-      autoTitle: isPlaceholderMission(mission) || mission === null
-        ? { subject: input.userText }
-        : { subject: mission, standIn: input.event === WORKSPACE_CREATED_EVENT },
+      autoTitle: { mission, standIn: input.event === WORKSPACE_CREATED_EVENT },
       autoGepa: true,
       shadowTrial: sampledVersion === null ? undefined : {
         pendingVersion: sampledVersion,
@@ -4493,19 +4490,6 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     return scaffoldRunReport(await runScaffoldOnce(this.scaffoldControl, task, opts));
   }
 
-  /**
-   * `agent.proposeScaffold` host method — the agent proposes a new version of
-   * its own agentic loop from inside eval. Routes through the
-   * EXISTING modifyScaffold 4-gate pipeline; an accepted proposal lands as
-   * status='pending' and is scored by the sampled shadow eval + promotion
-   * gate (core queueTurnShadowTrial → runQueuedShadowTrials) like any other
-   * proposal — no new safety
-   * surface.
-   */
-  async proposeScaffold(rationale: string, code: string, baseVersion?: number) {
-    return proposeScaffold(this.scaffoldControl, rationale, code, baseVersion);
-  }
-
   /** Return the current shadow-rollout status: pending version, win counts, decision. */
   async getShadowStatus(): Promise<ShadowStatus> {
     return getShadowStatus(this.boundSql, this.rt.actor);
@@ -5368,7 +5352,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
         },
       // Null rather than a default: a share-of-window shown against a guessed
       // window would be a made-up percentage.
-      contextWindow: this.sessionContextWindow() || null,
+      contextWindow: this.modelCatalog.contextWindow() || null,
       // Every step in the window, reporting or not: `summarizeSteps` counts the
       // silent ones into `stepsWithoutUsage` so the totals carry their own
       // denominator instead of quietly under-counting.
@@ -6924,8 +6908,8 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
    *
    * Returns the DURABLE request immediately, at `requested`: no model has run
    * and no artifact has moved. The refiner runs on the off-turn cadence pass
-   * (`ActorAgent.runRefinementLane`, driven by AgentOrchestrator), where it can
-   * be re-driven for free.
+   * (core `refinementPass`, driven by AgentOrchestrator), where it can be
+   * re-driven for free.
    *
    * The nudge below is DETACHED for the reason the section and GEPA passes
    * beside it are: an owner asking explicitly should not wait for the next
@@ -6938,14 +6922,8 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   async requestRefinement(opts?: {
     turnIds?: string[]; scope?: RefinementScope;
   }): Promise<RefinementRequestView> {
-    let request: RequestRefinementInput = {
-      trigger: 'explicit',
-      scope: opts?.scope ?? 'workspace',
-    };
-
-    if (opts?.turnIds !== undefined) request = { ...request, turnIds: opts.turnIds };
-    const view = await requestRefinement(this.refinementDeps, request);
-    void this.runRefinementLane()
+    const view = await requestOwnerRefinement(this.refinementDeps, opts);
+    void refinementPass(this.refinementDeps)
       .catch((...rejection: [unknown]) => diagnostics.failure('refinement.lane_failed', toKinuError({
         doing: 'advancing the continual-refinement lane',
         cause: rejection[0],
@@ -6999,10 +6977,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   async listRefinements(limit = 20): Promise<{
     requests: RefinementRequestView[]; debt: EvolutionDebt;
   }> {
-    return {
-      requests: createRefinementStore(this.boundSql, this.actorHandle()).list(limit).map(refinementRequestView),
-      debt: refinementDebt(this.refinementDeps),
-    };
+    return listRefinements(this.refinementDeps, limit);
   }
 
   /** Run a webhook delivery through the hub from within the agent DO. This

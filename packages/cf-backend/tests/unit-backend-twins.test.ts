@@ -80,22 +80,14 @@ const KNOWN_TWINS: readonly string[] = [
   // means is the backend's, because the surfaces differ — a device tunnel and an
   // SMTP channel are not one implementation.
   'terminalEffectTable',
-  // The WAKE: a Durable Object writes a schedule row the platform fires; a CLI
-  // process has no alarm at all and its carrier is the next start. Neither can be
-  // expressed in the other's terms, which is the whole reason the port exists.
+  // The WAKE: a Durable Object writes Agents SDK schedule rows
+  // (`schedule`/`listSchedules`/`cancelSchedule`) its alarm fires; a CLI
+  // process arms `setTimeout(...).unref()` and its durable carrier is the next
+  // start. Neither can be expressed in the other's terms.
   'scheduleTerminalRetry',
-  // What keeps the runtime alive for a detached close: a durable fiber on the DO,
-  // the process lifetime on the CLI. Core decides WHEN the transition may close;
-  // this decides what is still running when it does.
-  'holdTerminalClose',
-  // Both build core's default key-less provider, but from different platform
-  // material: cf's owned model services (env + the owner's auth) vs node fetch
-  // + the local auth store. Only the memoisation is common, and memoisation is
-  // not a module.
-  'getWebSearchProvider',
-  // The platform fan-out itself: cf's is the Durable Object's socket
-  // broadcast minus its terminal sockets, the CLI's is one frontend listener.
-  // Neither carries logic the other could share.
+  // Not one method under two bodies: cf overrides the Agents SDK's
+  // `Agent.broadcast(message, without)` over `getConnections()` tags, the CLI
+  // emits a typed event to its one frontend listener.
   'broadcast',
   // The seam itself, not duplication: each backend describes the inference
   // surface a candidate scaffold runs on (its ToolSet, its history, its
@@ -139,6 +131,10 @@ const SHARED_TRANSPORTS = {
   // Both construct core's one lifecycle object over their own storage, effect
   // table, clock and wake. The state machine inside it is shared by definition.
   terminal: 'TerminalTransitions',
+  // The carrier is the platform's — an Agents SDK `runFiber` chain on the DO, a
+  // process-tracked fiber on the CLI; what a rejected close means (release,
+  // record, re-arm) is core's one rule.
+  holdTerminalClose: '.closeFailed',
   // Both gather their own readings — an accumulator's takes, a pending branch
   // list, a scaffold candidate — and hand them to core's ONE declaration, which
   // owns the order, the lanes, the keys and the gates.
@@ -152,10 +148,6 @@ const SHARED_TRANSPORTS = {
   listFileCheckpoints: 'fileCheckpointListing',
   planFileRestore: '.plan',
   restoreFileCheckpoint: '.restore',
-  // Three lines each over ONE core store (CompactionStateStore). No duplicated
-  // logic — only the session key differs, which is what a backend knows and
-  // core does not.
-  armCompactNow: '.armForceCompaction',
   cancelBackgroundJob: 'cancelBackgroundJob',
   cancelTrigger: 'cancelTrigger',
   decideDeferredApprovals: '.decide',
@@ -193,7 +185,6 @@ const SHARED_TRANSPORTS = {
   getAlwaysActiveSkills: 'getAlwaysActiveSkills',
   getEvolutionChangelog: 'getEvolutionChangelog',
   getReasoningEffort: 'getReasoningEffort',
-  getReplayEvals: 'listReplayEvals',
   getRunEvents: 'getRunEvents',
   getShadowStatus: 'getShadowStatus',
   // Both are one-line delegations to read-models/config-plane.ts, exactly like
@@ -201,32 +192,22 @@ const SHARED_TRANSPORTS = {
   // RPC surface each backend has to expose in its own transport.
   getShellApprovalGrants: 'getShellApprovalGrants',
   getShellApprovalMode: 'getShellApprovalMode',
-  // KINU-N028's instruction-trust surface. Every decision the owner makes and
-  // every byte either side reads is core's: the store (safety/instruction-trust.ts)
-  // holds the digest rule, and read-models/instruction-approvals.ts holds the
-  // paging, the on-demand open and the preview sanitizer. What each backend
-  // spells for itself is only the transport: a cf `@callable` against a stub, a
-  // local method behind LocalSessionControls. Both approve/revoke admit the
-  // owner's request through core's `admitInstructionDecision`, so the two sides
-  // share one rule for what counts as a valid decision rather than sharing only
-  // a name — which is the difference this gate is asking about.
-  approveInstruction: 'admitInstructionDecision',
-  revokeInstruction: 'admitInstructionDecision',
-  listInstructionApprovals: 'listInstructionApprovals',
-  readInstructionApproval: 'openInstructionSource',
-  getSkillsVfs: 'skillsVfsOver',
+  // KINU-N028's instruction-trust surface: one core InstructionApprovalDesk
+  // owns the listing, the opening and the digest re-check. Each backend names
+  // only where AGENTS.md is discovered and its transport (a cf `@callable`, a
+  // local method behind LocalSessionControls).
+  approveInstruction: '.approve',
+  revokeInstruction: '.revoke',
+  listInstructionApprovals: '.list',
+  readInstructionApproval: '.read',
   getStoredModelSpec: 'getStoredModelSpec',
   jobResult: 'jobResult',
   latestAlternateTakes: 'latestAlternateTakeSet',
   listBackgroundJobs: 'listBackgroundJobs',
   listDeferredApprovals: '.list',
-  listCurriculumTasks: 'listProposedTasks',
   listRuns: 'listRuns',
   logActivity: 'writeActivityLog',
-  listScaffoldVersions: 'listScaffoldVersions',
-  // `refinementDebt` is the direct call the delegation check can see; the row
-  // view beside it (`refinementRequestView`) is passed by reference into map.
-  listRefinements: 'refinementDebt',
+  listRefinements: 'listRefinements',
 
   makeScaffoldHistory: 'createScaffoldHistory',
 
@@ -237,22 +218,14 @@ const SHARED_TRANSPORTS = {
   submitPlanEdits: '.submit',
   getActivePlanReview: '.active',
   savePlanReviewAnnotations: '.saveAnnotations',
-  decidePlanReview: 'planHandoffTurn',
+  decidePlanReview: '.decideAndHandOff',
   turnWorkMode: 'workModeUnderReview',
   pickAlternateTake: 'pickAlternateTake',
-  proposeCurriculumTasks: 'proposeCurriculumTasks',
-  proposeScaffold: 'proposeScaffold',
-  requestRefinement: 'requestRefinement',
-  runRefinementLane: 'advanceRefinementLane',
+  requestRefinement: 'requestOwnerRefinement',
   recordSystemPromptHash: 'observeSystemPromptHash',
   resumeBackgroundJob: 'resumeBackgroundJob',
   revertChangelogEntry: 'revertChangelogEntryById',
   revokeShellApprovalGrants: 'revokeShellApprovalGrants',
-  // ONE lane per turn, ever started: the tombstone key, its scope and the
-  // fiber's name are core's, so a replay on either backend refuses a second
-  // review by the same rule. Each body keeps only its own carrier — a durable
-  // fiber on the DO, a tracked process fiber on the CLI.
-  reviewTurnInBackground: 'advisorLaneStarted',
   // One review, from a snapshot: the body the live lane and its recovery both
   // run, governed off the TURN's labels. Each backend states only which client
   // answers, where the governor lives, and whether a completion gate exists at
@@ -268,13 +241,9 @@ const SHARED_TRANSPORTS = {
   // backend is only how an IDLE backend starts the turn: the DO's
   // enqueueTurn, the CLI's session-queue pump.
   send: '.send',
-  // Accessors over ONE core object (ModelCatalogSession), three lines each.
-  sessionAcceptedMedia: '.acceptedMedia',
-  sessionContextWindow: '.contextWindow',
   setAlwaysActiveSkills: 'setAlwaysActiveSkills',
-  setCurriculumTaskStatus: 'updateProposedTaskStatus',
   setModel: 'setModel',
-  setRole: 'changeActiveRole',
+  setRole: 'changeRoleAsOwner',
   setReasoningEffort: 'setReasoningEffort',
   setShellApprovalMode: 'setShellApprovalMode',
   wrapToolsForBackground: 'wrapToolsForBackground',
