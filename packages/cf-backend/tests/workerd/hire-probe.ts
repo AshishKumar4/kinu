@@ -116,17 +116,15 @@ export class HireOrchestrator extends ProductionOrchestrator {
     return rows.map((row) => {
       const record = v.parse(
         v.fallback(
-          v.looseObject({ kind: v.optional(v.unknown()), body: v.optional(v.unknown()), content: v.optional(v.unknown()) }),
+          v.looseObject({ kind: v.optional(v.string()), body: v.optional(v.string()), content: v.optional(v.string()) }),
           {},
         ),
         JSON.parse(row.payload),
       );
 
-      const kind = v.is(v.string(), record.kind) ? record.kind : row.variant;
-
-      const body = v.is(v.string(), record.body)
-        ? record.body
-        : v.is(v.string(), record.content) ? record.content : '';
+      const kind = record.kind ?? row.variant;
+      // An assignment carries its text as `body`, a report as `content`.
+      const body = record.body ?? record.content ?? '';
 
       return {
         actorId: row.actor_id, id: row.id, variant: row.variant,

@@ -407,13 +407,13 @@ export function lockCandidate(
   previous: Budget,
   measured: readonly Measured[],
   spread: Distribution,
-  census: { readonly measuredAt: string; readonly files: number },
+  corpus: { readonly measuredAt: string; readonly files: number },
 ): Budget {
   const line = Math.min(previous.line, spread.line);
 
   return {
-    measuredAt: census.measuredAt,
-    files: census.files,
+    measuredAt: corpus.measuredAt,
+    files: corpus.files,
     functions: spread.functions,
     ceiling: spread.ceiling,
     line,

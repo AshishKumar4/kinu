@@ -45,11 +45,6 @@ let clock: number;
 
 const savedGlobals = new Map<string, PropertyDescriptor | undefined>();
 
-function installGlobal<Value>(name: string, value: Value): void {
-  if (!savedGlobals.has(name)) savedGlobals.set(name, Object.getOwnPropertyDescriptor(globalThis, name));
-  Object.defineProperty(globalThis, name, { configurable: true, writable: true, value });
-}
-
 /** A Canvas2D surface that counts strokes and answers every other call with nothing. */
 function countingSurface(canvas: FakeCanvas): StrokeSurface {
   const gradient = { addColorStop: () => undefined, toString: () => 'gradient()' };
@@ -137,6 +132,27 @@ const host: HTMLElement = Object.assign(Object.create(null), {
   getBoundingClientRect: () => ({ left: 0, top: 0, right: 1200, bottom: 600, width: 1200, height: 600 }),
 });
 
+/** The globals the mount looks up by name. Every value is a fake this file owns,
+ *  installed before each test and restored after, so none outlives the file. */
+const FAKE_GLOBALS = {
+  window: fakeWindow,
+  document: fakeDocument,
+  getComputedStyle: () => ({ getPropertyValue: () => '' }),
+  requestAnimationFrame: (cb: (now: number) => void): number => {
+    rafNext += 1;
+    rafQueue.push({ id: rafNext, cb });
+
+    return rafNext;
+  },
+  cancelAnimationFrame: (id: number): void => {
+    rafQueue = rafQueue.filter((entry) => entry.id !== id);
+  },
+  IntersectionObserver: FakeIntersectionObserver,
+  ResizeObserver: FakePassiveObserver,
+  MutationObserver: FakePassiveObserver,
+  navigator: { gpu: { requestAdapter: (): Promise<object> => Promise.resolve({}) } },
+};
+
 const disposers: (() => void)[] = [];
 
 beforeEach(() => {
@@ -145,22 +161,11 @@ beforeEach(() => {
   rafQueue = [];
   rafNext = 0;
   clock = 0;
-  installGlobal('window', fakeWindow);
-  installGlobal('document', fakeDocument);
-  installGlobal('getComputedStyle', () => ({ getPropertyValue: () => '' }));
-  installGlobal('requestAnimationFrame', (cb: (now: number) => void): number => {
-    rafNext += 1;
-    rafQueue.push({ id: rafNext, cb });
 
-    return rafNext;
-  });
-  installGlobal('cancelAnimationFrame', (id: number): void => {
-    rafQueue = rafQueue.filter((entry) => entry.id !== id);
-  });
-  installGlobal('IntersectionObserver', FakeIntersectionObserver);
-  installGlobal('ResizeObserver', FakePassiveObserver);
-  installGlobal('MutationObserver', FakePassiveObserver);
-  installGlobal('navigator', { gpu: { requestAdapter: (): Promise<object> => Promise.resolve({}) } });
+  for (const [name, value] of Object.entries(FAKE_GLOBALS)) {
+    if (!savedGlobals.has(name)) savedGlobals.set(name, Object.getOwnPropertyDescriptor(globalThis, name));
+    Object.defineProperty(globalThis, name, { configurable: true, writable: true, value });
+  }
 });
 
 afterEach(() => {

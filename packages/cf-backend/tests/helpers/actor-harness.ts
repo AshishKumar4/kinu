@@ -1323,10 +1323,14 @@ function requestView({ request, model, identity, tools, history }: RecordedCall)
   };
 }
 
+/** A message of the SDK prompt the loop assembled, system excluded: a suite
+ *  reads the system block on its own, through `system`. */
+type PromptMessage = Exclude<ScriptedTurnOptions['prompt'][number], { role: 'system' }>;
+
 /** The SDK prompt a model was called with, as the ModelMessages the loop
  *  assembled — user and assistant text read back the way
  *  `convertToModelMessages` wrote them; tool messages by their call ids. */
-function promptToModelMessages(prompt: ScriptedTurnOptions['prompt']): ModelMessage[] {
+function promptToModelMessages(prompt: readonly PromptMessage[]): ModelMessage[] {
   return prompt.flatMap((message): ModelMessage[] => {
     switch (message.role) {
       case 'user':
@@ -1349,9 +1353,6 @@ function promptToModelMessages(prompt: ScriptedTurnOptions['prompt']): ModelMess
             ? [{ type: 'tool-result' as const, toolCallId: part.toolCallId, toolName: part.toolName, output: part.output }]
             : []),
         }];
-
-      default:
-        return [];
     }
   });
 }
@@ -1684,8 +1685,8 @@ export function chatSessionTurns(agent: HarnessOrchestratorAgent): TurnHarness {
       const prior = lastUser === -1 ? [...input.messages] : input.messages.slice(0, lastUser);
 
       if (prior.length > 0) await agent.harnessSeedHistory(prior);
-      const content = user?.content;
-      const text = content === undefined ? '' : v.is(v.string(), content) ? content : content.flatMap((part) => part.type === 'text' ? [part.text] : []).join('');
+      const content = user?.content ?? '';
+      const text = v.is(v.string(), content) ? content : content.flatMap((part) => part.type === 'text' ? [part.text] : []).join('');
       // ONE mode carrier, the product's: the composer stamps `kinuMode` on
       // the message it sends, so the driving message's metadata is where
       // `admit` reads it. A second copy on the request body proved a mode the

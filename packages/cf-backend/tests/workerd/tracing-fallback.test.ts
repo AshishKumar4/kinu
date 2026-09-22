@@ -108,11 +108,11 @@ const CENSORED = [
   `TO SETTLE THIS TEST: re-run this file with ${EVIDENCE_KEY} set to the trace id from step 3.`,
 ].join('\n');
 
-interface Attempt {
+interface Attempt<T> {
   /** How many times the wrapped callback ran. */
   readonly ran: number;
   /** What `span` returned, or `undefined` when it threw. */
-  readonly returned: unknown;
+  readonly returned: T | undefined;
   /** What escaped to the caller, or `null` when nothing did. */
   readonly thrown: unknown;
   /**
@@ -138,7 +138,7 @@ interface Attempt {
  * about recorded. It never rethrows, because "an exception escaped" is one of
  * the three observations rather than a reason to stop measuring.
  */
-function attempt<T>(name: string, body: (traced: boolean) => T): Attempt {
+function attempt<T>(name: string, body: (traced: boolean) => T): Attempt<T> {
   let ran = 0;
   let fallbackSpan = false;
 
@@ -198,7 +198,7 @@ type StubThen = (resolve: (settled: string) => void) => void;
 function pipelinedStub(value: string): PromiseLike<string> {
   // The trap below answers every read; the target only has to BE the type the
   // Proxy declares.
-  const target: PromiseLike<string> = { then: (onfulfilled) => Promise.resolve(value).then(onfulfilled) };
+  const target: PromiseLike<string> = Promise.resolve(value);
 
   return new Proxy<PromiseLike<string>>(target, {
     get(_target: PromiseLike<string>, key: string | symbol): StubThen | undefined {
@@ -271,7 +271,7 @@ describe('the shipped Workers tracer against the platform it deploys onto', () =
    */
   it(`falls back when ${MEMBER} is absent: the callback runs once and nothing escapes`, () => {
     const sentinel = Object.freeze({ probe: 'fallback identity' });
-    let observed: Attempt;
+    let observed: Attempt<typeof sentinel>;
 
     try {
       shadowMember(undefined);
@@ -294,7 +294,7 @@ describe('the shipped Workers tracer against the platform it deploys onto', () =
 
   /** The second arm: the member is present, and it is not callable. */
   it(`falls back when ${MEMBER} is present but not callable`, () => {
-    let observed: Attempt;
+    let observed: Attempt<string>;
 
     try {
       shadowMember({ present: true, callable: false });
@@ -307,7 +307,7 @@ describe('the shipped Workers tracer against the platform it deploys onto', () =
   });
 
   it('reports the fallback span as untraced rather than claiming a recording', () => {
-    let observed: Attempt;
+    let observed: Attempt<boolean>;
 
     try {
       shadowMember(undefined);
@@ -330,9 +330,9 @@ describe('the shipped Workers tracer against the platform it deploys onto', () =
   it('preserves an async result and a rejection through the fallback', async () => {
     const resolved = Promise.resolve('async result');
     const rejection = new Error('the traced work failed');
-    let value: Attempt;
-    let rejected: Attempt;
-    let threw: Attempt;
+    let value: Attempt<Promise<string>>;
+    let rejected: Attempt<Promise<never>>;
+    let threw: Attempt<never>;
 
     try {
       shadowMember(undefined);

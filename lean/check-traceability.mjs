@@ -26,6 +26,10 @@ const qualifiedNamePattern = /^Kinu(?:\.[A-Za-z_][A-Za-z0-9_']*)+$/;
 
 const leanConstructorPattern = /\|\s*([A-Za-z_][A-Za-z0-9_']*)/g;
 
+function leanConstructors(text) {
+  return [...text.matchAll(leanConstructorPattern)].map((match) => match[1]);
+}
+
 // --manifest-only stops before the kernel axiom audit, which needs a built Lean
 // toolchain. Everything up to that point is pure file reading: the manifest is
 // well-formed, every tsRef still resolves to a live TypeScript declaration,
@@ -279,7 +283,7 @@ function collectDeclarations(paths) {
     for (const [lineIndex, line] of source.split("\n").entries()) {
       if (collecting !== undefined) {
         if (/^\s*\|/.test(line)) {
-          for (const match of line.matchAll(leanConstructorPattern)) collecting.push(match[1]);
+          collecting.push(...leanConstructors(line));
           continue;
         }
 
@@ -292,7 +296,7 @@ function collectDeclarations(paths) {
         // Constructors sit on the `inductive` line itself, or on the `|` lines
         // under it, or both. Doc comments between two constructors are already
         // blank here, so a blank line continues rather than ends the list.
-        const constructors = [...inductiveMatch[2].matchAll(leanConstructorPattern)].map((m) => m[1]);
+        const constructors = leanConstructors(inductiveMatch[2]);
         inductives.set([...namespace, inductiveMatch[1]].join("."), { path, constructors });
         collecting = constructors;
         continue;
