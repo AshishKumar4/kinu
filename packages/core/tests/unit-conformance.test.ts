@@ -123,10 +123,10 @@ describe('manifest hygiene', () => {
   test('the closed planes cover their registry universe exactly', () => {
     // A registry addition without a manifest decision is a compile error via
     // the Record key type; this locks the runtime view to the same truth.
-    expect(Object.keys(BACKEND_CONFORMANCE.tool).sort()).toEqual([...PLANE_UNIVERSE.tool!].sort());
+    expect(Object.keys(BACKEND_CONFORMANCE.tool).sort()).toEqual([...PLANE_UNIVERSE.tool].sort());
     expect(Object.keys(BACKEND_CONFORMANCE['agents-action']).sort()).toEqual([...AGENTS_TOOL_ACTIONS].sort());
-    expect(Object.keys(BACKEND_CONFORMANCE['memory-action']).sort()).toEqual([...PLANE_UNIVERSE['memory-action']!].sort());
-    expect(Object.keys(BACKEND_CONFORMANCE.producer).sort()).toEqual([...PLANE_UNIVERSE.producer!].sort());
+    expect(Object.keys(BACKEND_CONFORMANCE['memory-action']).sort()).toEqual([...PLANE_UNIVERSE['memory-action']].sort());
+    expect(Object.keys(BACKEND_CONFORMANCE.producer).sort()).toEqual([...PLANE_UNIVERSE.producer].sort());
   });
 
   /** A declaration is dead when no root holds the capability. A root that

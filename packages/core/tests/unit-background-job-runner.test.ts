@@ -246,7 +246,7 @@ describe('BackgroundJobRunner.detach — settle/fail → wake', () => {
 
     const pending = eventLog.pending();
     expect(pending).toHaveLength(1);
-    expect(buildDrainBatch(pending)?.ids).toEqual([pending[0]!.id]);
+    expect(buildDrainBatch(pending)?.ids).toEqual([pending[0].id]);
     expect(buildDrainBatch(pending)?.text).toContain(id);
     expect(drainSchedules()).toBe(1);
   });

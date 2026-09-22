@@ -105,11 +105,11 @@ describe('MCTS integration', () => {
     // Two branches in one expansion.
     expect(seenSiblings.length).toBe(2);
     // Each branch received exactly one sibling angle (the other branch's).
-    expect(seenSiblings[0]!.length).toBe(1);
-    expect(seenSiblings[1]!.length).toBe(1);
+    expect(seenSiblings[0].length).toBe(1);
+    expect(seenSiblings[1].length).toBe(1);
     // The two prompts are DISTINCT — branch 0 differs from branch 1's angle and
     // vice-versa, so they are not identical near-duplicates.
-    expect(seenSiblings[0]![0]).not.toBe(seenSiblings[1]![0]);
+    expect(seenSiblings[0][0]).not.toBe(seenSiblings[1][0]);
 
     // And the distinct angles landed in the recorded node observations.
     const observations = rt.storage.sql<SearchNode>`
@@ -176,7 +176,7 @@ describe('MCTS integration', () => {
     expect(minPassing).toBeGreaterThan(maxProse); // passing code dominates
 
     // Root should have been visited (backprop propagates to ancestors)
-    const root = rt.storage.sql<SearchNode>`SELECT * FROM search_nodes WHERE parent_id IS NULL`[0]!;
+    const root = rt.storage.sql<SearchNode>`SELECT * FROM search_nodes WHERE parent_id IS NULL`[0];
     expect(root.visits).toBeGreaterThan(0);
 
     // Convergence closes the tree: winner terminal, everything else pruned —
@@ -185,7 +185,7 @@ describe('MCTS integration', () => {
     expect(openNodes.length).toBe(0);
     const terminal = rt.storage.sql<SearchNode>`SELECT * FROM search_nodes WHERE status = 'terminal'`;
     expect(terminal.length).toBe(1);
-    expect(terminal[0]!.id).toBe(result.winnerId);
+    expect(terminal[0].id).toBe(result.winnerId);
   });
 
   test('a branch whose code FAILS execution scores below a branch whose code PASSES, despite a judge that loves both', async () => {
@@ -242,7 +242,7 @@ describe('MCTS integration', () => {
     await runMCTS(rt, session, 'implement the widget', { budget: 1, branches: 1 });
 
     const child = rt.storage.sql<SearchNode>`
-      SELECT * FROM search_nodes WHERE parent_id IS NOT NULL`[0]!;
+      SELECT * FROM search_nodes WHERE parent_id IS NOT NULL`[0];
 
     if (child.msg_id === null) throw new Error('the expanded branch recorded no message to inherit from');
 
@@ -293,7 +293,7 @@ describe('MCTS integration', () => {
 
     // A branch that never reached the environment gets no invented observation.
     const prose = rt.storage.sql<SearchNode>`
-      SELECT * FROM search_nodes WHERE parent_id IS NOT NULL AND code_used IS NULL`[0]!;
+      SELECT * FROM search_nodes WHERE parent_id IS NOT NULL AND code_used IS NULL`[0];
 
     if (prose.msg_id === null) throw new Error('the prose branch recorded no message to read back');
 
@@ -371,7 +371,7 @@ describe('MCTS integration', () => {
     // Fields, not prose: the pair a spend question needs, both scalars.
     const lines = stderr.filter(isClampLine);
     expect(lines).toHaveLength(1);
-    expect(JSON.parse(lines[0]!).fields).toMatchObject({
+    expect(JSON.parse(lines[0]).fields).toMatchObject({
       mode: 'build',
       judgeSamplesRequested: 20,
       judgeSamplesRealised: 3,
@@ -553,7 +553,7 @@ describe('MCTS integration', () => {
 
     const child = rt.storage.sql<SearchNode>`
       SELECT * FROM search_nodes WHERE parent_id IS NOT NULL LIMIT 1
-    `[0]!;
+    `[0];
 
     expect(child.visits).toBe(1);
     expect(child.value).toBe(0);
@@ -624,8 +624,8 @@ describe('MCTS progress reporting', () => {
     expect(events.filter(e => e.type === 'phase' && e.phase === 'evaluate').length).toBe(2);
     const iterations = events.flatMap(e => e.type === 'iteration-complete' ? [e] : []);
     expect(iterations.map(e => e.iteration)).toEqual([1, 2]);
-    expect(iterations[0]!.remainingBudget).toBe(1);
-    expect(iterations[0]!.scores.length).toBe(2);
+    expect(iterations[0].remainingBudget).toBe(1);
+    expect(iterations[0].scores.length).toBe(2);
     // The first thing reported for an iteration is the phase it entered.
     expect(events[0]).toMatchObject({ type: 'phase', phase: 'explore', iteration: 1, branches: 2 });
   });
@@ -679,9 +679,9 @@ describe('MCTS progress reporting', () => {
 
     const failures = events.flatMap(e => e.type === 'branch-failed' && e.stage === 'explore' ? [e] : []);
     expect(failures.length).toBe(1);
-    expect(failures[0]!.iteration).toBe(1);
-    expect(failures[0]!.error).toBe('Failed after 3 attempts. Last error: 429 rate limited');
-    expect(failures[0]!.branchId.length).toBeGreaterThan(0);
+    expect(failures[0].iteration).toBe(1);
+    expect(failures[0].error).toBe('Failed after 3 attempts. Last error: 429 rate limited');
+    expect(failures[0].branchId.length).toBeGreaterThan(0);
   });
 
   test('a failed reflection is reported and does not abort a search that already scored its branches', async () => {

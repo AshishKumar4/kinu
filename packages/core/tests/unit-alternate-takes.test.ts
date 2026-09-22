@@ -200,13 +200,13 @@ describe('recordTakePick — the preference signal', () => {
     expect(result).toMatchObject({ outcome: 'corrected', changedAnswer: true });
     expect(result.chosen.text).toBe('alternative approach');
 
-    const row = listTurnOutcomes(sql, actor)[0]!;
+    const row = listTurnOutcomes(sql, actor)[0];
     expect(row).toMatchObject({ outcome: 'corrected', source: 'take_pick', confidence: 1 });
     // The chosen take IS the correction follow-up — GEPA's optimization target.
     expect(row.followup).toBe('alternative approach');
 
-    const win = sql<{ status: string }>`SELECT status FROM search_nodes WHERE id = 'win'`[0]!;
-    const alt = sql<{ status: string }>`SELECT status FROM search_nodes WHERE id = 'alt'`[0]!;
+    const win = sql<{ status: string }>`SELECT status FROM search_nodes WHERE id = 'win'`[0];
+    const alt = sql<{ status: string }>`SELECT status FROM search_nodes WHERE id = 'alt'`[0];
     expect(win.status).toBe('pruned');
     expect(alt.status).toBe('terminal');
     expect(latestAlternateTakeSet(sql, actor)).toMatchObject({ chosenNodeId: 'alt', winnerNodeId: 'alt' });
@@ -226,8 +226,8 @@ describe('recordTakePick — the preference signal', () => {
     await recordTakePick(sql, actor, transcript, { takeId: set.id, nodeId: 'alt' });
     const switched = await recordTakePick(sql, actor, transcript, { takeId: set.id, nodeId: 'win' });
     expect(switched).toMatchObject({ outcome: 'corrected', changedAnswer: true });
-    const win = sql<{ status: string }>`SELECT status FROM search_nodes WHERE id = 'win'`[0]!;
-    const alt = sql<{ status: string }>`SELECT status FROM search_nodes WHERE id = 'alt'`[0]!;
+    const win = sql<{ status: string }>`SELECT status FROM search_nodes WHERE id = 'win'`[0];
+    const alt = sql<{ status: string }>`SELECT status FROM search_nodes WHERE id = 'alt'`[0];
     expect(win.status).toBe('terminal');
     expect(alt.status).toBe('pruned');
     expect(latestAlternateTakeSet(sql, actor)).toMatchObject({ chosenNodeId: 'win', winnerNodeId: 'win' });
@@ -260,7 +260,7 @@ describe('the take_pick signal feeds R3’s routes for free', () => {
 
     const split = await buildOutcomeEvalSplit(sql, actor, transcript, 4);
     expect(split.train).toHaveLength(1);
-    expect(split.train[0]!.expected).toMatchObject({ outcome: 'corrected', followup: 'alternative approach' });
+    expect(split.train[0].expected).toMatchObject({ outcome: 'corrected', followup: 'alternative approach' });
 
     const rates = realOutcomeScaffoldRates(sql, actor);
     expect(rates.get(5)).toEqual({ accepted: 0, negative: 1 });

@@ -172,7 +172,7 @@ describe('an operator-cancelled fork is not reported as running', () => {
     // A fork vanishing from the roster retracts nothing: the agent had already
     // read that it was in flight. It gets a turn, not a silence.
     expect(agent.enqueued).toHaveLength(1);
-    const turn = agent.enqueued[0]!;
+    const turn = agent.enqueued[0];
     expect(turn.metadata?.kinuEvent).toBe(FORK_INTERRUPTED_SIGNAL);
     expect(turn.text).toContain(ROOT);
     expect(turn.text).toContain(RATIONALE);

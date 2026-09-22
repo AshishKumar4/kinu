@@ -114,17 +114,17 @@ describe('buildBenchReport', () => {
     expect(t1).toMatchObject({ taskId: 't1', attempts: 3, passesA: 2, passesB: 3 });
     expect(t2).toMatchObject({ taskId: 't2', attempts: 3, passesA: 0, passesB: 0 });
     // Mean per attempt, so a k=3 row reads against the same per-attempt budget.
-    expect(t2!.tokensA).toBe(300);
-    expect(t2!.modelCallsA).toBe(6);
+    expect(t2.tokensA).toBe(300);
+    expect(t2.modelCallsA).toBe(6);
     // Cost fields are means so a k=3 row reads against the same per-attempt
     // budget a k=1 row does — except the PEAK, which is a maximum: averaging
     // peaks would report a working set no attempt ever reached.
-    expect(t2!.peakPromptTokensA).toBe(9000);
-    expect(t2!.durationMsA).toBe(20);
-    expect(t2!.breachA).toBe('tokens');
+    expect(t2.peakPromptTokensA).toBe(9000);
+    expect(t2.durationMsA).toBe(20);
+    expect(t2.breachA).toBe('tokens');
     expect(report.budgetBreaches).toBe(1);
-    expect(caseIsUnstable(t1!)).toBe(true);
-    expect(caseIsUnstable(t2!)).toBe(false);
+    expect(caseIsUnstable(t1)).toBe(true);
+    expect(caseIsUnstable(t2)).toBe(false);
     // pass@1 counts every attempt; pass^3 counts only clean sweeps.
     expect(report.dev.stats.passAtOneA).toBeCloseTo(1 / 3, 10);
     expect(report.dev.stats.passAllA).toBe(0);
@@ -149,11 +149,11 @@ describe('buildBenchReport', () => {
     });
 
     const [t1] = report.dev.cases;
-    expect(t1!.tokensA).toBeNull();
-    expect(t1!.peakPromptTokensA).toBeNull();
+    expect(t1.tokensA).toBeNull();
+    expect(t1.peakPromptTokensA).toBeNull();
     // The measured arm is untouched, so one row distinguishes unmeasured from
     // genuinely cheap.
-    expect(t1!.tokensB).toBe(100);
+    expect(t1.tokensB).toBe(100);
     expect(renderBenchSummary(report)).toContain('tokens/task A=unreported  B=100');
     expect(renderBenchSummary(report)).toContain('peak prompt tokens A=unreported  B=1000');
   });

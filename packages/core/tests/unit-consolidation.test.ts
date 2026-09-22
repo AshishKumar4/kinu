@@ -34,7 +34,7 @@ describe('CraftStore consolidation', () => {
 
     const remaining = rt.craftStore.list();
     expect(remaining).toHaveLength(1);
-    expect(remaining[0]!.name).toBe('fresh_tool');
+    expect(remaining[0].name).toBe('fresh_tool');
   });
 
   test('BUG-2: does NOT retire all tools when all are stale', async () => {

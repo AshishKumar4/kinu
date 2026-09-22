@@ -208,7 +208,7 @@ describe('models.dev dynamic catalog source', () => {
     expect(source.get('groq')?.id).toBe('groq');
     expect(source.get('not yet fetched')).toBeUndefined();
     expect(source.get('UPPER')).toBeUndefined();
-    expect(source.get('groq')).toBe(source.get('groq')!);
+    expect(source.get('groq')).toBe(source.get('groq'));
   });
 });
 

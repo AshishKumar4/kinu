@@ -22,19 +22,19 @@ describe('DrainScheduler — fixed-window debounce', () => {
 
     for (let i = 0; i < 5; i++) scheduler.schedule();
     expect(timers).toHaveLength(1);                 // 4 calls absorbed
-    expect(timers[0]!.ms).toBe(DRAIN_DEBOUNCE_MS);
-    await timers[0]!.fn();
+    expect(timers[0].ms).toBe(DRAIN_DEBOUNCE_MS);
+    await timers[0].fn();
     expect(drained()).toBe(1);
   });
 
   test('schedule() after the window fired arms a fresh window → a second drain', async () => {
     const { scheduler, timers, drained } = setup();
     scheduler.schedule();
-    await timers[0]!.fn();
+    await timers[0].fn();
     scheduler.schedule();
     scheduler.schedule();                           // absorbed into window 2
     expect(timers).toHaveLength(2);
-    await timers[1]!.fn();
+    await timers[1].fn();
     expect(drained()).toBe(2);
   });
 
@@ -48,22 +48,22 @@ describe('DrainScheduler — fixed-window debounce', () => {
     });
 
     scheduler.schedule();
-    await timers[0]!.fn();                          // swallowed + logged, never rejects
+    await timers[0].fn();                          // swallowed + logged, never rejects
     expect(calls).toBe(1);
     scheduler.schedule();
     expect(timers).toHaveLength(2);
-    await timers[1]!.fn();
+    await timers[1].fn();
     expect(calls).toBe(2);
   });
 
   test('the window disarms before the drain runs, so a mid-drain schedule() arms a new one', async () => {
     const { scheduler, timers, drained } = setup();
     scheduler.schedule();
-    const firing = timers[0]!.fn();
+    const firing = timers[0].fn();
     scheduler.schedule();                           // lands while window 1 fires
     await firing;
     expect(timers).toHaveLength(2);
-    await timers[1]!.fn();
+    await timers[1].fn();
     expect(drained()).toBe(2);
   });
 });

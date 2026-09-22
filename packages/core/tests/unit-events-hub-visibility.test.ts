@@ -239,7 +239,7 @@ describe('renderForLLM', () => {
         `[... ${longReport.length - EVENT_BRIEF_MAX_CHARS} chars omitted from the middle ...]`,
       );
       expect(r.brief.endsWith(` — full report: ${content_path}`)).toBe(true);
-      expect(await vfs.readFile(content_path!)).toBe(longReport);
+      expect(await vfs.readFile(content_path)).toBe(longReport);
     });
 
     test('a report within the brief budget spills nothing and renders unreferenced', async () => {
@@ -281,7 +281,7 @@ describe('renderForLLM', () => {
       // The tail survives the window, so the serialization's closing brace is
       // visible rather than cut mid-value.
       expect(r.brief).toContain(`"} — full message: ${body_path}`);
-      expect(await vfs.readFile(body_path!)).toBe(serialized);
+      expect(await vfs.readFile(body_path)).toBe(serialized);
     });
 
     test('a peer body within the brief budget spills nothing and renders unreferenced', async () => {
@@ -325,7 +325,7 @@ describe('renderForLLM', () => {
       );
       expect(r.brief).toContain('rollback');
       expect(r.brief.endsWith(` — full body: ${body_path}`)).toBe(true);
-      expect(await vfs.readFile(body_path!)).toBe(serialized);
+      expect(await vfs.readFile(body_path)).toBe(serialized);
     });
 
     test('an oversize email body is windowed, counted, and addressable', async () => {
@@ -361,7 +361,7 @@ describe('renderForLLM', () => {
       const overBudget = `${atBudget}b`;
       const first = await spillEventContent(vfs, overBudget);
       const second = await spillEventContent(vfs, overBudget);
-      expect(second).toBe(first!);
+      expect(second).toBe(first);
       expect([...files.keys()]).toEqual([first!]);
       expect(first!.startsWith('.kinu/event-content/')).toBe(true);
     });

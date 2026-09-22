@@ -98,20 +98,20 @@ describe('sanitizeAttachmentsForModel', () => {
     // messages keep referential identity.
     expect(out).toHaveLength(2);
     expect(JSON.stringify(input)).toBe(before);
-    expect(out[1]).toBe(input[1]!);
+    expect(out[1]).toBe(input[1]);
 
-    const content = textParts(out[0]!);
+    const content = textParts(out[0]);
     expect(content).toHaveLength(2);
     const [replacement, text] = content;
-    expect(replacement!.type).toBe('text');
-    expect(replacement!.text).toContain('resume.pdf');
-    expect(replacement!.text).toContain('application/pdf');
-    expect(replacement!.text).toContain(`${PDF_BYTES.length} bytes`);
-    expect(replacement!.text).toContain('read it with your file tools');
-    expect(text!.text).toBe('I have shared the resume.');
+    expect(replacement.type).toBe('text');
+    expect(replacement.text).toContain('resume.pdf');
+    expect(replacement.text).toContain('application/pdf');
+    expect(replacement.text).toContain(`${PDF_BYTES.length} bytes`);
+    expect(replacement.text).toContain('read it with your file tools');
+    expect(text.text).toBe('I have shared the resume.');
 
     // No file-typed part survives; the payload round-trips through the VFS.
-    const path = savedPath(replacement!.text);
+    const path = savedPath(replacement.text);
     expect(path).toStartWith('attachments/');
     const stored = await vfs.readFile(path);
     expect(stored instanceof Uint8Array ? Array.from(stored) : stored).toEqual(Array.from(PDF_BYTES));
@@ -137,7 +137,7 @@ describe('sanitizeAttachmentsForModel', () => {
     const { vfs, writes } = countingVfs();
     const policy = { accepts: accepts(), vfs };
     const first = await sanitizeAttachmentsForModel([pdfMessage()], policy);
-    const path = savedPath(textParts(first[0]!)[0]!.text);
+    const path = savedPath(textParts(first[0])[0].text);
     expect(writes()).toBe(1);
 
     // Somebody else's bytes now occupy the address.
@@ -145,7 +145,7 @@ describe('sanitizeAttachmentsForModel', () => {
 
     const again = await sanitizeAttachmentsForModel([pdfMessage()], policy);
     // The reference is still byte-stable (the prompt-cache prefix holds)...
-    expect(savedPath(textParts(again[0]!)[0]!.text)).toBe(path);
+    expect(savedPath(textParts(again[0])[0].text)).toBe(path);
     // ...and it resolves to the attachment, not to the impostor.
     const stored = await vfs.readFile(path);
     expect(stored instanceof Uint8Array ? Array.from(stored) : stored).toEqual(Array.from(PDF_BYTES));
@@ -166,10 +166,10 @@ describe('sanitizeAttachmentsForModel', () => {
     expect(kept[0]).toBe(message);
 
     const replaced = await sanitizeAttachmentsForModel([message], { accepts: accepts(), vfs });
-    const parts = textParts(replaced[0]!);
+    const parts = textParts(replaced[0]);
     expect(parts.every((p) => p.type === 'text')).toBe(true);
-    expect(parts[0]!.text).toContain('attachments/');
-    expect(parts[1]!.text).toContain('attachments/');
+    expect(parts[0].text).toContain('attachments/');
+    expect(parts[1].text).toContain('attachments/');
   });
 
   test('passes PDFs through untouched for pdf-capable models', async () => {
@@ -195,7 +195,7 @@ describe('sanitizeAttachmentsForModel', () => {
     };
 
     const out = await sanitizeAttachmentsForModel([message], { accepts: accepts('image'), vfs });
-    const part = textParts(out[0]!)[0]!;
+    const part = textParts(out[0])[0];
     expect(part.type).toBe('text');
     expect(part.text).toContain('notes.md');
     expect(part.text).toContain(body);
@@ -217,7 +217,7 @@ describe('sanitizeAttachmentsForModel', () => {
     };
 
     const out = await sanitizeAttachmentsForModel([message], { accepts: accepts('image'), vfs });
-    const part = textParts(out[0]!)[0]!;
+    const part = textParts(out[0])[0];
     expect(part.text).toContain('attachments/');
     expect(part.text).not.toContain(body);
     expect(writes()).toBe(1);
@@ -232,7 +232,7 @@ describe('sanitizeAttachmentsForModel', () => {
     };
 
     const out = await sanitizeAttachmentsForModel([message], { accepts: accepts(), vfs });
-    const part = textParts(out[0]!)[0]!;
+    const part = textParts(out[0])[0];
     expect(part.type).toBe('text');
     expect(part.text).toContain('https://example.com/a.pdf');
     expect(writes()).toBe(0);
@@ -248,9 +248,9 @@ describe('sanitizeAttachmentsForModel', () => {
     ];
 
     const out = await sanitizeAttachmentsForModel(input, { accepts: accepts(), vfs });
-    expect(out[0]).toBe(input[0]!);
-    expect(out[1]).toBe(input[1]!);
-    expect(out[2]).toBe(input[2]!);
+    expect(out[0]).toBe(input[0]);
+    expect(out[1]).toBe(input[1]);
+    expect(out[2]).toBe(input[2]);
   });
 });
 
@@ -267,7 +267,7 @@ describe('message-borne bulk (pasted text and oversize accepted documents)', () 
     const input: ModelMessage[] = [{ role: 'user', content: HUGE_PASTE }];
 
     const out = await sanitizeAttachmentsForModel(input, { accepts: accepts('image'), vfs, budget });
-    const text = messageString(out[0]!);
+    const text = messageString(out[0]);
 
     expect(text.length).toBeLessThan(3_000);
     expect(text).toContain('PASTE-HEAD');
@@ -290,10 +290,10 @@ describe('message-borne bulk (pasted text and oversize accepted documents)', () 
     }];
 
     const output = await sanitizeAttachmentsForModel(input, { accepts: accepts('image'), vfs });
-    const parts = textParts(output[0]!);
+    const parts = textParts(output[0]);
     expect(parts).toHaveLength(2);
-    expect(parts[0]!.text).toBe('here is the log:');
-    expect(parts[1]!.text).toContain('attachments/');
+    expect(parts[0].text).toBe('here is the log:');
+    expect(parts[1].text).toContain('attachments/');
   });
 
   test('ordinary messages inline untouched — the root must not starve on normal material', async () => {
@@ -307,8 +307,8 @@ describe('message-borne bulk (pasted text and oversize accepted documents)', () 
     ];
 
     const out = await sanitizeAttachmentsForModel(input, { accepts: accepts('image'), vfs, budget });
-    expect(out[0]).toBe(input[0]!);
-    expect(out[1]).toBe(input[1]!);
+    expect(out[0]).toBe(input[0]);
+    expect(out[1]).toBe(input[1]);
     expect(writes()).toBe(0);
     expect(budget.active).toBe(false);
   });
@@ -328,7 +328,7 @@ describe('message-borne bulk (pasted text and oversize accepted documents)', () 
     const policy = { accepts: accepts('image'), vfs };
     const once = await sanitizeAttachmentsForModel([{ role: 'user', content: HUGE_PASTE }], policy);
     const twice = await sanitizeAttachmentsForModel(once, policy);
-    expect(twice[0]).toBe(once[0]!);
+    expect(twice[0]).toBe(once[0]);
     expect(writes()).toBe(1);
   });
 
@@ -349,7 +349,7 @@ describe('message-borne bulk (pasted text and oversize accepted documents)', () 
     const policy = { accepts: accepts('image', 'pdf'), vfs, budget };
 
     const spilled = await sanitizeAttachmentsForModel([bigPdf], policy);
-    const part = textParts(spilled[0]!)[0]!;
+    const part = textParts(spilled[0])[0];
     expect(part.type).toBe('text');
     expect(part.text).toContain('thesis.pdf');
     expect(part.text).toContain('attachments/');
@@ -391,7 +391,7 @@ describe('the spill-directory mkdir failure is classified, not substring-matched
   test('an EEXIST-shaped mkdir failure is tolerated and the sanitize flow proceeds', async () => {
     const vfs = vfsWhoseMkdirThrows(Object.assign(new Error('EEXIST: file already exists'), { code: 'EEXIST' }));
     const out = await sanitizeAttachmentsForModel([pdfMessage()], { accepts: accepts(), vfs });
-    const stored = await vfs.readFile(savedPath(textParts(out[0]!)[0]!.text));
+    const stored = await vfs.readFile(savedPath(textParts(out[0])[0].text));
     expect(stored instanceof Uint8Array ? Array.from(stored) : stored).toEqual(Array.from(PDF_BYTES));
   });
 

@@ -137,10 +137,10 @@ describe('Convergence', () => {
     await converge(rt, session, 'r');
 
     const best = rt.storage.sql<{ status: string }>`SELECT status FROM search_nodes
-      WHERE actor_id = ${rt.actor.actorId} AND id = 'best'`[0]!;
+      WHERE actor_id = ${rt.actor.actorId} AND id = 'best'`[0];
 
     const other = rt.storage.sql<{ status: string }>`SELECT status FROM search_nodes
-      WHERE actor_id = ${rt.actor.actorId} AND id = 'other'`[0]!;
+      WHERE actor_id = ${rt.actor.actorId} AND id = 'other'`[0];
 
     expect(best.status).toBe('terminal');
     expect(other.status).toBe('pruned');
@@ -163,7 +163,7 @@ describe('Convergence', () => {
 
     // The set snapshots the choice the close erased: the rival is now pruned…
     const rival = rt.storage.sql<{ status: string }>`SELECT status FROM search_nodes
-      WHERE actor_id = ${rt.actor.actorId} AND id = 'rival'`[0]!;
+      WHERE actor_id = ${rt.actor.actorId} AND id = 'rival'`[0];
 
     expect(rival.status).toBe('pruned');
     // …but lives on as a comparable take next to the winner.
@@ -208,10 +208,10 @@ describe('Convergence', () => {
     expect(result.winnerId).toBe('passer');
 
     const passer = rt.storage.sql<{ status: string }>`SELECT status FROM search_nodes
-      WHERE actor_id = ${rt.actor.actorId} AND id = 'passer'`[0]!;
+      WHERE actor_id = ${rt.actor.actorId} AND id = 'passer'`[0];
 
     const argmax = rt.storage.sql<{ status: string }>`SELECT status FROM search_nodes
-      WHERE actor_id = ${rt.actor.actorId} AND id = 'argmax'`[0]!;
+      WHERE actor_id = ${rt.actor.actorId} AND id = 'argmax'`[0];
 
     expect(passer.status).toBe('terminal');
     expect(argmax.status).toBe('pruned');

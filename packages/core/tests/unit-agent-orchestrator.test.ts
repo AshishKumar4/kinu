@@ -469,7 +469,7 @@ describe('AgentOrchestrator — the settle’s claimable parts', () => {
       const stamped = orch.recordedTurn(status, aTurn(0));
       predicted.push(stamped.hadError);
       orch.recordTurn(stamped, 'conversation');
-      recorded.push(store.claim()!.turns[0]!.hadError);
+      recorded.push(store.claim()!.turns[0].hadError);
     }
 
     expect(recorded).toEqual([false, false, true]);
@@ -668,13 +668,13 @@ describe('AgentOrchestrator.drainPendingEvents — the reactor (drain-then-stop)
     const injected = await absorb(orch);
     expect(injected).toHaveLength(1);
     // Mid-turn rendering: the live turn is told to fold the events in, not stop.
-    expect(injected[0]!.stepText).toContain('arrived while you were working');
-    expect(injected[0]!.stepText).toContain('[webhook]');
+    expect(injected[0].stepText).toContain('arrived while you were working');
+    expect(injected[0].stepText).toContain('[webhook]');
     // The standalone rendering rides along for the re-delivery fallback.
-    expect(injected[0]!.text).toContain('arrived while you were idle');
+    expect(injected[0].text).toContain('arrived while you were idle');
     // Reply-channel binding: the consumed event is bound to the SAME turn id
     // the signal carries — the backend dispatches the live turn's answer by it.
-    const bound = log.query({ turn_id: injected[0]!.replyTurnId! });
+    const bound = log.query({ turn_id: injected[0].replyTurnId! });
     expect(bound.map((event) => event.id)).toHaveLength(1);
     // The delivery is observable (clients get a typed fan-out, not silence):
     // the user's card exists from the moment the batch was DELIVERED, saying
@@ -686,9 +686,9 @@ describe('AgentOrchestrator.drainPendingEvents — the reactor (drain-then-stop)
         type: 'signal_card', id: cardId, state: 'pending',
         metadata: {
           kinuEvent: 'event_drain', kinuAuthor: 'harness',
-          drainTurnId: injected[0]!.replyTurnId!,
+          drainTurnId: injected[0].replyTurnId!,
         },
-        text: injected[0]!.stepText,
+        text: injected[0].stepText,
       },
       { type: 'signal_card', id: cardId, state: 'shown' },
     ]);
@@ -704,7 +704,7 @@ describe('AgentOrchestrator.drainPendingEvents — the reactor (drain-then-stop)
     await orch.drainPendingEvents();
     expect(await absorb(orch)).toHaveLength(0);
     expect(enqueued).toHaveLength(1);
-    expect(enqueued[0]!.metadata?.kinuEvent).toBe('event_drain');
+    expect(enqueued[0].metadata?.kinuEvent).toBe('event_drain');
     // Same card, same moment: the queued path is not a silent one. The turn
     // this signal starts flips it, and it names that card on its own metadata.
     const signalId = v.parse(v.string(), enqueued[0]?.metadata?.signalId);
@@ -714,7 +714,7 @@ describe('AgentOrchestrator.drainPendingEvents — the reactor (drain-then-stop)
         kinuEvent: 'event_drain', kinuAuthor: 'harness',
         drainTurnId: expect.any(String),
       },
-      text: enqueued[0]!.text,
+      text: enqueued[0].text,
     }]);
   });
 
@@ -786,7 +786,7 @@ describe('AgentOrchestrator.scheduleDrain — debounced ingress coalescing', () 
     expect(timers).toHaveLength(1);                  // calls 2..3 absorbed
     expect(enqueued).toHaveLength(0);                // nothing drains inside the window
 
-    await timers[0]!.fn();                           // the window fires
+    await timers[0].fn();                           // the window fires
     expect(enqueued).toHaveLength(1);                // ONE coalesced turn…
     const drainTurnId = v.parse(v.string(), enqueued[0]?.metadata?.drainTurnId);
     const bound = log.query({ turn_id: drainTurnId });
@@ -801,10 +801,10 @@ describe('AgentOrchestrator.scheduleDrain — debounced ingress coalescing', () 
 
     log.publish({ descriptor: webhook('a', { seq: 'a' }), now: 1 });
     orch.scheduleDrain();
-    await timers[0]!.fn();
+    await timers[0].fn();
     log.publish({ descriptor: webhook('b', { seq: 'b' }), now: 2 });
     orch.scheduleDrain();
-    await timers[1]!.fn();
+    await timers[1].fn();
     expect(enqueued).toHaveLength(2);
   });
 
@@ -813,7 +813,7 @@ describe('AgentOrchestrator.scheduleDrain — debounced ingress coalescing', () 
     const { host, enqueued, timers } = fakeHost();
     const orch = new AgentOrchestrator({ host, engine, eventLog: newEventLog() });
     orch.scheduleDrain();
-    await timers[0]!.fn();
+    await timers[0].fn();
     expect(enqueued).toHaveLength(0);                // buildDrainBatch null → no enqueueTurn
   });
 });
@@ -840,7 +840,7 @@ describe('AgentOrchestrator — the in-episode evolution clock', () => {
     await runBlock(orch, 'return await tools.summarize(1)');
 
     expect(observed).toHaveLength(1);
-    expect(observed[0]!.names).toEqual(['summarize']);
+    expect(observed[0].names).toEqual(['summarize']);
     // No turn boundary, no user message, no cadence — the score is already in.
     expect(orch.craft.snapshot()).toEqual({
       crafted: [], invoked: ['summarize'], reused: [], returned: 1, raised: 0, dropped: [],

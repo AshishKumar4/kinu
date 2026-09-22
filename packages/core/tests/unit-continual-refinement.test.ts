@@ -212,7 +212,7 @@ function deferredRefiner(...answers: readonly RefinementProposal[]) {
         const mine = Math.min(asks, answers.length) - 1;
 
         if (asks === 1) await gate;
-        const answer = answers[mine]!;
+        const answer = answers[mine];
 
         const outcome: TemporaryRunOutcome = {
           status: 'completed', agent: 'refiner-1', lifetime: 'task', role: 'task',
@@ -411,7 +411,7 @@ function everyOwnerProposal(
         source: section,
         rationale: 'four corrected turns all asked for a shorter answer than the section invites',
       },
-      skillProposal(skill).edits[0]!,
+      skillProposal(skill).edits[0],
     ],
   };
 }
@@ -530,7 +530,7 @@ describe('the refiner — bounded references, prior history, strict typed answer
     const first = await requestRefinement(deps, { trigger: 'explicit', scope: 'workspace' });
     await advanceRefinementLane(deps);
     expect(requests).toHaveLength(1);
-    const brief = requests[0]!.task;
+    const brief = requests[0].task;
 
     // The trajectory it must review.
     expect(brief).toContain('always answer in one line');
@@ -554,7 +554,7 @@ describe('the refiner — bounded references, prior history, strict typed answer
     const secondDeps = fx.deps(second);
     await requestRefinement(secondDeps, { trigger: 'explicit', scope: 'workspace' });
     await advanceRefinementLane(secondDeps);
-    expect(secondRequests[0]!.task).toContain(first.id);
+    expect(secondRequests[0].task).toContain(first.id);
   });
 
   test('the refiner reads context refs itself — only the files this workspace has, at their real paths', async () => {
@@ -578,8 +578,8 @@ describe('the refiner — bounded references, prior history, strict typed answer
     await requestRefinement(deps, { trigger: 'explicit', scope: 'workspace' });
     await advanceRefinementLane(deps);
 
-    expect(requests[0]!.contextRefs).toEqual(['memory/MEMORY.md']);
-    expect(requests[0]!.mode).toBe('plan');
+    expect(requests[0].contextRefs).toEqual(['memory/MEMORY.md']);
+    expect(requests[0].mode).toBe('plan');
 
     // With an AGENTS.md in place it is offered too; nothing absent ever is.
     const withAgentsMd = fixture();
@@ -591,7 +591,7 @@ describe('the refiner — bounded references, prior history, strict typed answer
     const secondDeps = withAgentsMd.deps(second.port);
     await requestRefinement(secondDeps, { trigger: 'explicit', scope: 'workspace' });
     await advanceRefinementLane(secondDeps);
-    expect(second.requests[0]!.contextRefs).toEqual(['memory/MEMORY.md', 'AGENTS.md']);
+    expect(second.requests[0].contextRefs).toEqual(['memory/MEMORY.md', 'AGENTS.md']);
   });
 
   test('an unparsable or off-schema answer refuses the request — it never half-applies', async () => {
@@ -665,7 +665,7 @@ describe('the brief and the schema are one contract', () => {
     await requestRefinement(deps, { trigger: 'explicit', scope: 'workspace' });
     await advanceRefinementLane(deps);
 
-    const brief = requests[0]!.task;
+    const brief = requests[0].task;
     const section = brief.slice(brief.indexOf('## Your answer'));
     expect(section).toContain('## Your answer');
 
@@ -1080,8 +1080,8 @@ describe('routing — every typed edit lands in the store that already owns it',
       SELECT turn_ids FROM refinement_requests`;
 
     expect(stored).toHaveLength(1);
-    expect(JSON.parse(stored[0]!.turn_ids)).toEqual(negatives);
-    expect(stored[0]!.turn_ids).not.toContain('always answer in one line');
+    expect(JSON.parse(stored[0].turn_ids)).toEqual(negatives);
+    expect(stored[0].turn_ids).not.toContain('always answer in one line');
   });
 });
 
@@ -1421,7 +1421,7 @@ describe('two passes at once — the claim, and what recovery may not revoke', (
     expect(fx.facts.recall('user.answer_length')).toBeNull();
     const versions = listPromptSectionVersions(fx.rt.storage.sql, fx.rt.actor, 50);
     expect(versions).toHaveLength(1);
-    expect(versions[0]!.source).toBe(`${INCUMBENT.slice(0, -6)}BRIEF.`);
+    expect(versions[0].source).toBe(`${INCUMBENT.slice(0, -6)}BRIEF.`);
     expect(await readSkill(fx.rt, refinementStagingPath(opened.id, 'brevity')))
       .toBe(`${BREVITY_SKILL}\nName the ask.`);
   });
@@ -1776,7 +1776,7 @@ describe('mixed outcomes settle honestly', () => {
       scope: 'workspace',
       summary: 'a preference and a section',
       edits: [
-        FACT_PROPOSAL.edits[0]!,
+        FACT_PROPOSAL.edits[0],
         {
           kind: 'prompt_section',
           sectionId: TARGET_ID,
@@ -1832,7 +1832,7 @@ describe('the refiner never sees the set its proposal is scored on', () => {
 
     await requestRefinement(deps, { trigger: 'explicit', scope: 'workspace' });
     await advanceRefinementLane(deps);
-    const brief = requests[0]!.task;
+    const brief = requests[0].task;
 
     const split = await buildOutcomeEvalSplit(fx.rt.storage.sql, fx.rt.actor, fx.stores.history.transcript(CHAT_SESSION_ID), EVAL_SIZE);
     expect(split.heldOutNegatives).toBeGreaterThan(0);
@@ -1845,7 +1845,7 @@ describe('the refiner never sees the set its proposal is scored on', () => {
 
     // The train half IS shown — reflection has to have something to fix.
     expect(split.train.length).toBeGreaterThan(0);
-    expect(brief).toContain(split.train[0]!.input);
+    expect(brief).toContain(split.train[0].input);
     expect(brief).toContain('WITHHELD');
   });
 });
@@ -2108,7 +2108,7 @@ describe('owner promotion — the approval is what makes a staged skill live', (
     const mixedDeps = mixed.deps(scriptedRefiner(proposalText({
       scope: 'workspace',
       summary: 'a preference and a skill',
-      edits: [FACT_PROPOSAL.edits[0]!, skillProposal(BREVITY_SKILL).edits[0]!],
+      edits: [FACT_PROPOSAL.edits[0], skillProposal(BREVITY_SKILL).edits[0]],
     })).port);
 
     const mixedReq = await requestRefinement(mixedDeps, {

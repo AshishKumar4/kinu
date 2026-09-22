@@ -116,8 +116,8 @@ describe('Phase D — crafted tools reach the eval builder under tools.*', () =>
     // Entry shape — description and execute
     const doubleEntry = resolved.double;
     expect(doubleEntry).toBeDefined();
-    expect(doubleEntry!.description).toBe('Doubles its numeric argument');
-    expect(doubleEntry!.execute).toBeFunction();
+    expect(doubleEntry.description).toBe('Doubles its numeric argument');
+    expect(doubleEntry.execute).toBeFunction();
 
     // Phase C factory was called exactly once for this tool, per resolution.
     expect(factoryCallCount).toBe(1);
@@ -145,7 +145,7 @@ describe('Phase D — crafted tools reach the eval builder under tools.*', () =>
 
     const after = resolve();
     expect(Object.keys(after)).toContain('quadruple');
-    expect(await after.quadruple!.execute(5)).toBe(20);
+    expect(await after.quadruple.execute(5)).toBe(20);
   });
 
   test('invoking the captured execute dispatches into craftedToolExecute', async () => {
@@ -171,7 +171,7 @@ describe('Phase D — crafted tools reach the eval builder under tools.*', () =>
     const capture = captureExecuteTool();
     actorTools(rt, { craftedToolExecute: factory, codemode: capture.builder });
 
-    const tripleExec = capture.surface().craftedTools().triple!.execute;
+    const tripleExec = capture.surface().craftedTools().triple.execute;
     expect(await tripleExec(7)).toBe(21);
     expect(execCalls).toBe(1);
   });

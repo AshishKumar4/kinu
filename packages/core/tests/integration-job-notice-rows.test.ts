@@ -177,8 +177,8 @@ describe('a settled background job announces itself once, and not as the owner',
 
     const rows = await noticeRows(ws.db);
     expect(rows).toHaveLength(1);
-    expect(rows[0]!.id).toBe(`${PROGRAMMATIC_MESSAGE_ID_PREFIX}${backgroundJobWakeTrigger(JOB)}`);
-    expect(rows[0]!.content).toContain(`Background agents job ${JOB} completed`);
+    expect(rows[0].id).toBe(`${PROGRAMMATIC_MESSAGE_ID_PREFIX}${backgroundJobWakeTrigger(JOB)}`);
+    expect(rows[0].content).toContain(`Background agents job ${JOB} completed`);
   });
 
   test('driving orphan recovery twice over the same rows still leaves ONE row', async () => {
@@ -202,7 +202,7 @@ describe('a settled background job announces itself once, and not as the owner',
 
     const rows = await noticeRows(ws.db);
     expect(rows).toHaveLength(1);
-    expect(rows[0]!.content).toContain('gave up after 5 resume attempts');
+    expect(rows[0].content).toContain('gave up after 5 resume attempts');
   });
 
   test('the notice is not offered as the owner\'s words: the transcript reports it as system', async () => {
@@ -213,13 +213,13 @@ describe('a settled background job announces itself once, and not as the owner',
 
     const history = (await getChatHistoryPage(chatStore(ws.db).transcript)).items;
     expect(history).toHaveLength(1);
-    expect(history[0]!.role).toBe('system');
+    expect(history[0].role).toBe('system');
 
     // The stored row is untouched: the model still reads its turn input as the
     // user message it has to be. Only the claim about authorship changed.
     const stored = makeSql(ws.db)<{ role: string }>`SELECT role FROM conversation_entries`;
 
-    expect(stored[0]!.role).toBe('user');
+    expect(stored[0].role).toBe('user');
   });
 
   test('a walk-back list built from the transcript offers no machine notice', async () => {
@@ -313,7 +313,7 @@ describe('a settled background job announces itself once, and not as the owner',
     // already made this rail exactly-once; the point here is that the id it
     // dedupes on is the SAME string the conversation row is keyed by.
     expect(events).toHaveLength(1);
-    expect(events[0]!.payload).toContain(backgroundJobWakeTrigger(JOB));
+    expect(events[0].payload).toContain(backgroundJobWakeTrigger(JOB));
   });
 
   test('the entry carries the stamp at rest, and the paged read serves it', async () => {
@@ -341,7 +341,7 @@ describe('a settled background job announces itself once, and not as the owner',
 
     const history = (await getChatHistoryPage(store.transcript)).items;
     expect(history).toHaveLength(1);
-    expect(history[0]!.role).toBe('system');
-    expect(history[0]!.metadata).toMatchObject({ kinuEvent: 'background_job', jobId: JOB });
+    expect(history[0].role).toBe('system');
+    expect(history[0].metadata).toMatchObject({ kinuEvent: 'background_job', jobId: JOB });
   });
 });

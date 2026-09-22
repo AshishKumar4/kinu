@@ -235,7 +235,7 @@ describe('runAutoShadowEval', () => {
 
     const row = rt.storage.sql<{ current_version: number; pending_version: number }>`
       SELECT current_version, pending_version FROM scaffold_evaluations
-      WHERE actor_id = ${rt.actor.actorId}`[0]!;
+      WHERE actor_id = ${rt.actor.actorId}`[0];
 
     expect(row.pending_version).toBe(3);
     expect(row.current_version).toBe(0); // the live status='current' row, NOT 2
@@ -455,7 +455,7 @@ describe('order-swapped double-win judging', () => {
 
     const row = rt.storage.sql<{ winner: string; current_score: number; pending_score: number }>`
       SELECT winner, current_score, pending_score FROM scaffold_evaluations
-      WHERE actor_id = ${rt.actor.actorId}`[0]!;
+      WHERE actor_id = ${rt.actor.actorId}`[0];
 
     expect(row.winner).toBe('pending');
     expect(row.pending_score).toBe(0.8);

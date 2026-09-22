@@ -104,7 +104,7 @@ function catalogueTable(): string {
 
     expect(created).toHaveLength(1);
 
-    return created[0]!;
+    return created[0];
   }
   finally { probe.close(); }
 }
