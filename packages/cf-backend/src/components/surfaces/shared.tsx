@@ -107,8 +107,9 @@ function MarkdownImage({ src, alt, title }: { src?: string; alt?: string; title?
           {alt ? `Image failed to load: ${alt}` : "Image failed to load"}
           {src && (
             <>
-              {" — "}
+              {" ("}
               <a href={src} target="_blank" rel="noopener noreferrer" className="p-accent hover:underline break-all">{src}</a>
+              {")"}
             </>
           )}
         </span>

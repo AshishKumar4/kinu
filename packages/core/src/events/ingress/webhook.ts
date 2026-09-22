@@ -356,7 +356,7 @@ export async function acceptWebhookDelivery(
   // fragment of the thing that woke it. After the auth + rate gates, so a
   // rejected delivery never writes a file.
   const bodySerialized = JSON.stringify(parsedBody) ?? String(parsedBody);
-  const bodyPath = await spillEventContent(deps.vfs, bodySerialized);
+  const spilled = await spillEventContent(deps.vfs, bodySerialized);
 
   const { id, admitted } = deps.log.publish({
     descriptor: {
@@ -368,7 +368,8 @@ export async function acceptWebhookDelivery(
         http_headers: opts.headers,
         body: parsedBody,
         delivery_id,
-        body_path: bodyPath ?? undefined,
+        body_path: spilled?.path,
+        body_unsaved: spilled?.unsaved,
       },
       auth_outcome: 'verified',
       webhook_id: opts.trigger_id,

@@ -90,7 +90,7 @@ async function serve(page: Page, mode: 'stable' | 'moves', served: { count: numb
 /** Whether the boundary's fallback is on screen. */
 async function fallbackVisible(page: Page): Promise<boolean> {
   return page.evaluate(() => [...document.querySelectorAll('div')]
-    .some((node) => (node.textContent ?? '').startsWith('Something went wrong rendering this view')));
+    .some((node) => (node.textContent ?? '').startsWith('This view crashed')));
 }
 
 async function tryAgain(page: Page): Promise<void> {
@@ -106,7 +106,7 @@ async function tryAgain(page: Page): Promise<void> {
  *  state rather than for one outcome is what lets a failure report which it was. */
 async function chunkSettled(page: Page): Promise<void> {
   await page.waitForFunction(() => document.querySelector('[data-lazy-loaded]') !== null
-    || (document.body.textContent ?? '').includes('Something went wrong rendering this view'));
+    || (document.body.textContent ?? '').includes('This view crashed'));
 }
 
 async function readAttempt(page: Page, which: 'lazyStaleAttempts' | 'lazyHealthyAttempts'): Promise<number> {

@@ -16,7 +16,9 @@ import {
 } from './helpers/user-do';
 import { createCredentialCipher } from '@kinu.run/core';
 import { ownerCaller } from '@kinu.run/core';
+import { renderThrownChain } from '@kinu.run/core/obs';
 import { present } from '@kinu.run/test-utils';
+import { handleUserProviderProxyRequest } from '../src/user/provider-proxy';
 
 /** The owner capability of a deployment whose key has been rotated. */
 const rotatedOwner = () => ownerCaller({ CREDENTIAL_ENCRYPTION_KEY: NEXT_KEY });
@@ -29,6 +31,10 @@ function storedValue(harness: ReturnType<typeof createTestUserDO>, key: string):
 
   return parsed.success ? parsed.output : undefined;
 }
+
+const ProxyListingSchema = v.object({
+  credentials: v.array(v.object({ key: v.string(), baseURL: v.optional(v.string()), failure: v.optional(v.string()) })),
+});
 
 describe('the credential store is sealed at rest', () => {
   test('the secret never lands in SQLite, and still round-trips', async () => {
@@ -72,7 +78,62 @@ describe('the credential store is sealed at rest', () => {
       `INSERT INTO user_credentials (key, kind, value, created_at, updated_at) VALUES (?, ?, ?, ?, ?)`,
       'openrouter.bearer', 'bearer', sealed, Date.now(), Date.now(),
     );
-    expect(await harness.userDO.getAuthHeaders(await testOwner(), 'openrouter.bearer')).toBeNull();
+    await expect(harness.userDO.getAuthHeaders(await testOwner(), 'openrouter.bearer'))
+      .rejects.toThrow('opening the stored credential openrouter.bearer');
+    harness.close();
+  });
+
+  test('a row that opens and does not decode rejects without quoting what it holds', async () => {
+    const harness = createTestUserDO();
+    // Any gated call brings the schema up before the rows are written.
+    await harness.userDO.listCredentials(await testOwner());
+    const cipher = await createCredentialCipher({ CREDENTIAL_ENCRYPTION_KEY: TEST_CREDENTIAL_ENCRYPTION_KEY });
+
+    for (const [key, plaintext] of [
+      ['openai.bearer', JSON.stringify('sk-bare-secret')],
+      ['anthropic.bearer', 'sk-not-json-secret'],
+    ]) {
+      sqlExec(harness.db).exec(
+        `INSERT INTO user_credentials (key, kind, value, created_at, updated_at) VALUES (?, ?, ?, ?, ?)`,
+        key, 'bearer', await cipher.seal(`test-user-do:${key}`, plaintext), 0, 0,
+      );
+    }
+
+    const owner = await testOwner();
+
+    const [bare, garbled] = (await Promise.allSettled([
+      harness.userDO.getAuthHeaders(owner, 'openai.bearer'),
+      harness.userDO.getAuthHeaders(owner, 'anthropic.bearer'),
+    ])).map((read) => read.status === 'rejected' ? renderThrownChain({ cause: read.reason }) : 'resolved');
+
+    expect(bare).toContain('not a credential');
+    expect(bare).not.toContain('sk-bare-secret');
+    expect(garbled).toContain('did not decode as JSON');
+    expect(garbled).not.toContain('sk-not-json-secret');
+    harness.close();
+  });
+
+  test('the proxy listing shows the one unreadable credential as failed and lists the rest', async () => {
+    const harness = createTestUserDO();
+    await harness.userDO.setCredential(await testOwner(), 'anthropic.bearer', { kind: 'bearer', token: 'sk-ok' });
+    const cipher = await createCredentialCipher({ CREDENTIAL_ENCRYPTION_KEY: 'a-retired-credential-encryption-key-5555' });
+    sqlExec(harness.db).exec(
+      `INSERT INTO user_credentials (key, kind, value, created_at, updated_at) VALUES (?, ?, ?, ?, ?)`,
+      'openai.bearer', 'bearer', await cipher.seal('test-user-do:openai.bearer', JSON.stringify({ kind: 'bearer', token: 'sk-lost' })), 0, 0,
+    );
+
+    const response = await handleUserProviderProxyRequest(
+      new Request('https://kinu.example/api/user/ai/proxy/credentials'),
+      { CREDENTIAL_ENCRYPTION_KEY: TEST_CREDENTIAL_ENCRYPTION_KEY },
+      { userDO: harness.userDO },
+    );
+
+    const listed = v.parse(ProxyListingSchema, await response.json());
+
+    expect(listed).toEqual({ credentials: [
+      { key: 'anthropic.bearer' },
+      { key: 'openai.bearer', failure: expect.stringContaining('opening the stored credential openai.bearer') },
+    ] });
     harness.close();
   });
 });
@@ -140,7 +201,8 @@ describe('migration and rotation', () => {
     );
     await orphaned.userDO.setCredential(await rotatedOwner(), 'anthropic.bearer', { kind: 'bearer', token: 'sk-ok' });
 
-    expect(await orphaned.userDO.getAuthHeaders(await rotatedOwner(), 'openai.bearer')).toBeNull();
+    await expect(orphaned.userDO.getAuthHeaders(await rotatedOwner(), 'openai.bearer'))
+      .rejects.toThrow('opening the stored credential openai.bearer');
     expect(await orphaned.userDO.getAuthHeaders(await rotatedOwner(), 'anthropic.bearer'))
       .toMatchObject({ 'x-api-key': 'sk-ok' });
     orphaned.close();
@@ -243,7 +305,8 @@ describe('a sealed value is bound to the store it was written in', () => {
       'openai.bearer', 'bearer', sealed, 0, 0,
     );
 
-    expect(await theirs.userDO.getAuthHeaders(await testOwner(), 'openai.bearer')).toBeNull();
+    await expect(theirs.userDO.getAuthHeaders(await testOwner(), 'openai.bearer'))
+      .rejects.toThrow('opening the stored credential openai.bearer');
     theirs.close();
   });
 });

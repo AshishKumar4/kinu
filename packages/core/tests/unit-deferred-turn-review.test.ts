@@ -1,12 +1,6 @@
 /**
- * The deferred turn-review lane — the one-shot host's exit from the turn
- * review it owes.
- *
- * A `kinu exec` process cannot afford to JOIN the outcome review it owes, so
- * it parks one durable row in `completed_turns` (evolution/session-window.ts)
- * and the next host runs it. The contract these tests hold is that deferring
- * changes WHEN the review runs and nothing else: same call, same inputs, same
- * `turn_outcomes` row.
+ * The deferred turn-review lane (evolution/session-window.ts): deferring changes when
+ * the review runs and nothing else — same call, inputs and `turn_outcomes` row.
  */
 
 import { describe, test, expect } from 'bun:test';
@@ -35,9 +29,7 @@ function makeTurn(overrides: Partial<CompletedTurn> = {}): CompletedTurn {
   };
 }
 
-/** One workspace with a keyed stub model, wired exactly as a live one is. The
- *  production workspace schema already carries `completed_turns` and the
- *  crafted-tool quality columns. */
+/** Keyed stub model over the production workspace schema. */
 function workspace(outcome: 'accepted' | 'corrected' = 'corrected') {
   const { rt, stores } = createTestRuntime({
     llmResponses: { [CLASSIFY]: `{"outcome":"${outcome}","confidence":0.9,"evidence":"test"}` },
@@ -46,8 +38,7 @@ function workspace(outcome: 'accepted' | 'corrected' = 'corrected') {
   return { rt, engine: new EvolutionEngine(rt, stores.history) };
 }
 
-/** Everything about an outcome row EXCEPT its row identity and clock, which are
- *  the two things a deferral legitimately changes. */
+/** An outcome row minus the identity and clock a deferral legitimately changes. */
 function comparable(row: TurnOutcomeRow): Omit<TurnOutcomeRow, 'id' | 'createdAt'> {
   const { id: _id, createdAt: _createdAt, ...rest } = row;
 
@@ -62,7 +53,7 @@ describe('EvolutionEngine.deferTurnReview — the one-shot turn-lane exit', () =
 
     const deferred = workspace();
     expect(deferred.engine.deferTurnReview(makeTurn(), followup)).toBe('queued');
-    // Deferring records nothing by itself: the verdict does not exist yet.
+    // Deferring records nothing by itself.
     expect(listTurnOutcomes(deferred.rt.storage.sql, deferred.rt.actor)).toEqual([]);
     expect(await deferred.engine.runDeferredTurnReviews()).toEqual({ reviewed: 1, refused: [] });
 
@@ -73,7 +64,7 @@ describe('EvolutionEngine.deferTurnReview — the one-shot turn-lane exit', () =
     expect(deferredRows[0].outcome).toBe('corrected');
     expect(deferredRows[0].source).toBe('classifier');
     expect(deferredRows[0].followup).toBe(followup);
-    // And the downstream evolution the review gates ran too, not just the row.
+    // The downstream evolution ran too.
     expect(listLessons(deferred.rt.storage.sql, deferred.rt.actor, { status: 'corroborated' }))
       .toHaveLength(listLessons(inline.rt.storage.sql, inline.rt.actor, { status: 'corroborated' }).length);
     // The row is retired only once its review has run.
@@ -81,8 +72,7 @@ describe('EvolutionEngine.deferTurnReview — the one-shot turn-lane exit', () =
   });
 
   test('a headless turn with no follow-up defers the same execution verdict', async () => {
-    // The execution verdict needs real tool work to read — a turn that acted
-    // and errored is the one signal a headless run produces.
+    // A turn that acted and errored.
     const headless = (): CompletedTurn => makeTurn({
       hadError: true,
       turnId: 'msg-err',
@@ -119,12 +109,10 @@ describe('EvolutionEngine.deferTurnReview — the one-shot turn-lane exit', () =
 
     expect(await engine.runDeferredTurnReviews())
       .toEqual({ reviewed: 0, refused: [{ id: 'rev-corrupt', reason: 'unreadable' }] });
-    // No verdict was fabricated from an empty turn, and no model was paid to
-    // grade one.
+    // No verdict fabricated, no model paid.
     expect(listTurnOutcomes(rt.storage.sql, rt.actor)).toEqual([]);
     expect(completions).toBe(0);
-    // The row is retired anyway: one unreadable row must not wedge the queue
-    // behind it forever.
+    // Retired anyway, so one unreadable row cannot wedge the queue.
     expect(engine.sessionWindow.countQueuedReviews()).toBe(0);
   });
 
@@ -163,8 +151,7 @@ describe('EvolutionEngine.deferTurnReview — the one-shot turn-lane exit', () =
     expect(await engine.runDeferredTurnReviews())
       .toEqual({ reviewed: MAX_TURN_REVIEWS_PER_OPEN, refused: [] });
     expect(engine.sessionWindow.countQueuedReviews()).toBe(3);   // the rest waits for the next open
-    // Oldest first: a later turn's lesson is worth more with the earlier one's
-    // already in the ledger.
+    // Oldest first: a later lesson is worth more with the earlier one in the ledger.
 
     const graded = listTurnOutcomes(rt.storage.sql, rt.actor)
       .map((r) => present(r.turnId, 'the graded turn id'))
@@ -175,8 +162,7 @@ describe('EvolutionEngine.deferTurnReview — the one-shot turn-lane exit', () =
 
   test('the queue refuses past its ceiling rather than growing without bound', () => {
     const { engine } = workspace();
-    // The contract, not the number: a ceiling exists, everything under it
-    // queues, and the first refusal is exactly where the count stops moving.
+    // The contract, not the number: the count stops exactly at the first refusal.
     let queued = 0;
 
     while (engine.deferTurnReview(makeTurn({ turnId: `msg-${String(queued)}` }), null) === 'queued') {
@@ -193,9 +179,8 @@ describe('EvolutionEngine.deferTurnReview — the one-shot turn-lane exit', () =
 
   test('an unserializable turn is refused at the queue, never written as a corrupt row', () => {
     const { engine } = workspace();
-    // SAFETY: a CompletedTurn is a plain JSON-shaped object, so widening it by
-    // one own property models exactly the failure under test — a tool result
-    // holding a reference cycle — without changing anything the queue reads.
+    // SAFETY: a plain JSON-shaped object widened by one property models a tool result
+    // holding a reference cycle.
     const cyclic: CompletedTurn & { self?: unknown } = makeTurn();
     cyclic.self = cyclic;
     expect(engine.sessionWindow.enqueueReview(cyclic, null)).toBe('unserializable');

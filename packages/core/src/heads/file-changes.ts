@@ -42,6 +42,8 @@ interface Touched {
   baseline: string | null;
   current: string | null;
   binary: boolean;
+  /** Why the content this head first found is unknown, when it is. */
+  unread: 'directory' | 'unreadable' | null;
 }
 
 /**
@@ -76,6 +78,7 @@ export class HeadFileChanges implements WriteObserver {
       baseline: before.text,
       current: after.text,
       binary: before.binary || after.binary,
+      unread: event.unread ?? null,
     });
   }
 
@@ -85,6 +88,17 @@ export class HeadFileChanges implements WriteObserver {
     const out: HeadFileChange[] = [];
 
     for (const [path, t] of this.touched) {
+      // First: an unknown baseline is a change whatever it held, never a
+      // create-then-delete that nets to nothing. The path existed (it was
+      // stat-ed), so it was changed or removed, and its lines are not counted.
+      if (t.unread !== null) {
+        const status = t.current === null ? 'removed' : 'changed';
+        out.push(t.unread === 'directory'
+          ? { path, status, added: 0, removed: 0, directory: true }
+          : { path, status, added: 0, removed: 0, unreadable: true });
+        continue;
+      }
+
       if (t.baseline === null && t.current === null) continue;
       const status = changeStatus(t);
 

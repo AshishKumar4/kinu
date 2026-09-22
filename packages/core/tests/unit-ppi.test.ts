@@ -1,14 +1,6 @@
 /**
- * Prediction-powered inference, validated against synthetic ground truth.
- *
- * Every test here builds a population whose TRUE event rate and whose
- * classifier's TRUE sensitivity/specificity are known by construction, draws a
- * stratified gold sample from it exactly the way calibration.ts does, and then
- * asks whether the estimator gets the known answer back. That is the only
- * honest way to validate a bias correction: on real data there is nothing to
- * compare against, which is the whole reason the correction is needed.
- *
- * No LLM calls, no storage, no clock — pure arithmetic on seeded draws.
+ * Prediction-powered inference against synthetic ground truth: populations with known
+ * rate, sensitivity and specificity, sampled the way calibration.ts samples.
  */
 import { describe, test, expect } from 'bun:test';
 import { seededRandom, wilsonInterval } from '../src/utils/stats';
@@ -18,31 +10,22 @@ import {
 } from '../src/evolution/ppi';
 import { allocateLabelBudget } from '../src/evolution/calibration';
 
-// ── Synthetic world ──────────────────────────────────────────────
-
 interface SyntheticRow {
-  /** What the row really is. */
   truth: boolean;
-  /** What the classifier said about it. */
   predicted: string;
 }
 
 interface WorldSpec {
   size: number;
-  /** True event rate. */
   rate: number;
-  /** P(classifier says event | it is one). */
   sensitivity: number;
-  /** P(classifier says non-event | it is not one). */
   specificity: number;
   seed: number;
-  /** When set, "event" verdicts split across two keys — the three-verdict
-   *  shape the real classifier has. */
+  /** Splits event verdicts across two keys, like the real classifier. */
   splitEvent?: boolean;
 }
 
-/** A population of rows with a known truth and a known classifier error
- *  profile. The classifier's OBSERVED rate will be wrong by construction. */
+/** The classifier's observed rate is wrong by construction. */
 function buildWorld(spec: WorldSpec): SyntheticRow[] {
   const random = seededRandom(spec.seed);
 
@@ -57,17 +40,8 @@ function buildWorld(spec: WorldSpec): SyntheticRow[] {
 
 const EVENT_KEYS = new Set(['corrected', 'frustrated']);
 
-/** The stratified gold draw calibration.ts performs, using its real budget
- *  allocation, taken as a SPREAD (systematic) sample of each stratum rather
- *  than a prefix.
- *
- *  The spread is not cosmetic. A prefix draw, on a ledger built by
- *  concatenating two eras, takes the whole gold set from the first one; the
- *  stratum means then describe that era while the population weights describe
- *  the whole ledger, and the mismatch shows up as a 6-point transport error
- *  that no budget can fix. Any draw that is not
- *  representative WITHIN a stratum breaks the estimator, and time order is
- *  exactly where a real ledger hides that. */
+/** calibration.ts's stratified draw, taken as a spread sample: a prefix draw over a
+ *  ledger of two eras describes only the first, and no budget fixes that. */
 function stratify(rows: ReadonlyArray<SyntheticRow>, budget: number): PredictionStratum[] {
   const byKey = new Map<string, SyntheticRow[]>();
 
@@ -99,8 +73,6 @@ function trueRate(rows: ReadonlyArray<SyntheticRow>): number {
   return rows.filter((r) => r.truth).length / rows.length;
 }
 
-/** What the classifier reports about a slice — the input a corrected surface
- *  starts from. */
 function observedRate(rows: ReadonlyArray<SyntheticRow>) {
   return { events: rows.filter((r) => EVENT_KEYS.has(r.predicted)).length, population: rows.length };
 }
@@ -121,19 +93,14 @@ function requireRate(rows: ReadonlyArray<SyntheticRow>, accuracy: ClassifierAccu
   return result.rate;
 }
 
-/** The whole pipeline: calibrate on a gold draw from these rows, then correct
- *  the same rows' observed rate. */
+/** Calibrate on a gold draw from these rows, then correct the same rows. */
 function calibrateAndCorrect(rows: ReadonlyArray<SyntheticRow>, budget: number) {
   return requireRate(rows, requireAccuracy(stratify(rows, budget)));
 }
 
-// ── Recovery ─────────────────────────────────────────────────────
-
 describe('the corrected rate recovers a known truth through a biased classifier', () => {
   test('a classifier that misses a third of the events is corrected back up', () => {
-    // 20% true event rate, 67% sensitivity, 97% specificity. The classifier
-    // reports roughly 0.2·0.67 + 0.8·0.03 ≈ 0.157 — a 20% relative undercount
-    // that no amount of extra turns would ever reveal.
+    // The classifier reports ≈ 0.157 against a true 0.2.
     const world = buildWorld({ size: 4000, rate: 0.2, sensitivity: 0.67, specificity: 0.97, seed: 7 });
     const rate = calibrateAndCorrect(world, 100);
 
@@ -177,7 +144,7 @@ describe('the Rogan–Gladen form is the stratified PPI estimate', () => {
     const strata = stratify(world, 100);
     const accuracy = requireAccuracy(strata);
 
-    // Σ_s w_s ȳ_s — PPI's stratified rectifier form, computed directly.
+    // Σ_s w_s ȳ_s, computed directly.
     const population = strata.reduce((n, s) => n + s.population, 0);
     const stratified = strata.reduce((sum, s) => sum + (s.population / population) * (s.events / s.labeled), 0);
 
@@ -185,8 +152,6 @@ describe('the Rogan–Gladen form is the stratified PPI estimate', () => {
     expect(requireRate(world, accuracy).corrected.mean).toBeCloseTo(stratified, 10);
   });
 });
-
-// ── The classifier's own error profile ───────────────────────────
 
 describe('classifierAccuracy', () => {
   test('brackets the sensitivity and specificity it was built with', () => {
@@ -200,12 +165,7 @@ describe('classifierAccuracy', () => {
   });
 
   test('specificity is unbiased; sensitivity carries a small-sample ratio bias that decays', () => {
-    // Sensitivity is a RATIO of weighted sums (A/θ̂), so it inherits the usual
-    // O(1/n) ratio bias — dominated by the majority stratum's variance times
-    // the weight it carries. It is real, it is upward, and at the ~100 labels
-    // this system budgets it is worth about +0.016. It is reported rather than
-    // patched: the corrected RATE, which is what every surface consumes, does
-    // not inherit it (see the coverage test below).
+    // Sensitivity is a ratio estimate with O(1/n) upward bias; the corrected rate does not inherit it.
     const meanSensitivity = (budget: number): number => {
       const draws = Array.from({ length: 800 }, (_, i) =>
         requireAccuracy(stratify(
@@ -236,9 +196,7 @@ describe('classifierAccuracy', () => {
   });
 
   test('the design re-weighting is what makes it right — the naive tally is not', () => {
-    // Equal quotas over-represent the rare "event" verdict several times over.
-    // Tallying the gold sample directly reports a sensitivity near 0.9 for a
-    // classifier whose real sensitivity is 0.7.
+    // Equal quotas over-represent rare verdicts; a direct tally would report ≈0.9 for a true 0.7.
     const world = buildWorld({ size: 6000, rate: 0.2, sensitivity: 0.7, specificity: 0.95, seed: 13 });
     const strata = stratify(world, 200);
 
@@ -267,8 +225,6 @@ describe('classifierAccuracy', () => {
   });
 });
 
-// ── Interval honesty ─────────────────────────────────────────────
-
 describe('the corrected interval', () => {
   test('is unbiased and covers the truth at its nominal 95%, where the raw rate does not', () => {
     let covered = 0;
@@ -285,29 +241,23 @@ describe('the corrected interval', () => {
       truthSum += truth;
 
       if (rate.corrected.lo <= truth && truth <= rate.corrected.hi) covered++;
-      // What the UNCORRECTED surface reports today: the classifier's own rate
-      // with a Wilson interval over the whole ledger (alignment.ts, verbatim).
+      // The uncorrected surface: classifier rate with a Wilson interval (as alignment.ts).
       const observed = observedRate(world);
       const raw = wilsonInterval(observed.events, observed.population);
 
       if (raw.lo <= truth && truth <= raw.hi) rawCovered++;
     }
 
-    // The headline claim: averaged over calibration sets, the correction lands
-    // on the truth. This is what every surface downstream depends on.
+    // Averaged over calibration sets, the correction lands on the truth.
     expect(estimateSum / trials).toBeCloseTo(truthSum / trials, 2);
     expect(covered / trials).toBeGreaterThan(0.93);
     expect(covered / trials).toBeLessThanOrEqual(1);
-    // The uncorrected surface is confidently wrong: a tight interval that
-    // essentially never contains the answer.
+    // The uncorrected interval essentially never contains the answer.
     expect(rawCovered / trials).toBeLessThan(0.05);
   });
 
   test('holds its operating characteristics across the regimes this ledger can be in', () => {
-    // The published behaviour of the estimator at the 100-label budget: what a
-    // reader of a corrected K_align is entitled to assume. Each row is a
-    // different classifier and a different true rate; all use the real
-    // allocation and the real draw.
+    // The estimator's behaviour at the 100-label budget across classifier regimes.
     const regimes = [
       { rate: 0.2, sensitivity: 0.7, specificity: 0.95, splitEvent: true },
       { rate: 0.3, sensitivity: 0.75, specificity: 0.9, splitEvent: true },
@@ -362,8 +312,7 @@ describe('the corrected interval', () => {
   });
 
   test('it is never narrower than the calibration set behind it', () => {
-    // Same ledger, same observed rate, a thinner gold set: the interval must
-    // widen. A correction cannot manufacture precision it did not buy.
+    // A thinner gold set must widen the interval.
     const world = buildWorld({ size: 4000, rate: 0.2, sensitivity: 0.7, specificity: 0.95, seed: 9 });
     const observed = observedRate(world);
 
@@ -379,26 +328,21 @@ describe('the corrected interval', () => {
   });
 });
 
-// ── Transporting one calibration set across slices ───────────────
-
 describe('one calibration set corrects every slice', () => {
   test('slices with different true rates each recover their own', () => {
-    // Two scaffold versions: the newer one genuinely trips the classifier less
-    // often. The calibration set is drawn once, over the pooled ledger.
+    // The newer version really trips the classifier less; calibration is drawn once over the pool.
     const older = buildWorld({ size: 2000, rate: 0.3, sensitivity: 0.7, specificity: 0.95, seed: 31 });
     const newer = buildWorld({ size: 2000, rate: 0.1, sensitivity: 0.7, specificity: 0.95, seed: 32 });
     const accuracy = requireAccuracy(stratify([...older, ...newer], 200));
 
     expect(requireRate(older, accuracy).corrected.mean).toBeCloseTo(trueRate(older), 1);
     expect(requireRate(newer, accuracy).corrected.mean).toBeCloseTo(trueRate(newer), 1);
-    // And the two remain distinguishable after correction.
+    // The two remain distinguishable after correction.
     expect(requireRate(newer, accuracy).corrected.hi).toBeLessThan(requireRate(older, accuracy).corrected.lo);
   });
 
   test('re-weighting the pooled posteriors instead would report the pooled rate', () => {
-    // The wrong version of this, kept as a test because it is the mistake the
-    // module note warns about: Σ_s w_s ȳ_s with POOLED ȳ_s barely moves off the
-    // pooled rate when a slice's true prevalence is a third of it.
+    // The wrong approach: pooled ȳ_s barely moves off the pooled rate for a low-prevalence slice.
     const older = buildWorld({ size: 2000, rate: 0.3, sensitivity: 0.7, specificity: 0.95, seed: 31 });
     const newer = buildWorld({ size: 2000, rate: 0.1, sensitivity: 0.7, specificity: 0.95, seed: 32 });
     const pooled = stratify([...older, ...newer], 200);
@@ -413,8 +357,6 @@ describe('one calibration set corrects every slice', () => {
     expect(requireRate(newer, requireAccuracy(pooled)).corrected.mean).toBeLessThan(0.13);
   });
 });
-
-// ── Honest nulls ─────────────────────────────────────────────────
 
 describe('calibration gaps — no number rather than a wrong one', () => {
   const accuracy = requireAccuracy([
@@ -458,8 +400,7 @@ describe('calibration gaps — no number rather than a wrong one', () => {
   });
 
   test('a classifier no better than chance yields no corrected rate', () => {
-    // Gold labels find the same event rate in both verdicts: the verdict tells
-    // you nothing, so sensitivity + specificity = 1 exactly.
+    // Same event rate in both verdicts: sensitivity + specificity = 1 exactly.
     const chance = requireAccuracy([
       { key: 'accepted', predictedEvent: false, population: 800, labeled: 40, events: 8 },
       { key: 'corrected', predictedEvent: true, population: 200, labeled: 40, events: 8 },
@@ -478,11 +419,8 @@ describe('calibration gaps — no number rather than a wrong one', () => {
   });
 });
 
-// ── Agreement ────────────────────────────────────────────────────
-
 describe('designWeightedKappa', () => {
-  /** A stratum whose first rater is the classifier verdict the stratum is
-   *  named for — the shape the calibration report passes in. */
+  /** First rater is the stratum's classifier verdict, as the calibration report passes. */
   const gold = (key: string, population: number, actuals: string[]): GoldStratum =>
     ({ key, population, draws: actuals.map((b) => ({ a: key, b })) });
 
@@ -525,15 +463,14 @@ describe('designWeightedKappa', () => {
     // Observed agreement is 0.75 against chance agreement 0.59, so κ = 16/41.
     const kappa = designWeightedKappa(strata);
     expect(kappa?.value).toBeCloseTo(16 / 41, 10);
-    // The bootstrap runs on the default seed, so the interval is stable too.
+    // Default bootstrap seed, so the interval is stable too.
     expect(designWeightedKappa(strata)).toEqual(kappa);
     expect(designWeightedKappa([gold('accepted', 800, [])])).toBeNull();
     expect(designWeightedKappa([])).toBeNull();
   });
 
   test('scores two raters who both vary, and is symmetric between them', () => {
-    // Neither rater is the stratum's own verdict here — the ensemble-vs-labeler
-    // comparison. κ is a property of the pair, so swapping them cannot move it.
+    // Neither rater is the stratum verdict; κ is symmetric in the pair.
     const pairs = (spec: Array<[string, string, number]>): Array<{ a: string; b: string }> =>
       spec.flatMap(([a, b, n]) => Array<{ a: string; b: string }>(n).fill({ a, b }));
 
@@ -554,8 +491,7 @@ describe('designWeightedKappa', () => {
   });
 
   test('weights a stratum by its population, not by how often it was drawn', () => {
-    // Same 40 draws per stratum; the raters agree in the rare one and disagree
-    // in the common one. A tally that ignored the design would call this good.
+    // Agreement in the rare stratum, disagreement in the common one: design weighting matters.
     const agree = Array<{ a: string; b: string }>(40).fill({ a: 'corrected', b: 'corrected' });
 
     const disagree = [

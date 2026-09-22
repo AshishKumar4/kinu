@@ -1,13 +1,6 @@
 /**
- * The public share index: what the Shared page's "Public" list reads.
- *
- * A PROJECTION, never an authority — the idiom `preview/preview-exposures.ts`
- * states for previews. A row names (owner, workspace, share, kind, title) and
- * never visibility, because visibility has one home, the share row in the
- * owner's workspace object, and every open asks that object again. A stale
- * row here can therefore list something that then refuses; it can never admit
- * anything. It lives on the control plane because the question is fleet-wide:
- * "what is public" has no per-user shard that could answer it.
+ * The public share index. A projection, never an authority: visibility lives on
+ * the owner's share row and every open re-checks it.
  */
 import * as v from 'valibot';
 import type { ControlPlaneSql } from './sql';
@@ -68,9 +61,7 @@ export function forgetPublicShare(sql: ControlPlaneSql, key: PublicShareKey): vo
   );
 }
 
-/** Newest first. `limit` bounds a page the reader then verifies row by row
- *  against each owner's object, so a large index costs the reader, not this
- *  query. */
+/** Newest first; readers verify each row against its owner. */
 export function listPublicShares(sql: ControlPlaneSql, limit = 200): PublicShareRow[] {
   return sql.exec('SELECT * FROM cp_public_shares ORDER BY created_at DESC, share_id LIMIT ?', limit).toArray()
     .map((raw) => {

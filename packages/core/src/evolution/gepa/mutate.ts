@@ -1,10 +1,4 @@
-/**
- * Reflective mutation operator — the heart of GEPA's leverage over random
- * search. The parent candidate is rolled out on a small minibatch of eval
- * instances, the per-instance score + feedback is collected, and the
- * reflection LM is asked to rewrite the candidate using the failure
- * trajectories as evidence. One LM call per mutation; cost is bounded.
- */
+/** Reflective mutation: roll the parent out on a minibatch and have the reflection LM rewrite it from the failure trajectories. */
 
 import * as v from 'valibot';
 import { MetricOutcomeSchema } from './types';
@@ -18,21 +12,18 @@ import { DELEGATION_RUBRIC } from '../delegation-features';
 
 export interface MutationContext<I = unknown, E = unknown> {
   parent: GepaCandidate;
-  /** The minibatch the parent will be rolled out on. */
   minibatch: ReadonlyArray<EvalInstance<I, E>>;
-  /** Completed measurements. Missing judge evidence must fail before reflection. */
+  /** Missing judge evidence must fail before reflection. */
   rollout: MutationRollout;
   reflectionLm: ReflectionLM;
 }
 
 export interface MutationRollout {
-  /** Per-instance score + feedback collected from rolling parent on minibatch. */
   outcomes: Array<{ instanceId: string; outcome: MetricOutcome }>;
-  /** Total metric calls made — equals minibatch.length. */
+  /** Equals minibatch.length. */
   metricCalls: number;
 }
 
-/** Roll out a candidate over a minibatch — score each, collect feedback. */
 export async function rolloutMinibatch<I, E>(
   candidate: string,
   minibatch: ReadonlyArray<EvalInstance<I, E>>,
@@ -48,20 +39,12 @@ export async function rolloutMinibatch<I, E>(
   return { outcomes, metricCalls: minibatch.length };
 }
 
-/** Render the reflection prompt the LM uses to propose a new candidate.
- *  Exposed for testing + so callers can override format if needed.
- *
- *  The rich per-instance trace below is the point of the operator and is never
- *  shortened — GEPA's own result is that natural-language feedback over whole
- *  trajectories beats a scalar reward (arXiv:2507.19457). What that result does
- *  not license is naming "a SPECIFIC defect" and never showing one: the contrast
- *  block does that, and the regression line states the half of the eval set the
- *  prompt cannot show. Both are artifact-agnostic, because `desc` varies. */
+/** The full per-instance trace is never shortened: GEPA's result is that natural-language
+ *  feedback over whole trajectories beats a scalar reward (arXiv:2507.19457). */
 export function renderReflectionPrompt<I, E>(opts: {
   parent: GepaCandidate;
   minibatch: ReadonlyArray<EvalInstance<I, E>>;
   rollout: MutationRollout;
-  /** Optional context describing what the candidate IS (e.g., "scaffold source"). */
   artifactDescription?: string;
 }): string {
   const desc = opts.artifactDescription ?? 'candidate artifact';
@@ -77,9 +60,7 @@ export function renderReflectionPrompt<I, E>(opts: {
     const inputStr = renderInput(inst);
     traceLines.push(
       `--- instance ${inst.id} (score ${o.score.toFixed(2)}) ---`,
-      // Windows, not head truncations: a rollout's decisive step is usually
-      // its last, and 400 characters of a twelve-step trajectory is a reflector
-      // reasoning about the opening move.
+      // Windows, not head truncations: a rollout's decisive step is usually its last.
       `input: ${evidenceWindow(inputStr, EVIDENCE_BUDGETS.gepaInstanceInput)}`,
       ...(inst.evidence ? [`evidence: ${evidenceWindow(inst.evidence, EVIDENCE_BUDGETS.gepaInstanceEvidence)}`] : []),
       `feedback: ${evidenceWindow(o.feedback, EVIDENCE_BUDGETS.gepaInstanceFeedback)}`,
@@ -110,7 +91,6 @@ ${traceLines.join('\n')}
 Return ONLY the revised ${desc} source — no commentary, no markdown fences. If you cannot improve on the current version, return the source unchanged.`;
 }
 
-/** Reflect on measured evidence and extract the next candidate's source. */
 export async function proposeMutation<I, E>(
   ctx: MutationContext<I, E>,
   artifactDescription?: string,

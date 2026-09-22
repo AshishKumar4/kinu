@@ -729,7 +729,7 @@ export function formatWorkspaceError(errors: WorkspaceErrors, loaded: boolean): 
   const list = formatNaturalList(labels);
 
   const sentenceCased = `${list.slice(0, 1).toUpperCase()}${list.slice(1)}`;
-  const blockedTitle = loaded ? `Couldn't refresh ${list}.` : "Couldn't open this workspace";
+  const blockedTitle = loaded ? `Could not refresh ${list}.` : "Could not open this workspace";
 
   const readTitle = blocking
     ? blockedTitle
@@ -2405,7 +2405,7 @@ export function useKinu(target?: string | KinuActorAddress) {
     } catch (err) {
       // Roll the picker back to the actually-stored spec so it can't keep
       // showing a model that was never saved.
-      let reason = `Couldn't switch model: ${errorMessage({ cause: err })}`;
+      let reason = `Could not switch model: ${errorMessage({ cause: err })}`;
 
       try {
         const stored = subordinate === undefined
@@ -2416,7 +2416,7 @@ export function useKinu(target?: string | KinuActorAddress) {
       } catch (rollbackErr) {
         // The rollback read failed too, so the picker is still showing a model
         // that was never stored. Say so rather than leaving it looking saved.
-        reason += ` — and the stored model couldn't be re-read (${errorMessage({ cause: rollbackErr })}), so the model shown may not be what's saved`;
+        reason += `. Could not re-read the saved model either (${errorMessage({ cause: rollbackErr })}), so the picker may not show the saved model`;
       }
 
       setSourceError("model", reason);
@@ -2436,7 +2436,7 @@ export function useKinu(target?: string | KinuActorAddress) {
       setSourceError("model", null);
     } catch (err) {
       setAgentStatus((prev) => prev ? { ...prev, reasoningEffort: before } : prev);
-      setSourceError("model", `Couldn't set the thinking level: ${errorMessage({ cause: err })}`);
+      setSourceError("model", `Could not set the thinking level: ${errorMessage({ cause: err })}`);
     }
   }, [rpc, setSourceError, subordinate, agentStatus?.reasoningEffort]);
 

@@ -96,7 +96,7 @@ export class ErrorBoundary extends Component<Props, State> {
       <div className="h-full overflow-y-auto flex items-start justify-center p-6">
         <div className="max-w-2xl w-full text-left space-y-3">
           <div className="text-sm font-medium p-text">
-            Something went wrong rendering this view{this.props.label ? ` (${this.props.label})` : ''}.
+            This view crashed{this.props.label ? ` (${this.props.label})` : ''}. Try again, or reload the page.
           </div>
           <div className="text-xs p-text-3 font-mono break-words p-fill rounded-sm p-3 border p-border text-left">
             <div className="font-bold mb-2">{this.state.error.message || String(this.state.error)}</div>

@@ -101,7 +101,7 @@ const JOB_CONTROLS = [
     action: 'job.retry',
     label: 'Retry',
     title: 'Retry this job',
-    body: (job: BackgroundJobRow, workspace: string) => `Re-drive ${job.kind} (${job.id}) in ${workspace} as a new job. Kinu refuses to retry a job that succeeded.`,
+    body: (job: BackgroundJobRow, workspace: string) => `Run ${job.kind} (${job.id}) in ${workspace} again as a new job. Kinu refuses to retry a job that succeeded.`,
   },
   {
     action: 'job.dismiss',
@@ -398,7 +398,7 @@ function ApprovalRows(
     return <div className="text-xs p-text-3">This approval list could not be read.</div>;
   }
 
-  if (rows.length === 0) return <div className="text-xs p-text-3">Nothing is parked on the owner.</div>;
+  if (rows.length === 0) return <div className="text-xs p-text-3">No command is waiting on the owner.</div>;
 
   return (
     <ul className="space-y-2">

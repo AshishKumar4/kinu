@@ -378,7 +378,7 @@ export function Composer({
             {(attachments.failed ?? []).map((name, i) => (
               <span key={`failed-${name}-${i}`}
                 className="inline-flex max-w-56 items-center gap-1.5 rounded-md border p-border p-fill px-1.5 py-1 p-meta p-text-2"
-                title={`Couldn't attach ${name}`}>
+                title={`Could not attach ${name}`}>
                 <FileIcon size={13} className="shrink-0 p-text-3" />
                 <span className="truncate font-mono">{name}</span>
                 <span className="shrink-0 font-medium p-warning">failed</span>

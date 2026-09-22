@@ -107,10 +107,6 @@ declare global {
      *  metrics view reports itself unconfigured; nothing else degrades. */
     CLOUDFLARE_ACCOUNT_ID?: string;
     ANALYTICS_SQL_API_TOKEN?: string;
-    /** What this deployment appends to a dataset NAME when the SQL API is asked
-     *  for one: '' in production, `_staging` under `env.staging`. Read path
-     *  only — writes go through the three bindings above. */
-    ANALYTICS_DATASET_SUFFIX?: string;
     AI_GATEWAY_URL: string;
     /** Zone isolated previews are served under, one capability hostname per
      *  exposed Workspace or Sandbox port. Empty disables previews. */
@@ -179,11 +175,11 @@ declare global {
     /** Names the ONE identity a caller may act as without an OAuth browser
      *  session. Says WHICH identity, never that anyone may have it: off a
      *  developer's own machine, `DEV_IDENTITY_SECRET` is what grants it.
-     *  Production must leave this unset. */
+     *  Production names the eval service account here. */
     DEV_USER_EMAIL?: string;
     /** The shared secret a caller presents in `x-kinu-dev-identity` to act as
      *  `DEV_USER_EMAIL` on a deployment that is not localhost. Set with
-     *  `wrangler secret put DEV_IDENTITY_SECRET --env staging`; without it a
+     *  `wrangler secret put DEV_IDENTITY_SECRET`; without it a
      *  published deployment grants no synthetic identity at all. */
     DEV_IDENTITY_SECRET?: string;
     /** Cloudflare Email Sending binding (`send_email` in wrangler.jsonc).
@@ -198,8 +194,8 @@ declare global {
     /** Public origin for unauthenticated CLI install/auth endpoints. Also the
      *  origin synthetic monitoring probes. */
     CLI_PUBLIC_ORIGIN?: string;
-    /** Where synthetic-monitoring alerts go. Unset (as in staging) leaves the
-     *  monitor observing and recording, but silent. */
+    /** Where synthetic-monitoring alerts go. Unset leaves the monitor
+     *  observing and recording, but silent. */
     OPS_ALERT_EMAIL?: string;
     /** Browser approval origin for CLI auth. In production this should be the
      *  public app origin so approval uses the user's browser session. */

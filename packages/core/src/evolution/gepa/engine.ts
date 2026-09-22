@@ -1,24 +1,7 @@
 /**
- * GEPA main loop — `runGepa(config)`.
- *
- * Algorithm (matches Agrawal et al., now including the Appendix-F Merge
- * operator):
- *
- *   1. Score the seed candidate on the full eval set. Add to pool.
- *   2. Loop until budget exhausted:
- *      a. If `useMerge` AND iteration is on the merge cadence AND we have a
- *         complementary pair → propose via Merge.
- *         Else → propose via reflective Mutate (parent + minibatch rollout).
- *      b. Run constraints (size cap, regex, custom check).
- *         If rejected, log and skip — DO NOT consume eval-set scoring budget.
- *      c. Score the candidate on the full eval set; aggregate.
- *      d. Add to pool.
- *      e. Emit iteration state via onIteration.
- *   3. Return winner (highest aggregate) + Pareto front + history + stop reason.
- *
- * Cost accounting: every metric call (whether rollout, scoring, or eval-set
- * scoring) is counted against `budget.maxMetricCalls`. The loop terminates
- * when either iterations OR metric calls are exhausted, whichever first.
+ * GEPA main loop (Agrawal et al., including the Appendix-F Merge operator).
+ * Constraints run before scoring so a rejected candidate costs no eval-set calls.
+ * Every metric call counts against `budget.maxMetricCalls`.
  */
 
 import * as v from 'valibot';
@@ -49,18 +32,14 @@ export async function runGepa<I = unknown, E = unknown>(
   }
 
   const budget = { ...DEFAULT_GEPA_BUDGET, ...config.budget };
-  // Reflection minibatches come from the train set (upstream GEPA's trainset
-  // discipline); scoring/Pareto always runs on the full evalSet. The two are
-  // disjoint when the caller supplies a real train set, so the minibatch is
-  // bounded by the set it actually samples from — not by the eval set.
+  // Minibatches come from the train set; scoring and Pareto always run on the full evalSet.
   const trainSet = config.trainSet && config.trainSet.length > 0 ? config.trainSet : config.evalSet;
 
   if (budget.minibatchSize <= 0) {
     throw new Error(`runGepa: minibatchSize must be positive; got ${budget.minibatchSize}`);
   }
 
-  // Over-asking is benign and normal — the train set is however many labeled
-  // failures the ledger happens to hold — so it caps rather than throws.
+  // The train set is however many failures the ledger holds, so over-asking caps rather than throws.
   const minibatchSize = Math.min(budget.minibatchSize, trainSet.length);
   const random = config.random ?? Math.random;
   const instanceIds = config.evalSet.map(i => i.id);
@@ -70,7 +49,6 @@ export async function runGepa<I = unknown, E = unknown>(
 
   const budgetLeft = () => budget.maxMetricCalls - metricCallsUsed;
 
-  // 1. Score the seed.
   const seed = await scoreCandidate({
     source: config.seed, parentId: null, evalSet: config.evalSet, metric: config.metric,
   });
@@ -84,9 +62,6 @@ export async function runGepa<I = unknown, E = unknown>(
   let mergeInvocations = 0;
   const REJECTION_GIVE_UP = 5;
 
-  // ── helpers (closed over loop state) ──
-
-  /** Propose a candidate via the reflective Mutate operator. */
   async function proposeViaMutate(): Promise<ProposalOutcome> {
     const parent =
       config.parentSelection === 'best-aggregate'
@@ -94,8 +69,7 @@ export async function runGepa<I = unknown, E = unknown>(
         : sampleParentByWeight(pool, instanceIds, random);
 
     const minibatch = sampleWithoutReplacement(trainSet, minibatchSize, random);
-    // Measurement failures invalidate the run; only proposal-generation failures
-    // belong to the recoverable rejection path below.
+    // Measurement failures invalidate the run; only proposal-generation failures are recoverable rejections.
     const rollout = await rolloutMinibatch(parent.source, minibatch, config.metric);
     charge(rollout.metricCalls);
 
@@ -114,11 +88,11 @@ export async function runGepa<I = unknown, E = unknown>(
     }
   }
 
-  /** Propose a candidate via Merge. Returns mutate fallback when no pair. */
+  /** Falls back to mutate when there is no complementary pair. */
   async function proposeViaMerge(): Promise<ProposalOutcome> {
     const pair = findComplementaryPair(pool, instanceIds, random);
 
-    if (!pair) return proposeViaMutate(); // no complementary pair → fallback
+    if (!pair) return proposeViaMutate();
 
     try {
       const merged = await proposeMerge({
@@ -128,7 +102,7 @@ export async function runGepa<I = unknown, E = unknown>(
 
       mergeInvocations++;
 
-      // Merge has no rollout cost; only the eval-set scoring will charge.
+      // Merge has no rollout cost.
       return {
         ok: true, source: merged, operator: 'merge',
       };
@@ -137,9 +111,7 @@ export async function runGepa<I = unknown, E = unknown>(
     }
   }
 
-  // Emit a rejection, bump the consecutive-rejection counter, and report
-  // whether GEPA should give up (K consecutive rejections). Every rejection
-  // path goes through this so the give-up logic is uniform.
+  // Every rejection path goes through this so the give-up logic is uniform.
   let consecutiveRejections = 0;
 
   async function recordRejection(iter: number, reason: string): Promise<boolean> {
@@ -152,13 +124,10 @@ export async function runGepa<I = unknown, E = unknown>(
     return ++consecutiveRejections >= REJECTION_GIVE_UP;
   }
 
-  // ── main loop ──
-
   let iterationsRun = 0;
 
   for (let iter = 0; iter < budget.maxIterations; iter++) {
-    // Worst-case cost of this iteration: minibatchSize (rollout) + evalSet (score).
-    // Merge costs 0 for rollout, so worst-case still applies for Mutate.
+    // Worst case: minibatchSize (rollout) + evalSet (score).
     if (budgetLeft() < minibatchSize + config.evalSet.length) {
       stopReason = 'metric_budget_exhausted';
       break;
@@ -166,7 +135,6 @@ export async function runGepa<I = unknown, E = unknown>(
 
     iterationsRun++;
 
-    // Pick operator.
     const tryMerge =
       budget.useMerge &&
       mergeInvocations < budget.maxMergeInvocations &&
@@ -181,7 +149,6 @@ export async function runGepa<I = unknown, E = unknown>(
       continue;
     }
 
-    // No-change check: a proposal identical to its parent wastes eval-set scoring.
     if (proposal.operator === 'mutate' && proposal.source === proposal.parentSource) {
       if (await recordRejection(iter, 'no_change')) { stopReason = 'no_improvement_possible'; break; }
 
@@ -194,7 +161,6 @@ export async function runGepa<I = unknown, E = unknown>(
       continue;
     }
 
-    // Constraints.
     const constraintError = checkConstraints(proposal.source, config.constraints);
 
     if (constraintError) {
@@ -203,11 +169,9 @@ export async function runGepa<I = unknown, E = unknown>(
       continue;
     }
 
-    // Score on the full eval set.
     const cand = await scoreCandidate({
       source: proposal.source,
-      // Parent id is meaningful only for mutate; merge inherits both parents
-      // but the type carries one id so leave null.
+      // Merge has two parents but the type carries one id.
       parentId: proposal.operator === 'mutate' ? findCandidateBySource(pool, proposal.parentSource ?? '')?.id ?? null : null,
       evalSet: config.evalSet, metric: config.metric,
     });
@@ -215,12 +179,10 @@ export async function runGepa<I = unknown, E = unknown>(
     charge(config.evalSet.length);
     await config.onCandidate?.({ candidate: cand, iteration: iter + 1 });
 
-    // Add to pool + history.
     pool.push(cand);
     history.push(cand);
     consecutiveRejections = 0;
 
-    // Emit.
     await emitIteration(config.onIteration, {
       iteration: iter,
       pool,
@@ -242,8 +204,6 @@ export async function runGepa<I = unknown, E = unknown>(
     stopReason,
   };
 }
-
-// ── helpers ──────────────────────────────────────────────────────
 
 async function scoreCandidate<I, E>(args: {
   source: string;

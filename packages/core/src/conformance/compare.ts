@@ -1,11 +1,6 @@
 /**
- * Backend conformance comparator — reality vs the manifest, both directions.
- *
- * The comparator never observes anything itself: each backend package owns a
- * harness that runs its REAL composition root (the actual `buildActorTools`
- * call site, the actual schema path) and hands the observed sets here. Keeping
- * observation in the backend and judgment in core is what stops the gate from
- * growing a parallel re-implementation of the wiring it checks.
+ * Backend conformance comparator. Backends observe their real composition
+ * roots and hand the sets here; core only judges.
  */
 
 import * as v from 'valibot';
@@ -23,12 +18,9 @@ import {
 } from './manifest';
 
 export type ConformanceFindingKind =
-  /** Declared wired on this root, but the real composition output lacks it. */
   | 'missing'
-  /** Observed on this root, but the manifest has no entry for it at all. */
   | 'undeclared'
-  /** Observed on this root, but declared deliberately absent — the manifest
-   *  (or the wiring) is wrong, and the recorded reason is stale. */
+  /** Observed, but declared absent: the recorded reason is stale. */
   | 'contradicted';
 
 export interface ConformanceFinding {
@@ -36,15 +28,13 @@ export interface ConformanceFinding {
   readonly plane: ConformancePlane;
   readonly root: ConformanceRoot;
   readonly name: string;
-  /** For `contradicted`: the now-stale reason the manifest recorded. */
   readonly staleReason?: string;
 }
 
 export interface ConformanceReport {
   readonly root: ConformanceRoot;
   readonly findings: readonly ConformanceFinding[];
-  /** Planes the manifest declares but this harness did not measure. Loud by
-   *  design: an unmeasured plane is never conformant, it is unmeasured. */
+  /** Declared but not measured; never counted as conformant. */
   readonly unmeasured: readonly ConformancePlane[];
 }
 
@@ -119,11 +109,7 @@ export function renderConformanceFindings(report: ConformanceReport): string {
     .join('\n');
 }
 
-// ── Observation helpers shared by the per-backend harnesses ─────────────────
-
-/** SQLite bookkeeping and FTS5 shadow tables are implementation artifacts of
- *  a declared virtual table, not capabilities; observing them would make every
- *  FTS index five spurious manifest rows. */
+/** Drops SQLite bookkeeping and FTS5 shadow tables of declared virtual tables. */
 export function normalizeObservedTables(names: Iterable<string>): Set<string> {
   const all = new Set(names);
   const out = new Set<string>();
@@ -141,8 +127,6 @@ export function normalizeObservedTables(names: Iterable<string>): Set<string> {
   return out;
 }
 
-/** The action enum of a builtin tool's input schema — the artifact the model
- *  actually sees, from the ToolSet the composition root actually built. */
 const ToolSchema = v.object({ inputSchema: v.optional(v.unknown()) });
 
 const ActionEnumSchema = v.object({
@@ -161,15 +145,7 @@ export function observedActionEnum(tool: { inputSchema?: unknown } | undefined):
   return new Set(parsedAction.success ? parsedAction.output.properties.action.enum : []);
 }
 
-/**
- * Which {@link CONFORMANCE_PRODUCERS} the root actually built a client for,
- * read off the assembled runtime.
- *
- * The observation is `!== undefined` because that is the whole contract: every
- * consumer of these fields branches on presence, and a field left unset IS the
- * "apply your documented fallback" instruction. `fastLlm` is deliberately not
- * observed — see CONFORMANCE_PRODUCERS for the measurement that says why.
- */
+/** Presence (`!== undefined`) is the contract; unset means the consumer's documented fallback. */
 export function wiredProducers(rt: {
   judgeModel?: unknown; advisorLlm?: unknown;
 }): Set<string> {
@@ -182,8 +158,7 @@ export function wiredProducers(rt: {
   return wired;
 }
 
-/** Unwrap an AI-SDK schema wrapper (jsonSchema(...) carries the raw object on
- *  jsonSchema; a plain object schema is already raw). */
+/** Unwrap an AI-SDK `jsonSchema(...)` wrapper; a plain object schema is already raw. */
 function schemaJson(input: { schema: unknown }): JsonObject | null {
   const wrapped = v.safeParse(v.object({ jsonSchema: JsonObjectSchema }), input.schema);
 
@@ -193,17 +168,7 @@ function schemaJson(input: { schema: unknown }): JsonObject | null {
   return direct.success ? direct.output : null;
 }
 
-// ── Phantom callables ────────────────────────────────────────────────────────
-
-/**
- * Call-shaped names in LLM-facing text that resolve to nothing.
- *
- * The defect this locks: an event brief told the model to "use
- * read_external_payload(event_id)" — a function that has never existed in any
- * namespace, on any backend. Text that names a callable is an API contract
- * with the model; this extracts every `name(...)`-shaped instruction and
- * reports the ones absent from the caller's set of real callables.
- */
+/** Call-shaped names in LLM-facing text (`name(...)`) absent from the real callables. */
 export function phantomCallables(text: string, callables: ReadonlySet<string>): string[] {
   const phantoms = new Set<string>();
 
@@ -212,15 +177,11 @@ export function phantomCallables(text: string, callables: ReadonlySet<string>): 
 
     if (name === undefined) continue;
 
-    // Membership first: a name the caller wires is real whatever its shape,
-    // so a wired single-word tool is never prose. Past that, a single word
-    // is prose ("do(", "call(") — unless it names a real tool, in which case
-    // an instruction meant it and a root that did not wire it must hear so.
     if (callables.has(name)) continue;
 
+    // Past wired names, single words are prose unless they name a real builtin tool.
     if (!name.includes('.') && !name.includes('_') && !isBuiltinToolName(name)) continue;
-    // A namespaced call resolves if its namespace root is a real callable
-    // surface (`workspace.readdir(...)` under a wired `workspace` namespace).
+    // A namespaced call resolves under a wired `root.*` namespace.
     const root = name.split('.', 1)[0];
 
     if (root !== undefined && name.includes('.') && callables.has(`${root}.*`)) continue;

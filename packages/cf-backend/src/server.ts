@@ -26,7 +26,7 @@
  *   6b. /mcp/v1/* — MCP server; CLI-bearer-token or session auth + ownership
  *       enforced inside (external MCP clients can't do browser OAuth).
  *   7. AUTH GATE — every other request needs a Kinu session
- *      (or DEV_USER_EMAIL in local/staging dev).
+ *      (or the DEV_USER_EMAIL identity; see auth/session.ts).
  *   7b. /api/workspaces/<name>/webhook/<trigger>/v1-<token> — public webhook
  *       delivery, served before the gate above because the route capability in
  *       the URL is its gate (events/webhook-route.ts).

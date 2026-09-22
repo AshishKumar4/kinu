@@ -64,7 +64,6 @@ export {
   ANALYTICS_SCHEMAS,
   CONTROL_PLANE_OPS_SCHEMA,
   FEEDBACK_MARKERS_SCHEMA,
-  analyticsDataset,
   blobColumn,
   doubleColumn,
   indexColumn,

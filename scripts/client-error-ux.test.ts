@@ -225,7 +225,7 @@ async function fallback(page: Page): Promise<{ visible: boolean; text: string; r
     const retry = buttons.find((node) => (node.textContent ?? '').trim() === 'Try again');
 
     const heading = [...document.querySelectorAll('div')]
-      .find((node) => (node.textContent ?? '').startsWith('Something went wrong rendering this view'));
+      .find((node) => (node.textContent ?? '').startsWith('This view crashed'));
 
     return {
       visible: heading !== undefined,
@@ -344,13 +344,13 @@ async function drive(gallery: Gallery, options: Scenario): Promise<Observed> {
 
     await page.click('[data-break]');
     await page.waitForFunction(
-      () => document.body.textContent?.includes('Something went wrong rendering this view') === true,
+      () => document.body.textContent?.includes('This view crashed') === true,
     );
 
     for (let attempt = 0; attempt < (options.retries ?? 0); attempt += 1) {
       await tryAgain(page);
       await page.waitForFunction(
-        () => document.body.textContent?.includes('Something went wrong rendering this view') === true,
+        () => document.body.textContent?.includes('This view crashed') === true,
       );
     }
 

@@ -499,16 +499,16 @@ export function FilesSurface({ rpc, executors, jump, onConnectDevice }: FilesSur
                 <span data-mount-badge className="p-t-status px-1.5 py-px rounded-full border p-border border-dashed">
                   {m.name === "device" ? deviceLabel ?? executorLabel("device") : executorLabel(m.name)}
                 </span>
-                <span className="p-text-4 truncate">— {m.reason ?? "not available"}</span>
+                <span className="p-text-4 truncate">{m.reason ?? "not available"}</span>
                 {m.name === "device" && (
                   <button type="button" data-files-connect onClick={onConnectDevice}
-                    className="p-accent hover:underline shrink-0">connect</button>
+                    className="p-accent hover:underline shrink-0">Connect</button>
                 )}
               </div>
             );
           })}
           {!loading && filtered.length === 0 && entries.length > 0 && (
-            <div className="p-text-3 italic px-3 py-1.5">Nothing here matches “{filter}”.</div>
+            <div className="p-text-3 italic px-3 py-1.5">Nothing here matches "{filter}".</div>
           )}
           {!loading && entries.length === 0 && offlineMounts.length === 0 && !err && (
             <div className="p-text-3 italic px-3 py-1.5">This folder is empty. Drop files here to upload.</div>

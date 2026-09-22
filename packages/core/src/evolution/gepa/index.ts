@@ -1,17 +1,4 @@
-/**
- * GEPA — Genetic-Pareto Prompt Evolution.
- *
- * Offline batch optimisation of any string-addressable agent artifact —
- * scaffold source, crafted tool implementations, system-prompt sections —
- * via reflective LLM mutation + Pareto-by-instance candidate preservation.
- *
- * Use case: produce a higher-scoring scaffold candidate from a held-out
- * eval set, then hand off to `modifyScaffold` for the standard shadow-
- * eval + promotion pipeline. Complementary to the runtime mutable-scaffold
- * loop; not a replacement.
- *
- * Paper: Agrawal et al., ICLR 2026 — https://arxiv.org/abs/2507.19457
- */
+/** GEPA: reflective, Pareto-by-instance optimisation of string artifacts (Agrawal et al., ICLR 2026, arXiv:2507.19457). */
 
 export * from './types';
 

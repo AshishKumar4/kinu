@@ -1,12 +1,16 @@
 // Payload visibility — redaction + LLM rendering.
 import { describe, test, expect } from 'bun:test';
-import { createMemoryVfs, present } from '@kinu.run/test-utils';
+import { Database } from 'bun:sqlite';
+import { createMemoryVfs, createTestActorsOver, present } from '@kinu.run/test-utils';
 import * as v from 'valibot';
 import {
-  EVENT_BRIEF_MAX_CHARS, applyVisibilityForStorage, eventContentPath,
+  EVENT_BRIEF_MAX_CHARS, EventLog, applyVisibilityForStorage, eventContentPath, initEventsHubTables,
   redactPayload, redactSecrets, renderForLLM, spillEventContent,
 } from '../src/events/hub/index';
 import type { BaseEvent } from '../src/events/hub/index';
+import { receivePeerMessage } from '../src/events/ingress/peer';
+import { acceptContainerEvent } from '../src/events/ingress/container';
+import { makeSqlExec } from './helpers';
 
 const StoredHttpSchema = v.object({
   headers: v.record(v.string(), v.string()),
@@ -219,10 +223,9 @@ describe('renderForLLM', () => {
 
     test('an oversize subordinate report cites the spill that holds it whole', async () => {
       const { vfs } = createMemoryVfs();
-      const content_path = await spillEventContent(vfs, longReport);
-      expect(content_path).toBe(eventContentPath(longReport));
-
-      if (content_path === null) throw new Error('long subordinate report was not spilled');
+      const spilled = await spillEventContent(vfs, longReport);
+      expect(spilled).toEqual({ path: eventContentPath(longReport) });
+      const content_path = present(spilled?.path, 'the spilled report path');
 
       const r = renderForLLM({
         ...EVENT_BASE, ingress: 'subordinate', variant: 'subordinate_report', payload_visibility: 'full',
@@ -262,9 +265,7 @@ describe('renderForLLM', () => {
       const { vfs } = createMemoryVfs();
       const body = { question: 'x'.repeat(900) };
       const serialized = JSON.stringify(body);
-      const body_path = await spillEventContent(vfs, serialized);
-
-      if (body_path === null) throw new Error('long peer body was not spilled');
+      const body_path = present((await spillEventContent(vfs, serialized))?.path, 'the spilled peer body path');
 
       const r = renderForLLM({
         ...EVENT_BASE, ingress: 'peer_async', variant: 'peer_agent', payload_visibility: 'full',
@@ -307,9 +308,7 @@ describe('renderForLLM', () => {
       const { vfs } = createMemoryVfs();
       const body = { event: 'deploy.failed', log: 'y'.repeat(900), action: 'rollback' };
       const serialized = JSON.stringify(body);
-      const body_path = await spillEventContent(vfs, serialized);
-
-      if (body_path === null) throw new Error('long webhook body was not spilled');
+      const body_path = present((await spillEventContent(vfs, serialized))?.path, 'the spilled webhook body path');
 
       const r = renderForLLM({
         ...EVENT_BASE, ingress: 'webhook_hmac', variant: 'webhook', payload_visibility: 'full',
@@ -331,9 +330,7 @@ describe('renderForLLM', () => {
     test('an oversize email body is windowed, counted, and addressable', async () => {
       const { vfs } = createMemoryVfs();
       const body_text = `Please review:\n${'context line\n'.repeat(90)}Ship it by Friday.`;
-      const body_path = await spillEventContent(vfs, body_text);
-
-      if (body_path === null) throw new Error('long email body was not spilled');
+      const body_path = present((await spillEventContent(vfs, body_text))?.path, 'the spilled email body path');
 
       const r = renderForLLM({
         ...EVENT_BASE, ingress: 'email_inbound', variant: 'email', payload_visibility: 'full',
@@ -361,11 +358,69 @@ describe('renderForLLM', () => {
       const overBudget = `${atBudget}b`;
       const first = await spillEventContent(vfs, overBudget);
       const second = await spillEventContent(vfs, overBudget);
-      const spilled = present(first, 'the spilled content path');
+      const spilled = present(first?.path, 'the spilled content path');
 
-      expect(second).toBe(first);
+      expect(second).toEqual(first);
       expect([...files.keys()]).toEqual([spilled]);
       expect(spilled.startsWith('.kinu/event-content/')).toBe(true);
+    });
+
+    test('an oversize peer body whose spill fails is still delivered, and its brief says why the rest is missing', async () => {
+      const db = new Database(':memory:');
+      const sql = makeSqlExec(db);
+      initEventsHubTables(sql);
+      const log = new EventLog(sql, createTestActorsOver(db).main);
+      const { vfs } = createMemoryVfs();
+      const body = { question: 'x'.repeat(900) };
+
+      const received = await receivePeerMessage({
+        log,
+        vfs: { ...vfs, async writeFile() { throw new Error('the disk is full'); } },
+        isSameOwner: async () => true,
+        hasGrant: async () => true,
+      }, {
+        sender_event_id: 'ox-spill', sender_agent_name: 'scout', sender_user_id: 'u1',
+        topic: 'research', body, mode: 'build',
+      }, 1_000);
+
+      expect(received.admitted).toBe(true);
+      const [event] = log.pending({ variant: 'peer_agent' });
+      const brief = renderForLLM(present(event, 'the delivered peer event')).brief;
+
+      expect(brief).toContain(`[... ${JSON.stringify(body).length - EVENT_BRIEF_MAX_CHARS} chars omitted from the middle ...]`);
+      expect(brief).toContain(' — full message could not be saved: ');
+      expect(brief).toContain('the disk is full');
+    });
+
+    test('oversize process output cites where each stream went, or why it went nowhere', async () => {
+      const db = new Database(':memory:');
+      const sql = makeSqlExec(db);
+      initEventsHubTables(sql);
+      const log = new EventLog(sql, createTestActorsOver(db).main);
+      const { vfs } = createMemoryVfs();
+      const stdout = 'o'.repeat(900);
+      const stderr = 'e'.repeat(900);
+
+      const accepted = await acceptContainerEvent({
+        log,
+        vfs: {
+          ...vfs,
+          async writeFile(path, data) {
+            if (data === stderr) throw new Error('the disk is full');
+            await vfs.writeFile(path, data);
+          },
+        },
+        launchingHeadTrust: 'owner',
+        onAdmitted: () => {},
+      }, { kind: 'process_done', process_id: 'p-1', command: 'make', exit_code: 2, stdout, stderr }, 1_000);
+
+      expect(accepted).toMatchObject({ status: 'admitted', admitted: true });
+      const [event] = log.pending({ variant: 'process_done' });
+      const brief = renderForLLM(present(event, 'the process event')).brief;
+
+      expect(brief).toContain(` — full stdout: ${eventContentPath(stdout)}`);
+      expect(brief).toContain(' — full stderr could not be saved: ');
+      expect(brief).toContain('the disk is full');
     });
   });
 });

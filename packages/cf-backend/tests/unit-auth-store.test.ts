@@ -231,16 +231,16 @@ describe('OAuth handoff state', () => {
 
 /**
  * `DEV_USER_EMAIL` names ONE identity a caller may act as without signing in.
- * The published staging deployment sets it, so what decides whether a caller
- * HAS it is the whole security property of that deployment: gated on the
- * absence of a session cookie, every unauthenticated request reaching
- * staging.kinu.run arrived as the eval service account.
+ * The published deployment sets it, so what decides whether a caller HAS it
+ * is the whole security property of that deployment: gated on the absence of
+ * a session cookie, every unauthenticated request reaching the then-staging
+ * origin arrived as the eval service account.
  */
 describe('the synthetic development identity', () => {
   const DEV_ENV = {
     AUTH_KV: makeKv(),
     DEV_USER_EMAIL: 'eval-service@kinu.run',
-    DEV_IDENTITY_SECRET: 'staging-shared-secret',
+    DEV_IDENTITY_SECRET: 'deployment-shared-secret',
   };
 
   /** Who the request resolved as, or the status it was refused with — a tag
@@ -260,8 +260,8 @@ describe('the synthetic development identity', () => {
   }
 
   test('a published host grants it only to a caller holding the secret', async () => {
-    const held = await resolve('https://staging.kinu.run/api/user/workspaces', {
-      'x-kinu-dev-identity': 'staging-shared-secret',
+    const held = await resolve('https://kinu.run/api/user/workspaces', {
+      'x-kinu-dev-identity': 'deployment-shared-secret',
     });
 
     if (!held.granted) throw new Error(`the secret was refused with ${String(held.status)}`);
@@ -274,13 +274,13 @@ describe('the synthetic development identity', () => {
     ['a wrong secret', { 'x-kinu-dev-identity': 'guess' }],
     ['an empty secret', { 'x-kinu-dev-identity': '' }],
   ])('a published host refuses a caller with %s', async (_label, headers) => {
-    expect(await resolve('https://staging.kinu.run/api/user/workspaces', headers))
+    expect(await resolve('https://kinu.run/api/user/workspaces', headers))
       .toEqual({ granted: false, status: 401 });
   });
 
   test('a deployment that configures no secret grants nothing', async () => {
-    const request = new Request('https://staging.kinu.run/api/user/workspaces', {
-      headers: { 'x-kinu-dev-identity': 'staging-shared-secret' },
+    const request = new Request('https://kinu.run/api/user/workspaces', {
+      headers: { 'x-kinu-dev-identity': 'deployment-shared-secret' },
     });
 
     expect(authenticateRequest(request, { AUTH_KV: makeKv(), DEV_USER_EMAIL: 'eval-service@kinu.run' }))

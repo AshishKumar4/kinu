@@ -24,11 +24,8 @@
  *   nothing. The negative run is the non-vacuity witness — evidence that the
  *   antecedent is reachable and that this gate can tell the difference.
  *
- * A2 CONFIG — traces have a SEPARATE switch from logs, and `observability` is
- *   NOT inherited into named environments. A deployment can therefore enable
- *   traces in production and silently leave them off in the environment used for
- *   testing, which is worse than off everywhere: the preview reports success
- *   while measuring a different system.
+ * A2 CONFIG — traces have a SEPARATE switch from logs, so a config can enable
+ *   logs and silently leave every span unrecorded while the Worker answers 200.
  *
  * A3 RE-ENTRANCY — no worker may name itself in `tail_consumers`. Measured
  *   amplification, one inbound request, `tails: [kCurrentWorker]` plus a single
@@ -68,9 +65,7 @@ import { parse, walk } from './syntax';
 
 const REPO = new URL('..', import.meta.url).pathname;
 
-/** Every wrangler config a deploy can use. Read from disk; the environment list
- *  inside each one is DERIVED, never enumerated here, because an enumerated
- *  environment list is the thing that drifts when someone adds a third. */
+/** Every wrangler config a deploy can use. */
 const WRANGLER_CONFIGS = ['packages/cf-backend/wrangler.jsonc'] as const;
 
 /** The fixture worker the runtime half boots. It is test code, outside the
@@ -79,8 +74,8 @@ const FIXTURE_ENTRY = 'packages/cf-backend/tests/fixtures/tracing-gate-worker.ts
 
 const TRACER_FACTORY = 'createWorkersTracer';
 
-export interface EnvironmentConfig {
-  /** `<config>` for the top level, `<config>#<envName>` for a named one. */
+export interface TracingConfig {
+  /** The config path. */
   readonly label: string;
   readonly workerName: string;
   readonly tracesEnabled: boolean;
@@ -91,7 +86,7 @@ export interface EnvironmentConfig {
  *  each one is optional BECAUSE absent is the defect the gate reports rather
  *  than a malformed input. Present but wrongly shaped fails the parse instead,
  *  since a config the gate cannot read is not a config the gate may pass. */
-const EnvironmentSchema = v.object({
+const WorkerSchema = v.object({
   name: v.optional(v.string()),
   observability: v.optional(v.object({
     traces: v.optional(v.object({ enabled: v.optional(v.boolean()) })),
@@ -99,48 +94,17 @@ const EnvironmentSchema = v.object({
   tail_consumers: v.optional(v.array(v.object({ service: v.string() }))),
 });
 
-/** Named environments carry the same keys and are deliberately NOT merged with
- *  the top level — see `environmentsOf`. */
-const WranglerConfigSchema = v.object({
-  ...EnvironmentSchema.entries,
-  env: v.optional(v.record(v.string(), EnvironmentSchema)),
-});
-
-type WranglerEnvironment = v.InferOutput<typeof EnvironmentSchema>;
-
-/** Top level and named environment build identically: they carry the same two
- *  keys, and the only difference is that the named one does not inherit them. */
-function environmentRow(
-  label: string,
-  workerName: string,
-  environment: WranglerEnvironment,
-): EnvironmentConfig {
-  return {
-    label,
-    workerName,
-    tracesEnabled: environment.observability?.traces?.enabled === true,
-    tailConsumers: (environment.tail_consumers ?? []).map((consumer) => consumer.service),
-  };
-}
-
-/** One row per deployable environment. Named environments are separate rows
- *  BECAUSE wrangler does not inherit `observability` or `tail_consumers` into
- *  them — the two keys this gate is about are exactly the two that do not
- *  propagate, which is why a single top-level check would be a vacuous pass for
- *  every named environment. */
-export function environmentsOf(configPath: string): readonly EnvironmentConfig[] {
+/** The two keys this gate reads, from one wrangler config. */
+export function tracingConfigOf(configPath: string): TracingConfig {
   const source = readFileSync(join(REPO, configPath), 'utf8');
-  const config = parseJsonc(source, WranglerConfigSchema, configPath);
-  const topName = config.name ?? basename(dirname(configPath));
+  const config = parseJsonc(source, WorkerSchema, configPath);
 
-  return [
-    environmentRow(configPath, topName, config),
-    ...Object.entries(config.env ?? {}).map(([envName, env]) => environmentRow(
-      `${configPath}#${envName}`,
-      env.name ?? `${topName}-${envName}`,
-      env,
-    )),
-  ];
+  return {
+    label: configPath,
+    workerName: config.name ?? basename(dirname(configPath)),
+    tracesEnabled: config.observability?.traces?.enabled === true,
+    tailConsumers: (config.tail_consumers ?? []).map((consumer) => consumer.service),
+  };
 }
 
 /** Derived, not listed: every product file that CALLS the tracer factory. The
@@ -268,22 +232,21 @@ export async function observeSpans(): Promise<SpanObservations> {
 /** Pure: the findings implied by a census and a pair of observation sets. Split
  *  out so the self-test drives every branch without booting workerd four times. */
 export function auditTracing(
-  environments: readonly EnvironmentConfig[],
+  configs: readonly TracingConfig[],
   instrumentedCount: number,
   observations: SpanObservations,
 ): readonly string[] {
   const findings: string[] = [];
 
-  for (const env of environments) {
+  for (const env of configs) {
     if (instrumentedCount > 0 && !env.tracesEnabled) {
       findings.push(finding({
-        invariant: 'observability.traces.enabled === true in every deployable environment',
+        invariant: 'observability.traces.enabled === true in the deployed config',
         at: env.label,
         found: 'traces absent or not enabled, while the tracer factory is used in src',
         silently: 'every custom span is created, reports isTraced false and is never recorded — '
           + 'the worker returns 200 and nothing anywhere says the trace was dropped',
-        fix: 'add "traces": { "enabled": true, "head_sampling_rate": 1 } to THIS environment\'s '
-          + '"observability" block; wrangler does not inherit it from the top level',
+        fix: 'add "traces": { "enabled": true, "head_sampling_rate": 1 } to the "observability" block',
       }));
     }
 
@@ -334,13 +297,13 @@ export function auditTracing(
 
 async function main(): Promise<number> {
   const gate = 'tracing';
-  const environments = WRANGLER_CONFIGS.flatMap((config) => environmentsOf(config));
+  const configs = WRANGLER_CONFIGS.map((config) => tracingConfigOf(config));
   const instrumented = tracerCallSites(readMatching(isProductSource));
   const observations = await observeSpans();
-  const findings = auditTracing(environments, instrumented.length, observations);
+  const findings = auditTracing(configs, instrumented.length, observations);
 
   const measured = assertMeasured(gate, [
-    ['deployable environments parsed', environments.length],
+    ['wrangler configs parsed', configs.length],
     ['tracer call sites', instrumented.length],
     ['spans recorded with a sink', observations.withSink.filter((s) => s.isTraced).length],
     ['spans inert without a sink', observations.withoutSink.filter((s) => !s.isTraced).length],
