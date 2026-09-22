@@ -250,6 +250,39 @@ function useEntryRevert(entryId: string, rpc: Rpc, onReverted: () => void) {
   return { busy, notice, revert };
 }
 
+/** Whether a card has anything to expand: evidence, grouped members, or a kind
+ *  whose facts render in the details region. */
+function entryHasDetails(entry: ChangelogEntryView): boolean {
+  return Boolean(entry.evidence) || (entry.items?.length ?? 0) > 0
+    || entry.kind === 'fact' || entry.kind === 'tool';
+}
+
+/** The scaffold diff a card opens: its summary and lines once loaded, the
+ *  failure when the read did not land, the wait while it runs. */
+function EntryScaffoldDiff({ diff, onRetry }: {
+  diff: AsyncResource<ScaffoldDiff> | null;
+  onRetry: () => void;
+}) {
+  if (diff === null) return null;
+
+  if (diff.status === "error") {
+    return <LoadFailure className="mt-2" what="this diff" message={diff.message} onRetry={onRetry} />;
+  }
+
+  if (diff.status === "loading") return <div className="flex justify-center py-3"><Loader size="sm" /></div>;
+
+  return (
+    <div className="mt-2 rounded-md border p-border overflow-hidden">
+      <div className="flex items-center gap-3 px-3 py-1.5 border-b p-border p-annotation p-text-3">
+        <span>v{diff.value.previousVersion ?? "∅"} → v{diff.value.version}</span>
+        <span className="p-success">+{diff.value.added}</span>
+        <span className="p-danger">−{diff.value.removed}</span>
+      </div>
+      <DiffLines lines={diff.value.lines} />
+    </div>
+  );
+}
+
 export interface ChangelogEntryCardProps {
   entry: ChangelogEntryView;
   /** Render inside the journal's shared grouped-row container. */
@@ -297,7 +330,7 @@ export function ChangelogEntryCard({ entry, grouped = false, seenAt, rpc, onReve
 
   const Icon = KIND_ICON[entry.kind];
   const fresh = entry.at > seenAt;
-  const hasDetails = Boolean(entry.evidence) || (entry.items?.length ?? 0) > 0 || entry.kind === 'fact' || entry.kind === 'tool';
+  const hasDetails = entryHasDetails(entry);
   const detailsId = `changelog-details-${encodeURIComponent(entry.id)}`;
 
   const headline = (
@@ -366,20 +399,7 @@ export function ChangelogEntryCard({ entry, grouped = false, seenAt, rpc, onReve
         </div>
       )}
 
-      {diff?.status === "ready" && (
-        <div className="mt-2 rounded-md border p-border overflow-hidden">
-          <div className="flex items-center gap-3 px-3 py-1.5 border-b p-border p-annotation p-text-3">
-            <span>v{diff.value.previousVersion ?? "∅"} → v{diff.value.version}</span>
-            <span className="p-success">+{diff.value.added}</span>
-            <span className="p-danger">−{diff.value.removed}</span>
-          </div>
-          <DiffLines lines={diff.value.lines} />
-        </div>
-      )}
-      {diff?.status === "error" && (
-        <LoadFailure className="mt-2" what="this diff" message={diff.message} onRetry={toggleDiff} />
-      )}
-      {diff?.status === "loading" && <div className="flex justify-center py-3"><Loader size="sm" /></div>}
+      <EntryScaffoldDiff diff={diff} onRetry={toggleDiff} />
     </div>
   );
 }
