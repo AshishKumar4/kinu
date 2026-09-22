@@ -1,7 +1,8 @@
 diff --git a/packages/core/src/bench/types.ts b/packages/core/src/bench/types.ts
+index 2e9b8845d..c2c2cb331 100644
 --- a/packages/core/src/bench/types.ts
 +++ b/packages/core/src/bench/types.ts
-@@ -208,12 +208,13 @@ const UsageBoundarySchema = v.object({
+@@ -223,12 +223,14 @@ const UsageBoundarySchema = v.object({
   *  quantity, and arithmetic that swallows one stops being a budget at all. */
  const TokenFigureSchema = v.pipe(
    v.union([
@@ -14,8 +15,9 @@ diff --git a/packages/core/src/bench/types.ts b/packages/core/src/bench/types.ts
 -  )),
 +  v.transform((figure): number | undefined => {
 +    if (Object.is(figure, Number.NaN)) return Number.NaN;
++
 +    return v.is(v.number(), figure) ? figure : figure.total ?? undefined;
 +  }),
  );
  
- export function usageTokens<Reported>(usage: Reported): number | undefined {
+ export function usageTokens(usage: { reported: unknown }): number | undefined {

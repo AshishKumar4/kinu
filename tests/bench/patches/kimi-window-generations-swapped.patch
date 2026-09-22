@@ -1,7 +1,8 @@
 diff --git a/packages/core/src/context-window.ts b/packages/core/src/context-window.ts
+index 6c792e878..a23897e45 100644
 --- a/packages/core/src/context-window.ts
 +++ b/packages/core/src/context-window.ts
-@@ -16,7 +16,7 @@
+@@ -27,8 +27,8 @@ const WINDOWS: Array<[RegExp, number]> = [
    // Per developers.cloudflare.com/workers-ai/models/glm-5.3 (read 2026-08-31):
    // 1M-token context, same as its 5.2 sibling.
    [/glm-5\.[23]/i, 1_048_576],
@@ -10,4 +11,5 @@ diff --git a/packages/core/src/context-window.ts b/packages/core/src/context-win
 +  [/kimi-k3/i, 262_144],
 +  [/kimi-k2/i, 1_048_576],
    [/llama-4/i, 131_072],
-   [/qwen/i, 131_072],
+   // The Meta line this product's OpenCode routing serves. models.dev (read
+   // 2026-09-22) reports limit.context 1_048_576 for muse-spark 1.1/1.2/1.3

@@ -1,13 +1,13 @@
 diff --git a/packages/core/src/skills/parse.ts b/packages/core/src/skills/parse.ts
-index e8e1672c3..533487061 100644
+index 89f43f19f..e2578d63b 100644
 --- a/packages/core/src/skills/parse.ts
 +++ b/packages/core/src/skills/parse.ts
-@@ -111,7 +111,7 @@ export function parseSkillFile(
-   const user_invocable =
-     fm['user-invocable'] !== undefined ? fm['user-invocable'] !== false
-     : fm.user_invocable !== undefined  ? fm.user_invocable !== false
--    : true;
-+    : false;
+@@ -193,7 +193,7 @@ function userInvocable(fm: JsonObject): boolean {
  
-   // auto_activate is the Kinu-only keyword-fire flag. We force it false
-   // when the author asked us not to model-invoke — the two contradict
+   if (fm.user_invocable !== undefined) return fm.user_invocable !== false;
+ 
+-  return true;
++  return false;
+ }
+ 
+ /** A frontmatter scalar as the text it states. A mapping or a list states no
