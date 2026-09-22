@@ -133,7 +133,7 @@ function Answered({ options, runId, onStarted }: {
 
   useEffect(() => {
     let live = true;
-    const failed = <Thrown,>(cause: Thrown): void => { if (live) setErr(renderThrownChain({ cause })); };
+    const failed = (...rejection: [unknown]): void => { if (live) setErr(renderThrownChain({ cause: rejection[0] })); };
 
     const door = doorFor(runId);
 
@@ -296,7 +296,7 @@ export default function DeployPage({ fixture, fixtureOptions }: {
     if (!live) return;
     let mounted = true;
 
-    const failed = <Thrown,>(cause: Thrown): void => { if (mounted) setErr(renderThrownChain({ cause })); };
+    const failed = (...rejection: [unknown]): void => { if (mounted) setErr(renderThrownChain({ cause: rejection[0] })); };
 
     deployOptions(location.origin).then((offer) => { if (mounted) setOptions(offer); }).catch(failed);
 
@@ -309,7 +309,7 @@ export default function DeployPage({ fixture, fixtureOptions }: {
     if (!live || runId === "" || heldRunKey(runId) === "") return;
     let mounted = true;
 
-    const failed = <Thrown,>(cause: Thrown): void => { if (mounted) setErr(renderThrownChain({ cause })); };
+    const failed = (...rejection: [unknown]): void => { if (mounted) setErr(renderThrownChain({ cause: rejection[0] })); };
 
     const door = doorFor(runId);
 
@@ -349,7 +349,7 @@ export default function DeployPage({ fixture, fixtureOptions }: {
   };
 
   const retry = useCallback((stepId: string): void => {
-    const failed = <Thrown,>(cause: Thrown): void => setErr(renderThrownChain({ cause }));
+    const failed = (...rejection: [unknown]): void => setErr(renderThrownChain({ cause: rejection[0] }));
 
     doorFor(runId).retry(stepId).then(setSnapshot).catch(failed);
   }, [runId]);

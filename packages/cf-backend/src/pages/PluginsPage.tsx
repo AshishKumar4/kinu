@@ -52,7 +52,7 @@ function serverStatus(status: McpServerSummary['status']): PluginStatus {
       return { label: status, tone: 'warning' };
     case 'failed':
       return { label: 'failed', tone: 'danger' };
-    default:
+    case 'unknown':
       return { label: status, tone: 'neutral' };
   }
 }

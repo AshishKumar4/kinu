@@ -144,6 +144,14 @@ const RUN_HISTORY_PAGE = 30;
 
 const RunPageSchema = pageSchema(RunSummarySchema);
 
+/** The tone a table gives a status word. The stores hold whatever word wrote
+ *  the row, so a word with no tone of its own reads neutral. */
+function dotTone(tones: Readonly<Record<string, string | undefined>>, status: string): string {
+  return tones[status] ?? "p-dot-neutral";
+}
+
+const RUN_DOT = { completed: "p-dot-success", aborted: "p-dot-danger" };
+
 /** The cross-run history, newest first. Totals that a spend decision needs
  *  live on the Activity surface; this header names the list and its size. */
 function RunHistoryBlock({ rpc }: { rpc: Rpc }) {
@@ -176,7 +184,7 @@ function RunHistoryBlock({ rpc }: { rpc: Rpc }) {
   // runs, and the pager cannot know that.
   const exhausted = first !== null && (first.status === "end" || tail.exhausted);
 
-  const containerRef = useGrowingScroll<HTMLDivElement>({
+  const containerRef = useGrowingScroll({
     grows: "down", content: runs, fetched: tail.fetched, onReachEdge: tail.loadMore,
   });
 
@@ -187,39 +195,39 @@ function RunHistoryBlock({ rpc }: { rpc: Rpc }) {
         <h2 className="text-sm font-semibold p-text">Run history</h2>
         {runs && <Badge variant="secondary">{exhausted ? `${runs.length}` : `${runs.length}+`}</Badge>}
       </div>
-      {runs === null ? (
-        resource.status === "error"
-          ? <LoadFailure what="the run history" message={resource.message} onRetry={reload} />
-          : <div className="flex justify-center py-6"><Loader size="sm" /></div>
-        )
-        : runs.length === 0 ? <p className="text-xs p-text-3">No recorded runs yet.</p>
-        : (
-          <div ref={containerRef} className="max-h-[28rem] overflow-y-auto rounded-md border p-border text-xs">
-            {runs.map((r) => {
-              const tokens = usageTotal(r.usage);
+      {runs === null && (resource.status === "error"
+        ? <LoadFailure what="the run history" message={resource.message} onRetry={reload} />
+        : <div className="flex justify-center py-6"><Loader size="sm" /></div>)}
+      {runs !== null && runs.length === 0 && <p className="text-xs p-text-3">No recorded runs yet.</p>}
+      {runs !== null && runs.length > 0 && (
+        <div ref={containerRef} className="max-h-[28rem] overflow-y-auto rounded-md border p-border text-xs">
+          {runs.map((r) => {
+            const tokens = usageTotal(r.usage);
 
-              return (
-                <div key={r.runId} className="flex items-center gap-2 px-3 py-1.5 border-b p-border">
-                  <span className={`size-1.5 rounded-full shrink-0 ${r.status === "completed" ? "p-dot-success" : r.status === "aborted" ? "p-dot-danger" : "p-dot-neutral"}`} />
-                  <span className="p-meta px-1 rounded-sm p-fill p-text-3 shrink-0">{r.causedBy ?? "chat"}</span>
-                  <span className="p-text-2 truncate flex-1" title={r.userMessage ?? r.runId}>{r.userMessage ?? r.runId}</span>
-                  <span className="p-text-3 shrink-0 tabular-nums"
-                    title={tokens === undefined
-                      ? `provider reported no usage for ${r.turnsWithoutUsage} turn${r.turnsWithoutUsage === 1 ? "" : "s"}`
-                      : "input and output tokens"}>{fmtTokens(tokens)} tok</span>
-                  <span className="p-text-3 shrink-0 tabular-nums">{new Date(r.startedAt).toLocaleDateString()}</span>
-                </div>
-              );
-            })}
-            <ScrollBoundary what="runs" count={runs.length}
-              loading={tail.loading} exhausted={exhausted} error={tail.error} onRetry={tail.loadMore} />
-          </div>
-        )}
+            return (
+              <div key={r.runId} className="flex items-center gap-2 px-3 py-1.5 border-b p-border">
+                <span className={`size-1.5 rounded-full shrink-0 ${dotTone(RUN_DOT, r.status ?? "")}`} />
+                <span className="p-meta px-1 rounded-sm p-fill p-text-3 shrink-0">{r.causedBy ?? "chat"}</span>
+                <span className="p-text-2 truncate flex-1" title={r.userMessage ?? r.runId}>{r.userMessage ?? r.runId}</span>
+                <span className="p-text-3 shrink-0 tabular-nums"
+                  title={tokens === undefined
+                    ? `provider reported no usage for ${r.turnsWithoutUsage} turn${r.turnsWithoutUsage === 1 ? "" : "s"}`
+                    : "input and output tokens"}>{fmtTokens(tokens)} tok</span>
+                <span className="p-text-3 shrink-0 tabular-nums">{new Date(r.startedAt).toLocaleDateString()}</span>
+              </div>
+            );
+          })}
+          <ScrollBoundary what="runs" count={runs.length}
+            loading={tail.loading} exhausted={exhausted} error={tail.error} onRetry={tail.loadMore} />
+        </div>
+      )}
     </section>
   );
 }
 
 /* ── Automations — triggers that wake the agent + what it has running ── */
+
+const JOB_DOT = { running: "p-dot-warning", completed: "p-dot-success", failed: "p-dot-danger" };
 
 function AutomationsBlock({ rpc }: { rpc: Rpc }) {
   const { agentId } = useParams();
@@ -275,19 +283,17 @@ function AutomationsBlock({ rpc }: { rpc: Rpc }) {
       <p className="text-xs p-text-3 mb-3">Webhooks, timers and background jobs — what wakes this agent and what it has running.</p>
       {err && <div className="text-xs p-danger mb-2">{err}</div>}
       {created && <NewWebhookCard result={created} onDismiss={() => setCreated(null)} />}
-      {triggers === null ? (
-        resource.status === "error"
-          ? <LoadFailure what="automations" message={resource.message} onRetry={reload} />
-          : <div className="flex justify-center py-6"><Loader size="sm" /></div>
-        )
-        : triggers.length === 0 ? <p className="text-xs p-text-3">No triggers. Create a webhook to wake this agent from another system.</p>
-        : (
-          <div className="rounded-md border p-border overflow-hidden text-xs">
-            {triggers.map((t) => (
-              <TriggerLine key={t.id} trigger={t} onRevoke={() => revoke(t.id)} />
-            ))}
-          </div>
-        )}
+      {triggers === null && (resource.status === "error"
+        ? <LoadFailure what="automations" message={resource.message} onRetry={reload} />
+        : <div className="flex justify-center py-6"><Loader size="sm" /></div>)}
+      {triggers !== null && triggers.length === 0 && <p className="text-xs p-text-3">No triggers. Create a webhook to wake this agent from another system.</p>}
+      {triggers !== null && triggers.length > 0 && (
+        <div className="rounded-md border p-border overflow-hidden text-xs">
+          {triggers.map((t) => (
+            <TriggerLine key={t.id} trigger={t} onRevoke={() => revoke(t.id)} />
+          ))}
+        </div>
+      )}
 
       {/* A failed jobs read is reported, never dropped into the trigger list's
           silence — and last-good rows stay up behind the failure notice. */}
@@ -305,7 +311,7 @@ function AutomationsBlock({ rpc }: { rpc: Rpc }) {
           <div className="rounded-md border p-border overflow-hidden text-xs">
             {jobs.map((job) => (
               <div key={job.id} className="flex items-center gap-2 px-3 py-1.5 border-b p-border last:border-0">
-                <span className={`size-1.5 rounded-full shrink-0 ${job.status === "running" ? "p-dot-warning" : job.status === "completed" ? "p-dot-success" : job.status === "failed" ? "p-dot-danger" : "p-dot-neutral"}`} />
+                <span className={`size-1.5 rounded-full shrink-0 ${dotTone(JOB_DOT, job.status)}`} />
                 <span className="font-medium p-text-2 truncate" title={job.label ?? job.id}>{job.label ?? job.id}</span>
                 <span className="font-mono p-text-3 shrink-0">{job.kind}</span>
                 <span className="flex-1" />
@@ -327,6 +333,8 @@ function AutomationsBlock({ rpc }: { rpc: Rpc }) {
   );
 }
 
+const TRIGGER_DOT = { active: "p-dot-success", paused: "p-dot-warning" };
+
 /** One trigger row. The delivery URL is the server's, never assembled here: it
  *  carries a signed route capability, so a URL this page built would 404. */
 function TriggerLine({ trigger, onRevoke }: {
@@ -338,22 +346,23 @@ function TriggerLine({ trigger, onRevoke }: {
 
   return (
     <div className="flex items-center gap-2 px-3 py-1.5 border-b p-border last:border-0">
-      <span className={`size-1.5 rounded-full shrink-0 ${trigger.state === "active" ? "p-dot-success" : trigger.state === "paused" ? "p-dot-warning" : "p-dot-neutral"}`} />
+      <span className={`size-1.5 rounded-full shrink-0 ${dotTone(TRIGGER_DOT, trigger.state)}`} />
       <span className="font-medium p-text-2 truncate max-w-40" title={spec.label ?? trigger.id}>{spec.label ?? trigger.id}</span>
       <span className="font-mono p-text-3 shrink-0">{trigger.kind}</span>
       {spec.cron && <code className="p-fill px-1 rounded-sm p-text-3 shrink-0">{spec.cron}</code>}
       <span className="flex-1" />
       {trigger.fire_count !== undefined && trigger.fire_count > 0 && <span className="p-text-3 shrink-0 tabular-nums">{trigger.fire_count} fires</span>}
       <span className="p-text-3 shrink-0">{trigger.state}</span>
-      {url ? (
+      {url !== null && (
         <CopyButton value={url} what="the webhook URL" size={11}
           className="p-1 rounded-sm p-card-hover p-text-3 shrink-0" />
-      ) : isWebhook ? (
+      )}
+      {url === null && isWebhook && (
         <span className="p-text-3 shrink-0"
           title="Set WEBHOOK_ROUTE_SECRET on this deployment to deliver webhooks.">
           no URL
         </span>
-      ) : null}
+      )}
       <button
         onClick={onRevoke}
         disabled={trigger.state === "revoked"}

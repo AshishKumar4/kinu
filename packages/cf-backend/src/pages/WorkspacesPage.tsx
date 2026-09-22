@@ -39,12 +39,16 @@ function storedView(): View {
  *  overview has not landed reads as idle rather than disappearing. */
 type Bucket = "needs" | "working" | "idle";
 
-const BUCKETS: readonly { id: "all" | Bucket; label: string; empty: string }[] = [
-  { id: "all", label: "All", empty: "No workspaces" },
-  { id: "needs", label: "Needs you", empty: "Nothing needs you" },
-  { id: "working", label: "Working", empty: "Nothing working" },
-  { id: "idle", label: "Idle", empty: "Nothing idle" },
-];
+const BUCKET_IDS = ["all", "needs", "working", "idle"] as const;
+
+const BUCKETS: Record<"all" | Bucket, { label: string; empty: string }> = {
+  all: { label: "All", empty: "No workspaces" },
+  needs: { label: "Needs you", empty: "Nothing needs you" },
+  working: { label: "Working", empty: "Nothing working" },
+  idle: { label: "Idle", empty: "Nothing idle" },
+};
+
+const SEGMENTS = BUCKET_IDS.map((id) => ({ id, label: BUCKETS[id].label }));
 
 function bucket(overview: WorkspaceOverview | null): Bucket {
   if (overview === null) return "idle";
@@ -84,8 +88,6 @@ export default function WorkspacesPage() {
     return bucket(read === undefined ? null : lastValue(read.resource)) === filter;
   });
 
-  const empty = BUCKETS.find(({ id }) => id === filter)!;
-
   return (
     <div className="h-full overflow-y-auto">
       <div className="mx-auto max-w-4xl space-y-6 px-6 py-8">
@@ -102,7 +104,7 @@ export default function WorkspacesPage() {
             aria-label="Search workspaces"
             className={`${inputCls} w-full sm:w-auto sm:max-w-xs`}
           />
-          <Segmented label="Workspace state" value={filter} onChange={setFilter} segments={BUCKETS} />
+          <Segmented label="Workspace state" value={filter} onChange={setFilter} segments={SEGMENTS} />
           <div className="ml-auto flex items-center gap-3">
             {total > 0 && <span className="p-meta p-text-4 tabular-nums">{shown.length} of {total}</span>}
             <div className="flex items-center gap-1">
@@ -133,7 +135,7 @@ export default function WorkspacesPage() {
 
         {entries.length > 0 && shown.length === 0 && (
           <p className="py-12 text-center p-text-3">
-            {needle === "" ? empty.empty : `Nothing matches “${query.trim()}”`}
+            {needle === "" ? BUCKETS[filter].empty : `Nothing matches “${query.trim()}”`}
           </p>
         )}
 
