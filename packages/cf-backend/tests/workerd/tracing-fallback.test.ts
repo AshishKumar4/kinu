@@ -196,9 +196,11 @@ type StubThen = (resolve: (settled: string) => void) => void;
  * would buy.
  */
 function pipelinedStub(value: string): PromiseLike<string> {
-  // The trap below answers every read; the target only has to BE the type the
-  // Proxy declares.
-  const target: PromiseLike<string> = Promise.resolve(value);
+  // The trap below answers every read, so the target carries nothing: a bare
+  // object with no prototype. A real promise here would make the stub
+  // `instanceof Promise`, and the platform would then derive one of its own —
+  // the wrapping this arm exists to prove does NOT happen to a stub.
+  const target = Object.create(null);
 
   return new Proxy<PromiseLike<string>>(target, {
     get(_target: PromiseLike<string>, key: string | symbol): StubThen | undefined {
