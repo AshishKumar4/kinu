@@ -2,10 +2,9 @@ import { expect, test } from 'bun:test';
 import * as v from 'valibot';
 import { createTestRuntime } from '@kinu.run/test-utils';
 import { initSessionContextTables } from '../src/session/schema';
-import { SessionMessages, type MessageReference } from '../src/session/messages';
+import { SessionMessages } from '../src/session/messages';
 import { SessionPayloads } from '../src/session/payload';
 import { SessionContext } from '../src/session/context';
-import { PreparedMessageUpdate } from '../src/session/updates';
 import { SessionProposals } from '../src/session/proposals';
 import { SessionTranscript, readSessionTranscript } from '../src/session/transcript';
 import { SessionHistory } from '../src/session/history';
@@ -40,73 +39,63 @@ test('message publication rolls back with its membership and can be retried', as
   } finally { s.testSql.close(); }
 });
 
-test('stream cutoffs retain partial text while final replacement and late metadata advance selection', async () => {
+test('an open message reads its accumulated text and a sealed one its content', async () => {
   const s = setup();
 
   try {
-    const prepared = await s.messages.prepare({ role: 'assistant', content: [{ type: 'text', text: '\ud83d' }] }, 'answer');
+    const streamRows = () => s.testSql.db.query<{ n: number }, []>('SELECT count(*) AS n FROM stream_parts').get()?.n ?? -1;
     let selected = s.context.initialize();
-    selected = s.context.commit(selected, 'output', 'turn', () => [{ ...s.messages.insert(prepared, 'output'), entryId: 'answer', position: 0 }], () => s.rt.actor.assertCurrent());
-    const first = s.context.entries(selected)[0]!;
-    const suffix = await PreparedMessageUpdate.prepare({ operation: 'append', part: 0, value: '\ude00' }, s.payloads);
-    selected = s.context.commit(selected, 'output', 'turn', entries => [{ ...s.messages.append('answer', first.sequence, [suffix]), entryId: 'answer', position: entries[0]!.position }], () => s.rt.actor.assertCurrent());
-    const second = s.context.entries(selected)[0]!;
-    expect(await s.messages.materialize(first)).toEqual({ role: 'assistant', content: [{ type: 'text', text: '\ud83d' }] });
-    expect(await s.messages.materialize(second)).toEqual({ role: 'assistant', content: [{ type: 'text', text: '😀' }] });
+    selected = s.context.commit(selected, 'output', 'turn', entries => {
+      const reference = s.messages.open('assistant', 'answer', 'output');
+      s.messages.streamOpenPart('answer', { partNo: 0, kind: 'text', streamOrder: 0, descriptor: { type: 'text' }, text: 'ab' });
 
-    const updates = await Promise.all([
-      PreparedMessageUpdate.prepare({ part: 0, operation: 'content-end' }, s.payloads),
-      PreparedMessageUpdate.prepare({ part: 0, operation: 'replace-content', value: 'final' }, s.payloads),
-      PreparedMessageUpdate.prepare({ part: null, operation: 'envelope-metadata', value: { providerOptions: { test: { late: true } } } }, s.payloads),
-    ]);
+      return [...entries, { ...reference, entryId: 'answer', position: 0 }];
+    }, () => s.rt.actor.assertCurrent());
+    const entry = { messageId: 'answer' };
+    expect(s.context.entries(selected).map(row => row.messageId)).toEqual(['answer']);
+    expect(await s.messages.materialize(entry)).toEqual({ role: 'assistant', content: [{ type: 'text', text: 'ab' }] });
 
-    selected = s.context.commit(selected, 'output', 'turn', () => [{ ...s.messages.append('answer', second.sequence, updates), entryId: 'answer', position: 0 }], () => s.rt.actor.assertCurrent());
-    expect(await s.messages.materialize(s.context.entries(selected)[0]!)).toEqual({ role: 'assistant', content: [{ type: 'text', text: 'final' }], providerOptions: { test: { late: true } } });
-    expect(await s.messages.materialize(second)).toEqual({ role: 'assistant', content: [{ type: 'text', text: '😀' }] });
+    // A window is one statement on the part's one row.
+    s.messages.streamAppend('answer', 0, 'cd');
+    s.messages.streamMetadata('answer', 0, { test: { partial: true } });
+    expect(streamRows()).toBe(1);
+    expect(await s.messages.materialize(entry)).toEqual({ role: 'assistant', content: [{ type: 'text', text: 'abcd', providerOptions: { test: { partial: true } } }] });
+    s.messages.streamEnd('answer', 0);
+    expect(() => s.messages.streamAppend('answer', 0, 'e')).toThrow('ended');
+
+    // The seal writes the final content once, moves no membership, and the
+    // stream rows go with it.
+    const content = await s.messages.prepareContent([{ partNo: 0, kind: 'text', streamOrder: 0, replyTo: null, value: { type: 'text', text: 'final' } }]);
+
+    const sealedAt = s.context.commit(selected, 'output', 'turn', entries => {
+      s.messages.seal('answer', content, { providerOptions: { test: { late: true } } });
+
+      return entries;
+    }, () => s.rt.actor.assertCurrent());
+
+    expect(sealedAt).toEqual(selected);
+    expect(streamRows()).toBe(0);
+    expect(await s.messages.materialize(entry)).toEqual({ role: 'assistant', content: [{ type: 'text', text: 'final' }], providerOptions: { test: { late: true } } });
+    expect(() => s.messages.seal('answer', content)).toThrow('already sealed');
+    expect(() => s.messages.streamOpenPart('answer', { partNo: 1, kind: 'text', streamOrder: 1, descriptor: { type: 'text' } })).toThrow('sealed');
+    expect(s.messages.openParts('answer')).toBeNull();
   } finally { s.testSql.close(); }
 });
 
-test('a sealed message is projected once at its seal and read as one row after', async () => {
-  // Every step of every turn materializes every message in its context. A
-  // streamed answer is one row per delta, so without the projection each
-  // step re-joined every delta of every past answer (D23). The rows stay the
-  // truth: the projection is derived from them, and only for the sealed
-  // cutoff — an open message still grows, and an earlier cutoff is history.
+test('a message left open by a dead stream seals from what it accumulated at the next admission', async () => {
   const s = setup();
 
   try {
-    const prepared = await s.messages.prepare({ role: 'assistant', content: [{ type: 'text', text: 'a' }] }, 'answer');
-    let selected = s.context.initialize();
-    selected = s.context.commit(selected, 'output', 'turn', () => [{ ...s.messages.insert(prepared, 'output'), entryId: 'answer', position: 0 }], () => s.rt.actor.assertCurrent());
-    const opened = s.context.entries(selected)[0]!;
-    const projections = () => s.testSql.db.query<{ n: number }, []>('SELECT count(*) AS n FROM message_projections').get()!.n;
-
-    // Open: read from its rows, projected by nobody.
-    expect(await s.messages.materialize(opened)).toEqual({ role: 'assistant', content: [{ type: 'text', text: 'a' }] });
-    expect(projections()).toBe(0);
-
-    let reference: MessageReference = opened;
-
-    for (const piece of ['b', 'c', 'd']) {
-      const suffix = await PreparedMessageUpdate.prepare({ operation: 'append', part: 0, value: piece }, s.payloads);
-      reference = s.messages.append('answer', reference.sequence, [suffix]);
-    }
-
-    const ended = await PreparedMessageUpdate.prepare({ part: 0, operation: 'content-end' }, s.payloads);
-    reference = s.messages.append('answer', reference.sequence, [ended]);
-    s.messages.seal(reference);
-
-    // Sealed: the first read joins the rows and stores the projection; the
-    // second reads the projection alone — proven by changing a delta row
-    // underneath it and reading the same answer.
-    expect(await s.messages.materialize(reference)).toEqual({ role: 'assistant', content: [{ type: 'text', text: 'abcd' }] });
-    expect(projections()).toBe(1);
-    s.testSql.db.run('UPDATE message_updates SET payload_json = \'"X"\' WHERE operation = \'append\' AND payload_json = \'"b"\'');
-    expect(await s.messages.materialize(reference)).toEqual({ role: 'assistant', content: [{ type: 'text', text: 'abcd' }] });
-    // An earlier cutoff of the same message is history: read from its rows
-    // as they are now, and never projected.
-    expect(await s.messages.materialize({ ...opened, sequence: opened.sequence + 1 })).toEqual({ role: 'assistant', content: [{ type: 'text', text: 'aX' }] });
-    expect(projections()).toBe(1);
+    initSessionTranscriptTables(s.rt.storage.execRaw);
+    const history = new SessionHistory({ sql: s.rt.storage.sql, actor: s.rt.actor, transactionSync: write => s.rt.storage.transactionSync(write), files: async () => ({ vfs: s.rt.storage.vfs, artifactDirectory: '/actor' }) });
+    history.context.initialize();
+    history.messages.open('assistant', 'cut', 'output');
+    history.messages.streamOpenPart('cut', { partNo: 0, kind: 'reasoning', streamOrder: 0, descriptor: { type: 'reasoning' }, text: 'thinking' });
+    history.messages.streamOpenPart('cut', { partNo: 1, kind: 'text', streamOrder: 1, descriptor: { type: 'text' }, text: 'partial ans' });
+    await history.sealAbandoned();
+    expect(history.messages.openParts('cut')).toBeNull();
+    expect(await history.messages.materialize({ messageId: 'cut' })).toEqual({ role: 'assistant', content: [{ type: 'reasoning', text: 'thinking' }, { type: 'text', text: 'partial ans' }] });
+    expect(s.testSql.db.query<{ n: number }, []>('SELECT count(*) AS n FROM stream_parts').get()?.n).toBe(0);
   } finally { s.testSql.close(); }
 });
 
@@ -123,6 +112,7 @@ test('pruning and branching preserve historical selection without resurrecting r
     expect(s.context.entries(original)).toEqual(s.context.entries(fork));
     s.context.select(pruned, fork, () => {});
     expect(s.context.selected()).toEqual(fork);
+    expect(() => s.context.entries({ contextId: 'missing', revision: 0 })).toThrow('revision does not exist');
   } finally { s.testSql.close(); }
 });
 
@@ -171,16 +161,6 @@ test('VFS-backed image payloads fail explicitly after file corruption', async ()
     const external = v.parse(v.object({ image: v.object({ $sessionAttachment: v.object({ path: v.string() }) }) }), stored[0]?.value);
     await s.rt.storage.vfs.writeFile(external.image.$sessionAttachment.path, 'corrupt');
     await expect(s.messages.materialize(reference)).rejects.toThrow('digest differs');
-  } finally { s.testSql.close(); }
-});
-
-test('metadata cannot replace structure regardless of payload size', async () => {
-  const s = setup();
-
-  try {
-    await expect(PreparedMessageUpdate.prepare({ operation: 'metadata', part: 0, value: { toolName: 'changed', padding: 'x'.repeat(1_100_000) } }, s.payloads)).rejects.toThrow('cannot change native part structure');
-    await expect(PreparedMessageUpdate.prepare({ operation: 'envelope-metadata', part: null, value: { role: 'system' } }, s.payloads)).rejects.toThrow('cannot replace message structure');
-    expect(() => s.context.entries({ contextId: 'missing', revision: 0 })).toThrow('revision does not exist');
   } finally { s.testSql.close(); }
 });
 
@@ -291,7 +271,7 @@ test('reverting to an entry continues from its parent on the context recorded th
       const input = await history.append({ id: ask, message: { role: 'user', content: text }, origin: 'input', turnId: ask, assertOwner });
       chat.record({ ...await chat.prepareUser({ id: ask, turnId: ask, message: input }), parentId: undefined });
       const output = await history.append({ id: answer, message: { role: 'assistant', content: `${text} answered` }, origin: 'output', turnId: ask, assertOwner });
-      chat.appendAssistant(await chat.prepareAssistant({ id: answer, parentId: ask, turnId: ask, runId: ask, parts: [{ messageId: answer, partNo: 0, throughSequence: output.sequence }], finalText: null }));
+      chat.appendAssistant(await chat.prepareAssistant({ id: answer, parentId: ask, turnId: ask, runId: ask, parts: [{ messageId: output.messageId, partNo: 0 }], finalText: null }));
     }
 
     const before = history.context.selected();
@@ -324,8 +304,8 @@ test('drain recovery returns the newest nonempty canonical answer across sibling
     transcript.appendUser(await transcript.prepareUser({ id: 'ask', turnId: 'turn', message: input, metadata: { drainTurnId: 'drain' } }));
 
     for (const [id, text] of [['older', 'old answer'], ['latest', 'latest answer'], ['empty', '  ']] as const) {
-      const output = s.messages.insert(await s.messages.prepare({ role: 'assistant', content: text }, id), 'output');
-      transcript.appendAssistant(await transcript.prepareAssistant({ id, parentId: 'ask', turnId: 'turn', runId: 'run', parts: [{ messageId: id, partNo: 0, throughSequence: output.sequence }], finalText: null }));
+      s.messages.insert(await s.messages.prepare({ role: 'assistant', content: text }, id), 'output');
+      transcript.appendAssistant(await transcript.prepareAssistant({ id, parentId: 'ask', turnId: 'turn', runId: 'run', parts: [{ messageId: id, partNo: 0 }], finalText: null }));
     }
 
     expect(await answersForDrainTurns(transcript, ['drain', 'unanswered'])).toEqual(new Map([['drain', 'latest answer']]));

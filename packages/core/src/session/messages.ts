@@ -4,55 +4,74 @@ import type { ActorHandle } from '../identity/actor-handle';
 import type { SqlExecutor } from '../types/primitives';
 import { KinuError } from '../obs/error';
 import { encodeModelMessages, decodeModelMessages } from './message-codec';
-import { JsonObjectSchema, JsonValueSchema, type JsonObject } from '../utils/json';
+import { JsonObjectSchema, JsonValueSchema, type JsonObject, type JsonValue } from '../utils/json';
 import type { SessionPayloads, SessionPayloadReader, SessionPayload } from './payload';
-import { PreparedMessageUpdate } from './updates';
 
-export interface MessageReference { readonly messageId: string; readonly sequence: number }
+export interface MessageReference { readonly messageId: string }
 
 export type MessageOrigin = 'input' | 'output' | 'edit' | 'context_transform' | 'render';
 
-export interface MessagePartReference { readonly messageId: string; readonly partNo: number; readonly throughSequence: number }
+export interface MessagePartReference { readonly messageId: string; readonly partNo: number }
 
-export type MessageOperation = 'open' | 'append' | 'envelope-metadata' | 'metadata' | 'content-end' | 'replace-content';
+/** One part of a message's content, as `content_*` stores it. `value` is the
+ *  native part, media externalized; `replyTo` pairs a tool result to its call. */
+const StoredPartSchema = v.object({
+  partNo: v.number(),
+  kind: v.string(),
+  streamOrder: v.number(),
+  replyTo: v.nullable(v.object({ messageId: v.string(), partNo: v.number() })),
+  value: JsonObjectSchema,
+});
 
+const StoredContentSchema = v.array(StoredPartSchema);
+
+export type StoredPart = v.InferOutput<typeof StoredPartSchema>;
+
+export interface PreparedContent { readonly parts: readonly StoredPart[]; readonly payload: SessionPayload }
 
 export interface PreparedMessage {
   readonly id: string;
   readonly role: string;
   readonly contentKind: 'string' | 'parts';
-  readonly parts: readonly { readonly number: number; readonly kind: string; readonly streamOrder?: number; readonly reply: { readonly messageId: string; readonly part: number } | null }[];
-  readonly updates: readonly PreparedMessageUpdate[];
+  readonly envelope: JsonObject;
+  readonly content: PreparedContent;
 }
 
-interface MessageRow { role: string; native_content_kind: 'string' | 'parts'; sealed_sequence: number | null }
-
-interface UpdateRow { sequence: number; part_no: number | null; operation: MessageOperation; payload_json: string | null; payload_path: string | null; payload_digest: string | null }
-
-interface PartRow { part_no: number; kind: string; reply_to_message_id: string | null; reply_to_part_no: number | null }
-
-function payloadOf(row: UpdateRow): SessionPayload {
-  if (row.payload_json !== null && row.payload_path === null && row.payload_digest === null) {
-    return { json: row.payload_json, path: null, digest: null };
-  }
-
-  if (row.payload_json === null && row.payload_path !== null && row.payload_digest !== null) {
-    return { json: null, path: row.payload_path, digest: row.payload_digest };
-  }
-
-  throw new KinuError('io', 'invalid session payload reference');
+export interface StreamPartInput {
+  readonly partNo: number;
+  readonly kind: string;
+  readonly streamOrder: number;
+  readonly descriptor: JsonObject;
+  text?: string;
 }
 
-/** A message at one cutoff, as the model sees it: what the update rows join
- *  to, and what a projection stores. */
-const StoredMessageSchema = v.object({
-  envelope: JsonObjectSchema,
-  role: v.string(),
-  contentKind: v.picklist(['string', 'parts']),
-  parts: v.array(v.object({ partNo: v.number(), value: JsonObjectSchema })),
-});
+interface MessageRow { role: string; native_content_kind: 'string' | 'parts'; envelope_json: string; sealed_at: number | null; content_json: string | null; content_path: string | null; content_digest: string | null }
 
-type StoredMessage = v.InferOutput<typeof StoredMessageSchema>;
+interface StreamPartRow { part_no: number; kind: string; stream_order: number; descriptor_json: string; text: string; ended: number }
+
+export type ToolCallIndex = ReadonlyMap<string, { messageId: string; part: number }>;
+
+function contentOf(row: MessageRow): SessionPayload {
+  if (row.content_json !== null && row.content_path === null && row.content_digest === null) {
+    return { json: row.content_json, path: null, digest: null };
+  }
+
+  if (row.content_json === null && row.content_path !== null && row.content_digest !== null) {
+    return { json: null, path: row.content_path, digest: row.content_digest };
+  }
+
+  throw new KinuError('io', 'invalid session content reference');
+}
+
+/** The stream rows hold text apart from the descriptor; a text-bearing kind
+ *  reads its text back even while it is still empty. */
+function streamedValue(row: StreamPartRow): JsonObject {
+  const value = v.parse(JsonObjectSchema, JSON.parse(row.descriptor_json));
+
+  if (row.kind === 'text' || row.kind === 'reasoning' || row.text !== '') value.text = row.text;
+
+  return value;
+}
 
 export interface ActorReadAuthority {
   readonly actorId: string;
@@ -63,107 +82,54 @@ export interface ActorReadAuthority {
 export class SessionMessageReader<A extends ActorReadAuthority = ActorReadAuthority, P extends SessionPayloadReader = SessionPayloadReader> {
   constructor(protected readonly sql: SqlExecutor, protected readonly actor: A, readonly payloads: P) {}
 
+  protected row(messageId: string): MessageRow {
+    this.actor.assertCurrent();
+
+    const row = this.sql<MessageRow>`SELECT role,native_content_kind,envelope_json,sealed_at,content_json,content_path,content_digest FROM session_messages
+      WHERE actor_id=${this.actor.actorId} AND message_id=${messageId}`[0];
+
+    if (row === undefined) throw new KinuError('missing', 'session message does not exist');
+
+    return row;
+  }
+
+  /** An open message's parts, folded from its stream rows. */
+  protected streamed(messageId: string): StoredPart[] {
+    return this.sql<StreamPartRow>`SELECT part_no,kind,stream_order,descriptor_json,text,ended FROM stream_parts
+      WHERE actor_id=${this.actor.actorId} AND message_id=${messageId} ORDER BY part_no`
+      .map(row => ({ partNo: row.part_no, kind: row.kind, streamOrder: row.stream_order, replyTo: null, value: streamedValue(row) }));
+  }
+
+  /** A sealed message reads its content row; an open one reads what its
+   *  stream has accumulated so far. */
+  protected async stored(reference: MessageReference): Promise<{ readonly row: MessageRow; readonly parts: readonly StoredPart[] }> {
+    const row = this.row(reference.messageId);
+
+    if (row.sealed_at === null) return { row, parts: this.streamed(reference.messageId) };
+    const parts = v.parse(StoredContentSchema, await this.payloads.read(contentOf(row)));
+    this.actor.assertCurrent();
+
+    return { row, parts };
+  }
+
   async projection(reference: MessageReference): Promise<JsonObject> {
-    const stored = await this.materializeEnvelope(reference);
+    const { row, parts } = await this.stored(reference);
+    const envelope = v.parse(JsonObjectSchema, JSON.parse(row.envelope_json));
 
-    return { ...stored.envelope, role: stored.role, content: stored.contentKind === 'string' ? v.parse(v.string(), stored.parts[0]?.value.text ?? '') : stored.parts.map(part => part.value) };
+    return { ...envelope, role: row.role, content: row.native_content_kind === 'string' ? v.parse(v.string(), parts[0]?.value.text ?? '') : parts.map(part => part.value) };
   }
 
-  /** The projection stored for this exact cutoff, if one has been written. */
-  protected async storedProjection(reference: MessageReference): Promise<StoredMessage | null> {
-    const row = this.sql<UpdateRow>`SELECT sequence,NULL AS part_no,'open' AS operation,payload_json,payload_path,payload_digest FROM message_projections
-      WHERE actor_id=${this.actor.actorId} AND message_id=${reference.messageId} AND sequence=${reference.sequence}`[0];
-
-    if (row === undefined) return null;
-
-    return v.parse(StoredMessageSchema, await this.payloads.read(payloadOf(row)));
-  }
-
-  /** A sealed message at its sealed cutoff reads as one row once its
-   *  projection is stored; `SessionMessages` stores it on the first such read. */
-  protected async materializeEnvelope(reference: MessageReference): Promise<StoredMessage> {
-    return (await this.storedProjection(reference)) ?? this.materializeFromUpdates(reference);
-  }
-
-  private async materializeFromUpdates(reference: MessageReference): Promise<StoredMessage> {
-    this.actor.assertCurrent();
-    const actorId = this.actor.actorId;
-    const message = this.sql<MessageRow>`SELECT role,native_content_kind,sealed_sequence FROM session_messages WHERE actor_id=${actorId} AND message_id=${reference.messageId}`[0];
-
-    if (message === undefined) throw new KinuError('missing', 'session message does not exist');
-
-    const rows = this.sql<UpdateRow>`SELECT sequence,part_no,operation,payload_json,payload_path,payload_digest FROM message_updates
-      WHERE actor_id=${actorId} AND message_id=${reference.messageId} AND sequence<=${reference.sequence} ORDER BY sequence`;
-
-    if (rows.at(-1)?.sequence !== reference.sequence) throw new KinuError('missing', 'message cutoff does not exist');
-    let envelope: JsonObject = {};
-    const parts = new Map<number, JsonObject>();
-
-    for (const row of rows) {
-      if (row.operation === 'content-end') continue;
-      const value = await this.payloads.read(payloadOf(row));
-
-      if (row.operation === 'envelope-metadata') { envelope = v.parse(JsonObjectSchema, value); continue; }
-
-      if (row.part_no === null) throw new KinuError('io', 'part update has no part');
-
-      if (row.operation === 'open') { parts.set(row.part_no, v.parse(JsonObjectSchema, value)); continue; }
-
-      const part = parts.get(row.part_no);
-
-      if (part === undefined) throw new KinuError('io', 'part update precedes its open');
-
-      if (row.operation === 'metadata') {
-        const metadata = v.parse(JsonObjectSchema, value);
-        delete part.providerOptions;
-
-        if (metadata.providerOptions !== undefined) part.providerOptions = metadata.providerOptions;
-        continue;
-      }
-
-      if (row.operation === 'replace-content' && v.is(JsonObjectSchema, value)) { Object.assign(part, value); continue; }
-
-      const text = v.parse(v.string(), value);
-      part.text = row.operation === 'replace-content' ? text : (v.is(v.string(), part.text) ? part.text : '') + text;
-    }
-
-    const identities = this.sql<PartRow>`SELECT part_no,kind,reply_to_message_id,reply_to_part_no FROM message_parts WHERE actor_id=${actorId} AND message_id=${reference.messageId} ORDER BY part_no`;
-
-    for (const identity of identities) {
-      const part = parts.get(identity.part_no);
-
-      if (part === undefined) continue;
-
-      if (identity.reply_to_message_id !== null && identity.reply_to_part_no !== null) {
-        const call = this.sql<UpdateRow>`SELECT sequence,part_no,operation,payload_json,payload_path,payload_digest FROM message_updates
-          WHERE actor_id=${actorId} AND message_id=${identity.reply_to_message_id} AND part_no=${identity.reply_to_part_no} AND operation='open'`[0];
-
-        if (call === undefined) throw new KinuError('io', 'result references a missing tool call');
-        const descriptor = v.parse(JsonObjectSchema, await this.payloads.read(payloadOf(call)));
-        part.toolCallId = v.parse(v.string(), descriptor.toolCallId);
-        part.toolName = v.parse(v.string(), descriptor.toolName);
-      }
-    }
-
-    this.actor.assertCurrent();
-
-    return { envelope, role: message.role, contentKind: message.native_content_kind, parts: identities.flatMap(identity => {
-      const value = parts.get(identity.part_no);
-
-      return value === undefined ? [] : [{ partNo: identity.part_no, value }];
-    }) };
-  }
-
-  async materializeParts(reference: MessageReference): Promise<readonly { readonly partNo: number; readonly value: JsonObject }[]> {
-    return (await this.materializeEnvelope(reference)).parts;
+  async materializeParts(reference: MessageReference): Promise<readonly StoredPart[]> {
+    return (await this.stored(reference)).parts;
   }
 
   async materialize(reference: MessageReference): Promise<ModelMessage> {
-    const stored = await this.materializeEnvelope(reference);
+    const { row, parts } = await this.stored(reference);
     const content: JsonObject[] = [];
 
-    for (const part of stored.parts) content.push(part.value.type === 'image' || part.value.type === 'file' ? await this.payloads.resolveMedia(part.value) : part.value);
-    const native = { ...stored.envelope, role: stored.role, content: stored.contentKind === 'string' ? v.parse(v.string(), content[0]?.text ?? '') : content };
+    for (const part of parts) content.push(part.value.type === 'image' || part.value.type === 'file' ? await this.payloads.resolveMedia(part.value) : part.value);
+    const envelope = v.parse(JsonObjectSchema, JSON.parse(row.envelope_json));
+    const native = { ...envelope, role: row.role, content: row.native_content_kind === 'string' ? v.parse(v.string(), content[0]?.text ?? '') : content };
     const decoded = decodeModelMessages(JSON.stringify([v.parse(JsonValueSchema, native)]))[0];
     this.actor.assertCurrent();
 
@@ -173,28 +139,11 @@ export class SessionMessageReader<A extends ActorReadAuthority = ActorReadAuthor
   }
 }
 
-/** Native message bytes and their ordered, immutable updates. Selection is owned by the context store. */
+/** Native message rows. A whole message is inserted sealed; a streamed one is
+ *  opened, accumulates in `stream_parts`, and seals once at its step's end.
+ *  Selection is owned by the context store. */
 export class SessionMessages extends SessionMessageReader<ActorHandle, SessionPayloads> {
   private readonly sources = new WeakMap<ModelMessage, MessageReference>();
-
-  protected override async materializeEnvelope(reference: MessageReference): Promise<StoredMessage> {
-    const stored = await this.storedProjection(reference);
-
-    if (stored !== null) return stored;
-    const joined = await super.materializeEnvelope(reference);
-    const sealed = this.sql<{ sealed_sequence: number | null }>`SELECT sealed_sequence FROM session_messages WHERE actor_id=${this.actor.actorId} AND message_id=${reference.messageId}`[0];
-
-    // Only a SEALED message at its sealed cutoff is projected: an open one
-    // still grows, and an earlier cutoff is a fork's or a history's, read once.
-    if (sealed?.sealed_sequence === reference.sequence) {
-      const payload = await this.payloads.prepare(joined);
-      this.actor.assertCurrent();
-      void this.sql`INSERT OR IGNORE INTO message_projections(actor_id,message_id,sequence,payload_json,payload_path,payload_digest)
-        VALUES(${this.actor.actorId},${reference.messageId},${reference.sequence},${payload.json},${payload.path},${payload.digest})`;
-    }
-
-    return joined;
-  }
 
   sourceOf(message: ModelMessage): MessageReference | null {
     this.actor.assertCurrent();
@@ -205,11 +154,11 @@ export class SessionMessages extends SessionMessageReader<ActorHandle, SessionPa
   async bindSource(message: ModelMessage, reference: MessageReference): Promise<void> {
     const recorded = await this.materialize(reference);
 
-    if (encodeModelMessages([recorded]) !== encodeModelMessages([message])) throw new KinuError('io', 'native output differs from its canonical cutoff');
+    if (encodeModelMessages([recorded]) !== encodeModelMessages([message])) throw new KinuError('io', 'native output differs from its recorded content');
     this.sources.set(message, reference);
   }
 
-  async prepare(message: ModelMessage, id: string, calls: ReadonlyMap<string, { messageId: string; part: number }> = new Map()): Promise<PreparedMessage> {
+  async prepare(message: ModelMessage, id: string, calls: ToolCallIndex = new Map()): Promise<PreparedMessage> {
     const encoded = v.parse(v.array(JsonObjectSchema), JSON.parse(encodeModelMessages([message])))[0];
 
     if (encoded === undefined) throw new KinuError('bad_input', 'missing native message');
@@ -218,7 +167,7 @@ export class SessionMessages extends SessionMessageReader<ActorHandle, SessionPa
     return this.prepareParts(v.parse(v.string(), role), v.parse(JsonValueSchema, content), envelope, id, calls);
   }
 
-  async prepareProjection(value: JsonObject, id: string, calls: ReadonlyMap<string, { messageId: string; part: number }> = new Map()): Promise<PreparedMessage> {
+  async prepareProjection(value: JsonObject, id: string, calls: ToolCallIndex = new Map()): Promise<PreparedMessage> {
     const { role, content, ...envelope } = value;
     const decodedContent = v.is(v.string(), content) ? content : await Promise.all(v.parse(v.array(JsonObjectSchema), content).map(part => part.type === 'file' || part.type === 'image' ? this.payloads.resolveMedia(part) : part));
     decodeModelMessages(JSON.stringify([{ ...envelope, role, content: decodedContent }]));
@@ -226,105 +175,115 @@ export class SessionMessages extends SessionMessageReader<ActorHandle, SessionPa
     return this.prepareParts(v.parse(v.string(), role), v.parse(JsonValueSchema, content), envelope, id, calls);
   }
 
-
-  async prepareParts(role: string, content: import('../utils/json').JsonValue, envelope: JsonObject, id: string, calls: ReadonlyMap<string, { messageId: string; part: number }> = new Map()): Promise<PreparedMessage> {
+  /** Native structure the codec does not validate: render-only parts a transcript entry shows and the model never reads. */
+  async prepareParts(role: string, content: JsonValue, envelope: JsonObject, id: string, calls: ToolCallIndex = new Map()): Promise<PreparedMessage> {
     const kind = v.is(v.string(), content) ? 'string' : 'parts';
     const nativeParts = v.is(v.string(), content) ? [{ type: 'text', text: content }] : v.parse(v.array(JsonObjectSchema), content);
 
-    const updates = [await PreparedMessageUpdate.prepare({ part: null, operation: 'envelope-metadata', value: envelope }, this.payloads)];
-    const parts: PreparedMessage['parts'][number][] = [];
+    const parts = nativeParts.map((value, partNo) => ({ partNo, kind: v.parse(v.string(), value.type), streamOrder: partNo, replyTo: replyOf(value, calls), value }));
 
-    for (const [number, native] of nativeParts.entries()) {
-      const type = v.parse(v.string(), native.type);
-      const callId = v.safeParse(v.string(), native.toolCallId);
-      const reply = type === 'tool-result' && callId.success ? calls.get(callId.output) ?? null : null;
-      const { text, ...descriptor } = native;
+    return { id, role, contentKind: kind, envelope, content: await this.prepareContent(parts) };
+  }
 
-      if (reply !== null) { delete descriptor.toolCallId; delete descriptor.toolName; }
+  /** Media leaves the row for the attachment plane; the parts array then
+   *  follows the payload spill rule. */
+  async prepareContent(parts: readonly StoredPart[]): Promise<PreparedContent> {
+    const stored: StoredPart[] = [];
 
-      parts.push({ number, kind: type, reply });
-      updates.push(await PreparedMessageUpdate.prepare({ part: number, operation: 'open', value: descriptor }, this.payloads));
-
-      if (text !== undefined) updates.push(await PreparedMessageUpdate.prepare({ part: number, operation: 'append', value: v.parse(v.string(), text) }, this.payloads));
+    for (const part of parts) {
+      const value = part.value.type === 'image' || part.value.type === 'file' ? await this.payloads.externalizeMedia(part.value) : part.value;
+      stored.push({ ...part, value });
     }
 
-    return { id, role: v.parse(v.string(), role), contentKind: kind, parts, updates };
+    return { parts: stored, payload: await this.payloads.prepare(stored) };
+  }
+
+  private assertUnrecorded(messageId: string): void {
+    const existing = this.sql<{ message_id: string }>`SELECT message_id FROM session_messages WHERE actor_id=${this.actor.actorId} AND message_id=${messageId}`[0];
+
+    if (existing !== undefined) throw new KinuError('denied', 'message identity is already recorded');
   }
 
   /** Called inside the context owner's transaction; no filesystem work occurs here. */
   insert(prepared: PreparedMessage, origin: MessageOrigin, identity: { requestId?: string; slot?: number; ingressId?: string } = {}): MessageReference {
     this.actor.assertCurrent();
-    const actorId = this.actor.actorId;
-    const existing = this.sql<MessageRow>`SELECT role,native_content_kind,sealed_sequence FROM session_messages WHERE actor_id=${actorId} AND message_id=${prepared.id}`[0];
+    this.assertUnrecorded(prepared.id);
+    const { payload } = prepared.content;
+    void this.sql`INSERT INTO session_messages(actor_id,message_id,role,native_content_kind,origin,request_id,output_slot,ingress_id,recorded_at,envelope_json,sealed_at,content_json,content_path,content_digest)
+      VALUES(${this.actor.actorId},${prepared.id},${prepared.role},${prepared.contentKind},${origin},${identity.requestId ?? null},${identity.slot ?? null},${identity.ingressId ?? null},${Date.now()},${JSON.stringify(prepared.envelope)},${Date.now()},${payload.json},${payload.path},${payload.digest})`;
 
-    if (existing !== undefined) throw new KinuError('denied', 'message identity is already recorded');
-    void this.sql`INSERT INTO session_messages(actor_id,message_id,role,native_content_kind,origin,request_id,output_slot,ingress_id,recorded_at)
-      VALUES(${actorId},${prepared.id},${prepared.role},${prepared.contentKind},${origin},${identity.requestId ?? null},${identity.slot ?? null},${identity.ingressId ?? null},${Date.now()})`;
-
-    for (const part of prepared.parts) {
-      void this.sql`INSERT INTO message_parts(actor_id,message_id,part_no,kind,reply_to_message_id,reply_to_part_no,stream_order)
-        VALUES(${actorId},${prepared.id},${part.number},${part.kind},${part.reply?.messageId ?? null},${part.reply?.part ?? null},${part.streamOrder ?? null})`;
-    }
-
-    return this.append(prepared.id, -1, prepared.updates);
+    return { messageId: prepared.id };
   }
 
-  addPart(reference: MessageReference, part: PreparedMessage['parts'][number], updates: readonly PreparedMessageUpdate[]): MessageReference {
+  /** A streamed message: its row only. Parts arrive through `stream*`. */
+  open(role: 'assistant' | 'tool', id: string, origin: MessageOrigin, identity: { requestId?: string; slot?: number } = {}, envelope: JsonObject = {}): MessageReference {
     this.actor.assertCurrent();
-    void this.sql`INSERT INTO message_parts(actor_id,message_id,part_no,kind,reply_to_message_id,reply_to_part_no,stream_order) VALUES(${this.actor.actorId},${reference.messageId},${part.number},${part.kind},${part.reply?.messageId ?? null},${part.reply?.part ?? null},${part.streamOrder ?? null})`;
+    this.assertUnrecorded(id);
+    void this.sql`INSERT INTO session_messages(actor_id,message_id,role,native_content_kind,origin,request_id,output_slot,ingress_id,recorded_at,envelope_json)
+      VALUES(${this.actor.actorId},${id},${role},'parts',${origin},${identity.requestId ?? null},${identity.slot ?? null},${null},${Date.now()},${JSON.stringify(envelope)})`;
 
-    return this.append(reference.messageId, reference.sequence, updates);
+    return { messageId: id };
   }
 
-  append(messageId: string, expectedSequence: number, updates: readonly PreparedMessageUpdate[]): MessageReference {
+  private assertOpen(messageId: string): void {
+    const row = this.sql<{ sealed_at: number | null }>`SELECT sealed_at FROM session_messages WHERE actor_id=${this.actor.actorId} AND message_id=${messageId}`[0];
+
+    if (row === undefined || row.sealed_at !== null) throw new KinuError('denied', 'message is missing or sealed');
+  }
+
+  streamOpenPart(messageId: string, part: StreamPartInput): void {
     this.actor.assertCurrent();
-    const actorId = this.actor.actorId;
-    const row = this.sql<MessageRow>`SELECT role,native_content_kind,sealed_sequence FROM session_messages WHERE actor_id=${actorId} AND message_id=${messageId}`[0];
-
-    if (row === undefined || row.sealed_sequence !== null) throw new KinuError('denied', 'message is missing or sealed');
-    const current = this.sql<{ sequence: number | null }>`SELECT MAX(sequence) AS sequence FROM message_updates WHERE actor_id=${actorId} AND message_id=${messageId}`[0]?.sequence ?? -1;
-
-    if (current !== expectedSequence) throw new KinuError('denied', 'message changed while its payload was prepared');
-    let sequence = current;
-
-    for (const update of updates) {
-      if (update.part !== null && update.operation !== 'open') {
-        // One equality per fact, so each is a covering read of its partial
-        // index (`message_part_open`, `message_part_end`). The `IN` form
-        // walked every update of the part per delta — the square of a
-        // streamed answer's length, measured 2026-09-21 (D23).
-        if (!this.partOpened(messageId, update.part)) throw new KinuError('denied', 'part update precedes open');
-
-        if (update.operation === 'append' && this.partEnded(messageId, update.part)) throw new KinuError('denied', 'stream content already ended');
-      }
-
-      if (!(update instanceof PreparedMessageUpdate)) throw new KinuError('bad_input', 'message update was not prepared');
-
-      sequence += 1;
-      void this.sql`INSERT INTO message_updates(actor_id,message_id,sequence,part_no,operation,payload_json,payload_path,payload_digest)
-        VALUES(${actorId},${messageId},${sequence},${update.part},${update.operation},${update.payload?.json ?? null},${update.payload?.path ?? null},${update.payload?.digest ?? null})`;
-    }
-
-    return { messageId, sequence };
+    this.assertOpen(messageId);
+    const { text, ...descriptor } = part.descriptor;
+    const initial = part.text ?? (v.is(v.string(), text) ? text : '');
+    void this.sql`INSERT INTO stream_parts(actor_id,message_id,part_no,kind,stream_order,descriptor_json,text,ended)
+      VALUES(${this.actor.actorId},${messageId},${part.partNo},${part.kind},${part.streamOrder},${JSON.stringify(descriptor)},${initial},0)`;
   }
 
-  /** The operation is a literal in each query, not a bound value: SQLite
-   *  proves a partial index applies only from the statement's own text. */
-  private partOpened(messageId: string, part: number): boolean {
-    return (this.sql<{ n: number }>`SELECT count(*) AS n FROM message_updates WHERE actor_id=${this.actor.actorId} AND message_id=${messageId} AND part_no=${part} AND operation='open'`[0]?.n ?? 0) > 0;
-  }
-
-  private partEnded(messageId: string, part: number): boolean {
-    return (this.sql<{ n: number }>`SELECT count(*) AS n FROM message_updates WHERE actor_id=${this.actor.actorId} AND message_id=${messageId} AND part_no=${part} AND operation='content-end'`[0]?.n ?? 0) > 0;
-  }
-
-  seal(reference: MessageReference): void {
+  /** One window of deltas is one statement. */
+  streamAppend(messageId: string, partNo: number, text: string): void {
     this.actor.assertCurrent();
-    const current = this.sql<{ sequence: number | null }>`SELECT MAX(sequence) AS sequence FROM message_updates WHERE actor_id=${this.actor.actorId} AND message_id=${reference.messageId}`[0]?.sequence;
 
-    if (current !== reference.sequence) throw new KinuError('denied', 'cannot seal a stale message cutoff');
-    void this.sql`UPDATE session_messages SET sealed_sequence=${reference.sequence}
-      WHERE actor_id=${this.actor.actorId} AND message_id=${reference.messageId} AND sealed_sequence IS NULL`;
+    const extended = this.sql<{ part_no: number }>`UPDATE stream_parts SET text = text || ${text}
+      WHERE actor_id=${this.actor.actorId} AND message_id=${messageId} AND part_no=${partNo} AND ended=0 RETURNING part_no`;
+
+    if (extended.length === 0) throw new KinuError('denied', 'stream part is missing, sealed or ended');
+  }
+
+  streamMetadata(messageId: string, partNo: number, providerOptions: JsonObject | undefined): void {
+    this.actor.assertCurrent();
+    const row = this.sql<{ descriptor_json: string }>`SELECT descriptor_json FROM stream_parts WHERE actor_id=${this.actor.actorId} AND message_id=${messageId} AND part_no=${partNo}`[0];
+
+    if (row === undefined) throw new KinuError('denied', 'stream part is missing or sealed');
+    const descriptor = v.parse(JsonObjectSchema, JSON.parse(row.descriptor_json));
+    delete descriptor.providerOptions;
+
+    if (providerOptions !== undefined) descriptor.providerOptions = providerOptions;
+    void this.sql`UPDATE stream_parts SET descriptor_json=${JSON.stringify(descriptor)} WHERE actor_id=${this.actor.actorId} AND message_id=${messageId} AND part_no=${partNo}`;
+  }
+
+  streamEnd(messageId: string, partNo: number): void {
+    this.actor.assertCurrent();
+    const ended = this.sql<{ part_no: number }>`UPDATE stream_parts SET ended=1 WHERE actor_id=${this.actor.actorId} AND message_id=${messageId} AND part_no=${partNo} AND ended=0 RETURNING part_no`;
+
+    if (ended.length === 0) throw new KinuError('denied', 'stream part is missing, sealed or ended');
+  }
+
+  /** The open message's parts as its stream holds them; null once sealed. */
+  openParts(messageId: string): readonly StoredPart[] | null {
+    return this.row(messageId).sealed_at === null ? this.streamed(messageId) : null;
+  }
+
+  /** One transaction: the content row lands, the stream rows go. */
+  seal(messageId: string, content: PreparedContent, envelope?: JsonObject): void {
+    const row = this.row(messageId);
+
+    if (row.sealed_at !== null) throw new KinuError('denied', 'message is already sealed');
+    const { payload } = content;
+    const envelopeJson = envelope === undefined ? row.envelope_json : JSON.stringify(envelope);
+    void this.sql`UPDATE session_messages SET sealed_at=${Date.now()},content_json=${payload.json},content_path=${payload.path},content_digest=${payload.digest},envelope_json=${envelopeJson}
+      WHERE actor_id=${this.actor.actorId} AND message_id=${messageId}`;
+    void this.sql`DELETE FROM stream_parts WHERE actor_id=${this.actor.actorId} AND message_id=${messageId}`;
   }
 
   override async materialize(reference: MessageReference): Promise<ModelMessage> {
@@ -333,4 +292,12 @@ export class SessionMessages extends SessionMessageReader<ActorHandle, SessionPa
 
     return decoded;
   }
+}
+
+function replyOf(value: JsonObject, calls: ToolCallIndex): StoredPart['replyTo'] {
+  if (value.type !== 'tool-result') return null;
+  const callId = v.safeParse(v.string(), value.toolCallId);
+  const call = callId.success ? calls.get(callId.output) : undefined;
+
+  return call === undefined ? null : { messageId: call.messageId, partNo: call.part };
 }

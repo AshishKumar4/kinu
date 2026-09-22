@@ -48,14 +48,12 @@ export function initSessionTranscriptTables(exec: RawSqlExec): void {
     position INTEGER NOT NULL CHECK(position >= 0),
     message_id TEXT NOT NULL,
     part_no INTEGER NOT NULL CHECK(part_no >= 0),
-    through_sequence INTEGER NOT NULL CHECK(through_sequence >= 0),
     text_start INTEGER,
     text_length INTEGER,
     CHECK((text_start IS NULL AND text_length IS NULL) OR
       (text_start IS NOT NULL AND text_length IS NOT NULL AND text_start >= 0 AND text_length >= 0)), 
     PRIMARY KEY(actor_id,session_id,entry_id,position),
     FOREIGN KEY(actor_id,session_id,entry_id) REFERENCES conversation_entries(actor_id,session_id,id) ON DELETE CASCADE,
-    FOREIGN KEY(actor_id,message_id,part_no) REFERENCES message_parts(actor_id,message_id,part_no),
-    FOREIGN KEY(actor_id,message_id,through_sequence) REFERENCES message_updates(actor_id,message_id,sequence)
+    FOREIGN KEY(actor_id,message_id) REFERENCES session_messages(actor_id,message_id)
   )`);
 }
