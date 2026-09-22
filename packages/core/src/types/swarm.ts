@@ -159,7 +159,8 @@ export interface SwarmInput {
    *  {@link branches} is refused. Every `task` must be distinct. */
   readonly nodes?: readonly SwarmNodeAssignment[];
   /**
-   * Per-node model routing for capability and cost. Not for diversity. Child `i` of a wave runs
+   * Per-node model routing for capability and cost. Not for diversity. Self-MoA (2502.00674)
+   * measured quality dominating diversity by up to 3.2×. Child `i` of a wave runs
    * `models[i % models.length]`. Exclusive with `tier`; each spec resolves through
    * `AgentsSwarmDeps.resolveModel` and an unresolvable one is refused before any node runs.
    */
