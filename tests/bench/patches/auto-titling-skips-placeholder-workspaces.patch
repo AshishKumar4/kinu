@@ -1,13 +1,13 @@
 diff --git a/packages/core/src/identity/naming.ts b/packages/core/src/identity/naming.ts
-index 09a64e7eb..e6763aa46 100644
+index 6fc19b56b..fd8e79df5 100644
 --- a/packages/core/src/identity/naming.ts
 +++ b/packages/core/src/identity/naming.ts
-@@ -384,7 +384,7 @@ export function planWorkspaceTitle(state: WorkspaceTitleState): WorkspaceTitlePl
- 
+@@ -397,7 +397,7 @@ export function planWorkspaceTitle(state: WorkspaceTitleState): WorkspaceTitlePl
    if (isPlaceholderMission(state.mission)) return null;
+   const placeholder = isPlaceholderWorkspaceTitle(state.displayName, state.slug);
  
--  if (state.nameOrigin !== 'provisional' && !isPlaceholderWorkspaceTitle(state.displayName, state.slug)) return null;
-+  if (state.nameOrigin !== 'provisional' && isPlaceholderWorkspaceTitle(state.displayName, state.slug)) return null;
+-  if (!placeholder && state.standIn !== true) return null;
++  if (placeholder && state.standIn !== true) return null;
    const mission = state.mission.trim();
  
-   return { provisional: workspaceTitleFromMission(mission) || null, mission };
+   return { provisional: placeholder ? workspaceTitleFromMission(mission) || null : null, mission };

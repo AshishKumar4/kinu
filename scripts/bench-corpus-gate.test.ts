@@ -1,21 +1,20 @@
 /**
- * The corpus applicability census's own decision boundary.
+ * The corpus census's own decision boundaries.
  *
  * `expect(stalePatches(REPO_ROOT)).toEqual([])` over a healthy corpus is a check
  * that cannot fail, and this repo has shipped several of those. So every verdict
  * here is driven from a fixture: a patch that applies, the same patch after the
- * source moved under it, and a patch file no `tasks.jsonl` line names — which is
- * the direction only the directory walk can see and which the two enumerations
- * this census replaced never named.
+ * source moved under it, a patch file no `tasks.jsonl` line names, and a task
+ * whose patch the tracked list lacks.
  */
 import { describe, test, expect } from 'bun:test';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { scratchDir } from '@kinu.run/test-utils';
-import { stalePatches } from './bench-corpus';
+import { corpusMembership, stalePatches } from './bench-corpus';
 
-/** The fixture's own patch list. `trackedFiles()` answers for THIS repo, so a
- *  fixture must name its files itself — see `stalePatches`. */
+/** The fixture's own patch list. A fixture has no git index, so it
+ *  names its files itself — see `stalePatches`. */
 const PATCH_FILES = ['tests/bench/patches/pick-returns-largest.patch'];
 
 const WITH_ORPHAN = [...PATCH_FILES, 'tests/bench/patches/nobody-measures-me.patch'];
@@ -77,24 +76,23 @@ describe('stalePatches', () => {
     // summarised message would make the reader re-derive what git already knew.
     expect(stale[0]?.detail).toContain('patch does not apply');
     expect(stale[0]?.detail).toContain('src/pick.ts');
-    expect(stale[0]?.orphan).toBe(false);
+  });
+});
+
+// The gate prints one count; these are the two ways it can overstate or
+// understate the corpus while every listed patch still applies.
+describe('corpusMembership', () => {
+  test('one tracked patch per task is a match', () => {
+    expect(corpusMembership(fixture(), PATCH_FILES)).toEqual({ tasks: 1, orphans: [], unchecked: [] });
   });
 
-  // Only the directory walk can see this: the corpus-loaded enumeration never
-  // loads a file no task line names, so for it the patch does not exist.
-  test('an orphan patch file is reported and labelled as one', () => {
-    const stale = stalePatches(fixture({ source: 'export const gone = 1;\n', orphanPatch: true }), WITH_ORPHAN);
-    expect(stale.map((p) => p.id).sort()).toEqual(['nobody-measures-me', 'pick-returns-largest']);
-    expect(stale.find((p) => p.id === 'nobody-measures-me')?.orphan).toBe(true);
-    expect(stale.find((p) => p.id === 'pick-returns-largest')?.orphan).toBe(false);
+  test('an orphan patch that still applies is reported', () => {
+    expect(corpusMembership(fixture({ orphanPatch: true }), WITH_ORPHAN).orphans)
+      .toEqual(['tests/bench/patches/nobody-measures-me.patch']);
   });
 
-  // An orphan that still applies is invisible to an applicability-only check, so
-  // the flag has to be carried by the census rather than inferred from failure.
-  test('an orphan that still applies is not reported by the census', () => {
-    // The whole point of `orphan` being a FIELD rather than a second census: this
-    // file is unmeasured, and the corpus test that owns that direction reads
-    // tasks.jsonl against the directory rather than waiting for an apply to fail.
-    expect(stalePatches(fixture({ orphanPatch: true }), WITH_ORPHAN)).toEqual([]);
+  // On disk, so `loadBenchCorpus` is satisfied here and throws on a fresh clone.
+  test('a task whose patch is untracked is reported', () => {
+    expect(corpusMembership(fixture(), []).unchecked).toEqual(['pick-returns-largest']);
   });
 });

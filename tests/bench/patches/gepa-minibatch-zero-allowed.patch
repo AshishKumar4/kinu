@@ -1,9 +1,9 @@
 diff --git a/packages/core/src/evolution/gepa/engine.ts b/packages/core/src/evolution/gepa/engine.ts
-index d67692b3e..17c56d00d 100644
+index 2d9ec3a7f..68c4da3f9 100644
 --- a/packages/core/src/evolution/gepa/engine.ts
 +++ b/packages/core/src/evolution/gepa/engine.ts
-@@ -55,7 +55,7 @@ export async function runGepa<I = unknown, E = unknown>(
-   // bounded by the set it actually samples from — not by the eval set.
+@@ -35,7 +35,7 @@ export async function runGepa<I = unknown, E = unknown>(
+   // Minibatches come from the train set; scoring and Pareto always run on the full evalSet.
    const trainSet = config.trainSet && config.trainSet.length > 0 ? config.trainSet : config.evalSet;
  
 -  if (budget.minibatchSize <= 0) {

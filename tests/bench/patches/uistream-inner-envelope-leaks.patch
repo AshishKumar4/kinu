@@ -1,9 +1,9 @@
 diff --git a/packages/core/src/scaffold/chat-transform.ts b/packages/core/src/scaffold/chat-transform.ts
-index fb1c69059..ab6e31929 100644
+index 63765a533..e5f9bf606 100644
 --- a/packages/core/src/scaffold/chat-transform.ts
 +++ b/packages/core/src/scaffold/chat-transform.ts
-@@ -140,11 +140,11 @@ async function* scaffoldTurn(
-           // nothing.
+@@ -113,11 +113,11 @@ async function* scaffoldTurn(
+ 
            if (inner.text.trim()) text = inner.text;
            answer = inner.answer;
 -        } else {

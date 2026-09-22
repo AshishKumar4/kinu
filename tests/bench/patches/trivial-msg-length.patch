@@ -1,8 +1,8 @@
 diff --git a/packages/core/src/evolution/outcomes.ts b/packages/core/src/evolution/outcomes.ts
-index 79c3923a1..0a271989f 100644
+index 719ec5f2c..706682036 100644
 --- a/packages/core/src/evolution/outcomes.ts
 +++ b/packages/core/src/evolution/outcomes.ts
-@@ -153,7 +153,7 @@ export function isTrivialTurn(turn: Pick<CompletedTurn, 'userMessage' | 'toolCal
+@@ -91,7 +91,7 @@ export function isTrivialTurn(turn: Pick<CompletedTurn, 'userMessage' | 'toolCal
  
    if (TRIVIAL_MESSAGE.test(msg)) return true;
  
@@ -10,4 +10,4 @@ index 79c3923a1..0a271989f 100644
 +  return msg.length < 120 && !msg.includes('?');
  }
  
- // ── The execution-grounded verdict (no LLM, no user) ─────────────
+ /** Read-only calls prove nothing about whether the turn's work landed; the

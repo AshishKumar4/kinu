@@ -39,54 +39,70 @@
  * "the patch applies again" into "the patch still breaks the checks", in one task
  * rather than 159.
  */
-import { benchPatchFiles, stalePatches } from './bench-corpus';
+import { benchPatchFiles, corpusMembership, stalePatches } from './bench-corpus';
 import { assertMeasured, finding } from './gate-ratchet';
 
 const REPO_ROOT = new URL('..', import.meta.url).pathname;
 
 function main(): number {
-  const files = benchPatchFiles();
+  const files = benchPatchFiles(REPO_ROOT);
+  const { tasks, orphans, unchecked } = corpusMembership(REPO_ROOT, files);
   const stale = stalePatches(REPO_ROOT, files);
-  const total = files.length;
 
   // The denominator BEFORE the verdict. A corpus that silently became empty
   // would otherwise report the healthiest possible number about a population
   // nobody looked at, which is the defect `assertMeasured` exists for.
   const measured = assertMeasured('bench-corpus', [
-    ['tracked patch files checked', total],
+    ['tasks.jsonl tasks', tasks],
+    ['tracked patch files checked', files.length],
   ]);
 
-  if (stale.length === 0) {
-    console.log(`bench-corpus: ok — ${measured}, every seeded defect still applies to this tree`);
+  const findings = [
+    ...orphans.map((path) => finding({
+      invariant: 'every tracked patch file is named by a tasks.jsonl line',
+      at: path,
+      found: 'no tasks.jsonl line names this patch',
+      silently: 'no run applies it and no score depends on it, yet the patch count includes it — '
+        + 'a half-finished retirement, which tests/bench/retired.jsonl exists to record',
+      fix: 'finish the retirement — record it in tests/bench/retired.jsonl and delete the file '
+        + '— or add back the tasks.jsonl line that measures it',
+    })),
+    ...unchecked.map((id) => finding({
+      invariant: 'every tasks.jsonl line names a tracked patch file',
+      at: `tests/bench/patches/${id}.patch`,
+      found: `task ${id} names a patch git does not track`,
+      silently: 'this gate never checks it, and a fresh checkout cannot load the corpus: '
+        + '`loadBenchCorpus` throws "missing defect patch" on every other machine',
+      fix: `git add tests/bench/patches/${id}.patch`,
+    })),
+    ...stale.map((patch) => finding({
+      invariant: 'every seeded defect patch applies to the tree it will be measured against',
+      at: patch.path,
+      found: patch.detail,
+      silently: 'the task becomes unrunnable and `prepare` throws OUTSIDE the per-attempt catch, so '
+        + 'the next compare/gain/validate run dies mid-flight with no partial report',
+      fix: 're-anchor the hunk onto the code as it now stands, then PROVE it still injects the '
+        + `defect: bun scripts/bench.ts validate --run-root <throwaway-dir> --id ${patch.id} `
+        + '(one task, two attempts, measured at 93s, no model — against ~160 attempts for the '
+        + 'whole corpus). `git apply --3way` may merge it for you, but merges '
+        + 'cleanly on only 4 of 15 measured cases, so read the result before keeping it. If '
+        + 'the code the defect was data about is GONE, retire it in tests/bench/retired.jsonl '
+        + 'instead — but only after establishing that no live code still holds the property',
+    })),
+  ];
+
+  if (findings.length === 0) {
+    console.log(`bench-corpus: ok — ${measured}, one patch per task, every seeded defect still `
+      + 'applies to this tree');
 
     return 0;
   }
 
-  for (const patch of stale) {
-    console.error(finding({
-      invariant: 'every seeded defect patch applies to the tree it will be measured against',
-      at: patch.path,
-      found: patch.detail,
-      silently: patch.orphan
-        ? 'no tasks.jsonl line names this patch, so no run applies it and no score depends on '
-          + 'it — a half-finished retirement, which tests/bench/retired.jsonl exists to record'
-        : 'the task becomes unrunnable and `prepare` throws OUTSIDE the per-attempt catch, so '
-          + 'the next compare/gain/validate run dies mid-flight with no partial report',
-      fix: patch.orphan
-        ? 'finish the retirement — record it in tests/bench/retired.jsonl and delete the file '
-          + '— or add back the tasks.jsonl line that measures it'
-        : 're-anchor the hunk onto the code as it now stands, then PROVE it still injects the '
-          + `defect: bun scripts/bench.ts validate --run-root <throwaway-dir> --id ${patch.id} `
-          + '(one task, two attempts, measured at 93s, no model — against ~160 attempts for the '
-          + 'whole corpus). `git apply --3way` may merge it for you, but merges '
-          + 'cleanly on only 4 of 15 measured cases, so read the result before keeping it. If '
-          + 'the code the defect was data about is GONE, retire it in tests/bench/retired.jsonl '
-          + 'instead — but only after establishing that no live code still holds the property',
-    }));
-  }
+  for (const text of findings) console.error(text);
 
-  console.error(`bench-corpus: ${String(stale.length)} of ${String(total)} seeded patches no `
-    + 'longer apply');
+  console.error(`bench-corpus: ${String(orphans.length)} orphan patch(es), ${String(unchecked.length)} `
+    + `untracked task patch(es), ${String(stale.length)} of ${String(files.length)} seeded patches `
+    + 'no longer apply');
 
   return 1;
 }

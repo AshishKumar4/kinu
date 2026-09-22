@@ -10,7 +10,7 @@ import { readFileSync, existsSync } from 'node:fs';
 import { basename, join } from 'node:path';
 import * as v from 'valibot';
 import { gitEnv } from '@kinu.run/test-utils';
-import { isBenchDefectPatch, trackedFiles } from './sources';
+import { enumerateRepository, isBenchDefectPatch } from './sources';
 import { partitionCorpus, promptLeaksFix } from '../packages/core/src/index';
 import type { BenchCheck, BenchCorpus, BenchTask, PartitionOptions } from '../packages/core/src/index';
 
@@ -124,16 +124,14 @@ export function loadBenchCorpus(repoRoot: string, opts: PartitionOptions = {}): 
 }
 
 /**
- * The corpus's patch files, as repo-relative paths.
- *
- * ONE enumeration, `trackedFiles()` narrowed by a named predicate, rather than a
- * `readdirSync` of its own: an untracked `.patch` in that directory is not part of
- * the corpus, and a private walk could report on one while `tasks.jsonl` and every
- * scored run ignore it. That is the measured-set-equals-governed-set rule, and
- * `gate:set-equality` refuses the second walk.
+ * The corpus's patch files, as repo-relative paths: the TRACKED subset of the one
+ * enumeration, narrowed by a named predicate. `trackedFiles()` also lists
+ * untracked additions, and an untracked `.patch` is not part of the corpus: a
+ * fresh checkout lacks it, so counting it would let a task pass here that fails
+ * to load everywhere else. `gate:set-equality` refuses a private walk.
  */
-export function benchPatchFiles(): readonly string[] {
-  return trackedFiles().filter(isBenchDefectPatch);
+export function benchPatchFiles(repoRoot: string): readonly string[] {
+  return enumerateRepository(repoRoot).tracked.filter(isBenchDefectPatch);
 }
 
 /** A patch that no longer applies, and git's own account of why. */
@@ -143,9 +141,29 @@ export interface StalePatch {
   /** git apply's stderr, verbatim. The line and hunk it failed on is the whole
    *  content of a re-anchor, so summarising it would throw away the fix. */
   readonly detail: string;
-  /** True when no `tasks.jsonl` line names it — an orphan patch file, which the
-   *  corpus-loaded enumeration cannot see because it never loads it. */
-  readonly orphan: boolean;
+}
+
+/** Where the tracked patch files and the `tasks.jsonl` lines disagree. The gate's
+ *  patch count equals the task count only when both lists are empty. */
+export interface CorpusMembership {
+  readonly tasks: number;
+  /** Tracked patch files no task line names: no run applies them, and the
+   *  count includes them anyway. A half-finished retirement leaves one. */
+  readonly orphans: readonly string[];
+  /** Task ids whose patch is not among `files`: untracked, so the gate never
+   *  checks it and a fresh checkout fails to load the corpus. */
+  readonly unchecked: readonly string[];
+}
+
+export function corpusMembership(repoRoot: string, files: readonly string[]): CorpusMembership {
+  const named = new Set(loadBenchCorpus(repoRoot).patches.keys());
+  const tracked = new Set(files.map((file) => basename(file, '.patch')));
+
+  return {
+    tasks: named.size,
+    orphans: files.filter((file) => !named.has(basename(file, '.patch'))),
+    unchecked: [...named].filter((id) => !tracked.has(id)),
+  };
 }
 
 /**
@@ -157,28 +175,21 @@ export interface StalePatch {
  * needed re-anchoring more than once, each time as a follow-up commit after the
  * breaking change had already landed.
  *
- * BOTH ENUMERATIONS, because neither alone governs the corpus: `tasks.jsonl` names
- * the patches a run will apply, and the directory holds the files that exist. A
- * patch file with no task line applies to nothing and is measured by nobody, and
- * that is exactly the state a partly-completed retirement leaves behind.
+ * Applicability only. Which files belong to the corpus is `corpusMembership`'s
+ * question; an orphan that still applies passes here.
  *
  * The command is the SAME `git apply` the sandbox runs (bench-sandbox.ts), so
  * nothing can pass here and fail there. `--check` never writes.
  *
- * `files` is handed in rather than walked here, and that is what keeps the gate's
- * population and this function's population the same one: production callers pass
- * `benchPatchFiles()`, which is `trackedFiles()` narrowed by a named predicate, so
- * `gate:set-equality` can see the single enumeration. Tests pass a fixture's own
- * list, which is the only way the red directions below can be driven at all —
- * a fixture has no git index to be tracked in.
+ * `files` is handed in rather than walked here, so the gate's population and this
+ * function's are the same one: production callers pass `benchPatchFiles`, and
+ * tests pass a fixture's own list, because a fixture has no git index.
  */
 export function stalePatches(repoRoot: string, files: readonly string[]): StalePatch[] {
-  const named = new Set(loadBenchCorpus(repoRoot).patches.keys());
   const stale: StalePatch[] = [];
 
   for (const relative of files) {
     const path = join(repoRoot, relative);
-    const file = basename(relative);
 
     const res = Bun.spawnSync(
       ['git', 'apply', '--check', '--whitespace=nowarn', '-'],
@@ -190,8 +201,7 @@ export function stalePatches(repoRoot: string, files: readonly string[]): StaleP
     );
 
     if (res.exitCode === 0) continue;
-    const id = file.slice(0, -'.patch'.length);
-    stale.push({ id, path, detail: res.stderr.toString().trim(), orphan: !named.has(id) });
+    stale.push({ id: basename(relative, '.patch'), path, detail: res.stderr.toString().trim() });
   }
 
   return stale;

@@ -1,13 +1,13 @@
 diff --git a/packages/core/src/prompting/attachment-sanitizer.ts b/packages/core/src/prompting/attachment-sanitizer.ts
-index dc95ebca2..faee26718 100644
+index 6fb149657..70675e133 100644
 --- a/packages/core/src/prompting/attachment-sanitizer.ts
 +++ b/packages/core/src/prompting/attachment-sanitizer.ts
-@@ -319,7 +319,7 @@ async function storeContentAddressed(
-  *  it is the ordinary first spill of a payload — but a path that exists and
-  *  does not hold them is not reusable, and the write below repairs it. */
+@@ -281,7 +281,7 @@ async function storeContentAddressed(
+ 
+ /** Absent is the ordinary first spill; mismatched bytes are rewritten. */
  async function holdsBytes(vfs: VFS, path: string, bytes: Uint8Array): Promise<boolean> {
 -  if (!(await vfs.exists(path))) return false;
 +  if (!vfs.exists(path)) return false;
    const stored = await vfs.readFile(path);
-   // Discriminated on the class rather than with a runtime `typeof`, which is
-   // how prompting/agents-md.ts already narrows the same `string | Uint8Array`
+   // Narrowed by class, as prompting/agents-md.ts does for the same VFS return.
+   const existing = stored instanceof Uint8Array ? stored : new TextEncoder().encode(stored);

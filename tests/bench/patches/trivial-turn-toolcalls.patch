@@ -1,10 +1,10 @@
 diff --git a/packages/core/src/evolution/outcomes.ts b/packages/core/src/evolution/outcomes.ts
-index 79c3923a1..daa885579 100644
+index 719ec5f2c..bc509a359 100644
 --- a/packages/core/src/evolution/outcomes.ts
 +++ b/packages/core/src/evolution/outcomes.ts
-@@ -148,7 +148,7 @@ const TRIVIAL_MESSAGE = new RegExp(
-  *  ran no tools AND the user message is a stock pleasantry (or too short to
-  *  be a real request). */
+@@ -86,7 +86,7 @@ const TRIVIAL_MESSAGE = new RegExp(
+ /** A turn is trivial when it ran no tools and the user message is a stock
+  *  pleasantry or too short to be a real request. */
  export function isTrivialTurn(turn: Pick<CompletedTurn, 'userMessage' | 'toolCalls'>): boolean {
 -  if (turn.toolCalls.length > 0) return false;
 +  if (turn.toolCalls.length > 0) return true;

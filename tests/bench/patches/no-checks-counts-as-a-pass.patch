@@ -1,12 +1,13 @@
 diff --git a/packages/core/src/bench/types.ts b/packages/core/src/bench/types.ts
+index 423e1a02d..99123c4e3 100644
 --- a/packages/core/src/bench/types.ts
 +++ b/packages/core/src/bench/types.ts
-@@ -172,7 +172,7 @@ export interface Solver {
- /** Passing a task is all-or-nothing: every check must exit 0. Partial credit
-  *  would need a weighting someone chose, and a chosen weighting is a rubric. */
+@@ -127,7 +127,7 @@ export interface Solver {
+ 
+ /** All-or-nothing: partial credit would need a chosen weighting, i.e. a rubric. */
  export function attemptPassed(checks: readonly CheckOutcome[]): boolean {
 -  return checks.length > 0 && checks.every((c) => c.passed);
 +  return checks.every((c) => c.passed);
  }
  
- /** Tokens spent on one model call, or undefined when the report carried no
+ /** Provider usage is a trust boundary with two dialects (nested V3 `{ total }` and flat).
