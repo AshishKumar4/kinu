@@ -2,7 +2,8 @@ import type { ModelMessage, ProviderMetadata, TextStreamPart, ToolSet } from 'ai
 import * as v from 'valibot';
 import type { ChatEvent } from '../chat';
 import { SessionHistory } from '../session/history';
-import type { MessageReference, StoredPart, StreamPartInput } from '../session/messages';
+import type { MessageReference, StoredPart, StreamPartInput, PreparedContent } from '../session/messages';
+import type { SessionPayload } from '../session/payload';
 import { JsonObjectSchema, projectJsonValue, type JsonObject } from '../utils/json';
 import { encodeModelMessages } from '../session/message-codec';
 import { renderThrownChain, KinuError } from '../obs/index';
@@ -17,8 +18,8 @@ interface StreamPart {
    *  which writes the final text whole. */
   buffered: string;
   bufferedDeltas: number;
+  bufferedBytes: number;
   readonly streamOrder: number;
-  ended: boolean;
   startMetadata: JsonObject | null;
 }
 
@@ -29,13 +30,19 @@ interface StreamPart {
  *  second of words. */
 const COALESCE_DELTAS = 64;
 
+/** UTF-8 bytes of the window, what the row takes; not UTF-16 units. */
 const COALESCE_BYTES = 4096;
+
+const utf8 = new TextEncoder();
 
 interface StreamContainer {
   readonly id: string;
   readonly role: 'assistant' | 'tool';
   readonly slot: number;
   reference: MessageReference | null;
+  /** Model-facing: joins the working context when it seals. A render-only
+   *  container never does. */
+  readonly working: boolean;
   sealed: boolean;
   readonly parts: Map<string, StreamPart>;
 }
@@ -76,7 +83,7 @@ export class SessionStream {
 
     switch (part.type) {
       case 'start-step':
-        await this.publish(this.ui, 'step-start', { type: 'step-start' }, null, undefined, false, false);
+        await this.publish(this.ui, 'step-start', { type: 'step-start' }, null);
 
         return;
       case 'source': {
@@ -85,7 +92,7 @@ export class SessionStream {
           : { type: 'source-document', sourceId: part.id, mediaType: part.mediaType, title: part.title };
 
         if (part.title !== undefined) source.title = part.title;
-        await this.publish(this.ui, `source:${part.id}`, source, null, part.providerMetadata, false, false);
+        await this.publish(this.ui, `source:${part.id}`, source, null, part.providerMetadata);
 
         return;
       }
@@ -164,7 +171,7 @@ export class SessionStream {
   async nativeStep(messages: readonly ModelMessage[]): Promise<void> {
     this.nativeProducer = true;
     await this.finishStep(messages);
-    this.nextStep();
+    await this.nextStep();
   }
 
   /** Scaffold-authored ChatEvents have no native stream; their explicit calls retain the same pairing rule. */
@@ -181,7 +188,7 @@ export class SessionStream {
       await this.publish(this.tool, `result:${event.toolCallId}`, { type: 'tool-result', toolCallId: event.toolCallId, toolName: event.toolName, output }, null);
     } else if (event.type === 'step-finish') {
       await this.finishStep(event.responseMessages);
-      this.nextStep();
+      await this.nextStep();
     } else if (event.type === 'done') {
       await this.finishStep(event.responseMessages);
     }
@@ -189,10 +196,14 @@ export class SessionStream {
 
 
   private container(role: 'assistant' | 'tool', slot = role === 'assistant' ? 0 : 1): StreamContainer {
-    return { id: `${this.requestId}:${this.nativeProducer ? slot : this.step * 3 + slot}`, role, slot, reference: null, sealed: false, parts: new Map() };
+    return { id: `${this.requestId}:${this.nativeProducer ? slot : this.step * 3 + slot}`, role, slot, reference: null, working: slot !== 2, sealed: false, parts: new Map() };
   }
 
-  private nextStep(): void {
+  /** Every container of the step seals before the next step's replace it:
+   *  a step the model ended without a final message for a container it
+   *  streamed into (a cancelled reasoning step) still commits what it holds. */
+  private async nextStep(): Promise<void> {
+    for (const container of [this.assistant, this.tool, this.ui]) await this.sealOpen(container);
     this.step += 1;
     this.sourceOrder = 0;
     this.assistant = this.container('assistant');
@@ -204,14 +215,14 @@ export class SessionStream {
     const existing = container.parts.get(key);
 
     if (existing !== undefined) return existing;
-    const part: StreamPart = { number: container.parts.size, kind, streamOrder: this.sourceOrder++, opened: false, buffered: '', bufferedDeltas: 0, ended: false, startMetadata: null };
+    const part: StreamPart = { number: container.parts.size, kind, streamOrder: this.sourceOrder++, opened: false, buffered: '', bufferedDeltas: 0, bufferedBytes: 0, startMetadata: null };
     container.parts.set(key, part);
 
     return part;
   }
 
   private async publish(container: StreamContainer, key: string, descriptor: JsonObject, delta: string | null,
-    providerMetadata?: ProviderMetadata, end = false, working = true): Promise<void> {
+    providerMetadata?: ProviderMetadata, end = false): Promise<void> {
     const kind = v.parse(v.string(), descriptor.type);
     const part = this.reserve(container, key, kind);
     const joins = part.opened && !end && providerMetadata === undefined && (kind === 'text' || kind === 'reasoning');
@@ -220,31 +231,35 @@ export class SessionStream {
     if (text === null && providerMetadata === undefined && !end && part.opened) return;
 
     const callId = v.safeParse(v.string(), descriptor.toolCallId);
-    let native: JsonObject = { ...descriptor };
-
-    if (!part.opened && part.startMetadata !== null) native.providerOptions = part.startMetadata;
-
-    if (!part.opened && (kind === 'file' || kind === 'image')) native = await this.history.messages.payloads.externalizeMedia(native);
     const metadata = providerMetadata === undefined ? undefined : v.parse(JsonObjectSchema, projectJsonValue({ value: providerMetadata }));
-    const opening: StreamPartInput = { partNo: part.number, kind, streamOrder: part.streamOrder, descriptor: native };
+    let opening: StreamPartInput | null = null;
+    let replaced: SessionPayload | null = null;
 
-    if (text !== null) opening.text = text;
+    if (part.opened) replaced = metadata === undefined ? null : await this.history.messages.prepareMetadata(container.id, part.number, metadata);
+    else {
+      const native: JsonObject = { ...descriptor };
+      const options = metadata ?? part.startMetadata;
+
+      if (options !== null && options !== undefined) native.providerOptions = options;
+      const prepared = await this.history.messages.prepareDescriptor(native);
+      opening = { partNo: part.number, kind, streamOrder: part.streamOrder, descriptor: prepared.descriptor };
+
+      if (text !== null) opening.text = text;
+    }
 
     const write = (): void => {
-      if (!part.opened) this.history.messages.streamOpenPart(container.id, opening);
+      if (opening !== null) this.history.messages.streamOpenPart(container.id, opening);
       else if (text !== null) this.history.messages.streamAppend(container.id, part.number, text);
 
-      if (metadata !== undefined) this.history.messages.streamMetadata(container.id, part.number, metadata);
+      if (replaced !== null) this.history.messages.streamMetadata(container.id, part.number, replaced);
 
       if (end) this.history.messages.streamEnd(container.id, part.number);
     };
 
     if (container.reference !== null) this.fenced(write);
-    else this.openContainer(container, working, write);
+    else this.openContainer(container, write);
 
     part.opened = true;
-
-    if (end) part.ended = true;
 
     if (kind === 'tool-call' && callId.success) this.calls.set(callId.output, { messageId: container.id, part: part.number });
   }
@@ -261,14 +276,16 @@ export class SessionStream {
     if (joins && pending !== null) {
       part.buffered += pending;
       part.bufferedDeltas += 1;
+      part.bufferedBytes += utf8.encode(pending).byteLength;
 
-      if (part.bufferedDeltas < COALESCE_DELTAS && part.buffered.length < COALESCE_BYTES) return null;
+      if (part.bufferedDeltas < COALESCE_DELTAS && part.bufferedBytes < COALESCE_BYTES) return null;
       pending = null;
     }
 
     let text = part.buffered + (pending ?? '');
     part.buffered = '';
     part.bufferedDeltas = 0;
+    part.bufferedBytes = 0;
 
     if (!end && text.length > 0) {
       const last = text.charCodeAt(text.length - 1);
@@ -276,6 +293,7 @@ export class SessionStream {
       if (last >= 0xd800 && last <= 0xdbff) {
         part.buffered = text.slice(-1);
         part.bufferedDeltas = 1;
+        part.bufferedBytes = 3;
         text = text.slice(0, -1);
       }
     }
@@ -294,26 +312,40 @@ export class SessionStream {
     });
   }
 
-  /** The container's message row, and its place in the working context when
-   *  it is model-facing. A delta after this extends the row and moves no
-   *  membership, so a streamed answer mints one revision when it joins. */
-  private openContainer(container: StreamContainer, working: boolean, write: () => void): void {
+  /** The container's message row, open. It joins the working context only
+   *  when it seals: a context revision names immutable content, never a
+   *  message a stream is still extending. */
+  private openContainer(container: StreamContainer, write: () => void): void {
+    this.fenced(() => {
+      container.reference = this.history.messages.open(container.role, container.id, container.working ? 'output' : 'render', { requestId: this.requestId, slot: this.nativeProducer ? container.slot : this.step * 3 + container.slot });
+      write();
+    });
+  }
+
+  /** ONE revision per sealed model-facing message: the seal and the
+   *  membership land in the same transaction under the epoch fence. */
+  private sealContainer(container: StreamContainer, content: PreparedContent, envelope?: JsonObject): void {
+    if (!container.working) {
+      this.fenced(() => this.history.messages.seal(container.id, content, envelope));
+      container.sealed = true;
+
+      return;
+    }
+
     const selected = this.history.context.selected();
 
     if (selected === null) throw new KinuError('missing', 'stream has no selected context');
     this.history.context.commit(selected, 'output', this.turnId, entries => {
-      const reference = this.history.messages.open(container.role, container.id, working ? 'output' : 'render', { requestId: this.requestId, slot: this.nativeProducer ? container.slot : this.step * 3 + container.slot });
-      container.reference = reference;
-      write();
+      this.history.messages.seal(container.id, content, envelope);
 
-      if (!working || entries.some(entry => entry.messageId === container.id)) return entries;
+      if (entries.some(entry => entry.messageId === container.id)) return entries;
 
-      return [...entries, { ...reference, entryId: container.id, position: entries.length }];
+      return [...entries, { messageId: container.id, entryId: container.id, position: entries.length }];
     }, () => this.history.assertEpoch(this.turnId, this.epoch));
+    container.sealed = true;
   }
 
   private async finishStep(cumulative: readonly ModelMessage[]): Promise<void> {
-    if (cumulative.length === 0) return;
     const produced = cumulative.slice(this.completedMessageCount);
 
     for (const message of produced) {
@@ -343,19 +375,17 @@ export class SessionStream {
 
       const sealed = await this.history.messages.prepareContent(parts);
 
-      if (container.reference === null) this.openContainer(container, true, () => this.history.messages.seal(container.id, sealed, envelope));
-      else this.fenced(() => this.history.messages.seal(container.id, sealed, envelope));
-      container.sealed = true;
+      if (container.reference === null) this.openContainer(container, () => {});
+      this.sealContainer(container, sealed, envelope);
       await this.history.messages.bindSource(message, { messageId: container.id });
     }
 
-    await this.sealOpen(this.ui);
     this.completedMessageCount = cumulative.length;
   }
 
   /** A container the step did not seal from a final message seals from what
-   *  its stream holds: the render-only container every step, and every
-   *  container of a turn that ended before its step did. */
+   *  its stream holds, buffered tail included: the render-only container
+   *  every step, and every container of a step or turn that ended early. */
   private async sealOpen(container: StreamContainer): Promise<void> {
     if (container.reference === null || container.sealed) return;
 
@@ -364,17 +394,19 @@ export class SessionStream {
       const window = part.buffered;
       part.buffered = '';
       part.bufferedDeltas = 0;
+      part.bufferedBytes = 0;
       this.fenced(() => this.history.messages.streamAppend(container.id, part.number, window));
     }
 
-    const parts = this.history.messages.openParts(container.id);
+    const parts = await this.history.messages.openParts(container.id);
 
-    if (parts !== null) {
-      const sealed = await this.history.messages.prepareContent(parts);
-      this.fenced(() => this.history.messages.seal(container.id, sealed));
+    if (parts === null) {
+      container.sealed = true;
+
+      return;
     }
 
-    container.sealed = true;
+    this.sealContainer(container, await this.history.messages.prepareContent(parts));
   }
 
   /** The turn ended, however it ended: what streamed is sealed as it stands. */

@@ -41,36 +41,43 @@ export interface StreamPartInput {
   readonly partNo: number;
   readonly kind: string;
   readonly streamOrder: number;
-  readonly descriptor: JsonObject;
+  /** The part without its text, through `SessionPayloads.prepare`. */
+  readonly descriptor: SessionPayload;
   text?: string;
 }
 
+/** UTF-16 units one `stream_parts` row holds before the part continues in
+ *  the next segment: at most three UTF-8 bytes each, so a row stays under
+ *  the payload inline bound and far under the platform's row limit. */
+export const STREAM_SEGMENT_CHARS = 262_144;
+
 interface MessageRow { role: string; native_content_kind: 'string' | 'parts'; envelope_json: string; sealed_at: number | null; content_json: string | null; content_path: string | null; content_digest: string | null }
 
-interface StreamPartRow { part_no: number; kind: string; stream_order: number; descriptor_json: string; text: string; ended: number }
+interface StreamPartRow { part_no: number; segment: number; kind: string; stream_order: number; descriptor_json: string | null; descriptor_path: string | null; descriptor_digest: string | null; text: string }
 
 export type ToolCallIndex = ReadonlyMap<string, { messageId: string; part: number }>;
 
-function contentOf(row: MessageRow): SessionPayload {
-  if (row.content_json !== null && row.content_path === null && row.content_digest === null) {
-    return { json: row.content_json, path: null, digest: null };
-  }
+function payloadOf(json: string | null, path: string | null, digest: string | null): SessionPayload {
+  if (json !== null && path === null && digest === null) return { json, path: null, digest: null };
 
-  if (row.content_json === null && row.content_path !== null && row.content_digest !== null) {
-    return { json: null, path: row.content_path, digest: row.content_digest };
-  }
+  if (json === null && path !== null && digest !== null) return { json: null, path, digest };
 
-  throw new KinuError('io', 'invalid session content reference');
+  throw new KinuError('io', 'invalid session payload reference');
 }
 
-/** The stream rows hold text apart from the descriptor; a text-bearing kind
- *  reads its text back even while it is still empty. */
-function streamedValue(row: StreamPartRow): JsonObject {
-  const value = v.parse(JsonObjectSchema, JSON.parse(row.descriptor_json));
+/** Text in pieces no longer than one stream segment, never split inside a
+ *  surrogate pair. */
+function* segmented(text: string): Generator<string> {
+  let at = 0;
 
-  if (row.kind === 'text' || row.kind === 'reasoning' || row.text !== '') value.text = row.text;
+  while (at < text.length) {
+    let end = Math.min(text.length, at + STREAM_SEGMENT_CHARS);
+    const last = text.charCodeAt(end - 1);
 
-  return value;
+    if (end < text.length && last >= 0xd800 && last <= 0xdbff) end += 1;
+    yield text.slice(at, end);
+    at = end;
+  }
 }
 
 export interface ActorReadAuthority {
@@ -93,11 +100,32 @@ export class SessionMessageReader<A extends ActorReadAuthority = ActorReadAuthor
     return row;
   }
 
-  /** An open message's parts, folded from its stream rows. */
-  protected streamed(messageId: string): StoredPart[] {
-    return this.sql<StreamPartRow>`SELECT part_no,kind,stream_order,descriptor_json,text,ended FROM stream_parts
-      WHERE actor_id=${this.actor.actorId} AND message_id=${messageId} ORDER BY part_no`
-      .map(row => ({ partNo: row.part_no, kind: row.kind, streamOrder: row.stream_order, replyTo: null, value: streamedValue(row) }));
+  /** An open message's parts, folded from its stream rows: segment 0 carries
+   *  the descriptor, every segment its share of the text. A text-bearing kind
+   *  reads its text back even while it is still empty. */
+  protected async streamed(messageId: string): Promise<StoredPart[]> {
+    const rows = this.sql<StreamPartRow>`SELECT part_no,segment,kind,stream_order,descriptor_json,descriptor_path,descriptor_digest,text FROM stream_parts
+      WHERE actor_id=${this.actor.actorId} AND message_id=${messageId} ORDER BY part_no,segment`;
+
+    const parts: StoredPart[] = [];
+
+    for (const row of rows) {
+      const open = parts.at(-1);
+
+      if (row.segment > 0 && open !== undefined && open.partNo === row.part_no) {
+        open.value.text = v.parse(v.string(), open.value.text) + row.text;
+        continue;
+      }
+
+      const value = v.parse(JsonObjectSchema, await this.payloads.read(payloadOf(row.descriptor_json, row.descriptor_path, row.descriptor_digest)));
+
+      if (row.kind === 'text' || row.kind === 'reasoning' || row.text !== '') value.text = row.text;
+      parts.push({ partNo: row.part_no, kind: row.kind, streamOrder: row.stream_order, replyTo: null, value });
+    }
+
+    this.actor.assertCurrent();
+
+    return parts;
   }
 
   /** A sealed message reads its content row; an open one reads what its
@@ -105,8 +133,8 @@ export class SessionMessageReader<A extends ActorReadAuthority = ActorReadAuthor
   protected async stored(reference: MessageReference): Promise<{ readonly row: MessageRow; readonly parts: readonly StoredPart[] }> {
     const row = this.row(reference.messageId);
 
-    if (row.sealed_at === null) return { row, parts: this.streamed(reference.messageId) };
-    const parts = v.parse(StoredContentSchema, await this.payloads.read(contentOf(row)));
+    if (row.sealed_at === null) return { row, parts: await this.streamed(reference.messageId) };
+    const parts = v.parse(StoredContentSchema, await this.payloads.read(payloadOf(row.content_json, row.content_path, row.content_digest)));
     this.actor.assertCurrent();
 
     return { row, parts };
@@ -231,46 +259,80 @@ export class SessionMessages extends SessionMessageReader<ActorHandle, SessionPa
     if (row === undefined || row.sealed_at !== null) throw new KinuError('denied', 'message is missing or sealed');
   }
 
-  streamOpenPart(messageId: string, part: StreamPartInput): void {
-    this.actor.assertCurrent();
-    this.assertOpen(messageId);
-    const { text, ...descriptor } = part.descriptor;
-    const initial = part.text ?? (v.is(v.string(), text) ? text : '');
-    void this.sql`INSERT INTO stream_parts(actor_id,message_id,part_no,kind,stream_order,descriptor_json,text,ended)
-      VALUES(${this.actor.actorId},${messageId},${part.partNo},${part.kind},${part.streamOrder},${JSON.stringify(descriptor)},${initial},0)`;
+  /** The descriptor a part opens with: the native part without its text,
+   *  media externalized, through the payload spill rule. */
+  async prepareDescriptor(native: JsonObject): Promise<{ readonly descriptor: SessionPayload; readonly text: string | undefined }> {
+    const { text, ...rest } = native;
+    const descriptor = rest.type === 'image' || rest.type === 'file' ? await this.payloads.externalizeMedia(rest) : rest;
+
+    return { descriptor: await this.payloads.prepare(descriptor), text: v.is(v.string(), text) ? text : undefined };
   }
 
-  /** One window of deltas is one statement. */
-  streamAppend(messageId: string, partNo: number, text: string): void {
+  /** An open part's descriptor with its provider options replaced. */
+  async prepareMetadata(messageId: string, partNo: number, providerOptions: JsonObject | undefined): Promise<SessionPayload> {
     this.actor.assertCurrent();
 
-    const extended = this.sql<{ part_no: number }>`UPDATE stream_parts SET text = text || ${text}
-      WHERE actor_id=${this.actor.actorId} AND message_id=${messageId} AND part_no=${partNo} AND ended=0 RETURNING part_no`;
-
-    if (extended.length === 0) throw new KinuError('denied', 'stream part is missing, sealed or ended');
-  }
-
-  streamMetadata(messageId: string, partNo: number, providerOptions: JsonObject | undefined): void {
-    this.actor.assertCurrent();
-    const row = this.sql<{ descriptor_json: string }>`SELECT descriptor_json FROM stream_parts WHERE actor_id=${this.actor.actorId} AND message_id=${messageId} AND part_no=${partNo}`[0];
+    const row = this.sql<StreamPartRow>`SELECT part_no,segment,kind,stream_order,descriptor_json,descriptor_path,descriptor_digest,text FROM stream_parts
+      WHERE actor_id=${this.actor.actorId} AND message_id=${messageId} AND part_no=${partNo} AND segment=0`[0];
 
     if (row === undefined) throw new KinuError('denied', 'stream part is missing or sealed');
-    const descriptor = v.parse(JsonObjectSchema, JSON.parse(row.descriptor_json));
+    const descriptor = v.parse(JsonObjectSchema, await this.payloads.read(payloadOf(row.descriptor_json, row.descriptor_path, row.descriptor_digest)));
     delete descriptor.providerOptions;
 
     if (providerOptions !== undefined) descriptor.providerOptions = providerOptions;
-    void this.sql`UPDATE stream_parts SET descriptor_json=${JSON.stringify(descriptor)} WHERE actor_id=${this.actor.actorId} AND message_id=${messageId} AND part_no=${partNo}`;
+
+    return this.payloads.prepare(descriptor);
+  }
+
+  streamOpenPart(messageId: string, part: StreamPartInput): void {
+    this.actor.assertCurrent();
+    this.assertOpen(messageId);
+    void this.sql`INSERT INTO stream_parts(actor_id,message_id,part_no,segment,kind,stream_order,descriptor_json,descriptor_path,descriptor_digest,text,ended)
+      VALUES(${this.actor.actorId},${messageId},${part.partNo},0,${part.kind},${part.streamOrder},${part.descriptor.json},${part.descriptor.path},${part.descriptor.digest},'',0)`;
+
+    if (part.text !== undefined && part.text !== '') this.streamAppend(messageId, part.partNo, part.text);
+  }
+
+  /** One window of deltas is one statement on the part's last segment; a
+   *  window the segment cannot hold opens the next one. */
+  streamAppend(messageId: string, partNo: number, text: string): void {
+    this.actor.assertCurrent();
+    const actorId = this.actor.actorId;
+
+    for (const piece of segmented(text)) {
+      const extended = this.sql<{ segment: number }>`UPDATE stream_parts SET text = text || ${piece}
+        WHERE actor_id=${actorId} AND message_id=${messageId} AND part_no=${partNo} AND ended=0 AND length(text) + ${piece.length} <= ${STREAM_SEGMENT_CHARS}
+        AND segment=(SELECT MAX(segment) FROM stream_parts WHERE actor_id=${actorId} AND message_id=${messageId} AND part_no=${partNo}) RETURNING segment`;
+
+      if (extended.length > 0) continue;
+
+      const last = this.sql<{ segment: number; ended: number; kind: string; stream_order: number }>`SELECT segment,ended,kind,stream_order FROM stream_parts
+        WHERE actor_id=${actorId} AND message_id=${messageId} AND part_no=${partNo} ORDER BY segment DESC LIMIT 1`[0];
+
+      if (last === undefined || last.ended !== 0) throw new KinuError('denied', 'stream part is missing, sealed or ended');
+      void this.sql`INSERT INTO stream_parts(actor_id,message_id,part_no,segment,kind,stream_order,descriptor_json,descriptor_path,descriptor_digest,text,ended)
+        VALUES(${actorId},${messageId},${partNo},${last.segment + 1},${last.kind},${last.stream_order},${null},${null},${null},${piece},0)`;
+    }
+  }
+
+  streamMetadata(messageId: string, partNo: number, descriptor: SessionPayload): void {
+    this.actor.assertCurrent();
+
+    const written = this.sql<{ segment: number }>`UPDATE stream_parts SET descriptor_json=${descriptor.json},descriptor_path=${descriptor.path},descriptor_digest=${descriptor.digest}
+      WHERE actor_id=${this.actor.actorId} AND message_id=${messageId} AND part_no=${partNo} AND segment=0 RETURNING segment`;
+
+    if (written.length === 0) throw new KinuError('denied', 'stream part is missing or sealed');
   }
 
   streamEnd(messageId: string, partNo: number): void {
     this.actor.assertCurrent();
-    const ended = this.sql<{ part_no: number }>`UPDATE stream_parts SET ended=1 WHERE actor_id=${this.actor.actorId} AND message_id=${messageId} AND part_no=${partNo} AND ended=0 RETURNING part_no`;
+    const ended = this.sql<{ segment: number }>`UPDATE stream_parts SET ended=1 WHERE actor_id=${this.actor.actorId} AND message_id=${messageId} AND part_no=${partNo} AND ended=0 RETURNING segment`;
 
     if (ended.length === 0) throw new KinuError('denied', 'stream part is missing, sealed or ended');
   }
 
   /** The open message's parts as its stream holds them; null once sealed. */
-  openParts(messageId: string): readonly StoredPart[] | null {
+  async openParts(messageId: string): Promise<readonly StoredPart[] | null> {
     return this.row(messageId).sealed_at === null ? this.streamed(messageId) : null;
   }
 

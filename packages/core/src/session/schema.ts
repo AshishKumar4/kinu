@@ -19,14 +19,21 @@ export function initSessionContextTables(exec: RawSqlExec): void {
         OR (content_json IS NULL AND content_path IS NOT NULL AND content_digest IS NOT NULL)))))`);
   exec(`CREATE UNIQUE INDEX IF NOT EXISTS session_message_ingress ON session_messages(actor_id,ingress_id) WHERE ingress_id IS NOT NULL`);
   // An open message's parts while its answer streams: one row per part,
-  // extended in place, deleted when the message seals into `content_*`.
+  // extended in place, deleted when the message seals into `content_*`. A
+  // part whose text outgrows one row continues in the next segment, so no
+  // row reaches the platform's row limit; segment 0 carries the descriptor,
+  // through the payload spill rule.
   exec(`CREATE TABLE IF NOT EXISTS stream_parts (
-    actor_id TEXT NOT NULL, message_id TEXT NOT NULL, part_no INTEGER NOT NULL,
-    kind TEXT NOT NULL, stream_order INTEGER NOT NULL, descriptor_json TEXT NOT NULL,
+    actor_id TEXT NOT NULL, message_id TEXT NOT NULL, part_no INTEGER NOT NULL, segment INTEGER NOT NULL,
+    kind TEXT NOT NULL, stream_order INTEGER NOT NULL,
+    descriptor_json TEXT, descriptor_path TEXT, descriptor_digest TEXT,
     text TEXT NOT NULL DEFAULT '', ended INTEGER NOT NULL DEFAULT 0,
-    PRIMARY KEY(actor_id,message_id,part_no),
+    PRIMARY KEY(actor_id,message_id,part_no,segment),
     FOREIGN KEY(actor_id,message_id) REFERENCES session_messages(actor_id,message_id),
-    CHECK(part_no >= 0), CHECK(stream_order >= 0), CHECK(ended IN (0,1)))`);
+    CHECK(part_no >= 0), CHECK(segment >= 0), CHECK(stream_order >= 0), CHECK(ended IN (0,1)),
+    CHECK((segment > 0 AND descriptor_json IS NULL AND descriptor_path IS NULL AND descriptor_digest IS NULL)
+      OR (segment = 0 AND ((descriptor_json IS NOT NULL AND descriptor_path IS NULL AND descriptor_digest IS NULL)
+        OR (descriptor_json IS NULL AND descriptor_path IS NOT NULL AND descriptor_digest IS NOT NULL)))))`);
   exec(`CREATE TABLE IF NOT EXISTS actor_contexts (
     actor_id TEXT NOT NULL REFERENCES workspace_actors(actor_id), context_id TEXT NOT NULL, fork_context_id TEXT, fork_revision INTEGER,
     PRIMARY KEY(actor_id,context_id), CHECK((fork_context_id IS NULL) = (fork_revision IS NULL)),

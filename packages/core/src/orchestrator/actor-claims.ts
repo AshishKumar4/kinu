@@ -76,9 +76,6 @@ export class ActorClaimStore {
 
   async admit(input: { readonly runId: string; readonly turnId: string; readonly workMode: WorkMode; readonly program: ActorProgramIdentity; readonly context: ContextSelection }): Promise<ActorTurnClaim> {
     this.actor.assertCurrent();
-    // A message still open belongs to a stream that never sealed it: an
-    // activation that reset mid-answer. This admission supersedes that epoch.
-    await this.history.sealAbandoned();
     const previous = this.read(input.turnId);
     const epoch = (previous?.epoch ?? 0) + 1;
 
@@ -88,7 +85,7 @@ export class ActorClaimStore {
       messages: this.history.context.entries(input.context),
     });
 
-    return this.transactionSync(() => {
+    const claim = this.transactionSync(() => {
       this.actor.assertCurrent();
       const now = this.read(input.turnId);
 
@@ -97,17 +94,24 @@ export class ActorClaimStore {
 
       if (selected?.contextId !== input.context.contextId || selected.revision !== input.context.revision) throw new KinuError('denied', 'working selection changed during admission preparation');
 
-      const claim: ActorTurnClaim = Object.freeze({ actorId: this.actorId, runId: input.runId, turnId: input.turnId, epoch,
+      const admitted: ActorTurnClaim = Object.freeze({ actorId: this.actorId, runId: input.runId, turnId: input.turnId, epoch,
         workMode: input.workMode, program: Object.freeze({ ...input.program }), workingRevision: input.context.revision, workingContextId: input.context.contextId });
 
       void this.sql`INSERT INTO actor_turn_claims(actor_id,turn_id,run_id,epoch,work_mode,program_kind,program_version,program_digest,program_build,status,outcome,consumed_revision,claimed_at,settled_at)
         VALUES(${this.actorId},${input.turnId},${input.runId},${epoch},${input.workMode},${input.program.kind},${input.program.version},${input.program.digest},${input.program.build},'admitted',NULL,NULL,${nowMs()},NULL)
         ON CONFLICT(actor_id,turn_id) DO UPDATE SET run_id=excluded.run_id,epoch=excluded.epoch,work_mode=excluded.work_mode,program_kind=excluded.program_kind,
           program_version=excluded.program_version,program_digest=excluded.program_digest,program_build=excluded.program_build,status='admitted',outcome=NULL,consumed_revision=NULL,claimed_at=excluded.claimed_at,settled_at=NULL`;
-      this.history.requests.record(admission, () => this.assertLive(claim));
+      this.history.requests.record(admission, () => this.assertLive(admitted));
 
-      return claim;
+      return admitted;
     });
+
+    // Only once this admission holds the turn: a message a reset activation
+    // left open under the epoch it superseded seals as it stands. An
+    // admission refused above seals nothing.
+    await this.history.sealAbandoned();
+
+    return claim;
   }
 
   async consume(claim: ActorTurnClaim, input: { readonly index: number; readonly messages: readonly ModelMessage[] }): Promise<ConsumedContext> {

@@ -1129,9 +1129,12 @@
     "actor_id",
     "message_id",
     "part_no",
+    "segment",
     "kind",
     "stream_order",
     "descriptor_json",
+    "descriptor_path",
+    "descriptor_digest",
     "text",
     "ended"
   ],

@@ -352,7 +352,7 @@ record which messages the model reads at each revision, and
 Readers answer from the entries: the chat pane's page walk
 (`read-models/status.ts` `getChatHistoryPage` over `session/page.ts`),
 `memory/conversation-search.ts`
-(`scroll`, `listConversations`, the FTS index keyed on entry rowid), the
+(`scroll`, `browse`, the FTS index keyed on entry rowid), the
 inherited context a spawned head receives
 (`orchestrator/heads-support.ts`), the evolution joins and the export. The
 Agents SDK's `assistant_messages` is the SDK's own table and is neither

@@ -44,26 +44,36 @@ export class SessionHistory {
     this.requests = new SessionRequests(sql, actor, this.messages, payloads);
   }
 
-  /** Seal every message still open under this actor from what its stream
-   *  holds. An open message belongs to the stream of one admitted epoch; once
-   *  that epoch is gone, nothing extends it again, so its accumulated parts are
-   *  its content. */
+  /** Open messages no live stream owns: their request's turn claim is settled,
+   *  or a later admission of that turn superseded its epoch. Nothing extends
+   *  such a message again, so its accumulated parts are its content, and a
+   *  model-facing one joins the working context as the cut answer it is. A
+   *  message whose claim is admitted at its epoch is a live stream and is
+   *  never touched, whichever admission asks. */
   async sealAbandoned(): Promise<void> {
     this.dependencies.actor.assertCurrent();
-    const open = this.dependencies.sql<{ message_id: string }>`SELECT message_id FROM session_messages WHERE actor_id=${this.dependencies.actor.actorId} AND sealed_at IS NULL ORDER BY rowid`;
+    const actorId = this.dependencies.actor.actorId;
 
-    for (const row of open) {
-      const parts = this.messages.openParts(row.message_id);
+    const abandoned = () => this.dependencies.sql<{ message_id: string; origin: string }>`SELECT m.message_id,m.origin FROM session_messages m
+      JOIN actor_requests r ON r.actor_id=m.actor_id AND r.request_id=m.request_id
+      LEFT JOIN actor_turn_claims c ON c.actor_id=r.actor_id AND c.turn_id=r.turn_id
+      WHERE m.actor_id=${actorId} AND m.sealed_at IS NULL AND (c.turn_id IS NULL OR c.status!='admitted' OR c.epoch!=r.epoch) ORDER BY m.rowid`;
+
+    for (const row of abandoned()) {
+      const parts = await this.messages.openParts(row.message_id);
 
       if (parts === null) continue;
       const content = await this.messages.prepareContent(parts);
+      const selected = this.context.selected() ?? this.context.initialize();
       this.dependencies.transactionSync(() => {
-        const now = this.messages.openParts(row.message_id);
+        if (!abandoned().some(candidate => candidate.message_id === row.message_id)) return;
+        this.context.commit(selected, 'output', null, entries => {
+          this.messages.seal(row.message_id, content);
 
-        if (now === null) return;
+          if (row.origin !== 'output' || entries.some(entry => entry.messageId === row.message_id)) return entries;
 
-        if (JSON.stringify(now) !== JSON.stringify(parts)) throw new KinuError('denied', 'open message changed while it was being sealed');
-        this.messages.seal(row.message_id, content);
+          return [...entries, { messageId: row.message_id, entryId: row.message_id, position: entries.length }];
+        }, () => this.dependencies.actor.assertCurrent());
       });
     }
   }

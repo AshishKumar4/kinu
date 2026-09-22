@@ -2,7 +2,7 @@ import { expect, test } from 'bun:test';
 import * as v from 'valibot';
 import { createTestRuntime } from '@kinu.run/test-utils';
 import { initSessionContextTables } from '../src/session/schema';
-import { SessionMessages } from '../src/session/messages';
+import { SessionMessages, STREAM_SEGMENT_CHARS } from '../src/session/messages';
 import { SessionPayloads } from '../src/session/payload';
 import { SessionContext } from '../src/session/context';
 import { SessionProposals } from '../src/session/proposals';
@@ -44,58 +44,56 @@ test('an open message reads its accumulated text and a sealed one its content', 
 
   try {
     const streamRows = () => s.testSql.db.query<{ n: number }, []>('SELECT count(*) AS n FROM stream_parts').get()?.n ?? -1;
-    let selected = s.context.initialize();
-    selected = s.context.commit(selected, 'output', 'turn', entries => {
-      const reference = s.messages.open('assistant', 'answer', 'output');
-      s.messages.streamOpenPart('answer', { partNo: 0, kind: 'text', streamOrder: 0, descriptor: { type: 'text' }, text: 'ab' });
-
-      return [...entries, { ...reference, entryId: 'answer', position: 0 }];
-    }, () => s.rt.actor.assertCurrent());
+    const descriptor = await s.payloads.prepare({ type: 'text' });
+    s.context.initialize();
+    s.messages.open('assistant', 'answer', 'output');
+    s.messages.streamOpenPart('answer', { partNo: 0, kind: 'text', streamOrder: 0, descriptor, text: 'ab' });
     const entry = { messageId: 'answer' };
-    expect(s.context.entries(selected).map(row => row.messageId)).toEqual(['answer']);
     expect(await s.messages.materialize(entry)).toEqual({ role: 'assistant', content: [{ type: 'text', text: 'ab' }] });
 
     // A window is one statement on the part's one row.
     s.messages.streamAppend('answer', 0, 'cd');
-    s.messages.streamMetadata('answer', 0, { test: { partial: true } });
+    s.messages.streamMetadata('answer', 0, await s.messages.prepareMetadata('answer', 0, { test: { partial: true } }));
     expect(streamRows()).toBe(1);
     expect(await s.messages.materialize(entry)).toEqual({ role: 'assistant', content: [{ type: 'text', text: 'abcd', providerOptions: { test: { partial: true } } }] });
     s.messages.streamEnd('answer', 0);
     expect(() => s.messages.streamAppend('answer', 0, 'e')).toThrow('ended');
 
-    // The seal writes the final content once, moves no membership, and the
-    // stream rows go with it.
+    // The seal writes the final content once, and the stream rows go with it.
     const content = await s.messages.prepareContent([{ partNo: 0, kind: 'text', streamOrder: 0, replyTo: null, value: { type: 'text', text: 'final' } }]);
-
-    const sealedAt = s.context.commit(selected, 'output', 'turn', entries => {
-      s.messages.seal('answer', content, { providerOptions: { test: { late: true } } });
-
-      return entries;
-    }, () => s.rt.actor.assertCurrent());
-
-    expect(sealedAt).toEqual(selected);
+    s.messages.seal('answer', content, { providerOptions: { test: { late: true } } });
     expect(streamRows()).toBe(0);
     expect(await s.messages.materialize(entry)).toEqual({ role: 'assistant', content: [{ type: 'text', text: 'final' }], providerOptions: { test: { late: true } } });
     expect(() => s.messages.seal('answer', content)).toThrow('already sealed');
-    expect(() => s.messages.streamOpenPart('answer', { partNo: 1, kind: 'text', streamOrder: 1, descriptor: { type: 'text' } })).toThrow('sealed');
-    expect(s.messages.openParts('answer')).toBeNull();
+    expect(() => s.messages.streamOpenPart('answer', { partNo: 1, kind: 'text', streamOrder: 1, descriptor })).toThrow('sealed');
+    expect(await s.messages.openParts('answer')).toBeNull();
   } finally { s.testSql.close(); }
 });
 
-test('a message left open by a dead stream seals from what it accumulated at the next admission', async () => {
+test('an accumulating part never puts one row over the platform limit and seals through the spill rule', async () => {
+  // `do.sqlite.row_bytes` is 2 MB and an INSERT or UPDATE over it fails: a
+  // reasoning part of a few hundred thousand tokens has to continue in the
+  // next row, not grow one row without bound.
   const s = setup();
 
   try {
-    initSessionTranscriptTables(s.rt.storage.execRaw);
-    const history = new SessionHistory({ sql: s.rt.storage.sql, actor: s.rt.actor, transactionSync: write => s.rt.storage.transactionSync(write), files: async () => ({ vfs: s.rt.storage.vfs, artifactDirectory: '/actor' }) });
-    history.context.initialize();
-    history.messages.open('assistant', 'cut', 'output');
-    history.messages.streamOpenPart('cut', { partNo: 0, kind: 'reasoning', streamOrder: 0, descriptor: { type: 'reasoning' }, text: 'thinking' });
-    history.messages.streamOpenPart('cut', { partNo: 1, kind: 'text', streamOrder: 1, descriptor: { type: 'text' }, text: 'partial ans' });
-    await history.sealAbandoned();
-    expect(history.messages.openParts('cut')).toBeNull();
-    expect(await history.messages.materialize({ messageId: 'cut' })).toEqual({ role: 'assistant', content: [{ type: 'reasoning', text: 'thinking' }, { type: 'text', text: 'partial ans' }] });
-    expect(s.testSql.db.query<{ n: number }, []>('SELECT count(*) AS n FROM stream_parts').get()?.n).toBe(0);
+    const descriptor = await s.payloads.prepare({ type: 'reasoning' });
+    s.messages.open('assistant', 'long', 'output');
+    s.messages.streamOpenPart('long', { partNo: 0, kind: 'reasoning', streamOrder: 0, descriptor });
+    const window = 'r'.repeat(300_000);
+
+    for (let i = 0; i < 4; i++) s.messages.streamAppend('long', 0, window);
+    const widest = s.testSql.db.query<{ n: number }, []>('SELECT MAX(length(text)) AS n FROM stream_parts').get()?.n ?? -1;
+    expect(widest).toBeLessThanOrEqual(STREAM_SEGMENT_CHARS);
+    expect(await s.messages.materialize({ messageId: 'long' })).toEqual({ role: 'assistant', content: [{ type: 'reasoning', text: window.repeat(4) }] });
+    const parts = await s.messages.openParts('long');
+
+    if (parts === null) throw new Error('the message is open');
+    s.messages.seal('long', await s.messages.prepareContent(parts));
+    const row = s.testSql.db.query<{ content_json: string | null; content_path: string | null }, []>("SELECT content_json, content_path FROM session_messages WHERE message_id = 'long'").get();
+    expect(row?.content_json).toBeNull();
+    expect(row?.content_path).not.toBeNull();
+    expect(await s.messages.materialize({ messageId: 'long' })).toEqual({ role: 'assistant', content: [{ type: 'reasoning', text: window.repeat(4) }] });
   } finally { s.testSql.close(); }
 });
 

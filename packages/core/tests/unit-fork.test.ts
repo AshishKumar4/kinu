@@ -124,6 +124,20 @@ describe('forkWorkspaceStorage', () => {
     expect(working.messages[2]).toMatchObject({ role: 'tool' });
   });
 
+  test('a message still open in the source refuses the fork', async () => {
+    const src = fresh();
+    const tgt = fresh();
+    await seedForkTarget(tgt);
+    const chat = await seedForkSource(src);
+    await chat.say({ id: 'm1', role: 'user', text: 'hi', parentId: null });
+    // An answer mid-stream: its row is open and its parts live in stream_parts.
+    chat.atomic(() => chat.messages.open('assistant', 'm2', 'output'));
+    chat.messages.streamOpenPart('m2', { partNo: 0, kind: 'text', streamOrder: 0, descriptor: { json: '{"type":"text"}', path: null, digest: null }, text: 'partial' });
+    chat.transcript.record({ id: 'm2', parentId: 'm1', role: 'assistant', turnId: null, runId: null, metadata: null, parts: [{ messageId: 'm2', partNo: 0 }] });
+
+    await expect(forkInto(src, tgt, { untilMessageId: 'm2' })).rejects.toThrow(/still open in the source/);
+  });
+
   test('re-roots carried payload files under the target\'s artifact directory', async () => {
     const src = fresh();
     const tgt = fresh();
