@@ -53,9 +53,9 @@ function harness(options: {
     refetches: () => refetchCount,
     advance(ms: number) { clockMs += ms; },
     openSocket(isFirstForSession = false) { recovery.socketOpened(isFirstForSession); },
-    failTimeout(socketOpen = true) { recovery.rpcFailed(timeoutError(), socketOpen); },
-    failFast() { recovery.rpcFailed(new Error("Connection closed"), true); },
-    fail(error: RpcFailureInput) { recovery.rpcFailed(error, true); },
+    failTimeout(socketOpen = true) { recovery.rpcFailed({ cause: timeoutError() }, socketOpen); },
+    failFast() { recovery.rpcFailed({ cause: new Error("Connection closed") }, true); },
+    fail(error: RpcFailureInput) { recovery.rpcFailed({ cause: error }, true); },
     succeed() { recovery.rpcSucceeded(); },
     retryManually(forceRedial = false) { recovery.manualRetry(forceRedial); },
   };
