@@ -3,6 +3,7 @@ import { describe, test, expect } from 'bun:test';
 import { createTestActors, createTestSql, present } from '@kinu.run/test-utils';
 import { initCompletedTurnTable, createCompletedTurnStore, type CompletedTurnStore } from '../src/evolution/session-window';
 import type { CompletedTurn } from '../src/evolution/types';
+import type { JsonObject } from '../src/utils/json';
 import type { SqlExecutor } from '../src/types/primitives';
 import type { ActorHandle } from '../src/identity/actor-handle';
 
@@ -115,6 +116,16 @@ describe('SessionWindow — the open window', () => {
     const b = win.append(aTurn(0), { awaitsFollowup: true, now: 1001 });
     expect(a).not.toBe(b);
     expect(win.size()).toBe(2);
+  });
+
+  test('a turn that cannot be encoded fails its append instead of vanishing from the window', () => {
+    const win = newStore();
+    const args: JsonObject = {};
+    args.self = args;
+
+    expect(() => win.append(aTurn(0, { toolCalls: [{ name: 'eval', args }] }), { awaitsFollowup: false, now: 1000 }))
+      .toThrow(TypeError);
+    expect(win.size()).toBe(0);
   });
 });
 

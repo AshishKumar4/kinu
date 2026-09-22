@@ -144,8 +144,8 @@ export interface AppendTurnOpts {
 
 export interface CompletedTurnStore {
   /** Joins the open window and, when `awaitsFollowup`, parks for review. Returns
-   *  the row id (or `opts.id`), or null when the turn cannot be serialized. */
-  append(turn: CompletedTurn, opts: AppendTurnOpts): string | null;
+   *  the row id (or `opts.id`). */
+  append(turn: CompletedTurn, opts: AppendTurnOpts): string;
   size(): number;
   /** Null when empty; the caller settles once the pass has run. */
   claim(): ClaimedWindow | null;
@@ -220,19 +220,7 @@ export function createCompletedTurnStore(sql: SqlExecutor, actor: ActorHandle): 
       authorize();
 
       if (opts.id !== undefined && effectAlreadyDone(sql, actor, APPEND_SCOPE, opts.id)) return opts.id;
-      // An unserializable turn is dropped alone rather than losing the window.
-      let encoded: string;
-
-      try {
-        encoded = JSON.stringify(turn);
-      } catch (err) {
-        diagnostics.failure(
-          'evolution.session_turn_unserializable',
-          toKinuError({ doing: 'serialize a completed turn', cause: err, otherwise: 'bad_input' }),
-        );
-
-        return null;
-      }
+      const encoded = JSON.stringify(turn);
 
       // The review obligation is written in the same insert, so an eviction
       // cannot lose it and a replay cannot dispatch it twice.
