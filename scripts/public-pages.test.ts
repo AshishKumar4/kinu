@@ -794,14 +794,13 @@ beforeAll(async () => {
         const assistants = [...(root?.querySelectorAll('div.animate-fade-in') ?? [])]
           .filter((node) => node.querySelector('.prose-chat, [data-tool-group]') !== null);
 
-        const first = assistants[0];
-
-        const head = first?.querySelector('.group > *') ?? null;
+        // The lead is whichever content comes first in document order, not
+        // the first child of some wrapper: how the blocks are boxed is layout.
+        const lead = assistants[0]?.querySelector('.prose-chat, [data-tool-group]') ?? null;
 
         return {
-          firstIsProse: head?.classList.contains('prose-chat') === true,
-          firstIsTool: head?.hasAttribute('data-tool-group') === true
-            || head?.querySelector('[data-tool-group]') !== null,
+          firstIsProse: lead?.classList.contains('prose-chat') === true,
+          firstIsTool: lead?.hasAttribute('data-tool-group') === true,
         };
       });
       await page.close();
