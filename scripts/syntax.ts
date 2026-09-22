@@ -274,7 +274,10 @@ const DECLARATION_WRAPPER: ReadonlySet<string> = new Set([
  * a comment that ends where the statement begins.
  *
  * Read from OFFSETS rather than from a comment table, because the offsets are what
- * a parsed tree already carries and the question is purely positional.
+ * a parsed tree already carries and the question is purely positional. Read
+ * BACKWARDS from the statement, so one call costs the comment's length rather
+ * than the file's: slicing and splitting the whole prefix once per declaration
+ * was 7.6 of the citation gate's 16.6 CPU-s on 2026-09-22.
  *
  * BOTH SYNTAXES, by the rule an author states by writing: a block comment's
  * closing delimiter ends it, and a run of line comments is one block while nothing
@@ -290,20 +293,30 @@ export function docComment(text: string, node: SyntaxNode): string | undefined {
     statement = statement.parent;
   }
 
-  const before = text.slice(0, statement.start).replace(/\s+$/, '');
+  let end = statement.start;
 
-  if (before.endsWith('*/')) {
-    const open = before.lastIndexOf('/**');
+  while (end > 0 && /\s/u.test(text.charAt(end - 1))) end -= 1;
 
-    return open < 0 ? undefined : before.slice(open);
+  if (end >= 2 && text.startsWith('*/', end - 2)) {
+    const open = end >= 3 ? text.lastIndexOf('/**', end - 3) : -1;
+
+    return open < 0 ? undefined : text.slice(open, end);
   }
 
-  const lines = before.split('\n');
-  let first = lines.length;
+  let start = end;
+  let lineEnd = end;
 
-  while (first > 0 && /^[ \t]*\/\//.test(lines[first - 1] ?? '')) first -= 1;
+  for (;;) {
+    const lineStart = text.lastIndexOf('\n', lineEnd - 1) + 1;
 
-  return first === lines.length ? undefined : lines.slice(first).join('\n');
+    if (!/^[ \t]*\/\//u.test(text.slice(lineStart, lineEnd))) break;
+    start = lineStart;
+
+    if (lineStart === 0) break;
+    lineEnd = lineStart - 1;
+  }
+
+  return start === end ? undefined : text.slice(start, end);
 }
 
 /** `MethodDefinition.kind`, which is how a constructor is told from a method,

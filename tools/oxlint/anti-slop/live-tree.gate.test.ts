@@ -28,9 +28,12 @@
 //      rule inside that file. A backtick inside a SQL comment inside a
 //      `sql.exec(\`...\`)` template literal in `packages/cf-backend/src/user/
 //      schema.ts` rode exactly that shape on 2026-08-27.
-//   4. The report is empty. `bun run lint` enforces the same through the exit
-//      code of its plain `oxlint` run, which is the readable run a person fixes
-//      from; this one is the run whose count a claim can cite.
+//   4. The report is empty AND oxlint exited 0. This is the one whole-tree lint:
+//      until 2026-09-22 `bun run lint` ran a second, plain `oxlint` after it,
+//      which could only pass once this one had, at 55 of the gate's 130 CPU-s
+//      (measured that day under load ~40). Its exit status is the part worth
+//      keeping: a failure outside every file, such as a plugin that did not load
+//      or a type-aware backend that died, leaves the report empty.
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 
@@ -83,9 +86,15 @@ assert.deepEqual(
   `the live tree carries ${report.diagnostics.length} lint finding(s); \`oxlint\` prints each with its code frame`,
 );
 
+assert.equal(
+  report.status,
+  0,
+  `oxlint exited ${String(report.status)} over an empty report, so the run failed outside every file and the empty report proves nothing:\n${report.stderr}`,
+);
+
 process.stdout.write(
   `live-tree: ${report.number_of_files} governed files linted once (measured set equals the enumeration by name), `
-  + `${report.number_of_rules} rules, 0 diagnostics, 0 unparsed files, 0 disable directives. `
+  + `${report.number_of_rules} rules, 0 diagnostics, 0 unparsed files, 0 disable directives, exit 0. `
   + "Blind spots: files oxlint cannot parse are counted as governed only when the enumeration "
   + "calls them parseable, and `node_modules`, `dist`, the plugin directory and the committed "
   + "scanner bundle are outside both sets by the config's own ignore roots\n",

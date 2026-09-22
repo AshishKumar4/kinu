@@ -234,7 +234,10 @@ export const LADDER: readonly Gate[] = [
     // Measured 2026-09-15 on the 24-thread workstation, quiet: 21.4 s solo
     // (test:anti-slop under node, then oxlint). Split out of `bun run check`
     // (37 s) so the lint's closure — the anti-slop tool tree and the corpus —
-    // is keyed apart from the typecheck's.
+    // is keyed apart from the typecheck's. 2026-09-22: the trailing plain
+    // `oxlint` is gone; `live-tree.gate.test.ts` lints the tree once and reads
+    // its exit status. Interleaved at load 64-170: 149/181 CPU-s before,
+    // 90/96 after. The 21.4 s stands until a quiet re-measure.
     seconds: 21.4,
     catches: `the ${String(ANTI_SLOP_RULE_COUNT)} anti-slop rules across every file, every line, and the `
       + 'rule suites that prove each rule red-to-green under node.',
