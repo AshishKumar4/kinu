@@ -14,7 +14,7 @@ import {
 } from '../src/events/hub/index';
 import type { SqlExec } from '../src/index';
 import { makeSqlExec } from './helpers';
-import { createTestActorsOver } from '@kinu.run/test-utils';
+import { createTestActorsOver, present } from '@kinu.run/test-utils';
 import type { ActorHandle } from '../src/identity/actor-handle';
 
 /** One hub database and the ONE actor whose rows it holds.
@@ -170,13 +170,13 @@ describe('subordinate event admission (EventLog round-trip)', () => {
     const { admitted } = log.publish({ descriptor: reportDescriptor, now: 1000 });
     expect(admitted).toBe(true);
 
-    const batch = buildDrainBatch(log.pending());
-    expect(batch).not.toBeNull();
-    expect(batch!.text).toContain('subordinate (researcher)');
-    expect(batch!.text).toContain('completed');
-    expect(batch!.text).toContain('[re: Survey the auth module]');
+    const batch = present(buildDrainBatch(log.pending()), 'the drain batch');
+
+    expect(batch.text).toContain('subordinate (researcher)');
+    expect(batch.text).toContain('completed');
+    expect(batch.text).toContain('[re: Survey the auth module]');
     // Reports are not peer asks — no mechanical reply hint.
-    expect(batch!.text).not.toContain('event_id');
+    expect(batch.text).not.toContain('event_id');
   });
 
   test('binding a task to a turn removes it from pending (drain contract)', () => {

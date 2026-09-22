@@ -109,6 +109,8 @@ function setup(opts: {
   const notified: Array<{ id: string; status: string }> = [];
   let drainSchedules = 0;
 
+  const policy = opts.policy;
+
   const runnerDeps = {
     store, fiber, inbox: new Inbox(host), eventLog,
     scheduleDrain: () => { drainSchedules++; },
@@ -117,7 +119,7 @@ function setup(opts: {
     onDetached: opts.onDetached,
     onCancelled: opts.onCancelled,
     resume: opts.resume,
-    policy: opts.policy ? () => opts.policy! : undefined,
+    policy: policy === undefined ? undefined : () => policy,
     harvest: opts.harvest,
     scheduleResume: opts.scheduleResume,
   };

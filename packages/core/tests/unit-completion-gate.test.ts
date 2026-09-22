@@ -8,6 +8,7 @@ import {
   COMPLETION_GATE_HEADER, COMPLETION_PROBE_COMMANDS, COMPLETION_TASK_ECHO_MAX_CHARS,
 } from '../src/orchestrator/completion-gate';
 import { DEFAULT_TOOL_RESULT_MAX_CHARS } from '../src/tools/clamp';
+import { present } from '@kinu.run/test-utils';
 
 const DID_WORK = { completed: true, toolCalls: 4 };
 
@@ -22,17 +23,19 @@ describe('when the gate fires', () => {
     expect(new CompletionGate().shouldGate(DID_WORK)).toBe(false);
   });
 
-  test('a turn that called no tools left no state to check', () => {
-    const gate = new CompletionGate();
-    gate.arm('the task');
-    expect(gate.shouldGate({ completed: true, toolCalls: 0 })).toBe(false);
-  });
+  const ungated = [
+    { name: 'a turn that called no tools left no state to check', completed: true, toolCalls: 0 },
+    { name: 'a turn that failed already reported its failure', completed: false, toolCalls: 9 },
+  ] as const;
 
-  test('a turn that failed already reported its failure', () => {
-    const gate = new CompletionGate();
-    gate.arm('the task');
-    expect(gate.shouldGate({ completed: false, toolCalls: 9 })).toBe(false);
-  });
+  for (const turn of ungated) {
+    test(turn.name, () => {
+      const gate = new CompletionGate();
+
+      gate.arm('the task');
+      expect(gate.shouldGate({ completed: turn.completed, toolCalls: turn.toolCalls })).toBe(false);
+    });
+  }
 
   test('once per task: the confirming turn cannot itself be gated', () => {
     const gate = new CompletionGate();
@@ -131,8 +134,10 @@ describe('the state the harness observes', () => {
       exec: async () => ({ stdout: 'F'.repeat(50_000), stderr: '', exitCode: 0 }),
     });
 
-    expect(observed!.length).toBeLessThanOrEqual(DEFAULT_TOOL_RESULT_MAX_CHARS);
-    expect(observed).toContain('[truncated;');
+    const clamped = present(observed, 'the observed completion state');
+
+    expect(clamped.length).toBeLessThanOrEqual(DEFAULT_TOOL_RESULT_MAX_CHARS);
+    expect(clamped).toContain('[truncated;');
   });
 });
 

@@ -4,6 +4,7 @@
 import { describe, test, expect } from 'bun:test';
 import type { ModelMessage } from 'ai';
 import { measureContext, TurnContextMeter, DYNAMIC_CONTEXT_OPEN_TAG } from '../src/index';
+import { present } from '@kinu.run/test-utils';
 
 const user = (text: string): ModelMessage => ({ role: 'user', content: text });
 
@@ -104,7 +105,8 @@ describe('TurnContextMeter', () => {
     // The system + tools ride every request; only the messages grew.
     expect(first?.segments.filter((s) => s.plane !== 'messages'))
       .toEqual(second?.segments.filter((s) => s.plane !== 'messages') ?? []);
-    expect(second!.measuredChars).toBeGreaterThan(first!.measuredChars);
+    expect(present(second, 'the second reading').measuredChars)
+      .toBeGreaterThan(present(first, 'the first reading').measuredChars);
   });
 
   test('take() drains, so a step never reports the previous step\'s request', () => {

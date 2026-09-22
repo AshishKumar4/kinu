@@ -13,6 +13,7 @@
 // while `background_jobs` said `cancelled by operator`. The agent was not
 // reasoning from a stale transcript; the runtime was asserting the falsehood.
 import { describe, test, expect } from 'bun:test';
+import * as v from 'valibot';
 import { Database } from 'bun:sqlite';
 import { HeadJournal, initHeadsTables } from '../src/heads/index';
 import {
@@ -26,7 +27,7 @@ import {
 } from '../src/prompting/volatile-context';
 import type { BackendHost, ProgrammaticTurn } from '../src/types/backend-host';
 import type { ModelMessage } from 'ai';
-import { testActorHandle } from '@kinu.run/test-utils';
+import { present, testActorHandle } from '@kinu.run/test-utils';
 import { makeSql, makeExecRaw } from './helpers';
 import { createTestActorsOver } from '@kinu.run/test-utils';
 import { defaultLoopOrigin } from '../src/scaffold/bootstrap';
@@ -357,7 +358,7 @@ describe('an operator-cancelled fork is not reported as running', () => {
       runningJobs: { items: [], total: 0 }, openTasks: { items: [], total: 0 }, liveHeadRuns: w.journal.listLive(), missingCapabilities: [],
     }));
 
-    expect(String(before.at(-1)?.content)).toContain(`${HEADS} of ${HEADS} nodes running`);
+    expect(v.parse(v.string(), before.at(-1)?.content)).toContain(`${HEADS} of ${HEADS} nodes running`);
 
     await reconcileInterruptedForks({ journal: w.journal, inbox: idleAgent().inbox });
 
@@ -369,8 +370,8 @@ describe('an operator-cancelled fork is not reported as running', () => {
     }));
 
     expect(ledger.size).toBe(2);
-    expect(after[1]).toEqual(before.at(-1)!);
-    expect(String(after.at(-1)?.content)).not.toContain('heads running');
+    expect(after[1]).toEqual(present(before.at(-1), 'the last block before the reconcile'));
+    expect(v.parse(v.string(), after.at(-1)?.content)).not.toContain('heads running');
   });
 
   /**

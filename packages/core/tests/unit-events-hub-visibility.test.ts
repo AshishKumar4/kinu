@@ -1,6 +1,6 @@
 // Payload visibility — redaction + LLM rendering.
 import { describe, test, expect } from 'bun:test';
-import { createMemoryVfs } from '@kinu.run/test-utils';
+import { createMemoryVfs, present } from '@kinu.run/test-utils';
 import * as v from 'valibot';
 import {
   EVENT_BRIEF_MAX_CHARS, applyVisibilityForStorage, eventContentPath,
@@ -361,9 +361,11 @@ describe('renderForLLM', () => {
       const overBudget = `${atBudget}b`;
       const first = await spillEventContent(vfs, overBudget);
       const second = await spillEventContent(vfs, overBudget);
+      const spilled = present(first, 'the spilled content path');
+
       expect(second).toBe(first);
-      expect([...files.keys()]).toEqual([first!]);
-      expect(first!.startsWith('.kinu/event-content/')).toBe(true);
+      expect([...files.keys()]).toEqual([spilled]);
+      expect(spilled.startsWith('.kinu/event-content/')).toBe(true);
     });
   });
 });

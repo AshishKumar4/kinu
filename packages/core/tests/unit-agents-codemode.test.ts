@@ -15,7 +15,7 @@
 // Real sandbox execution (node `new Function`, cf `createCodeTool`) is covered
 // in the two backend suites; here the surface itself is the subject.
 import { describe, expect, test } from 'bun:test';
-import { createTestRuntime } from '@kinu.run/test-utils';
+import { createTestRuntime, present } from '@kinu.run/test-utils';
 import { hostedSeatsOver, refuseHostNode } from './helpers-actor-host';
 import { MockLanguageModelV3 } from 'ai/test';
 import * as v from 'valibot';
@@ -105,8 +105,22 @@ function member(tools: CodemodeProvider['tools'], name: string) {
   return descriptor;
 }
 
-function recordCall<Value>(calls: Call[], action: string, input: Value): void {
-  calls.push({ action, input: decodeJsonValue({ value: input }) });
+function recordCall(calls: Call[], action: string, call: { input: unknown }): void {
+  calls.push({ action, input: decodeJsonValue({ value: call.input }) });
+}
+
+interface HandoffEcho {
+  action: string;
+  input: { name: string };
+  delivery: SubordinateDelivery;
+  busy: boolean;
+}
+
+/** Record the call and answer with the handoff its action reports. */
+function echoHandoff(calls: Call[], echo: HandoffEcho) {
+  recordCall(calls, echo.action, { input: echo.input });
+
+  return { ok: true as const, name: echo.input.name, ...handoff(echo.delivery, echo.busy) };
 }
 
 type TestAgentsToolDeps = Omit<AgentsToolDeps, 'mode'> & { mode?: AgentsToolDeps['mode'] };
@@ -170,7 +184,7 @@ function makeTeam() {
         subordinate: { name: input.name ?? 'researcher', displayName: 'Researcher', role: input.role ?? 'task', actorReference: null, birth: null, deleteRequested: false, createdBy: 'user', status: 'idle', currentTask: null, createdAt: 1, dismissedAt: null, lifetime: 'durable', taskEventId: null },
       }),
       rename: async (input) => {
-        recordCall(calls, 'rename', input);
+        recordCall(calls, 'rename', { input });
 
         return {
           ok: true, name: input.name, displayName: input.displayName,
@@ -178,33 +192,29 @@ function makeTeam() {
         };
       },
       recordTitle: async (input) => {
-        recordCall(calls, 'recordTitle', input);
+        recordCall(calls, 'recordTitle', { input });
 
         return { ok: true, name: input.name, displayName: input.displayName, applied: true };
       },
       spawn: async (input) => {
-        recordCall(calls, 'spawn', input);
+        recordCall(calls, 'spawn', { input });
 
         return { name: input.name ?? 'researcher', displayName: 'Researcher' };
       },
-      assign: async (input) => {
-        recordCall(calls, 'assign', input);
-
-        return { ok: true, name: input.name, ...handoff('queued', true) };
-      },
+      assign: async (input) => echoHandoff(calls, {
+        action: 'assign', input, delivery: 'queued', busy: true,
+      }),
       knows: async () => true,
       status: async (input) => {
-        recordCall(calls, 'status', input);
+        recordCall(calls, 'status', { input });
 
         return { roster: [rosterEntry] };
       },
-      message: async (input) => {
-        recordCall(calls, 'message', input);
-
-        return { ok: true, name: input.name, ...handoff('starts_now', false) };
-      },
+      message: async (input) => echoHandoff(calls, {
+        action: 'message', input, delivery: 'starts_now', busy: false,
+      }),
       dismiss: async (input) => {
-        recordCall(calls, 'dismiss', input);
+        recordCall(calls, 'dismiss', { input });
 
         return { ok: true, name: input.name, historyKept: input.keepHistory ?? false };
       },
@@ -220,22 +230,22 @@ function makePeers() {
     deps: {
       listPeers: async () => [{ name: 'scout', displayName: 'Scout' }],
       ask: async (input) => {
-        recordCall(calls, 'ask', input);
+        recordCall(calls, 'ask', { input });
 
         return { status: 'replied', from: input.agent, reply: 'answer' };
       },
       send: async (input) => {
-        recordCall(calls, 'send', input);
+        recordCall(calls, 'send', { input });
 
         return { status: 'delivered', message_id: 'ox1' };
       },
       reply: async (input) => {
-        recordCall(calls, 'reply', input);
+        recordCall(calls, 'reply', { input });
 
         return { ok: true };
       },
       spawnWorkspace: async (input) => {
-        recordCall(calls, 'spawn_workspace', input);
+        recordCall(calls, 'spawn_workspace', { input });
 
         return { agent: input.name ?? 'specialist', created: true, status: 'replied', from: 'specialist', reply: 'done' };
       },
@@ -872,9 +882,8 @@ describe('agents delegation — role/tier/preset precedence', () => {
     const team = makeTeam();
     const tools = namespaceOf(() => profileDeps({ team: team.deps }));
     await member(tools, 'hire').execute?.({ role: 'researcher', mission: 'map the landscape' });
-    const call = team.calls.find((c) => c.action === 'spawn');
-    expect(call).toBeDefined();
-    const input = v.parse(SpawnCallInputSchema, call!.input);
+    const call = present(team.calls.find((c) => c.action === 'spawn'), 'the spawn call');
+    const input = v.parse(SpawnCallInputSchema, call.input);
     expect(input.role).toBe('researcher');
     // The ROLE-default tier is NOT stored — the child re-derives it from its
     // roleId at its own turn boundary. Only an explicit override rides along.
@@ -888,7 +897,7 @@ describe('agents delegation — role/tier/preset precedence', () => {
 
     const input = v.parse(
       SpawnCallInputSchema,
-      team.calls.find((call) => call.action === 'spawn')!.input,
+      present(team.calls.find((call) => call.action === 'spawn'), 'the spawn call').input,
     );
 
     expect(input.tier).toBe('deep');
