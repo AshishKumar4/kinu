@@ -236,7 +236,7 @@ describe('the eval sandbox under workerd', () => {
     const run = (code: string) => withCodemodeProgram(() => executor.execute(code, providers));
     const recovered = await run('const failure = await tools.file({action:"read"}); if (failure.success === false) return failure.reason; throw new Error("missing failure shape");');
     expect(recovered.result).toBe('unavailable');
-    expect(successfulToolOutcome('eval', { output: recovered })).toEqual({ success: true, failures: [
+    expect(successfulToolOutcome('eval', recovered)).toEqual({ success: true, failures: [
       { success: false, tool: 'file', action: 'read', reason: 'unavailable', error: 'file plane offline' },
     ] });
 

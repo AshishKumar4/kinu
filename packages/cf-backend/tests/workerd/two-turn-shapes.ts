@@ -127,11 +127,12 @@ export const ArmedWakeSchema = v.object({
 export type ArmedWake = v.InferOutput<typeof ArmedWakeSchema>;
 
 /** A durable `pending_steers` row — the reservation a mid-turn send writes:
- *  the client's own message id bound to the turn it will land in. */
+ *  the client's own message id, and the turn it will land in once one is open
+ *  (`turn_id` is nullable: a reservation taken before a turn opens holds none). */
 export const PendingSteerSchema = v.object({
   actorId: v.string(),
   id: v.string(),
-  turnId: v.string(),
+  turnId: v.nullable(v.string()),
   mode: v.string(),
   text: v.string(),
 });

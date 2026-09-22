@@ -275,7 +275,7 @@ export class ObservedOrchestrator extends ProductionOrchestrator {
       .map((row) => ({
         actorId: textColumn(row.actor_id),
         id: textColumn(row.id),
-        turnId: textColumn(row.turn_id),
+        turnId: row.turn_id === null ? null : textColumn(row.turn_id),
         mode: textColumn(row.mode),
         text: textColumn(row.text),
       }));
