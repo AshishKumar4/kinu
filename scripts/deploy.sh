@@ -58,7 +58,6 @@ export CLOUDFLARE_ACCOUNT_ID="${CLOUDFLARE_ACCOUNT_ID:-f44999d1ddda7012e9a87729e
 # worker IS the test target: every gate below, the first-run tier included,
 # drives https://kinu.run. The landing carries the app behind auth, so the
 # smoke marker is one value.
-KINU_ENV="production"
 KINU_APP_ROOT="landing-root"
 KINU_URL="https://kinu.run/"
 KINU_WRANGLER_ARGS=()
@@ -108,11 +107,9 @@ for option in "$@"; do
       ;;
   esac
 done
-# Read by scripts/infra-verify.ts when no environment is given on its argv, so
-# the `bun run gate:infra` line below stays one string for scripts/ladder.ts to
-# parse while still checking the environment being deployed.
-export KINU_DEPLOY_ENV="$KINU_ENV"
-# The pre-deploy phase, travelling beside that same line for that same reason.
+# The pre-deploy phase, read by scripts/infra-verify.ts, travels in the
+# environment so the `bun run gate:infra` line below stays one string for
+# scripts/ladder.ts to parse.
 # ALWAYS ASSIGNED, in both arms: an ambient KINU_INFRA_PHASE from whatever shell
 # launched this must never decide how strictly a deploy nobody asked to
 # bootstrap is checked. There is no third value, and no value of it reaches the
@@ -140,7 +137,7 @@ KINU_SHA="$(git -C "$KINU_ROOT" rev-parse --short HEAD 2>/dev/null || echo dev)"
 # produced it is somebody's terminal scrollback. Afterwards the pair is readable
 # from `npx wrangler versions list`, and /api/health reports the same sha back out
 # of the asset bundle — which is the other half of the same join.
-KINU_WRANGLER_ARGS+=(--tag "$KINU_SHA" --message "kinu $KINU_ENV $KINU_SHA")
+KINU_WRANGLER_ARGS+=(--tag "$KINU_SHA" --message "kinu production $KINU_SHA")
 
 # Temp log file — trap cleans up on any exit.
 KINU_DEPLOY_LOG=""
@@ -515,7 +512,7 @@ flush_gates() {
 
 echo -e "${BOLD}Kinu Deploy Pipeline${NC}"
 echo "========================"
-echo "Environment:  $KINU_ENV"
+echo "Environment:  production"
 echo "Target:       $KINU_URL"
 echo "Kinu root: $KINU_ROOT"
 echo "Account:      $CLOUDFLARE_ACCOUNT_ID"
@@ -587,9 +584,8 @@ run_phase hammer
 
 
 # Alone, and last before the build. Everything above proves the SOURCE is
-# deployable; this proves the ACCOUNT is. Scoped to the environment being
-# deployed (KINU_DEPLOY_ENV) and the phase KINU_INFRA_PHASE names (`full`
-# normally, `bootstrap` under `--bootstrap`), both travelling in the
+# deployable; this proves the ACCOUNT is, in the phase KINU_INFRA_PHASE names
+# (`full` normally, `bootstrap` under `--bootstrap`), travelling in the
 # environment so the gate's command stays one string in the plan.
 run_phase infra
 
@@ -911,11 +907,11 @@ run_phase post-publish
 # no public route touches.
 echo ""
 echo -e "${BOLD}Step 5: Post-deploy infrastructure verification${NC}"
-if bun scripts/infra-verify.ts "$KINU_ENV" --phase=post-deploy; then
+if bun scripts/infra-verify.ts --phase=post-deploy; then
   echo -e "${GREEN}✅ Every declared resource exists and is bound${NC}"
 else
   echo ""
-  echo -e "${RED}❌ Post-deploy infrastructure verification failed for $KINU_ENV.${NC}"
+  echo -e "${RED}❌ Post-deploy infrastructure verification failed for production.${NC}"
   echo "   The Worker uploaded and the smoke test passed, and a resource the deployed version"
   echo "   declares is not in this account. The findings above name each one. Whatever the"
   echo "   public route answers, this deployment is not good."
@@ -924,7 +920,7 @@ fi
 
 # ── Step 6: Summary ──────────────────────────────────────────────
 echo ""
-echo -e "${BOLD}Deploy complete — $KINU_ENV.${NC}"
+echo -e "${BOLD}Deploy complete — production.${NC}"
 echo "================================="
 echo "Kinu:  $KINU_URL"
 echo "          version ${KINU_VERSION:-unknown}"

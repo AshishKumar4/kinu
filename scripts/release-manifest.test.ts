@@ -20,7 +20,7 @@ import { RELEASE_ARTIFACT_ROUTE, ReleaseManifestSchema } from '../packages/core/
 
 const CONFIG = readWranglerConfig();
 
-const PRODUCTION = deriveInfrastructure().environments[0];
+const WORKER = deriveInfrastructure().worker;
 
 const MANIFEST = buildReleaseManifest({
   version: '0.1.0+abcdef1',
@@ -33,7 +33,7 @@ const MANIFEST = buildReleaseManifest({
 
 describe('the manifest is the config', () => {
   test('its bindings are exactly the ones the deployed environment declares', () => {
-    const declared = [...(PRODUCTION?.bindings ?? [])].sort();
+    const declared = [...WORKER.bindings].sort();
     const carried = MANIFEST.bindings.map((binding) => binding.binding).sort();
 
     expect(carried).toEqual(declared);

@@ -29,16 +29,6 @@ const SQL_API = (accountId: string): string =>
 export interface AnalyticsSqlEnv {
   CLOUDFLARE_ACCOUNT_ID?: string;
   ANALYTICS_SQL_API_TOKEN?: string;
-  /**
-   * What this deployment appends to every dataset name: unset or '' in
-   * production, `_staging` under `env.staging`.
-   *
-   * A READ-PATH setting only. Writes go through bindings, which wrangler already
-   * points at the right dataset. It lives on the env rather than in the schemas
-   * because it is the one analytics fact that differs per deployment, and
-   * `scripts/analytics-datasets.test.ts` holds it equal to what wrangler binds.
-   */
-  ANALYTICS_DATASET_SUFFIX?: string;
 }
 
 /**

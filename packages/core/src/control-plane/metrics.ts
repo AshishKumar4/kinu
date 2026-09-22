@@ -78,10 +78,7 @@ export async function controlPlaneMetrics(
   // filter must leave the property ABSENT, and `analyticsDigest('')` returns ''
   // rather than a hash, so a spread that guessed would send an empty digest and
   // silently match nothing.
-  const ask: MetricsQueryRequest = {
-    sinceHours: windowHours,
-    datasetSuffix: env.ANALYTICS_DATASET_SUFFIX ?? '',
-  };
+  const ask: MetricsQueryRequest = { sinceHours: windowHours };
 
   if (workspace) ask.workspaceDigest = analyticsDigest(workspace);
   const queries = new Map(Object.entries(controlPlaneMetricsQueries(ask)));
