@@ -15,7 +15,7 @@ import {
 } from '../packages/core/src/index';
 import { manifestHash } from '../packages/core/src/bench/split';
 import { BENCH_FAMILIES, DEFAULT_VALIDATE_RETRIES, panelArm, panelProviders, parseArgv, parseCommon } from './bench';
-import { BENCH_SUITES, benchPatchFiles, loadBenchCorpus, stalePatches } from './bench-corpus';
+import { BENCH_SUITES, benchPatchFiles, corpusMembership, loadBenchCorpus, stalePatches } from './bench-corpus';
 import { loadLongHorizonCorpus, materializeLongHorizon } from './bench-longhorizon';
 import { applyPatch, assertScratchRoot, budgetSignal, createAttemptSandbox, restoreGuarded, sandboxEnv } from './bench-sandbox';
 import { workspacePackages } from '../packages/test-utils/src/workspace-resolution';
@@ -863,12 +863,9 @@ describe('loadBenchCorpus', () => {
   // applying and its task silently becomes unrunnable: `prepare` throws at
   // attempt time, long after anyone would connect it to the refactor.
   //
-  // ONE CENSUS, not two. This property was asserted twice in this file by two
-  // different enumerations — the corpus-loaded patches here and a directory walk
-  // further down — which meant either could pass while the other failed and
-  // neither named which direction it owned. `stalePatches` does both and labels
-  // the difference (`orphan`), and `gate:bench-corpus` holds the same census at
-  // COMMIT tier, so nothing can pass here and fail there either.
+  // ONE CENSUS per direction: `stalePatches` owns applicability and
+  // `corpusMembership` owns which files belong, over the same enumeration that
+  // `gate:bench-corpus` reads, so nothing can pass here and fail there.
   test('every defect patch still applies to the tree it was seeded against', () => {
     // THE DENOMINATOR FIRST, for the reason `assertMeasured` exists one tier up:
     // `stalePatches` over an empty enumeration returns `[]`, so this assertion
@@ -877,7 +874,7 @@ describe('loadBenchCorpus', () => {
     // (`scripts/bench-corpus-gate.ts`); this test had no such floor, so a
     // narrowing of `isBenchDefectPatch` — or an enumeration that silently came
     // back empty — would have gone green here and red only at commit tier.
-    const patches = benchPatchFiles();
+    const patches = benchPatchFiles(REPO_ROOT);
     expect(patches.length).toBeGreaterThan(100);
     expect(stalePatches(REPO_ROOT, patches)).toEqual([]);
   });
@@ -1107,22 +1104,16 @@ describe('the long-horizon check scores what was actually materialized', () => {
 // checkable and neither earlier enumeration named: a patch file the corpus does
 // not measure.
 describe('the task corpus stays applicable to HEAD', () => {
-  // An orphan patch is reachable ONLY by the directory walk — the corpus-loaded
-  // enumeration never loads a file no `tasks.jsonl` line names — and it is the
+  // An orphan patch applies to nothing and is measured by nobody, which is the
   // state a half-finished retirement leaves behind. `retired.jsonl`'s own test
   // below asserts the inverse, where a patch file's ABSENCE is the claim.
   test('no patch file sits outside the corpus that measures it', () => {
     // Same denominator, same reason: an empty enumeration has no orphans.
-    const patches = benchPatchFiles();
+    const patches = benchPatchFiles(REPO_ROOT);
     expect(patches.length).toBeGreaterThan(100);
-    expect(stalePatches(REPO_ROOT, patches).filter((p) => p.orphan)).toEqual([]);
-    const named = new Set(loadBenchCorpus(REPO_ROOT).patches.keys());
-
-    const files = readdirSync(join(REPO_ROOT, 'tests', 'bench', 'patches'))
-      .filter((f) => f.endsWith('.patch'))
-      .map((f) => f.slice(0, -'.patch'.length));
-
-    expect(files.filter((id) => !named.has(id))).toEqual([]);
+    const { orphans, unchecked } = corpusMembership(REPO_ROOT, patches);
+    expect(orphans).toEqual([]);
+    expect(unchecked).toEqual([]);
   });
 
   // The only sanctioned answer to a patch that can never apply again: the code
