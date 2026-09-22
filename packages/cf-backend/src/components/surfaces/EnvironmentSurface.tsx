@@ -349,7 +349,7 @@ function PcConnectCta({ onConnectDevice }: { onConnectDevice: () => void }) {
         onClick={onConnectDevice}
         className="inline-flex items-center gap-1.5 px-3 py-2 rounded-md p-accent-bg p-accent text-xs font-medium hover:opacity-90">
         <PlugIcon size={13} />
-        Connect a computer
+        Connect a machine
       </button>
     </div>
   );

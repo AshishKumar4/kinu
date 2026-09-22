@@ -228,7 +228,7 @@ export function AddServerCard({ onCancel, onAdded }: { onCancel: () => void; onA
       if (headersText.trim()) {
         try {
           headers = v.parse(v.record(v.string(), v.string()), JSON.parse(headersText));
-        } catch (e) { throw new Error(`Bad headers JSON: ${renderThrownChain({ cause: e })}`, { cause: e }); }
+        } catch (e) { throw new Error(`Headers are not valid JSON: ${renderThrownChain({ cause: e })}`, { cause: e }); }
       }
 
       const tools = allowedTools.trim()

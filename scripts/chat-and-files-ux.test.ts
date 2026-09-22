@@ -1026,7 +1026,7 @@ describe('the gallery shell photographs a healthy neighbour', () => {
       }));
 
       await page.close();
-      expect(shell.footer).not.toContain('Profile unavailable');
+      expect(shell.footer).not.toContain('Could not load your profile');
       expect(shell.footer).toContain('@');
       expect(shell.chatWidth).toBe(780);
       expect(shell.composerWidth).toBe(780);

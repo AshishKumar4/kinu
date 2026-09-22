@@ -76,7 +76,7 @@ export interface SteerActions {
 function queuedSteerNotice(steerRuns: readonly InlineSteer[]): ComposerNotice | null {
   if (!steerRuns.some((steer) => steer.state === "queued")) return null;
 
-  return { id: NOTICE_ID, tone: "progress", text: "Queued — it lands at the agent's next step." };
+  return { id: NOTICE_ID, tone: "progress", text: "Queued. The agent reads it at its next step." };
 }
 
 export function useSteerActions(deps: SteerActionsDeps): SteerActions {
@@ -124,7 +124,7 @@ export function useSteerActions(deps: SteerActionsDeps): SteerActions {
         setDraft((current) => current === "" ? text : `${current}\n\n${text}`);
         setSettled(cause instanceof KinuError && cause.code === "cancelled"
           ? { id: NOTICE_ID, tone: "info", text: "Stopped before the agent read this, so it is back here." }
-          : { id: NOTICE_ID, tone: "danger", text: `Couldn't send to the turn: ${describeError({ cause })}` });
+          : { id: NOTICE_ID, tone: "danger", text: `Could not send to the turn: ${describeError({ cause })}` });
       }
     });
   }, [draft, setDraft, attachments, sendChat]);
@@ -137,7 +137,7 @@ export function useSteerActions(deps: SteerActionsDeps): SteerActions {
       } catch (cause) {
         setSettled({
           id: NOTICE_ID, tone: "danger",
-          text: `Couldn't stop the turn: ${describeError({ cause })}`,
+          text: `Could not stop the turn: ${describeError({ cause })}`,
         });
       }
     });

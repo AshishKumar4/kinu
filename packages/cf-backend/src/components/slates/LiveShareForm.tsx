@@ -249,7 +249,7 @@ export function LiveShareForm({ workspace, slate, rpc, onClose, onBusy, fixture 
             A live share runs this slate here, in your workspace, for whoever you admit. Every call a viewer makes goes through the members below, as you.
           </p>
           <p className="p-text-3 leading-relaxed">
-            Every viewer is bounded: {SHARE_VIEWER_REQUESTS_PER_MINUTE} requests a minute each, and ${SHARE_SPEND_CAP_USD_PER_DAY} of model spend a day per share — a viewer who reaches a bound is refused until it renews.
+            Each viewer gets {SHARE_VIEWER_REQUESTS_PER_MINUTE} requests a minute, and each share gets ${SHARE_SPEND_CAP_USD_PER_DAY} of model spend a day. Past either limit, a viewer is refused until the limit resets.
           </p>
           <div role="radiogroup" aria-label="Who can open this share" className="flex flex-col gap-2 sm:flex-row">
             <VisibilityOption value="users" current={visibility} onPick={setVisibility} icon={UsersIcon} disabled={busy}
@@ -294,7 +294,7 @@ export function LiveShareForm({ workspace, slate, rpc, onClose, onBusy, fixture 
           )}
           <label className="flex items-center gap-2 p-text">
             <input type="checkbox" checked={fork} onChange={(event) => setFork(event.target.checked)} disabled={busy} />
-            Viewers can fork <span className="p-text-3">— copy the slate's skeleton, with every binding unmapped, into a workspace of theirs</span>
+            <span>Viewers can fork <span className="p-text-3">into a workspace of their own, with every binding unmapped</span></span>
           </label>
           {shares.length > 0 && (
             <div className="space-y-1">
@@ -305,7 +305,7 @@ export function LiveShareForm({ workspace, slate, rpc, onClose, onBusy, fixture 
                     <span className={`${row.visibility === "public" ? "p-badge-warning" : "p-badge-neutral"} shrink-0 rounded px-1.5 py-0.5 text-[10px]`}>{row.visibility === "public" ? "public" : "people"}</span>
                     <span className="min-w-0 flex-1 truncate p-text-2">
                       {row.grant.members.length} member{row.grant.members.length === 1 ? "" : "s"} granted · {new Date(row.createdAt).toLocaleDateString()}{row.users.length > 0 ? ` · ${row.users.join(", ")}` : ""}
-                      {row.paused === true && <span className="p-badge-warning rounded px-1 py-0.5 text-[10px]">paused today — spend bound</span>}
+                      {row.paused === true && <span className="p-badge-warning rounded px-1 py-0.5 text-[10px]">paused: daily spend limit reached</span>}
                     </span>
                     <button type="button" onClick={() => revoke(row.id)} className="p-btn-quiet rounded-md px-2 py-0.5" disabled={busy}>Stop sharing</button>
                   </li>

@@ -187,7 +187,7 @@ export function BlueprintShareForm({ workspace, slate, rpc, onClose, onBusy, fix
           </label>
           <label className="flex items-center gap-2 p-text">
             <input type="checkbox" checked={listed} onChange={(event) => setListed(event.target.checked)} disabled={busy} />
-            List publicly <span className="p-text-3">— on the Shared page's public list, for anyone signed in to find</span>
+            <span>List publicly <span className="p-text-3">on the Shared page, where anyone signed in can find it</span></span>
           </label>
           {shares.length > 0 && (
             <div className="space-y-1">

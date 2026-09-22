@@ -4454,7 +4454,7 @@ function GalleryModal() {
         </>}
       >
         <p className="text-xs p-text-2 leading-relaxed">
-          Remove <span className="font-medium p-text">Checkout coupon bug</span> and clear its server-side state? This cannot be undone.
+          Remove <span className="font-medium p-text">Checkout coupon bug</span> and delete everything in it? This cannot be undone.
         </p>
       </Modal>
     </div>
