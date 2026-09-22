@@ -1,14 +1,10 @@
 {
   "measuredAt": "2026-09-22",
-  "files": 2546,
-  "functions": 62748,
-  "ceiling": 125,
+  "files": 2545,
+  "functions": 62845,
+  "ceiling": 108,
   "line": 33,
   "inventory": [
-    {
-      "key": "packages/cli/src/slash-commands.ts#executeSlashCommand",
-      "complexity": 125
-    },
     {
       "key": "packages/cf-backend/src/cli/routes.ts#handleCliRequest",
       "complexity": 108

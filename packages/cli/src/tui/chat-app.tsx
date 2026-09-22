@@ -1198,6 +1198,83 @@ function ChatScene({
     }
   }, [addError, addMessage, applySlashOutcome, client, commands, dispatchInput, messages, performBranch, performWalkback, ready, runInputEffects, sendPrompt]);
 
+  /** The takes affordance after a delegating turn: offered once per set, and
+   *  never for one the owner has already picked from. */
+  const hintAlternateTakes = useCallback(async () => {
+    const generation = clientGenerationRef.current;
+
+    try {
+      const set = await client.latestTakes();
+
+      if (
+        clientGenerationRef.current === generation
+        && set
+        && set.candidates.length >= 2
+        && !set.chosenNodeId
+        && hintedTakesRef.current !== set.id
+      ) {
+        hintedTakesRef.current = set.id;
+        addMessage({ role: 'system', content: `${set.candidates.length} takes: /takes to compare` });
+      }
+    } catch (takesError) {
+      if (clientGenerationRef.current === generation) {
+        addMessage({ role: 'system', content: errorLine(`This turn's takes could not be read: ${renderThrownChain({ cause: takesError })}`) });
+      } else {
+        diagnostics.failure(
+          'tui.stale_takes_read_failed',
+          toKinuError({
+            doing: 'reading takes for a previous workspace',
+            cause: takesError,
+            otherwise: 'unavailable',
+          }),
+          { workspace: client.agentName },
+        );
+      }
+    }
+  }, [addMessage, client]);
+
+  const handleTurnEnd = useCallback(async (event: Extract<AgentClientEvent, { type: 'turn-end' }>) => {
+    if (activeSegmentRef.current) stream.finish();
+    sealSegment();
+
+    if (!turnStreamedTextRef.current && event.turn.text.trim()) {
+      addMessage({ role: 'assistant', content: event.turn.text.trim() });
+    }
+
+    const inputEffects = runInputEffects(dispatchInput({ type: 'turn-settled' }));
+
+    if (machineRef.current.activeTurns === 0) setTurnPhase(null);
+
+    if (event.turn.toolCalls.some((call) => call.name === 'agents')) await hintAlternateTakes();
+
+    await inputEffects;
+  }, [addMessage, dispatchInput, hintAlternateTakes, runInputEffects, sealSegment, setTurnPhase, stream]);
+
+  const handleBroadcast = useCallback((event: Extract<AgentClientEvent, { type: 'broadcast' }>) => {
+    // The plan as it now stands — the owner reads it and decides with
+    // /plan approve | /plan changes.
+    if (event.event.type === 'plan_updated' && event.event.plan) {
+      addMessage({ role: 'system', content: renderPlanReview(event.event.plan) });
+
+      return;
+    }
+
+    if (!isBranchStatusEvent(event.event)) return;
+    const branchStatus = event.event;
+    setBranchTasks((prev) => {
+      const next = { ...prev };
+
+      if (branchStatus.status === 'running') next[branchStatus.branchId] = branchStatus.task;
+      else delete next[branchStatus.branchId];
+
+      return next;
+    });
+
+    // The settle/error line IS the takes affordance (the running state
+    // lives in the status bar).
+    if (branchStatus.status !== 'running') addMessage({ role: 'system', content: describeBranchStatus(branchStatus) });
+  }, [addMessage, setBranchTasks]);
+
   const handleClientEvent = useCallback(async (event: AgentClientEvent) => {
     switch (event.type) {
       case 'turn-start': {
@@ -1256,83 +1333,14 @@ function ChatScene({
         addMessage({ role: 'system', content: errorLine(event.message) });
 
         return;
-      case 'turn-end': {
-        if (activeSegmentRef.current) stream.finish();
-        sealSegment();
-
-        if (!turnStreamedTextRef.current && event.turn.text.trim()) {
-          addMessage({ role: 'assistant', content: event.turn.text.trim() });
-        }
-
-        const inputEffects = runInputEffects(dispatchInput({ type: 'turn-settled' }));
-
-        if (machineRef.current.activeTurns === 0) setTurnPhase(null);
-
-        if (event.turn.toolCalls.some((call) => call.name === 'agents')) {
-          const generation = clientGenerationRef.current;
-
-          try {
-            const set = await client.latestTakes();
-
-            if (
-              clientGenerationRef.current === generation
-              && set
-              && set.candidates.length >= 2
-              && !set.chosenNodeId
-              && hintedTakesRef.current !== set.id
-            ) {
-              hintedTakesRef.current = set.id;
-              addMessage({ role: 'system', content: `${set.candidates.length} takes: /takes to compare` });
-            }
-          } catch (takesError) {
-            if (clientGenerationRef.current === generation) {
-              addMessage({ role: 'system', content: errorLine(`This turn's takes could not be read: ${renderThrownChain({ cause: takesError })}`) });
-            } else {
-              diagnostics.failure(
-                'tui.stale_takes_read_failed',
-                toKinuError({
-                  doing: 'reading takes for a previous workspace',
-                  cause: takesError,
-                  otherwise: 'unavailable',
-                }),
-                { workspace: client.agentName },
-              );
-            }
-          }
-        }
-
-        await inputEffects;
+      case 'turn-end':
+        await handleTurnEnd(event);
 
         return;
-      }
-
-      case 'broadcast': {
-        // The plan as it now stands — the owner reads it and decides with
-        // /plan approve | /plan changes.
-        if (event.event.type === 'plan_updated' && event.event.plan) {
-          addMessage({ role: 'system', content: renderPlanReview(event.event.plan) });
-
-          return;
-        }
-
-        if (!isBranchStatusEvent(event.event)) return;
-        const branchStatus = event.event;
-        setBranchTasks((prev) => {
-          const next = { ...prev };
-
-          if (branchStatus.status === 'running') next[branchStatus.branchId] = branchStatus.task;
-          else delete next[branchStatus.branchId];
-
-          return next;
-        });
-
-        // The settle/error line IS the takes affordance (the running state
-        // lives in the status bar).
-        if (branchStatus.status !== 'running') addMessage({ role: 'system', content: describeBranchStatus(branchStatus) });
+      case 'broadcast':
+        handleBroadcast(event);
 
         return;
-      }
-
       case 'run-event': {
         // A `provider_wait` row is the turn saying "the model endpoint told me
         // to wait" — the difference between a quiet stream that is thinking
@@ -1348,7 +1356,7 @@ function ChatScene({
         return;
       }
     }
-  }, [addMessage, beginSegment, client, dispatchInput, runInputEffects, sealSegment, setTurnPhase, stream]);
+  }, [addMessage, beginSegment, dispatchInput, handleBroadcast, handleTurnEnd, sealSegment, setTurnPhase, stream]);
 
   // Connect once per client: event subscription, startup resources, initial
   // hydration. Re-runs when a walk-back fork swaps in a sibling client.

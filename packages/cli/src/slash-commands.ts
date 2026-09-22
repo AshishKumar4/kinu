@@ -20,41 +20,65 @@ export interface SlashCommandInfo {
   requires?: 'localControls' | 'consents' | 'checkpoints' | 'rename' | 'plans';
 }
 
-const SLASH_COMMANDS: readonly SlashCommandInfo[] = [
-  { name: '/help', description: 'Show command help' },
-  { name: '/status', description: 'Show agent state and stats' },
-  { name: '/tools', description: 'List available tools' },
-  { name: '/model', description: 'Show or set the default model', usage: '/model [spec]' },
-  { name: '/effort', description: 'Show or set default-tier reasoning effort', usage: '/effort [level]' },
-  { name: '/role', description: 'Show or select this agent role', usage: '/role [id]' },
-  { name: '/rename', description: 'Rename this agent; a name you choose is never auto-replaced', usage: '/rename <name>', requires: 'rename' },
-  { name: '/settings', description: 'Open interactive settings' },
-  { name: '/theme', description: 'Choose the TUI theme; light by default' },
-  { name: '/models', description: 'List configured model providers', requires: 'localControls' },
-  { name: '/memory', description: 'Show memory' },
-  { name: '/changelog', description: 'Review self-changes; revert by index', usage: '/changelog [revert <n>]' },
-  { name: '/refine', description: 'Review corrected turns and rule on each staged fix', usage: '/refine [now|show <n> <edit>|approve <n> <edit> <digest>|reject <n> <edit> <digest>]' },
-  { name: '/takes', description: 'Compare the last alternate takes; pick by number', usage: '/takes [n]' },
-  { name: '/tree', description: 'Show MCTS search tree' },
-  { name: '/jobs', description: 'List background jobs' },
-  { name: '/connect', description: 'Connect this PC for agent device access', requires: 'consents' },
-  { name: '/stop', description: 'Stop the active turn' },
-  { name: '/queue', description: 'Queue a message to send after the current turn', usage: '/queue <text>' },
-  { name: '/branch', description: 'Run a redirect as a parallel branch of the running turn', usage: '/branch <text>' },
-  { name: '/plan', description: 'Work in Plan mode: draft a plan for review, then approve it or send it back', usage: '/plan [<text>|show|approve [notes]|changes <feedback>]', requires: 'plans' },
-  { name: '/fork', description: 'Fork the conversation before an earlier message to walk back', usage: '/fork [number]' },
-  { name: '/undo', description: 'Restore files to before a turn (n = turns back), then offer walk-back', usage: '/undo [n]', requires: 'checkpoints' },
-  { name: '/approval', description: 'Show or set shell approval mode', usage: '/approval strict|allow_all|deny_all', requires: 'localControls' },
-  { name: '/instructions', description: 'Approve which AGENTS.md and skill files the agent follows', usage: '/instructions [page <cursor>|read <page> <n>|approve <page> <n> <digest>|revoke <page> <n>]', requires: 'localControls' },
-  { name: '/always', description: 'Manage always-active skills', usage: '/always <name...|none>', requires: 'localControls' },
-  { name: '/advisor', description: 'Show or set the advisor. It is off by default. Turning it on adds one model call per turn.', usage: '/advisor [on|off|severity <nit|concern|blocker>]' },
-  { name: '/exit', description: 'Exit chat' },
+/** What one command runs against: the client, and the words typed after the
+ *  command itself. */
+export interface SlashContext {
+  readonly client: AgentClient;
+  /** The command as typed, lowercased — what an unknown outcome names. */
+  readonly command: string;
+  /** The words after the command, joined and trimmed. */
+  readonly arg: string;
+  /** The words after the command, as typed. */
+  readonly rest: readonly string[];
+}
+
+/** One command: the row the palette reads, and the handler dispatch calls. */
+interface SlashCommand extends SlashCommandInfo {
+  readonly run: (context: SlashContext) => Promise<SlashOutcome> | SlashOutcome;
+  /** Names that reach this handler without a palette row of their own. */
+  readonly aliases?: readonly string[];
+  /** Dispatchable and never offered: no palette row, no help line. */
+  readonly hidden?: true;
+}
+
+const SLASH_COMMANDS: readonly SlashCommand[] = [
+  { name: '/help', description: 'Show command help', run: helpCommand },
+  { name: '/status', description: 'Show agent state and stats', run: statusCommand },
+  { name: '/tools', description: 'List available tools', run: toolsCommand },
+  { name: '/model', description: 'Show or set the default model', usage: '/model [spec]', run: modelCommand },
+  { name: '/effort', description: 'Show or set default-tier reasoning effort', usage: '/effort [level]', run: effortCommand },
+  { name: '/role', description: 'Show or select this agent role', usage: '/role [id]', run: roleCommand },
+  { name: '/rename', description: 'Rename this agent; a name you choose is never auto-replaced', usage: '/rename <name>', requires: 'rename', run: renameCommand },
+  { name: '/settings', description: 'Open interactive settings', run: settingsCommand },
+  { name: '/theme', description: 'Choose the TUI theme; light by default', run: themeCommand },
+  { name: '/models', description: 'List configured model providers', requires: 'localControls', run: modelsCommand },
+  { name: '/memory', description: 'Show memory', run: memoryCommand },
+  { name: '/changelog', description: 'Review self-changes; revert by index', usage: '/changelog [revert <n>]', run: changelogCommand },
+  { name: '/refine', description: 'Review corrected turns and rule on each staged fix', usage: '/refine [now|show <n> <edit>|approve <n> <edit> <digest>|reject <n> <edit> <digest>]', run: refineCommand },
+  { name: '/takes', description: 'Compare the last alternate takes; pick by number', usage: '/takes [n]', run: takesCommand },
+  { name: '/tree', description: 'Show MCTS search tree', aliases: ['/mcts'], run: treeCommand },
+  { name: '/jobs', description: 'List background jobs', run: jobsCommand },
+  { name: '/connect', description: 'Connect this PC for agent device access', requires: 'consents', run: connectCommand },
+  { name: '/stop', description: 'Stop the active turn', run: stopCommand },
+  { name: '/queue', description: 'Queue a message to send after the current turn', usage: '/queue <text>', run: queueCommand },
+  { name: '/branch', description: 'Run a redirect as a parallel branch of the running turn', usage: '/branch <text>', run: branchCommand },
+  { name: '/plan', description: 'Work in Plan mode: draft a plan for review, then approve it or send it back', usage: '/plan [<text>|show|approve [notes]|changes <feedback>]', requires: 'plans', run: planCommand },
+  { name: '/fork', description: 'Fork the conversation before an earlier message to walk back', usage: '/fork [number]', run: forkCommand },
+  { name: '/undo', description: 'Restore files to before a turn (n = turns back), then offer walk-back', usage: '/undo [n]', requires: 'checkpoints', run: undoCommand },
+  { name: '/approval', description: 'Show or set shell approval mode', usage: '/approval strict|allow_all|deny_all', requires: 'localControls', run: approvalCommand },
+  { name: '/instructions', description: 'Approve which AGENTS.md and skill files the agent follows', usage: '/instructions [page <cursor>|read <page> <n>|approve <page> <n> <digest>|revoke <page> <n>]', requires: 'localControls', run: instructionsCommand },
+  { name: '/always', description: 'Manage always-active skills', usage: '/always <name...|none>', requires: 'localControls', run: alwaysCommand },
+  { name: '/advisor', description: 'Show or set the advisor. It is off by default. Turning it on adds one model call per turn.', usage: '/advisor [on|off|severity <nit|concern|blocker>]', run: advisorCommand },
+  { name: '/exit', description: 'Exit chat', aliases: ['/quit'], run: exitCommand },
+  { name: '/cancel', description: 'Close the open overlay', hidden: true, run: cancelCommand },
 ];
 
 export function commandsForClient(
   client: Pick<AgentClient, 'localControls' | 'consents' | 'checkpoints' | 'rename' | 'plans'>,
 ): SlashCommandInfo[] {
   return SLASH_COMMANDS.filter((command) => {
+    if (command.hidden) return false;
+
     if (!command.requires) return true;
     const capability = client[command.requires];
 
@@ -185,488 +209,510 @@ const REFINE_USAGE =
   + `       /refine <${REFINEMENT_DECISIONS.join('|')}> <n> <edit> <digest>\n`
   + '  n and edit are the indexes /refine prints; digest is what /refine show prints.';
 
+/* ── The handlers, in table order ──────────────────────────────────────── */
+
+function helpCommand({ client }: SlashContext): SlashOutcome {
+  return { kind: 'text', text: commandHelp(client) };
+}
+
+async function statusCommand({ client }: SlashContext): Promise<SlashOutcome> {
+  return { kind: 'status', status: await client.status() };
+}
+
+async function toolsCommand({ client }: SlashContext): Promise<SlashOutcome> {
+  const tools = await client.describeTools();
+  const lines = ['Built-in:', ...tools.builtIn.map(({ name, description }) => `  ${name} — ${description}`)];
+
+  if (tools.crafted.length > 0) {
+    lines.push('', 'Crafted:', ...tools.crafted.map(({ name, description }) => `  ${name} — ${description.slice(0, 50)}`));
+  }
+
+  return { kind: 'text', text: lines.join('\n') };
+}
+
+async function modelCommand({ client, arg }: SlashContext): Promise<SlashOutcome> {
+  if (!arg) return { kind: 'model-picker' };
+  const result = await setModelPreference(client, arg);
+
+  return { kind: 'model-set', spec: result.spec };
+}
+
+async function roleCommand({ client, arg }: SlashContext): Promise<SlashOutcome> {
+  if (!arg) {
+    const status = await client.status();
+
+    return { kind: 'text', text: `Role: ${status.roleId ?? DEFAULT_ROLE_ID}` };
+  }
+
+  const result = await client.setRole(arg);
+
+  return { kind: 'role-set', role: result.role };
+}
+
+async function renameCommand({ client, arg }: SlashContext): Promise<SlashOutcome> {
+  if (!client.rename) return { kind: 'text', text: 'You cannot rename this agent from this client.' };
+
+  if (!arg) return { kind: 'text', text: 'Usage: /rename <name>' };
+  const renamed = await client.rename(arg);
+
+  return { kind: 'text', text: `Renamed to ${renamed.displayName}.` };
+}
+
+function settingsCommand(): SlashOutcome {
+  return { kind: 'settings' };
+}
+
+function themeCommand(): SlashOutcome {
+  return { kind: 'theme' };
+}
+
+async function modelsCommand({ client, command }: SlashContext): Promise<SlashOutcome> {
+  if (!client.localControls) return { kind: 'unknown', command };
+  const providers = await client.localControls.listModelProviders();
+
+  if (providers.length === 0) {
+    return { kind: 'text', text: 'This session has no local provider registry.' };
+  }
+
+  const lines = ['Providers:'];
+
+  for (const provider of providers) {
+    lines.push(`  ${provider.id} — ${provider.available ? 'available' : provider.unavailableReason ?? 'unavailable'}`);
+  }
+
+  const menu = await client.listModels();
+
+  if (menu.models.length > 0) {
+    lines.push('', 'Models:');
+
+    for (const model of menu.models.slice(0, 40)) lines.push(`  ${model.spec} — ${model.label}`);
+
+    if (menu.models.length > 40) lines.push(`  … ${menu.models.length - 40} more`);
+  }
+
+  for (const failure of menu.failures) {
+    lines.push(`  ! ${failure.label ?? failure.provider} could not be listed: ${failure.reason}`);
+  }
+
+  return { kind: 'text', text: lines.join('\n') };
+}
+
+async function memoryCommand({ client }: SlashContext): Promise<SlashOutcome> {
+  const content = await client.readMemory();
+
+  if (!content) return { kind: 'text', text: 'Memory is empty.' };
+
+  const shown = content.length > 1500
+    ? `${content.slice(0, 1500)}\n… [+${content.length - 1500} chars: read memory/MEMORY.md for the rest]`
+    : content;
+
+  return { kind: 'text', text: `Memory:\n${shown}` };
+}
+
+async function changelogCommand({ client, rest }: SlashContext): Promise<SlashOutcome> {
+  if (rest[0] === 'revert') {
+    const n = Number.parseInt(rest[1] ?? '', 10);
+
+    if (!Number.isInteger(n) || n < 1) {
+      return { kind: 'text', text: 'Usage: /changelog revert <n>. Take n from the /changelog listing.' };
+    }
+
+    // Re-fetch so the index resolves against the same ordering the
+    // listing showed; the revert itself is id-addressed.
+    const view = await client.changelog();
+    const entry = view.entries[n - 1];
+
+    if (!entry) return { kind: 'text', text: `No changelog entry ${n}. /changelog lists ${view.entries.length}.` };
+
+    if (!entry.revert) return { kind: 'text', text: `Entry ${n} is informational (${entry.kind}). Nothing to revert.` };
+    const result = await client.revertChangelogEntry(entry.id);
+
+    return {
+      kind: 'text',
+      text: result.ok
+        ? `Reverted ${n}. ${entry.summary}\n  → ${result.detail ?? 'done'}`
+        : `Revert failed: ${result.error ?? 'unknown error'}`,
+    };
+  }
+
+  return { kind: 'changelog', view: await client.changelog() };
+}
+
+async function refineCommand({ client, rest }: SlashContext): Promise<SlashOutcome> {
+  const [sub, ...args] = rest.filter((token) => token);
+
+  if (sub === 'now') {
+    return { kind: 'text', text: renderRefinementRequest(await client.requestRefinement()) };
+  }
+
+  if (sub === 'show') {
+    const located = resolveRefinementEdit(await client.refinements(), args[0], args[1]);
+
+    if (!located.ok) return { kind: 'text', text: located.error };
+    const shown = await client.showRefinement(located.id, located.index);
+
+    return {
+      kind: 'text',
+      text: shown.ok ? renderStagedSkill(shown.view, located.requestRef, located.editRef) : shown.error,
+    };
+  }
+
+  const decision = sub === undefined
+    ? undefined
+    : REFINEMENT_DECISIONS.find((candidate) => candidate === sub);
+
+  if (decision !== undefined) {
+    const [requestRef, editRef, token] = args;
+    const located = resolveRefinementEdit(await client.refinements(), requestRef, editRef);
+
+    if (!located.ok) return { kind: 'text', text: located.error };
+
+    if (token === undefined) {
+      return {
+        kind: 'text',
+        text: `Read it first: /refine show ${located.requestRef} ${located.editRef}\n`
+          + `Then repeat the digest it prints: /refine ${decision} ${located.requestRef} ${located.editRef} <digest>\n`,
+      };
+    }
+
+    const result = await client.decideRefinement({
+      requestId: located.id,
+      routeIndex: located.index,
+      expectedDigest: token,
+      decision,
+    });
+
+    return {
+      kind: 'text',
+      text: result.ok
+        ? `${result.detail}\n\n${renderRefinementRequest(result.request)}`
+        : `Could not ${decision}: ${result.error}`,
+    };
+  }
+
+  if (sub !== undefined) return { kind: 'text', text: REFINE_USAGE };
+
+  return { kind: 'text', text: renderRefinementsText(await client.refinements()) };
+}
+
+async function takesCommand({ client, arg }: SlashContext): Promise<SlashOutcome> {
+  const set = await client.latestTakes();
+
+  if (!set || set.candidates.length < 2) {
+    return { kind: 'text', text: 'No alternate takes yet. They appear after a swarm search with near-tied approaches, or after a /branch redirect settles.' };
+  }
+
+  if (!arg) return { kind: 'takes', set };
+  const n = Number.parseInt(arg, 10);
+  const candidate = Number.isInteger(n) ? set.candidates[n - 1] : undefined;
+
+  if (!candidate) {
+    return { kind: 'text', text: `No take "${arg}". /takes lists ${set.candidates.length}.` };
+  }
+
+  return { kind: 'text', text: describeTakePick(await client.pickTake(set.id, candidate.nodeId), n) };
+}
+
+async function treeCommand({ client }: SlashContext): Promise<SlashOutcome> {
+  const nodes = await client.searchNodes();
+
+  if (nodes.length === 0) {
+    return { kind: 'text', text: 'No MCTS nodes yet. Ask something that needs a search, or run kinu evolve <name> from a shell.' };
+  }
+
+  return { kind: 'text', text: `MCTS Tree (${nodes.length} nodes):\n${renderSearchTreeLines(nodes).join('\n')}` };
+}
+
+async function jobsCommand({ client }: SlashContext): Promise<SlashOutcome> {
+  const jobs = await client.listJobs(20);
+
+  return {
+    kind: 'text',
+    text: jobs.length
+      ? jobs.map((job) => `${job.id}  ${job.kind}  ${job.status}`).join('\n')
+      : 'No background jobs.',
+  };
+}
+
+function connectCommand({ client, command }: SlashContext): SlashOutcome {
+  if (!client.consents) return { kind: 'unknown', command };
+
+  return { kind: 'device-connect' };
+}
+
+function stopCommand({ client }: SlashContext): SlashOutcome {
+  const dropped = client.stop();
+
+  return {
+    kind: 'text',
+    text: dropped.length > 0
+      ? `Stop requested for the active turn. Undelivered steered input:\n${dropped.map((t) => `  ${t}`).join('\n')}`
+      : 'Stop requested for the active turn.',
+  };
+}
+
+function queueCommand({ arg }: SlashContext): SlashOutcome {
+  return { kind: 'queue', text: arg || undefined };
+}
+
+function branchCommand({ arg }: SlashContext): SlashOutcome {
+  return { kind: 'branch', text: arg || undefined };
+}
+
+async function planCommand({ client, command, arg, rest }: SlashContext): Promise<SlashOutcome> {
+  const plans = client.plans;
+
+  if (!plans) return { kind: 'unknown', command };
+  const [sub, ...args] = rest.filter((token) => token);
+
+  if (sub === undefined || sub === 'show') return { kind: 'text', text: renderPlanReview(await plans.active()) };
+
+  if (sub === 'approve' || sub === 'changes') {
+    const active = await plans.active();
+
+    if (!active) return { kind: 'text', text: 'No plan is waiting for you. Draft one with /plan <what to plan>.' };
+    const feedback = args.join(' ').trim();
+
+    if (sub === 'changes' && !feedback) {
+      return { kind: 'text', text: 'Usage: /plan changes <feedback>. Say what has to change; the agent revises against it.' };
+    }
+
+    const decided = await plans.decide(
+      active.id, active.revision,
+      sub === 'approve' ? 'approve' : 'request_changes',
+      feedback || undefined,
+    );
+
+    if (!decided.ok) return { kind: 'text', text: `The plan was not decided: ${decided.error}` };
+
+    return {
+      kind: 'text',
+      text: sub === 'approve'
+        ? `Approved plan ${decided.plan.id} revision ${String(decided.plan.revision)}. The agent is implementing it now.`
+        : `Sent plan ${decided.plan.id} revision ${String(decided.plan.revision)} back for changes. The agent is revising it now.`,
+    };
+  }
+
+  return { kind: 'plan', text: arg || undefined };
+}
+
+function forkCommand({ arg }: SlashContext): SlashOutcome {
+  return { kind: 'fork', ref: arg || undefined };
+}
+
+function undoCommand({ client, command, arg }: SlashContext): SlashOutcome {
+  if (!client.checkpoints) return { kind: 'unknown', command };
+
+  return { kind: 'undo', ref: arg || undefined };
+}
+
+function approvalCommand({ client, command, arg }: SlashContext): SlashOutcome {
+  if (!client.localControls) return { kind: 'unknown', command };
+
+  if (!arg) return { kind: 'text', text: `Shell approval: ${client.localControls.getShellApprovalMode()}` };
+
+  if (arg === 'strict' || arg === 'allow_all' || arg === 'deny_all') {
+    return { kind: 'text', text: `Shell approval: ${client.localControls.setShellApprovalMode(arg)}` };
+  }
+
+  return { kind: 'text', text: 'Usage: /approval strict | allow_all | deny_all' };
+}
+
+async function instructionsCommand({ client, command, rest }: SlashContext): Promise<SlashOutcome> {
+  if (!client.localControls) return { kind: 'unknown', command };
+  const [sub, pageToken, indexToken, rowToken, reviewedDigest] = rest.filter((token) => token);
+
+  const pageCursor = (token: string | undefined): { after: string } | null | 'invalid' => {
+    if (token === undefined || token === 'root') return null;
+
+    // Page anchors contain a NUL separator, so they cannot travel verbatim
+    // through a shell-style command. Base64url is terminal-safe; the
+    // alphabet check is the complete malformed-input policy and means no
+    // decoder exception has to be caught or silently dropped.
+    if (!/^[A-Za-z0-9_-]+$/.test(token)) return 'invalid';
+    const after = Buffer.from(token, 'base64url').toString('utf8');
+
+    return after.includes('\u0000') ? { after } : 'invalid';
+  };
+
+  const cursor = pageCursor(sub === 'page' ? pageToken : undefined);
+
+  if (cursor === 'invalid') {
+    return { kind: 'text', text: 'That page reference is not valid. Run /instructions again.' };
+  }
+
+  const page = await client.localControls.listInstructionApprovals(
+    cursor === null ? {} : { cursor },
+  );
+
+  const rows = page.items;
+
+  const tokenFor = (after: string | undefined): string =>
+    after === undefined ? 'root' : Buffer.from(after).toString('base64url');
+
+  const rowTokenFor = (path: string): string => Buffer.from(path).toString('base64url');
+
+  const actionUsage = (pageId: string, index: number, path: string): string =>
+    `/instructions read ${pageId} ${String(index)} ${rowTokenFor(path)}`;
+
+  if (sub === undefined || sub === 'page') {
+    if (rows.length === 0) {
+      return { kind: 'text', text: 'No AGENTS.md or workspace skills found here.' };
+    }
+
+    const pageId = tokenFor(cursor?.after);
+
+    return {
+      kind: 'text',
+      text: [
+        'Instruction files the agent can write. The agent follows only what you approve.',
+        ...rows.map((row, index) => {
+          const state = instructionState(row);
+          const kind = row.kind === 'skill' ? 'skill' : 'AGENTS.md';
+
+          return `  ${String(index + 1)}. [${state}] ${row.path} (${kind}, ${String(row.bytes)} bytes) — ${actionUsage(pageId, index + 1, row.path)}`;
+        }),
+        ...(page.status === 'more'
+          ? [`More: /instructions page ${tokenFor(page.next.after)}`]
+          : []),
+      ].join('\n'),
+    };
+  }
+
+  const actionCursor = pageCursor(pageToken);
+
+  if (actionCursor === 'invalid') {
+    return { kind: 'text', text: 'That page reference is not valid. Run /instructions again.' };
+  }
+
+  const actionPage = await client.localControls.listInstructionApprovals(
+    actionCursor === null ? {} : { cursor: actionCursor },
+  );
+
+  const at = Number(indexToken);
+  const row = Number.isInteger(at) ? actionPage.items[at - 1] : undefined;
+
+  if (!row) {
+    return { kind: 'text', text: `That instruction row is no longer on this page; list it again before acting.` };
+  }
+
+  if (rowToken === undefined || !/^[A-Za-z0-9_-]+$/.test(rowToken)) {
+    return { kind: 'text', text: 'That command is missing the row token. List the page again to copy it.' };
+  }
+
+  const reviewedPath = Buffer.from(rowToken, 'base64url').toString('utf8');
+
+  if (reviewedPath !== row.path) {
+    return { kind: 'text', text: 'That instruction row changed on this page; list it again before acting.' };
+  }
+
+  if (sub === 'read') {
+    const opened = await client.localControls.readInstructionApproval(row.path);
+
+    if (!opened) {
+      return { kind: 'text', text: `${row.path} could not be read${row.reason === undefined ? '' : `: ${row.reason}`}.` };
+    }
+
+    const pageId = tokenFor(actionCursor?.after);
+
+    return {
+      kind: 'text',
+      text: [
+        opened.path,
+        `digest ${opened.digest}`,
+        '',
+        opened.preview,
+        '',
+        `Approve exactly these reviewed bytes: /instructions approve ${pageId} ${String(at)} ${rowTokenFor(opened.path)} ${opened.digest}`,
+      ].join('\n'),
+    };
+  }
+
+  if (sub === 'approve') {
+    if (reviewedDigest === undefined) {
+      return { kind: 'text', text: 'Read the file first: approving needs the digest it prints.' };
+    }
+
+    const decided = await client.localControls.approveInstruction(row.path, reviewedDigest);
+
+    if (!decided.ok) return { kind: 'text', text: `Nothing was approved: ${decided.error}` };
+
+    return { kind: 'text', text: `Approved ${row.path}. Editing it drops it back to reference material.` };
+  }
+
+  if (sub === 'revoke') {
+    const decided = await client.localControls.revokeInstruction(row.path);
+
+    if (!decided.ok) return { kind: 'text', text: `Nothing was revoked: ${decided.error}` };
+
+    return { kind: 'text', text: `Revoked ${row.path}. The agent now sees it as reference material.` };
+  }
+
+  return { kind: 'text', text: 'Usage: /instructions [page <cursor>|read <page> <n>|approve <page> <n> <digest>|revoke <page> <n>]' };
+}
+
+function alwaysCommand({ client, command, rest }: SlashContext): SlashOutcome {
+  if (!client.localControls) return { kind: 'unknown', command };
+  const names = rest.filter((name) => name.trim());
+
+  if (names.length === 0) {
+    const current = client.localControls.getAlwaysActiveSkills();
+
+    return {
+      kind: 'text',
+      text: current.length
+        ? `Always-active skills: ${current.join(', ')}`
+        : 'No always-active skills set. Usage: /always <name>… (or "none" to clear).',
+    };
+  }
+
+  const next = names[0] === 'none' ? [] : names;
+  client.localControls.setAlwaysActiveSkills(next);
+
+  return { kind: 'text', text: next.length ? `Always-active skills: ${next.join(', ')}` : 'Cleared always-active skills.' };
+}
+
+async function advisorCommand({ client, rest }: SlashContext): Promise<SlashOutcome> {
+  const [sub, level, ...extra] = rest.filter((token) => token).map((token) => token.toLowerCase());
+  let config: EvolutionConfigView;
+
+  if (extra.length > 0) return { kind: 'text', text: ADVISOR_USAGE };
+
+  if (sub === undefined) config = await client.getEvolutionConfig();
+  else if (level === undefined && (sub === 'on' || sub === 'off')) config = await client.setEvolutionConfig({ advisorEnabled: sub === 'on' });
+  else if (sub === 'severity' && isAdvisorSeverity(level)) config = await client.setEvolutionConfig({ advisorMinSeverity: level });
+  else return { kind: 'text', text: ADVISOR_USAGE };
+
+  return {
+    kind: 'text',
+    text: config.advisorEnabled
+      ? `Advisor: on. Minimum severity ${config.advisorMinSeverity}. It adds one model call per turn.`
+      : `Advisor: off. Minimum severity ${config.advisorMinSeverity}. /advisor on adds one model call per turn.`,
+  };
+}
+
+function exitCommand(): SlashOutcome {
+  return { kind: 'exit' };
+}
+
+function cancelCommand(): SlashOutcome {
+  return { kind: 'cancel' };
+}
+
+/** Every dispatchable name, aliases included, on the entry that runs it. */
+const DISPATCH = new Map<string, SlashCommand>(
+  SLASH_COMMANDS.flatMap((command): [string, SlashCommand][] =>
+    [command.name, ...command.aliases ?? []].map((name) => [name, command])),
+);
+
 export async function executeSlashCommand(client: AgentClient, input: string): Promise<SlashOutcome> {
   const [rawCmd, ...rest] = input.split(/\s+/);
-  const cmd = rawCmd.toLowerCase();
-  const arg = rest.join(' ').trim();
+  const command = rawCmd.toLowerCase();
+  const entry = DISPATCH.get(command);
 
-  switch (cmd) {
-    case '/exit':
-    case '/quit':
-      return { kind: 'exit' };
-    case '/cancel':
-      return { kind: 'cancel' };
-    case '/rename': {
-      if (!client.rename) return { kind: 'text', text: 'You cannot rename this agent from this client.' };
+  if (!entry) return { kind: 'unknown', command };
 
-      if (!arg) return { kind: 'text', text: 'Usage: /rename <name>' };
-      const renamed = await client.rename(arg);
-
-      return { kind: 'text', text: `Renamed to ${renamed.displayName}.` };
-    }
-
-    case '/help':
-      return { kind: 'text', text: commandHelp(client) };
-    case '/settings':
-      return { kind: 'settings' };
-    case '/theme':
-      return { kind: 'theme' };
-    case '/status':
-      return { kind: 'status', status: await client.status() };
-    case '/tools': {
-      const tools = await client.describeTools();
-      const lines = ['Built-in:', ...tools.builtIn.map(({ name, description }) => `  ${name} — ${description}`)];
-
-      if (tools.crafted.length > 0) {
-        lines.push('', 'Crafted:', ...tools.crafted.map(({ name, description }) => `  ${name} — ${description.slice(0, 50)}`));
-      }
-
-      return { kind: 'text', text: lines.join('\n') };
-    }
-
-    case '/memory': {
-      const content = await client.readMemory();
-
-      if (!content) return { kind: 'text', text: 'Memory is empty.' };
-
-      const shown = content.length > 1500
-        ? `${content.slice(0, 1500)}\n… [+${content.length - 1500} chars: read memory/MEMORY.md for the rest]`
-        : content;
-
-      return { kind: 'text', text: `Memory:\n${shown}` };
-    }
-
-    case '/changelog': {
-      if (rest[0] === 'revert') {
-        const n = Number.parseInt(rest[1] ?? '', 10);
-
-        if (!Number.isInteger(n) || n < 1) {
-          return { kind: 'text', text: 'Usage: /changelog revert <n>. Take n from the /changelog listing.' };
-        }
-
-        // Re-fetch so the index resolves against the same ordering the
-        // listing showed; the revert itself is id-addressed.
-        const view = await client.changelog();
-        const entry = view.entries[n - 1];
-
-        if (!entry) return { kind: 'text', text: `No changelog entry ${n}. /changelog lists ${view.entries.length}.` };
-
-        if (!entry.revert) return { kind: 'text', text: `Entry ${n} is informational (${entry.kind}). Nothing to revert.` };
-        const result = await client.revertChangelogEntry(entry.id);
-
-        return {
-          kind: 'text',
-          text: result.ok
-            ? `Reverted ${n}. ${entry.summary}\n  → ${result.detail ?? 'done'}`
-            : `Revert failed: ${result.error ?? 'unknown error'}`,
-        };
-      }
-
-      return { kind: 'changelog', view: await client.changelog() };
-    }
-
-    case '/refine': {
-      const [sub, ...args] = rest.filter((token) => token);
-
-      if (sub === 'now') {
-        return { kind: 'text', text: renderRefinementRequest(await client.requestRefinement()) };
-      }
-
-      if (sub === 'show') {
-        const located = resolveRefinementEdit(await client.refinements(), args[0], args[1]);
-
-        if (!located.ok) return { kind: 'text', text: located.error };
-        const shown = await client.showRefinement(located.id, located.index);
-
-        return {
-          kind: 'text',
-          text: shown.ok ? renderStagedSkill(shown.view, located.requestRef, located.editRef) : shown.error,
-        };
-      }
-
-      const decision = sub === undefined
-        ? undefined
-        : REFINEMENT_DECISIONS.find((candidate) => candidate === sub);
-
-      if (decision !== undefined) {
-        const [requestRef, editRef, token] = args;
-        const located = resolveRefinementEdit(await client.refinements(), requestRef, editRef);
-
-        if (!located.ok) return { kind: 'text', text: located.error };
-
-        if (token === undefined) {
-          return {
-            kind: 'text',
-            text: `Read it first: /refine show ${located.requestRef} ${located.editRef}\n`
-              + `Then repeat the digest it prints: /refine ${decision} ${located.requestRef} ${located.editRef} <digest>\n`,
-          };
-        }
-
-        const result = await client.decideRefinement({
-          requestId: located.id,
-          routeIndex: located.index,
-          expectedDigest: token,
-          decision,
-        });
-
-        return {
-          kind: 'text',
-          text: result.ok
-            ? `${result.detail}\n\n${renderRefinementRequest(result.request)}`
-            : `Could not ${decision}: ${result.error}`,
-        };
-      }
-
-      if (sub !== undefined) return { kind: 'text', text: REFINE_USAGE };
-
-      return { kind: 'text', text: renderRefinementsText(await client.refinements()) };
-    }
-
-    case '/takes': {
-      const set = await client.latestTakes();
-
-      if (!set || set.candidates.length < 2) {
-        return { kind: 'text', text: 'No alternate takes yet. They appear after a swarm search with near-tied approaches, or after a /branch redirect settles.' };
-      }
-
-      if (!arg) return { kind: 'takes', set };
-      const n = Number.parseInt(arg, 10);
-      const candidate = Number.isInteger(n) ? set.candidates[n - 1] : undefined;
-
-      if (!candidate) {
-        return { kind: 'text', text: `No take "${arg}". /takes lists ${set.candidates.length}.` };
-      }
-
-      return { kind: 'text', text: describeTakePick(await client.pickTake(set.id, candidate.nodeId), n) };
-    }
-
-    case '/model': {
-      if (!arg) return { kind: 'model-picker' };
-      const result = await setModelPreference(client, arg);
-
-      return { kind: 'model-set', spec: result.spec };
-    }
-
-    case '/effort': {
-      return executeEffortCommand(client, arg);
-    }
-
-    case '/role': {
-      if (!arg) {
-        const status = await client.status();
-
-        return { kind: 'text', text: `Role: ${status.roleId ?? DEFAULT_ROLE_ID}` };
-      }
-
-      const result = await client.setRole(arg);
-
-      return { kind: 'role-set', role: result.role };
-    }
-
-    case '/models': {
-      if (!client.localControls) return { kind: 'unknown', command: cmd };
-      const providers = await client.localControls.listModelProviders();
-
-      if (providers.length === 0) {
-        return { kind: 'text', text: 'This session has no local provider registry.' };
-      }
-
-      const lines = ['Providers:'];
-
-      for (const provider of providers) {
-        lines.push(`  ${provider.id} — ${provider.available ? 'available' : provider.unavailableReason ?? 'unavailable'}`);
-      }
-
-      const menu = await client.listModels();
-
-      if (menu.models.length > 0) {
-        lines.push('', 'Models:');
-
-        for (const model of menu.models.slice(0, 40)) lines.push(`  ${model.spec} — ${model.label}`);
-
-        if (menu.models.length > 40) lines.push(`  … ${menu.models.length - 40} more`);
-      }
-
-      for (const failure of menu.failures) {
-        lines.push(`  ! ${failure.label ?? failure.provider} could not be listed: ${failure.reason}`);
-      }
-
-      return { kind: 'text', text: lines.join('\n') };
-    }
-
-    case '/always': {
-      if (!client.localControls) return { kind: 'unknown', command: cmd };
-      const names = rest.filter((name) => name.trim());
-
-      if (names.length === 0) {
-        const current = client.localControls.getAlwaysActiveSkills();
-
-        return {
-          kind: 'text',
-          text: current.length
-            ? `Always-active skills: ${current.join(', ')}`
-            : 'No always-active skills set. Usage: /always <name>… (or "none" to clear).',
-        };
-      }
-
-      const next = names[0] === 'none' ? [] : names;
-      client.localControls.setAlwaysActiveSkills(next);
-
-      return { kind: 'text', text: next.length ? `Always-active skills: ${next.join(', ')}` : 'Cleared always-active skills.' };
-    }
-
-    case '/approval': {
-      if (!client.localControls) return { kind: 'unknown', command: cmd };
-
-      if (!arg) return { kind: 'text', text: `Shell approval: ${client.localControls.getShellApprovalMode()}` };
-
-      if (arg === 'strict' || arg === 'allow_all' || arg === 'deny_all') {
-        return { kind: 'text', text: `Shell approval: ${client.localControls.setShellApprovalMode(arg)}` };
-      }
-
-      return { kind: 'text', text: 'Usage: /approval strict | allow_all | deny_all' };
-    }
-
-    case '/instructions': {
-      if (!client.localControls) return { kind: 'unknown', command: cmd };
-      const [sub, pageToken, indexToken, rowToken, reviewedDigest] = rest.filter((token) => token);
-
-      const pageCursor = (token: string | undefined): { after: string } | null | 'invalid' => {
-        if (token === undefined || token === 'root') return null;
-
-        // Page anchors contain a NUL separator, so they cannot travel verbatim
-        // through a shell-style command. Base64url is terminal-safe; the
-        // alphabet check is the complete malformed-input policy and means no
-        // decoder exception has to be caught or silently dropped.
-        if (!/^[A-Za-z0-9_-]+$/.test(token)) return 'invalid';
-        const after = Buffer.from(token, 'base64url').toString('utf8');
-
-        return after.includes('\u0000') ? { after } : 'invalid';
-      };
-
-      const cursor = pageCursor(sub === 'page' ? pageToken : undefined);
-
-      if (cursor === 'invalid') {
-        return { kind: 'text', text: 'That page reference is not valid. Run /instructions again.' };
-      }
-
-      const page = await client.localControls.listInstructionApprovals(
-        cursor === null ? {} : { cursor },
-      );
-
-      const rows = page.items;
-
-      const tokenFor = (after: string | undefined): string =>
-        after === undefined ? 'root' : Buffer.from(after).toString('base64url');
-
-      const rowTokenFor = (path: string): string => Buffer.from(path).toString('base64url');
-
-      const actionUsage = (pageId: string, index: number, path: string): string =>
-        `/instructions read ${pageId} ${String(index)} ${rowTokenFor(path)}`;
-
-      if (sub === undefined || sub === 'page') {
-        if (rows.length === 0) {
-          return { kind: 'text', text: 'No AGENTS.md or workspace skills found here.' };
-        }
-
-        const pageId = tokenFor(cursor?.after);
-
-        return {
-          kind: 'text',
-          text: [
-            'Instruction files the agent can write. The agent follows only what you approve.',
-            ...rows.map((row, index) => {
-              const state = instructionState(row);
-              const kind = row.kind === 'skill' ? 'skill' : 'AGENTS.md';
-
-              return `  ${String(index + 1)}. [${state}] ${row.path} (${kind}, ${String(row.bytes)} bytes) — ${actionUsage(pageId, index + 1, row.path)}`;
-            }),
-            ...(page.status === 'more'
-              ? [`More: /instructions page ${tokenFor(page.next.after)}`]
-              : []),
-          ].join('\n'),
-        };
-      }
-
-      const actionCursor = pageCursor(pageToken);
-
-      if (actionCursor === 'invalid') {
-        return { kind: 'text', text: 'That page reference is not valid. Run /instructions again.' };
-      }
-
-      const actionPage = await client.localControls.listInstructionApprovals(
-        actionCursor === null ? {} : { cursor: actionCursor },
-      );
-
-      const at = Number(indexToken);
-      const row = Number.isInteger(at) ? actionPage.items[at - 1] : undefined;
-
-      if (!row) {
-        return { kind: 'text', text: `That instruction row is no longer on this page; list it again before acting.` };
-      }
-
-      if (rowToken === undefined || !/^[A-Za-z0-9_-]+$/.test(rowToken)) {
-        return { kind: 'text', text: 'That command is missing the row token. List the page again to copy it.' };
-      }
-
-      const reviewedPath = Buffer.from(rowToken, 'base64url').toString('utf8');
-
-      if (reviewedPath !== row.path) {
-        return { kind: 'text', text: 'That instruction row changed on this page; list it again before acting.' };
-      }
-
-      if (sub === 'read') {
-        const opened = await client.localControls.readInstructionApproval(row.path);
-
-        if (!opened) {
-          return { kind: 'text', text: `${row.path} could not be read${row.reason === undefined ? '' : `: ${row.reason}`}.` };
-        }
-
-        const pageId = tokenFor(actionCursor?.after);
-
-        return {
-          kind: 'text',
-          text: [
-            opened.path,
-            `digest ${opened.digest}`,
-            '',
-            opened.preview,
-            '',
-            `Approve exactly these reviewed bytes: /instructions approve ${pageId} ${String(at)} ${rowTokenFor(opened.path)} ${opened.digest}`,
-          ].join('\n'),
-        };
-      }
-
-      if (sub === 'approve') {
-        if (reviewedDigest === undefined) {
-          return { kind: 'text', text: 'Read the file first: approving needs the digest it prints.' };
-        }
-
-        const decided = await client.localControls.approveInstruction(row.path, reviewedDigest);
-
-        if (!decided.ok) return { kind: 'text', text: `Nothing was approved: ${decided.error}` };
-
-        return { kind: 'text', text: `Approved ${row.path}. Editing it drops it back to reference material.` };
-      }
-
-      if (sub === 'revoke') {
-        const decided = await client.localControls.revokeInstruction(row.path);
-
-        if (!decided.ok) return { kind: 'text', text: `Nothing was revoked: ${decided.error}` };
-
-        return { kind: 'text', text: `Revoked ${row.path}. The agent now sees it as reference material.` };
-      }
-
-      return { kind: 'text', text: 'Usage: /instructions [page <cursor>|read <page> <n>|approve <page> <n> <digest>|revoke <page> <n>]' };
-    }
-
-    case '/advisor': {
-      const [sub, level, ...extra] = rest.filter((token) => token).map((token) => token.toLowerCase());
-      let config: EvolutionConfigView;
-
-      if (extra.length > 0) return { kind: 'text', text: ADVISOR_USAGE };
-
-      if (sub === undefined) config = await client.getEvolutionConfig();
-      else if (level === undefined && (sub === 'on' || sub === 'off')) config = await client.setEvolutionConfig({ advisorEnabled: sub === 'on' });
-      else if (sub === 'severity' && isAdvisorSeverity(level)) config = await client.setEvolutionConfig({ advisorMinSeverity: level });
-      else return { kind: 'text', text: ADVISOR_USAGE };
-
-      return {
-        kind: 'text',
-        text: config.advisorEnabled
-          ? `Advisor: on. Minimum severity ${config.advisorMinSeverity}. It adds one model call per turn.`
-          : `Advisor: off. Minimum severity ${config.advisorMinSeverity}. /advisor on adds one model call per turn.`,
-      };
-    }
-
-    case '/mcts':
-    case '/tree': {
-      const nodes = await client.searchNodes();
-
-      if (nodes.length === 0) {
-        return { kind: 'text', text: 'No MCTS nodes yet. Ask something that needs a search, or run kinu evolve <name> from a shell.' };
-      }
-
-      return { kind: 'text', text: `MCTS Tree (${nodes.length} nodes):\n${renderSearchTreeLines(nodes).join('\n')}` };
-    }
-
-    case '/jobs': {
-      const jobs = await client.listJobs(20);
-
-      return {
-        kind: 'text',
-        text: jobs.length
-          ? jobs.map((job) => `${job.id}  ${job.kind}  ${job.status}`).join('\n')
-          : 'No background jobs.',
-      };
-    }
-
-    case '/connect':
-      if (!client.consents) return { kind: 'unknown', command: cmd };
-
-      return { kind: 'device-connect' };
-    case '/stop': {
-      const dropped = client.stop();
-
-      return {
-        kind: 'text',
-        text: dropped.length > 0
-          ? `Stop requested for the active turn. Undelivered steered input:\n${dropped.map((t) => `  ${t}`).join('\n')}`
-          : 'Stop requested for the active turn.',
-      };
-    }
-
-    case '/queue':
-      return { kind: 'queue', text: arg || undefined };
-    case '/branch':
-      return { kind: 'branch', text: arg || undefined };
-    case '/plan': {
-      const plans = client.plans;
-
-
-      if (!plans) return { kind: 'unknown', command: cmd };
-      const [sub, ...args] = rest.filter((token) => token);
-
-      if (sub === undefined || sub === 'show') return { kind: 'text', text: renderPlanReview(await plans.active()) };
-
-      if (sub === 'approve' || sub === 'changes') {
-        const active = await plans.active();
-
-        if (!active) return { kind: 'text', text: 'No plan is waiting for you. Draft one with /plan <what to plan>.' };
-        const feedback = args.join(' ').trim();
-
-        if (sub === 'changes' && !feedback) {
-          return { kind: 'text', text: 'Usage: /plan changes <feedback>. Say what has to change; the agent revises against it.' };
-        }
-
-        const decided = await plans.decide(
-          active.id, active.revision,
-          sub === 'approve' ? 'approve' : 'request_changes',
-          feedback || undefined,
-        );
-
-        if (!decided.ok) return { kind: 'text', text: `The plan was not decided: ${decided.error}` };
-
-        return {
-          kind: 'text',
-          text: sub === 'approve'
-            ? `Approved plan ${decided.plan.id} revision ${String(decided.plan.revision)}. The agent is implementing it now.`
-            : `Sent plan ${decided.plan.id} revision ${String(decided.plan.revision)} back for changes. The agent is revising it now.`,
-        };
-      }
-
-      return { kind: 'plan', text: arg || undefined };
-    }
-
-    case '/fork':
-      return { kind: 'fork', ref: arg || undefined };
-    case '/undo':
-      if (!client.checkpoints) return { kind: 'unknown', command: cmd };
-
-      return { kind: 'undo', ref: arg || undefined };
-    default:
-      return { kind: 'unknown', command: cmd };
-  }
+  return entry.run({ client, command, arg: rest.join(' ').trim(), rest });
 }
 
 /**
@@ -697,10 +743,7 @@ export async function setReasoningEffortPreference(
   return { effort: envelope.catalog.tiers.default.reasoningEffort ?? 'medium' };
 }
 
-async function executeEffortCommand(
-  client: Pick<AgentClient, 'getReasoningEffort' | 'setReasoningEffort' | 'listModels'>,
-  arg: string,
-): Promise<SlashOutcome> {
+async function effortCommand({ client, arg }: SlashContext): Promise<SlashOutcome> {
   if (!arg) {
     const tier = (await loadActiveProfile()).catalog.tiers.default;
     const current = tier.reasoningEffort ?? 'medium';
