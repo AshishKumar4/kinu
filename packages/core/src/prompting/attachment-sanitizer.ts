@@ -1,27 +1,7 @@
 /**
- * Model-capability attachment sanitizer — the mechanical fix for the
- * "attached PDF 400s every Workers AI request forever" class of failure.
- *
- * Given the model-visible history and the media kinds the resolved
- * model+provider can actually accept, every file/image part the model cannot
- * take is written ONCE to the workspace VFS (content-addressed under
- * attachments/) and replaced with a text part referencing the path, so
- * the agent can read the payload back with its normal file tools instead of
- * the provider rejecting the whole request.
- *
- * Invariants callers rely on:
- *  - Applied to the WHOLE history every turn assembly: deterministic, heals
- *    already-poisoned transcripts mechanically, and NEVER mutates the
- *    persisted history (copy-on-write per message).
- *  - BYTE-STABLE per part: same payload bytes → same VFS path → same
- *    replacement text, so the prompt-cache prefix invariant holds across
- *    turns. The write is skipped only when the path already holds those
- *    exact bytes.
- *  - Per-part in-place replacement only — the message COUNT never changes,
- *    so index-anchored consumers (the ephemeral ledger's frozen block
- *    positions, compaction plan ranges) stay valid.
- *  - Small text/* attachments (<8 KB) inline as text instead of a VFS
- *    round-trip; larger ones get the VFS treatment.
+ * Replaces parts the resolved model cannot accept with content-addressed VFS copies plus a text reference.
+ * Applied to the whole history each turn, never mutating it; byte-stable (prompt-cache prefix); message count
+ * never changes, so index-anchored consumers stay valid.
  */
 
 import type { AssistantModelMessage, FilePart, ImagePart, ModelMessage, TextPart, UserModelMessage } from 'ai';
@@ -31,37 +11,20 @@ import { SPILL_DIRS, type TurnContextBudget } from '../context-budget';
 import { classify, diagnostics, renderThrownChain, toKinuError } from '../obs/index';
 import { sha256Hex } from '../safety/argument-digest';
 
-/** Media kinds an attachment can be — the input-modality vocabulary minus
- *  'text' (text is trivially accepted by every model). */
+/** Text is accepted by every model, so it is excluded. */
 export type MediaModality = Exclude<ModelInputModality, 'text'>;
 
 export interface AttachmentPolicy {
-  /** Media kinds the resolved model+provider transport accepts. Build with
-   *  {@link acceptedMediaForModel}. */
   readonly accepts: ReadonlySet<MediaModality>;
-  /** The workspace file plane (Storage.vfs) — replaced payloads land here. */
   readonly vfs: VFS;
-  /** The turn's bulk ledger. Every offload here is one message-borne spill
-   *  trip; the counters answer how often real traffic crosses the threshold. */
+  /** Counters show how often real traffic crosses the spill threshold. */
   readonly budget?: TurnContextBudget;
 }
 
-/** Providers whose native SDK transport can carry PDF document parts.
- *  Everything else rides the OpenAI-compatible chat schema, whose content
- *  parts are `text` | `image_url` ONLY — a `type:"file"` part is a guaranteed
- *  400 (the proven Workers AI failure). */
+/** Other providers use the OpenAI-compatible schema, where a `type:"file"` part is a guaranteed 400. */
 const PDF_CAPABLE_PROVIDERS: ReadonlySet<string> = new Set(['anthropic', 'openai', 'codex']);
 
-/**
- * The capability policy: media the resolved model request can carry.
- *
- * Intersection of the provider transport ceiling (what the wire format can
- * express) and the model's catalog-reported input modalities (what the model
- * itself takes — models.dev `modalities.input`). With no catalog entry the
- * ceiling itself is the conservative default: text+image for the
- * OpenAI-compatible family, text+image+pdf for providers whose current model
- * lineups all accept PDFs natively (Anthropic/OpenAI direct).
- */
+/** Transport ceiling ∩ catalog input modalities; the ceiling alone when the catalog has no entry. */
 export function acceptedMediaForModel(opts: {
   provider?: string;
   catalogInputModalities?: readonly ModelInputModality[];
@@ -80,38 +43,18 @@ export function acceptedMediaForModel(opts: {
   return accepted;
 }
 
-/**
- * The message-borne bulk threshold — ONE number for every text payload that
- * arrives in a message, whether it came as a text/* attachment or as raw
- * pasted prose. Below it the text inlines verbatim: the root must not starve
- * on ordinary material (a stack trace, a config file), which is exactly where
- * reference-only context management loses to plain inlining. Above it the
- * payload spills and the message keeps a bounded head plus the address.
- */
+/** One threshold for all message-borne text: inline below, spill with a bounded head above. */
 const INLINE_TEXT_MAX_BYTES = 8 * 1024;
 
-/** Head of a spilled paste the message keeps inline — enough for the model to
- *  know what it is holding the address of, never enough to be the payload. */
+/** Enough to identify the payload, never enough to be it. */
 const PASTED_TEXT_PREVIEW_CHARS = 2_000;
 
-/**
- * Ceiling above which a document the model CAN natively accept is spilled
- * anyway. An inline document part is re-uploaded and re-priced on every
- * single turn for the rest of the session, so a 300-page PDF is a permanent
- * per-turn tax; past this size the workspace copy plus a read-back recipe is
- * the better trade. Documents only — an image has no read-back recipe (the
- * agent cannot see a file it reads as bytes), so accepted images always stay
- * inline regardless of size.
- */
+/** Inline documents are re-priced every turn, so large ones spill anyway. Images always stay inline: no read-back recipe exists. */
 const OVERSIZE_ACCEPTED_DOC_MAX_BYTES = 1024 * 1024;
 
 const ATTACHMENTS_DIR = SPILL_DIRS.attachments;
 
-/**
- * Replace every file/image part the model cannot accept across the whole
- * history. Returns a new array (copy-on-write per message — untouched
- * messages keep referential identity); never mutates the input.
- */
+/** Copy-on-write per message; untouched messages keep referential identity. */
 export async function sanitizeAttachmentsForModel(
   messages: readonly ModelMessage[],
   policy: AttachmentPolicy,
@@ -176,9 +119,7 @@ async function sanitizeAssistantMessage(
   return changed ? { ...message, content: parts } : message;
 }
 
-/** The replacement TextPart for an image part, or null to pass it through. */
-/** The replacement one user part needs, or null when it passes through as it
- *  is. Only the three carrier kinds can hold an attachment. */
+/** Only the three carrier kinds can hold an attachment. */
 async function sanitizePart(part: UserPart, policy: AttachmentPolicy): Promise<TextPart | null> {
   if (part.type === 'image') return await sanitizeImagePart(part, policy);
 
@@ -195,7 +136,6 @@ async function sanitizeImagePart(part: ImagePart, policy: AttachmentPolicy): Pro
   return replaceMedia(part.image, part.mediaType ?? 'image', undefined, policy);
 }
 
-/** The replacement TextPart for a file part, or null to pass it through. */
 async function sanitizeFilePart(part: FilePart, policy: AttachmentPolicy): Promise<TextPart | null> {
   const modality = mediaModalityFor(part.mediaType);
 
@@ -210,21 +150,13 @@ async function sanitizeFilePart(part: FilePart, policy: AttachmentPolicy): Promi
   return replaceMedia(part.data, part.mediaType, part.filename, policy);
 }
 
-/** A text part carrying more than the message-borne budget — the giant paste.
- *  Returns the replacement part, or null to pass it through. */
 async function sanitizeTextPart(part: TextPart, policy: AttachmentPolicy): Promise<TextPart | null> {
   const replacement = await sanitizeUserText(part.text, policy);
 
   return replacement === null ? null : { ...part, text: replacement };
 }
 
-/**
- * The replacement for one oversize user text payload: the full text lands
- * content-addressed on the file plane and the message keeps a bounded head
- * plus the path. Byte-stable — same bytes, same path, same replacement — so a
- * pasted document does not move the prompt-cache prefix every turn. Returns
- * null when the text is within budget (the overwhelming majority).
- */
+/** Byte-stable, so a pasted document does not move the prompt-cache prefix. Null within budget. */
 async function sanitizeUserText(text: string, policy: AttachmentPolicy): Promise<string | null> {
   const bytes = new TextEncoder().encode(text);
 
@@ -239,9 +171,7 @@ async function sanitizeUserText(text: string, policy: AttachmentPolicy): Promise
     `oversize: name ${path} in the mission of a lifetime:"task" agents hire so that agent reads it instead of you). The first ${head.length} chars follow.]\n\n${head}`;
 }
 
-/** True when a natively-acceptable document is large enough that carrying it
- *  inline costs more than the read-back hop. Sized without decoding: base64
- *  payloads are ~4/3 of their bytes, and a remote URL has no local payload. */
+/** Sized without decoding: base64 is ~4/3 of the bytes; remote URLs have no local payload. */
 function oversizeForInlineDocument(data: FilePart['data']): boolean {
   const bytes = estimatePayloadBytes(data);
 
@@ -261,9 +191,7 @@ function estimatePayloadBytes(data: FilePart['data']): number | null {
   return Math.floor(((comma === -1 ? data.length : data.length - comma - 1) * 3) / 4);
 }
 
-/** The media kind of a file part, or null when no model transport accepts it
- *  (unknown/binary media always gets the VFS treatment). Text is handled
- *  separately — see {@link inlineOrStoreText}. */
+/** Null means no transport accepts it; text is handled by {@link inlineOrStoreText}. */
 function mediaModalityFor(mediaType: string): MediaModality | null {
   if (mediaType.startsWith('image/')) return 'image';
 
@@ -280,8 +208,6 @@ function isTextMediaType(mediaType: string): boolean {
   return mediaType.startsWith('text/');
 }
 
-/** text/* attachments: small ones inline verbatim (no VFS round-trip needed
- *  to read them), larger ones get the standard VFS treatment. */
 async function inlineOrStoreText(file: FilePart, policy: AttachmentPolicy): Promise<TextPart> {
   const payload = decodePayload(file.data);
 
@@ -313,8 +239,6 @@ async function replaceMedia(
   return storeAndReference(payload.bytes, mediaType, filename, policy);
 }
 
-/** Content-addressed VFS write (skipped when the path already exists) + the
- *  byte-stable replacement text. */
 async function storeAndReference(
   bytes: Uint8Array,
   mediaType: string,
@@ -332,14 +256,7 @@ async function storeAndReference(
   };
 }
 
-/** The content-addressed VFS write every message-borne producer here shares.
- *
- *  The address is a cryptographic digest of the bytes, and reuse of an existing
- *  object VERIFIES it: the path is a claim about content, and "the file exists"
- *  is not that claim. A truncated write, a file the agent put there itself, or
- *  (under a 64-bit non-cryptographic address) a genuine collision all present as
- *  an existing path — and reusing one substitutes somebody else's bytes for the
- *  attachment the model is being pointed at. */
+/** Reuse verifies the bytes: an existing path (truncated write, agent-written file) is not proof of content. */
 async function storeContentAddressed(
   bytes: Uint8Array,
   mediaType: string,
@@ -362,15 +279,11 @@ async function storeContentAddressed(
   return path;
 }
 
-/** Whether `path` already holds exactly these bytes. Absent is not an error —
- *  it is the ordinary first spill of a payload — but a path that exists and
- *  does not hold them is not reusable, and the write below repairs it. */
+/** Absent is the ordinary first spill; mismatched bytes are rewritten. */
 async function holdsBytes(vfs: VFS, path: string, bytes: Uint8Array): Promise<boolean> {
   if (!(await vfs.exists(path))) return false;
   const stored = await vfs.readFile(path);
-  // Discriminated on the class rather than with a runtime `typeof`, which is
-  // how prompting/agents-md.ts already narrows the same `string | Uint8Array`
-  // return from this VFS contract.
+  // Narrowed by class, as prompting/agents-md.ts does for the same VFS return.
   const existing = stored instanceof Uint8Array ? stored : new TextEncoder().encode(stored);
 
   if (existing.length !== bytes.length) return false;
@@ -382,8 +295,7 @@ async function holdsBytes(vfs: VFS, path: string, bytes: Uint8Array): Promise<bo
   return true;
 }
 
-/** A part whose data is a remote URL carries no payload to store — reference
- *  the URL itself (equally byte-stable). */
+/** Remote URLs are referenced directly (equally byte-stable). */
 function remoteReference(url: string, mediaType: string, filename: string | undefined): TextPart {
   const name = filename ?? url;
 
@@ -397,9 +309,6 @@ type DecodedPayload =
   | { kind: 'bytes'; bytes: Uint8Array }
   | { kind: 'remote'; url: string };
 
-/** Decode every DataContent carrier to raw bytes: data URLs (base64 or
- *  percent-encoded), bare base64 strings (the DataContent contract), and
- *  binary views. Remote http(s) URLs have no local payload. */
 function decodePayload(data: FilePart['data']): DecodedPayload {
   if (data instanceof URL) return { kind: 'remote', url: data.toString() };
 
@@ -424,9 +333,7 @@ function decodeDataUrl(dataUrl: string): Uint8Array {
   return new TextEncoder().encode(decodeURIComponent(payload));
 }
 
-/** DataContent strings are base64 by contract; a string that isn't valid
- *  base64 is treated as UTF-8 text so a malformed part can never break the
- *  turn (the sanitizer's whole job is preventing request-killing payloads). */
+/** Invalid base64 is treated as UTF-8 so a malformed part cannot break the turn. */
 function decodeBase64OrText(value: string): Uint8Array {
   try {
     const binary = atob(value);
@@ -446,7 +353,6 @@ interface AttachmentExtensions {
   [mediaType: string]: string;
 }
 
-/** Deterministic file extension for the content-addressed path. */
 function extensionFor(mediaType: string): string {
   const known: AttachmentExtensions = {
     'application/pdf': 'pdf',
