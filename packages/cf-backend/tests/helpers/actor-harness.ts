@@ -15,7 +15,7 @@
  */
 import { Database } from 'bun:sqlite';
 import { makeSqlExec } from '../../../core/tests/helpers';
-import type { SessionHistory } from '@kinu.run/core';
+import type { PlanReviewStore, SessionHistory } from '@kinu.run/core';
 import type { AgentContext, Connection, FiberRecoveryContext, FiberRecoveryResult, WSMessage } from 'agents';
 import type { LanguageModel, ModelMessage, ToolSet } from 'ai';
 import * as v from 'valibot';
@@ -1023,6 +1023,9 @@ export class HarnessOrchestratorAgent extends OrchestratorAgent {
       },
     });
   }
+  /** The review store the plan tool writes through, for a test that interrupts
+   *  one of its writes mid-flight. */
+  get harnessPlanReviews(): PlanReviewStore { return this.stores.planReviews; }
   /** The one refusal the loop answers a send with: this process may not
    *  drive. Armed, every admission is refused with it until disarmed. */
   private _driverRefusal: Refusal | null = null;

@@ -5,6 +5,7 @@ import {
   decodeJsonValue,
   type JsonValue,
   type PlanReviewAnnotation,
+  PlanReviewStore,
   type ProgrammaticTurn,
 } from '@kinu.run/core';
 import {
@@ -30,8 +31,6 @@ import * as v from 'valibot';
 type HarnessAgent = HarnessOrchestratorAgent;
 
 const WorkModeSchema = v.picklist(['plan', 'build']);
-
-const PlanStoreProbeSchema = v.object({ markHandoffAccepted: v.function() });
 
 /** A frame type with no reachable producer on the workspace connection, which
  *  is exactly why the forged-content test below replays it as plan TEXT: the
@@ -390,13 +389,10 @@ describe('Plan mode tool lifecycle', () => {
       edits: [{ start: 1, content: '# Plan' }],
     });
     const plan = await agent.getActivePlanReview();
-    const reviews = Object.getOwnPropertyDescriptor(agent, '_planReviews')?.value;
 
-    if (!v.is(PlanStoreProbeSchema, reviews) || !plan) {
-      throw new Error('plan review store was not initialized');
-    }
-
-    const markAccepted = reviews.markHandoffAccepted;
+    if (!plan) throw new Error('plan review was not created');
+    const reviews = agent.harnessPlanReviews;
+    const markAccepted = (id: string, revision: number) => PlanReviewStore.prototype.markHandoffAccepted.call(reviews, id, revision);
     let interruptOnce = true;
     Object.defineProperty(reviews, 'markHandoffAccepted', { value: (id: string, revision: number) => {
       if (interruptOnce) {
@@ -404,7 +400,7 @@ describe('Plan mode tool lifecycle', () => {
         throw new Error('actor interrupted after durable acceptance');
       }
 
-      return decodeJsonValue({ value: markAccepted.call(reviews, id, revision) });
+      return markAccepted(id, revision);
     } });
 
     expect(await agent.decidePlanReview(plan.id, 1, 'approve')).toMatchObject({
