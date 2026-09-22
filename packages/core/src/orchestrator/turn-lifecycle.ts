@@ -41,20 +41,25 @@ export interface TurnRunRecorder {
 /**
  * How a run ended, as the durable ledger names it.
  *
- * Three values, and they are the same three the CF turn driver already reports,
- * so nothing here invents a vocabulary. It is a TYPE because it was a bare
- * string: one backend sealed a user Stop as `'aborted'` and the other sealed the
- * identical action as `'error'`, and every cross-backend reader of the run
- * ledger — Supervise, eval triage — counted local stops as failures. Nothing
- * mechanical held the two spellings together.
+ * It is a TYPE because it was a bare string: one backend sealed a user Stop as
+ * `'aborted'` and the other sealed the identical action as `'error'`, and every
+ * cross-backend reader of the run ledger — Supervise, eval triage — counted
+ * local stops as failures. Nothing mechanical held the two spellings together.
  *
- * DELIBERATELY STILL THREE. A fourth word for a turn cut mid-work was designed
- * and dropped: the cloud loop's step ceiling was the only thing that could
- * produce that state, and removing the ceiling removes the state. See
- * {@link TURN_ENDED_MID_WORK} for what guards it instead, and why a ledger word
- * no run can carry would have been worse than none.
+ * FOUR VALUES SINCE THE STATE WAS OBSERVED IN PRODUCTION. This reverses the
+ * "deliberately still three" decision recorded here and in
+ * {@link TURN_ENDED_MID_WORK}, which argued a turn cut mid-work was unreachable
+ * once the cloud loop's step ceiling was gone, so a fourth word would be
+ * vocabulary no run could carry. The premise was wrong: the owner reported a
+ * session that stopped mid-work with the transcript ending on a tool call
+ * (issue #16) and the UI showing an ordinary completed turn, because
+ * `'completed'` is what the ledger said. A turn that stopped with work still
+ * pending did NOT reach an end of its own, and sealing it under the same word
+ * as a turn that answered is the loop reporting something it did not observe.
+ * The tripwire stays — it is still a defect in the loop — and it is now beside
+ * an honest status instead of standing in for one.
  */
-export const RUN_END_REASONS = ['completed', 'aborted', 'error'] as const;
+export const RUN_END_REASONS = ['completed', 'aborted', 'error', 'incomplete'] as const;
 
 export type RunEndReason = (typeof RUN_END_REASONS)[number];
 
@@ -174,37 +179,23 @@ export function owesOutputLimitContinuation(facts: OutputContinuationFacts): boo
 /**
  * THE INVARIANT: a turn that reached its own end never has tool calls pending.
  *
- * Reported as a DEFECT rather than named in the ledger, and that is a decision
- * with an argument behind it.
- *
  * The state was real and it shipped: `@cloudflare/think` OR-s
  * `stepCountIs(this.maxSteps)` — default 10 — ahead of anything a caller passes,
  * so four of four production turns that reached ten steps were cut with the model
- * still emitting tool calls, and all four sealed `'completed'`. The obvious fix
- * is a fourth ledger word. It is the wrong one, because the ceiling was the ONLY
- * producer. Once the bound is a step count no turn can reach, nothing else can
- * end a clean loop mid-work: Think's other stop condition
- * (`hasToolCall(finalAnswerToolName)`) fires only for structured output, which no
- * actor here requests — and would be a legitimate end if one did; every tool on
- * the surface executes server-side, so no client-side tool can suspend the loop;
- * a user Stop seals `'aborted'` and a throw seals `'error'`, both ahead of this
- * check; a turn killed with its host writes no `run_end` row at all, which
- * `RunEventRecorder.unterminatedModelOperations` already detects. Heads and swarm
- * nodes DO run bounded stop conditions, and they journal rather than sealing a
- * run, so they never reach here.
+ * still emitting tool calls, and all four sealed `'completed'`. The fix recorded
+ * here was a tripwire and NO ledger word, on the argument that the ceiling was
+ * the only producer and removing it removed the state.
  *
- * A fourth word would therefore have been vocabulary no run could carry, spread
- * across a union, a valibot mirror, two read models, a status dot and an
- * analytics arm — every one of them a branch nothing reaches, and each one a
- * thing a reader has to understand before concluding it never happens.
- *
- * What is owed instead is a tripwire. If this fires, one of the facts above
- * stopped being true — a vendor release re-introducing a cap, an actor that
- * starts asking for structured output, a client-side tool — and it is a defect in
- * the loop, not a status for a user. It is `failure` and not `event` for exactly
- * that reason: the run still seals `'completed'` because that is what the driver
- * observed, and the diagnostic is the only thing that says the observation is
- * impossible.
+ * THAT ARGUMENT IS RETIRED, by the owner's report on issue #16: a session
+ * stopped mid-work, its transcript ending on a tool call, and every surface
+ * read it as a turn that answered because `'completed'` is what the ledger
+ * carried. Whatever ends a loop mid-work — a vendor release re-introducing a
+ * cap, an actor that starts asking for structured output, a client-side tool, a
+ * relay the loop waited on — the turn did not reach an end of its own, and the
+ * ledger must not say it did. So the classification is `'incomplete'`, which is
+ * a status a reader can act on, and this stays as the DEFECT report beside it:
+ * whatever produced the state is still broken, and the `failure` severity is
+ * what says so.
  */
 export const TURN_ENDED_MID_WORK = 'turn.ended_mid_work';
 
@@ -253,8 +244,10 @@ export interface RunEndClassification {
  * new label.
  *
  * The completed arm additionally CHECKS its own impossibility — see
- * {@link TURN_ENDED_MID_WORK}. The reason it reports is unchanged: this function
- * names what the driver saw, and a defect in the loop is not a status for a user.
+ * {@link TURN_ENDED_MID_WORK}. A turn whose last step still had tool calls
+ * pending is `'incomplete'`: it stopped with work outstanding, so it never
+ * reached an end of its own, and the defect that stopped it is reported beside
+ * the status rather than instead of it.
  *
  * It also refuses the one clean end that was never the model's own — see
  * {@link PROVIDER_NAMED_NO_END}. That one DOES change the reason, because the
@@ -280,11 +273,13 @@ export function classifyRunEnd(facts: RunEndFacts): RunEndClassification {
       doing: 'seal a turn that reported a clean end',
       cause: new Error(
         'the turn\'s last step still had tool calls pending, so something stopped the loop '
-        + 'mid-work while reporting that it finished. The only thing that could do that was a '
-        + 'step ceiling the caller cannot widen; if this fired, a bound is back.',
+        + 'mid-work while reporting that it finished. The turn is sealed incomplete; what '
+        + 'stopped the loop is the defect — a step ceiling, a stop condition, a relay it waited on.',
       ),
       otherwise: 'unavailable',
     }));
+
+    return { reason: 'incomplete' };
   }
 
   return { reason: 'completed' };

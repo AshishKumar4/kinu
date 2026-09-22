@@ -453,8 +453,9 @@ describe('AgentOrchestrator — the settle’s claimable parts', () => {
   });
 
   // Only the `'error'` arm. A user pressing Stop did not make the agent fail,
-  // and stamping their turn as an error would feed the outcome classifier a
-  // negative label nothing earned.
+  // and neither did a turn that stopped with work still pending — stamping
+  // either as an error would feed the outcome classifier a negative label
+  // nothing earned.
   test('the recorded turn carries hadError only when the driver said error', () => {
     const recorded: Array<boolean> = [];
     const predicted: Array<boolean> = [];
@@ -473,7 +474,7 @@ describe('AgentOrchestrator — the settle’s claimable parts', () => {
       recorded.push(present(store.claim(), 'the claimed window').turns[0].hadError);
     }
 
-    expect(recorded).toEqual([false, false, true]);
+    expect(recorded).toEqual([false, false, true, false]);
     expect(predicted).toEqual(recorded);
   });
 

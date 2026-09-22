@@ -6,7 +6,7 @@ import type { MessageReference, StoredPart, StreamPartInput, PreparedContent } f
 import type { SessionPayload } from '../session/payload';
 import { JsonObjectSchema, projectJsonValue, type JsonObject } from '../utils/json';
 import { encodeModelMessages } from '../session/message-codec';
-import { renderThrownChain, KinuError } from '../obs/index';
+import { diagnostics, renderThrownChain, KinuError } from '../obs/index';
 
 interface StreamPart {
   readonly number: number;
@@ -41,6 +41,43 @@ function toolOutput(output: { readonly value: unknown }): JsonObject {
 
   return { type: 'json', value: projectJsonValue(output) };
 }
+
+/**
+ * The name a streamed part and a final part are the SAME part under.
+ *
+ * A tool call and its result carry their own identity, so those pair on the
+ * call id. Nothing else does: a native `text` or `reasoning` part is anonymous
+ * once the stream's part id is spent, so the pairing is the kind plus the
+ * ordinal within that kind — the second reasoning block of the stream is the
+ * second reasoning block of the final message.
+ *
+ * NEVER the array index, which is what this replaces. A provider that reorders
+ * its final message, or settles on a message missing a part it streamed, is
+ * reporting a disagreement about ORDER or CONTENTS; read positionally it read
+ * as a type mismatch and threw the whole turn's seal away.
+ */
+function partIdentity(kind: string, native: JsonObject, ordinals: Map<string, number>): string {
+  const callId = v.safeParse(v.string(), native.toolCallId);
+
+  if (callId.success && (kind === 'tool-call' || kind === 'tool-result')) return `${kind}:${callId.output}`;
+  const ordinal = ordinals.get(kind) ?? 0;
+  ordinals.set(kind, ordinal + 1);
+
+  return `${kind}#${ordinal}`;
+}
+
+/** Whether a streamed part witnessed anything: a text-bearing kind needs
+ *  words, and every other kind is the fact itself. An empty reasoning part a
+ *  provider opened and never wrote into is not evidence of thinking. */
+function streamedContent(part: StoredPart): boolean {
+  if (part.kind !== 'text' && part.kind !== 'reasoning') return true;
+
+  return v.is(v.string(), part.value.text) && part.value.text.length > 0;
+}
+
+/** The disagreement between what a provider streamed and the message it
+ *  settled on, as one line of evidence. */
+const STREAM_DIVERGED = 'session.stream_final_diverged';
 
 interface StreamContainer {
   readonly id: string;
@@ -388,21 +425,7 @@ export class SessionStream {
       const finalParts = v.parse(v.array(JsonObjectSchema), content);
 
       if (container.reference === null && finalParts.length === 0) continue;
-      const opened = [...container.parts.values()].filter(part => part.opened).sort((a, b) => a.number - b.number);
-
-      const parts: StoredPart[] = finalParts.map((native, index) => {
-        const type = v.parse(v.string(), native.type);
-        const prior = opened[index];
-
-        if (prior !== undefined && prior.kind !== type) throw new KinuError('io', 'native final part order differs from its recorded stream');
-        const callId = v.safeParse(v.string(), native.toolCallId);
-        const call = type === 'tool-result' && callId.success ? this.calls.get(callId.output) : undefined;
-
-        if (type === 'tool-call' && callId.success) this.calls.set(callId.output, { messageId: container.id, part: index });
-
-        return { partNo: index, kind: type, streamOrder: prior?.streamOrder ?? this.sourceOrder++, replyTo: call === undefined ? null : { messageId: call.messageId, partNo: call.part }, value: native };
-      });
-
+      const parts = await this.reconcile(container, finalParts);
       const sealed = await this.history.messages.prepareContent(parts);
 
       if (container.reference === null) this.openContainer(container);
@@ -413,12 +436,89 @@ export class SessionStream {
     this.completedMessageCount = cumulative.length;
   }
 
-  /** A container the step did not seal from a final message seals from what
-   *  its stream holds, buffered tail included: the render-only container
-   *  every step, and every container of a step or turn that ended early. */
-  private async sealOpen(container: StreamContainer): Promise<void> {
-    if (container.reference === null || container.sealed) return;
+  /**
+   * The container's sealed parts: the provider's final message RECONCILED with
+   * the stream that produced it, paired by {@link partIdentity}.
+   *
+   * The final message decides ORDER and CONTENT for every part it carries —
+   * that is the message the provider settled on and the one it must read back.
+   * A part the stream witnessed with content and the final message left out is
+   * kept, at the place the stream put it: the client watched it arrive, so
+   * dropping it makes the transcript disagree with what was on screen, which is
+   * how a turn's reasoning vanished on reload. Either disagreement is recorded
+   * as {@link STREAM_DIVERGED} and neither is a throw.
+   */
+  private async reconcile(container: StreamContainer, finalParts: readonly JsonObject[]): Promise<StoredPart[]> {
+    const streamed = container.reference === null ? [] : await this.openParts(container) ?? [];
+    const witnessed = new Map<string, StoredPart>();
+    const streamOrdinals = new Map<string, number>();
 
+    for (const part of [...streamed].sort((a, b) => a.streamOrder - b.streamOrder)) {
+      witnessed.set(partIdentity(part.kind, part.value, streamOrdinals), part);
+    }
+
+    const finalOrdinals = new Map<string, number>();
+    const paired = new Set<string>();
+    let reordered = false;
+    let lastOrder = -1;
+
+    const finals = finalParts.map(native => {
+      const kind = v.parse(v.string(), native.type);
+      const identity = partIdentity(kind, native, finalOrdinals);
+      const prior = witnessed.get(identity);
+
+      if (prior === undefined) return { kind, value: native, streamOrder: null };
+      paired.add(identity);
+
+      if (prior.streamOrder < lastOrder) reordered = true;
+      lastOrder = prior.streamOrder;
+
+      return { kind, value: native, streamOrder: prior.streamOrder };
+    });
+
+    const kept = [...witnessed]
+      .filter(([identity, part]) => !paired.has(identity) && streamedContent(part))
+      .map(([, part]) => part)
+      .sort((a, b) => a.streamOrder - b.streamOrder);
+
+    if (kept.length > 0 || reordered) {
+      diagnostics.event(STREAM_DIVERGED, { messageId: container.id, kept: kept.length, reordered, finalParts: finalParts.length });
+    }
+
+    const merged: { kind: string; value: JsonObject; streamOrder: number | null }[] = [];
+    let at = 0;
+
+    for (const final of finals) {
+      while (at < kept.length && final.streamOrder !== null && (kept[at]?.streamOrder ?? 0) < final.streamOrder) {
+        const orphan = kept[at++];
+
+        if (orphan !== undefined) merged.push({ kind: orphan.kind, value: orphan.value, streamOrder: orphan.streamOrder });
+      }
+
+      merged.push(final);
+    }
+
+    while (at < kept.length) {
+      const orphan = kept[at++];
+
+      if (orphan !== undefined) merged.push({ kind: orphan.kind, value: orphan.value, streamOrder: orphan.streamOrder });
+    }
+
+    return merged.map((part, index) => {
+      const callId = v.safeParse(v.string(), part.value.toolCallId);
+      const call = part.kind === 'tool-result' && callId.success ? this.calls.get(callId.output) : undefined;
+
+      if (part.kind === 'tool-call' && callId.success) this.calls.set(callId.output, { messageId: container.id, part: index });
+
+      return { partNo: index, kind: part.kind, streamOrder: part.streamOrder ?? this.sourceOrder++,
+        replyTo: call === undefined ? null : { messageId: call.messageId, partNo: call.part }, value: part.value };
+    });
+  }
+
+  /** What the container's stream rows hold right now, its in-memory windows
+   *  written down first: the last second of words belongs to the seal that
+   *  reads them. Null once the message is sealed and its rows are gone. */
+  private async openParts(container: StreamContainer): Promise<readonly StoredPart[] | null> {
     for (const part of container.parts.values()) {
       if (part.buffered.length === 0) continue;
       const window = part.buffered;
@@ -428,7 +528,15 @@ export class SessionStream {
       this.fenced(() => this.history.messages.streamAppend(container.id, part.number, window));
     }
 
-    const parts = await this.history.messages.openParts(container.id);
+    return this.history.messages.openParts(container.id);
+  }
+
+  /** A container the step did not seal from a final message seals from what
+   *  its stream holds, buffered tail included: the render-only container
+   *  every step, and every container of a step or turn that ended early. */
+  private async sealOpen(container: StreamContainer): Promise<void> {
+    if (container.reference === null || container.sealed) return;
+    const parts = await this.openParts(container);
 
     if (parts === null) {
       container.sealed = true;

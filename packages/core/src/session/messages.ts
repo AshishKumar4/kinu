@@ -200,10 +200,20 @@ export class SessionMessages extends SessionMessageReader<ActorHandle, SessionPa
     return this.sources.get(message) ?? null;
   }
 
+  /**
+   * Bind the provider's own message object to the row that recorded it.
+   *
+   * The row CARRIES the message: same role, same envelope, every part of it in
+   * the same relative order. It may hold MORE — a streamed part the provider's
+   * final message left out is reconciled back in by `SessionStream`, and that
+   * is evidence the client already saw. Byte equality was the assertion here
+   * and it refused exactly that row, so the guard is containment: what the
+   * provider settled on must be readable back out of the record, whole.
+   */
   async bindSource(message: ModelMessage, reference: MessageReference): Promise<void> {
     const recorded = await this.materialize(reference);
 
-    if (encodeModelMessages([recorded]) !== encodeModelMessages([message])) throw new KinuError('io', 'native output differs from its recorded content');
+    if (!carries(recorded, message)) throw new KinuError('io', 'native output differs from its recorded content');
     this.sources.set(message, reference);
   }
 
@@ -376,6 +386,42 @@ export class SessionMessages extends SessionMessageReader<ActorHandle, SessionPa
 
     return decoded;
   }
+}
+
+/**
+ * Whether `recorded` carries `message` whole: the same role and envelope, and
+ * every part of the message present, in order, among the parts of the record.
+ *
+ * Both sides go through the codec first, so the comparison is of the native
+ * encoding and not of two object identities. A string-content message has one
+ * part and the walk reduces to equality.
+ */
+function carries(recorded: ModelMessage, message: ModelMessage): boolean {
+  const record = v.parse(v.array(JsonObjectSchema), JSON.parse(encodeModelMessages([recorded])))[0];
+  const wanted = v.parse(v.array(JsonObjectSchema), JSON.parse(encodeModelMessages([message])))[0];
+
+  if (record === undefined || wanted === undefined) return false;
+  const { content: recordedContent, ...recordedEnvelope } = record;
+  const { content: wantedContent, ...wantedEnvelope } = wanted;
+
+  if (JSON.stringify(recordedEnvelope) !== JSON.stringify(wantedEnvelope)) return false;
+
+  if (!v.is(v.array(v.unknown()), recordedContent) || !v.is(v.array(v.unknown()), wantedContent)) {
+    return JSON.stringify(recordedContent) === JSON.stringify(wantedContent);
+  }
+
+  let at = 0;
+
+  for (const part of wantedContent) {
+    const encoded = JSON.stringify(part);
+
+    while (at < recordedContent.length && JSON.stringify(recordedContent[at]) !== encoded) at += 1;
+
+    if (at === recordedContent.length) return false;
+    at += 1;
+  }
+
+  return true;
 }
 
 function replyOf(value: JsonObject, calls: ToolCallIndex): StoredPart['replyTo'] {

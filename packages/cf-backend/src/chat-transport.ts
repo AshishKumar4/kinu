@@ -57,9 +57,9 @@ import type { UIMessage, UIMessageChunk } from 'ai';
 import * as v from 'valibot';
 import {
   partialFlushCadence, type PartialFlushCadence, type PartialFlushSignal, isWorkMode, INTERRUPTED_TURN,
-  type ChatTransport, type PromptFile, type SendLanding, type SessionEvent, type SqlExecutor, type WorkMode,
+  type ChatTransport, type ObservedCall, type PromptFile, type SendLanding, type SessionEvent, type SqlExecutor, type WorkMode,
 } from '@kinu.run/core';
-import { diagnostics, KinuError, refusalOf, renderThrownChain, toKinuError } from '@kinu.run/core/obs';
+import { diagnostics, KinuError, refusalOf, toKinuError } from '@kinu.run/core/obs';
 
 /** What the transport asks of the actor: the connection set, and the loop.
  *  A connection is the SDK's: its resume handshake takes the full type. */
@@ -120,7 +120,13 @@ interface LiveStream {
    *  every leftover as one turn — answered when it closes. */
   readonly carried: readonly string[];
   readonly streamId: string;
-  readonly accumulator: StreamAccumulator;
+  /** The SDK's reconstruction of the answer. ONE PER PROVIDER CALL — a
+   *  continuation renews it against the parts the turn already holds, so the
+   *  object never reads a second stream on the first stream's state while the
+   *  answer stays one message under one id. */
+  accumulator: StreamAccumulator;
+  /** What the client's own reader would have open by now — see {@link OpenParts}. */
+  readonly open: OpenParts;
   readonly cadence: PartialFlushCadence;
   /** The transcript spent this answer before `turn-end` closed the stream. */
   taken: boolean;
@@ -139,6 +145,55 @@ function flushSignal(chunk: UIMessageChunk): PartialFlushSignal {
   if (chunk.type === 'tool-output-available' || chunk.type === 'tool-output-error' || chunk.type === 'tool-output-denied') return 'settled';
 
   return chunk.type === 'text-delta' || chunk.type === 'reasoning-delta' || chunk.type === 'tool-input-available' ? 'content' : 'none';
+}
+
+/**
+ * The part ids this relay has seen OPENED, mirroring the state the client's
+ * own stream reader keeps.
+ *
+ * The reader (`ai`'s `processUIMessageStream`) THROWS on a continuation of a
+ * part it never saw open — `Received text-delta for missing text part with ID
+ * "…"`, the same for `reasoning-delta`, `reasoning-end`, `text-end`, and
+ * `Received tool-input-delta for missing tool call with ID "…"` — and that
+ * throw ends the tab's whole answer, which is how an owner sees an unexplained
+ * tool-call error (#15) and reasoning that appears and then vanishes (#14).
+ * The SDK's SERVER-side builder is forgiving about all of it, so the relay
+ * cannot learn this from the accumulator: it has to keep the reader's rule.
+ *
+ * `text`/`reasoning` ids are scoped to the STEP, because the reader clears
+ * `activeTextParts` and `activeReasoningParts` on every `finish-step`; tool
+ * call ids are not, because it never clears `partialToolCalls`.
+ */
+class OpenParts {
+  private readonly step = new Set<string>();
+  private readonly calls = new Set<string>();
+
+  /** Take this chunk in, and answer whether the client could follow it. */
+  admits(chunk: UIMessageChunk): boolean {
+    if (chunk.type === 'text-start' || chunk.type === 'reasoning-start') {
+      this.step.add(`${chunk.type === 'text-start' ? 'text' : 'reasoning'}:${chunk.id}`);
+
+      return true;
+    }
+
+    if (chunk.type === 'text-delta' || chunk.type === 'text-end') return this.step.has(`text:${chunk.id}`);
+
+    if (chunk.type === 'reasoning-delta' || chunk.type === 'reasoning-end') return this.step.has(`reasoning:${chunk.id}`);
+
+    if (chunk.type === 'finish-step') {
+      this.step.clear();
+
+      return true;
+    }
+
+    if (chunk.type === 'tool-input-start' || chunk.type === 'tool-input-available' || chunk.type === 'tool-input-error') {
+      this.calls.add(chunk.toolCallId);
+
+      return true;
+    }
+
+    return chunk.type !== 'tool-input-delta' || this.calls.has(chunk.toolCallId);
+  }
 }
 
 /** The frame a tab draws its whole transcript from: the seed one socket reads
@@ -407,7 +462,7 @@ export class ChatWireTransport implements ChatTransport, ChatRoom {
 
     const streamId = this.resume?.resumable.start(requestId, { messageId: turn.messageId }) ?? requestId;
 
-    this.live = { requestId, carried, streamId, accumulator: new StreamAccumulator({ messageId: turn.messageId }), cadence: partialFlushCadence(), taken: false, broken: false };
+    this.live = { requestId, carried, streamId, accumulator: new StreamAccumulator({ messageId: turn.messageId }), open: new OpenParts(), cadence: partialFlushCadence(), taken: false, broken: false };
 
     if (turn.userTurn) this.wire.broadcast(transcriptFrame(await this.wire.history()));
   }
@@ -489,19 +544,46 @@ export class ChatWireTransport implements ChatTransport, ChatRoom {
   // ── The model stream ────────────────────────────────────────────────
 
   /**
-   * One turn's UIMessage chunks, from the SDK's own stream conversion, each
-   * stored for resume and broadcast under the live request. Runs beside the
-   * loop's own consumption of the same result; the loop settles the turn once
-   * this has drained, so the answer row carries every part the client saw.
+   * One PROVIDER CALL's UIMessage chunks, from the SDK's own stream
+   * conversion, each stored for resume and broadcast under the live request.
+   * Runs beside the loop's own consumption of the same result; the loop
+   * settles the turn once this has drained, so the answer row carries every
+   * part the client saw.
+   *
+   * A turn can take a second call — an answer the provider cut at its output
+   * limit is continued — and each call is its own SDK stream. The accumulator
+   * is renewed for it, seeded with what the turn already holds: the object
+   * reads one stream, as it is built to, and the answer stays one message
+   * under the id the row is persisted with, which a second stream's `start`
+   * would otherwise rename.
    */
-  async observe(stream: ReadableStream<UIMessageChunk>): Promise<void> {
+  async observe(stream: ReadableStream<UIMessageChunk>, call: ObservedCall): Promise<void> {
     const live = this.live;
 
     if (live === null) return;
 
+    if (call.index > 0) {
+      live.accumulator = new StreamAccumulator({
+        messageId: live.accumulator.messageId,
+        continuation: true,
+        existingParts: live.accumulator.parts,
+        ...(live.accumulator.metadata !== undefined && { existingMetadata: live.accumulator.metadata }),
+      });
+    }
+
     try {
       for await (const chunk of stream) {
         const { action } = live.accumulator.applyChunk(chunk);
+
+        if (!live.open.admits(chunk)) {
+          this.degradeRelay(live, toKinuError({
+            doing: 'relaying the answer stream to the connected clients',
+            cause: new KinuError('io', `the model stream carried a ${chunk.type} continuing a part this relay never saw open`),
+            otherwise: 'io',
+          }));
+
+          return;
+        }
 
         // The client builds the streamed message under the id the row is
         // persisted under, as Think stamped it: a provider that emits no
@@ -520,20 +602,32 @@ export class ChatWireTransport implements ChatTransport, ChatRoom {
         this.wire.broadcast(JSON.stringify({ type: MessageType.CF_AGENT_USE_CHAT_RESPONSE, id: live.requestId, body, done: false }));
       }
     } catch (cause) {
-      // The turn goes on: the loop consumes its own copy of the stream and
-      // commits the answer from it. What broke is the RELAY, and three things
-      // read the relay as if it were the answer — the accumulator the
-      // transcript would persist, the chunk store a reconnect replays, and
-      // the tab watching the request — so each is told, here, that it is not.
-      diagnostics.failure('chat.stream_observe_failed', toKinuError({
+      this.degradeRelay(live, toKinuError({
         doing: 'relaying the answer stream to the connected clients', cause, otherwise: 'io',
       }));
-      live.broken = true;
-      this.resume?.resumable.markError(live.streamId);
-      this.wire.broadcast(JSON.stringify({
-        type: MessageType.CF_AGENT_USE_CHAT_RESPONSE, id: live.requestId, body: renderThrownChain({ cause }), done: false, error: true,
-      }));
     }
+  }
+
+  /**
+   * The relay broke; the turn did not.
+   *
+   * The loop consumes its own copy of the stream and commits the answer from
+   * it. Three things read the relay as if it were the answer — the accumulator
+   * the transcript would persist, the chunk store a reconnect replays, and the
+   * tab watching the request — so each is told, here, that it is not.
+   *
+   * The tab reads OUR classification of what broke and never a raw sentence
+   * from underneath: the SDK's own words for a chunk it could not take belong
+   * on the diagnostics record, where the cause chain is kept whole, not in a
+   * chat bubble telling an operator to send a different kind of chunk.
+   */
+  private degradeRelay(live: LiveStream, error: KinuError): void {
+    diagnostics.failure('chat.stream_observe_failed', error);
+    live.broken = true;
+    this.resume?.resumable.markError(live.streamId);
+    this.wire.broadcast(JSON.stringify({
+      type: MessageType.CF_AGENT_USE_CHAT_RESPONSE, id: live.requestId, body: refusalOf(error).error, done: false, error: true,
+    }));
   }
 }
 

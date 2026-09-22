@@ -28,8 +28,9 @@
 
 import {
   tool, jsonSchema,
-  type ToolSet, type LanguageModel, type ModelMessage, type StepResult, type ToolExecutionOptions, type UIMessageChunk,
+  type ToolSet, type LanguageModel, type ModelMessage, type StepResult, type ToolExecutionOptions,
 } from 'ai';
+import type { ObserveStream } from '../chat';
 import type { HostedActor } from '../state/actor-host';
 import type { WorkMode } from '../types/turn';
 import type { ProfileAuthorityInputs, ResolvedTurnProfile } from '../profiles';
@@ -621,8 +622,9 @@ export interface HeadInferenceDeps {
    */
   reportDelta?: ReportHeadDelta;
   /** The turn's UIMessage chunks, for a pane watching this actor's own chat —
-   *  the same relay the root's transport reads (`chat.observeStream`). */
-  observeStream?: (chunks: ReadableStream<UIMessageChunk>) => Promise<void>;
+   *  the same relay the root's transport reads (`chat.observeStream`), called
+   *  once per provider call and told which one. */
+  observeStream?: ObserveStream;
   /**
    * The prompt this loop runs, when the caller is not a head.
    *

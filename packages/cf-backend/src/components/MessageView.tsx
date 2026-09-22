@@ -40,7 +40,7 @@ import {
 import type { LiveTail } from "@kinu.run/core";
 import { redactPayload, redactSecrets, segmentBySteers } from "@kinu.run/core";
 import {
-  classifyProgrammaticTurn, eventSourceLabel, eventVariantLabel, isSteeredMessage, parseDrainedEvents,
+  classifyProgrammaticTurn, endedMidWork, eventSourceLabel, eventVariantLabel, isSteeredMessage, parseDrainedEvents,
   type ClassifiedProgrammaticTurn, type DrainedEvent, type SignalCard,
 } from "@kinu.run/core";
 import { useToggledSet } from "@/hooks/use-toggled-set";
@@ -100,20 +100,34 @@ const BLOCK_GAP = {
 } as const;
 
 /**
- * The turn's live tail when nothing is arriving — between a settled call and
- * whatever the model does next, or before its first token.
+ * ONE "Thinking" affordance, and two things wear it.
  *
- * Rendered only where `liveTail` says the stream is open with no active part,
- * so it stops the moment anything lands. The shimmer is the same one the
- * running tool name carries; live work reads as light moving through text
- * everywhere in this UI, and a second vocabulary for the same fact would be
- * decoration.
+ * A pause between steps and a reasoning block are the same fact to a reader —
+ * the model is thinking — and they were drawn as two unrelated shapes: a dotted
+ * shimmering row for the pause, a bordered block with a pulsing word for the
+ * reasoning. A turn that reasons, pauses, reasons again swapped between them on
+ * every transition, which is the "Thinking appears and disappears" the owner
+ * reported. So the LABEL is one component and the block is the label plus its
+ * words; a reasoning part that arrives while the pause row is showing adds its
+ * text under the same line rather than replacing it with another shape.
  */
+function ThinkingLabel({ live }: { live: boolean }) {
+  return (
+    <span className="flex items-center gap-2">
+      <span className={`size-1.5 rounded-full p-dot-accent${live ? " p-dot-pulse" : ""}`} aria-hidden />
+      <span className={`p-row-text font-medium${live ? " p-shimmer" : ""}`}>Thinking</span>
+    </span>
+  );
+}
+
+/** The live tail when nothing is arriving — between a settled call and whatever
+ *  the model does next, or before its first token. Rendered only where
+ *  `liveTail` says the stream is open with no active part, so it stops the
+ *  moment anything lands. */
 function ThinkingRow() {
   return (
-    <div data-live-indicator="thinking" className="flex items-center gap-2 animate-fade-in py-1.5" aria-live="polite">
-      <span className="size-1.5 rounded-full p-dot-accent p-dot-pulse" aria-hidden />
-      <span className="p-row-text p-shimmer font-medium">Thinking</span>
+    <div data-live-indicator="thinking" className="animate-fade-in py-1.5" aria-live="polite">
+      <ThinkingLabel live />
     </div>
   );
 }
@@ -144,24 +158,36 @@ function ReasoningBlock({ text, live = false }: { text: string; live?: boolean }
   }, [live, text]);
 
   return (
-    <div className="border-l-2 border-[var(--c-dash)] py-0.5 pl-3.5 p-row-text p-text-4">
+    <div className="py-0.5 p-row-text p-text-4">
       {live ? (
         <>
-          <span data-live-indicator="reasoning" className="motion-safe:animate-[pulse_1.6s_ease-in-out_infinite] motion-reduce:animate-none">Thinking</span>
-          <div ref={viewport} data-reasoning-viewport className="mt-1 max-h-[4lh] overflow-y-auto scroll-auto whitespace-pre-wrap">{text}</div>
+          <span data-live-indicator="reasoning"><ThinkingLabel live /></span>
+          <div ref={viewport} data-reasoning-viewport className="mt-1 ml-3.5 max-h-[4lh] overflow-y-auto scroll-auto whitespace-pre-wrap">{text}</div>
         </>
       ) : (
         <>
           <button onClick={() => setExpanded(!expanded)} className="group/reason w-full text-left cursor-pointer" aria-expanded={expanded}>
-            <span>Thinking</span>
-            {!expanded && <span className="opacity-80"> · {text.slice(0, 120)}</span>}
+            <ThinkingLabel live={false} />
+            {!expanded && <span className="ml-3.5 block opacity-80">{text.slice(0, 120)}</span>}
             {text.length > 120 && (
-              <span className="ml-1.5 font-medium p-accent">{expanded ? "collapse" : "expand"}</span>
+              <span className="ml-3.5 font-medium p-accent">{expanded ? "collapse" : "expand"}</span>
             )}
           </button>
-          {expanded && <div className="mt-1 whitespace-pre-wrap">{text}</div>}
+          {expanded && <div className="mt-1 ml-3.5 whitespace-pre-wrap">{text}</div>}
         </>
       )}
+    </div>
+  );
+}
+
+/** The turn stopped with work still pending — the loop ended while the model
+ *  was still calling tools. Durable, from the answer row's own metadata, so it
+ *  survives a reload rather than living in one tab's stream state. */
+function StoppedMidWorkRow() {
+  return (
+    <div className="flex items-center gap-2 p-row-text p-text-3" role="status">
+      <span className="size-1.5 rounded-full p-dot-danger" aria-hidden />
+      <span>Stopped before the work was finished</span>
     </div>
   );
 }
@@ -954,6 +980,7 @@ export const MessageView = memo(function MessageView({
           )}
         </Fragment>
       ))}
+      {!isLive && endedMidWork({ metadata: message.metadata }) && <StoppedMidWorkRow />}
       {!isLive && (
         <div className="flex items-center gap-2">
           <MessageTimestamp createdAt={messageCreatedAt(message)} />

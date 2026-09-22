@@ -40,8 +40,8 @@
  * with the others.
  */
 
-import { REAL_CLOCK, type HeadReport } from '@kinu.run/core';
-import type { LanguageModel, ToolSet, UIMessageChunk } from 'ai';
+import { REAL_CLOCK, type HeadReport, type ObserveStream } from '@kinu.run/core';
+import type { LanguageModel, ToolSet } from 'ai';
 import {
   EventLog, HeadCapture, runHeadInference, titleActorFromMessage,
   admitSubordinateTask, describeSubordinateHandoff, readSubordinateLiveStatus,
@@ -421,7 +421,7 @@ export async function runHostedTask(
     readonly sequenceId: string;
     readonly inheritedContext?: SubordinateInheritedContext;
   },
-  observeStream?: (chunks: ReadableStream<UIMessageChunk>) => Promise<void>,
+  observeStream?: ObserveStream,
 ): Promise<HostedTaskResult> {
   return await seams.host.run(reference, async (actor) => {
     // This runtime is the one `ActorHostDeps.runtimeFor` built, which on this
