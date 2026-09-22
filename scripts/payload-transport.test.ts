@@ -3,6 +3,7 @@ import { gzipSync } from 'node:zlib';
 import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import * as v from 'valibot';
+import { present } from '@kinu.run/test-utils';
 import {
   PAYLOAD_ARMS,
   PAYLOAD_SIZES_MIB,
@@ -46,7 +47,15 @@ const harnessSource = readFileSync(join(FIXTURE_DIR, 'container-harness.ts'), 'u
  *  naming a number the list can stop containing. */
 const TIER = PAYLOAD_SIZES_MIB[0];
 
-function cell(arm: PayloadArmId, op: 'put' | 'get', sizeMiB: PayloadSizeMiB, wallMs: number | null, status: Cell['status'] = 'ok'): Cell {
+interface CellFixture {
+  readonly arm: PayloadArmId;
+  readonly op: 'put' | 'get';
+  readonly sizeMiB: PayloadSizeMiB;
+  readonly wallMs: number | null;
+  readonly status?: Cell['status'];
+}
+
+function cell({ arm, op, sizeMiB, wallMs, status = 'ok' }: CellFixture): Cell {
   const result: Cell = { arm, op, sizeMiB, rep: 0, phase: status === 'ok' ? 'published' : 'failed', status, wallMs };
 
   if (status !== 'ok') result.reason = status;
@@ -158,7 +167,7 @@ describe('credentials never reach a command line or the artifact', () => {
   test('artifacts carry grant fingerprints, never grant material', () => {
     // The opaque URL is forwarded to the container as a command argument but
     // never persisted; only its SHA-256 fingerprint reaches the artifact.
-    expect(JSON.stringify(validateArtifact(artifact([cell('presigned-r2', 'put', TIER, 10)])))).not.toContain('https://');
+    expect(JSON.stringify(validateArtifact(artifact([cell({ arm: 'presigned-r2', op: 'put', sizeMiB: TIER, wallMs: 10 })])))).not.toContain('https://');
   });
   test('deploy argv carries non-secret vars only', () => {
     const varMatches = [...driverSource.matchAll(/'--var', `([A-Z_]+):/g)].map((match) => match[1]);
@@ -212,13 +221,13 @@ describe('no payload body originates on the driver', () => {
 describe('decision honesty', () => {
   test('never ranks unavailable or corrupt arms', () => {
     const cells = [
-      cell('do-base64', 'put', TIER, 100), cell('do-base64', 'get', TIER, 100),
-      cell('loopback-entrypoint', 'put', TIER, 50), cell('loopback-entrypoint', 'get', TIER, 50),
-      cell('presigned-r2', 'put', TIER, null, 'unavailable'), cell('presigned-r2', 'get', TIER, null, 'unavailable'),
-      cell('temp-s3-creds', 'put', TIER, null, 'corrupt'), cell('temp-s3-creds', 'get', TIER, null, 'corrupt'),
+      cell({ arm: 'do-base64', op: 'put', sizeMiB: TIER, wallMs: 100 }), cell({ arm: 'do-base64', op: 'get', sizeMiB: TIER, wallMs: 100 }),
+      cell({ arm: 'loopback-entrypoint', op: 'put', sizeMiB: TIER, wallMs: 50 }), cell({ arm: 'loopback-entrypoint', op: 'get', sizeMiB: TIER, wallMs: 50 }),
+      cell({ arm: 'presigned-r2', op: 'put', sizeMiB: TIER, wallMs: null, status: 'unavailable' }), cell({ arm: 'presigned-r2', op: 'get', sizeMiB: TIER, wallMs: null, status: 'unavailable' }),
+      cell({ arm: 'temp-s3-creds', op: 'put', sizeMiB: TIER, wallMs: null, status: 'corrupt' }), cell({ arm: 'temp-s3-creds', op: 'get', sizeMiB: TIER, wallMs: null, status: 'corrupt' }),
     ];
 
-    const verdict = decideAll(cells).find((entry) => entry.sizeMiB === TIER)!;
+    const verdict = present(decideAll(cells).find((entry) => entry.sizeMiB === TIER), 'the verdict for the tier');
     expect(verdict.kind).toBe('ranking');
 
     if (verdict.kind === 'ranking') {
@@ -227,23 +236,23 @@ describe('decision honesty', () => {
     }
   });
   test('a single clean arm produces no ranking', () => {
-    const verdict = decideAll([cell('do-base64', 'put', TIER, 100), cell('do-base64', 'get', TIER, 100)]).find((entry) => entry.sizeMiB === TIER)!;
+    const verdict = present(decideAll([cell({ arm: 'do-base64', op: 'put', sizeMiB: TIER, wallMs: 100 }), cell({ arm: 'do-base64', op: 'get', sizeMiB: TIER, wallMs: 100 })]).find((entry) => entry.sizeMiB === TIER), 'the verdict for the tier');
     expect(verdict.kind).toBe('no-ranking');
   });
   test('records warm-up evidence separately from statistic samples and ranking', () => {
     const samples = [
-      cell('do-base64', 'put', TIER, 100), cell('do-base64', 'get', TIER, 100),
-      cell('loopback-entrypoint', 'put', TIER, 50), cell('loopback-entrypoint', 'get', TIER, 50),
+      cell({ arm: 'do-base64', op: 'put', sizeMiB: TIER, wallMs: 100 }), cell({ arm: 'do-base64', op: 'get', sizeMiB: TIER, wallMs: 100 }),
+      cell({ arm: 'loopback-entrypoint', op: 'put', sizeMiB: TIER, wallMs: 50 }), cell({ arm: 'loopback-entrypoint', op: 'get', sizeMiB: TIER, wallMs: 50 }),
     ];
 
     const warmups = [
-      cell('do-base64', 'put', TIER, 10_000), cell('do-base64', 'get', TIER, 10_000),
+      cell({ arm: 'do-base64', op: 'put', sizeMiB: TIER, wallMs: 10_000 }), cell({ arm: 'do-base64', op: 'get', sizeMiB: TIER, wallMs: 10_000 }),
     ];
 
     const observed = artifact(samples, warmups);
     expect(observed.cells).toHaveLength(samples.length);
     expect(observed.warmups).toEqual(warmups);
-    const verdict = decideAll(observed.cells).find((entry) => entry.sizeMiB === TIER)!;
+    const verdict = present(decideAll(observed.cells).find((entry) => entry.sizeMiB === TIER), 'the verdict for the tier');
     expect(verdict.kind).toBe('ranking');
 
     if (verdict.kind === 'ranking') {
@@ -258,7 +267,7 @@ describe('decision honesty', () => {
       instrument: 'payload-transports', version: 1,
       plan: { runId: 'r', workerName: 'w', bucketName: 'b', seed: 1, sizesMiB: [...PAYLOAD_SIZES_MIB], reps: 1, concurrency: 1, startedAt: '2026-08-26T00:00:00.000Z' },
       availability: [], warmups: [], controlRpc: [], concurrency: [], verdicts: [], cleanup: { residue: false, steps: [] },
-      cells: [{ ...cell('do-base64', 'put', TIER, 10), uploadIntent: { operationId: 'op', attemptId: 'attempt', boxId: 'box', epoch: '0', exactKey: 'key', method: 'PUT', byteLength: '1', sha256: 'NOT-A-DIGEST', expiresAt: '1' } }],
+      cells: [{ ...cell({ arm: 'do-base64', op: 'put', sizeMiB: TIER, wallMs: 10 }), uploadIntent: { operationId: 'op', attemptId: 'attempt', boxId: 'box', epoch: '0', exactKey: 'key', method: 'PUT', byteLength: '1', sha256: 'NOT-A-DIGEST', expiresAt: '1' } }],
     };
 
     expect(() => v.parse(ArtifactSchema, invalid)).toThrow('Expected a lowercase SHA-256 digest');
@@ -267,11 +276,22 @@ describe('decision honesty', () => {
 
 describe('report honesty and cleanup admission', () => {
   test('renders every required disclosure', () => {
-    const text = renderMarkdown(artifact([cell('do-base64', 'put', TIER, 10), cell('do-base64', 'get', TIER, 10)]));
+    const text = renderMarkdown(artifact([cell({ arm: 'do-base64', op: 'put', sizeMiB: TIER, wallMs: 10 }), cell({ arm: 'do-base64', op: 'get', sizeMiB: TIER, wallMs: 10 })]));
     expect(text).toContain(SDK_THROUGHPUT_CLAIM_NOTE);
     expect(text).toContain(LOOPBACK_RESIDENCY_NOTE);
     expect(text).toContain('CPU per arm is UNKNOWN');
     expect(text).toContain('no payload body ever originated on it');
+  });
+  test('an ok cell with no wall time is rendered, not crashed on', () => {
+    // `rankTier` already treats an ok cell without a wall time as unrankable,
+    // and the schema accepts one, so the renderer meets them: the row has to
+    // say the measurement is absent instead of throwing mid-report.
+    const text = renderMarkdown(artifact([
+      cell({ arm: 'do-base64', op: 'put', sizeMiB: TIER, wallMs: null }),
+      cell({ arm: 'do-base64', op: 'get', sizeMiB: TIER, wallMs: 10 }),
+    ]));
+
+    expect(text).toContain('no wall time recorded');
   });
   test('missing evidence is residue and forces a nonzero exit', () => {
     const cleanup = evaluateCleanup([{ gate: 'bucket-deleted', ok: true, detail: 'deleted' }]);
