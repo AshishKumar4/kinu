@@ -11,7 +11,7 @@ export { inspectSubordinateStorage, type SubordinateInspectionAuthority, type Su
 // wraps. Backend-neutral: the Durable Object and the CLI drive the same state
 // machine over the same table and supply only effect bodies and a wake.
 export {
-  declareTerminalRoster,
+  declareTerminalRoster, owesShadowTrial,
   type TerminalTurnFacts, type TerminalTurnParts,
 } from './orchestrator/terminal-roster';
 
@@ -710,6 +710,8 @@ export { createAgentsCodemodeProvider } from './delegation/agents-codemode';
 // `agent.*` — self-direction (curriculum, scaffold proposals, schedules,
 // background jobs, compaction) over one host seam both backends implement.
 export { createAgentSelfProvider, type AgentSelfHost } from './tools/agent-self';
+
+export { agentSelfHost } from './orchestrator/agent-self-host';
 
 // Subordinate roster, identity, admission and the orchestration policy over
 // them — platform-neutral, so a backend supplies only SubordinateRuntime.

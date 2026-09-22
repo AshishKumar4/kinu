@@ -36,7 +36,7 @@ function agentSelfHost(
     listCurriculumTasks: async () => [],
     setCurriculumTaskStatus: async () => ({ ok: true }),
     proposeScaffold: async () => ({ ok: false, reason: 'not in this test' }),
-    listScaffoldVersions: () => [],
+    listScaffoldVersions: async () => [],
     createTimerTrigger: async () => ({ id: 't1', kind: 'timer_oneshot', nextFireAt: null }),
     budget: new MissionGovernor({ storage, actor }),
     cancelTrigger: () => ({ ok: true, changed: false }),

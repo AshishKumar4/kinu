@@ -27,6 +27,7 @@ import type { RunEndReason } from './turn-lifecycle';
 import type { TurnContinuity } from './agent-orchestrator';
 import type { OwedEffect } from './terminal-effects';
 import type { SubordinateReportStatus } from '../events/hub/types';
+import { isPlaceholderMission } from '../identity/soul';
 
 /**
  * What every settled response knows about itself.
@@ -128,10 +129,11 @@ export interface TerminalTurnParts {
   /** Whether this actor runs the memory-compression lane at all. The lane
    *  reads its evidence from the transcript, so the row carries no input. */
   readonly sleepTime?: boolean;
-  /** What this actor should name itself from, when it is unnamed. `standIn`
-   *  says the title it shows is one a NEW workspace was created with, which
-   *  this turn's naming replaces with a model's name (identity/naming.ts). */
-  readonly autoTitle?: { readonly subject: string; readonly standIn?: boolean };
+  /** The actor's recorded mission, which the roster turns into the subject an
+   *  unnamed actor names itself from. `standIn` says the title it shows is one
+   *  a NEW workspace was created with, which this turn's naming replaces with a
+   *  model's name (identity/naming.ts). */
+  readonly autoTitle?: { readonly mission: string | null; readonly standIn?: boolean };
   /** Whether this actor runs the cadence optimisation lanes at all. */
   readonly autoGepa?: boolean;
   /**
@@ -309,12 +311,7 @@ export function declareTerminalRoster(
     });
   }
 
-  const title = parts.autoTitle;
-
-  const naming: OwedEffect | null = title === undefined ? null : {
-    name: 'auto_title', scope: messageId, lane: 'detached',
-    input: title.standIn === true ? { subject: title.subject, standIn: true } : { subject: title.subject },
-  };
+  const naming = autoTitleEffect(facts, parts);
 
   // Everything below is completed-Build only, and the gate is here rather than at
   // each caller because it is one rule: a turn the improvement lanes are closed
@@ -323,12 +320,24 @@ export function declareTerminalRoster(
   // the exception: it is owed however its first turn ended, because no later
   // turn replaces the stand-in the workspace was created with.
   if (!completed || facts.workMode === 'plan') {
-    if (naming !== null && title?.standIn === true) owed.push(naming);
+    if (naming?.standIn === true) owed.push(naming.effect);
 
     return owed;
   }
 
-  if (parts.shadowTrial) {
+  owed.push(...completedBuildEffects(facts, parts, naming?.effect ?? null));
+
+  return owed;
+}
+
+/** The rows only a completed Build turn earns, in order. */
+function completedBuildEffects(
+  facts: TerminalTurnFacts, parts: TerminalTurnParts, naming: OwedEffect | null,
+): OwedEffect[] {
+  const { messageId } = facts;
+  const owed: OwedEffect[] = [];
+
+  if (parts.shadowTrial && owesShadowTrial(facts)) {
     owed.push({
       name: 'shadow_trial', scope: messageId, lane: 'inline',
       input: {
@@ -354,4 +363,37 @@ export function declareTerminalRoster(
   }
 
   return owed;
+}
+
+/** The naming row this turn owes, and whether it replaces a new workspace's
+ *  stand-in title. */
+function autoTitleEffect(
+  facts: TerminalTurnFacts, parts: TerminalTurnParts,
+): { readonly effect: OwedEffect; readonly standIn: boolean } | null {
+  if (parts.autoTitle === undefined) return null;
+  const input = autoTitleInput(parts.autoTitle, facts.userText);
+
+  return { effect: { name: 'auto_title', scope: facts.messageId, lane: 'detached', input }, standIn: 'standIn' in input };
+}
+
+/**
+ * Whether a turn owes its candidate scaffold a shadow trial: a completed Build
+ * turn of a session whose evolution lanes are on. The roster's own gate, asked
+ * by a host before it reads the sampling plan at all.
+ */
+export function owesShadowTrial(facts: Pick<TerminalTurnFacts, 'completed' | 'workMode' | 'evolutionEnabled'>): boolean {
+  return facts.completed && facts.workMode !== 'plan' && facts.evolutionEnabled;
+}
+
+/**
+ * What an unnamed actor names itself from: its mission, unless that is still a
+ * placeholder that names nothing yet, and then the owner's own words. Only a
+ * real mission replaces the stand-in title a new workspace was created with.
+ */
+function autoTitleInput(
+  title: NonNullable<TerminalTurnParts['autoTitle']>, userText: string,
+): { subject: string } | { subject: string; standIn: true } {
+  if (title.mission === null || isPlaceholderMission(title.mission)) return { subject: userText };
+
+  return title.standIn === true ? { subject: title.mission, standIn: true } : { subject: title.mission };
 }
