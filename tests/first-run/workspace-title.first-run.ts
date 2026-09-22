@@ -19,10 +19,23 @@ const Health = v.object({ build: v.object({ sha: v.string(), version: v.string()
 
 const Snapshot = v.object({ status: v.object({ name: v.string(), displayName: v.string() }) });
 
-/** Read-only exception to the fresh-workspace runner: it must never create,
+/**
+ * Read-only exception to the fresh-workspace runner: it must never create,
  * rename, send a turn to, or delete this explicitly selected OWNED workspace.
  * Whole-workspace spend belongs to its history, not this check, so the receipt
  * contains only actual listing/snapshot observations, never model/spend fields.
+ *
+ * WHAT IT MEASURES, and what it deliberately no longer accepts as its entry
+ * condition. The earlier prerequisite was "a nonempty registry title that is
+ * not the slug", which the DEFECT satisfies: a workspace stuck on the truncated
+ * first line of its own prompt (#18) passed the gate and the gate then only
+ * compared registry title to snapshot title. So the title the deployment shows
+ * had to be wrong in exactly the reported way for the check to be green about
+ * hydration. The prerequisite is now the ORIGIN the registry recorded — a
+ * workspace still showing a `provisional` stand-in has not finished being
+ * named, so it cannot answer the hydration question either way — and the
+ * observation is both that the origin settled and that the snapshot serves the
+ * registry's title.
  *
  * Targeted invocation: KINU_FIRST_RUN_OPERATOR=1 KINU_EVAL_BACKEND=cloud
  * KINU_FIRST_RUN_CLI_CONFIG=<existing-config> KINU_EVAL_ORIGIN=<origin>
@@ -80,6 +93,14 @@ describe('First-run · workspace-title (owned workspace, read-only)', () => {
       prerequisite('Selected workspace needs a nonempty registry title distinct from its ID; this would not exercise title hydration');
     }
 
+    // THE ENTRY CONDITION IS THE ORIGIN, not the shape of the string. A title
+    // still marked `provisional` is the deterministic stand-in the create
+    // stored, which means naming has not finished — the state #18 reported as
+    // permanent, and the one this check used to accept as its starting point.
+    if (owned.nameOrigin === 'provisional') {
+      prerequisite(`Selected workspace still shows its provisional stand-in title "${owned.displayName}"; naming has not settled, so hydration cannot be measured`);
+    }
+
     // First actor RPC: do not warm its title through another read beforehand.
     // Select title fields only; private memory and other snapshot data are never logged.
     const snapshot = v.safeParse(Snapshot, await callAgentRpc({
@@ -91,11 +112,12 @@ describe('First-run · workspace-title (owned workspace, read-only)', () => {
     const statusWorkspace = snapshot.output.status.name;
 
     const receipt = { requested, build, phase: 'observed', receipts: [{ workspace, registryTitle: owned.displayName,
-      statusTitle, statusWorkspace, matches: statusTitle === owned.displayName && statusWorkspace === workspace }] };
+      nameOrigin: owned.nameOrigin ?? null, statusTitle, statusWorkspace,
+      matches: statusTitle === owned.displayName && statusWorkspace === workspace }] };
 
     writeFileSync(receiptPath, JSON.stringify(receipt, null, 2) + '\n');
-    expectReached(CASE, { what: 'loaded-snapshot-uses-owned-registry-title', reached: receipt.receipts[0]?.matches === true,
-      detail: JSON.stringify({ workspace, registryTitle: owned.displayName, statusTitle, statusWorkspace, deployedSha: build.sha }) });
+    expectReached(CASE, { what: 'settled-title-hydrates-from-the-owned-registry-row', reached: receipt.receipts[0]?.matches === true,
+      detail: JSON.stringify({ workspace, registryTitle: owned.displayName, nameOrigin: owned.nameOrigin ?? null, statusTitle, statusWorkspace, deployedSha: build.sha }) });
   });
 });
 

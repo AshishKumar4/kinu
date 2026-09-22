@@ -61,7 +61,7 @@ import {
   type SubordinateSeed, type TaskTurnEnding, type TemporaryAgentPort, type VFS,
   type WorkMode, type WorkspaceActor, type WorkspaceActorDirectory,
 } from '@kinu.run/core';
-import { KinuError } from '@kinu.run/core/obs';
+import { diagnostics, KinuError, toKinuError } from '@kinu.run/core/obs';
 import { isCFRuntime, type CFRuntime } from './runtime';
 import { actorRetirementFor, type ActorRetirementRequest } from './actor-hosting';
 import type { ExplorationProfile } from './exploration-hosting';
@@ -153,6 +153,10 @@ export interface SubordinateHostSeams {
     readonly workMode: WorkMode;
   }): Promise<ExplorationProfile>;
   resolveModel(spec: string): LanguageModel;
+  /** The workspace's naming round-trip — the same prompt, model route and
+   *  spend label the root's own auto-title uses. A hosted actor's title is not
+   *  a second naming policy; it is this one, asked on that actor's behalf. */
+  suggestTitle(mission: string): Promise<string | null>;
   /** What this hosted actor's delegated turn may call and what it is told it
    *  is, built over {@link HostedTaskTurn} — the whole turn, because the
    *  profile is a function of every part of it and a builder that took only
@@ -302,9 +306,12 @@ export async function admitHostedTask(
     const result = admitSubordinateTask(new EventLog(seams.exec, actor.handle), admission);
 
     // A hosted actor has no chat session, so no `auto_title` effect exists —
-    // the first admitted message titles it here instead, and a landed title is
-    // announced so the parent's roster stops showing the codename.
-    if (result.admitted && input.kind === 'message' && titleActorFromMessage(actor.handle, input.body)) {
+    // the first admitted message lands its PROVISIONAL title here instead, and
+    // a landed title is announced so the parent's roster stops showing the
+    // codename. The model that turns that stand-in into a name runs at the end
+    // of the turn this admission hands over (`runHostedTask`): a model call
+    // inside the admitting request would delay the handoff it exists to make.
+    if (result.admitted && input.kind === 'message' && await titleActorFromMessage(actor.handle, input.body)) {
       seams.announce(actor);
     }
 
@@ -535,6 +542,28 @@ export async function runHostedTask(
         errorText: report.errorMessage,
       }),
     });
+
+    // THE HOSTED ACTOR'S TITLE UPGRADE, and the counterpart of the provisional
+    // one `admitHostedTask` landed. The root gets this from its `auto_title`
+    // terminal effect; a hosted actor has no chat session and therefore no such
+    // effect, so without this it kept the truncated first line of its brief as
+    // its permanent name — half of what #18 reported. Here rather than at
+    // admission because admission may not spend a model call, and after the run
+    // rather than before it so the turn the caller is waiting on is never held
+    // behind a naming call.
+    //
+    // One condition, handled: a titling model that failed. The provisional
+    // title is already shown by then, the next admitted message plans again,
+    // and a hired actor's turn is not failed over its own name.
+    try {
+      const titled = await titleActorFromMessage(actor.handle, task.body, (brief) => seams.suggestTitle(brief));
+
+      if (titled) seams.announce(actor);
+    } catch (cause) {
+      diagnostics.failure('agent.auto_title_suggestion_failed', toKinuError({
+        doing: 'deriving a hosted actor title from its brief', cause, otherwise: 'unavailable',
+      }), { workspace: actor.record.workspaceId });
+    }
 
     const ending: TaskTurnEnding = TASK_TURN_ENDING[report.status];
 

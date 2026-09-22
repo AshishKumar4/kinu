@@ -310,7 +310,7 @@ describe('root-cloud title authority', () => {
     expect(await harness.userDO.getWorkspaceTitle(owner, 'named-by-owner')).toEqual({
       displayName: 'Chosen Title', nameOrigin: 'user',
     });
-    await harness.userDO.registerWorkspace(owner, 'derived', undefined, 'a mission');
+    await harness.userDO.registerWorkspace(owner, 'derived', undefined, { purpose: 'a mission' });
     expect(await harness.userDO.getWorkspaceTitle(owner, 'derived'))
       .toMatchObject({ nameOrigin: 'auto' });
     harness.close();

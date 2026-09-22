@@ -1,24 +1,18 @@
-import { generateText } from 'ai';
 import {
-  WORKSPACE_TITLE_SYSTEM_PROMPT,
   DEFAULT_ROLE_ID,
   defaultSpecFor,
-  effortFor,
-  workspaceTitlePrompt,
   fallbackWorkspaceIdentity, workspaceAddressRefusal,
-  parseWorkspaceTitle,
   renderSoulMarkdown,
   isReasoningEffort,
-  normalizeUsage,
+  type NameOrigin,
   type ProfileCatalogEnvelope,
   type ReasoningEffort,
 } from '@kinu.run/core';
 import { diagnostics, renderThrownChain, toKinuError } from '@kinu.run/core/obs';
-import { createAgentProviderRegistry } from '../providers/agent-registry';
 import type { UserCredentialClient } from '../providers/agent-registry';
 import type { UserCaller } from '@kinu.run/core';
 import { listAvailableModels, type AvailableModelsEnv } from './available-models';
-import type { WorkspaceEntry, WorkspaceRegistration } from './user-do';
+import type { WorkspaceEntry, WorkspaceRegistration, WorkspaceRegistrationSource } from './user-do';
 import { indexNewWorkspace, unindexWorkspace, type IndexFeedEnv } from '../control-plane/index-feed';
 import type { OrchestratorAgent } from '../orchestrator';
 import type { ObjectNamespace } from '../bindings';
@@ -31,7 +25,7 @@ export interface CloudWorkspaceRegistry extends UserCredentialClient {
     caller: UserCaller,
     name: string,
     displayName?: string,
-    purpose?: string,
+    from?: WorkspaceRegistrationSource,
   ): Promise<WorkspaceRegistration>;
   removeWorkspace(caller: UserCaller, name: string, ownerUserId: string): Promise<void>;
   /** Drop the exact roster row this create inserted, matched on its own
@@ -50,16 +44,11 @@ export interface CreateCloudWorkspaceInput {
   role?: string;
 }
 
-export interface CreateCloudWorkspaceOptions {
-  waitUntil?: (promise: Promise<unknown>) => void;
-  suggestDisplayName?: (mission: string) => Promise<string | null>;
-}
-
 /** Every call a create makes on the workspace object it is bringing up. */
 export type CloudWorkspaceBirth = Pick<
   OrchestratorAgent,
-  'claimOwner' | 'setInitialDisplayName' | 'setAutoDisplayName' | 'setSoul' | 'resetWorkspaceBaseline'
-  | 'setModel' | 'setReasoningEffort' | 'setRole' | 'beginGenesisTurn' | 'reportFacetModelCall'
+  'claimOwner' | 'setInitialDisplayName' | 'setSoul' | 'resetWorkspaceBaseline'
+  | 'setModel' | 'setReasoningEffort' | 'setRole' | 'beginGenesisTurn'
 >;
 
 /** Every binding a create reads: the model menu's, the index feed's, and the
@@ -74,13 +63,12 @@ export interface CreateCloudWorkspaceRequest<Id> {
   userDO: CloudWorkspaceRegistry;
   caller: UserCaller;
   input: CreateCloudWorkspaceInput;
-  options?: CreateCloudWorkspaceOptions;
 }
 
 export async function createCloudWorkspaceForUser<Id>(
   request: CreateCloudWorkspaceRequest<Id>,
 ): Promise<WorkspaceEntry> {
-  const { env, userId, userDO, caller, input, options = {} } = request;
+  const { env, userId, userDO, caller, input } = request;
   const trimmedPurpose = input.purpose?.trim() ?? '';
   const purpose = trimmedPurpose === '' ? undefined : trimmedPurpose;
 
@@ -106,7 +94,12 @@ export async function createCloudWorkspaceForUser<Id>(
 
   const identity = createInitialCloudAgentIdentity(input, purpose);
 
-  const registered = await userDO.registerWorkspace(caller, identity.name, identity.displayName, purpose);
+  // The origin TRAVELS with the title rather than being re-derived from whether
+  // a display name is empty: only this call knows whether the string it is
+  // handing over is the owner's choice or the mission's first line.
+  const registered = await userDO.registerWorkspace(
+    caller, identity.name, identity.displayName, { purpose, nameOrigin: identity.nameOrigin },
+  );
 
   // A name an uncommitted fork transfer is holding is not a name a create may
   // take: the roster row IS that reservation, and the workspace it will become
@@ -151,15 +144,12 @@ export async function createCloudWorkspaceForUser<Id>(
       userId, name: entry.name, displayName: entry.displayName, createdAt: entry.createdAt,
     });
 
-    if (identity.nameOrigin === 'auto' && purpose && options.waitUntil) {
-      // A Worker request owns this pre-turn generation. Callers without that
-      // request owner already queued the genesis turn, whose durable
-      // `auto_title` effect derives the same title without delaying dispatch.
-      options.waitUntil(scheduleCloudAgentDisplayNameGeneration({
-        env, userDO, caller, agentName: entry.name, mission: purpose, modelSpec: model,
-        suggestDisplayName: options.suggestDisplayName,
-      }));
-    }
+    // NO PRE-TURN NAMING CALL. The genesis turn queued above owes a durable
+    // `auto_title` effect, and that effect now upgrades the provisional title
+    // this create stored — which is the one path, retried until it lands, for
+    // every caller. The `waitUntil` variant only ever ran for a create with a
+    // Worker request behind it, so a workspace created any other way was named
+    // by nothing at all.
 
     return entry;
   } catch (err) {
@@ -261,7 +251,7 @@ const OWNED_BY_ANOTHER = /owned by a different user/i;
 interface InitialCloudAgentIdentity {
   name: string;
   displayName: string;
-  nameOrigin: 'auto' | 'user';
+  nameOrigin: NameOrigin;
 }
 
 function createInitialCloudAgentIdentity(
@@ -292,84 +282,17 @@ function createInitialCloudAgentIdentity(
 
   return {
     name: fallback.name,
+    // PROVISIONAL, not 'auto'. `fallback.displayName` is the mission's first
+    // line — a stand-in for the seconds before the genesis turn's `auto_title`
+    // effect asks a model. Recorded as 'auto' it was indistinguishable from a
+    // generated title, so that effect found the workspace "already named" and
+    // the truncated prompt became the permanent one (#18).
     displayName: requestedDisplayName === '' ? fallback.displayName : requestedDisplayName,
-    nameOrigin: requestedDisplayName === '' ? 'auto' : 'user',
+    nameOrigin: requestedDisplayName === '' ? 'provisional' : 'user',
   };
 }
 
-interface CloudAgentNaming<Id> {
-  env: CreateCloudWorkspaceEnv<Id>;
-  userDO: CloudWorkspaceRegistry;
-  caller: UserCaller;
-  agentName: string;
-  mission: string;
-  modelSpec: string;
-  suggestDisplayName?: (mission: string) => Promise<string | null>;
-}
 
-async function scheduleCloudAgentDisplayNameGeneration<Id>(naming: CloudAgentNaming<Id>): Promise<void> {
-  try {
-    await applyGeneratedDisplayName(naming);
-  } catch (cause) {
-    diagnostics.failure('workspace.display_name_generation_failed', toKinuError({
-      doing: "generating a new workspace's display name",
-      cause,
-      otherwise: 'unavailable',
-    }), { workspace: naming.agentName });
-  }
-}
-
-async function applyGeneratedDisplayName<Id>(naming: CloudAgentNaming<Id>): Promise<void> {
-  const { env, agentName, mission, suggestDisplayName } = naming;
-
-  const displayName = suggestDisplayName
-    ? await suggestDisplayName(mission)
-    : await suggestCloudAgentDisplayName(naming);
-
-  if (!displayName) return;
-
-  const orchestrator = env.OrchestratorAgent.get(
-    env.OrchestratorAgent.idFromName(agentName),
-  );
-
-  await orchestrator.setAutoDisplayName(displayName);
-}
-
-/**
- * `agentName` is here so the call can be filed against the workspace it names.
- *
- * This is the first model call of a workspace's life and it happens before any
- * turn, so there is no run to attach it to — the reserved workspace run id is
- * where the actor files exactly this case. Reported through the same cross-DO
- * port a facet uses, because the total that has to account for it lives in that
- * Durable Object and not in this Worker.
- */
-async function suggestCloudAgentDisplayName<Id>(naming: CloudAgentNaming<Id>): Promise<string | null> {
-  const { env, userDO, caller, mission, modelSpec, agentName } = naming;
-
-  const provider = createAgentProviderRegistry({ env, userDO: { stub: userDO, caller }, fetch });
-
-  const result = await generateText({
-    model: provider.resolveModel(modelSpec),
-    system: WORKSPACE_TITLE_SYSTEM_PROMPT,
-    prompt: workspaceTitlePrompt(mission),
-    // No output cap: reasoning models spend budget on thinking before the
-    // JSON, so a cap starves them into empty text and the generic name wins.
-    ...effortFor('reflection'),
-  });
-
-  const orchestrator = env.OrchestratorAgent.get(
-    env.OrchestratorAgent.idFromName(agentName),
-  );
-
-  const modelId = result.response?.modelId;
-  const usage = normalizeUsage(result.usage);
-  await orchestrator.reportFacetModelCall(modelId
-    ? { source: 'fast', usage, spec: modelSpec, modelId }
-    : { source: 'fast', usage, spec: modelSpec });
-
-  return parseWorkspaceTitle(result.text);
-}
 
 interface InitializeOrchestratorInput<Id> {
   env: CreateCloudWorkspaceEnv<Id>;
@@ -377,7 +300,7 @@ interface InitializeOrchestratorInput<Id> {
   userDO: CloudWorkspaceRegistry;
   agentName: string;
   displayName: string;
-  nameOrigin: 'user' | 'auto';
+  nameOrigin: NameOrigin;
   mission?: string;
   model?: string;
   reasoningEffort?: ReasoningEffort;

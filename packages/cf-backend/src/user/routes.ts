@@ -259,7 +259,7 @@ export async function handleUserRequest<Id>(
   }
 
   if (path === '/workspaces' && method === 'POST') {
-    return handleCreateWorkspaceRequest({ request, env, userId: identity.userId, userDO: stub, ctx });
+    return handleCreateWorkspaceRequest({ request, env, userId: identity.userId, userDO: stub });
   }
 
   const agentTouchMatch = path.match(/^\/workspaces\/([^/]+)\/touch$/);

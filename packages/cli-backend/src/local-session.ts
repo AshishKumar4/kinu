@@ -2447,21 +2447,26 @@ export class LocalAgentSession implements BackendHost {
     const historyLength = this.actorSession.history.length;
     const measured = measureCompactionTrigger(this.compactionState, cache.sessionKey, historyLength);
     // Resolved once for the whole turn so compaction, the step-prune budget,
-    // and overflow recovery all budget against the same number.
-    const contextWindow = this.sessionContextWindow();
+    // and overflow recovery all budget against the same number — and AWAITED,
+    // because the synchronous catalog reads answer from the static stand-in
+    // table while the lookup is still in flight, which is how a 1M-window model
+    // came to be measured against 128k and refused (#20).
+    const window = await this.modelCatalog.resolved();
+    const contextWindow = window.contextWindow;
 
     const liveTurn: ActorExecutionInput['chat'] = {
       model,
-      // The window pair, both halves of it: `contextWindow` is the whole
-      // window and `modelOutputLimit` the answer's share, and the input
-      // allocation every producer divides (`stepContextLimit`) is what the two
-      // produce. Omitting the second read the whole window as the answer's
-      // allowance, which halved the allocation this turn's admission and its
-      // step pruning both budget against.
+      // The window pair, both halves of it, plus where the window came from:
+      // `contextWindow` is the whole window and `modelOutputLimit` the answer's
+      // share, and the input allocation every producer divides
+      // (`stepContextLimit`) is what the two produce. Omitting the second read
+      // the whole window as the answer's allowance, which halved the allocation
+      // this turn's admission and its step pruning both budget against.
       modelContext: {
         id: this.effectiveModelSpec(),
         contextWindow,
-        modelOutputLimit: this.modelCatalog.modelOutputLimit(),
+        windowMeasured: window.windowMeasured,
+        modelOutputLimit: window.modelOutputLimit,
       },
       system: systemPrompt,
       // Model-capability attachment sanitization — runChat applies it to
@@ -3119,8 +3124,8 @@ export class LocalAgentSession implements BackendHost {
 
     if (planWorkspaceTitle(state) === null) return;
     await applyWorkspaceTitle(state, {
-      persist: (name) => {
-        if (!persistAutoTitle(this.config, name)) return false;
+      persist: (name, origin) => {
+        if (!persistAutoTitle(this.config, name, origin)) return false;
         this.broadcast({ type: 'workspace_renamed', displayName: name });
 
         return true;

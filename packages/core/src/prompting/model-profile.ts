@@ -12,9 +12,15 @@ export interface PromptModelContext {
   reasoning?: boolean;
   capabilities?: readonly string[];
   contextWindow?: number;
+  /** Whether `contextWindow` is a figure measured off this model rather than a
+   *  stand-in for a spec no catalog answered. Absent means the caller is not
+   *  claiming either way and the static table answers for itself
+   *  (`contextWindowForModel`); it never reads as a measurement. */
+  windowMeasured?: boolean;
   /** The largest answer the resolved model will produce, out of that same
-   *  window. Absent when the catalog has not answered. */
-  modelOutputLimit?: number;
+   *  window. Absent when the catalog has not answered — never the window
+   *  itself, which is a reserve nobody reported (see step-prune.ts). */
+  modelOutputLimit?: number | null;
 }
 
 export interface PromptModelProfile {

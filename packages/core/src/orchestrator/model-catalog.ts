@@ -1,16 +1,20 @@
 /**
- * ModelCatalogSession — the cached, non-blocking catalog view of the session's
- * resolved model. One lookup armed per spec; until (and unless) it lands, the
- * static fallbacks answer:
+ * ModelCatalogSession — the cached catalog view of the session's resolved
+ * model. One lookup armed per spec; the SYNCHRONOUS reads never block and the
+ * static table answers until (and unless) it lands:
  *
  *   contextWindow()   catalog-reported, else the static window table — feeds
  *                     compaction, the step-prune budget, and overflow recovery
  *                     with the SAME number.
+ *   windowMeasured()  whether that number is a figure somebody measured off
+ *                     this model, or the table's stand-in for a spec nothing
+ *                     here has an entry for.
  *   modelOutputLimit() the answer allowance context admission reserves out of
- *                     that window. Catalog-reported, else the whole window —
- *                     an unanswered catalog says nothing about how much of the
- *                     window the answer takes, and a picked number here would
- *                     read as a fact.
+ *                     that window. Catalog-reported, else NULL — an unanswered
+ *                     catalog says nothing about how much of the window the
+ *                     answer takes, and every number that could be written here
+ *                     instead (the whole window, a picked share) reads as a
+ *                     fact and is spent as one.
  *   acceptedMedia()   the attachment sanitizer's policy input — provider class
  *                     caps the wire format immediately (conservative: errs
  *                     toward sanitizing, never toward a rejected request); the
@@ -21,6 +25,13 @@
  *                     the catalog prices nothing) — the caller falls back to
  *                     the blended rate and RECORDS that it did.
  *
+ * {@link ModelCatalogSession.resolved} is the one AWAITED read, for the caller
+ * that is about to gate work on the answer: a turn assembled on the first
+ * activation after an isolate start measured itself against the stand-in table
+ * while the lookup that knew better was already in flight (#20). Awaiting it
+ * costs one lookup per spec, before any provider call, and every synchronous
+ * read afterwards answers from the landed catalog.
+ *
  * One implementation for both backends — they differ only in the lookup
  * function (provider registry vs LocalModelResolver).
  */
@@ -29,7 +40,7 @@ import { contextWindowForModel } from '../context-window';
 import { acceptedMediaForModel, type MediaModality } from '../prompting/attachment-sanitizer';
 import type { ModelInfo, ModelPricing } from '../providers/types';
 import type { PromptModelContext } from '../prompting/model-profile';
-import type { ModelWindow } from '../prompting/step-prune';
+import type { ResolvedModelWindow } from '../prompting/step-prune';
 import { classifyErrorCode, diagnostics, renderThrownChain, toKinuError } from '../obs/index';
 
 /**
@@ -92,29 +103,67 @@ export class ModelCatalogSession {
   }
 
   contextWindow(): number {
-    return this.info()?.contextWindow ?? contextWindowForModel(this.deps.effectiveSpec());
+    return this.info()?.contextWindow ?? contextWindowForModel(this.deps.effectiveSpec()).window;
+  }
+
+  /** Whether {@link contextWindow} is a figure measured off this model. False
+   *  says it is the static table's stand-in for a spec nothing here has an
+   *  entry for — a number a budget may spend and a refusal may not. */
+  windowMeasured(): boolean {
+    return this.info()?.contextWindow !== undefined
+      || contextWindowForModel(this.deps.effectiveSpec()).measured;
+  }
+
+  /**
+   * The current spec's window, AFTER the armed lookup has settled.
+   *
+   * The synchronous reads above are deliberately non-blocking, which is right
+   * for a budget and wrong for a decision that refuses work: the first turn of
+   * a fresh isolate measured itself against the stand-in table while the lookup
+   * that knew the real window was still in flight. One await per spec, taken
+   * before the provider is called, and every synchronous read after it answers
+   * from the landed catalog.
+   */
+  async resolved(): Promise<ResolvedModelWindow> {
+    // `info()` arms the lookup for the current spec and caches the promise;
+    // awaiting THAT — rather than calling `lookup` again — is what keeps this
+    // to one catalog round trip shared with every synchronous reader.
+    this.info();
+    await this.cached?.lookup;
+
+    return {
+      contextWindow: this.contextWindow(),
+      modelOutputLimit: this.modelOutputLimit(),
+      windowMeasured: this.windowMeasured(),
+    };
   }
 
   /** Await the selected operation's catalog, independent of the live chat cache. */
-  async contextFor(spec: string): Promise<PromptModelContext & ModelWindow> {
+  async contextFor(spec: string): Promise<PromptModelContext & ResolvedModelWindow> {
     const info = await this.lookup(spec);
-    const contextWindow = info?.contextWindow ?? contextWindowForModel(spec);
+    const table = contextWindowForModel(spec);
 
-    return Object.freeze({ id: spec, contextWindow, modelOutputLimit: info?.modelOutputLimit ?? contextWindow });
+    return Object.freeze({
+      id: spec,
+      contextWindow: info?.contextWindow ?? table.window,
+      windowMeasured: info?.contextWindow !== undefined || table.measured,
+      modelOutputLimit: info?.modelOutputLimit ?? null,
+    });
   }
 
   /**
    * The largest answer the resolved model will produce, out of the window
-   * {@link contextWindow} reports.
+   * {@link contextWindow} reports, or null when nothing has reported one.
    *
-   * An unreported allowance is not a small one: a catalog that has not landed
-   * says nothing about how much of the window the answer may take, so the
-   * honest reading is the whole window, and context admission splits from
-   * there (prompting/step-prune.ts). Reporting a picked number here instead
-   * would put a fact in the catalog's mouth.
+   * Null rather than the whole window. "The answer may take all of it" reads as
+   * the honest reading of an unanswered catalog and is not one: the half bound
+   * in `outputReserveTokens` then withheld half of every unreported model's
+   * window, which is how a 1M-window model came to refuse a 124,644-token
+   * request against 64,000 (#20). An absent figure is absent, and the reserve
+   * is the one thing that may not be invented from it.
    */
-  modelOutputLimit(): number {
-    return this.info()?.modelOutputLimit ?? this.contextWindow();
+  modelOutputLimit(): number | null {
+    return this.info()?.modelOutputLimit ?? null;
   }
 
   /** What the resolved model charges, or null when the catalog has not landed

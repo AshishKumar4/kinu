@@ -143,6 +143,7 @@ export {
   suggestWorkspaceTitle,
   workspaceSlug, workspaceAddressRefusal, isPlaceholderWorkspaceTitle, codenameFor,
   workspaceTitleFromMission,
+  type NameOrigin,
   type SuggestedWorkspaceIdentity,
   type WorkspaceTitlePlan,
   type WorkspaceTitleState,
@@ -498,6 +499,7 @@ export {
   stepContextLimit,
   outputReserveTokens,
   type ModelWindow,
+  type ResolvedModelWindow,
   type StepPruneBudget,
 } from './prompting/step-prune';
 
@@ -542,7 +544,7 @@ export {
 
 export type { Usage } from './usage';
 
-export { contextWindowForModel } from './context-window';
+export { contextWindowForModel, type ContextWindowEstimate } from './context-window';
 
 // The per-turn bulk ledger: the cumulative clamp budget + the M1 trip counters.
 export {
@@ -1881,6 +1883,7 @@ export {
   openTurnRun, closeTurnRun, snapshotCompletedTurn,
   persistMeasuredPromptTokens, applyOverflowRecovery, creditedTurnId,
   classifyRunEnd, RUN_END_REASONS, TOOL_CALLS_PENDING, OUTPUT_LIMIT_REACHED, TURN_ENDED_MID_WORK,
+  PROVIDER_NAMED_NO_END, STREAM_ENDED_UNNAMED,
   owesOutputLimitContinuation, OUTPUT_CONTINUATION_EVENT, OUTPUT_CONTINUATION_TEXT,
   type CompactionTriggerState, type SettledTurn, type OutputContinuationFacts,
   type RunEndReason, type RunEndFacts, type RunEndClassification,
@@ -2434,7 +2437,9 @@ export {
   type HeadDelta, type HeadDeltaKind, type HeadDeltas,
 } from './read-models/head-chat';
 
-export { liveTail, type LiveTail } from './read-models/message-live-tail';
+export { liveTail, threadLiveTail, type LiveTail } from './read-models/message-live-tail';
+
+export { turnLiveness, type TurnClaimState, type TurnLiveness } from './read-models/turn-liveness';
 
 export {
   breakdownView, shareOfMeasured,

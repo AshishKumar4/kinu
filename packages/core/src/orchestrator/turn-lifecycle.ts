@@ -94,6 +94,48 @@ export const TOOL_CALLS_PENDING = 'tool-calls';
  */
 export const OUTPUT_LIMIT_REACHED = 'length';
 
+/**
+ * The finish reason a step reports when the provider named NO end at all.
+ *
+ * The AI SDK's own word once more, and specifically its FALLBACK: every mapper
+ * in the families this tree calls — `@ai-sdk/openai`, `@ai-sdk/openai-compatible`,
+ * `@ai-sdk/anthropic` — returns this string for a `finish_reason` that never
+ * arrived, and `ai` folds its own `'unknown'` onto it. So a step that says this
+ * is a step whose stream ENDED without the producer saying why.
+ *
+ * That is a definitive failure wearing a clean end's clothes, and it is the one
+ * the framing layer cannot catch. `providers/sse-terminal.ts` ends a stream at
+ * `data: [DONE]` and closes cleanly when the body ends without one, because the
+ * terminator is not universal among the gateways that speak the dialect —
+ * absence of the marker is not evidence of a broken pipe at the byte layer.
+ * One layer up it is: the SDK parsed every frame the producer sent and none of
+ * them named an end, so the answer the user is about to read is whatever had
+ * arrived when the socket died.
+ *
+ * The MIRROR of {@link TOOL_CALLS_PENDING}, and it earns a ledger word where
+ * that one earns a tripwire, because the two states differ in what produced
+ * them. Tool calls pending could only come from a step ceiling inside our own
+ * loop — a defect, not a status. An unnamed end comes from the network, which
+ * is neither reachable nor removable from here, so a run CAN carry it and the
+ * honest word for a turn whose answer was cut by a dead socket is `error` with
+ * the reason written out.
+ *
+ * One stop reason maps here legitimately: Anthropic's `compaction`, from the
+ * vendor's own context-management feature. No request this tree sends asks for
+ * it (compaction here is `packages/compaction`, over our own history), so it
+ * cannot arrive; if it ever can, the SDK giving it a word of its own is the
+ * repair, not a predicate here that guesses which kind of `other` it saw.
+ */
+export const PROVIDER_NAMED_NO_END = 'other';
+
+/** What the ledger says when a run ended on {@link PROVIDER_NAMED_NO_END}. The
+ *  text a person reads in the run history, so it says what happened to the
+ *  answer rather than naming a finish reason. */
+export const STREAM_ENDED_UNNAMED =
+  'The model stream ended without naming a finish reason: the connection stopped producing '
+  + 'before the model said it was done, so the answer recorded for this turn is what had '
+  + 'arrived by then rather than the whole of it.';
+
 /** The `kinuEvent` name stamped on the ONE continuation turn a truncated cloud
  *  answer earns — the marker that stops the continuation from earning another,
  *  the same way {@link OVERFLOW_RETRY_EVENT} bounds the retry it names. */
@@ -213,6 +255,12 @@ export interface RunEndClassification {
  * The completed arm additionally CHECKS its own impossibility — see
  * {@link TURN_ENDED_MID_WORK}. The reason it reports is unchanged: this function
  * names what the driver saw, and a defect in the loop is not a status for a user.
+ *
+ * It also refuses the one clean end that was never the model's own — see
+ * {@link PROVIDER_NAMED_NO_END}. That one DOES change the reason, because the
+ * driver's observation is the thing being corrected: it saw a loop that ran out
+ * of work and called it finished, and the reason the loop ran out of work is
+ * that the stream feeding it stopped.
  */
 export function classifyRunEnd(facts: RunEndFacts): RunEndClassification {
   if (facts.interrupted) return { reason: 'aborted' };
@@ -222,6 +270,10 @@ export function classifyRunEnd(facts: RunEndFacts): RunEndClassification {
   // Neither finished nor threw anything nameable: still a failure, and saying
   // so without inventing a cause is the honest row.
   if (!facts.completed) return { reason: 'error' };
+
+  if (facts.lastFinishReason === PROVIDER_NAMED_NO_END) {
+    return { reason: 'error', error: STREAM_ENDED_UNNAMED };
+  }
 
   if (facts.lastFinishReason === TOOL_CALLS_PENDING) {
     diagnostics.failure(TURN_ENDED_MID_WORK, toKinuError({

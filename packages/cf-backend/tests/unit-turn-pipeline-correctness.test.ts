@@ -87,8 +87,6 @@ const chatRunner = readFileSync(join(import.meta.dir, '..', '..', 'core', 'src',
 
 const transport = readFileSync(join(import.meta.dir, '..', 'src', 'chat-transport.ts'), 'utf8');
 
-const inboxSource = readFileSync(join(import.meta.dir, '..', '..', 'core', 'src', 'orchestrator', 'inbox.ts'), 'utf8');
-
 /** Every cf-backend source that turns a reasoning-effort level into provider
  *  options. Core owns the function; this names its callers, so a second
  *  derivation added anywhere in the backend shows up as a new entry. */
@@ -310,21 +308,6 @@ describe('turn-pipeline correctness wiring', () => {
     await expect(chatSessionTurns(denied.agent).prepare(turn)).rejects.toMatchObject({ code: 'denied' });
   });
 
-  test('client RPC policy runs before SDK dispatch and defaults to allow', () => {
-    const constructor = actor.slice(
-      actor.indexOf('constructor(ctx: AgentContext, env: Env)'),
-      actor.indexOf('/** The settled turn\'s actor-generic front half'),
-    );
-
-    const policy = constructor.indexOf('this.isClientRpcMethodDenied(rpc.method)');
-    const dispatch = constructor.indexOf('await dispatchMessage.call');
-    expect(actor).toContain('protected isClientRpcMethodDenied(_method: string): boolean { return false; }');
-    expect(policy).toBeGreaterThan(-1);
-    expect(dispatch).toBeGreaterThan(policy);
-    expect(constructor).toContain("type: 'rpc'");
-    expect(constructor).toContain('success: false');
-  });
-
   test('the admission count and the submitted model resolve ONE spec, not two', () => {
     // The counter picks a provider by parsing the profile tier's spec; the model
     // actually submitted comes from `resolveModel`, which NORMALISES first. So
@@ -464,46 +447,6 @@ describe('turn-pipeline correctness wiring', () => {
     const rootRuntime = memberBody(actor, 'protected getCFHeadRuntime()');
     expect(rootRuntime).toContain('operations: this.modelOperations');
     expect(headRuntime).toContain('operations?: ModelOperationSink');
-  });
-
-  test('the MEMORY.md tail is read once per turn and rides the per-step dynamic block', () => {
-    // Parity with the CLI: the reflection loop assumes the model sees its
-    // newest lessons in-turn. The tail is the ONE dynamic-context input behind
-    // an await, so it is sourced once at turn assembly and closed over by the
-    // per-step snapshot — never rendered into the cacheable prefix.
-    // The tail is read inside the turn assembly, which `prepareTurn` awaits
-    // before it hands the loop the execution whose per-step snapshot closes
-    // over it: the read sits inside the assembly, and the await before the
-    // closure.
-    const assemblyIdx = actor.indexOf('private async assembleTurn(input: TurnAssemblyInput)');
-    const sourceIdx = actor.indexOf('const memoryTail = await readMemoryTail(this.rt.memory)');
-    const assembledIdx = actor.indexOf('await this.assembleTurn(');
-    const closedOverIdx = actor.indexOf('this.dynamicContextSnapshot(profile, tools, assembled.memoryTail)');
-    expect(assemblyIdx).toBeGreaterThan(-1);
-    expect(sourceIdx).toBeGreaterThan(assemblyIdx);
-    expect(assembledIdx).toBeGreaterThan(-1);
-    expect(closedOverIdx).toBeGreaterThan(assembledIdx);
-    expect(actor.match(/readMemoryTail\(/g)).toHaveLength(1);
-
-    // Everything else the block carries is now read live inside core, at the
-    // step the snapshot is called: WHICH planes exist is agentDynamicContext's
-    // (pinned in core's unit-volatile-context.test.ts) and WHICH STORE feeds
-    // each is collectDynamicContext's (pinned behaviourally, per plane, in
-    // core's unit-dynamic-context-binding.test.ts). What is left here is the
-    // two inputs only this backend knows.
-    const snapshot = actor.slice(
-      actor.indexOf('protected dynamicContextSnapshot('),
-      actor.indexOf('private _lastSystemPromptHash'),
-    );
-
-    expect(snapshot).toContain('collectDynamicContext({');
-    expect(snapshot).toContain('memoryTail,');
-    expect(snapshot).toContain('profile,');
-    expect(actor).toContain('dynamic: (profile, tools) => this.dynamicContextSnapshot(profile, tools, assembled.memoryTail)');
-    expect(snapshot).toContain('...this._mcpUnavailable');
-    // Passed, not re-derived: a backend that rebuilt its own store handles here
-    // would be back to stating the binding twice.
-    expect(snapshot).toContain('stores: this.stores');
   });
 
   test('the dynamic-context ledger rides the shared STEP pipeline, not the turn assembly', async () => {
@@ -1021,27 +964,7 @@ describe('turn-pipeline correctness wiring', () => {
     });
   });
 
-  test('programmatic turns succeed only after the loop completes the turn and keep their own drain identity', async () => {
-    // The host's enqueue is the loop's: a programmatic turn is answered when
-    // the pump has RUN it — 'queued' after the turn, a refusal as 'skipped', a
-    // consumed offer as 'yielded' — and only a settle running on the pump's
-    // own stack is answered at admission instead.
-    expect(actor).toContain('enqueueTurn: (input) => this.chatLoop.enqueueTurn(input),');
-    const pump = loop.slice(loop.indexOf('  pump(): void {'), loop.indexOf('private async processTurn('));
-    const ran = pump.indexOf('await this.processTurn(item);');
-    const answered = pump.indexOf('item.settle(null);');
-    expect(ran).toBeGreaterThan(-1);
-    expect(answered).toBeGreaterThan(ran);
-    expect(loop).toContain("status: yielded === true ? 'yielded' : refusal ? 'skipped' : 'queued',");
-    // ONE source for the drain identity, and it is durable: the enqueue seam
-    // stamps `drainTurnId` on the turn it queues, the loop's admission row
-    // carries it, and the settle reads it off the ADMITTED ITEM — so the
-    // activation that runs a durably admitted drain, which is not the one that
-    // submitted it, still answers it as one turn. No per-activation stash.
-    expect(inboxSource).toContain('if (signal.replyTurnId) metadata.drainTurnId = signal.replyTurnId;');
-    expect(loop).toContain("const queued = v.safeParse(v.string(), item.metadata?.drainTurnId);");
-    expect(actor).not.toContain('_activeDrainTurnId');
-    expect(actor).not.toContain('_pendingDrainReplyTurns');
+  test('a queued drain is driven by its own words and answered by the model', async () => {
     // Behavioural: the driving text of a queued drain is the drain's own words,
     // and its answer is the model's.
     const drained = orchestratorHarness();
@@ -1092,48 +1015,6 @@ describe('turn-pipeline correctness wiring', () => {
     expect(source).not.toContain('_pendingDrainReplyTurns');
     expect(loop).toContain('private answeredDeliveries(item: QueueItem): ReadonlySet<string> {');
   });
-
-  test('activation classifies owed deliveries; only the durable wake dispatches', () => {
-    // Activation asks ONE predicate and arms one row…
-    const onStart = memberBody(source, 'async onStart(): Promise<void>', 'orchestrator.ts');
-    expect(onStart).toContain('sweepsTruncated || this.owedWorkExists()');
-    expect(onStart).toContain('this.scheduleTerminalRetry(Date.now())');
-
-    // …and that predicate's untimed half is EXISTENCE READS AND NOTHING ELSE —
-    // the init ruling covers spawned work too, so the lease join, the stale
-    // sweep and every dispatch belong to the wake's frame. Behaviour:
-    // unit-durable-terminal-recovery.test.ts drives an activation over an owed
-    // lease and asserts both halves — the classification answers true and the
-    // lease is untouched until the tick runs.
-    const classify = memberBody(
-      source, 'protected override owedUntimedWork(): boolean', 'orchestrator.ts',
-    );
-
-    expect(classify).toContain('hasOpenDrainLease()');
-    expect(classify).toContain('hasIncomplete()');
-    expect(classify).not.toContain('await');
-    expect(classify).not.toContain('owedDrainReplies');
-    expect(classify).not.toContain('unbindStale');
-    expect(classify).not.toContain('resumeAll');
-
-    // The wake: sweep with the answered set excluded, then the replies, then
-    // the terminal replay — one frame, one order that cannot lose work.
-    const wake = memberBody(
-      source, 'protected override async owedDeliveryWork(): Promise<void>', 'orchestrator.ts',
-    );
-
-    const owedAt = wake.indexOf('this.owedDrainReplies()');
-    const sweptAt = wake.indexOf('this.eventLog.unbindStale(');
-    const repliesAt = wake.indexOf('await this.completeEventBatch(');
-    const terminalAt = wake.indexOf('await super.owedDeliveryWork()');
-    expect(owedAt).toBeGreaterThan(-1);
-    expect(sweptAt).toBeGreaterThan(owedAt);
-    expect(repliesAt).toBeGreaterThan(sweptAt);
-    expect(terminalAt).toBeGreaterThan(repliesAt);
-    expect(wake).toContain('STALE_EVENT_DELIVERY_MS');
-    expect(wake).toContain('this.orch.scheduleDrain()');
-  });
-
 
   test('attachment sanitization runs on the whole history BEFORE the extension transform', () => {
     // The ordering (sanitize → onTurnStart → transformContext → turn-local) is

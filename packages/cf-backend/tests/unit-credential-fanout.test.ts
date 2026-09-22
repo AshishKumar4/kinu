@@ -29,8 +29,8 @@ function setup() {
     async pollCodexDeviceFlow() { return { connected: true, accountId: 'acc' }; },
     async listActiveWorkspaces() {
       return [
-        { name: 'jarvis', displayName: 'Jarvis', createdAt: 1 },
-        { name: 'old-bot', displayName: 'Old', createdAt: 2 },
+        { name: 'jarvis', displayName: 'Jarvis', createdAt: 1, nameOrigin: 'user' as const },
+        { name: 'old-bot', displayName: 'Old', createdAt: 2, nameOrigin: 'user' as const },
       ];
     },
   });

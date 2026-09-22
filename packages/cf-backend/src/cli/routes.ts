@@ -342,7 +342,7 @@ export async function handleCliRequest<Id>(
   }
 
   if (path === '/workspaces' && method === 'POST') {
-    return handleCreateWorkspaceRequest({ request, env, userId: cli.userId, userDO: cli.userDO, ctx });
+    return handleCreateWorkspaceRequest({ request, env, userId: cli.userId, userDO: cli.userDO });
   }
 
   const workspaceMatch = path.match(/^\/workspaces\/([^/]+)$/);

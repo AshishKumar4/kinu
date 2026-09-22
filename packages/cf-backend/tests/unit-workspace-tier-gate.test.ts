@@ -145,12 +145,12 @@ const GATED_CALLS: GatedCall[] = [
 
   { capability: 'peers.grants', name: 'hasPeerGrant', run: (u, c) => u.hasPeerGrant(c, 'scout', 'b'.repeat(32)) },
 
-  { capability: 'experience.read', name: 'searchExperience', run: (u, c) => u.searchExperience(c, { query: 'deploy' }) },
-  { capability: 'experience.read', name: 'getExperienceEntry', run: (u, c) => u.getExperienceEntry(c, 'exp-nope') },
+  { capability: 'experience.read', name: 'searchExperienceWire', run: (u, c) => u.searchExperienceWire(c, { query: 'deploy' }) },
+  { capability: 'experience.read', name: 'getExperienceEntryWire', run: (u, c) => u.getExperienceEntryWire(c, 'exp-nope') },
   {
     capability: 'experience.write',
-    name: 'publishExperience',
-    run: (u, c) => u.publishExperience(c, {
+    name: 'publishExperienceWire',
+    run: (u, c) => u.publishExperienceWire(c, {
       kind: 'fact', key: 'deploy.target', title: 'deploy.target',
       payload: { kind: 'fact', key: 'deploy.target', value: 'x.workers.dev', confidence: 1 },
       evidence: 'held at confidence 1.00',
@@ -408,8 +408,8 @@ describe('a registered workspace reaches the whole surface', () => {
     expect(kept).toContain('workspaces.read:listWorkspaces');
     expect(kept).toContain('workspaces.write:registerWorkspace');
     expect(kept).toContain('release:getReleaseBoard');
-    expect(kept).toContain('experience.read:searchExperience');
-    expect(kept).toContain('experience.write:publishExperience');
+    expect(kept).toContain('experience.read:searchExperienceWire');
+    expect(kept).toContain('experience.write:publishExperienceWire');
     expect(kept).toContain('profile:getProfile');
     expect(kept).toContain('auth_tokens:mintCliToken');
     expect(kept).toContain('credentials.model:getAuthHeaders(codex.oauth)');

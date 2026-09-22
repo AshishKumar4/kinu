@@ -22,18 +22,29 @@
  * draft to the turn already running. Enter is never a no-op mid-stream: a send
  * that early-returns while streaming leaves someone typing at a working agent
  * with nothing happening and nothing said about it.
+ *
+ * WHICH of those the composer offers comes from one value — `turnLiveness`,
+ * folded over the durable claim and the socket — and the transcript's live
+ * tail reads the same one. Two readings of "a turn is live" is how a Stop
+ * button came to sit over a thread with no indicator in it. A claim nobody is
+ * executing (`stranded`) offers recovery instead: Stop would be sent to an
+ * isolate that is gone.
  */
 import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import { InputArea, Loader } from "@cloudflare/kumo";
 import {
-  StopIcon, GitBranchIcon, ArrowBendUpRightIcon,
+  StopIcon, GitBranchIcon, ArrowBendUpRightIcon, ArrowsClockwiseIcon,
   WarningCircleIcon, InfoIcon, CheckCircleIcon, FileIcon, XIcon,
 } from "@phosphor-icons/react";
 import type { FileUIPart } from "ai";
+import type { TurnLiveness } from "@kinu.run/core";
 import { AttachmentChip } from "@/components/AttachmentChip";
 import type { WorkspaceNotice } from "@/hooks/use-kinu";
 
 const CHAT_MODES = ["build", "plan"] as const;
+
+/** The recovery button, in the two states the press moves it through. */
+const RECOVER_LABEL = { idle: "Recover", busy: "Recovering…" } as const;
 
 export type ChatMode = (typeof CHAT_MODES)[number];
 
@@ -260,8 +271,16 @@ export interface ComposerProps {
   placeholder: string;
   /** The socket is not usable — every control goes inert. */
   disabled: boolean;
-  streaming: boolean;
+  /** Whether a turn is running, and how — the one fold both this and the
+   *  transcript's live tail read. */
+  liveness: TurnLiveness;
   onStop: () => void;
+  /** Settle a claim nobody is executing. Offered only for a stranded turn;
+   *  a surface with no recovery route omits it and the strand is then stated
+   *  without an action. Rejects on RPC failure — this owns the line that says
+   *  so, for the reason the feedback toggle does: the press must not report
+   *  success the server did not give. */
+  onRecover?: () => Promise<void>;
   /** Statuses above the draft, oldest first. Empty renders nothing. */
   notices?: readonly ComposerNotice[];
   /** Turn mode. Every agent conversation passes its own; omitted only on
@@ -288,17 +307,23 @@ export interface ComposerProps {
 }
 
 export function Composer({
-  value, onValueChange, onSend, placeholder, disabled, streaming, onStop,
+  value, onValueChange, onSend, placeholder, disabled, liveness, onStop, onRecover,
   notices, mode, attachments, modelPicker, onBranch, textareaRef,
 }: ComposerProps) {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const empty = value.trim() === "" && (attachments?.parts.length ?? 0) === 0;
   const hasFailedAttachment = (attachments?.failed?.length ?? 0) > 0;
+  const streaming = liveness.kind === "live";
+  const stranded = liveness.kind === "stranded";
   const canBranch = Boolean(onBranch) && streaming && !empty && mode?.value !== "plan";
   const [stopping, setStopping] = useState(false);
+  const [recovering, setRecovering] = useState(false);
+  const [recoverFailed, setRecoverFailed] = useState(false);
+  const recoverLabel = recoverFailed ? "Retry recovery" : RECOVER_LABEL[recovering ? "busy" : "idle"];
   // The runtime sends no stopped event, so the streaming flag going false is
   // the only confirmation a stop landed.
   useEffect(() => { if (!streaming) setStopping(false); }, [streaming]);
+  useEffect(() => { if (!stranded) setRecovering(false); }, [stranded]);
   // One submit whatever the agent is doing: while a turn runs it is the words
   // handed to that turn, and the button says so. Enter reaches the same thing
   // the button does — an Enter that silently does nothing is the defect this
@@ -446,6 +471,20 @@ export function Composer({
                 title="Stop this turn. Queued messages run next.">
                 <StopIcon size={14} weight="fill" />
                 <span className="hidden @[30rem]:inline p-meta">{stopping ? "Stopping…" : "Stop"}</span>
+              </button>
+            )}
+            {stranded && onRecover && (
+              <button type="button" disabled={recovering}
+                onClick={() => {
+                  setRecovering(true);
+                  setRecoverFailed(false);
+                  onRecover().catch(() => { setRecoverFailed(true); setRecovering(false); });
+                }}
+                className="p-btn-quiet inline-flex h-8 cursor-pointer items-center justify-center gap-1.5 px-2 disabled:opacity-50"
+                aria-label="Recover this turn"
+                title="This turn's worker stopped without finishing. Settle it so the agent takes work again.">
+                <ArrowsClockwiseIcon size={14} />
+                <span className="hidden @[30rem]:inline p-meta">{recoverLabel}</span>
               </button>
             )}
             {canBranch && (

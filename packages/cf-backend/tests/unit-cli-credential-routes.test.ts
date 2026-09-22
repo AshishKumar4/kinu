@@ -45,7 +45,7 @@ function setupEnv() {
 
   const userDO = cliAccount({
     async listActiveWorkspaces(_caller: UserCaller) {
-      return [{ name: 'jarvis', displayName: 'Jarvis', createdAt: 1 }];
+      return [{ name: 'jarvis', displayName: 'Jarvis', createdAt: 1, nameOrigin: 'user' as const }];
     },
     async verifyCliToken(_caller: UserCaller, token: string) {
       return {

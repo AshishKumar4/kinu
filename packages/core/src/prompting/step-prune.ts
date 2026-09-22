@@ -51,10 +51,30 @@ import { renderThrownChain } from '../obs/index';
  * source names an output-token cap"). It is a SHARE of `contextWindow`, not
  * capacity beside it: a chat model's window holds the instruction and the
  * answer together.
+ *
+ * `null` is the catalog saying NOTHING about the answer's size, and it is a
+ * third answer rather than a small or a large one. It used to be spelled as the
+ * whole window, on the reasoning that an unreported answer may take all of it —
+ * which reads as honest and is not: the half bound below then reserved half the
+ * window from every model whose allowance nobody had published, and #20 was a
+ * 1M-window model refused against 64,000 tokens on exactly that arithmetic.
  */
 export interface ModelWindow {
   readonly contextWindow: number;
-  readonly modelOutputLimit: number;
+  readonly modelOutputLimit: number | null;
+}
+
+/**
+ * A {@link ModelWindow} that also states where `contextWindow` came from.
+ *
+ * `windowMeasured: false` says the number is the static table's stand-in for a
+ * spec no catalog has answered for. Every budget in this codebase may spend a
+ * stand-in — a budget has to produce some number — but the one decision that
+ * REFUSES work (orchestrator/turn-context.ts) may not, so the provenance
+ * travels with the value rather than being re-derived by whoever needs it.
+ */
+export interface ResolvedModelWindow extends ModelWindow {
+  readonly windowMeasured: boolean;
 }
 
 /**
@@ -72,8 +92,17 @@ export interface ModelWindow {
  * module means `limit <= 0` and the pruning pass switching itself off. Maxima
  * below half are facts and are reserved in full: 128000 of 1000000 for
  * anthropic/claude-opus-4-7, 384000 of 1000000 for deepseek/deepseek-v4-pro.
+ *
+ * AN UNREPORTED MAXIMUM RESERVES NOTHING. The bound above exists to keep a
+ * REPORTED allowance from eating the instruction's room; applying it to an
+ * absent one halves a window on no evidence at all, and the half it takes away
+ * is real input the model would have accepted. The answer is bounded by the
+ * provider whatever this function does, so the honest reservation for a figure
+ * nobody published is zero, and the request that follows is the provider's to
+ * refuse.
  */
 export function outputReserveTokens(limits: ModelWindow): number {
+  if (limits.modelOutputLimit === null) return 0;
   const window = Math.max(0, Math.floor(limits.contextWindow));
   const answer = Math.max(0, Math.floor(limits.modelOutputLimit));
 

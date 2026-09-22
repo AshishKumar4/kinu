@@ -846,7 +846,7 @@ describe('creating a workspace whose name is already taken', () => {
     const owner = await testOwner();
 
     const created = createdWorkspace(await harness.userDO.registerWorkspace(owner, 'jarvis', 'Jarvis'));
-    const again = await harness.userDO.registerWorkspace(owner, 'jarvis', 'A different title', 'a new mission');
+    const again = await harness.userDO.registerWorkspace(owner, 'jarvis', 'A different title', { purpose: 'a new mission' });
     const third = await harness.userDO.registerWorkspace(owner, 'jarvis');
 
     expect(again.status).toBe('active');
@@ -866,7 +866,7 @@ describe('creating a workspace whose name is already taken', () => {
     const owner = await testOwner();
     const reserved = await harness.userDO.reserveWorkspace(owner, 'in-flight', 'Fork target');
 
-    const registered = await harness.userDO.registerWorkspace(owner, 'in-flight', 'Hijacked', 'another mission');
+    const registered = await harness.userDO.registerWorkspace(owner, 'in-flight', 'Hijacked', { purpose: 'another mission' });
 
     expect(registered).toEqual({ status: 'reserved' });
     // The reservation is untouched: same title, still unpublished, still the

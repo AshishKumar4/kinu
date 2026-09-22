@@ -46,6 +46,7 @@ import {
 } from "@kinu.run/core";
 import { abandonTurn, abandonTurnIfOwner, admitTurn, newSendLatch } from "@kinu.run/core";
 import { terminalChatError, type ChatTurnError } from "@kinu.run/core";
+import { turnLiveness, type TurnClaimState } from "@kinu.run/core";
 import type { AsyncResource } from "./use-async-resource";
 import { pruneSlateReloads } from "../components/surfaces/presence";
 
@@ -239,6 +240,11 @@ export interface WorkspaceSnapshot {
    *  a branch that started or settled while this tab was gone is invisible to
    *  a state fed only by broadcasts. */
   branchRuns: Array<{ branchId: string; task: string; status: "running" }>;
+  /** The actor's durable turn claim — admitted, settled, or stranded. The one
+   *  fact the composer's actions and the thread's live tail are both folded
+   *  from, so a turn the client has not seen a token for is still live and a
+   *  claim nobody is executing reads as stuck rather than as work. */
+  turnClaim: TurnClaimState;
 }
 
 import { PlanReviewSchema, WorkspacePlanReferenceSchema, type WorkspacePlanReference } from "@kinu.run/core";
@@ -317,7 +323,7 @@ const SubordinateRosterEntrySchema = v.object({
   name: v.string(),
   displayName: v.string(),
   role: v.string(),
-  nameOrigin: v.optional(v.picklist(["user", "auto"])),
+  nameOrigin: v.optional(v.picklist(["user", "auto", "provisional"])),
   createdBy: v.picklist(["orchestrator", "user"]),
   status: v.picklist(["idle", "working", "awaiting_input", "dismissed"]),
   currentTask: v.nullable(v.string()),
@@ -1086,6 +1092,10 @@ export function useKinu(target?: string | KinuActorAddress) {
   const [changelogUnseen, setChangelogUnseen] = useState(0);
   // Steer-as-Branch runs — the split progress chips near the streaming answer.
   const [branchRuns, setBranchRuns] = useState<BranchRun[]>([]);
+  /** The durable turn claim, replaced by every snapshot. A pane that has not
+   *  loaded one yet answers `settled`; the socket's own streaming flag covers
+   *  the window before the first snapshot lands. */
+  const [turnClaim, setTurnClaim] = useState<TurnClaimState>({ kind: "settled" });
   // Per-branch write counter, bumped by the `head_activity` broadcast. Counts
   // rather than timestamps: an open transcript only has to notice that ITS
   // branch moved, and a counter says that unambiguously without a clock the two
@@ -1311,6 +1321,22 @@ export function useKinu(target?: string | KinuActorAddress) {
    * exists rather than a second flag to keep in step with the latch below.
    */
   const isStreaming = streamingTokens || chatStatus === "submitted";
+
+  /**
+   * THE ONE ANSWER to "is a turn live", folded over the durable claim and the
+   * socket above. The composer's actions and the thread's live tail both read
+   * this; before it they read two different things and disagreed whenever a
+   * turn was admitted with no assistant row written yet.
+   *
+   * `isStreaming` stays as the socket's own view, which this fold consumes —
+   * the claim is snapshot-paced and a turn opens between snapshots, so a
+   * client watching its own tokens is live regardless of when the last
+   * snapshot landed.
+   */
+  const liveness = useMemo(
+    () => turnLiveness({ claim: turnClaim, streaming: isStreaming }),
+    [turnClaim, isStreaming],
+  );
 
   /**
    * SEND ADMISSION. The latch lives in `send-admission.ts` — a ref mutated in
@@ -1945,6 +1971,15 @@ export function useKinu(target?: string | KinuActorAddress) {
     if (!isSubordinate) refreshLiveData();
   }, [isSubordinate, refreshLiveData, sessionRecovery, setSourceError]);
 
+  /** Settle a stranded claim on the server, then re-read the snapshot the
+   *  affordance is derived from. The press never edits the claim locally: the
+   *  server's next answer is what retires the button, so a recovery that
+   *  refused leaves the turn shown as stuck. */
+  const recoverTurn = useCallback(async (): Promise<void> => {
+    await rpc("recoverStrandedTurn", []);
+    refreshLiveData();
+  }, [refreshLiveData, rpc]);
+
   // Refresh surface data when a turn completes (streaming ends).
   const wasStreaming = useRef(false);
   useEffect(() => {
@@ -2023,6 +2058,7 @@ export function useKinu(target?: string | KinuActorAddress) {
     setBranchRuns(snap.branchRuns.map((run) => ({
       branchId: run.branchId, task: run.task, status: run.status,
     })));
+    setTurnClaim(snap.turnClaim);
 
     try {
       await Promise.all([refreshExposedPorts(), refreshPendingActions()]);
@@ -2443,6 +2479,13 @@ export function useKinu(target?: string | KinuActorAddress) {
      *  on, which is what "working" vs "waiting on {provider}" reads. */
     providerWait,
     isStreaming,
+    /** Whether a turn is live, stuck, or neither — the one value both the
+     *  composer and the thread's live tail read. */
+    liveness,
+    /** Settle a claim nobody is executing and re-pend what it fenced, then
+     *  re-read the snapshot so the affordance retires on the server's answer
+     *  rather than on the press. */
+    recoverTurn,
     /** True once the server has stated this conversation's contents. Until then
      *  `messages` being empty means "not delivered", not "there is nothing". */
     transcriptSeeded,

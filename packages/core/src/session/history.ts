@@ -8,6 +8,7 @@ import { SessionContext, type ContextSelection, type ContextEntry } from './cont
 import { SessionProposals, type ContextProposal } from './proposals';
 import { SessionRequests } from './requests';
 import { KinuError } from '../obs/error';
+import { diagnostics } from '../obs/log';
 import type { JsonObject } from '../utils/json';
 import { SessionTranscript } from './transcript';
 import { toolPairingGaps } from './tool-pairing';
@@ -140,6 +141,11 @@ export class SessionHistory {
       const target = this.context.fork(base);
       this.context.select(selected, target, assertIdle);
       transcript.setHead(entry.parentId);
+      // The one deliberate way the head moves BACKWARDS. Recorded because a
+      // conversation that reads shorter than it was is otherwise
+      // indistinguishable from one that lost rows, and the owner's report was
+      // exactly that ambiguity.
+      diagnostics.event('session.transcript_head_moved', { session: sessionId, from: entryId, to: entry.parentId ?? '' });
 
       return target;
     });

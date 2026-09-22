@@ -216,6 +216,7 @@ export const AGENT_RPC_ACCESS = {
 
   // ── Run-a-task surfaces a workspace.exec token may perform ──
   cancelCurrentWork: 'workspace.exec',
+  recoverStrandedTurn: 'workspace.exec',
   executeInExecutor: 'workspace.exec',
 
   // ── Interactive-session-only (scoped tokens denied on every transport) ──

@@ -169,7 +169,7 @@ function routeHarness(selectFails = false) {
     async ensureProfile(_caller: UserCaller, email: string) { return bootstrappedProfile(email); },
     async userMcp_warmConnections() { return { servers: 0 }; },
     async listActiveWorkspaces() {
-      return [{ name: 'jarvis', displayName: 'Jarvis', createdAt: 1 }];
+      return [{ name: 'jarvis', displayName: 'Jarvis', createdAt: 1, nameOrigin: 'user' as const }];
     },
     async listCloudflareAccounts() {
       return { connected: true, selectedId: PERSONAL.id, accounts: [PERSONAL, EMPLOYER] };

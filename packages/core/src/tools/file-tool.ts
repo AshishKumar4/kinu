@@ -27,12 +27,63 @@ import {
   BUILTIN_TOOL_DESCRIPTIONS, FILE_TOOL_ACTIONS, unknownActionError, type FileToolAction,
 } from './registry';
 import { applyFileEdits, formatFileSlice, FILE_REFUSAL_REASONS, FileRefusalError, type FileEdit } from './file-edit';
-import { readFileText, scanFileWindow, type ScannedFile } from './file-scan';
+import { readFileHead, readFileText, scanFileWindow, type ScannedFile } from './file-scan';
 import { TurnFileLedger, type FileEditOutcomeReason, type FileSeenNeed } from './file-ledger';
 import { DEFAULT_TOOL_RESULT_MAX_CHARS, clampSerializedToolResult } from './clamp';
 import type { JsonValue } from '../utils/json';
 import { KinuError, renderThrownChain } from '../obs/index';
 import { permitInPlan, requireBuild } from '../execution/work-mode';
+import { RESIDENT_TEXT_MAX_BYTES } from '../vfs/mounts';
+
+/**
+ * The most NAMES one `list` answers with.
+ *
+ * A directory belongs to whoever wrote it, so the size of this answer is not
+ * the agent's choice and not the tool's. One thousand is the count this tree
+ * already gives a model-facing bulk read (`tools/db-codemode.ts`
+ * SELECT_LIMIT_MAX: "one read returns at most 1000 rows; page with `offset` or
+ * narrow the query"), and it sits just above what the context cap can carry —
+ * so the spill file holds slightly more than the transcript, and neither holds
+ * a directory.
+ */
+export const FILE_LIST_MAX_ENTRIES = 1_000;
+
+/** The most CHARACTERS of names one `list` answers with, for the directory
+ *  whose entries are few and enormous. Both ceilings are real: the entry count
+ *  bounds an ordinary wide directory and this bounds a pathological one, and a
+ *  listing that tripped neither is returned whole. */
+export const FILE_LIST_MAX_CHARS = RESIDENT_TEXT_MAX_BYTES;
+
+/** The most BYTES one `search` reads of the file it scans. The same budget
+ *  every bounded view in this tree spends on text it makes resident
+ *  (`vfs/mounts.ts`), applied here because search read the file WHOLE — a log
+ *  the agent did not write became an allocation the size of that log inside
+ *  the object that holds the workspace. */
+export const FILE_SEARCH_MAX_BYTES = RESIDENT_TEXT_MAX_BYTES;
+
+/**
+ * The entries a listing answers with, and what it says when it kept back the
+ * rest.
+ *
+ * The shape follows the page-metadata rule the recovery sweep states
+ * (`cf-backend/src/fiber-recovery.ts`): a bounded producer reports the counts,
+ * never the blob. `truncated` is ABSENT on a whole listing rather than present
+ * and zero, so its presence is the fact and a reader needs no arithmetic.
+ */
+function boundListing(path: string, entries: readonly string[]): JsonValue {
+  const shown: string[] = [];
+  let chars = 0;
+
+  for (const entry of entries) {
+    if (shown.length >= FILE_LIST_MAX_ENTRIES || chars + entry.length > FILE_LIST_MAX_CHARS) break;
+    chars += entry.length;
+    shown.push(entry);
+  }
+
+  return shown.length === entries.length
+    ? { path, entries: shown }
+    : { path, entries: shown, truncated: { shown: shown.length, total: entries.length } };
+}
 
 export interface FileToolDeps {
   /** The agent's canonical workspace filesystem (rt.storage.vfs). */
@@ -262,7 +313,7 @@ export function createFileDispatcher(deps: FileToolDeps): (input: FileToolInput)
 
     switch (parsed.output) {
       case 'list':
-        return inspect('list', path, async () => ({ path, entries: await vfs.readdir(path) }));
+        return inspect('list', path, async () => boundListing(path, await vfs.readdir(path)));
       case 'stat':
         return inspect('stat', path, async () => {
           const stat = await vfs.stat(path);
@@ -274,7 +325,14 @@ export function createFileDispatcher(deps: FileToolDeps): (input: FileToolInput)
 
         if (!query.success) return failure('bad_input', 'file search requires a non-empty literal query');
 
-        return inspect('search', path, async () => ({ path, matches: searchLines(await readFileText(vfs, path), query.output) }));
+        return inspect('search', path, async (): Promise<JsonValue> => {
+          const head = await readFileHead(vfs, path, FILE_SEARCH_MAX_BYTES);
+          const matches = searchLines(head.text, query.output);
+
+          return head.total !== null && head.total > head.bytes
+            ? { path, matches, truncated: { shown: head.bytes, total: head.total } }
+            : { path, matches };
+        });
       }
 
       case 'read': {

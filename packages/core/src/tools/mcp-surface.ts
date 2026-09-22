@@ -238,9 +238,9 @@ export interface McpSurfaceBudget {
    *  compaction trigger and the step-prune pass read. */
   contextWindow: number;
   /** The resolved model's output allowance, which the request has to leave room
-   *  for. Read off the SAME `ModelCatalogSession` as the window, never a second
-   *  source. */
-  modelOutputLimit: number;
+   *  for, or null when nothing reported one. Read off the SAME
+   *  `ModelCatalogSession` as the window, never a second source. */
+  modelOutputLimit: number | null;
   /** What the actor's OWN tool definitions cost this turn, measured by
    *  {@link toolSurfaceTokens}. */
   nativeToolTokens: number;
@@ -323,11 +323,14 @@ export function admitMcpDescriptors(
     admitted.push(bounded);
   }
 
+  const reserve = budget.modelOutputLimit === null
+    ? 'no reported output allowance to leave room for'
+    : `this model's ${String(budget.modelOutputLimit)}-token output allowance`;
+
   const deferred = [...lost].map(([server, count]) => ({
     server,
     reason: `${String(count)} of its tools did not fit this turn's remaining tool budget of `
-      + `${String(total)} tokens (a ${String(budget.contextWindow)}-token window less this `
-      + `model's ${String(budget.modelOutputLimit)}-token output allowance, and `
+      + `${String(total)} tokens (a ${String(budget.contextWindow)}-token window less ${reserve}, and `
       + `${String(budget.nativeToolTokens)} already spent by this agent's own tools) `
       + '— those tools are absent',
   }));

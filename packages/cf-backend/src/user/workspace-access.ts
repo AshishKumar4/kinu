@@ -30,12 +30,11 @@ export interface CreateWorkspaceRequest<Id> {
   env: CreateWorkspaceEnv<Id>;
   userId: string;
   userDO: CloudWorkspaceRegistry;
-  ctx?: Pick<ExecutionContext, 'waitUntil'>;
 }
 
 /** POST /workspaces body → created WorkspaceEntry (201) | mapped error response. */
 export async function handleCreateWorkspaceRequest<Id>(call: CreateWorkspaceRequest<Id>): Promise<Response> {
-  const { request, env, userId, userDO, ctx } = call;
+  const { request, env, userId, userDO } = call;
 
   const body = await safeJson(request, v.object({
     name: v.optional(v.string()),
@@ -66,12 +65,8 @@ export async function handleCreateWorkspaceRequest<Id>(call: CreateWorkspaceRequ
   };
 
   try {
-    const createOptions = ctx === undefined
-      ? {}
-      : { waitUntil: (promise: Promise<unknown>) => ctx.waitUntil(promise) };
-
     const entry = await createCloudWorkspaceForUser({
-      env, userId, userDO, caller: await ownerCaller(env), input, options: createOptions,
+      env, userId, userDO, caller: await ownerCaller(env), input,
     });
 
     return json({ body: entry }, { status: 201 });

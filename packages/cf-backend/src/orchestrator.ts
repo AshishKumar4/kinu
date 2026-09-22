@@ -16,7 +16,6 @@ import { callable, type AgentContext, type Connection, type ConnectionContext } 
 import { ORCHESTRATOR_RPC_SURFACE, sealRpcSurface } from "./rpc-surface";
 import {
   runExperienceAction, type ExperienceActionDeps, type ExperienceActionInput,
-  decodeJsonWire, EXPERIENCE_KINDS, parseExperiencePayload,
   type ExperienceEntry, type ExperienceKind, type PublishableCandidate,
   ArchiveCursorSchema,
   createWorkspaceForkSink, createWorkspaceForkSource, workspaceArchiveFiles, writeWorkspaceSoul,
@@ -71,7 +70,7 @@ import {
 import { getSandbox } from "@cloudflare/sandbox";
 import type { SupervisorOpEnvelope } from '@nimbus-sh/core/workspace/supervisor-op.js';
 import type { SupervisorOpResult } from '@kinu.run/core/workspace';
-import type { ActivitySnapshot, TabPresence } from "@kinu.run/core";
+import type { ActivitySnapshot, TabPresence, TurnClaimState } from "@kinu.run/core";
 import type { SubordinateRosterEntry } from "@kinu.run/core/protocol";
 import { teamPeers } from "./lib/workspace-roster";
 import { nextAlarmTime } from '@kinu.run/core';
@@ -242,9 +241,9 @@ import {
   buildWorkspaceOverview, type WorkspaceOverview,
   projectJsonValue,
   type AgentSignal,
-  isPlaceholderWorkspaceTitle,
 } from "@kinu.run/core";
 import * as v from 'valibot';
+import { decodeExperienceEntries, decodeExperienceEntry, decodeOptionalExperienceEntry } from './user/experience-wire';
 import {
   ActorAgent,
   TERMINAL_RETRY_CALLBACK,
@@ -268,6 +267,7 @@ import {
 import type { CodemodeProvider, MctsSearchRunSummary, SubordinateInspectionRequest, SubordinateInspectionResult, WorkspacePlanReference } from "@kinu.run/core";
 import { classify, diagnostics, KinuError, refusalOf, renderCauseChain, renderThrownChain, toKinuError, type Refusal } from "@kinu.run/core/obs";
 import { createCloudWorkspaceForUser } from "./user/workspace-create";
+import type { NameOrigin } from "@kinu.run/core";
 import { deliverCloudFork } from "./user/workspace-fork";
 import { agentEmailAddress } from "./email/inbound";
 import {
@@ -383,6 +383,10 @@ const WAKE_ARM_FAILURE = {
   reconcile: {
     event: 'event.delivery_reconcile_failed',
     doing: 'arming the wake that finishes what a dead activation owed',
+  },
+  recovery: {
+    event: 'turn.recovery_wake_arm_failed',
+    doing: 'arming the wake that resumes work a stranded turn fenced',
   },
 } as const;
 
@@ -521,7 +525,7 @@ export class OrchestratorAgent extends ActorAgent {
     const { stub, caller } = await this.userHub();
     const published = await stub.publishExperienceWire(caller, candidate);
 
-    return experienceEntryOf(v.parse(ExperienceEntryWireSchema, decodeJsonWire(published)));
+    return decodeExperienceEntry(published);
   }
 
   /** One owner-library search through this activation's hub. */
@@ -531,16 +535,15 @@ export class OrchestratorAgent extends ActorAgent {
     const { stub, caller } = await this.userHub();
     const found = await stub.searchExperienceWire(caller, options);
 
-    return v.parse(v.array(ExperienceEntryWireSchema), decodeJsonWire(found)).map(experienceEntryOf);
+    return decodeExperienceEntries(found);
   }
 
   /** One owner-library read through this activation's hub. */
   private async getExperienceEntry(id: string): Promise<ExperienceEntry | null> {
     const { stub, caller } = await this.userHub();
     const read = await stub.getExperienceEntryWire(caller, id);
-    const row = v.parse(v.nullable(ExperienceEntryWireSchema), decodeJsonWire(read));
 
-    return row === null ? null : experienceEntryOf(row);
+    return decodeOptionalExperienceEntry(read);
   }
 
   /**
@@ -852,6 +855,7 @@ export class OrchestratorAgent extends ActorAgent {
       // told a `scribe` child it had the workspace's whole surface.
       profile: (input) => this.hostedActorProfile({ ...input, actor: input.actor.handle }),
       resolveModel: (spec) => this.ownedModelServices.resolveModel(spec),
+      suggestTitle: (mission) => this.suggestTitle(mission),
       taskProfile: (turn) => this.hostedTaskProfile(turn),
       dynamic: (actor, profile, tools) => this.hostedActorDynamicContext(actor, profile, tools),
       mission: () => null,
@@ -3171,8 +3175,8 @@ export class OrchestratorAgent extends ActorAgent {
    *  commits through the same propagation an owner rename does — which is
    *  also where the "a manual rename claimed it first" refusal lives (in
    *  UserDO's `name_origin`, not a local copy of it). */
-  protected async persistAutoTitle(displayName: string): Promise<boolean> {
-    return (await this.setAutoDisplayName(displayName)).applied;
+  protected async persistAutoTitle(displayName: string, origin: NameOrigin): Promise<boolean> {
+    return await this.propagateDisplayName(displayName, origin);
   }
 
   /**
@@ -3182,7 +3186,7 @@ export class OrchestratorAgent extends ActorAgent {
    * scheduler) commits to the root. Sync readers use whatever is hydrated;
    * every mutation path hydrates BEFORE deciding.
    */
-  protected _titleCache: { displayName: string; nameOrigin: 'user' | 'auto' } | null = null;
+  protected _titleCache: { displayName: string; nameOrigin: NameOrigin } | null = null;
   /** Whether the registry was read this activation. A null row (untitled) is
    *  an answer too — without this, every turn re-reads UserDO for a workspace
    *  nobody named. Failures leave it false so the next read retries. Protected
@@ -3204,7 +3208,7 @@ export class OrchestratorAgent extends ActorAgent {
     }
   }
 
-  private titleState(): { displayName: string; nameOrigin: 'user' | 'auto' } {
+  private titleState(): { displayName: string; nameOrigin: NameOrigin } {
     return this._titleCache ?? { displayName: this.name, nameOrigin: 'auto' as const };
   }
 
@@ -3297,7 +3301,7 @@ export class OrchestratorAgent extends ActorAgent {
    *  the naming — decided at the root, in the same write. */
   private async propagateDisplayName(
     displayName: string,
-    origin: 'user' | 'auto',
+    origin: NameOrigin,
   ): Promise<boolean> {
     await this.hydrateTitle();
     let applied = true;
@@ -4194,16 +4198,6 @@ export class OrchestratorAgent extends ActorAgent {
    *  parsing arrives with the Triggers UI. */
 
   // ── Callable RPC methods ───────────────────────────────────────
-
-  private getDisplayName(): string {
-    // The title, not the slug: an untitled workspace answers "" here and every
-    // surface names it "Untitled workspace" through workspaceDisplayTitle —
-    // returning `this.name` put the slug back on screen as the workspace's name.
-
-    const state = this.titleState();
-
-    return isPlaceholderWorkspaceTitle(state.displayName, this.name) ? '' : state.displayName;
-  }
 
   @callable()
   async getReleaseBoard(limit = 20) {
@@ -5899,13 +5893,7 @@ export class OrchestratorAgent extends ActorAgent {
     return { displayName };
   }
 
-  async setAutoDisplayName(displayName: string) {
-    const applied = await this.propagateDisplayName(displayName, 'auto');
-
-    return { displayName: applied ? displayName : this.getDisplayName(), applied };
-  }
-
-  async setInitialDisplayName(displayName: string, nameOrigin: 'user' | 'auto') {
+  async setInitialDisplayName(displayName: string, nameOrigin: NameOrigin) {
     // Genesis only, right after the create path registered the row in the
     // root registry. The activation cache is seeded from what was just
     // written; the root remains the authority.
@@ -6155,7 +6143,53 @@ export class OrchestratorAgent extends ActorAgent {
     return {
       status, tools, memoryContent, executors, executorOutputs, lastActiveExecutor, activePlan,
       tabPresence, slates, pendingSteers: this.pendingSteerRuns(), branchRuns,
+      turnClaim: this.turnClaimState(),
     };
+  }
+
+  /**
+   * The durable answer to "is a turn running", for the one client fold that
+   * decides both the composer's actions and the transcript's live tail.
+   *
+   * `unsettled()` is the claim ledger's wedged-turn query and it is the only
+   * record that outlives the isolate. A claim this isolate is NOT executing
+   * is stranded: the turn it fenced ended with the object that admitted it,
+   * nothing will settle it, and every later send is refused by `assertLive`
+   * while the surface offers a Stop that reaches nobody.
+   */
+  private turnClaimState(): TurnClaimState {
+    const open = this.claims.unsettled(1)[0];
+
+    if (open === undefined) return { kind: 'settled' };
+
+    return {
+      kind: this._inFlight || this.actorSession.inFlight ? 'admitted' : 'stranded',
+      turnId: open.turnId, claimedAt: open.claimedAt,
+    };
+  }
+
+  /**
+   * Settle a claim nobody is executing, and re-pend the work it fenced.
+   *
+   * The claim is sealed `indeterminate` — what the interrupted turn achieved
+   * is unknown, and naming any run-end reason would assert something this
+   * never observed. Owed work then decides the rest: an actor that still owes
+   * a wake gets one, so the turn resumes rather than being silently dropped.
+   */
+  @callable() async recoverStrandedTurn(): Promise<{ readonly recovered: 'sealed' | 'requeued' | 'none' }> {
+    const state = this.turnClaimState();
+
+    if (state.kind !== 'stranded') return { recovered: 'none' };
+    const claim = this.claims.read(state.turnId);
+
+    if (claim === null) return { recovered: 'none' };
+    this.claims.settleRecovered(claim.turnId, claim.epoch, 'indeterminate');
+    diagnostics.event('turn.claim_recovered', { turnId: claim.turnId, epoch: claim.epoch });
+
+    if (!this.owedWorkExists()) return { recovered: 'sealed' };
+    this.armOwedWorkWake('recovery');
+
+    return { recovered: 'requeued' };
   }
 
   /**
@@ -7440,31 +7474,6 @@ export class OrchestratorAgent extends ActorAgent {
 }
 
 // ── Module-scope helpers (referenced by OrchestratorAgent) ────────
-
-/** One library entry as the owner's object sends it. The payload crosses as
- *  plain JSON and is read back through core's own parser, which is the one
- *  reader of the four-kind union; the entry types themselves never cross a stub
- *  signature, because their `JsonValue` exceeds TypeScript's RPC mapping depth. */
-const ExperienceEntryWireSchema = v.object({
-  id: v.string(),
-  kind: v.picklist(EXPERIENCE_KINDS),
-  key: v.string(),
-  title: v.string(),
-  payload: JsonValueSchema,
-  evidence: v.string(),
-  sourceWorkspace: v.string(),
-  publishedAt: v.number(),
-});
-
-function experienceEntryOf(row: v.InferOutput<typeof ExperienceEntryWireSchema>): ExperienceEntry {
-  const payload = parseExperiencePayload(JSON.stringify(row.payload));
-
-  if (payload === null) {
-    throw new KinuError('io', `experience entry ${row.id} carries a payload no kind describes`);
-  }
-
-  return { ...row, payload };
-}
 
 /** An export cursor arrives from a client, so it is claimed, not trusted:
  *  anything that is not the shape the previous page returned starts a fresh
