@@ -1,27 +1,6 @@
 /**
- * `kinu exec` must EXIT.
- *
- * This is the assertion the whole suite structurally could not make. Every
- * other test of the one-shot path runs in-process and awaits a promise, so it
- * can prove the turn produced the right events and still be blind to whether
- * the process that produced them ever terminates. Two defects shipped straight
- * through that blind spot in one session:
- *
- *   - `settleBackgroundWork` waited on a detached job that never settles, so a
- *     one-shot run hung until the harness SIGKILLed it (6.4 of 16.2 agent-hours
- *     of dead idle across a benchmark run, found by an external benchmark and
- *     not by us).
- *   - the host shell settled on the child's `close`, which does not fire until
- *     every inherited pipe shuts, so backgrounding a server held the process
- *     open for the server's whole lifetime.
- *
- * Both are invisible to a return value and obvious to a stopwatch on a real
- * process. So this spawns the actual CLI binary against a mock model that
- * drives the actual `shell` tool at a real host shell, and asserts on the exit.
- *
- * The paired assertion matters as much: the backgrounded process must SURVIVE.
- * Exiting promptly by killing the user's server would pass a naive timing test
- * and destroy the thing they asked for.
+ * `kinu exec` must exit even after `shell` backgrounds a server, and the server must survive.
+ * In-process tests await a promise and cannot see a process that never terminates.
  */
 
 import { readFileSync } from "node:fs";
@@ -38,7 +17,6 @@ const cliBin = join(repoRoot, "packages/cli/bin/cli.ts");
 
 const homes: string[] = [];
 
-/** Fresh throwaway project directory per spawn: the CLI records its cwd as the agent file plane, so a spawn must never sit in the developer repo. */
 function newProjectDir(): string {
   const dir = scratchDir("cli-project");
   homes.push(dir);
@@ -46,16 +24,12 @@ function newProjectDir(): string {
   return dir;
 }
 
-/** Where {@link heartbeatCommand} records the pid of the writer it backgrounds,
- *  so cleanup can stop it instead of racing it. */
+/** Pid file of the writer {@link heartbeatCommand} backgrounds, so cleanup can stop it. */
 const HEARTBEAT_PID = 'heartbeat.pid';
 
 afterEach(() => {
   for (const home of homes.splice(0)) {
-    // Every process this suite left running, stopped before the directory it
-    // writes into is removed. The daemon was already handled; the backgrounded
-    // heartbeat was not, and it is what made `rmSync` a no-op that reported
-    // success (see heartbeatCommand).
+    // Stop leftover processes before removing the directory they write into.
     for (const pidfile of ['daemon.pid', HEARTBEAT_PID]) {
       const recorded = tolerate(() => readFileSync(join(home, pidfile), "utf-8"), 'enoent');
 
@@ -68,10 +42,6 @@ afterEach(() => {
   }
 });
 
-/**
- * An OpenAI-compatible endpoint that calls `shell` once with `command`, then
- * answers with text. Non-streaming and streaming both, because the CLI picks.
- */
 function modelThatRuns(command: string) {
   let calls = 0;
   const usage = { prompt_tokens: 5, completion_tokens: 7, total_tokens: 12 };
@@ -79,8 +49,6 @@ function modelThatRuns(command: string) {
   const toolCall = {
     id: "call_1",
     type: "function",
-    // The workspace shell IS the machine's shell in the directory the run
-    // was started in; there is no device runtime in the CLI.
     function: { name: "shell", arguments: JSON.stringify({ command }) },
   };
 
@@ -141,7 +109,6 @@ function newHome(): string {
   return home;
 }
 
-/** Run the CLI to completion, or report that it did not finish in time. */
 async function runCli(
   args: string[], env: Record<string, string>, home: string, timeoutMs: number,
 ): Promise<{ exitCode: number | null; elapsed: number; timedOut: boolean; stdout: string }> {
@@ -164,22 +131,9 @@ async function runCli(
 }
 
 /**
- * A stand-in for the server the agent was asked to start: it backgrounds, it
- * outlives the command, and it keeps touching a file so its liveness is a fact
- * on disk rather than a pid to chase across process groups.
- *
- * It records its own pid because "it stops on its own once the temp home goes
- * away" is a RACE, and the race is measured: the loop reopens the log with
- * `>>` every second, so a removal that unlinks the log and then rmdirs the
- * home loses to the next append, and `rmSync(force: true)` swallows the
- * resulting ENOTEMPTY and returns as if it had succeeded. Two homes survived
- * every run of this file that way, with the same inode as before the removal —
- * the directory was never gone, and nothing said so. `afterEach` stops the
- * writer first.
- *
- * `seconds` is deliberately much longer than the exit deadline asserted below:
- * that gap IS the test. A shell that waits for this process to finish cannot
- * come in under the deadline.
+ * A backgrounded server stand-in that appends to a log each second. It records its pid because
+ * `rmSync(force: true)` swallows the ENOTEMPTY its next append causes. `seconds` far exceeds the
+ * exit deadline: that gap is the test.
  */
 function heartbeatCommand(home: string, path: string, seconds: number): string {
   return `(for i in $(seq 1 ${seconds}); do [ -d ${home} ] || exit 0; echo alive >> ${path}; sleep 1; done) &`
@@ -209,14 +163,12 @@ describe("kinu exec — a one-shot run terminates", () => {
         ["exec", "--workspace", "lifecycle", "--json", "Start the server"], env, home, 90_000,
       );
 
-      // The whole point. A correct run exits in a few seconds; one that waits
-      // on the backgrounded process cannot beat its 90s lifetime.
+      // A correct run exits in seconds; one waiting on the background process cannot beat its 90s lifetime.
       expect(run.timedOut).toBe(false);
       expect(run.elapsed).toBeLessThan(30_000);
       expect(run.exitCode).toBe(0);
 
-      // And the process the user asked for outlived the CLI that started it —
-      // exiting fast by killing it would be a worse bug than hanging.
+      // The server outlives the CLI; exiting by killing it would be worse than hanging.
       const before = readFileSync(beat, "utf-8").length;
       await Bun.sleep(2_500);
       expect(readFileSync(beat, "utf-8").length).toBeGreaterThan(before);
@@ -226,10 +178,6 @@ describe("kinu exec — a one-shot run terminates", () => {
   });
 
   test("the tool result reaches the model instead of waiting on the server", async () => {
-    // The same defect seen from the model's side: if the call only returns when
-    // the server dies, the turn cannot continue, so `shell`'s output never enters
-    // the transcript. Asserting on the exit alone would not catch a variant
-    // that exits promptly having dropped the result.
     const home = newHome();
     const server = modelThatRuns(heartbeatCommand(home, join(home, "hb2.log"), 90));
 

@@ -1,7 +1,3 @@
-// LocalAgentClient — the local AgentClient adapter over LocalAgentSession,
-// driven by the authentic createCLIRuntime and a fake streaming model (no
-// network LLM). Verifies the unified seam: event stream, turn results, JSONL
-// recording, history hydration, walk-back fork, and stop() reaching the abort.
 import { scratchDir } from '../../test-utils/src/scratch';
 import { present, readTranscriptRows } from '@kinu.run/test-utils';
 import { existsSync } from 'node:fs';
@@ -51,7 +47,6 @@ function fakeModel(answer: string, onPrompt?: (prompt: LanguageModelV2Prompt) =>
   });
 }
 
-/** Emits one delta then stalls until the turn abort signal fires. */
 function stallingModel(): LanguageModel {
   return new TestLanguageModelV2({
     provider: 'fake',
@@ -85,9 +80,7 @@ function fakeResolver(model: LanguageModel): LocalModelResolver {
     modelInfo: async () => null,
     judgeCandidates: async () => [],
     getAuth: async () => null,
-    // The fake vendor publishes no count endpoint, which is what the real seam
-    // answers for it: the turn is assembled ungated rather than gated on an
-    // estimate.
+    // The fake vendor has no count endpoint, so the turn is assembled ungated.
     countInputTokens: async () => ({
       kind: 'unsupported' as const,
       provider: 'fake',
@@ -99,12 +92,10 @@ function fakeResolver(model: LanguageModel): LocalModelResolver {
 function setup(model: LanguageModel) {
   const home = scratchDir('client');
   const dbPath = join(home, 'agent.db');
-  // The database IS `dbPath`: `createCLIRuntime` binds the actor by reading the
-  // database's own filename back and refuses a runtime whose declared path is
-  // not that one (actor-identity.ts `requireLocalDatabasePath`), which no
-  // in-memory handle can satisfy. `create: true` is what puts the file there.
+  // `createCLIRuntime` requires the actor database to be `dbPath` on disk (`requireLocalDatabasePath`),
+  // which no in-memory handle satisfies.
   const db = new Database(dbPath, { create: true });
-  // THE PRODUCTION INITIALIZER, not a copy of its DDL.
+  // The production initializer, not a copy of its DDL.
   initWorkspaceSchema(makeWorkspaceSchemaSql(db));
   const rt = createCLIRuntime(db, { dbPath, llm: DUMMY_LLM });
 
@@ -140,7 +131,6 @@ function openPersistentClient(
 ): LocalAgentClient {
   const dbPath = join(home, 'agent.db');
   const db = new Database(dbPath);
-  // THE PRODUCTION INITIALIZER, not a copy of its DDL.
   initWorkspaceSchema(makeWorkspaceSchemaSql(db));
   const rt = createCLIRuntime(db, { dbPath, llm: DUMMY_LLM });
 
@@ -188,7 +178,6 @@ describe('LocalAgentClient', () => {
     const streamed = events.flatMap((event) => event.type === 'text-delta' ? [event.delta] : []).join('');
     expect(streamed).toBe('hello there');
 
-    // Recording is owned by the client: user + assistant entries land in JSONL.
     const history = await client.history();
     expect(history.map((message) => message.role)).toEqual(['user', 'assistant']);
     expect(history[0].content).toBe('hi');
@@ -266,22 +255,15 @@ describe('LocalAgentClient', () => {
 
     client.stop();
     const result = await turn;
-    // A user's Stop is a choice, not an agent failure. `hadError` is what grades
-    // the turn, and folding an interruption into it is the same drift that
-    // sealed the durable run 'error' here and 'aborted' in the cloud — pinned
-    // now in cli-backend local-session.test.ts, "a user's Stop seals the run
-    // 'aborted'". The turn still ENDS abruptly, and the surface is still told.
+    // A user's Stop is a choice, not an agent failure: `hadError` stays false while the turn still ends.
     expect(result).toMatchObject({ landed: 'turn', hadError: false });
     expect(events.some((event) => event.type === 'error')).toBe(true);
     await client.close();
   });
 
   test('send mid-turn records a steered user entry and reaches the agent', async () => {
-    // The 'start' turn's first model call is a gated tool call — the
-    // deterministic window for a mid-turn send — and its finish opens the
-    // step boundary the message lands at. The gate is ARMED, not always on:
-    // every other call (the 'too early' turn, the post-tool step) answers at
-    // once, which is what lets 'too early' resolve before the gate exists.
+    // The 'start' turn's first call is a gated tool call: a deterministic window for a mid-turn send.
+    // The gate is armed per call; every other call answers at once.
     const prompts: LanguageModelV2Prompt[] = [];
     const usage = { inputTokens: 5, outputTokens: 7, totalTokens: 12 };
     let release!: () => void;
@@ -328,7 +310,6 @@ describe('LocalAgentClient', () => {
     client.subscribe((event) => events.push(event));
     await client.connect();
 
-    // Nothing running: the message is a turn of its own, not a splice.
     expect(await client.send('too early')).toMatchObject({ landed: 'turn' });
 
     armed = true;
@@ -339,15 +320,11 @@ describe('LocalAgentClient', () => {
       await new Promise((resolve) => setTimeout(resolve, 5));
     }
 
-    // Answered where it is decided: the step boundary the gate opens is what
-    // makes 'mid-turn' a fact, so the send resolves once that step took it.
     const steer = client.send('actually, use yaml');
     release();
     await turn;
     expect(await steer).toEqual({ landed: 'mid-turn' });
 
-    // The send spliced into the running turn's second step as one user
-    // message — the model read it, and no second turn ran for it.
     const seen = (prompts.at(-1) ?? [])
       .filter((message) => message.role === 'user')
       .flatMap((message) => message.content)
@@ -365,10 +342,8 @@ describe('LocalAgentClient', () => {
   });
 
   test('a message the running turn ended before reading answers with the turn that ran it', async () => {
-    // The armed call is the turn's LAST step, held open on its final words:
-    // a message sent while it is held has no step boundary left to land on,
-    // so the session reruns it as the operator's next turn. Every other call
-    // answers at once, which is what the rerun's own model call does.
+    // The armed call is the turn's last step: a message sent while it is held has no step boundary
+    // left, so the session reruns it as the operator's next turn.
     const usage = { inputTokens: 5, outputTokens: 7, totalTokens: 12 };
     let release!: () => void;
     const gate = new Promise<void>((resolve) => { release = resolve; });
@@ -409,8 +384,6 @@ describe('LocalAgentClient', () => {
 
     armed = true;
     const first = client.send('here is your standing brief');
-    // The held turn has streamed its words: the next message arrives with the
-    // turn on screen and nothing left for it to ride.
     await new Promise<void>((resolve) => {
       const unsubscribe = client.subscribe((event) => {
         if (event.type === 'text-delta') { unsubscribe(); resolve(); }
@@ -422,23 +395,15 @@ describe('LocalAgentClient', () => {
 
     expect((await first).landed).toBe('turn');
     const result = await second;
-    // Both leftovers reran as ONE turn under the first one's id; the turn
-    // carried the second, so it is answered with the same result.
     const carried = await third;
 
     if (carried.landed !== 'turn') throw new Error('a message the turn never read runs as the next turn');
     expect(carried.text).toBe('answer 2');
 
-    // Answered by the rerun, with the rerun's own reply — not by the turn
-    // that was writing when the words arrived, and not `mid-turn` at
-    // admission, which is what made a harness read the brief's reply as the
-    // answer to the question.
     if (result.landed !== 'turn') throw new Error('a message the turn never read runs as the next turn');
     expect(result.text).toBe('answer 2');
     expect(events.filter((event) => event.type === 'turn-start')).toHaveLength(2);
 
-    // The CLI transcript shows it as the operator's own next message, in
-    // order, ahead of the answer it got — never as a steer inside the brief's turn.
     const history = await client.history();
     expect(history.map((message) => [message.role, message.content])).toEqual([
       ['user', 'here is your standing brief'], ['assistant', 'standing brief, noted'],
@@ -450,7 +415,6 @@ describe('LocalAgentClient', () => {
   });
 
   test('fork walks the conversation back before the picked message and re-points the client', async () => {
-    // Capture what the model sees so the forked context is provable.
     const seenPrompts: string[] = [];
     const model = fakeModel('answer', (prompt) => { seenPrompts.push(JSON.stringify(prompt)); });
 
@@ -465,7 +429,6 @@ describe('LocalAgentClient', () => {
     expect(client.cliSession.id).not.toBe(originalSessionId);
     expect(result.label).toBe(`branch ${client.cliSession.id}`);
 
-    // The forked conversation keeps turn one but not the walked-back message.
     await client.send('third question');
     const forkedPrompt = present(seenPrompts.at(-1), 'the last prompt seen');
     expect(forkedPrompt).toContain('first question');
@@ -488,9 +451,6 @@ describe('LocalAgentClient', () => {
       const pivot = empty ? 'first question' : 'second question';
       await client.fork({ text: pivot, occurrenceFromEnd: 1 });
 
-      // The walk-back re-points the conversation in place: the entries before
-      // the pivot are the head's whole ancestry, and the working history the
-      // fork's first turn will run on is exactly those messages.
       const rows = await readTranscriptRows(rt.storage.sql, rt.actor, rt.storage.vfs);
 
       expect(rows.map((row) => `${row.role}:${row.content}`))
@@ -540,7 +500,6 @@ describe('/changelog — the Evolution Changelog over a real local client', () =
     await client.connect();
     const { executeSlashCommand } = await import('../src/slash-commands');
 
-    // Seed real ledgers: one crafted tool + two learned facts in one aggregate.
     rt.craftStore.create({ params: null, name: 'csv_summarizer', description: 'summarize CSVs', code: 'async () => 1', scope: 'local' });
     void rt.storage.sql`INSERT INTO agent_facts (actor_id, key, value_json, confidence, source, last_observed_at)
                    VALUES (${rt.actor.actorId}, 'favorite_shell', '"fish"', 1.0, NULL, ${Date.now() - 1000})`;
@@ -560,13 +519,11 @@ describe('/changelog — the Evolution Changelog over a real local client', () =
       'Your favorite shell is fish',
     ]);
 
-    // Viewing IS the acknowledgement — the next fetch shows nothing unseen.
     const second = await executeSlashCommand(client, '/changelog');
 
     if (second.kind !== 'changelog') throw new Error('expected changelog outcome');
     expect(second.view.unseenCount).toBe(0);
 
-    // The aggregate is one rendered row/index; reverting it forgets every child.
     const factIndex = second.view.entries.findIndex((entry) => entry.kind === 'fact') + 1;
     const reverted = await executeSlashCommand(client, `/changelog revert ${factIndex}`);
 
@@ -575,7 +532,6 @@ describe('/changelog — the Evolution Changelog over a real local client', () =
     expect(rt.storage.sql`SELECT * FROM agent_facts`).toHaveLength(0);
     expect(rt.craftStore.get('csv_summarizer')).toMatchObject({ name: 'csv_summarizer' });
 
-    // Out-of-range and bad indices answer with usage, never throw.
     const missing = await executeSlashCommand(client, '/changelog revert 99');
 
     if (missing.kind !== 'text') throw new Error('expected text outcome');
@@ -597,23 +553,18 @@ describe('/takes — Alternate Takes over a real local client', () => {
     const { executeSlashCommand } = await import('../src/slash-commands');
     const { initSearchTables, initAlternateTakesTable, captureAlternateTakes } = await import('@kinu.run/core');
 
-    // No takes yet — the command explains instead of opening a comparison.
     const empty = await executeSlashCommand(client, '/takes');
 
     if (empty.kind !== 'text') throw new Error(`expected text outcome, got ${empty.kind}`);
     expect(empty.text).toContain('No alternate takes yet');
 
-    // Seed a near-tied convergence (what think-mcts captures mid-turn), then
-    // run a turn so the session claims it.
     initSearchTables(rt.storage.execRaw);
     initAlternateTakesTable(rt.storage.execRaw);
     void rt.storage.sql`INSERT INTO search_nodes (actor_id, root_id, id, task, action, observation, value, visits, depth, status)
         VALUES (${rt.actor.actorId}, 'r', 'win', 'choose a plan', 'A', 'plan A wins', 0.9, 3, 1, 'open')`;
     void rt.storage.sql`INSERT INTO search_nodes (actor_id, root_id, id, task, action, observation, value, visits, depth, status)
         VALUES (${rt.actor.actorId}, 'r', 'alt', 'choose a plan', 'B', 'plan B instead', 0.84, 2, 1, 'open')`;
-    // Production captures happen mid-turn. This fixture seeds before send(), so
-    // place it inside the upcoming turn's claim window instead of depending on
-    // capture and turn start landing in the same millisecond.
+    // Seeded before send(), so place it inside the turn's claim window rather than rely on same-millisecond timing.
     captureAlternateTakes(rt.storage.sql, rt.actor, {
       rootId: 'r', task: 'choose a plan', winnerId: 'win', epsilon: 0.1, now: Date.now() + 1_000,
     });
@@ -630,7 +581,6 @@ describe('/takes — Alternate Takes over a real local client', () => {
     if (listing.kind !== 'takes') throw new Error(`expected takes outcome, got ${listing.kind}`);
     expect(listing.set.id).toBe(set.id);
 
-    // Pick by number through the shared command path (take 2 = the sibling).
     const picked = await executeSlashCommand(client, '/takes 2');
 
     if (picked.kind !== 'text') throw new Error(`expected text outcome, got ${picked.kind}`);
@@ -646,8 +596,6 @@ describe('/takes — Alternate Takes over a real local client', () => {
     if (altNode === undefined) throw new Error('expected the sibling take node');
     expect(altNode.status).toBe('terminal');
 
-    // The pick queued a take_pick continuation turn — let it stream through
-    // the same event seam before closing.
     const deadline = Date.now() + 2000;
 
     while (!events.some((e) => e.type === 'turn-start' && e.kind === 'programmatic' && e.event === 'take_pick')
@@ -656,7 +604,6 @@ describe('/takes — Alternate Takes over a real local client', () => {
       await new Promise((r) => setTimeout(r, 5));
     }
 
-    // Out-of-range picks answer with usage, never throw.
     const missing = await executeSlashCommand(client, '/takes 9');
 
     if (missing.kind !== 'text') throw new Error('expected text outcome');

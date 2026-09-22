@@ -1,17 +1,6 @@
 /**
- * Enter, on a real terminal, in the composer.
- *
- * The in-process suites drive `createTestRenderer`, which never negotiates
- * with a terminal: they deliver CR and assert the submit binding. A real tty
- * can also deliver Enter as LF, because the kernel translates CR to NL when
- * the line discipline has ICRNL set (or the terminal answered LNM). Before
- * the fix, only the 'return' name submitted; opentui's own default table
- * mapped the 'linefeed' name to the newline action, so Enter-as-LF opened a
- * line and nothing was sent. That was measured in the real product under a
- * real tmux: `send-keys -H 0a` left the composer empty and no turn ran.
- *
- * These tests run the same product path `runTuiChat` runs — `createCliRenderer`
- * and `ChatApp` — on a real pty, and press both spellings.
+ * Enter on a real pty: a tty can deliver Enter as LF (ICRNL/LNM), which `createTestRenderer`
+ * never does, so CR and LF must both submit through the `runTuiChat` path.
  */
 import { describe, expect, test } from 'bun:test';
 import { resolve } from 'node:path';

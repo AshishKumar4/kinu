@@ -1,9 +1,4 @@
-/**
- * Device-connect prompt state machine shared by the TUI surfaces (home-app on
- * cloud-agent creation, chat-app on cloud chat open and /connect). Owns the
- * ask → connecting → result flow over the device-connect module; the rendering
- * lives in DeviceConnectOverlay and key routing in the host's useKeyboard.
- */
+/** Device-connect prompt state machine shared by home-app and chat-app. */
 
 import { useCallback, useMemo, useRef, useState, useTransition } from 'react';
 import { requireAuthConfig } from '../config';
@@ -27,13 +22,10 @@ const RESULT_LINGER_MS = 2_500;
 
 export interface DeviceConnectPrompt {
   state: DeviceConnectPromptState | null;
-  /** Offer the prompt when no device is connected (at most once per CLI
-   *  invocation); resolves when the prompt closes — or immediately when
-   *  there is nothing to ask. */
+  /** At most once per invocation; resolves immediately when there is nothing to ask. */
   offerIfUnconnected: () => Promise<void>;
-  /** Open unconditionally with current device status (the /connect command). */
+  /** The /connect command. */
   open: () => Promise<void>;
-  /** Route a key press; true when the prompt consumed it. */
   handleKey(key: TuiKeyEvent): boolean;
 }
 

@@ -1,4 +1,3 @@
-// The TUI input reducer: interrupt/walk-back, queue, branch, and turn lifecycle.
 import { describe, expect, test } from 'bun:test';
 import {
   ESC_ESC_BEAT_MS,
@@ -125,7 +124,6 @@ describe('queue ordering', () => {
     expect(settledOnce.effects).toEqual([{ kind: 'send-queued', text: 'first queued' }]);
     expect(settledOnce.state.queue).toEqual(['second queued']);
 
-    // The drained message starts its own turn; the next settle sends the rest.
     const next = run(settledOnce.state, { type: 'turn-start' });
     const settledTwice = reduceInput(next.state, { type: 'turn-settled' });
     expect(settledTwice.effects).toEqual([{ kind: 'send-queued', text: 'second queued' }]);
@@ -152,7 +150,6 @@ describe('queue ordering', () => {
     expect(popped.effects).toEqual([{ kind: 'set-input', text: 'edit me' }]);
     expect(popped.state.queue).toEqual(['keep']);
 
-    // With text in the input, Backspace belongs to the textarea.
     const typing = reduceInput(popped.state, { type: 'backspace', draft: 'kee' });
     expect(typing.effects).toEqual([]);
     expect(typing.state.queue).toEqual(['keep']);
@@ -172,7 +169,6 @@ describe('queue ordering', () => {
     ]);
     expect(interrupted.state.queue).toEqual([]);
 
-    // The aborted turn settling sends nothing.
     const settled = reduceInput(interrupted.state, { type: 'turn-settled' });
     expect(settled.effects).toEqual([]);
   });
@@ -199,7 +195,6 @@ describe('semantic steer-as-branch', () => {
       { kind: 'send-branch', text: 'try the other approach' },
       { kind: 'clear-input' },
     ]);
-    // Branching never queues and never interrupts — the machine state is untouched.
     expect(branched.state).toEqual(busy.state);
   });
 

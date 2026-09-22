@@ -94,9 +94,7 @@ export async function daemonCommand(action: string | undefined, agent?: string):
     return;
   }
 
-  // One foreground pass of the daemon-owned host for machines without a
-  // resident daemon. It drives the same recovery/event/trigger/evolution/
-  // peer-outbox path once, then releases every agent handle.
+  // One foreground pass of the daemon-owned host for machines without a resident daemon.
   if (sub === 'tick') {
     ensureAgentHome();
     const host = createDaemonHost();
@@ -116,9 +114,7 @@ export async function daemonCommand(action: string | undefined, agent?: string):
       for (const ref of due) {
         const result = await host.tick(ref.name, now);
         const where = DIM(`${ref.workspaceId} · ${ref.cwd}`);
-        // A pass another driver owns converted nothing here, and printing a tick
-        // for it would be a claim this process cannot support. Naming the holder
-        // is also the answer to "why did nothing happen?".
+        // A pass another driver owns converted nothing here; name the holder instead of printing a tick.
         console.log(result.ran
           ? `${OK('✓')} ticked ${ref.name} ${where}`
           : `${WARN('⋯')} deferred ${ref.name} ${DIM(`the ${result.heldBy?.kind ?? 'other'} driver`
@@ -155,14 +151,8 @@ function startDaemon(opts: { quiet?: boolean } = {}): number | null {
     return null;
   }
 
-  // Guard against recursive spawning: if the entry point is a test script
-  // (not the real CLI), spawning a daemon child would re-execute the test,
-  // which would call ensureLocalDaemonRunning() again, creating an infinite
-  // fork loop.  Refuse silently in quiet mode, throw loudly otherwise.
-  // The FILE is what decides — a checkout whose path merely contains
-  // "test"/"spec"/"e2e" (a worktree name, a user's directory) is not a test
-  // script, and matching the whole path made the real CLI refuse its daemon
-  // from such a checkout.
+  // Spawning a daemon from a test entry would re-run the test and fork forever. Match the file's basename only:
+  // a checkout path containing "test" is not a test script.
   if (/test|spec|e2e/i.test(basename(entry))) {
     if (!opts.quiet) throw new Error(`Refusing to start daemon from a test script: ${entry}`);
 
@@ -187,41 +177,25 @@ function startDaemon(opts: { quiet?: boolean } = {}): number | null {
   }
 }
 
-/**
- * Stop the daemon and wait for the process to actually be gone — the pidfile
- * is the daemon's own, and it unlinks it on exit, so starting a replacement
- * before the old one dies lets the corpse delete the new daemon's pidfile.
- * Waits for the reap because the "stopped pid X" report names the process.
- *
- * Returns the pid that was stopped, or null when nothing was running.
- */
+/** Waits for the reap: the daemon unlinks its pidfile on exit, so a replacement started earlier would lose its
+ * pidfile to the old one. */
 async function stopDaemon(): Promise<number | null> {
   return stopDaemonUntil(isReaped);
 }
 
-/**
- * Stop the daemon ahead of a replacement. The replacement only needs the old
- * daemon past its own pidfile unlink, which lands before the reap. Waiting
- * for the reap instead reads the reaper's schedule under fixed caps: a
- * dead-but-unreaped daemon outlasted the 5 s grace and the 2 s force under
- * parallel load, so restart threw "did not exit" at 7.3 s for a daemon that
- * was already dead. The pidfile is the daemon's own durable signal; a
- * pidfile that outlives grace still escalates to SIGKILL exactly as `stop`
- * does.
- */
+/** Waits only for the old pidfile unlink, which precedes the reap; fixed reap caps fail under load. A pidfile
+ * outliving grace still escalates to SIGKILL. */
 async function stopDaemonForRestart(): Promise<number | null> {
   return stopDaemonUntil(isReleased);
 }
 
 /** Shared escalation: SIGTERM, grace, SIGKILL, force, then admit defeat. */
 async function stopDaemonUntil(released: (pid: number) => boolean): Promise<number | null> {
-  const pid = readLivePid(); // clears a stale pidfile on its way out
+  const pid = readLivePid();
 
   if (pid === null) return null;
 
-  // A pid that vanished between the liveness probe and the signal is the one
-  // tolerable outcome; EPERM means it is alive and not ours, and claiming we
-  // stopped it would be a lie.
+  // ESRCH is the one tolerable outcome; EPERM means alive and not ours.
   tolerate(() => process.kill(pid, 'SIGTERM'), 'esrch');
 
   if (!await waitUntilRelease(pid, released, STOP_GRACE_MS)) {
@@ -238,16 +212,11 @@ async function stopDaemonUntil(released: (pid: number) => boolean): Promise<numb
   return pid;
 }
 
-/** The kernel reaped the process: `kill` names no such pid. */
 function isReaped(pid: number): boolean {
   return tolerate(() => process.kill(pid, 0), 'esrch') === undefined;
 }
 
-/**
- * The old daemon is past the point where it can unlink the pidfile: the file
- * is already gone, or the pid is dead and nothing remains that could. Either
- * precedes the reap, so a starved reaper cannot fail it.
- */
+/** Pidfile gone, or pid dead: either precedes the reap, so a starved reaper cannot fail it. */
 function isReleased(pid: number): boolean {
   return !existsSync(PID_PATH) || isReaped(pid);
 }
@@ -267,7 +236,6 @@ async function waitUntilRelease(
   }
 }
 
-/** The earlier of two wake times; either may be absent. */
 function soonest(current: number | null, candidate: number | null): number | null {
   if (candidate === null) return current;
 
@@ -285,9 +253,7 @@ async function runDaemonLoop(): Promise<void> {
   process.on('SIGTERM', stop);
   process.on('SIGINT', stop);
 
-  /** Soonest moment the host has asked to be re-driven — a peer outbox retry
-   *  armed while this loop was already asleep. Folded into the next delay and
-   *  cleared by the pass that honours it, so it never re-shortens a later one. */
+  /** A peer outbox retry armed while asleep; cleared by the pass that honours it. */
   let armedAt: number | null = null;
 
   const host = createDaemonHost((at) => {
@@ -304,9 +270,7 @@ async function runDaemonLoop(): Promise<void> {
       let nextAt: number | null = armedAt;
       armedAt = null;
 
-      // Every placed local agent, in every project. A resident scheduler keeps
-      // each virtual workspace's peers and background queues draining, so the
-      // directory this process happened to start in decides nothing.
+      // Every placed local agent in every project; the start directory decides nothing.
       for (const ref of listLocalRefsAllProjects()) {
         try {
           const result = await host.tick(ref.name, now);
@@ -343,36 +307,18 @@ async function runDaemonLoop(): Promise<void> {
 
 function createDaemonHost(wakeAt?: (at: number) => void): LocalAgentHost {
   const options = {
-    // The refs are the authority: which agents exist, which directory each
-    // binds, and which virtual workspace groups it with its peers.
     roster: (): HostedAgentRef[] => listLocalRefsAllProjects(),
     dbPath: agentDbPath,
     open: openDaemonAgent,
-    // Both callers of this factory are the daemon: `daemon shell` resident, and
-    // `daemon tick` one foreground pass. Saying so is what makes the lease
-    // behave as designed — the pass is handed back at the end of it, and a
-    // person at a prompt can take the conversation. Left unsaid, the host
-    // defaulted to `interactive`: the resident daemon held every lease until
-    // the process exited, and no foreground driver could ever preempt it,
-    // because the row it met claimed to be somebody's chat session.
+    // Both callers are the daemon. As `interactive` the resident daemon would hold every lease forever and no
+    // foreground driver could preempt it.
     driverKind: 'daemon' as const,
   };
 
   return new LocalAgentHost(wakeAt ? { ...options, wakeAt } : options);
 }
 
-/**
- * One daemon-hosted agent's runtime inputs. Everything a turn needs that this
- * process owns rather than the agent database: its provider wiring, its model
- * resolver, its MCP servers, and the profile authority its turns resolve
- * under.
- *
- * That last one is the same reader the interactive clients install. Without
- * it a daemon-driven turn resolves from the workspace's own bootstrap while an
- * interactive turn of the SAME agent resolves from the account or local
- * catalog, so a role only one of them knows about fails in one process and
- * runs in the other.
- */
+/** Installs the same profile authority as interactive clients, so a role resolves identically in both. */
 async function openDaemonAgent(
   ref: HostedAgentRef,
   db: Database,
@@ -386,9 +332,7 @@ async function openDaemonAgent(
     providerCredentials: resolveProviderCredentials(),
     codexAuthStore: createCodexAuthStore(),
     codexConfigPath: CONFIG_PATH,
-    // The stored directory, never process.cwd(): a daemon serves every
-    // project at once, so the plane an agent works in is the one its ref
-    // records and nothing about where this process was launched.
+    // The ref's stored directory, never process.cwd(): a daemon serves every project.
     cwd: ref.cwd,
   };
 
@@ -400,9 +344,7 @@ async function openDaemonAgent(
     modelResolver,
     mcpServers: resolveMcpServers(),
     profileAuthority: createProfileAuthorityReader(),
-    // The resident daemon is the session that most needs this: it can stay bound
-    // to one agent for days, and every `kinu provider connect` in that time
-    // happens in a process it cannot see.
+    // A resident daemon stays bound for days; `kinu provider connect` happens in processes it cannot see.
     providerRevision: readProviderRevision,
   };
 }
@@ -425,9 +367,7 @@ function readLivePid(): number | null {
 
   if (!Number.isInteger(pid) || pid <= 0) return null;
 
-  // Only ESRCH means the pidfile outlived its daemon. EPERM means the process
-  // is alive and merely not ours to signal — treating that as dead would have
-  // us delete a live daemon's pidfile and report no daemon at all.
+  // Only ESRCH means a stale pidfile; EPERM is a live process that is not ours.
   if (tolerate(() => process.kill(pid, 0), 'esrch') === undefined) {
     tolerate(() => unlinkSync(PID_PATH), 'enoent');
 

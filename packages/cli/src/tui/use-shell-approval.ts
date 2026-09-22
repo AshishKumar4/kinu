@@ -7,8 +7,7 @@ interface PendingShellApproval {
   resolve(outcome: ShellApprovalOutcome | null): void;
 }
 
-/** Parallel tool calls each keep their own answer; leaving the surface declines
- * to decide so the backend can apply its unattended policy. */
+/** Each parallel tool call keeps its own answer; leaving declines so the backend applies its unattended policy. */
 export function useShellApproval(client: AgentClient) {
   const queue = useRef<PendingShellApproval[]>([]);
   const [pending, setPending] = useState<ShellApprovalRequest | null>(null);

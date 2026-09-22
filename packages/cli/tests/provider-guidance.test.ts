@@ -1,11 +1,5 @@
-// Every CLI failure renders through guideFailure. What it must guarantee: a
-// real message for any thrown shape, and the exact next command for the
-// failure classes a user can actually do something about.
-//
-// KINU-043: the classification reads the FACTS the provider boundary preserved
-// — the HTTP status and the provider's own code — and falls back to matching
-// wording only when neither survived. The prose-only version sent a 402 to the
-// credential hint on any gateway that phrased it without the word billing.
+// KINU-043: guideFailure classifies by HTTP status and provider code, falling back to wording only when
+// neither survived the provider boundary.
 import { describe, expect, test } from 'bun:test';
 import { APICallError } from '@ai-sdk/provider';
 import { guideFailure } from '../src/provider-guidance';
@@ -85,8 +79,7 @@ describe('guideFailure reads the preserved facts', () => {
   });
 
   test("the provider's own code beats the status it arrives with", () => {
-    // A context overflow is a 400 like any malformed request, so the status
-    // alone would send the user off to fix their input.
+    // A context overflow is a 400 like any malformed request, so status alone would misguide.
     const guided = guideFailure({
       cause: apiFailure({
         statusCode: 400,

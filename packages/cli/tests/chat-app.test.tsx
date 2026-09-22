@@ -24,16 +24,12 @@ const MISSING_CLOUD: FixtureWorkspace = {
 };
 
 interface HubWorkspaces {
-  /** The workspace the surface opened on. */
   open: string;
   label: string;
-  /** The peer the hub creates, listed only once it exists. */
   peer: string;
   created: boolean;
 }
 
-/** The drawer an agent-hub test sees: the open workspace, and the peer created
- *  beside it in the same project. */
 function hubWorkspaces({ open, label, peer, created }: HubWorkspaces): FixtureWorkspace[] {
   const cwd = process.cwd();
   const rows: FixtureWorkspace[] = [{ name: open, label, mode: 'local', cwd, workspaceId: 'shop' }];
@@ -299,7 +295,6 @@ describe('ChatApp terminal interaction', () => {
       settled: (frame) => frame.includes('the workspace socket refused'),
     });
 
-    // The whole chain reaches the person; the composer says the truth about readiness.
     expect(screen.frame()).toContain('Error: the workspace socket refused: ECONNREFUSED 127.0.0.1');
     expect(screen.frame()).toContain('Connecting…');
   });
@@ -335,8 +330,6 @@ describe('ChatApp terminal interaction', () => {
 
     screen.mockInput.pressKey('w', { meta: true });
     await screen.waitFor('the workspace drawer', () => screen.frame().includes('Esc close'));
-    // The selection starts on the open agent; the cloud section below it
-    // expands first, then its workspace row opens.
     screen.mockInput.pressArrow('down');
     screen.mockInput.pressEnter();
     await screen.waitFor('the expanded cloud section', () => screen.frame().includes('Missing'));
@@ -540,7 +533,6 @@ test('a turn waiting on a rate limit names the provider, not thinking', async ()
 
     screen.mockInput.pressKey('a', { meta: true });
     await screen.waitFor('the agent hub', () => screen.frame().includes('Agent Hub'));
-    // The one-key affordance is announced; no form ever appears.
     expect(screen.frame()).toContain('new agent');
     screen.mockInput.pressKey('n');
     await screen.waitFor('the created peer conversation', () => screen.frame().includes('Connected to agent-1'));
@@ -548,8 +540,6 @@ test('a turn waiting on a rate limit names the provider, not thinking', async ()
     expect(screen.frame()).not.toContain('Role:');
     expect(screen.frame()).not.toContain('Mission:');
 
-    // Reopened, the hub lists the workspace's members with the unnamed peer
-    // under its codename — the current, open conversation.
     screen.mockInput.pressKey('a', { meta: true });
     await screen.waitFor('the refreshed hub roster', () => screen.frame().includes(codenameFor('agent-1')));
     expect(screen.frame()).toContain('Checkout · main');
@@ -608,7 +598,7 @@ test('a turn waiting on a rate limit names the provider, not thinking', async ()
     await screen.waitFor('the agent hub', () => screen.frame().includes('Agent Hub'));
     expect(screen.frame()).not.toContain('new agent');
     screen.mockInput.pressKey('n');
-    // Nothing was created and the hub stays put — n is not a hub action here.
+    // n is not a hub action here.
     expect(screen.frame()).toContain('Agent Hub');
     screen.mockInput.pressEscape();
   });
@@ -631,11 +621,9 @@ test('a turn waiting on a rate limit names the provider, not thinking', async ()
     await screen.mockInput.typeText('half a thought for alpha');
     screen.mockInput.pressKey('w', { meta: true });
     await screen.waitFor('the workspace drawer', () => screen.frame().includes('Esc close'));
-    // Selection opens on the current agent's row; one step reaches the peer.
     screen.mockInput.pressArrow('down');
     screen.mockInput.pressEnter();
     await screen.waitFor('the beta workspace', () => screen.frame().includes('Connected to beta'));
-    // Beta's composer starts clean — alpha's draft did not travel.
     expect(screen.frame()).not.toContain('half a thought for alpha');
     await screen.mockInput.typeText('beta draft');
     screen.mockInput.pressKey('w', { meta: true });
@@ -646,20 +634,14 @@ test('a turn waiting on a rate limit names the provider, not thinking', async ()
     expect(screen.frame()).not.toContain('beta draft');
   });
 
-  // One process mounts many chat surfaces, one after another. Rendering an
-  // empty box over a mounted app does not take it down: `createRoot().render()`
-  // builds a NEW container each call, so the app stays mounted, keeps its
-  // client subscription, and goes on committing into renderables that the
-  // renderer is about to free — `EditorView is destroyed` inside React's commit,
-  // a later surface that never receives its own async result, and a segfault
-  // once the freed memory is touched again.
+  // `createRoot().render()` builds a new container each call, so rendering over a mounted app leaves
+  // it committing into freed renderables (segfault); unmount must release the client.
   test('a torn-down chat surface releases its client, and the next one lands its async work', async () => {
     const first = fakeClient({ name: 'first' });
     const firstScreen = await mountChat(first.client, { hubData: HUB_FIXTURE });
     await firstScreen.mockInput.typeText('a draft the composer is still holding');
     expect(first.listenerCount()).toBe(1);
     cleanupChats();
-    // Gone, not painted over: the effect cleanup released the client.
     expect(first.listenerCount()).toBe(0);
 
     const second = fakeClient({ name: 'second' });
@@ -689,15 +671,10 @@ test('a turn waiting on a rate limit names the provider, not thinking', async ()
       consoleError.mockRestore();
     }
 
-    // The dead surface reported nothing into the live one's run.
     expect(reported).toEqual([]);
   });
 
-  // A workspace switch clears the hub and re-reads it, and that read is
-  // asynchronous — the CLI's own reader asks the profile authority, which is a
-  // network read on a signed-in machine. A key pressed inside that window opens
-  // the hub anyway; dropped on the floor it would leave the surface closed with
-  // nothing said, and no later frame could recover it — only another keypress.
+  // The hub re-read after a workspace switch is async; a key pressed in that window must still open the hub.
   test('the hub key pressed while its read is in flight still opens the hub', async () => {
     const client = fakeClient({ name: 'slowhub' });
     const read = Promise.withResolvers<void>();
@@ -709,30 +686,21 @@ test('a turn waiting on a rate limit names the provider, not thinking', async ()
     };
 
     const screen = await mountChat(client.client, { readHub });
-    // The read has not answered, so there is no hub yet.
     expect(screen.frame()).not.toContain('Agent Hub');
     screen.mockInput.pressKey('a', { meta: true });
     await screen.waitFor('the hub surface to own the composer hint', () => screen.frame().includes('Agents ›'));
     expect(screen.frame()).not.toContain('Agent Hub');
     read.resolve();
     await screen.waitFor('the hub the key asked for', () => screen.frame().includes('Agent Hub'));
-    // The row is the open conversation, relabelled live from its own status.
     expect(screen.frame()).toContain('slowhub · main');
   });
 
-  // No unit test may read the developer's home. The hub's re-read must not go
-  // through the CLI's own profile reader, whose account authority is a live
-  // network read of the machine's signed-in session — 1,567 ms against the real
-  // home, inside a unit test. The runner's preload mints a
-  // throwaway home so that read cannot leave the machine, and the fixture
-  // answers from memory so it never even reaches a store; this test holds
-  // both: a switch's hub refresh crosses no network boundary at all.
+  // A switch's hub refresh must cross no network boundary; the CLI profile reader hits the live account authority.
   test('a workspace switch refreshes the hub without one network request', async () => {
     const alpha = fakeClient({ name: 'alpha' });
     const beta = fakeClient({ name: 'beta' });
     const realFetch = globalThis.fetch;
     const seen: unknown[] = [];
-    // Records every outbound request and still answers — a spy, not a stub.
     globalThis.fetch = asFetchFunction(async (input) => {
       seen.push(input);
 
@@ -751,8 +719,6 @@ test('a turn waiting on a rate limit names the provider, not thinking', async ()
       screen.mockInput.pressArrow('down');
       screen.mockInput.pressEnter();
       await screen.waitFor('the beta workspace', () => screen.frame().includes('Connected to beta'));
-      // Give the refresh every chance to fire, then prove the network stayed
-      // closed across the whole switch.
       screen.mockInput.pressKey('a', { meta: true });
       await screen.waitFor('the hub after the switch', () => screen.frame().includes('Agent Hub'));
       expect(seen).toEqual([]);

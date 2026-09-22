@@ -1,16 +1,7 @@
 /** @jsxImportSource @opentui/react */
 /**
- * The chat surface on a REAL terminal, in cloud mode, meeting the connect
- * card: the local fixture of what `enter-sends.first-run.ts` drives on staging.
- *
- * The card is raised by the product's own policy (`shouldOfferDeviceConnect`):
- * a cloud session, no dismissal on record, and a device list with nothing
- * connected. This process serves that list itself, on a loopback port it picks,
- * and points the CLI at it through the same two variables a signed-in shell
- * sets. The agent client is a fixture whose connect takes as long as a
- * deployment's socket round trip, so the composer's first paint is
- * `Connecting…` and its ready placeholder is a diff paint, exactly the bytes
- * the first-run tier met.
+ * Cloud-mode chat on a real terminal meeting the connect card (local twin of
+ * `enter-sends.first-run.ts`); slow connect makes the ready placeholder a diff paint.
  */
 import { createCliRenderer } from '@opentui/core';
 import { createRoot } from '@opentui/react';
@@ -18,15 +9,13 @@ import { createRoot } from '@opentui/react';
 import { ChatApp } from '../../src/tui/chat-app';
 import { fakeClient, soloHub } from '../helpers/chat-app-fixture';
 
-/** Prose the agent "writes", so a submitted turn is visible on the surface. */
 const REPLY = 'agent prose reply';
 
 const TURN = { landed: 'turn' as const, text: REPLY, toolCalls: [], steps: 1, durationMs: 1, hadError: false };
 
 const CONNECT_MS = 800;
 
-/** How long the fixture turn runs before it answers, so the running-turn
- *  placeholder is on screen long enough for a wait to meet it. */
+/** Long enough for a wait to meet the running-turn placeholder. */
 const TURN_MS = 1500;
 
 const devices = Bun.serve({

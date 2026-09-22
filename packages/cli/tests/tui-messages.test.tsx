@@ -28,15 +28,12 @@ describe('TUI transcript rendering', () => {
         </box>,
       );
       const frame = await renderSettled(renderOnce, captureCharFrame, ['Review this module', 'Plan', 'Inspect']);
-      // The TUI marks the speaker the way the landing preview does: a YOU
-      // gutter on a left turn, never a right bubble and never an agent label.
       expect(frame).toContain('YOU');
       expect(frame).toContain('Review this module');
       const row = frame.split('\n')[lineContaining(frame, 'Review this module')];
       expect(row.indexOf('YOU')).toBeLessThan(row.indexOf('Review this module'));
       expect(row.search(/\S/)).toBeLessThanOrEqual(8);
       expect(frame).not.toContain('KINU');
-      // No bubble edge anywhere on this transcript: the user row is plain.
       expect(frame).not.toContain('╭');
       expect(frame).toContain('Plan');
       expect(frame).toContain('Inspect');
@@ -93,7 +90,6 @@ describe('TUI transcript rendering', () => {
     const root = createRoot(renderer);
 
     try {
-      // The transcript order IS the chronological order: text, tool, text, tool.
       root.render(
         <box style={{ width: '100%', height: '100%', backgroundColor: TEST_TUI_BACKGROUND }}>
           <MessageList
@@ -115,7 +111,6 @@ describe('TUI transcript rendering', () => {
       );
       const frame = await renderSettled(renderOnce, captureCharFrame, ['FIRST', 'read_file', '✗ command exited 1', 'SECOND', 'write_file', 'THIRD']);
       const at = (needle: string) => frame.indexOf(needle);
-      // Each surface lands strictly after the one that preceded it in the stream.
       expect(at('FIRST')).toBeGreaterThanOrEqual(0);
       expect(at('read_file')).toBeGreaterThan(at('FIRST'));
       expect(at('✗ command exited 1')).toBeGreaterThan(at('read_file'));
@@ -145,7 +140,6 @@ describe('TUI transcript rendering', () => {
         </box>,
       );
       const frame = await renderSettled(renderOnce, captureCharFrame, ['read_file', 'streaming reply']);
-      // The live segment sits AFTER the tool it followed, with its text visible.
       expect(frame.indexOf('streaming reply')).toBeGreaterThan(frame.indexOf('read_file'));
     } finally {
       flushSync(() => { root.unmount(); });
@@ -171,7 +165,6 @@ describe('TUI transcript rendering', () => {
       const frame = await renderSettled(renderOnce, captureCharFrame, ['use staging instead', '↪ steered mid-turn']);
       expect(frame).toContain('use staging instead');
       expect(frame).toContain('↪ steered mid-turn');
-      // The marker belongs to the steered bubble only.
       expect(frame.split('↪ steered mid-turn')).toHaveLength(2);
     } finally {
       flushSync(() => { root.unmount(); });
@@ -179,10 +172,8 @@ describe('TUI transcript rendering', () => {
     }
   });
 
-  // The owner's rule: code blocks and tool calls carry the dark well, under every
-  // theme. opentui builds a fenced block's CodeRenderable with the markdown
-  // renderable's own ink and fill, so the well arrives through the block hook
-  // (`useCodeWellRenderer` in src/tui/messages.tsx).
+  // Code blocks and tool calls carry the dark well under every theme; opentui builds fenced blocks with the
+  // markdown renderable's ink and fill, so the well arrives via `useCodeWellRenderer` (src/tui/messages.tsx).
   test('a fenced code block sits on the dark well; the prose around it does not', async () => {
     for (const themeId of ['kinu-light', 'kinu-dark']) {
       const theme = present(BUILTIN_TUI_THEMES.find((candidate) => candidate.id === themeId), 'the theme theme');
@@ -209,10 +200,8 @@ describe('TUI transcript rendering', () => {
         const rail = present(spans.find((span) => span.text.includes('│')), 'the rail span');
         expect(hex(fenced.bg)).toBe(theme.colors.well.fill);
         expect(hex(fenced.fg)).toBe(theme.colors.well.code);
-        // A single rail keeps the well's grouping without framing prose in chrome.
         expect(hex(rail.bg)).toBe(theme.colors.well.fill);
         expect(hex(rail.fg)).toBe(theme.colors.well.border);
-        // Prose keeps the canvas and the ink register.
         expect(hex(prose.bg)).not.toBe(theme.colors.well.fill);
         expect(hex(prose.fg)).toBe(theme.colors.text.strong);
       } finally {
@@ -223,9 +212,7 @@ describe('TUI transcript rendering', () => {
   });
 
   test('assistant markdown renders: bold is bold, a bullet is a glyph, the markers are gone', async () => {
-    // The owner's transcript showed `**Build something**` and `- ` verbatim:
-    // the syntax styles were keyed by marked's token names, which opentui's
-    // tree-sitter captures never match, so every span fell to the flat ink.
+    // Syntax styles must be keyed by opentui's tree-sitter capture names, not marked's token names.
     const theme = present(BUILTIN_TUI_THEMES.find((candidate) => candidate.id === 'kinu-dark'), 'the kinu-dark theme');
     const { renderer, renderOnce, captureSpans } = await createTestRenderer({ width: 80, height: 20, useThread: false, maxFps: Number.POSITIVE_INFINITY });
     const root = createRoot(renderer);
@@ -273,11 +260,8 @@ describe('TUI transcript rendering', () => {
     }
   });
 
-  // The picker switches themes while the transcript stands, and it switches
-  // through state: React updates the markdown renderable in place rather than
-  // building a new one, and that renderable read its block hook once, at
-  // construction. The well still has to follow the theme in force. (Re-rendering
-  // the root instead would rebuild the renderable and prove nothing.)
+  // The markdown renderable reads its block hook once at construction and React updates it in place, so
+  // the theme switch goes through state; re-rendering the root would rebuild it and prove nothing.
   test('the code well follows a live theme switch', async () => {
     const contrast = present(BUILTIN_TUI_THEMES.find((candidate) => candidate.id === 'high-contrast'), 'the high-contrast theme');
     const { renderer, renderOnce, captureSpans } = await createTestRenderer({ width: 80, height: 16, useThread: false, maxFps: Number.POSITIVE_INFINITY });
@@ -317,11 +301,8 @@ describe('TUI transcript rendering', () => {
 });
 
 /**
- * A frame count is not a settled frame: opentui paints markdown prose only once
- * its grammar has loaded and highlighted, which is asynchronous, and a React
- * update lands a frame or two after that. Render until every text the
- * assertions read is on screen, then hand the frame over and let them speak —
- * a frame that never arrives fails the same assertion it always did.
+ * opentui paints markdown prose only after its grammar loads asynchronously, so wait for the asserted
+ * text rather than a frame count.
  */
 async function renderSettled(
   renderOnce: () => Promise<void>,
@@ -341,7 +322,6 @@ async function renderSettled(
   return frame;
 }
 
-/** The same wait, read over captured spans rather than characters. */
 async function renderUntil(
   renderOnce: () => Promise<void>,
   captureSpans: () => { lines: { spans: CapturedSpan[] }[] },

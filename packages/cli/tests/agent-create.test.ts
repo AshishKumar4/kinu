@@ -14,7 +14,6 @@ interface RecordedCreate {
   input?: CreateCloudAgentInput;
 }
 
-/** A `create` port that records what it was asked for and echoes it back. */
 function recordingCreate(seen: RecordedCreate) {
   return async (input: CreateCloudAgentInput) => {
     seen.input = input;
@@ -139,13 +138,8 @@ describe('a cloud workspace name the hub refuses', () => {
   });
 });
 
-// Local workspace creation touches three planes — a directory, a database
-// carrying identity/schema/config/role, and the visible ref — so a failure
-// between them could leave an `agent.db` nothing has a ref for, and the
-// duplicate-name check would then refuse to create that name again. These pin
-// the ONE authority that makes it impossible: `agent.db` exists if and only if
-// the workspace was published, so every earlier await boundary either
-// publishes or leaves nothing behind.
+// `agent.db` exists iff the workspace was published, so a failure at any await boundary
+// leaves nothing the duplicate-name check would later refuse.
 const CreateStateSchema = v.object({
   db: v.boolean(),
   partial: v.boolean(),
@@ -158,8 +152,7 @@ describe('local workspace creation publishes or leaves nothing', () => {
   const HOME = scratchDir('create-atomic-home');
   const PROJECT = scratchDir('create-atomic-project');
 
-  /** config.ts binds KINU_HOME at module load, so the isolated home is only
-   *  authoritative in a fresh process. */
+  /** config.ts binds KINU_HOME at module load, so the isolated home needs a fresh process. */
   function run(scenario: string) {
     const result = Bun.spawnSync(['bun', '-e', scenario], {
       cwd: join(import.meta.dir, '../../..'),
@@ -178,7 +171,6 @@ describe('local workspace creation publishes or leaves nothing', () => {
     };
   }
 
-  /** Every on-disk trace a create can leave, read the way the CLI reads it. */
   const PRELUDE = `
     import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
     import { dirname } from 'node:path';
@@ -197,8 +189,6 @@ describe('local workspace creation publishes or leaves nothing', () => {
     };
   `;
 
-  /** Every on-disk trace the scenario printed, parsed rather than asserted:
-   *  each scenario emits its own first line then the state line. */
   function reported<First>(stdout: string, first: v.GenericSchema<First>) {
     const [head, tail] = stdout.trim().split('\n');
 
@@ -229,8 +219,6 @@ describe('local workspace creation publishes or leaves nothing', () => {
     expect(result.exitCode, result.stderr).toBe(0);
     const { first: attempt, state } = reported(result.stdout, v.object({ failure: v.string() }));
     expect(attempt.failure).toContain('no-such-role-in-any-catalog');
-    // No ghost: nothing on disk claims to be this workspace, and the name is
-    // free again — the whole difference from the half-created state.
     expect(state).toEqual({ db: false, partial: false, wal: false, shm: false, ref: false });
   });
 
@@ -279,9 +267,7 @@ describe('local workspace creation publishes or leaves nothing', () => {
       result.stdout, v.object({ identity: v.string(), model: v.boolean() }),
     );
 
-    // `workspace_identity.name` is the ADDRESS, so it is the slug and not the
-    // title beside it. Take whichever of the two is non-empty and `agentName()`
-    // answers with a title on every named workspace.
+    // `workspace_identity.name` is the address (slug), not the title.
     expect(contents).toEqual({ identity: 'published-ws', model: true });
     expect(state).toEqual({ db: true, partial: false, wal: false, shm: false, ref: true });
   });

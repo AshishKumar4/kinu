@@ -87,8 +87,6 @@ describe('CLI TUI layout', () => {
       await renderSettled(renderOnce);
       const frame = captureCharFrame();
       expect(frame).toContain('●');
-      // Nothing half-clips: too narrow for even the bare name means the
-      // control is gone, not an ellipsized fragment.
       expect(frame).not.toContain('A Very Long Model Name That Cannot Fit');
       expect(frame).not.toContain('…');
 
@@ -154,7 +152,6 @@ describe('CLI TUI layout', () => {
       );
       await renderSettled(renderOnce);
       const frame = captureCharFrame();
-      // The name may ellipsize; the mode may not silently vanish with it.
       expect(frame).toContain('local');
     } finally {
       flushSync(() => { root.unmount(); });
@@ -189,14 +186,10 @@ describe('CLI TUI layout', () => {
       }
     };
 
-    // A running branch survives a mid-size bar and the live settings follow
-    // it; the statics are the first to go.
     await render(72, (frame) => {
       expect(frame).toContain('⎇ branch');
       expect(frame).not.toContain('effort high');
     });
-    // With room, everything earns its place back — including the full model
-    // control.
     await render(124, (frame) => {
       expect(frame).toContain('⎇ branch');
       expect(frame).toContain('ctx');
@@ -208,8 +201,6 @@ describe('CLI TUI layout', () => {
   });
 
   test('the model control degrades whole — hint, then name, never a clipped bracket', async () => {
-    // Long display names are where the budget runs out; the capture fixture's
-    // Deepseek spelling is the honest worst case.
     const render = async (width: number, assertions: (frame: string) => void) => {
       const { renderer, renderOnce, captureCharFrame } = await createTestRenderer({ width, height: 6, useThread: false, maxFps: Number.POSITIVE_INFINITY });
       const root = createRoot(renderer);
@@ -243,18 +234,14 @@ describe('CLI TUI layout', () => {
     await render(64, (frame) => {
       const line = frame.split('\n').find((row) => row.includes('Deepseek V4 Pro'));
       expect(line).toBeDefined();
-      // A bracket that opens must close: '[Ct…' teaches nobody anything.
       expect(line?.match(/\[[^\]]*…/)).toBeNull();
     });
   });
 
-  // The chrome's glyph language is textual only: box-drawing, geometric shapes,
-  // dingbats, braille. Emoji-presentation code points render unpredictably per
-  // terminal font and read as leftovers of another era, so no frame may carry
-  // one. ★ stays: it is Emoji_Presentation=No and monochrome everywhere.
+  // No emoji-presentation code points in chrome: they render unpredictably per terminal font.
+  // ★ stays: Emoji_Presentation=No and monochrome everywhere.
   test('TUI chrome renders zero emoji', async () => {
-    // FE0F is checked apart: inside a class it combines with the neighbour
-    // and the lint reads that as a misleading pattern.
+    // FE0F is checked apart: inside a class it combines with the neighbour and lint flags it.
     const EMOJI = /[\u{1F000}-\u{1FFFF}\u{23E9}-\u{23FA}\u{2B00}-\u{2BFF}\u{2600}-\u{26FF}]/gu;
     const VARIATION_SELECTOR = /\uFE0F/u;
     const frames: string[] = [];
@@ -320,12 +307,6 @@ describe('CLI TUI layout', () => {
 
     expect(VERSION).toBe(packageJson.version);
 
-    // What the CLI reports is the contract. The greps this replaced named the
-    // wiring instead — display.ts's package.json import, program.ts's
-    // `.version(VERSION)` call, home-app.tsx's header literal — and passed for
-    // any spelling of it while a `-v` that printed nothing would too. The home
-    // header is asserted where it renders, on the frame, by 'digit keys never
-    // select a workspace on the home screen'.
     const reported = Bun.spawnSync({
       cmd: [process.execPath, resolve(repoRoot, 'packages/cli/bin/cli.ts'), '-v'],
       cwd: repoRoot,
@@ -389,8 +370,6 @@ describe('CLI TUI layout', () => {
 
     const root = createRoot(renderer);
 
-    // Plain system rows: one line each, no markdown, so which rows are on
-    // screen is an exact read of where the transcript is scrolled to.
     const transcript = Array.from({ length: 60 }, (_, index) => ({
       id: `line-${index}`,
       role: 'system' as const,
@@ -402,30 +381,25 @@ describe('CLI TUI layout', () => {
     try {
       root.render(<ChatApp client={agent.client} hydrateHistory={true} onExit={() => {}} />);
       await renderSettled(renderOnce);
-      // Sticky-bottom: the newest row is on screen and the oldest is not.
       expect(captureCharFrame()).toContain('line-59');
       expect(captureCharFrame()).not.toContain('line-00');
       const bottom = topVisibleTranscriptLine(captureCharFrame());
 
-      // Alt+arrows keep transcript scrolling independent of prompt history.
       mockInput.pressArrow('up', { meta: true });
       await renderSettled(renderOnce);
       expect(captureCharFrame()).not.toContain('line-59');
       const lineStep = bottom - topVisibleTranscriptLine(captureCharFrame());
       expect(lineStep).toBeGreaterThan(0);
 
-      // Down returns to the bottom, so both steps are measured from one place.
       mockInput.pressArrow('down', { meta: true });
       await renderSettled(renderOnce);
       expect(topVisibleTranscriptLine(captureCharFrame())).toBe(bottom);
 
-      // A page is a bigger jump than a line, not merely a jump.
       mockInput.pressKey('\u001B[5~');
       await renderSettled(renderOnce);
       const pageStep = bottom - topVisibleTranscriptLine(captureCharFrame());
       expect(pageStep).toBeGreaterThan(lineStep);
 
-      // A multiline draft owns its own arrows: Down must not move the transcript.
       await mockInput.typeText('first line');
       mockInput.pressEnter({ shift: true });
       await mockInput.typeText('second line');
@@ -435,7 +409,6 @@ describe('CLI TUI layout', () => {
       await renderSettled(renderOnce);
       expect(topVisibleTranscriptLine(captureCharFrame())).toBe(beforeDraftArrow);
 
-      // Page keys still reach the transcript over a draft, and come back down.
       mockInput.pressKey('\u001B[6~');
       await renderSettled(renderOnce);
       expect(topVisibleTranscriptLine(captureCharFrame())).toBeGreaterThan(beforeDraftArrow);
@@ -446,8 +419,6 @@ describe('CLI TUI layout', () => {
   });
 
   test('slash command hints render as a palette without numeric hotkeys', async () => {
-    // The offered list, not the raw table: capability-gated commands are
-    // absent for this client, exactly as the chat app renders them.
     const commands = commandsForClient({ localControls: null, consents: null, checkpoints: null, plans: null });
     const { renderer, renderOnce, captureCharFrame } = await createTestRenderer({ width: 80, height: 24, useThread: false, maxFps: Number.POSITIVE_INFINITY });
     const root = createRoot(renderer);
@@ -470,7 +441,6 @@ describe('CLI TUI layout', () => {
       expect(frame).not.toContain('/helptoShow');
       expect(frame).not.toContain('1 /help');
       expect(frame).not.toContain('2 /status');
-      // The palette's own instructions are copy, not data: they read whole.
       expect(frame).toContain('Type to filter · Enter runs a completed command');
       expect(frame).toContain('Keep typing to filter.');
     } finally {
@@ -849,12 +819,7 @@ describe('CLI TUI layout', () => {
     }
   });
 
-  // Digits belong to the mission, never to the workspace list. The grep this
-  // replaced ("home-app.tsx does not contain Number(key.name)") locked a
-  // spelling: renaming the local broke it with no behaviour change, and a
-  // numeric handler written any other way passed it. So drive the real screen
-  // and press the keys — with an arrow press afterwards, so "the selection did
-  // not move" cannot be "no key arrived".
+  // The arrow press afterwards proves keys arrived, so "the selection did not move" is meaningful.
   test('digit keys never select a workspace on the home screen', () => {
     const run = runHomeScreen({
       workspaces: WORKSPACE_NAMES,
@@ -896,9 +861,7 @@ describe('CLI TUI layout', () => {
       `,
     });
 
-    // The actions stay unmodelled records: v.object would quietly drop a field
-    // the screen has no business sending, which is exactly the field that
-    // would carry a mission into chat.
+    // Unmodelled records on purpose: v.object would drop the extra field that would carry a mission into chat.
     const homeAction = v.nullable(v.record(v.string(), v.unknown()));
 
     const observed = v.parse(v.object({
@@ -916,19 +879,10 @@ describe('CLI TUI layout', () => {
     expect(observed.openedByDigits).toBeNull();
     expect(observed.afterArrowDown).toBe(observed.listed[1]);
     expect(observed.finalAction).toEqual({ type: 'exit' });
-    // The home header renders the one VERSION, which is why the version test
-    // asserts this header instead of grepping home-app.tsx for the literal.
     expect(observed.header).toContain(`Kinu workspaces · cli ${VERSION}`);
   });
 
-  // The mission is what the workspace IS — it seeds SOUL.md and names the
-  // workspace. Replaying it as the opening turn hands a standing brief over as
-  // a task, which is what "My personal assistant, Jarvis" being answered as a
-  // request came from. The CLI opens the new workspace with an empty
-  // conversation, exactly as the web app does. Asserted on the created
-  // workspace itself and on the action the home screen hands to chat — the only
-  // channel a prompt could ride in on — rather than on the absence of the
-  // string 'initialPrompt' from three files.
+  // The mission seeds SOUL.md and names the workspace; it must not be replayed as the opening turn.
   test('creating a workspace from a mission opens it without sending the mission', () => {
     const mission = 'My personal assistant, Jarvis';
 
@@ -954,8 +908,6 @@ describe('CLI TUI layout', () => {
       .map((entry) => entry.name);
 
     expect(created).toHaveLength(1);
-    // Exactly this payload: an extra field is how a mission would reach chat
-    // as a first turn, and chat opens whatever `name` says.
     expect(observed.opened).toEqual({ type: 'open-agent', name: created[0] });
 
     const db = new Database(resolve(run.home, created[0], 'agent.db'), { readonly: true });
@@ -968,17 +920,8 @@ describe('CLI TUI layout', () => {
     }
   });
 
-  // Finishing the home screen once rendered an empty box and freed the
-  // renderer, which unmounted nothing: a React commit still queued at that
-  // moment landed afterwards on a tree whose native side was gone, and its
-  // blur wrote the cursor position through the released renderer pointer — a
-  // segfault in one create in ten, because the create test reaches complete()
-  // with the "busy" update pending only when the create outran React's
-  // scheduler. This does not sample that race, it forces it: Tab queues a
-  // focus commit, and Escape finishes the screen in the same tick, before that
-  // commit can run. What a consumer observes is then the whole assertion —
-  // once the renderer is freed, nothing at all reaches the native library.
-  // The list names what did, which a panic block never could.
+  // Tab queues a focus commit and Escape finishes the screen in the same tick, forcing a commit after the
+  // renderer is freed; nothing may reach the native library once it is.
   test('nothing reaches the native library after the home screen frees its renderer', () => {
     const run = runHomeScreen({
       driver: `
@@ -1015,8 +958,6 @@ describe('CLI TUI layout', () => {
       afterFree: v.array(v.string()),
     }), JSON.parse(run.stdout));
 
-    // The exit itself has to have happened, or an empty list is a screen
-    // that never finished rather than one that finished cleanly.
     expect(observed.finalAction).toEqual({ type: 'exit' });
     expect(observed.afterFree).toEqual([]);
   });
@@ -1186,8 +1127,6 @@ function lineContaining(frame: string, text: string) {
   return line;
 }
 
-/** Where the transcript is scrolled to, as the number of the topmost seeded
- *  `line-NN` row still on screen. Larger means further down the history. */
 function topVisibleTranscriptLine(frame: string): number {
   const numbers = [...frame.matchAll(/line-(\d\d)/gu)].map(([, digits]) => Number(digits));
   expect(numbers.length).toBeGreaterThan(0);
@@ -1195,18 +1134,13 @@ function topVisibleTranscriptLine(frame: string): number {
   return Math.min(...numbers);
 }
 
-/** The DIRECTORIES three seeded workspaces live in — their addresses. */
 const WORKSPACE_NAMES = ['alpha', 'beta', 'gamma'] as const;
 
-/** What the navigator shows for one of them. The label a workspace renders is
- *  its title, never its directory, so a driver that waits for a row has to wait
- *  for this. */
 function workspaceTitle(name: string): string {
   return `${name[0]?.toUpperCase() ?? ''}${name.slice(1)} workspace`;
 }
 
-/** Keys and tokens that would otherwise decide, from the developer's own shell,
- *  whether the home screen comes up in cloud or local mode. */
+/** Env keys that would otherwise let the developer's shell pick cloud or local mode. */
 const INHERITED_CREDENTIALS = [
   'ANTHROPIC_API_KEY',
   'CLAUDE_CODE_OAUTH_TOKEN',
@@ -1216,9 +1150,7 @@ const INHERITED_CREDENTIALS = [
   'KINU_TOKEN',
 ];
 
-/** `fetchStub` is the whole handler body, installed BEFORE the screen mounts:
- *  the cloud roster sync runs on mount, so a stub swapped in from a driver
- *  would race it. */
+/** Installed before mount: the cloud roster sync runs on mount, so a later swap would race it. */
 const homeScreenPrelude = (width = 100, height = 40, fetchStub?: string) => `
   import { mock } from 'bun:test';
   import * as core from '@opentui/core';
@@ -1273,10 +1205,6 @@ const homeScreenPrelude = (width = 100, height = 40, fetchStub?: string) => `
   await waitFor('the home screen to start accepting keys', () => renderer.keyInput.listenerCount('keypress') > 1);
 `;
 
-  // Full-height home shows readiness on the mode segments themselves; the
-  // dots row is the compact fallback for the heights where those segments
-  // don't render. The mission brief reads in one line — the second example
-  // only ever wrapped into an orphan.
   test('the home screen carries readiness once and reads its brief in one line', () => {
     const full = runHomeScreen({
       driver: `
@@ -1331,8 +1259,6 @@ const homeScreenPrelude = (width = 100, height = 40, fetchStub?: string) => `
           },
         },
       },
-      // The server offers a workspace under the same name as the placed local
-      // one; everything else the screen reads answers empty.
       fetchStub: `async (input) => String(input).endsWith('/api/cli/workspaces')
         ? Response.json([{ name: 'shopbot', displayName: 'Cloud Shop', createdAt: 1790000000000, lastVisited: 1790000000000, archivedAt: null }])
         : new Response('{}', { status: 200, headers: { 'content-type': 'application/json' } })`,
@@ -1348,29 +1274,17 @@ const homeScreenPrelude = (width = 100, height = 40, fetchStub?: string) => `
     });
 
     const observed = v.parse(v.object({ notice: v.string() }), JSON.parse(run.stdout));
-    // The row is clipped to the panel, so the contested NAME has to survive
-    // the clip: without it the reader cannot tell which workspace is missing
-    // from the roster, and silence would read as "no such cloud workspace".
     expect(observed.notice).toContain('shopbot');
     expect(observed.notice).toContain('a local workspace holds this name');
   });
 
-/** Drives the home screen the CLI actually runs, in a subprocess so that one
- *  KINU_HOME and one renderer swap belong to one test. `driver` runs with
- *  `frame`, `rowWith`, `waitFor`, `settle`, `mockInput`, `action` (whatever the
- *  screen has finished with, or null) and `opened` in scope, and prints the one
- *  JSON line the caller asserts on. The caller owns the returned home. */
+/** Subprocess so one KINU_HOME and one renderer swap belong to one test; the caller owns the returned home. */
 function runHomeScreen(options: {
   driver: string;
   workspaces?: readonly string[];
   width?: number;
   height?: number;
-  /** Merged over the default config.json — a signed-in session, extra refs.
-   *  The real config type, so a seeded field that no longer exists is a
-   *  compile error rather than a scenario quietly configuring nothing. */
   config?: Partial<KinuConfig>;
-  /** Whole `globalThis.fetch` handler body, for a screen whose cloud reads
-   *  have to answer with something specific. */
   fetchStub?: string;
 }) {
   const home = scratchDir('home-tui');
@@ -1382,10 +1296,7 @@ function runHomeScreen(options: {
 
   for (const name of options.workspaces ?? []) {
     mkdirSync(resolve(home, name));
-    // A REAL database carrying a title, because the navigator reads its label
-    // from there. A zero-byte file is a workspace nobody has named, and the
-    // navigator says so ("Untitled workspace") rather than printing the
-    // directory name — that name is the address `kinu chat <name>` takes.
+    // A real database with a title: the navigator reads its label there, and an unnamed one shows "Untitled workspace".
     const db = new Database(resolve(home, name, 'agent.db'), { create: true });
 
     try {
@@ -1411,8 +1322,7 @@ function runHomeScreen(options: {
     stderr: 'pipe',
   });
 
-  // A driver that timed out reports what never arrived on stderr, and Bun still
-  // exits 0 for a rejected top-level await, so stderr is what fails the test.
+  // Bun exits 0 for a rejected top-level await, so stderr is what fails the test.
   expect({ exitCode: proc.exitCode, stderr: proc.stderr.toString() }).toEqual({ exitCode: 0, stderr: '' });
 
   return { home, stdout: proc.stdout.toString() };

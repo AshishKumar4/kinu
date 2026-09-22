@@ -1,6 +1,3 @@
-// One alias map for `kinu setup --provider` and `kinu provider connect`.
-// Both surfaces resolve through `canonicalProviderName`, so an alias learned
-// on one works on the other: `cf` on setup, `workersai` on provider connect.
 import { scratchDir } from '../../test-utils/src/scratch';
 import { writeFileSync } from 'node:fs';
 

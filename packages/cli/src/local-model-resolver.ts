@@ -12,23 +12,19 @@ export interface LocalModelResolverOptions {
   model?: string;
   baseUrl?: string;
   auth?: string;
-  /** Pins the agent's signed-in proxy turns to one Workers AI replica
-   *  (x-session-affinity) — same `kinu-<name>` key cloud agents use. */
+  /** Pins signed-in proxy turns to one Workers AI replica (x-session-affinity). */
   agentName?: string;
-  /** Seam for the local Claude-subscription provider (tests inject a fake
-   *  `claude` binary). Production leaves this undefined. */
+  /** Test seam; undefined in production. */
   claudeCli?: ClaudeCliProviderOptions;
 }
 
 export interface ConfiguredLocalModelResolver {
-  /** The default endpoint for bare ids — null when nothing derives one.
-   *  Explicit `provider/model` specs resolve regardless. */
+  /** Default endpoint for bare ids, or null. */
   llmConfig: LLMProviderConfig | null;
   resolver: LocalModelResolver;
 }
 
 
-/** Why a workspace's model cannot run yet, or null when it can. */
 export interface UnusableModel {
   spec: string;
   /** Absent when resolution failed before any provider could be named. */
@@ -36,15 +32,6 @@ export interface UnusableModel {
   reason: string;
 }
 
-/**
- * Whether a model spec has a usable credential path right now.
- *
- * A workspace could be created against a provider nothing had connected — most often a signed-in
- * account whose Cloudflare AI was never granted — and the only symptom was the first turn failing.
- * The provider registry already knows (`isAvailable` + `unavailableReason`); this asks it at
- * selection time. `listProviders` describes a provider (or catalog) it could not reach as
- * unavailable WITH a reason instead of rejecting, so there is no lookup failure to absorb here.
- */
 export async function findUnusableModel(opts: LocalModelResolverOptions = {}): Promise<UnusableModel | null> {
   let resolver: LocalModelResolver;
   let spec: string;
@@ -55,8 +42,7 @@ export async function findUnusableModel(opts: LocalModelResolverOptions = {}): P
     spec = resolver.normalizeSpecSync(opts.model ?? null);
     provider = parseModelSpec(spec).provider;
   } catch (error) {
-    // Failing to resolve the model AT ALL is this function's answer, not a lookup it may shrug off:
-    // null said "usable", and the workspace then died on its first turn with this very error.
+    // A resolution failure means unusable; do not swallow it.
     return {
       spec: opts.model ?? 'The configured model',
       reason: renderThrownChain({ cause: error }),
@@ -71,8 +57,7 @@ export async function findUnusableModel(opts: LocalModelResolverOptions = {}): P
 }
 
 export function createConfiguredLocalModelResolver(opts: LocalModelResolverOptions = {}): ConfiguredLocalModelResolver {
-  // Total on purpose: a null endpoint only means bare ids have no default —
-  // explicit registry-only specs (claude/…, opencode/…) resolve regardless.
+  // A null endpoint only removes the bare-id default.
   const llmConfig = resolveLLMConfig(opts);
   const cloud = resolveCloudSession();
 

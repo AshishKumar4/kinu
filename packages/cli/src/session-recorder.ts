@@ -7,18 +7,7 @@ interface AssistantTurnMetadata {
   hadError: boolean;
 }
 
-/**
- * Records an AgentClientEvent stream to the JSONL terminal log, preserving the
- * CHRONOLOGICAL interleaving of assistant text and tool calls. Both backend
- * clients route their event stream through one recorder instance, so entry
- * shapes — and ordering — never drift.
- *
- * The model streams text-deltas, tool-calls, and tool-results interleaved
- * (text → tool → text → tool). Recording one consolidated `assistant` entry at
- * turn-end would regroup all text after all tools on reload. Instead we buffer
- * text-deltas and flush an `assistant` entry at each tool boundary (and at
- * turn-end), so the JSONL replays in true order.
- */
+/** Flushes buffered text at each tool boundary so the JSONL replays text and tools in order. */
 export class SessionRecorder {
   private pendingText = '';
 
@@ -27,8 +16,7 @@ export class SessionRecorder {
   record(session: CliSession, event: AgentClientEvent): void {
     switch (event.type) {
       case 'turn-start':
-        // A turn never starts mid-segment, but reset defensively so a dropped
-        // turn-end can't bleed text into the next turn.
+        // Defensive: a dropped turn-end must not bleed text into the next turn.
         this.pendingText = '';
         break;
       case 'text-delta':
@@ -48,9 +36,7 @@ export class SessionRecorder {
         });
         break;
       case 'turn-end':
-        // turn.text is the authoritative full text; use it as the trailing
-        // segment when nothing streamed (no deltas), otherwise the streamed
-        // buffer already holds exactly the trailing text after the last tool.
+        // turn.text only when nothing streamed.
         this.flushText(session, event.turn.text, {
           steps: event.turn.steps,
           durationMs: event.turn.durationMs,
@@ -70,12 +56,7 @@ export class SessionRecorder {
     }
   }
 
-  /**
-   * Persist the buffered text segment as an `assistant` entry and clear it.
-   * `finalText`, when given (turn-end), is the trailing text used only when the
-   * buffer is empty (no streamed deltas) so a mid-turn flush keeps exactly what
-   * streamed up to the tool boundary.
-   */
+  /** `finalText` is used only when the buffer is empty. */
   private flushText(session: CliSession, finalText?: string, meta?: AssistantTurnMetadata): void {
     const text = this.pendingText || (finalText ?? '');
     this.pendingText = '';

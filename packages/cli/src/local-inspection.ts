@@ -189,14 +189,7 @@ export function getLocalAgentState(name: string): LocalAgentState {
   }));
 }
 
-/**
- * What this local workspace spent, on both axes, from the same read model the
- * cloud panel renders — never a second query written here.
- *
- * No window on either surface: `workspaceSpend` sums the whole log, so the two
- * answer the same question about the same rows by construction rather than by
- * both being handed the same bound.
- */
+/** Same read model as the cloud panel; no window, since `workspaceSpend` sums the whole log. */
 export function getLocalWorkspaceSpend(name: string): WorkspaceSpend {
   return withLocalDb(name, (db) => {
     const sql = makeSql(db);
@@ -221,8 +214,7 @@ export function getLocalAgentInfo(name: string): LocalAgentInfoSnapshot {
       taskCount: actor && tableExists(db, 'task_history')
         ? countOf(db, `SELECT COUNT(*) AS c FROM task_history WHERE actor_id = ?`, actor.actorId)
         : 0,
-      // Not reported: it is a walk of the workspace filesystem, and this path
-      // may not open one (see getLocalStatus).
+      // Needs a filesystem walk this path may not open (see getLocalStatus).
       memorySize: 0,
       createdAt: status.createdAt ?? 0,
       conversationCount: actor && tableExists(db, 'conversation_entries')
@@ -259,14 +251,7 @@ export function getLocalProfileCoordinates(name: string): LocalProfileCoordinate
   });
 }
 
-
-/**
- * The curated memory document, reassembled from its indexed chunks.
- *
- * `memory_chunks` is MemoryStore's index OF `memory/MEMORY.md` — the same text,
- * in a table this read-only path can open. Reading the file itself would mean
- * opening the workspace filesystem, which writes; see getLocalStatus.
- */
+/** Reassembled from `memory_chunks`, MemoryStore's index of `memory/MEMORY.md`; opening the file would write (see getLocalStatus). */
 export function readLocalMemory(name: string): string {
   return withLocalDb(name, (db) => {
     if (!tableExists(db, 'memory_chunks')) return '';
@@ -278,13 +263,7 @@ export function readLocalMemory(name: string): string {
   });
 }
 
-/**
- * `limit` is a user CLI flag (`--limit`, via `numberField`) and reaches a raw
- * `LIMIT ?` on both branches below, so it is closed to a finite positive integer
- * first: SQLite reads `LIMIT -1` as no limit and rejects a fraction or NaN as a
- * datatype mismatch. Validity only — no ceiling is imposed, because this surface
- * has never had one and a recall read the operator asked to widen should widen.
- */
+/** `limit` is user input bound to raw `LIMIT ?`: SQLite reads -1 as unlimited and rejects NaN/fractions. Validity only, no ceiling. */
 export function searchLocalMemory(name: string, query: string, limit = 10): Array<{ path: string; text: string; score?: number; startLine?: number; endLine?: number }> {
   const q = query.trim();
 
@@ -318,8 +297,6 @@ export function listLocalEvents(name: string, opts: { variant?: string; since?: 
   });
 }
 
-/** Recent runs from the durable run-event log — the local peer of the cloud
- *  `listRuns` RPC. One page; `kinu inspect` prints a window, not a walk. */
 export function listLocalRuns(name: string, limit = 50): RunListEntry[] {
   return withLocalDb(name, (db) => {
     if (!tableExists(db, 'run_events')) return [];
@@ -329,8 +306,7 @@ export function listLocalRuns(name: string, limit = 50): RunListEntry[] {
   });
 }
 
-/** One run's durable events, oldest first — the local peer of `getRunEvents`.
- *  `since` is the inclusive lower bound an SSE resume replays from. */
+/** `since` is inclusive. */
 export function listLocalRunEvents(
   name: string, runId: string, opts: { since?: number; limit?: number } = {},
 ): RunEvent[] {
@@ -342,25 +318,15 @@ export function listLocalRunEvents(
   });
 }
 
-/**
- * The LOCAL peer of core's `getRunTimeline`, and bounded the same way. `limit`
- * is a user CLI flag (`kinu inspect timeline --limit`), and below it reaches
- * three raw `LIMIT ?` binds plus a tail slice — so `--limit -1` read three whole
- * tables and `--limit abc` bound NaN. Its default stays 100, which is what the
- * command has always shown; only the ceiling is shared with the cloud peer.
- */
+/** Local peer of core's `getRunTimeline`, sharing its ceiling; `limit` is user input bound to raw `LIMIT ?`. */
 export function listLocalTimeline(name: string, limit = 100): JsonObject[] {
   const window = boundedInt(limit, 100, 1, RUN_TIMELINE_MAX);
 
   return withLocalDb(name, (db) => {
-    // WHOSE timeline. Every rail below is actor-scoped now, so the workspace's
-    // MAIN actor is the one this whole-workspace read reports; another actor's
-    // is reached by id through `getLocalActorInfo`.
+    // Every rail is actor-scoped; this reports the main actor.
     const actor = mainActor(db);
     const rows: JsonObject[] = [];
 
-    // The durable run-event log of the most recent run — tool calls, steps and
-    // turn boundaries. The cloud timeline spine leads with the same source.
     if (tableExists(db, 'run_events')) {
       const sql = makeSql(db);
       const recorder = new RunEventRecorder(sql, openWorkspaceMainActor(sql));
@@ -438,10 +404,7 @@ export function listLocalTimeline(name: string, limit = 100): JsonObject[] {
   });
 }
 
-/** Every search_nodes row this workspace ever wrote, across every search — the
- *  debugging read `kinu inspect mcts` serves with no node id. Core's scoped
- *  projections (readSearchTree, readLatestSearchTree) answer one search; this
- *  deliberately answers all of them. */
+/** Every search, deliberately; core's projections answer one. */
 export function listLocalMcts(name: string): SearchNode[] {
   return withLocalDb(name, (db) => {
     const actor = mainActor(db);
@@ -460,8 +423,6 @@ export function listLocalMcts(name: string): SearchNode[] {
   });
 }
 
-/** Local peer of the cloud `getMctsSearchRuns` RPC — the mcts_search_runs
- *  ledger, newest-updated first. */
 export function listLocalMctsSearchRuns(name: string, limit = 20): MctsSearchRunSummary[] {
   return withLocalDb(name, (db) => {
     if (!tableExists(db, 'mcts_search_runs')) return [];
@@ -471,15 +432,7 @@ export function listLocalMctsSearchRuns(name: string, limit = 20): MctsSearchRun
   });
 }
 
-/**
- * Local peers of the three record RPCs — the CUMULATIVE half of exploration.
- *
- * The trees above are per-run; `exploration_records` is what survived across
- * runs, and it had no local read path at all. Guarded on the table existing for
- * the same reason `listLocalMcts` is: a workspace created before it was part of
- * the shared schema has no such table, and that is an absence rather than a
- * failure. The read models themselves work over any `SqlExecutor`.
- */
+/** Local peers of the three record RPCs. A workspace predating `exploration_records` has no table: an absence, not a failure. */
 export function listLocalRecordObjectives(name: string, limit = 20): RecordObjectiveSummary[] {
   return withLocalDb(name, (db) => (
     tableExists(db, 'exploration_records')
@@ -511,9 +464,6 @@ export function readLocalRecordCell(
   ));
 }
 
-/** Local peer of the cloud `getMctsNodeDetail` RPC. The projection itself is
- *  core's (read-models/search-tree.ts), so `kinu inspect mcts <id>` formats
- *  one shape whichever target answered. */
 export function getLocalMctsNode(name: string, nodeId: string): SearchNodeDetail | null {
   return withLocalDb(name, (db) => (
     tableExists(db, 'search_nodes') ? readSearchNodeDetail(makeSql(db), requireMainActor(db), nodeId) : null
@@ -538,9 +488,6 @@ export function listLocalGepaRuns(name: string, limit = 20): GepaRunSummary[] {
   });
 }
 
-/** Local peer of the cloud `getChatHistoryPage` RPC — the newest page, which
- *  is what `kinu debug messages --limit` is asking for. The read model
- *  itself (core status.ts) works over any SqlExecutor. */
 export function getLocalChatHistory(name: string, limit = 100): Promise<ChatHistoryEntry[]> {
   return withLocalDbAsync(name, async (db) => {
     const sql = makeSql(db);
@@ -551,7 +498,6 @@ export function getLocalChatHistory(name: string, limit = 100): Promise<ChatHist
   });
 }
 
-/** Local peer of the cloud `getEvolutionChangelog` RPC. */
 export function getLocalChangelog(name: string, limit = 50): EvolutionChangelogView {
   return withLocalDb(name, (db) => {
     if (!tableExists(db, 'actor_config')) initAgentConfigTable((ddl) => { db.exec(ddl); });
@@ -561,7 +507,6 @@ export function getLocalChangelog(name: string, limit = 50): EvolutionChangelogV
   });
 }
 
-/** Local peer of the cloud `listScaffoldVersions` RPC. */
 export function getLocalScaffoldVersions(name: string, limit = 20): ScaffoldVersionView[] {
   return withLocalDb(name, (db) => {
     const actor = mainActor(db);
@@ -572,7 +517,6 @@ export function getLocalScaffoldVersions(name: string, limit = 20): ScaffoldVers
   });
 }
 
-/** Local peer of the cloud `getFacts` RPC. */
 export function getLocalFacts(name: string, limit = 100): Array<{
   key: string; value: unknown; confidence: number; source: string; lastObservedAt: number;
 }> {
@@ -586,25 +530,19 @@ export function getLocalFacts(name: string, limit = 100): Array<{
   });
 }
 
-/** K_align for a local agent. A workspace with no outcome ledger yet reads as
- *  an empty result — alignmentConvergence already owns that case. */
 export function getLocalAlignment(name: string): AlignmentConvergence {
   return withLocalDb(name, (db) => alignmentConvergence(makeSql(db), requireMainActor(db)));
 }
 
-/** What the hand labels establish about this agent's outcome classifier, and
- *  the corrected rates they buy. Reads "uncalibrated" until labels exist. */
 export function getLocalCalibration(name: string): CalibrationReport {
   return withLocalDb(name, (db) => calibrationReport(makeSql(db), requireMainActor(db)));
 }
 
-/** Draw the next calibration set for a local agent. */
 export function sampleLocalLabeling(name: string, size: number): LabelingItem[] {
   return withLocalDb(name, (db) => sampleForLabeling(makeSql(db), requireMainActor(db), { size }));
 }
 
-/** Store a labeling pass. The ledger's tables are ensured first: a workspace
- *  can predate the label table without ever having run a turn since. */
+/** Tables are ensured first: a workspace can predate the label table. */
 export async function recordLocalOutcomeLabels(
   name: string,
   input: { labeler: string; labels: ReadonlyArray<{ outcomeId: string; label: OutcomeLabel }> },
@@ -617,32 +555,18 @@ export async function recordLocalOutcomeLabels(
   });
 }
 
-/** How the LLM panel scored against the owner's own labels, and whether it
- *  cleared the bar to stand in for them. Reads "not run" until it has. */
 export function getLocalEnsemble(name: string): EnsembleReport {
   return withLocalDb(name, (db) => ensembleReport(makeSql(db), requireMainActor(db)));
 }
 
-/** One judge from one spec: normalize, then resolve the model behind it. The
- *  calibration panel and the corpus eval both need exactly this, and this is the
- *  resolution step that costs credentials — which is why the panel hands it to
- *  `runEnsemble` as a callback rather than calling it up front. */
+/** Resolving costs credentials, so `runEnsemble` takes this as a callback rather than resolving up front. */
 function localJudge(resolver: LocalModelResolver, named: string): EnsembleJudge {
   const spec = resolver.normalizeSpecSync(named);
 
   return { spec, llm: createCompletionLLM({ model: resolver.resolveModel(spec), spec, stage: 'judge' }) };
 }
 
-/**
- * Put a local agent's hand-labeled turns to the panel — one blind pass per
- * judge. Judges are the models the owner named, else one per available vendor
- * family other than the chat model's: core's `selectEnsembleJudges`, over the
- * same candidate list the DO backend walks.
- *
- * The database is held open for the whole pass rather than per judge, because
- * each judge's verdicts are written as they land: a run interrupted halfway
- * keeps the model calls it already paid for, and the next run tops up.
- */
+/** Holds the database open for the whole pass: verdicts are written as they land, so an interrupted run keeps paid calls. */
 export async function runLocalOutcomeEnsemble(
   name: string,
   specs: string[] | null,
@@ -653,12 +577,7 @@ export async function runLocalOutcomeEnsemble(
   try {
     const sql = makeSql(db);
     initTurnOutcomeTables((ddl) => { db.exec(ddl); });
-    // Two stages, because they have different costs: choosing the judges is a
-    // read over the provider catalog, while resolving one into an LLM reaches the
-    // signed-in session and the stored keys. `runEnsemble` asks for the specs
-    // only once it knows there are hand labels, and for a judge only once the
-    // panel is big enough to run — so a workspace with no labels, or a
-    // one-model panel, is told that rather than told it is unauthenticated.
+    // Choosing judges reads the catalog; resolving one needs credentials. Deferred so a label-less workspace is told that, not "unauthenticated".
     const { resolver } = createConfiguredLocalModelResolver({ agentName: name });
 
     return await runEnsemble(sql, openWorkspaceMainActor(sql), {
@@ -674,15 +593,7 @@ export async function runLocalOutcomeEnsemble(
   }
 }
 
-/**
- * Score the classifier and the judge panel over a mined behavioural corpus.
- *
- * The panel is chosen exactly as `runLocalOutcomeEnsemble` chooses it, and the
- * classifier runs on the agent's own chat model — the model production would
- * have classified those turns with. Nothing is written to the agent's ledger:
- * the corpus is not this agent's history, and a row claiming otherwise would
- * corrupt the very calibration this is meant to complement.
- */
+/** Nothing is written to the ledger: the corpus is not this agent's history. */
 export async function runLocalCorpusEval(name: string, input: {
   turns: ReadonlyArray<CorpusTurn>;
   labels: ReadonlyArray<WeakLabel>;
@@ -732,11 +643,7 @@ export function getLocalGepaRun(name: string, runId: string): LocalGepaRunDetail
   });
 }
 
-/** The CLI's one executor: the machine is the workspace. Its toolchain is
- *  the same probe the live provider declares from, not a copy of its row —
- *  this listing is what `kinu inspect` shows for the machine it is running
- *  on, so a hardcoded `git`/`npm` here would contradict the row the agent
- *  is actually given. */
+/** Uses the live provider's toolchain probe so this listing matches the row the agent is given. */
 export function listLocalExecutors(): LocalExecutorInfo[] {
   return [
     {
@@ -764,7 +671,6 @@ export function getLocalToolSurface(name: string): {
     executors: listLocalExecutors(),
   }));
 }
-
 
 export function listLocalTriggers(name: string): { triggers: TriggerRow[] } {
   return withLocalDb(name, (db) => {
@@ -826,9 +732,7 @@ export async function executeLocalExecutor(name: string, executorId: string, com
     throw new Error(`Executor "${executorId}" is not available for local agents.`);
   }
 
-  // The one host-shell implementation: it owns the process contract (group
-  // kill on abort, and settling when the COMMAND exits rather than when a
-  // backgrounded grandchild finally closes the inherited pipe).
+  // createHostShell owns group kill on abort and settles when the command exits, not when a grandchild closes the pipe.
   const result = await createHostShell(process.cwd()).exec(command);
 
   return { executor: executorId, command, ...result };
@@ -849,11 +753,7 @@ export function getLocalReleaseBoard(name: string, limit = 20): ReleaseBoard {
 export async function markLocalBackgroundJobsCancelled(name: string): Promise<string[]> {
   return withLocalWritableDb(name, (db) => {
     if (!tableExists(db, 'background_jobs')) return [];
-    // Through the store rather than one blanket UPDATE: the registry is
-    // actor-private, `cancel` is fenced on the row's own epoch, and the ids
-    // reported back have to be the rows this actually settled. A table-wide
-    // write would also cancel a swarm node actor's jobs, which the operator
-    // interrupting THIS workspace's session did not ask for and cannot see.
+    // Through the store: the registry is actor-private and `cancel` is epoch-fenced; a blanket UPDATE would cancel other actors' jobs.
     const sql = makeSql(db);
     const store = new BackgroundJobStore(sql, openWorkspaceMainActor(sql));
     const cancelled: string[] = [];
@@ -867,7 +767,6 @@ export async function markLocalBackgroundJobsCancelled(name: string): Promise<st
       cancelled.push(id);
     }
 
-    // Newest first, the order the raw read reported and the surfaces render.
     return cancelled.reverse();
   });
 }
@@ -900,10 +799,7 @@ async function withLocalDbAsync<T>(name: string, fn: (db: SqliteDb) => Promise<T
   }
 }
 
-/** Writable handle, closed only once the callback's result has settled. The
- *  callback may be async: `TriggerRegistry`'s mutators await the host's alarm
- *  seam, and a `finally { db.close() }` that fired at the first suspension
- *  point would hand the rest of the callback a closed database. */
+/** Closes only after the callback settles: `TriggerRegistry` mutators await the alarm seam. */
 async function withLocalWritableDb<T>(name: string, fn: (db: SqliteDb) => T | Promise<T>): Promise<T> {
   const dbPath = agentDbPath(name);
 
@@ -927,12 +823,10 @@ function all<T>(db: SqliteDb, sql: string, ...params: SQLQueryBindings[]): T[] {
   return db.prepare<T, SQLQueryBindings[]>(sql).all(...params);
 }
 
-/** A `SELECT COUNT(*) AS c` — zero when the query matched no row at all. */
 function countOf(db: SqliteDb, sql: string, ...params: SQLQueryBindings[]): number {
   return all<{ c: number }>(db, sql, ...params).at(0)?.c ?? 0;
 }
 
-/** The LIVE scaffold version of one actor — 0 when none is current. */
 function currentScaffoldVersion(db: SqliteDb, actorId: string): number {
   const current = all<{ version: number }>(
     db,
@@ -949,41 +843,14 @@ function tableExists(db: SqliteDb, name: string): boolean {
 }
 
 /**
- * The actor whose rows a whole-workspace inspection reports, or null when the
- * database carries no durable identity yet.
- *
- * Every store this module reads — facts, the head journal, the job registry,
- * the task ledger, the scaffold pointer — is actor-private, so "show me this
- * workspace's jobs" has to name whose. The workspace's MAIN actor is that
- * answer: it is the actor a `kinu` session drives, and the real handle
- * `openWorkspaceMainActor` issues through the production directory rather than
- * a stand-in.
- *
- * Every OTHER actor of this workspace — a hire, an ask-by-role temporary, a
- * head, a swarm node — lives in this same database and is reachable by id
- * through {@link listLocalActors} and {@link getLocalActorInfo}, retired ones
- * included. That is the whole of what one database buys an inspector: nothing
- * has to be opened, mounted or started to read what an actor did.
- *
- * A count taken without the predicate sums over strangers, and
- * `status = 'current'` would name whichever actor promoted last. Null when
- * there is no identity: such a database owns no actor-scoped rows either, so
- * zero is the honest answer rather than a total over rows nobody claims.
+ * The main actor, or null without a durable identity. Every store read here is actor-private; other actors are
+ * reachable via {@link listLocalActors} and {@link getLocalActorInfo}.
  */
 function mainActor(db: SqliteDb): ActorHandle | null {
   return tableExists(db, 'workspace_identity') ? openWorkspaceMainActor(makeSql(db)) : null;
 }
 
-/**
- * The main actor, or a refusal.
- *
- * Every actor-scoped read below needs an actor, and `tableExists` on the table
- * being read does NOT establish that the workspace has an identity to name. A
- * read that fell back to "no actor" would return another actor's rows or an
- * empty set indistinguishable from absence — and with every actor's rows in ONE
- * database, that is exactly the failure this refusal prevents. So an
- * inspection of a database with no identity row says so.
- */
+/** Refuses a database with no identity row instead of returning another actor's rows or an empty set. */
 function requireMainActor(db: SqliteDb): ActorHandle {
   const actor = mainActor(db);
 
@@ -992,7 +859,6 @@ function requireMainActor(db: SqliteDb): ActorHandle {
   return actor;
 }
 
-/** One actor of a local workspace, as its directory row records it. */
 export interface LocalActorRow {
   readonly actorId: string;
   readonly name: string;
@@ -1003,13 +869,7 @@ export interface LocalActorRow {
   readonly retired: boolean;
 }
 
-/**
- * The directory of the ONE database this workspace is, or null before it has an
- * identity to be a directory of.
- *
- * Read-only by construction: a directory answers from `workspace_actors` and
- * issues no handle here, so listing a workspace's actors starts none of them.
- */
+/** Null before the workspace has an identity. Issues no handle, so listing starts no actor. */
 function actorDirectory(db: SqliteDb): WorkspaceActorDirectory | null {
   if (!tableExists(db, 'workspace_actors') || !tableExists(db, 'workspace_identity')) return null;
 
@@ -1023,26 +883,13 @@ function actorDirectory(db: SqliteDb): WorkspaceActorDirectory | null {
   });
 }
 
-/**
- * Every actor this workspace holds — including retired ones, which is the
- * point.
- *
- * One database means a dismissed hire's transcript, a finished head's steps and
- * a swarm node's claims are all still here, keyed by the actor id they were
- * written under. Nothing is opened to read them.
- */
+/** Includes retired actors; nothing is opened to read them. */
 export function listLocalActors(name: string, opts: { readonly retired?: boolean } = {}): LocalActorRow[] {
   return withLocalDb(name, (db) => {
     const directory = actorDirectory(db);
 
     if (!directory) return [];
-    // The FULL set by default. `list()`'s own default excludes retired rows, so
-    // `retired` is passed explicitly on every call rather than left to that
-    // default. Leaving it makes this function's headline claim false: measured
-    // against a workspace holding a main, a hire, a head and one retired hire,
-    // it answers three. A lister that hides retained actors reports the
-    // workspace as smaller than its own archive, which is the one thing this
-    // read exists to prevent.
+    // `list()` excludes retired rows by default, so `retired` is always passed explicitly.
     const rows = directory.list({ retired: opts.retired ?? true });
 
     return rows.map((row): LocalActorRow => ({
@@ -1057,15 +904,7 @@ export function listLocalActors(name: string, opts: { readonly retired?: boolean
   });
 }
 
-/**
- * What ONE actor of this workspace did, read by its id and nothing else.
- *
- * No handle, no fence, no session: an inspection must not START the actor it is
- * reading, and a retired actor has no handle to be issued anyway. So the
- * directory row supplies the identity, `actor_id` supplies every count, and the
- * config store is bound to the id with a validator that asks only whether the
- * row is still retained. Null for an id this workspace never issued.
- */
+/** Reads by id only, starting nothing; retired actors have no handle. Null for an id this workspace never issued. */
 export function getLocalActorInfo(name: string, actorId: string): LocalAgentInfoSnapshot | null {
   return withLocalDb(name, (db) => {
     const directory = actorDirectory(db);
@@ -1088,15 +927,7 @@ export function getLocalActorInfo(name: string, actorId: string): LocalAgentInfo
       scaffoldVersion: tableExists(db, 'scaffold_versions')
         ? currentScaffoldVersion(db, actorId)
         : 0,
-      // Both were hardcoded `0` with no reason given, under a doc claiming
-      // "`actor_id` supplies every count" — measured against a workspace with a
-      // node and a tool in it, they reported nothing was there.
-      //
-      // The two are counted DIFFERENTLY on purpose. `crafted_tools` is one
-      // catalog per workspace (identity/schema.ts), so this is the catalog's
-      // size and not this actor's slice of it; `search_nodes` is actor-scoped,
-      // so a node belongs to the actor that opened it and reading it unscoped
-      // would report a sibling's search as this actor's.
+      // `crafted_tools` is one catalog per workspace (identity/schema.ts); `search_nodes` is actor-scoped.
       craftedToolCount: tableExists(db, 'crafted_tools')
         ? countOf(db, `SELECT COUNT(*) AS c FROM crafted_tools`)
         : 0,
@@ -1106,9 +937,7 @@ export function getLocalActorInfo(name: string, actorId: string): LocalAgentInfo
       taskCount: tableExists(db, 'task_history')
         ? countOf(db, `SELECT COUNT(*) AS c FROM task_history WHERE actor_id = ?`, actorId)
         : 0,
-      // Not reported here for the same reason the workspace snapshot withholds
-      // it: measuring it walks the workspace filesystem, and this path opens
-      // the database read-only.
+      // Needs a filesystem walk; this path opens the database read-only.
       memorySize: 0,
       createdAt: row.createdAt,
       conversationCount: tableExists(db, 'conversation_entries')
@@ -1131,13 +960,7 @@ function getLocalStatus(db: SqliteDb): LocalStatus {
       db, `SELECT name, created_at FROM workspace_identity LIMIT 1`).at(0)
     : null;
 
-  // The MISSION, off the identity row — not SOUL.md itself.
-  //
-  // This inspection opens the database READ-ONLY, and reading the document
-  // means opening the workspace filesystem, which writes (it seeds its base
-  // directories and advances the process-generation counter on every open). A
-  // listing that mutated every workspace it walked past would be wrong twice
-  // over, so `writeSoul` keeps this one line current instead (identity/soul.ts).
+  // From the identity row, not SOUL.md: opening the workspace filesystem writes. `writeSoul` keeps it current (identity/soul.ts).
   const mission = hasIdentity
     ? all<{ mission: string | null }>(db, `SELECT mission FROM workspace_identity LIMIT 1`).at(0)?.mission?.trim() ?? null
     : null;
@@ -1147,8 +970,7 @@ function getLocalStatus(db: SqliteDb): LocalStatus {
     purpose: mission ?? '',
     soul: '',
     createdAt: identity?.created_at ?? null,
-    // The LIVE version — the one that actually drives a turn. MAX(version)
-    // reported an unresolved pending proposal as though it were already running.
+    // The live version, not MAX(version), which would include a pending proposal.
     scaffoldVersion: actor && tableExists(db, 'scaffold_versions')
       ? currentScaffoldVersion(db, actor.actorId)
       : 0,
@@ -1182,9 +1004,6 @@ function getLocalToolSummary(db: SqliteDb): LocalToolSummary {
   };
 }
 
-
-/** Inspection reads and writes a workspace's database with no session behind it,
- *  so there is no host to wake and nothing to arm. */
 const NOOP_ALARM: AlarmScheduler = {
   async scheduleAt() {},
 };

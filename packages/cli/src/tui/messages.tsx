@@ -16,8 +16,7 @@ export interface DisplayMessage {
   role: 'user' | 'assistant' | 'tool_call' | 'tool_result' | 'evolution' | 'system';
   content: string;
   toolName?: string;
-  /** The call identity both a call row and its result row carry, so a result
-   *  pairs with its own call however the two interleave. */
+  /** Pairs a result with its call however they interleave. */
   toolCallId?: string;
   args?: string;
   success?: boolean;
@@ -29,11 +28,6 @@ export interface DisplayMessage {
   live?: boolean;
 }
 
-/**
- * The user turn as the landing preview draws it: the YOU gutter in the accent
- * register with the turn beside it, set to the left at full width. The web
- * keeps its own right bubble. The steer mark sits under the turn.
- */
 function UserMessage({ content, attachments, steered, branched }: { content: string; attachments?: string[]; steered?: boolean; branched?: boolean }) {
   const { colors } = useTuiTheme();
 
@@ -57,10 +51,7 @@ function UserMessage({ content, attachments, steered, branched }: { content: str
 
 type WellBoxStyle = Pick<BoxOptions, 'border' | 'borderStyle' | 'borderColor' | 'backgroundColor' | 'paddingLeft' | 'paddingRight'>;
 
-/**
- * The dark well: the box a tool card sits on and the box a fenced code block
- * sits in. One definition, so the two surfaces cannot drift apart.
- */
+/** Shared by tool cards and fenced code blocks. */
 function wellBoxStyle(well: TuiThemeColors['well']): WellBoxStyle {
   return {
     border: ['left'],
@@ -73,20 +64,8 @@ function wellBoxStyle(well: TuiThemeColors['well']): WellBoxStyle {
 }
 
 /**
- * A fenced block on the well. opentui gives a fenced block its own
- * `CodeRenderable` built with the markdown renderable's ink and fill
- * (`MarkdownRenderable.createCodeRenderable` passes `fg: this._fg`,
- * `bg: this._bg`), so the `code` syntax style's fill never reaches the block
- * and the code reads in prose ink. `renderNode`
- * (`MarkdownOptions.renderNode`, @opentui/core/renderables/Markdown.d.ts:92)
- * is that renderable's own block hook: it hands the default block back, and
- * the well is the tool card's box around it, in the well's code ink.
- *
- * The hook reads the well from a ref, not from its own closure, because
- * `MarkdownRenderable` takes `renderNode` once at construction and declares no
- * setter for it. A theme change re-creates every block through this same
- * callback (`refreshStyles` → `rerenderBlocks` → `updateBlocks(true)`), which
- * must paint the theme in force at that moment.
+ * A fenced block on the well; opentui paints fences in markdown ink, so `renderNode` wraps them. The well is read
+ * from a ref: `renderNode` is taken once at construction, yet theme changes rerender blocks through it.
  */
 function useCodeWellRenderer(): NonNullable<MarkdownOptions['renderNode']> {
   const { colors } = useTuiTheme();
@@ -116,19 +95,10 @@ function useCodeWellRenderer(): NonNullable<MarkdownOptions['renderNode']> {
   return render;
 }
 
-/**
- * A list as markers and bodies. opentui's grammar leaves a list marker as
- * the literal `-` it was typed with (its bullet-conceal rules are commented
- * out upstream over a parser spacing issue), so the block is drawn here: one
- * row per item, a glyph or an ordinal in the accent, and the item's own text
- * as a nested markdown block, so emphasis inside a bullet still renders and
- * a nested list comes back through this same hook.
- */
+/** opentui leaves list markers as literal `-`, so lists are drawn here. */
 type RenderNode = NonNullable<MarkdownOptions['renderNode']>;
 
-/** The marked list token, read at the renderer boundary: marked's token
- *  union carries a `Generic` member whose every field is `any`, so the shape
- *  is parsed rather than trusted. */
+/** Parsed: marked's `Generic` member types every field `any`. */
 const ListTokenSchema = v.object({
   ordered: v.boolean(),
   start: v.union([v.number(), v.literal('')]),
@@ -137,7 +107,6 @@ const ListTokenSchema = v.object({
 
 type ListToken = v.InferOutput<typeof ListTokenSchema>;
 
-/** The bullet a list row draws: its number, its checkbox, or a dot. */
 function listMarker(ordered: boolean, position: number, item: ListToken['items'][number]): string {
   if (ordered) return `${String(position)}. `;
 
@@ -182,13 +151,11 @@ function renderList(
   return list;
 }
 
-/** The first line of a tool result is marked by how the call ended. */
 function resultMark(success: boolean | undefined): string {
   return success === false ? `${TUI_MARKS.failure} ` : `${TUI_MARKS.toolResult} `;
 }
 
-/** Prose on the canvas, in the ink register: the agent's body must read as
- * neither thinking (muted, italic) nor a system annotation (muted). */
+/** Full ink, distinct from thinking and system notes. */
 function AssistantMessage({ content, live }: { content: string; live?: boolean }) {
   const { colors, markdownSyntax } = useTuiTheme();
   const renderCodeWell = useCodeWellRenderer();
@@ -214,12 +181,6 @@ type ToolActivityRow =
   | { readonly kind: 'call'; readonly message: DisplayMessage }
   | { readonly kind: 'result'; readonly message: DisplayMessage; readonly call?: DisplayMessage };
 
-/**
- * A run of tool calls as one card, the web's `ToolCallGroup`: a header that
- * counts the calls and the failures, one row per call with its result under
- * it, dashed rules between calls. The card is the well — dark in every theme
- * — so it carries the well's own inks.
- */
 function ToolActivityCard({ rows, callPreviewWidth, resultPreviewWidth, expanded }: {
   readonly rows: readonly ToolActivityRow[];
   readonly callPreviewWidth: number;
@@ -314,10 +275,6 @@ function EvolutionMessage({ content }: { content: string }) {
   );
 }
 
-/**
- * A system note is an annotation in the dim register. An error is the web's
- * `p-notice-danger`: a bordered notice in the danger hue.
- */
 function SystemMessage({ content }: { content: string }) {
   const { colors } = useTuiTheme();
 
@@ -340,11 +297,7 @@ type TranscriptBlock =
   | { readonly kind: 'message'; readonly message: DisplayMessage }
   | { readonly kind: 'tools'; readonly key: string; readonly rows: readonly ToolActivityRow[] };
 
-/** Consecutive tool calls and results fold into one activity card. A result
- *  also meets the call it answers: by toolCallId first, then — for the rows
- *  a session log predating call ids left behind — the nearest unmatched call
- *  of the same tool, then simply the nearest unmatched call. The pairing is
- *  what lets a `file` result render the diff its call recorded. */
+/** Results pair by toolCallId, else nearest unmatched call of the same tool, else nearest. */
 function groupTranscript(messages: readonly DisplayMessage[]): TranscriptBlock[] {
   const blocks: TranscriptBlock[] = [];
   const pending: DisplayMessage[] = [];
@@ -365,8 +318,6 @@ function groupTranscript(messages: readonly DisplayMessage[]): TranscriptBlock[]
       }
     }
 
-    // The nearest unmatched call — of the same tool when the result names
-    // one, positionally when it does not.
     let index = pending.length - 1;
 
     if (message.toolName !== undefined) {

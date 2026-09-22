@@ -11,23 +11,14 @@ export interface AgentClientFlags {
   baseUrl?: string;
   auth?: string;
   noAutoEvolve?: boolean;
-  /** This process runs ONE task turn and exits (`kinu exec`/`kinu run`)
-   *  rather than holding a conversation. Not a capability switch — it is a
-   *  statement of fact the outcome ledger needs: the next invocation's prompt
-   *  is a fresh task, not a verdict on the previous answer. Applies to both
-   *  backends (local: session option; cloud: stamped on the chat request). */
+  /** One task turn, then exit. The outcome ledger needs it: the next prompt is a fresh task, not a verdict on
+   *  the previous answer. */
   oneShot?: boolean;
 }
 
 /**
- * Build the AgentClient for a resolved target. --model/--base-url/--auth are
- * session-scoped local LLM overrides and never mutate an agent durably; cloud
- * turns run in the DO with the agent's stored model, so the flags are rejected
- * there with a pointer to the explicit durable command.
- *
- * `surface` is not a user flag: it is which command is driving. A one-shot run
- * exits after its answer, which changes how long work may run before it is
- * moved to the background and how long teardown waits for it.
+ * --model/--base-url/--auth are session-scoped local overrides; cloud turns use the stored model, so they are
+ * rejected there. `surface` names the driving command: one-shot runs change background and teardown timing.
  */
 export async function createAgentClient(
   target: AgentTarget,
@@ -48,9 +39,7 @@ export async function createAgentClient(
     });
   }
 
-  // The one local resolution: the database, and the project directory every
-  // peer agent in this virtual workspace shares. Binding the planes to the
-  // recorded placement is what stops them following the invocation directory.
+  // Bind the planes to the recorded placement, not the invocation directory.
   const local = resolveLocalAgent(target.requestedName);
 
   return openLocalAgentClient(local.name, {

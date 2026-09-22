@@ -1,12 +1,5 @@
-// What `kinu setup` recommends.
-//
-// The native Cloudflare Workers AI model is option 1 and the `--yes` answer: it
-// is the one the account already serves. Recommending a BYO subscription — the
-// ChatGPT Codex one, say — would override what the platform otherwise resolves
-// to. Every other provider stays reachable, just not preferred.
-//
-// Driven through the real `setupCommand` in a subprocess, because config.ts
-// binds KINU_HOME at import.
+// Workers AI is option 1 and the `--yes` answer: the account already serves it, and a BYO default would
+// override what the platform resolves to. Subprocess: config.ts binds KINU_HOME at import.
 import { scratchDir } from '../../test-utils/src/scratch';
 import { readFileSync, writeFileSync } from 'node:fs';
 
@@ -20,7 +13,6 @@ const CLOUD_ORIGIN = 'https://kinu.example.com';
 
 const CLOUD_TOKEN = ['ptc_', '0123456789abcdef0123456789abcdef_abcdefghijklmnopqrstuvwxyz'].join('');
 
-/** A signed-in machine that had been pinned to a paid BYO provider. */
 function signedInHome(extra: JsonObject = {}): string {
   return home({
     origin: CLOUD_ORIGIN,
@@ -38,10 +30,7 @@ function home(config: JsonObject): string {
   return dir;
 }
 
-/** Runs setupCommand with `skipCloud`, so no branch can reach the network:
- *  every assertion here is about which provider the flow chooses. The import
- *  is dynamic because it runs inside a `bun -e` child — config.ts binds
- *  KINU_HOME at import, so each case needs its own process. */
+/** `skipCloud` keeps every branch off the network; each case needs its own process. */
 function runSetup(opts: JsonObject, kinuHome: string) {
   const runner = `
     const { setupCommand } = await import('./packages/cli/src/commands/setup.ts');
@@ -73,11 +62,9 @@ describe('kinu setup recommends the native Workers AI model', () => {
   test('--yes takes the native path and stops pinning a BYO model', () => {
     const out = runSetup({ yes: true }, signedInHome());
     expect(out.exitCode).toBe(0);
-    // Nothing stored: the platform default is one constant, and an unset model
-    // reads it at resolve time instead of pinning a copy that would go stale.
+    // An unset model reads the platform default at resolve time instead of pinning a copy that would go stale.
     expect(out.config.model).toBeUndefined();
     expect(out.stdout).toContain(DEFAULT_WORKERS_AI_MODEL_SPEC);
-    // The Codex credential is left alone — the provider stays available.
     expect(out.config.providers).toMatchObject({ codex: { accessToken: 'codex-token' } });
   });
 

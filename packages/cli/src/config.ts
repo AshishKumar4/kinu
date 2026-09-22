@@ -1,8 +1,3 @@
-/**
- * CLI configuration. App auth is stored in ~/.kinu/config.json after
- * `kinu setup`; direct LLM env vars remain as explicit local overrides.
- */
-
 import {
   chmodSync, existsSync, readFileSync, mkdirSync, readdirSync, realpathSync,
   writeFileSync, unlinkSync,
@@ -90,21 +85,16 @@ export type AgentMode = 'local' | 'cloud';
 export interface KinuAgentConfig {
   name: string;
   mode: AgentMode;
-  /** Cloud workspaces only: the server-side title cache. A local agent's
-   *  title lives in its own database (`actor_config.display_name`) and is
-   *  never mirrored here. */
+  /** Cloud workspaces only; a local agent's title lives in its own database (`actor_config.display_name`). */
   displayName?: string;
   alias?: string;
   localName?: string;
   cloudName?: string;
-  /** Canonical physical project directory this local agent works in. Recorded
-   *  at creation; its file and shell plane binds here. */
+  /** Canonical project directory; the agent's file and shell plane binds here. */
   cwd?: string;
-  /** Virtual workspace label grouping peer agents inside `cwd`. Metadata: it
-   *  names a group, never a directory — state stays at `~/.kinu/<name>`. */
+  /** Label grouping peer agents inside `cwd`, never a directory: state stays at `~/.kinu/<name>`. */
   workspaceId?: string;
-  /** `workspace_identity.id` of the database this ref addresses, so a reused
-   *  name cannot silently re-point the ref at a different workspace. */
+  /** `workspace_identity.id` of the addressed database, so a reused name cannot re-point the ref. */
   identityId?: string;
   createdAt: string;
   updatedAt: string;
@@ -119,9 +109,7 @@ export interface KinuConfig {
   aliases?: Record<string, string>;
   model?: string;
   reasoningEffort?: ReasoningEffort;
-  /** Set false to silence the once-a-day "newer Kinu available" notice. */
   updateCheck?: boolean;
-  /** Throttle state for that notice — never a version source, just a cache. */
   updateCheckedAt?: number;
   updateLatestSeen?: string;
   providers?: {
@@ -141,37 +129,18 @@ export interface KinuConfig {
       extraHeaders?: Record<string, string>;
     }>;
   };
-  /** Stdio MCP servers to connect locally (standard mcpServers shape). */
   mcpServers?: Record<string, McpServerConfig>;
-  /** "Don't ask again" for the chat device-connect prompt. */
   deviceConnectPromptDismissed?: boolean;
-  /** Shadow-git file checkpoints kept per working directory (default 50). */
+  /** Shadow-git checkpoints kept per working directory (default 50). */
   checkpointKeep?: number;
   /**
-   * How many times this machine's PROVIDER configuration has changed — every
-   * credential connected, revoked, or signed in or out advances it by one.
-   *
-   * It exists to cross a process boundary. A resident daemon or a live chat
-   * session caches the provider listing and invalidates it by signal rather
-   * than by time, and `kinu provider connect` runs in a different process
-   * entirely, so nothing in the resident one is there to raise that signal.
-   * This counter is what it reads instead: a number that differs from the one
-   * its cached listing was measured under means sweep again.
-   *
-   * Monotonic and meaningless in absolute terms — only inequality is read, so
-   * there is no clock here and nothing expires. Absent reads as 0, which is the
-   * correct baseline for a machine that has never changed a provider.
+   * Bumped on every provider change so resident sessions in other processes know to re-sweep their cached listing.
+   * Only inequality is read; absent reads as 0.
    */
   providerRevision?: number;
-  /**
-   * A server-side logout this machine could not complete. The raw token is the
-   * ONLY copy — the server stores a hash — so it stays here until a retry
-   * confirms the revocation, because deleting it would orphan a live 180-day
-   * bearer with nothing able to name it.
-   */
+  /** Failed server-side logout. The raw token is the only copy (the server stores a hash); kept until a retry confirms revocation. */
   pendingRevocation?: { token: string; origin: string; at: number };
-  /** Signed-out profile authority: the one local envelope, canonical when
-   *  no account session governs this machine. Never holds account data. */
+  /** Signed-out profile authority; never holds account data. */
   localProfile?: ProfileCatalogEnvelope;
 }
 
@@ -260,20 +229,13 @@ export function ensureBinDir(): void {
   mkdirSync(BIN_DIR, { recursive: true });
 }
 
-/** The canonical physical project directory: one identity per project, so two
- *  spellings of the same directory are not two projects.
- *
- *  A directory that is not there has no canonical form, and the absolute path is
- *  the honest answer for it — a project whose directory was moved or removed has
- *  to read as a different place, not abort the command with a bare `lstat`. */
+/** One identity per project; a missing directory falls back to its absolute path rather than aborting on `lstat`. */
 export function canonicalProjectRoot(cwd = process.cwd()): string {
   const absolute = resolve(cwd);
 
   return existsSync(absolute) ? realpathSync(absolute) : absolute;
 }
 
-/** A project's default virtual-workspace label — its directory name, slugged.
- *  A label grouping peer agents, never a path segment. */
 export function defaultVirtualWorkspaceId(cwd = process.cwd()): string {
   const candidate = basename(canonicalProjectRoot(cwd))
     .toLowerCase()
@@ -283,8 +245,6 @@ export function defaultVirtualWorkspaceId(cwd = process.cwd()): string {
   return candidate && KINU_IDENTIFIER_RE.test(candidate) ? candidate : 'workspace';
 }
 
-/** The one owner of local agent state paths. Nothing else joins AGENT_HOME
- *  with an agent name. A virtual workspace groups these; it never nests them. */
 export function agentDir(name: string): string {
   validateAgentName(name);
 
@@ -295,8 +255,6 @@ export function agentDbPath(name: string): string {
   return join(agentDir(name), 'agent.db');
 }
 
-/** A local agent placed in a project: the directory its file and shell plane
- *  binds to, and the virtual workspace grouping it with its peers. */
 export interface LocalAgentRef {
   name: string;
   cwd: string;
@@ -304,25 +262,18 @@ export interface LocalAgentRef {
   dbPath: string;
 }
 
-/** `recorded` — placement written when the agent was created. `adopted` — this
- *  resolve bound an unplaced `~/.kinu/<name>` workspace to the caller's project.
- *  `unplaced` — read without binding anything. */
+/** `adopted`: this resolve bound an unplaced `~/.kinu/<name>` workspace to the caller's project. */
 export type LocalPlacement = 'recorded' | 'adopted' | 'unplaced';
 
 export interface ResolvedLocalAgent extends LocalAgentRef {
   placement: LocalPlacement;
 }
 
-/** The ref as a placed local agent, or null when it records no placement —
- *  which is what makes an unplaced workspace belong to no project, rather than to
- *  whichever directory the CLI happened to start in. */
+/** Null without a recorded placement, so an unplaced workspace belongs to no project rather than to the current directory. */
 function placedRef(agent: KinuAgentConfig): LocalAgentRef | null {
   if (agent.mode !== 'local' || !agent.cwd || !agent.workspaceId) return null;
 
-  // A recorded directory that no longer exists places nothing: the planes cannot
-  // bind to it, and treating the ref as placed anyway would drop the agent out
-  // of both this listing and the unplaced one, which is how renaming a project
-  // directory would make its agents disappear from every roster.
+  // A missing recorded directory places nothing; otherwise a renamed project's agents would vanish from every roster.
   if (!existsSync(agent.cwd)) return null;
   const name = agent.localName ?? agent.name;
 
@@ -336,8 +287,6 @@ function placedRef(agent: KinuAgentConfig): LocalAgentRef | null {
   };
 }
 
-/** Every placed local ref, in any project. The machine-wide view: a scheduler
- *  must not be scoped to the directory it was launched from. */
 export function listLocalRefsAllProjects(): LocalAgentRef[] {
   return Object.values(loadConfigFile().agents ?? {})
     .map(placedRef)
@@ -345,15 +294,13 @@ export function listLocalRefsAllProjects(): LocalAgentRef[] {
     .sort((a, b) => a.workspaceId.localeCompare(b.workspaceId) || a.name.localeCompare(b.name));
 }
 
-/** One project's refs. A workspace with no recorded placement is NOT
- *  attributed here — attribution is adoption, and adoption is per-agent. */
+/** Unplaced workspaces are not attributed here: attribution is adoption, and adoption is per-agent. */
 function listLocalRefs(cwd = process.cwd()): LocalAgentRef[] {
   const root = canonicalProjectRoot(cwd);
 
   return listLocalRefsAllProjects().filter((ref) => ref.cwd === root);
 }
 
-/** Peers: the agents sharing one project directory and one workspace label. */
 export function localWorkspaceMembers(workspaceId: string, cwd = process.cwd()): LocalAgentRef[] {
   return listLocalRefs(cwd).filter((ref) => ref.workspaceId === workspaceId);
 }
@@ -362,8 +309,7 @@ export function listAgentDirs(cwd = process.cwd()): string[] {
   return listLocalRefs(cwd).map((ref) => ref.name);
 }
 
-/** Local workspaces on this machine that no ref places in a project: an
- *  `~/.kinu/<name>` directory with an `agent.db`. Readable, and adopted one at a time. */
+/** `~/.kinu/<name>` directories with an `agent.db` that no ref places; adopted one at a time. */
 export function listUnplacedAgentNames(): string[] {
   if (!existsSync(AGENT_HOME)) return [];
   const placed = new Set(listLocalRefsAllProjects().map((ref) => ref.name));
@@ -375,15 +321,9 @@ export function listUnplacedAgentNames(): string[] {
     .sort();
 }
 
-/** The durable id of a local workspace database, or null when it carries none. */
 export function readWorkspaceIdentityId(dbPath: string): string | null {
   if (!existsSync(dbPath)) return null;
-  // Opened READ-WRITE although nothing here writes. A workspace runs in WAL
-  // mode, a WAL database is unreadable without the `-shm` file SQLite builds
-  // beside it, and a readonly connection may not build one — so a workspace
-  // whose sidecars are not on disk failed every readonly read with "unable to
-  // open database file". That reached the owner's own log, reading back the
-  // title of a workspace nothing had open.
+  // Read-write although nothing writes: a WAL database needs its `-shm`, and a readonly connection may not build one.
   const db = new Database(dbPath);
 
   try {
@@ -402,14 +342,10 @@ export function readWorkspaceIdentityId(dbPath: string): string | null {
   }
 }
 
-/** The visible title a local workspace's own database carries, or null when it
- *  has none yet. The one label source for local agents: config.json holds no
- *  copy of it, so a rename or auto-title cannot drift from the roster. */
+/** The only label source for local agents; config.json holds no copy, so renames cannot drift. */
 export function readWorkspaceDisplayName(dbPath: string): string | null {
   if (!existsSync(dbPath)) return null;
-  // Read-write for the reason `readWorkspaceIdentityId` above states: a
-  // published WAL database has no `-shm`, and only a writable connection may
-  // build one.
+  // Read-write: see `readWorkspaceIdentityId`.
   const db = new Database(dbPath);
 
   try {
@@ -430,12 +366,7 @@ export interface AdoptUnplacedAgentOptions {
   workspaceId?: string;
 }
 
-/**
- * Bind ONE unplaced `~/.kinu/<name>` workspace to a project, keyed on that
- * database's own workspace identity. Bounded on purpose: it takes a name, so
- * nothing can sweep every unplaced directory into whichever directory the CLI
- * happened to start in. An already-placed ref comes back unchanged.
- */
+/** Binds one named workspace, keyed on its own identity, so nothing sweeps every unplaced directory. Placed refs return unchanged. */
 export function adoptUnplacedLocalAgent(name: string, opts: AdoptUnplacedAgentOptions = {}): LocalAgentRef {
   const dbPath = agentDbPath(name);
 
@@ -467,8 +398,6 @@ export function adoptUnplacedLocalAgent(name: string, opts: AdoptUnplacedAgentOp
   return { name, cwd, workspaceId, dbPath };
 }
 
-/** A named local workspace has no database. Carries the remedy separately so
- *  a command renders it as a hint instead of folding it into the message. */
 export class MissingLocalWorkspaceError extends Error {
   readonly hint: string;
 
@@ -481,18 +410,12 @@ export class MissingLocalWorkspaceError extends Error {
 
 export interface ResolveLocalAgentOptions {
   cwd?: string;
-  /** Label to adopt an unplaced workspace into. Default: the project's own. */
   workspaceId?: string;
-  /** Record the placement for an unplaced workspace. Leave it on for a real
-   *  open; pass false for a read that must not change configuration. */
+  /** Pass false for a read that must not change configuration. */
   adopt?: boolean;
 }
 
-/**
- * The one local resolution: the database path plus the project its file and
- * shell plane binds to. Commands call this instead of joining paths, so the
- * placement a peer group depends on cannot drift between call sites.
- */
+/** The one local resolution, so the placement a peer group depends on cannot drift between call sites. */
 export function resolveLocalAgent(input: string, opts: ResolveLocalAgentOptions = {}): ResolvedLocalAgent {
   const ref = resolveAgentRef(input);
 
@@ -522,9 +445,7 @@ export function resolveLocalAgent(input: string, opts: ResolveLocalAgentOptions 
   return { ...adoptUnplacedLocalAgent(name, { cwd, workspaceId }), placement: 'adopted' };
 }
 
-/** A ref is bound to one durable workspace. When the recorded identity no
- *  longer matches the database at that path the name was reused, and carrying
- *  on would attach one project's history to a different workspace. */
+/** A changed identity means the name was reused; continuing would attach history to a different workspace. */
 function assertIdentityUnchanged(agent: KinuAgentConfig, ref: LocalAgentRef): void {
   if (!agent.identityId) return;
   const actual = readWorkspaceIdentityId(ref.dbPath);
@@ -543,8 +464,7 @@ export function loadConfigFile(): KinuConfig {
   try {
     return v.parse(KinuConfigSchema, JSON.parse(readFileSync(CONFIG_PATH, 'utf-8')));
   } catch (error) {
-    // Defaulting silently here would discard the whole file — model, aliases, agents, session —
-    // because of one bad field, and look identical to a first run.
+    // Defaulting would discard the whole file over one bad field and look like a first run.
     throw new Error(`${CONFIG_PATH} is not a valid Kinu config; fix or remove it.`, { cause: error });
   }
 }
@@ -561,13 +481,7 @@ function writeConfigFileUnlocked(config: KinuConfig): void {
   writeSecretFile(CONFIG_PATH, `${JSON.stringify(config, null, 2)}\n`);
 }
 
-/**
- * The ONE config writer. The mutator may edit the loaded config in place or
- * return a replacement, so a whole-file overwrite is `updateConfigFile(() =>
- * next)` under the same lock rather than a second exported entry point that
- * skips the read. Every command here is read-modify-write, because a blind
- * overwrite drops whatever another process wrote since this one loaded.
- */
+/** The one config writer; always read-modify-write under the lock, since a blind overwrite drops other processes' writes. */
 export function updateConfigFile(mutator: (config: KinuConfig) => KinuConfig | void): KinuConfig {
   return withConfigLock(CONFIG_PATH, () => {
     const config = loadConfigFile();
@@ -578,29 +492,12 @@ export function updateConfigFile(mutator: (config: KinuConfig) => KinuConfig | v
   });
 }
 
-/**
- * This machine's current provider revision — see {@link KinuConfig.providerRevision}.
- *
- * Read by every resident session at every profile resolution, so it stays a
- * plain file read and never a network call. An unreadable config throws, which
- * is right: the alternative is answering 0 for a machine whose real revision is
- * higher, and that reads as "nothing changed".
- */
+/** Read on every profile resolution, so a plain file read. An unreadable config throws rather than answer 0. */
 export function readProviderRevision(): number {
   return loadConfigFile().providerRevision ?? 0;
 }
 
-/**
- * Publish that this machine's provider configuration changed.
- *
- * Called by every command that connects, disconnects, signs in or signs out —
- * anything that changes the set of providers a model resolution can reach. It
- * is the ONLY signal a resident daemon or chat session gets that its cached
- * provider listing is stale, so a mutation that skips it leaves that session
- * refusing a model the user just connected until it restarts.
- *
- * Returns the new value so a caller can log or assert on it.
- */
+/** The only signal a resident daemon or chat session gets that its cached provider listing is stale. */
 export function bumpProviderRevision(): number {
   let next = 0;
   updateConfigFile((config) => {
@@ -616,9 +513,7 @@ export function resolveCloudOrigin(opts?: { origin?: string }): string {
 }
 
 export function requireAuthConfig(): CloudAuthConfig {
-  // CI path: a token from the environment (typically a scoped `pta_…` access
-  // token from `kinu tokens create`) wins over the stored interactive
-  // session. Long-lived by design — the server is the validity authority.
+  // CI: `KINU_TOKEN` (usually a scoped `pta_…` token) wins over the stored session; the server decides validity.
   const envToken = process.env.KINU_TOKEN?.trim();
 
   if (envToken) return { origin: resolveCloudOrigin(), token: envToken };
@@ -645,8 +540,6 @@ function storedAuthConfig(missingTokenMessage: string): CloudAuthConfig {
   return { origin: resolveCloudOrigin(), token, user: config.user };
 }
 
-/** True when the stored interactive session's expiry has passed. Shared by
- *  auth gating and profile authority resolution. */
 export function sessionExpired(config: KinuConfig): boolean {
   if (!config.tokenExpiresAt) return false;
   const expiresAt = Date.parse(config.tokenExpiresAt);
@@ -654,9 +547,7 @@ export function sessionExpired(config: KinuConfig): boolean {
   return Number.isFinite(expiresAt) && expiresAt <= Date.now();
 }
 
-/** The signed-in session as a model source, or null when signed out / expired.
- *  `KINU_TOKEN` wins here exactly as it does in requireAuthConfig. Asks rather
- *  than catching: an unreadable config is not a signed-out user. */
+/** `KINU_TOKEN` wins, as in requireAuthConfig. An unreadable config throws: it is not a signed-out user. */
 export function resolveCloudSession(): LocalCloudSession | null {
   const envToken = process.env.KINU_TOKEN?.trim();
 
@@ -795,7 +686,6 @@ export function pathHint(): string | null {
   return (process.env.PATH ?? '').split(':').includes(BIN_DIR) ? null : `Add ${BIN_DIR} to PATH for kinu aliases.`;
 }
 
-
 function validateIdentifier(value: string, noun: string): void {
   if (!KINU_IDENTIFIER_RE.test(value)) {
     throw new Error(`${noun} must be 1-64 characters: letters, numbers, dashes, or underscores; it must start with a letter or number.`);
@@ -806,8 +696,6 @@ function validateAgentName(name: string): void {
   validateIdentifier(name, 'Agent name');
 }
 
-/** A virtual workspace label. Same shape as an agent name because a user
- *  types both on the command line. */
 export function validateWorkspaceId(workspaceId: string): void {
   validateIdentifier(workspaceId, 'Workspace id');
 }
@@ -820,14 +708,7 @@ function validateAliasName(alias: string): void {
   }
 }
 
-/**
- * The default inference endpoint for BARE model ids — the one input the
- * cli-backend registry cannot derive on its own. Total: null when nothing
- * derives one, because an explicit `provider/model` spec needs no endpoint at
- * all (registry-only families — the claude subscription, the opencode bridge —
- * carry their own auth seams). Seams that must hand core an endpoint object
- * use {@link requireLLMConfig}.
- */
+/** Default endpoint for bare model ids; null when nothing derives one. Use {@link requireLLMConfig} where core needs an endpoint. */
 export function resolveLLMConfig(opts?: {
   model?: string;
   baseUrl?: string;
@@ -835,8 +716,6 @@ export function resolveLLMConfig(opts?: {
 }): LLMProviderConfig | null {
   const file = loadConfigFile();
 
-  // Direct-endpoint overrides come only from explicit flags or env; provider
-  // credentials in config.json are the persistent source of truth.
   const baseURL = opts?.baseUrl
     ?? process.env.KINU_BASE_URL
     ?? process.env.AI_GATEWAY_BASE_URL;
@@ -861,13 +740,8 @@ export function resolveLLMConfig(opts?: {
 
   const cloud = resolveCloudSession();
 
-  // The signed-in account IS the default inference path, and it owns the native
-  // model families. Both halves matter: no selection lands on the platform
-  // default rather than on whichever BYO key happens to sit on disk, and a
-  // `workers-ai` / `my-gateway` / `@cf/` selection is answered by the account
-  // rather than by a local endpoint that would happily accept the model id and
-  // serve something else. Stored BYO credentials still win when the user picks
-  // one of their models explicitly.
+  // The signed-in account is the default path and owns native model families (`workers-ai`, `my-gateway`, `@cf/`);
+  // a local endpoint would accept those ids and serve something else. Explicitly picked BYO models still win.
   const cloudConfig: LLMProviderConfig | null = cloud
     ? {
         name: 'workers-ai',
@@ -879,8 +753,7 @@ export function resolveLLMConfig(opts?: {
 
   if (cloudConfig && (!model || isNativeCloudSpec(model))) return cloudConfig;
 
-  // An explicit spec naming a registry-only family resolves to that family —
-  // ahead of any credential default, which exists to answer BARE ids.
+  // An explicit registry-only spec resolves to that family ahead of any credential default.
   const family = registryFamilyMarker(model);
 
   if (family) return family;
@@ -891,7 +764,6 @@ export function resolveLLMConfig(opts?: {
 
   if (cloudConfig) return cloudConfig;
 
-  // Half an advanced override is a misconfiguration, not an absence: name it.
   if (baseURL && !auth) {
     throw new Error(
       'A base URL is set (--base-url or KINU_BASE_URL) but no auth header (--auth or KINU_AUTH).\n' +
@@ -902,12 +774,7 @@ export function resolveLLMConfig(opts?: {
   return null;
 }
 
-/**
- * resolveLLMConfig for the seams that must hand core's runtime an endpoint
- * object (workspace creation, evolution). Resolution itself never requires
- * one — registry-only families run without it — so the failure names every
- * fix rather than leaking null downward.
- */
+/** For seams that must hand core an endpoint object (workspace creation, evolution); the failure names every fix. */
 export function requireLLMConfig(opts?: {
   model?: string;
   baseUrl?: string;
@@ -925,8 +792,6 @@ export function requireLLMConfig(opts?: {
   );
 }
 
-/** Local provider credentials used by the CLI backend's provider registry.
- *  Env wins over ~/.kinu/config.json so temporary shell overrides work. */
 export function resolveProviderCredentials(): LocalProviderCredentials {
   const file = loadConfigFile();
 
@@ -943,7 +808,6 @@ export function createCodexAuthStore(fetchFn?: typeof fetch): LocalCodexAuthStor
   return createFileCodexAuthStore(CONFIG_PATH, { fetch: fetchFn });
 }
 
-/** Stdio MCP servers from ~/.kinu/config.json (`mcpServers`). Empty if none. */
 export function resolveMcpServers(): Record<string, McpServerConfig> {
   return loadConfigFile().mcpServers ?? {};
 }
@@ -1004,9 +868,7 @@ function deriveLLMConfigFromProviderCredentials(file: KinuConfig, model: string 
 
   const compat = file.providers?.openaiCompat?.default;
 
-  // The local endpoint answers for any model id it might serve, but never for a
-  // native Cloudflare spec: an Ollama on this machine will accept
-  // `@cf/deepseek-ai/…` as a model name and serve something else entirely.
+  // A local Ollama accepts `@cf/deepseek-ai/…` as a model name and serves something else.
   if (compat && !(providerModel && isNativeCloudSpec(providerModel))) {
     const headers = { ...compat.headers };
 
@@ -1024,10 +886,7 @@ function deriveLLMConfigFromProviderCredentials(file: KinuConfig, model: string 
   return null;
 }
 
-/** Registry-only families: served by the CLI backend's own providers from
- *  their own auth seams (the claude binary's subscription login, opencode's
- *  auth.json), so their endpoint config is a marker the resolver maps back to
- *  the family rather than a place to send HTTP. */
+/** Families served by their own auth seams (claude binary login, opencode auth.json); the endpoint is only a marker. */
 function registryFamilyMarker(model: string | undefined): LLMProviderConfig | null {
   if (!model) return null;
 
@@ -1060,9 +919,6 @@ function stripProvider(model: string, provider: string): string {
   return model.startsWith(`${provider}/`) ? model.slice(provider.length + 1) : model;
 }
 
-/** The Workers AI wire id for the proxy-derived config — a configured
- *  workers-ai model is honored; anything else falls to the platform default
- *  (non-workers-ai specs still resolve per-spec through the registry). */
 function workersAIModelId(model: string | undefined): string {
   const stripped = stripProvider(model ?? '', WORKERS_AI_PROVIDER_ID);
 
@@ -1071,8 +927,6 @@ function workersAIModelId(model: string | undefined): string {
   return model?.startsWith(WORKERS_AI_MODEL_ID_PREFIX) ? model : DEFAULT_WORKERS_AI_MODEL_ID;
 }
 
-/** Specs the signed-in account serves: the proxy's own provider ids plus the
- *  bare Workers AI wire form. */
 function isNativeCloudSpec(model: string): boolean {
   return model.startsWith(WORKERS_AI_MODEL_ID_PREFIX)
     || CLOUD_PROXY_PROVIDER_IDS.some((id) => model.startsWith(`${id}/`));

@@ -3,9 +3,7 @@ import { loadConfigFile, resolveAgentRef } from '../config';
 import { ACCENT, DIM, OK, WARN } from '../display';
 import { findTranscriptPath, listCliSessions } from '../session';
 
-/** `kinu transcripts` — list recorded terminal-transcript artifacts. These
- *  JSONL files are diagnostics and export material only; they are never
- *  conversations to reopen. */
+/** `kinu transcripts`: diagnostic JSONL artifacts, never conversations to reopen. */
 export async function transcriptsCommand(agentName: string | undefined, opts: {
   transcriptDir?: string;
   path?: boolean;
@@ -63,8 +61,6 @@ function resolveAgentNames(input: string | undefined): string[] {
 
   for (const [name, agent] of Object.entries(cfg.agents ?? {})) names.add(agent.name || name);
 
-  // Project-scoped refs, then the workspaces no project claims yet: a
-  // transcript recorded before placement existed is still worth listing.
   for (const name of listLocalAgentNames()) names.add(name);
 
   return [...names].sort();

@@ -17,20 +17,16 @@ export interface ListedAgent {
   name: string;
   label: string;
   mode: AgentMode;
-  /** Why this local workspace's own title could not be read. The display label
-   *  carries the same text for the human; this field is the typed branch a
-   *  caller uses instead of parsing that label. */
+  /** Typed reason the title could not be read, so callers need not parse the label. */
   readError?: string;
   localName?: string;
   cloudName?: string;
-  /** Canonical project root this local agent is placed in; unplaced
-   *  agents carry neither this nor `workspaceId`. */
+  /** Unplaced agents carry neither this nor `workspaceId`. */
   cwd?: string;
-  /** Virtual workspace inside `cwd`. Peers share the pair `{cwd, workspaceId}`. */
+  /** Peers share the pair `{cwd, workspaceId}`. */
   workspaceId?: string;
 }
 
-/** One virtual workspace: peer agents sharing a `{cwd, workspaceId}` pair. */
 export interface AgentWorkspaceGroup<T extends ListedAgent = ListedAgent> {
   readonly cwd: string;
   readonly workspaceId: string;
@@ -39,17 +35,13 @@ export interface AgentWorkspaceGroup<T extends ListedAgent = ListedAgent> {
 
 export interface GroupedAgentWorkspaces<T extends ListedAgent = ListedAgent> {
   readonly projectRoot: string;
-  /** Virtual workspaces, the current project's first, in first-seen order. */
   readonly workspaces: readonly AgentWorkspaceGroup<T>[];
   /** Local agents no ref places in any project (a `~/.kinu/<name>` directory). */
   readonly unplaced: readonly T[];
-  /** Remote cloud workspaces. */
   readonly remote: readonly T[];
 }
 
-/** The display label a placed local agent's workspace falls back to when its
- *  ref records no `workspaceId`: the same directory-basename slug placement
- *  writes. Display-only — placement itself always stores the real id. */
+/** Display-only fallback when a ref records no `workspaceId`; placement always stores the real id. */
 function workspaceIdForRoot(root: string): string {
   const base = root.replace(/\/+$/u, '').split('/').at(-1) ?? '';
 
@@ -61,11 +53,7 @@ function workspaceIdForRoot(root: string): string {
   return candidate === '' ? 'workspace' : candidate;
 }
 
-/**
- * The virtual-workspace bucket an agent belongs to: `'unplaced'` for a
- * local agent no ref places anywhere, `null` for cloud, otherwise the
- * `{cwd, workspaceId}` pair peers share.
- */
+/** `'unplaced'` for a local agent no ref places, `null` for cloud, else the peers' `{cwd, workspaceId}` pair. */
 export function agentWorkspaceKey(agent: ListedAgent, projectRoot: string): string | null {
   if (agent.mode === 'cloud') return null;
 
@@ -75,12 +63,7 @@ export function agentWorkspaceKey(agent: ListedAgent, projectRoot: string): stri
   return `${cwd}\u0000${agent.workspaceId ?? workspaceIdForRoot(cwd)}`;
 }
 
-/**
- * Split a flat agent list into the sidebar's shape: virtual workspaces of the
- * current project first, then any group another project contributed, then
- * unplaced agents, then cloud workspaces. Grouping is pure metadata —
- * rows are never reordered inside their group.
- */
+/** Current project's workspaces first, then other projects, unplaced, cloud. Rows keep their order in a group. */
 export function groupAgentWorkspaces<T extends ListedAgent>(
   agents: readonly T[],
   projectRoot: string,
@@ -114,12 +97,7 @@ export function groupAgentWorkspaces<T extends ListedAgent>(
   return { projectRoot, workspaces: ordered, unplaced, remote };
 }
 
-/** A local agent's shown title is the shared rule — `workspaceDisplayTitle`
- *  reads the workspace's own title and answers "Untitled workspace" when the
- *  stored value is absent or the directory's slug stored in its place. The
- *  slug is never the label: it is the address `kinu chat <name>` takes, and
- *  showing it as a title is what put `handwrought-walnut-4166c321` in front
- *  of the owner. */
+/** The slug is the address `kinu chat <name>` takes, never the title shown. */
 function localDisplay(dirName: string): Pick<ListedAgent, 'label' | 'readError'> {
   try {
     return { label: workspaceDisplayTitle({ name: dirName, displayName: readWorkspaceDisplayName(agentDbPath(dirName)) }) };
@@ -135,11 +113,7 @@ function localDisplay(dirName: string): Pick<ListedAgent, 'label' | 'readError'>
   }
 }
 
-/** A local agent's row. `dirName` is the `~/.kinu/<name>` directory; the row
- *  opens under the ref's config name when a ref exists, so aliases and cloud
- *  links stay attached. The label is the workspace database's own title — the
- *  one place a rename or auto-title lands — and the shared untitled label
- *  until something names it. */
+/** Opens under the ref's config name when one exists, so aliases and cloud links stay attached. */
 function localRow(configured: KinuAgentConfig | undefined, dirName: string): ListedAgent {
   return {
     name: configured?.name ?? dirName,
@@ -158,22 +132,12 @@ function localRefsByDirName(refs: readonly KinuAgentConfig[]): Map<string, KinuA
     .map((agent) => [agent.localName ?? agent.name, agent]));
 }
 
-/**
- * Every local workspace on this machine: this directory's placed agent
- * directories plus unplaced names no project claims, deduped. The roster `kinu
- * list`, `kinu transcripts` and the chat picker all read — one function, so a
- * workspace cannot show on one surface and miss another.
- */
+/** The one roster `kinu list`, `kinu transcripts` and the chat picker all read. */
 export function listLocalAgentNames(cwd = process.cwd()): string[] {
   return [...new Set([...listAgentDirs(cwd), ...listUnplacedAgentNames()])];
 }
 
-/**
- * The TUI navigator roster for one directory: this project's placed agents,
- * unplaced agents (openable here; opening one adopts it), and the
- * signed-in account's cloud workspaces. A cloud ref sharing a local agent's
- * name stays listed — the two are different workspaces, not one row.
- */
+/** A cloud ref sharing a local agent's name stays listed: they are different workspaces. */
 export function listSidebarAgents(cwd = process.cwd()): ListedAgent[] {
   const refs = listConfiguredAgentRefs();
   const byDirName = localRefsByDirName(refs);
@@ -226,11 +190,7 @@ export function listKnownAgents(): ListedAgent[] {
     ...[...localAgents].map((name) => localRow(byDirName.get(name), name)),
     ...refs
       .filter((agent) => agent.mode === 'cloud' || !localAgents.has(agent.localName ?? agent.name))
-      // A LOCAL ref goes through `localRow` like any other, so its label comes
-      // from its workspace database — the one place a rename or an auto-title
-      // lands. Reading `config.json` here showed `kinu chat`'s picker a stale
-      // mirror for every workspace placed in another project, and its own
-      // directory name when that mirror was empty.
+      // The label comes from the workspace database, where renames and auto-titles land, not the `config.json` mirror.
       .map((agent) => (agent.mode === 'local'
         ? localRow(agent, agent.localName ?? agent.name)
         : {
@@ -245,25 +205,17 @@ export function listKnownAgents(): ListedAgent[] {
   ];
 }
 
-/**
- * A server workspace whose name a local ref already holds on this machine.
- * The local ref stands and the cloud workspace is not recorded under that
- * name: the mode was chosen when the workspace was created, and flipping it
- * would drop a placed agent out of its project, its peer group and the
- * scheduler's roster while its files stayed on disk.
- */
+/** A server workspace whose name a local ref already holds. The local ref stands: flipping its mode would
+ * drop a placed agent out of its project, peer group and scheduler roster. */
 export interface CloudRefCollision {
-  /** The contested name, as the server spells it. */
   name: string;
-  /** The local workspace directory holding it, which a ref may alias. */
   localName: string;
   cloudDisplayName: string;
 }
 
 export interface CloudRefSync {
   agents: ListedAgent[];
-  /** Empty on the ordinary path. A name here reached neither store's roster
-   *  as cloud, so a caller that shows the roster has to show these too. */
+  /** A name here reached neither roster as cloud, so a caller showing the roster must show these too. */
   collisions: CloudRefCollision[];
 }
 

@@ -1,18 +1,6 @@
 /**
- * The file-edit diff card — the transcript's one diff view.
- *
- * A `file` call's `edit`/`write` result carries what the model needs — the
- * path, the counts, never a diff (tools/file-edit.ts is explicit about not
- * echoing one back into context). This card reconstructs the diff for the
- * HUMAN from what the call itself recorded: the spans it asked replaced, or
- * the whole file it wrote, aligned by the same LCS (`vfs/diff.ts`) the
- * workspace change-set runs, so a transcript hunk and a Diffs surface hunk
- * can never disagree about what one algorithm calls a change.
- *
- * What it cannot know it says in words: an overwrite's earlier contents are
- * gone by the time the result arrives — the turn ledger keeps digests, not
- * bodies — so a `replaced` write gets the card's header and
- * "diff unavailable" rather than an empty box or a guessed reconstruction.
+ * The file-edit diff card. Rebuilds the diff from the call's recorded spans or written file with the same LCS
+ * (`vfs/diff.ts`) as the change-set; an overwrite's prior contents are gone, so `replaced` says "diff unavailable".
  */
 import * as v from 'valibot';
 
@@ -25,15 +13,13 @@ import { tolerate } from '@kinu.run/core/obs';
 import { clipText } from '@kinu.run/core';
 import { useTuiTheme } from './theme';
 
-/** The line budget an expanded tool result already answers to; the diff card
- *  spends it the same way and says so in a trailer rather than overrunning. */
+/** The expanded tool-result line budget, shared with the card. */
 export const EXPANDED_RESULT_LINES = 20;
 
 const EditResultSchema = v.object({
   ok: v.literal(true),
   path: v.string(),
-  // A landed edit always reports at least one span — `no_change` is refused
-  // earlier — so an empty array here belongs to some other tool's payload.
+  // A landed edit always reports a span, so empty means another tool's payload.
   applied: v.pipe(v.array(v.object({ line: v.number(), removed_lines: v.number(), added_lines: v.number() })), v.minLength(1)),
 });
 
@@ -56,15 +42,12 @@ const WriteCallSchema = v.object({
   content: v.string(),
 });
 
-/** What the card draws: the path, the true +/- counts when they are known,
- *  and the hunks when a diff could be reconstructed at all. `hunks === null`
- *  is the stated absence — "diff unavailable" — never an empty card. */
+/** `hunks === null` renders "diff unavailable". */
 export interface FileEditDiffView {
   readonly path: string;
   readonly status: FileStatus;
   readonly hunks: readonly (readonly DiffLine[])[] | null;
   readonly counts: { readonly added: number; readonly removed: number } | null;
-  /** A qualifier after the path: "new file", "replaced", "edited". */
   readonly label?: string;
   /** The read model ran out of body room upstream; the counts still hold. */
   readonly truncated: boolean;
@@ -72,8 +55,6 @@ export interface FileEditDiffView {
 
 const DIFF_PREFIX: Record<DiffLine['kind'], string> = { add: '+', del: '−', ctx: ' ' };
 
-/** A successful file edit/write result, or null — a refusal or another
- *  action's payload keeps the ordinary text row. */
 function fileWriteResult(content: string):
   | { readonly kind: 'edit'; readonly body: v.InferOutput<typeof EditResultSchema> }
   | { readonly kind: 'write'; readonly body: v.InferOutput<typeof WriteResultSchema> }
@@ -90,9 +71,7 @@ function fileWriteResult(content: string):
   return write.success ? { kind: 'write', body: write.output } : null;
 }
 
-/** The recorded call for a result, when it is this tool and this file. A call
- *  paired positionally still has to agree on the path — transcript order is
- *  not a call identity. */
+/** Tool and path must agree: transcript order is not a call identity. */
 function fileWriteCall(argsText: string | undefined, path: string):
   | { readonly kind: 'edit'; readonly args: v.InferOutput<typeof EditCallSchema> }
   | { readonly kind: 'write'; readonly args: v.InferOutput<typeof WriteCallSchema> }
@@ -111,12 +90,7 @@ function fileWriteCall(argsText: string | undefined, path: string):
   return write.success && write.output.path === path ? { kind: 'write', args: write.output } : null;
 }
 
-/**
- * One hunk per requested span: each edit's own `diffLines` output — context
- * included, because the model writes the anchoring lines into old_text and
- * they are exactly what orients the change — capped at what the read model
- * itself would carry for one file.
- */
+/** Context included: the model's anchoring lines orient the change. */
 function editHunks(edits: readonly { readonly old_text: string; readonly new_text: string }[]): Pick<FileEditDiffView, 'hunks' | 'truncated'> {
   const hunks: DiffLine[][] = [];
   let carried = 0;
@@ -141,13 +115,6 @@ function editHunks(edits: readonly { readonly old_text: string; readonly new_tex
   return { hunks, truncated };
 }
 
-/**
- * The card model for one `file` result row. `call` is the transcript row the
- * result was paired with (by toolCallId when it carries one); its args hold
- * the before/after the tool recorded. Anything that is not a successful file
- * edit/write answer — a refusal, `list`/`stat`/`search`, another tool's
- * payload — returns null and keeps its text row.
- */
 export function fileEditDiffView(
   call: { readonly toolName?: string; readonly args?: string } | undefined,
   result: { readonly toolName?: string; readonly content: string; readonly success?: boolean },
@@ -173,8 +140,7 @@ export function fileEditDiffView(
       counts.removed += span.removed_lines;
     }
 
-    // The call row is absent or unreadable: the result still recorded the
-    // true line counts, so the header stays honest and the body says so.
+    // Call row absent or unreadable: keep the result's true counts.
     if (recorded?.kind !== 'edit') {
       return { path, status: 'changed', hunks: null, counts, truncated: false, label: 'edited' };
     }
@@ -202,28 +168,18 @@ export function fileEditDiffView(
   };
 }
 
-/** The tool's own text is LF-normalized before it ever meets a file; the card
- *  aligns the same form so a CRLF anchor cannot read as a whole-file change. */
+/** The tool LF-normalizes its text; align the same form so a CRLF anchor is not a whole-file change. */
 function toLf(text: string): string {
   return text.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
 }
 
-/**
- * The card: `↳ path +N −M`, then prefixed hunk lines in the well's own
- * success/danger inks — the same tokens the failure counts already draw with,
- * so the contrast audit that holds the well's inks already holds these.
- * Collapsed shows the first hunk; expanded shows every hunk, both bounded by
- * the shared result-line budget with a "+K more lines" trailer, so creating a
- * large file cannot flood the transcript.
- */
-/** What a whole-file write did, for the card's one-line label. */
+/** Bounded by the shared line budget, so a large write cannot flood the transcript. */
 function writeLabel(created: boolean, bytes: number | undefined): string {
   if (created) return 'new file';
 
   return bytes === undefined ? 'replaced' : `replaced · ${String(bytes)} B`;
 }
 
-/** The line under a clipped diff: what was left out, or where it stops. */
 function diffTrailer(omitted: number, truncated: boolean): string | null {
   if (omitted > 0) {
     return `+${String(omitted)} more line${omitted === 1 ? '' : 's'}${truncated ? ' · truncated' : ''}`;

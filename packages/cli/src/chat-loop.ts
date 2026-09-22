@@ -1,15 +1,6 @@
 /**
- * Interactive chat REPL — the single classic (readline) chat surface for both
- * backends, parameterized by an AgentClient. The client owns transport,
- * recording, and history; this renders its streaming event feed, dispatches
- * slash commands through the shared command core, surfaces device-consent
- * requests inline while a turn is processing, and maps the first Ctrl+C during
- * a turn to client.stop() (second Ctrl+C, or Ctrl+C while idle, exits).
- *
- * Steering trio (classic equivalents): a line typed while a turn runs STEERS
- * the running turn (client.steer); `/queue <text>` holds a message to send
- * after the turn; `/fork [n]` walks back to an earlier user message, forking
- * the conversation there and pre-filling the input with it for editing.
+ * Classic readline chat surface for both backends, driven by an AgentClient. First Ctrl+C during a turn stops it;
+ * a second (or Ctrl+C while idle) exits. A line typed mid-turn steers the running turn.
  */
 
 import * as readline from 'node:readline';
@@ -46,23 +37,18 @@ export async function runChatLoop(opts: ChatLoopOpts): Promise<void> {
   const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
   const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
 
-  // Per-turn render state — reset on every user turn so the agent-name header
-  // prints once per turn and the status line stops on first output.
+  // Reset per user turn so the name header prints once and the status line stops on first output.
   let turnStatus = createTurnStatus({ hold: () => consentAskPending || rl.line.length > 0 });
   let headerPrinted = false;
   let turnInFlight = false;
   let interruptRequested = false;
   let exiting = false;
-  /** Turn-lifecycle depth from paired turn-start/turn-end events — covers
-   *  cascaded turns (leftover steers, cloud-steer follow-ups) past send(). */
+  /** Counts paired turn events, covering cascaded turns past send(). */
   let activeTurns = 0;
-  /** Messages held for after the current turn (/queue, or a steer that lost
-   *  the race with turn end). Drained FIFO before the next prompt. */
+  /** Drained FIFO before the next prompt. */
   const queuedInputs: string[] = [];
-  /** Input pre-filled into the next prompt (walk-back fork edit). */
   let pendingPrefill: string | null = null;
-  /** True while a consent question owns the readline — its answer lines must
-   *  not be mistaken for mid-turn steering input. */
+  /** Answer lines to a consent question must not be read as steering input. */
   let consentAskPending = false;
 
   const onClientEvent = (event: AgentClientEvent) => {
@@ -131,8 +117,7 @@ export async function runChatLoop(opts: ChatLoopOpts): Promise<void> {
   rl.on('SIGINT', onInterrupt);
   process.on('SIGINT', onInterrupt);
 
-  // Mid-turn input: a plain line steers the running turn; /queue holds it for
-  // after; /stop interrupts. Lines answering a consent question are excluded.
+  // Lines answering a consent question are excluded.
   const onMidTurnLine = async (input: string) => {
     const command = input.split(/\s+/, 1)[0].toLowerCase();
 
@@ -209,9 +194,7 @@ export async function runChatLoop(opts: ChatLoopOpts): Promise<void> {
 
   const promptLabel = () => tty ? `${ACCENT(client.agentName)} ${DIM('›')} ` : '';
 
-  /** Wait until every cascaded turn settles — a leftover steer (local) or a
-   *  steered follow-up (cloud) starts moments after the previous turn-end, so
-   *  idle must hold through a short debounce. */
+  /** A cascaded turn starts moments after the previous turn-end, so idle holds through a short debounce. */
   const waitForTurnsToSettle = async () => {
     for (;;) {
       while (activeTurns > 0 && !exiting) await sleep(25);
@@ -237,8 +220,6 @@ export async function runChatLoop(opts: ChatLoopOpts): Promise<void> {
   };
 
   const runTurn = async (input: string, mode?: WorkMode) => {
-    // @path mentions (plus quoted/~ path tokens) become attachments: images
-    // and PDFs inline as file parts, other files stay path references.
     const resolved = await resolvePromptAttachments(input, { limitBytes: client.inlineAttachmentLimitBytes });
 
     for (const problem of resolved.errors) console.log(WARN(`  ${problem}`));
@@ -313,8 +294,7 @@ export async function runChatLoop(opts: ChatLoopOpts): Promise<void> {
       client = result.client;
       unsubscribe = client.subscribe(onClientEvent);
       turnStatus = createTurnStatus({ hold: () => consentAskPending || rl.line.length > 0 });
-      // Bring the replacement up first: a failure closing the old session must not leave the loop
-      // holding a client that was never connected.
+      // Connect the replacement first so a failed close never leaves the loop on an unconnected client.
       await client.connect();
       await previous.close();
     }
@@ -324,7 +304,6 @@ export async function runChatLoop(opts: ChatLoopOpts): Promise<void> {
   };
 
   while (!exiting) {
-    // Drain messages queued during the previous turn, in order.
     while (!exiting && queuedInputs.length > 0) {
       const queued = queuedInputs.shift();
 
@@ -391,10 +370,7 @@ export async function runChatLoop(opts: ChatLoopOpts): Promise<void> {
   await onExit();
 }
 
-/** Read one line; resolves null on EOF/close (so piped input terminates
- *  cleanly) and on abort (a consent question cancelled by turn end). Settling
- *  always detaches the listeners, so abandoned questions never leak them.
- *  `prefill` seeds the line buffer for editing (walk-back fork resend). */
+/** Resolves null on EOF/close (piped input ends cleanly) and on abort. Settling always detaches listeners. */
 function ask(rl: readline.Interface, prompt: string, signal?: AbortSignal, prefill?: string): Promise<string | null> {
   return new Promise((resolve) => {
     let settled = false;
@@ -417,20 +393,15 @@ function ask(rl: readline.Interface, prompt: string, signal?: AbortSignal, prefi
 
       if (prefill) rl.write(prefill);
     } catch (error) {
-      // Readline closed under us (stdin hit EOF) — settle as EOF. The reason goes
-      // to stderr so stdout keeps carrying only the conversation.
+      // Stdin hit EOF. Stderr, because stdout carries only the conversation.
       process.stderr.write(`note: readline closed before the prompt: ${renderThrownChain({ cause: error })}\n`);
       settle(null);
     }
   });
 }
 
-/**
- * The natural device-access flow: when a cloud chat opens with no PC
- * connected, offer to connect this one — once per CLI invocation, with a
- * persisted "don't ask again". Reuses the consent-watch ask pattern; a
- * non-interactive stdin gets the `kinu connect` instruction instead.
- */
+/** Offer once per invocation to connect this PC when a cloud chat opens with none; persisted "don't ask
+ * again". Non-interactive stdin gets the `kinu connect` instruction instead. */
 async function maybeOfferDeviceConnect(rl: readline.Interface, tty: boolean): Promise<void> {
   if (!(await shouldOfferDeviceConnect())) return;
 
@@ -600,7 +571,7 @@ async function applySlashOutcome(client: AgentClient, rl: readline.Interface, ou
     case 'plan':
     case 'fork':
     case 'undo':
-      // Surface-owned outcomes — runChatLoop intercepts them before this.
+      // runChatLoop intercepts surface-owned outcomes before this.
       return 'ok';
     case 'unknown':
       console.log(WARN(`  Unknown command: ${outcome.command}. Type /help`));
@@ -609,7 +580,6 @@ async function applySlashOutcome(client: AgentClient, rl: readline.Interface, ou
   }
 }
 
-/** Run the draft as a Plan turn, or say how to use /plan. */
 async function planOrExplain(
   text: string | undefined,
   runTurn: (text: string, mode?: WorkMode) => Promise<void>,
@@ -623,7 +593,6 @@ async function planOrExplain(
   await runTurn(text, 'plan');
 }
 
-/** Run the redirect as its own turn, or say how to use /branch. */
 async function branchOrExplain(text: string | undefined, runTurn: (text: string) => Promise<void>): Promise<void> {
   if (text === undefined || text === '') {
     console.log(DIM('  Usage: /branch <text>. It runs a redirect as a parallel branch during a turn.'));
@@ -634,8 +603,7 @@ async function branchOrExplain(text: string | undefined, runTurn: (text: string)
   await runTurn(text);
 }
 
-/** Undo the last turn's writes; when files came back, offer the matching
- *  conversation walk-back too (opencode parity). */
+/** When files came back, offer the matching conversation walk-back too. */
 async function runUndo(
   client: Pick<AgentClient, 'checkpoints'>,
   ref: string | undefined,
@@ -649,7 +617,6 @@ async function runUndo(
   await handleFork(undefined);
 }
 
-/** Queue the text for after the running turn, or say how to use /queue. */
 function queueOrExplain(text: string | undefined, queued: string[]): void {
   if (text === undefined || text === '') {
     console.log(DIM('  Usage: /queue <text>. It sends after the running turn, or at once when idle.'));
@@ -660,13 +627,7 @@ function queueOrExplain(text: string | undefined, queued: string[]): void {
   queued.push(text);
 }
 
-/**
- * Render one AgentClientEvent to the terminal. The status line is part of the
- * same event flow: every label it shows is a state the turn actually entered —
- * `thinking` until output starts, the tool's name while its call runs — so the
- * line never spins a claim the client did not make. The vocabulary matches the
- * TUI's phase line word for word.
- */
+/** Status-line labels are only states the turn actually entered; vocabulary matches the TUI phase line. */
 interface ClientEventRender {
   readonly event: AgentClientEvent;
   readonly agentName: string;
@@ -691,8 +652,7 @@ function renderClientEvent({ event, agentName, status, getHeader, setHeader }: C
         console.log(`\n${DIM(`» ${event.event ?? 'event'}`)} ${MUTED(clipText(event.text, 80))}`);
         status.show('running background work');
       } else {
-        // A cascaded user turn (steer follow-up / queued leftover) gets its
-        // own agent-name header when its response starts.
+        // A cascaded user turn gets its own name header when its response starts.
         setHeader(false);
         status.show('thinking');
       }
@@ -729,7 +689,7 @@ function renderClientEvent({ event, agentName, status, getHeader, setHeader }: C
         console.log(`\n${DIM(describeBranchStatus(event.event))}`);
       }
 
-      // The plan as it now stands, which is what the owner decides on.
+      // The plan as it now stands is what the owner decides on.
       if (event.event.type === 'plan_updated' && event.event.plan) {
         status.clear();
         console.log(`\n${renderPlanReview(event.event.plan)}\n`);

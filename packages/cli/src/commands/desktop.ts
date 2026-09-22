@@ -16,7 +16,6 @@ import { ask, canPrompt, confirm } from '../prompt';
 import { authCommand } from './auth';
 import { renderThrownChain } from '@kinu.run/core/obs';
 
-/** What `kinu desktop logs` and a failed connect print. */
 function daemonLogTail(lines: number): string {
   return readDaemonLogTail(DAEMON_LOG_PATH, lines) ?? DIM(`No daemon log at ${DAEMON_LOG_PATH}`);
 }
@@ -50,8 +49,7 @@ export async function desktopCommand(action: string | undefined, opts: { label?:
         },
       });
     } catch (err) {
-      // The readiness failure already quotes the daemon's last output lines;
-      // this only closes the progress line the wait was drawing.
+      // The readiness failure already quotes the daemon log; this only ends the progress line.
       if (waiting) process.stdout.write('\n');
       console.error(`${ERR('✗')} ${renderThrownChain({ cause: err })}`);
       process.exit(1);
@@ -81,7 +79,6 @@ export async function desktopCommand(action: string | undefined, opts: { label?:
     console.log(`${DIM('Daemon log:')} ${status.logPresent ? OK('present') : 'missing'} ${DIM(DAEMON_LOG_PATH)}`);
     console.log(`${DIM('Daemon process:')} ${status.daemonPid ? OK(`running (pid ${status.daemonPid})`) : 'not running'}`);
 
-
     return;
   }
 
@@ -94,14 +91,7 @@ export async function desktopCommand(action: string | undefined, opts: { label?:
   throw new Error('Usage: kinu desktop [connect|status|logs]');
 }
 
-/**
- * State what linking does, take the machine's name, and require an explicit
- * yes. Installing the daemon is the moment an agent can reach this machine, so
- * it is never a side effect of typing a command: without a terminal to state
- * the terms in, this refuses instead of proceeding.
- *
- * Returns the name to register the device under, or null when the answer is no.
- */
+/** Linking is never a side effect: without a terminal to state the terms in, this refuses. Null when the answer is no. */
 async function confirmConnect(label?: string): Promise<string | null> {
   console.log('');
 

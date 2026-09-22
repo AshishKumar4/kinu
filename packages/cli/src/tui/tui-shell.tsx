@@ -47,7 +47,6 @@ export function tuiLayoutForWidth(width: number): TuiLayout {
   return width >= MEDIUM_LAYOUT_MIN_COLUMNS ? 'medium' : 'narrow';
 }
 
-/** The columns left to the chat scene after an opted-in pinned sidebar. */
 export function sceneWidthFor(width: number, wideSidebarOpen: boolean): number {
   return tuiLayoutForWidth(width) === 'wide' && wideSidebarOpen
     ? Math.max(1, width - WORKSPACE_SIDEBAR_COLUMNS)
@@ -56,13 +55,7 @@ export function sceneWidthFor(width: number, wideSidebarOpen: boolean): number {
 
 const SceneWidthContext = createContext<number | null>(null);
 
-/**
- * The columns the scene owns: the terminal minus the pinned sidebar. The
- * status bar, the transcript and every overlay size themselves to it, not to
- * the terminal — the pinned sidebar took 28 columns the chrome kept counting
- * as its own, so the status bar overflowed and dialogs centred off the edge.
- * Outside a shell (a bare component in a test or a capture) it is the terminal.
- */
+/** Everything sizes to the scene's columns, not the terminal's. */
 export function useSceneWidth(): number {
   const { width } = useTerminalDimensions();
 
@@ -71,7 +64,6 @@ export function useSceneWidth(): number {
 
 export type TuiAgentStatus = 'idle' | 'running' | 'needs-you' | 'failed';
 
-/** A subordinate of one peer agent — display data under its parent's row. */
 export interface TuiSubordinate {
   readonly id: string;
   readonly label: string;
@@ -80,7 +72,6 @@ export interface TuiSubordinate {
   readonly tierId?: string;
 }
 
-/** One selectable agent: a peer in a virtual workspace, or a cloud workspace. */
 export interface TuiAgentSummary extends ListedAgent {
   readonly status?: TuiAgentStatus;
   readonly subordinates?: readonly TuiSubordinate[];
@@ -101,9 +92,7 @@ export interface TuiAgentRoster {
   readonly loading: boolean;
   readonly error: string | null;
   reload: () => Promise<void>;
-  /** Fire-and-forget by contract: a failure lands in `error` (with its whole
-   *  cause chain) and the paging row stays, so paging is retryable and a failed
-   *  page can never read as the end of the list. Implementations never reject. */
+  /** Never rejects: failures land in `error` and the paging row stays, so a failed page never reads as the end. */
   loadMore(): void;
 }
 
@@ -294,8 +283,6 @@ export function usePreservedScrollAnchor(
   }), [scrollRef]);
 }
 
-// ── Sidebar rows — the grouped projection the navigator renders ─────────────
-
 type TuiSidebarRow =
   | {
       readonly kind: 'workspace';
@@ -324,13 +311,6 @@ function workspaceRowKey(agent: ListedAgent, projectRoot: string): string {
   return agent.mode === 'cloud' ? 'remote' : `ws:${agentWorkspaceKey(agent, projectRoot)}`;
 }
 
-/**
- * Project one loaded page into navigator rows: the current project's virtual
- * workspaces first (each header followed by its peer agents when expanded),
- * then unplaced agents, then the cloud section, then the explicit
- * paging row. Every row is selectable; subordinates render under their peer
- * agent's row and are not rows themselves.
- */
 function buildSidebarRows(
   page: TuiAgentPage,
   projectRoot: string,
@@ -391,7 +371,6 @@ function rowLineOffset(rows: readonly TuiSidebarRow[], index: number): number {
 interface TuiShellProps {
   readonly scene: 'onboarding' | 'home' | 'chat';
   readonly roster: TuiAgentRoster;
-  /** The open agent, highlighted and kept visible; its section auto-expands. */
   readonly currentAgent?: { readonly name: string; readonly mode: ListedAgent['mode'] };
   readonly navigationOverlayOpen: boolean;
   readonly onNavigationOverlayChange: (open: boolean) => void;
@@ -427,8 +406,7 @@ export function TuiShell(props: TuiShellProps) {
   const lastSelectedIndex = useRef(0);
 
   if (selectedIndex >= 0) lastSelectedIndex.current = selectedIndex;
-  // Handler-side mirrors: keypresses arrive in bursts between renders, so
-  // selection reads and writes go through refs and re-render follows.
+  // Keypresses arrive in bursts between renders, so selection goes through refs.
   const rowsRef = useRef(rows);
   rowsRef.current = rows;
   const selectionRef = useRef<string | null>(null);
@@ -453,9 +431,7 @@ export function TuiShell(props: TuiShellProps) {
     return { row: rowsNow[index], index };
   }, []);
 
-  // First selection lands on the first openable agent, not a group header; a
-  // vanished selection (collapse, reload, shrink) lands on the row that took
-  // its place, never silently back at the top.
+  // First selection is the first openable agent; a vanished selection lands on the row that took its place.
   useEffect(() => {
     if (rows.length === 0 || selectedIndex >= 0) return;
 
@@ -494,7 +470,6 @@ export function TuiShell(props: TuiShellProps) {
     props.onNavigationFocusChange?.(false);
   }, [overlayOpen, props.onNavigationFocusChange]);
 
-  // Keep the selected row visible inside whichever navigator is mounted.
   useLayoutEffect(() => {
     const scroll = navScrollRef.current;
 
@@ -546,7 +521,6 @@ export function TuiShell(props: TuiShellProps) {
     applySelection(rowsNow[next].key);
   }, [applySelection, selectedRowNow]);
 
-  /** Page by the navigator's own viewport, in rows measured through row heights. */
   const pageRows = useCallback((direction: -1 | 1) => {
     const selected = selectedRowNow();
 
@@ -672,9 +646,7 @@ export function TuiShell(props: TuiShellProps) {
       flexDirection="row"
       style={{ width: '100%', height: '100%', backgroundColor: colors.background.canvas }}
     >
-      {/* Mounted only while pinned: opentui draws a border whenever
-          `borderColor` is styled, even with `border: false`, so a resting
-          zero-width box still painted a two-column border sliver. */}
+      {/* Mounted only while pinned: opentui draws a border whenever `borderColor` is set, even with `border: false`. */}
       {sidebarPinned && (
         <box
           key="workspace-sidebar"
@@ -724,7 +696,6 @@ export function TuiShell(props: TuiShellProps) {
   );
 }
 
-/** Where the navigator sits: on the chrome beside the scene, or in a dialog. */
 type NavigatorHost = 'sidebar' | 'overlay';
 
 function WorkspaceNavigator(props: {
@@ -791,8 +762,7 @@ function NavigatorRow(props: {
 }) {
   const { colors } = useTuiTheme();
   const { row } = props;
-  // The open row is the web sidebar's raised row (`--c-elevated`); inside a
-  // dialog that rung is the dialog's own ground, so the tinted row stands in.
+  // Open row is `--c-elevated`, but inside a dialog that is the dialog's ground, so the tinted row stands in.
   const highlight = props.host === 'overlay' ? colors.background.selection : colors.background.elevated;
   const rowBackground = props.selected || props.active ? highlight : undefined;
   const marker = <span fg={props.selected ? colors.intent.accentStrong : colors.text.muted}>{props.selected ? '› ' : '  '}</span>;

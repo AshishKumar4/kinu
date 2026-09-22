@@ -1,8 +1,3 @@
-/**
- * Terminal display — branded output, box drawing, spinners, tables.
- * Single source of truth for all CLI visual output.
- */
-
 import chalk from 'chalk';
 import type { Command } from 'commander';
 import { BUILTIN_TOOLS, describeToolCall, summarizeToolCall, TUI_MARKS } from '@kinu.run/core';
@@ -11,11 +6,7 @@ import { clipText } from '@kinu.run/core';
 import { guideFailure } from './provider-guidance';
 import cliPackage from '../package.json' with { type: 'json' };
 
-// ── Brand ────────────────────────────────────────────────────────
-
-// The Kinu design system the product renders — cf-backend index.css :root is
-// the source of truth. Fixed hexes assume the dark terminal the TUI paints;
-// NO_COLOR still strips everything through chalk.
+// Kinu design tokens; cf-backend index.css :root is the source of truth. Fixed hexes assume a dark terminal.
 const INK = {
   sheen: '#E3D2AE',   // --c-accent-fg — brand ink
   thread: '#E0A458',  // --c-accent — fills, strokes, the winning line
@@ -27,10 +18,7 @@ const INK = {
 
 const BRAND = chalk.bold.hex(INK.sheen)('Kinu');
 
-/** The build stamp the dist build folds in at bundle time
- *  (`bun build --define process.env.KINU_BUILD_STAMP`), so an installed copy
- *  reports `0.2.0+<sha>` while package.json stays the one version source and
- *  the source tree is never written. A source run carries no stamp. */
+/** Folded in at bundle time (`bun build --define process.env.KINU_BUILD_STAMP`); a source run carries none. */
 const BUILD_STAMP = process.env.KINU_BUILD_STAMP;
 
 const VERSION = BUILD_STAMP === undefined ? cliPackage.version : `${cliPackage.version}+${BUILD_STAMP}`;
@@ -48,8 +36,6 @@ const ERR = chalk.hex(INK.danger);
 const MUTED = chalk.hex(INK.dim);
 
 export { BRAND, VERSION, DIM, ACCENT, OK, WARN, ERR, MUTED };
-
-// ── Box drawing ──────────────────────────────────────────────────
 
 const BOX = { tl: '┌', tr: '┐', bl: '└', br: '┘', h: '─', v: '│' } as const;
 
@@ -76,8 +62,6 @@ function stripAnsi(s: string): string {
   return s.replace(new RegExp(`${String.fromCharCode(27)}\\[[0-9;]*m`, 'g'), '');
 }
 
-// ── Spinner ──────────────────────────────────────────────────────
-
 const SPINNER_FRAMES = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
 
 const isTTY = process.stdout.isTTY ?? false;
@@ -97,19 +81,13 @@ export function createSpinner(initialMessage: string) {
       if (!isTTY) return;
       timer = setInterval(paint, 80);
     },
-    /** Replace the live status. Piped output gets one plain line instead.
-     *
-     *  A terminal is painted HERE as well as by the interval, because the
-     *  interval alone showed a state only if it outlived a frame: a phase that
-     *  began and ended inside 80 ms reached a pipe and never a terminal, which
-     *  is the wrong way round for the mode a person actually watches. */
+    /** Paints immediately, not only on the interval, so a phase shorter than one frame still reaches a terminal. Piped output gets one plain line. */
     update(next: string) {
       message = next;
 
       if (isTTY) paint();
       else console.log(`${DIM('·')} ${next}`);
     },
-    /** Print a line that stays in the scrollback, above the live status. */
     note(line: string) {
       if (isTTY) process.stdout.write(`\r\x1b[K`);
       console.log(line);
@@ -130,25 +108,13 @@ export function createSpinner(initialMessage: string) {
   };
 }
 
-// ── Turn status line for chat ────────────────────────────────────
-
 export interface TurnStatus {
-  /** The turn entered a named state (`thinking`, `calling run`). */
   show(label: string): void;
-  /** Release the row; the label is remembered for `resume`. */
   clear(): void;
-  /** Redraw the last shown label — after a consent question gave the row back. */
   resume(): void;
 }
 
-/**
- * The chat turn's live status line. The LABEL is state: only a client event
- * names it (the same vocabulary the TUI's phase line uses), so the line never
- * claims work the turn is not doing — during a tool call it says `calling`,
- * not `thinking`. The interval only animates frames under a live label, and
- * `hold` surrenders the row to whatever has the user's attention (typed
- * steering input, an unanswered consent question).
- */
+/** Only a client event names the label, so the line never claims work the turn is not doing. `hold` surrenders the row. */
 export function createTurnStatus(opts: { hold?: () => boolean; tty?: boolean } = {}): TurnStatus {
   const tty = opts.tty ?? isTTY;
   let frame = 0;
@@ -186,8 +152,6 @@ export function createTurnStatus(opts: { hold?: () => boolean; tty?: boolean } =
   };
 }
 
-// ── Agent created card ───────────────────────────────────────────
-
 export function printCreatedCard(name: string, purpose: string, model: string, dbPath: string): void {
   const w = termWidth();
   const L = (label: string) => DIM(label.padEnd(10));
@@ -202,9 +166,6 @@ export function printCreatedCard(name: string, purpose: string, model: string, d
   console.log(`\n${DIM('Start chatting:')} ${ACCENT(`kinu chat ${name}`)}\n`);
 }
 
-// ── Agent status card ────────────────────────────────────────────
-
-/** The status card reads these fields of a workspace, whichever reader supplied them. */
 export interface AgentStatusInfo {
   name: string;
   purpose: string;
@@ -228,7 +189,6 @@ export function printAgentStatus(info: AgentStatusInfo, dbSize: number, extra?: 
 
   const L = (label: string) => DIM(label.padEnd(14));
 
-  // Identity: the slug and nothing else. It IS the workspace's id.
   console.log(boxRow(L('Name:'), ACCENT(info.name), w));
   console.log(boxRow(L('Mission:'), info.purpose.slice(0, w - 22), w));
   const created = info.createdAt ? new Date(info.createdAt).toLocaleDateString() : '—';
@@ -238,7 +198,6 @@ export function printAgentStatus(info: AgentStatusInfo, dbSize: number, extra?: 
   console.log(boxRow(L('Effort:'), extra?.reasoningEffort ?? 'medium (chat default)', w));
   console.log(DIM(`${BOX.v}${'─'.repeat(w - 3)}`));
 
-  // Evolution section
   console.log(boxRow(L('Scaffold:'), `v${info.scaffoldVersion}`, w));
   console.log(boxRow(L('MCTS nodes:'), String(info.searchNodeCount), w));
   console.log(boxRow(L('Tasks:'), String(info.taskCount), w));
@@ -249,14 +208,11 @@ export function printAgentStatus(info: AgentStatusInfo, dbSize: number, extra?: 
 
   console.log(DIM(`${BOX.v}${'─'.repeat(w - 3)}`));
 
-  // Tools section
   console.log(boxRow(L('Tools:'), `${BUILTIN_TOOLS.length} built-in + ${info.craftedToolCount} crafted`, w));
   console.log(boxRow(L('Memory:'), formatBytes(info.memorySize), w));
   console.log(boxBot(w));
   console.log('');
 }
-
-// ── Agent list table ─────────────────────────────────────────────
 
 export function printAgentList(agents: Array<{
   name: string;
@@ -276,11 +232,7 @@ export function printAgentList(agents: Array<{
   console.log(`${BRAND} ${DIM(`· ${plural(agents.length, 'workspace')}`)}`);
   console.log('');
 
-  // Adaptive column widths. NAME is an IDENTIFIER: it is what the user pastes
-  // into `kinu debug <name>`, so it is never clipped — a silently truncated
-  // name is a different valid-looking name, and one such clip sent a session
-  // chasing a phantom "not in your registry" defect. PURPOSE is prose and
-  // absorbs the squeeze instead.
+  // NAME is an identifier users paste into `kinu debug <name>`, so it never clips; PURPOSE absorbs the squeeze.
   const maxName = Math.max(4, ...agents.map(a => a.name.length));
   const nameW = maxName + 2;
   const modeW = 8;
@@ -291,7 +243,6 @@ export function printAgentList(agents: Array<{
   console.log(`  ${DIM('─'.repeat(termWidth() - 4))}`);
 
   for (const a of agents) {
-    // PURPOSE clips (prose); NAME only pads (identifier).
     const name = ACCENT(a.name.padEnd(nameW));
     const mode = DIM(a.mode.padEnd(modeW));
     const purpose = DIM(a.purpose.slice(0, purposeW - 2).padEnd(purposeW));
@@ -303,10 +254,6 @@ export function printAgentList(agents: Array<{
   console.log('');
 }
 
-// ── Search tree visualization ────────────────────────────────────
-
-/** The fields every MCTS-tree surface renders. Core SearchNode and the
- *  AgentSearchNode projection both narrow to this. */
 export interface SearchTreeNode {
   depth: number;
   status: string;
@@ -315,7 +262,7 @@ export interface SearchTreeNode {
   visits: number;
 }
 
-/** The glyph for each engine status; open reads as pending. */
+/** Open reads as pending. */
 const SEARCH_STATUS_ICON: Record<SearchTreeNode['status'], string> = {
   terminal: OK('●'),
   pruned: ERR('○'),
@@ -323,8 +270,6 @@ const SEARCH_STATUS_ICON: Record<SearchTreeNode['status'], string> = {
   open: WARN('◌'),
 };
 
-/** One terminal line per node. The glyphs name all four engine statuses:
- *  terminal, failed and pruned each read apart, open reads as pending. */
 export function renderSearchTreeLines(nodes: readonly SearchTreeNode[]): string[] {
   return nodes.map((node) => {
     const indent = '  '.repeat(node.depth + 1);
@@ -352,19 +297,7 @@ export function printSearchTree(nodes: SearchNode[]): void {
   console.log('');
 }
 
-// ── Tool call display (for chat) ─────────────────────────────────
-
-/**
- * A tool call, as a person reads it: what it is doing, then the arguments that
- * say which thing.
- *
- * Until the summary vocabulary was hoisted out of cf-backend this printed the
- * raw argument VALUES, JSON-encoded, comma-joined and clipped at 70 characters
- * — so a file edit read `edit, /a/b.ts, [{"old":"import {…` while the web chat
- * card, from the same arguments, read `Edited b.ts — 3 replacements`. The
- * fallback below is what the CLI had for every tool; it now applies only to
- * MCP and crafted tools, whose argument contracts nothing knows.
- */
+/** Summarized as the web chat card does; the raw-argument fallback applies only to MCP and crafted tools. */
 export function printToolCall(toolName: string, args: JsonObject): void {
   console.log(`\n${DIM('  ▸ ')}${MUTED(toolName)} ${DIM('━'.repeat(Math.max(1, 40 - toolName.length)))}`);
   const action = describeToolCall(toolName, args);
@@ -375,7 +308,6 @@ export function printToolCall(toolName: string, args: JsonObject): void {
   if (summary) console.log(`${DIM('  ')}${MUTED(summary)}`);
 }
 
-/** Display the recorded invocation status without interpreting output content. */
 export function printToolResult(result: string, outcome: ToolOutcome): void {
   if (!outcome.success) {
     console.log(ERR('  ' + TUI_MARKS.failure + ' failed (' + (outcome.reason ?? 'unclassified') + ')'));
@@ -395,8 +327,6 @@ export function printToolResult(result: string, outcome: ToolOutcome): void {
   console.log(DIM('  ' + '━'.repeat(44)));
 }
 
-// ── Evolution event (for chat) ───────────────────────────────────
-
 const EVOLUTION_ICONS = new Map<string, string>([
   ['reflection', '◔'], ['craft_discovered', '✚'], ['consolidation', '⟳'],
   ['scaffold_proposed', '✎'], ['mcts_started', '⌕'], ['mcts_complete', '✓'],
@@ -407,8 +337,6 @@ export function printEvolutionEvent(type: string, message: string): void {
   console.log(MUTED(`  ${icon} ${clipText(message, 70)}`));
 }
 
-// ── Error formatting ─────────────────────────────────────────────
-
 export function printError(message: string, hint?: string): void {
   console.error(`\n${ERR('error')} ${message}`);
 
@@ -416,31 +344,21 @@ export function printError(message: string, hint?: string): void {
   console.error('');
 }
 
-/** A command that could not complete: the failure in the provider's words,
- *  plus the next command when the failure class implies one. Every command
- *  action funnels here, so no thrown value can reach a user unrendered. */
+/** Every command action funnels here, so no thrown value reaches a user unrendered. */
 export function printFailure(failure: { readonly cause: unknown }): void {
   const { message, hint } = guideFailure(failure);
   printError(message, hint);
 }
 
-/** The same block for surfaces that own their output stream — the run/chat
- *  transcripts, where an error is one entry among the streamed events rather
- *  than the end of the process. */
 export function formatFailure(failure: { readonly cause: unknown }): string {
   const { message, hint } = guideFailure(failure);
 
   return hint ? `${ERR('error')} ${message}\n${DIM('hint:')} ${hint}` : `${ERR('error')} ${message}`;
 }
 
-// ── Help screen ──────────────────────────────────────────────────
-
-/** Where a command lands when it was registered without a `.helpGroup()`. Its
- *  existence is the drift guarantee: a new command is always listed. */
+/** Guarantees a command registered without `.helpGroup()` is still listed. */
 const UNGROUPED_HEADING = 'Other commands:';
 
-/** Environment variables that apply to every command. Per-command options are
- *  deliberately not repeated here — `kinu <command> --help` owns those. */
 export const GLOBAL_ENVIRONMENT: ReadonlyArray<readonly [string, string]> = [
   ['KINU_HOME', 'Where Kinu keeps workspaces and config (default ~/.kinu)'],
   ['KINU_ORIGIN', 'Kinu app origin'],
@@ -460,9 +378,7 @@ export const HELP_EXAMPLES: ReadonlyArray<string> = [
   'kinu connect',
 ];
 
-/** One real invocation per command, keyed by the command's own object so a
- *  rename cannot orphan it. `kinu <command> --help` prints it and the CLI
- *  reference renders it. */
+/** Keyed by the command object so a rename cannot orphan the example. */
 const COMMAND_EXAMPLES = new WeakMap<Command, string>();
 
 export function setCommandExample(command: Command, example: string): void {
@@ -471,26 +387,18 @@ export function setCommandExample(command: Command, example: string): void {
 }
 
 export interface HelpEntry {
-  /** The registration itself — what a renderer needs for options/aliases. */
   command: Command;
-  /** Invocation term, e.g. `workspace delete <name>`. */
   term: string;
   description: string;
   heading: string;
-  /** The command's registered example; undefined when none was registered. */
   example: string | undefined;
 }
 
-/** Every runnable command in the tree, in registration order, with its heading
- *  inherited from the nearest ancestor that declared one. The one walk behind
- *  both the `--help` screen and the generated CLI reference, so neither can
- *  list a command the other misses. */
+/** The one walk behind `--help` and the generated CLI reference, so neither misses a command. */
 export function commandEntries(program: Command): HelpEntry[] {
   const helper = program.createHelp();
 
-  // visibleCommands() applies the hidden-command policy but also appends
-  // Commander's implicit `help` placeholder, which is not a registered command;
-  // intersecting with .commands keeps the policy and drops the placeholder.
+  // visibleCommands() also appends Commander's implicit `help` placeholder; intersecting with .commands drops it.
   const children = (cmd: Command): Command[] =>
     helper.visibleCommands(cmd).filter((child) => cmd.commands.includes(child));
 
@@ -521,11 +429,7 @@ function argumentSuffix(cmd: Command): string {
   return args.length > 0 ? ` ${args.join(' ')}` : '';
 }
 
-/**
- * The branded root help, rendered from the registered command tree. Nothing is
- * curated by hand here, so `--help` cannot drift from what the CLI accepts;
- * grouping and wording live on the registrations themselves (src/program.ts).
- */
+/** Rendered from the command tree so `--help` cannot drift; grouping lives on the registrations (src/program.ts). */
 function renderHelp(program: Command): string {
   const entries = commandEntries(program);
   const width = termWidth();
@@ -567,10 +471,8 @@ function renderHelp(program: Command): string {
   return lines.join('\n');
 }
 
-/** One `term    description` row, wrapping the description under a hanging
- *  indent. An over-long term takes its own line so the column never shears. */
+/** An over-long term takes its own line so the column never shears. */
 interface HelpRow {
-  /** Styled for the terminal; `termLength` is its visible width. */
   readonly term: string;
   readonly termLength: number;
   readonly description: string;
@@ -614,8 +516,6 @@ function wrapText(text: string, width: number): string[] {
 export function printHelp(program: Command): void {
   console.log(renderHelp(program));
 }
-
-// ── Utilities ────────────────────────────────────────────────────
 
 export function formatBytes(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`;

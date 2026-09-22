@@ -29,16 +29,13 @@ const EVOLUTION: EvolutionConfigView = {
 
 export const TURN = { landed: 'turn' as const, text: '', toolCalls: [], steps: 1, durationMs: 1, hadError: false };
 
-/** Teardowns run synchronously: the unmount they flush must complete before
- *  the renderer that owns those renderables is destroyed. */
+/** Synchronous: the flushed unmount must finish before the renderer owning those renderables is destroyed. */
 const mounted: Array<() => void> = [];
 
 export function cleanupChats(): void {
   for (const destroy of mounted.splice(0)) destroy();
 }
 
-/** One workspace with one agent and the built-in role, held in memory. What a
- *  surface that never opens its hub still needs the hub reader to answer. */
 export function soloHub(client: AgentClient): TuiHubData {
   return {
     agents: [{
@@ -66,8 +63,6 @@ interface FakeClientOptions {
   mode?: 'local' | 'cloud';
   status?: () => Promise<AgentClientStatus>;
   consents?: DeviceConsentSurface | null;
-  /** Lets command tests supply an honest local boundary without mutating the
-   * readonly AgentClient surface after construction. */
   localControls?: LocalSessionControls;
   plans?: PlanReviewSurface | null;
   listModels?: () => Promise<AgentModelMenu>;
@@ -178,8 +173,6 @@ export function fakeClient(options: FakeClientOptions) {
 
       return shellApprovalHandler(request);
     },
-    /** What still listens to this client. A mounted chat surface holds one; a
-     *  torn-down one holds none, because its effect cleanup ran. */
     listenerCount: () => listeners.size,
     emit(event: AgentClientEvent) {
       for (const listener of listeners) listener(event);
@@ -187,7 +180,6 @@ export function fakeClient(options: FakeClientOptions) {
   };
 }
 
-/** One row of the workspace drawer, as a test declares it. */
 export interface FixtureWorkspace {
   name: string;
   label: string;
@@ -204,19 +196,12 @@ export async function mountChat(
     listWorkspaces?: () => FixtureWorkspace[];
     onWorkspaceSelect?: (name: string) => Promise<AgentClient>;
     hubData?: TuiHubData;
-    /** How a mounted surface re-reads its hub after a switch. Left alone, it
-     *  answers with the same fixture data for whatever client asks. The point
-     *  is that it answers from memory: the product's own reader goes to the
-     *  profile authority, which on a signed-in machine is a network read, and
-     *  a unit test that waits on one is measuring the network. */
+    /** Answers from memory: the product reader hits the profile authority, a network read when signed in. */
     readHub?: ChatAppOpts['readHub'];
     onNewAgent?: ChatAppOpts['onNewAgent'];
     width?: number;
-    /** What "mounted" means for this test; defaults to the ready composer. */
     settled?: (frame: string) => boolean;
-    /** Drive keys as a kitty-protocol terminal encodes them. A test that
-     *  needs a chord the legacy byte set cannot express — Shift+Enter, or a
-     *  Ctrl+J that is not byte-identical with Enter — asks for this. */
+    /** Kitty-protocol keys, for chords the legacy byte set cannot express (Shift+Enter, Ctrl+J distinct from Enter). */
     kittyKeyboard?: boolean;
   } = {},
 ) {
@@ -272,13 +257,8 @@ export async function mountChat(
   const settled = options.settled ?? ((view: string) => view.includes('Send a message'));
   await waitFor('the chat surface to settle', () => settled(frame()));
   mounted.push(() => {
-    // Two things a teardown here has to know. `root.render()` builds a NEW
-    // container on every call, so painting an empty box over the app leaves it
-    // mounted, subscribed and committing — and the renderer's own DESTROY hook
-    // can only unmount the LAST container it was handed. And this is a
-    // concurrent root, so `unmount()` merely SCHEDULES the removal: flushed
-    // synchronously, every effect releases what it holds before `destroy()`
-    // frees the renderables those effects still point at.
+    // `root.render()` builds a new container per call and destroy unmounts only the last one, so unmount
+    // explicitly; on a concurrent root `unmount()` only schedules, so flush it before `destroy()`.
     flushSync(() => { root.unmount(); });
     testRenderer.renderer.destroy();
   });

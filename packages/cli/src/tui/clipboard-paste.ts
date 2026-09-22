@@ -1,7 +1,6 @@
 import type { CliRenderer } from '@opentui/core';
 
-/** Kitty OSC 5522's listing/read handshake, including its dot MIME listing.
- * Protocol shapes also exercised by oh-my-pi's enhanced-paste controller. */
+/** Kitty OSC 5522's listing/read handshake, including its dot MIME listing. */
 /** How many characters end an OSC reply: BEL, ST, or none (still partial). */
 function terminatorLength(sequence: string): number {
   if (sequence.endsWith('\x07')) return 1;

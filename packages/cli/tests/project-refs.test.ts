@@ -1,11 +1,5 @@
-// Project-scoped local refs: which project an agent belongs to, which virtual
-// workspace groups it with its peers, and which database it opens.
-//
-// The policy under test is metadata-only. `~/.kinu/<name>/agent.db` is still the
-// one state path, so a virtual workspace GROUPS agents and never nests them, and
-// a relabel moves nothing. These assertions exist because the two ways to get
-// this wrong are both silent: attributing every unplaced workspace to whichever
-// directory the CLI started in, and inferring a backend from a file's existence.
+// Project-scoped local refs are metadata only: `~/.kinu/<name>/agent.db` stays the one state path, so a
+// virtual workspace groups agents and never nests them, and a relabel moves nothing.
 import { scratchDir } from '../../test-utils/src/scratch';
 import { afterAll, afterEach, beforeAll, describe, expect, test } from 'bun:test';
 import { Database } from 'bun:sqlite';
@@ -34,9 +28,7 @@ import {
   type KinuConfig,
 } from '../src/config';
 
-// Same boundary assertion as the conformance suite: AGENT_HOME is bound at
-// module load, so a hand-run without scripts/test-preload.ts would create real
-// workspaces and real `agents` entries in the developer's own home.
+// AGENT_HOME is bound at module load: without scripts/test-preload.ts this would write the developer's home.
 if (resolve(AGENT_HOME) === resolve(join(homedir(), '.kinu'))
   || !resolve(AGENT_HOME).startsWith(resolve(tmpdir()))) {
   throw new Error(
@@ -75,16 +67,12 @@ afterAll(() => {
   else process.env.KINU_SKIP_DAEMON = daemonBefore;
 });
 
-/** The virtual workspaces a project holds, in listing order. Read off the
- *  machine-wide roster the scheduler iterates, filtered to one project — the
- *  attribution under test is the ref's recorded `cwd` and nothing else. */
 function workspaceLabels(cwd: string): string[] {
   return [...new Set(
     listLocalRefsAllProjects().filter((ref) => ref.cwd === cwd).map((ref) => ref.workspaceId),
   )];
 }
 
-/** A throwaway physical project directory, canonical so comparisons hold. */
 function project(): string {
   const dir = join(scratchDir('project'), 'work');
   mkdirSync(dir);
@@ -105,8 +93,6 @@ async function create(name: string, cwd: string, workspaceId?: string): Promise<
   });
 }
 
-/** An unplaced workspace: a database under `~/.kinu/<name>` and no ref naming
- *  a project. */
 function unplacedWorkspace(name: string, identityId: string): string {
   mkdirSync(agentDir(name), { recursive: true });
   workspaces.push(name);
@@ -124,14 +110,12 @@ function unplacedWorkspace(name: string, identityId: string): string {
   return dbPath;
 }
 
-/** A local create always reports its database; a cloud one has none. */
 function createdDbPath(created: CreatedCliAgent): string {
   if (!created.dbPath) throw new Error(`create reported no database for ${created.name}`);
 
   return created.dbPath;
 }
 
-/** The refusal `shell` produces. A call that does not refuse is the failure. */
 function messageOf(run: () => void): string {
   try {
     run();
@@ -159,14 +143,10 @@ describe('virtual workspaces group agents inside one project', () => {
     const first = await create('peer-one', cwd, 'team');
     const second = await create('peer-two', cwd, 'team');
 
-    // `peers` reports who was already there, so opening a workspace and joining
-    // one are distinguishable at the call site.
     expect(first.peers).toEqual([]);
     expect(second.peers).toEqual(['peer-one']);
     expect(localWorkspaceMembers('team', cwd).map((ref) => ref.name)).toEqual(['peer-one', 'peer-two']);
 
-    // One physical plane, private state each: the shared cwd is the point of a
-    // virtual workspace, and the separate databases are the point of a peer.
     expect(localWorkspaceMembers('team', cwd).map((ref) => ref.cwd)).toEqual([cwd, cwd]);
     expect(first.dbPath).toBe(join(AGENT_HOME, 'peer-one', 'agent.db'));
     expect(second.dbPath).toBe(join(AGENT_HOME, 'peer-two', 'agent.db'));
@@ -193,8 +173,6 @@ describe('the same label in two projects is two workspaces', () => {
     expect(localWorkspaceMembers('app', second).map((ref) => ref.name)).toEqual(['same-label-b']);
     expect(listAgentDirs(first)).toEqual(['same-label-a']);
     expect(listAgentDirs(second)).toEqual(['same-label-b']);
-    // Both are still reachable machine-wide, which is what a scheduler that is
-    // not scoped to its launch directory has to iterate.
     expect(listLocalRefsAllProjects().map((ref) => `${ref.cwd}:${ref.workspaceId}:${ref.name}`).sort())
       .toEqual([`${first}:app:same-label-a`, `${second}:app:same-label-b`].sort());
   });
@@ -215,7 +193,6 @@ describe('the same label in two projects is two workspaces', () => {
     expect(message).toContain('already exists');
     expect(message).toContain('workspace "app"');
     expect(message).toContain(first);
-    // The refusal changed nothing: the original placement still stands.
     expect(localWorkspaceMembers('app', first).map((ref) => ref.name)).toEqual(['claimed-name']);
     expect(listAgentDirs(second)).toEqual([]);
   });
@@ -229,16 +206,11 @@ describe('renaming changes no identity and moves no database', () => {
     const identity = readWorkspaceIdentityId(dbPath);
 
     if (identity === null) throw new Error(`the workspace at ${dbPath} carries no identity`);
-    // Creation records it on the ref too, keyed on the database rather than on
-    // the name — that recorded value is the only thing `resolveLocalAgent` can
-    // compare a later database against, so a create that left it unset would
-    // turn the mismatch guard off and say nothing.
+    // Recorded on the ref: `resolveLocalAgent` compares later databases against it, so leaving it unset
+    // would silently disable the mismatch guard.
     expect(loadConfigFile().agents?.['renamed-label']?.identityId).toBe(identity);
 
-    // The rename a user actually performs: the workspace's human name,
-    // written into the workspace's own database — never mirrored into
-    // config.json. `kinu create` writes it and auto-titling rewrites it
-    // after the first turn.
+    // The human name lives in the workspace database, never mirrored into config.json.
     renameLocalAgent('renamed-label', 'Second Thoughts');
     expect(loadConfigFile().agents?.['renamed-label']?.displayName).toBeUndefined();
 
@@ -260,11 +232,8 @@ describe('renaming changes no identity and moves no database', () => {
     const to = `${from}-moved`;
     renameSync(from, to);
 
-    // The recorded directory is gone, so the ref places nothing and the agent
-    // reads as unplaced — visible, rather than missing from every roster.
     expect(listAgentDirs(from)).toEqual([]);
-    // Membership, not equality: another file in the same process may own its
-    // own unplaced rows; what this test created is what the assertion names.
+    // Membership, not equality: another file in the same process may own unplaced rows.
     expect(listUnplacedAgentNames()).toContain('moved-project');
 
     const rebound = resolveLocalAgent('moved-project', { cwd: to, workspaceId: 'bound' });
@@ -319,8 +288,6 @@ describe('a backend is stated, not inferred from a file', () => {
     const db = new Database(createdDbPath(created));
 
     try {
-      // Exactly what `createAgentClient` binds: the recorded placement, never
-      // the invocation directory.
       const { rt } = await openWorkspaceCLI(db, createdDbPath(created), { llm: null, cwd: local.cwd });
       expect(rt.cwd).toBe(cwd);
       expect(rt.executionRouter?.listExecutors().map((e) => e.name)).toEqual(['workspace']);
@@ -339,18 +306,13 @@ describe('an unplaced workspace is adopted one at a time', () => {
     unplacedWorkspace('unplaced-two', 'ws-unplaced-two');
 
     expect(listAgentDirs(cwd)).toEqual([]);
-    // Membership and absence over the machine-wide roster: every unplaced
-    // row this file created is present, and nothing it didn't create can be
-    // claimed by the assertion either way.
     expect(listUnplacedAgentNames()).toEqual(expect.arrayContaining(['unplaced-one', 'unplaced-two']));
 
-    // A read states the placement it would use without recording it.
     const read = resolveLocalAgent('unplaced-one', { cwd, adopt: false });
     expect(read.placement).toBe('unplaced');
     expect(read.dbPath).toBe(agentDbPath('unplaced-one'));
     expect(listUnplacedAgentNames()).toEqual(expect.arrayContaining(['unplaced-one', 'unplaced-two']));
 
-    // An open adopts exactly the one it opened.
     const opened = resolveLocalAgent('unplaced-one', { cwd, workspaceId: 'adopted' });
     expect(opened.placement).toBe('adopted');
     expect(opened.cwd).toBe(cwd);
@@ -367,7 +329,6 @@ describe('an unplaced workspace is adopted one at a time', () => {
     adoptUnplacedLocalAgent('keyed', { cwd, workspaceId: 'first' });
     expect(loadConfigFile().agents?.keyed?.identityId).toBe('ws-keyed');
 
-    // Already placed: adopting again does not re-point it at another project.
     const other = project();
     expect(adoptUnplacedLocalAgent('keyed', { cwd: other, workspaceId: 'second' }).cwd).toBe(cwd);
     expect(resolveLocalAgent('keyed', { cwd }).placement).toBe('recorded');

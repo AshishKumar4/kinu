@@ -1,11 +1,6 @@
 /**
- * `kinu export` / `kinu import` end to end, as a user runs them.
- *
- * The load-bearing claim is one format: a CLOUD workspace exported over the
- * paged RPC restores through the SAME `kinu import` a local export does,
- * with its content intact. Both directions run the real CLI binary against a
- * throwaway KINU_HOME — the cloud side against a stub origin that answers
- * the export RPC out of a real SQLite workspace.
+ * `kinu export` / `kinu import` end to end: a cloud workspace exported over the paged
+ * RPC restores through the same `kinu import` as a local export.
  */
 
 import { scratchDir } from '../../test-utils/src/scratch';
@@ -36,9 +31,7 @@ function scratch(prefix: string): string {
 
 const ACTOR = 'a1';
 
-/** One conversation entry and the message text it references — the canonical
- *  pair, written straight to SQL because this suite is about what the archive
- *  copies, not about how a turn publishes. */
+/** Written straight to SQL: this suite covers what the archive copies, not how a turn publishes. */
 function seedEntry(db: Database, id: string, text: string, position: number): void {
   const content = JSON.stringify([{ partNo: 0, kind: 'text', streamOrder: 0, replyTo: null, value: { type: 'text', text } }]);
   db.query(`INSERT INTO session_messages (actor_id, message_id, role, native_content_kind, origin, recorded_at, envelope_json, sealed_at, content_json)
@@ -49,7 +42,6 @@ function seedEntry(db: Database, id: string, text: string, position: number): vo
     VALUES (?, 'default', ?, 0, ?, 0)`).run(ACTOR, id, id);
 }
 
-/** The text of one seeded entry, read back the way it was written. */
 function entryText(db: Database, id: string): string {
   const row = db.query<{ content_json: string }, [string]>(
     `SELECT content_json FROM session_messages WHERE message_id = ?`,
@@ -61,7 +53,6 @@ function entryText(db: Database, id: string): string {
   return v.parse(v.string(), v.parse(JsonObjectSchema, part?.value).text);
 }
 
-/** A workspace database with the awkward content: text, BLOBs, many rows. */
 function seedWorkspace(path: string): void {
   const db = new Database(path, { create: true });
   db.exec(`CREATE TABLE workspace_identity (id TEXT NOT NULL, name TEXT NOT NULL, created_at INTEGER NOT NULL)`);
@@ -75,8 +66,7 @@ function seedWorkspace(path: string): void {
 
   for (let i = 0; i < bytes.length; i++) bytes[i] = i;
   db.query(`INSERT INTO vfs_files (path, data) VALUES (?, ?)`).run('logo.bin', bytes);
-  // Multi-byte text long enough that the reader's 64 KiB chunks land mid-
-  // character: a decoder that does not stream corrupts a real transcript here.
+  // Multi-byte text long enough that the reader's 64 KiB chunks land mid-character.
   seedEntry(db, 'unicode', '→ café 🌍 '.repeat(9000), 300);
   db.close();
 }
@@ -213,8 +203,7 @@ describe('kinu export / import', () => {
         const args = v.parse(JsonArraySchema, body.args);
         calls.push({ method, cursor: v.parse(v.nullable(ArchiveCursorSchema), args[0] ?? null) });
 
-        // Exactly what the orchestrator RPC does, with a page size small
-        // enough that the CLI has to walk more than one page.
+        // Page size small enough that the CLI walks more than one page.
         const page = await readWorkspaceArchivePage(source, {
           workspace: 'skywriter', source: 'cloud',
           cursor: calls[calls.length - 1].cursor, maxBytes: 2048,
@@ -249,7 +238,6 @@ describe('kinu export / import', () => {
       expect(calls.every((c) => c.method === 'exportWorkspaceArchive')).toBe(true);
       expect(calls[0].cursor).toBeNull();
 
-      // No --name: the archive says which workspace it is.
       const imported = await result(runCli(home, ['import', archive]));
       expect(imported.stderr).toBe('');
       expect(imported.exitCode).toBe(0);

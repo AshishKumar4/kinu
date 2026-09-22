@@ -13,8 +13,7 @@ import { renderThrownChain } from '@kinu.run/core/obs';
 export async function evolveCommand(name: string, opts: {
   budget?: string; branches?: string; maxCost?: string; model?: string; baseUrl?: string; auth?: string;
 }, deps?: {
-  /** A stand-in for the search engine. Commander passes its own Command
-   *  object here at runtime; it carries no runMcts, so the real engine runs. */
+  /** Test seam; Commander's own Command object carries none, so the real engine runs. */
   runMcts?: typeof runMCTS;
 }): Promise<void> {
   const configured = resolveAgentRef(name);
@@ -30,9 +29,7 @@ export async function evolveCommand(name: string, opts: {
   const workspace = local.name;
   const dbPath = local.dbPath;
 
-  // Use core's `DEFAULT_CONFIG.mcts` defaults unless the operator overrides
-  // them. Halving those defaults locally runs a weaker search than other
-  // callers, so this command reads the engine's values directly.
+  // Core's `DEFAULT_CONFIG.mcts` unless overridden, so this search matches other callers.
   const budget = opts.budget !== undefined ? parsePositiveInt(opts.budget, 'budget') : DEFAULT_CONFIG.mcts.budget;
   const branches = opts.branches !== undefined ? parsePositiveInt(opts.branches, 'branches') : DEFAULT_CONFIG.mcts.branches;
   const maxCostUSD = opts.maxCost !== undefined ? parsePositiveNumber(opts.maxCost, 'max-cost') : DEFAULT_CONFIG.mcts.maxCostUSD;
@@ -62,8 +59,7 @@ export async function evolveCommand(name: string, opts: {
   const spinner = createSpinner('Starting the MCTS search…');
   spinner.start();
 
-  // Failed branches score 0 by design (the engine's allSettled), so a run whose
-  // model calls all failed still returns a number. Count them to qualify it.
+  // Failed branches score 0 (the engine's allSettled); count them to qualify the score.
   let failed = 0;
 
   try {
@@ -139,7 +135,6 @@ const PHASE_LABEL = {
   reflect: 'reflecting on',
 } as const;
 
-/** Render one search event for the terminal. Pure — the sink decides where it goes. */
 function formatMctsProgress(event: MCTSProgressEvent, totalBudget: number): ProgressLine {
   switch (event.type) {
     case 'phase':

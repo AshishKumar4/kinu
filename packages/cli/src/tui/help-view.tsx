@@ -1,7 +1,3 @@
-/**
- * Slash-command result views rendered inline in the TUI chat.
- */
-
 import type { AgentClientStatus } from '../agent-client';
 import { renderStatusLines } from '../slash-commands';
 import { useTuiTheme } from './theme';

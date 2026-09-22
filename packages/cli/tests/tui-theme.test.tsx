@@ -19,14 +19,12 @@ import {
 
 const TUI_SOURCES = join(import.meta.dir, '..', 'src', 'tui');
 
-/** Terminal grounds a transparent theme meets in the wild, for the blind-spot print. */
 const MID_TONE_TERMINALS = {
   dark: { 'Nord #2E3440': '#2E3440', 'Dracula #282A36': '#282A36', 'Solarized dark #002B36': '#002B36' },
   light: { 'Solarized light #FDF6E3': '#FDF6E3', 'GitHub light #FFFFFF': '#FFFFFF' },
 } as const;
 
-/** WCAG 2.x relative luminance and contrast, owned by this test so the palette
- *  is judged against the standard's arithmetic rather than the registry's own. */
+/** WCAG 2.x arithmetic owned by this test, so the palette is not judged by the registry's own math. */
 function luminance(hex: string): number {
   const channel = (index: number): number => {
     const value = Number.parseInt(hex.slice(1 + index * 2, 3 + index * 2), 16) / 255;
@@ -43,7 +41,6 @@ function contrast(foreground: string, background: string): number {
   return (light + 0.05) / (dark + 0.05);
 }
 
-/** A rendered colour as the theme writes it. */
 function hexOf(color: { toInts(): [number, number, number, number] }): string {
   const [red, green, blue] = color.toInts();
 
@@ -76,8 +73,6 @@ describe('TUI theme', () => {
   test('a missing preference file holds no theme; an existing file keeps its choice', async () => {
     const path = join(scratchDir('tui-theme-prefs'), 'tui.json');
     const store = createFileTuiPreferenceStore(path);
-    // Nothing is stored until the person picks in onboarding, and the TUI
-    // paints the dark product face meanwhile.
     expect(store.read().theme).toBeUndefined();
     const { renderer, renderOnce, captureCharFrame } = await createTestRenderer({ width: 40, height: 4, useThread: false });
     const root = createRoot(renderer);
@@ -101,8 +96,7 @@ describe('TUI theme', () => {
       const theme = BUILTIN_TUI_THEMES.find((candidate) => candidate.id === id);
 
       if (theme === undefined) throw new Error(`missing preset ${id}`);
-      // Solid presets paint the canvas, so every ground is a literal opaque
-      // fill — an undefined or transparent one leaves the panel edgeless.
+      // An undefined or transparent ground leaves the panel edgeless.
       const { background } = theme.colors;
       expect(background.canvas, `${id} canvas`).toMatch(/^#[0-9A-Fa-f]{6}$/);
       expect(background.chrome, `${id} chrome`).toMatch(/^#[0-9A-Fa-f]{6}$/);
@@ -114,10 +108,8 @@ describe('TUI theme', () => {
   });
 
   test('every preset passes the registry contrast gate, and the numbers are printed', () => {
-    // The registry refuses any theme whose ink does not reach the WCAG floor
-    // over the grounds it is drawn on — presets included, at module load. So
-    // the presets standing here IS the assertion; the ratios are printed on
-    // the green path because a floor says nothing about the margin.
+    // The registry refuses sub-WCAG presets at module load, so their presence is the assertion;
+    // ratios print because a floor says nothing about the margin.
     const registry = createThemeRegistry(BUILTIN_TUI_THEMES);
     expect(registry.themes.map((theme) => theme.id)).toEqual([
       'kinu-light-solid', 'kinu-dark-solid', 'kinu-light', 'kinu-dark', 'kinu-dusk', 'kinu-paper', 'high-contrast',
@@ -133,8 +125,7 @@ describe('TUI theme', () => {
       lines.push(`${theme.id}: bubble ink ${bubble.toFixed(2)} · ink on accent ${onAccent.toFixed(2)}`);
 
       if (background.canvas === undefined) {
-        // Blind spot, printed on the green path: the gate measures the web
-        // canvas and the extreme, never the mid-tone terminals in between.
+        // Blind spot: the gate measures the web canvas and the extreme, never mid-tone terminals.
         const grounds = MID_TONE_TERMINALS[theme.appearance];
         const dim = Object.entries(grounds).map(([name, ground]) => `${name} ${contrast(text.muted, ground).toFixed(2)}`);
         lines.push(`  not gated — text.muted on ${dim.join(', ')}`);
@@ -175,8 +166,7 @@ describe('TUI theme', () => {
           </box>
         </TuiThemeProvider>,
       );
-      // opentui paints markdown prose only after an async grammar load, so a
-      // frame count is not a settled frame: wait for the spans read below.
+      // opentui paints markdown prose only after an async grammar load: wait for the spans read below.
       let spans = captureSpans().lines.flatMap((line) => line.spans);
 
       for (let index = 0; index < 60; index += 1) {
@@ -196,7 +186,6 @@ describe('TUI theme', () => {
       expect(hexOf(user.bg)).not.toBe(light.colors.background.user);
       expect(hexOf(assistant.bg)).not.toBe(light.colors.background.user);
       expect(hexOf(assistant.fg)).toBe(light.colors.text.strong);
-      // The tool card is the dark well, even under the light theme.
       expect(hexOf(tool.bg)).toBe(light.colors.well.fill);
       expect(hexOf(tool.fg)).toBe(light.colors.well.ink);
     } finally {
@@ -239,8 +228,6 @@ describe('TUI theme', () => {
       const span = (text: string) => present(spans.find((candidate) => candidate.text.includes(text)), `the ${text} span`);
       const { text } = dark.colors;
       expect(hexOf(span('USERTURN').fg)).toBe(text.strong);
-      // The agent's body is ink, so it reads as prose and not as one more
-      // grey register beside the thinking line and the annotations.
       expect(hexOf(span('PROSETURN').fg)).toBe(text.strong);
       expect(hexOf(span('SYSTEMNOTE').fg)).toBe(text.muted);
       const thinking = span('THINKINGLABEL');

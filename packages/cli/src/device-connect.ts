@@ -1,16 +1,6 @@
 /**
- * Device connect — the single implementation behind every "link this PC"
- * surface (kinu connect/desktop, the chat connect prompts, /connect).
- * Registers the device, installs the daemon this CLI ships (the daemon is the
- * only device-RPC implementation, and its bytes travel inside the release, so
- * connect fetches no executable code from anywhere), starts it either
- * persistently (detached + pidfile) or for this CLI session only (a child
- * killed when the CLI exits), and verifies the device actually shows up
- * connected on the server before claiming success.
- *
- * One daemon owns a machine. `~/.kinu/pc-agent.pid` names it, and the daemon
- * claims that file in its own process too, so a daemon started by anything
- * else exits instead of running beside this one.
+ * The one device-connect implementation behind every "link this PC" surface. The daemon ships inside the release, so connect
+ * fetches no code. One daemon owns a machine via `~/.kinu/pc-agent.pid`, which the daemon also claims itself.
  */
 
 import { randomBytes } from 'node:crypto';
@@ -35,34 +25,19 @@ const PID_PATH = join(AGENT_HOME, 'pc-agent.pid');
 
 const SCRIPT_PATH = join(AGENT_HOME, 'pc-agent.js');
 
-/** The build the installed daemon is, beside it. The daemon reports it in
- *  HELLO and the hub pushes an update when it is not the served one; the
- *  daemon's own updater rewrites it when it lands a newer build. */
+/** The installed daemon's build; reported in HELLO so the hub can push updates. The daemon's updater rewrites it. */
 const VERSION_STAMP_PATH = join(AGENT_HOME, 'pc-agent.version');
 
-/** Written by the daemon from the moment it starts its successor until a
- *  daemon connects. With a stale pidfile beside it, the successor died before
- *  the hub saw it, and `.prev` is the build that last ran. */
+/** Written by the daemon while its successor starts; with a stale pidfile, the successor died and `.prev` last ran. */
 const UPDATE_PENDING_PATH = join(AGENT_HOME, 'pc-agent.update-pending');
 
-/**
- * Every module the daemon `require`s beside itself, by the name it requires.
- *
- * The daemon is one file that requires siblings by relative path, so the
- * shipped set is the daemon's own require lines and nothing else — a sibling
- * missing here is a daemon that dies on its first require after a clean
- * install, which is how the pty module shipped nowhere for one release.
- * `daemonSiblingNames` reads those lines from the source this CLI ships, and
- * the install refuses to stage a daemon whose requires this table does not
- * cover.
- */
+/** Every sibling the daemon `require`s; install refuses a daemon whose require lines this table does not cover. */
 const DAEMON_SIBLINGS: readonly { readonly name: string; readonly source: string }[] = [
   { name: 'sandbox.js', source: PC_AGENT_SANDBOX_SOURCE },
   { name: 'pty.js', source: PC_AGENT_PTY_SOURCE },
   { name: 'update.js', source: PC_AGENT_UPDATE_SOURCE },
 ];
 
-/** The sibling names the daemon source requires — `require('./x.js')`. */
 function daemonSiblingNames(daemonSource: string): readonly string[] {
   return [...daemonSource.matchAll(/require\('\.\/([^']+)'\)/g)].map((m) => m[1] ?? '').filter((n) => n !== '');
 }
@@ -71,32 +46,21 @@ export const DAEMON_LOG_PATH = join(AGENT_HOME, 'pc-agent.log');
 
 export const DEVICE_CONFIG_PATH = join(AGENT_HOME, 'device.json');
 
-/** Where this machine keeps agent homes. The daemon reports this ROOT to the
- *  hub on HELLO and the hub composes `<root>/<workspace>/home` per command, so
- *  the CLI creates the root and the daemon owns everything under it. */
+/** The daemon reports this root in HELLO and the hub composes `<root>/<workspace>/home`; the daemon owns everything under it. */
 const AGENT_ROOT = join(AGENT_HOME, 'agents');
 
 const CONNECT_POLL_MS = 1_000;
 
-/** The name a machine offers when nobody named it: the hostname, nothing else. */
 export function defaultDeviceName(): string {
   return hostname().trim();
 }
 
-/**
- * Create the agent-home root, owner-only. `mkdir -p` then a VERIFIED chmod, so
- * a root an earlier build left group-readable is tightened instead of kept.
- * What the agent writes on this machine is the owner's alone.
- */
+/** Owner-only, with a verified chmod so an existing group-readable root is tightened. */
 function ensureAgentRoot(): void {
   ensureSecretDir(AGENT_ROOT);
 }
 
-/**
- * What linking this machine means. The words live in `@kinu.run/core` because
- * the web connect panel renders the same three lines; this re-export keeps
- * every CLI surface importing them from the module it already imports.
- */
+/** Lives in `@kinu.run/core` because the web connect panel renders the same lines. */
 export { DEVICE_CONNECT_DISCLOSURE } from '@kinu.run/core';
 
 export interface DeviceAuth {
@@ -106,15 +70,11 @@ export interface DeviceAuth {
 
 export interface ConnectDeviceOptions {
   label?: string;
-  /** Tie the daemon to this CLI process instead of installing it persistently. */
   session?: boolean;
-  /** Called after every poll that found the daemon not connected yet (about once a second). */
   onWaiting?: () => void;
-  /** Ends the wait for the daemon; the result is then `cancelled`. The daemon
-   *  itself keeps running and keeps trying to connect. */
+  /** The daemon keeps running and trying to connect. */
   signal?: AbortSignal;
 }
-
 
 export interface ConnectOutcomeDescription {
   ok: boolean;
@@ -122,16 +82,13 @@ export interface ConnectOutcomeDescription {
 }
 
 export type ConnectDeviceResult =
-  /** `label` is the hub roster row's own label — the name that prints. */
   | { kind: 'connected'; deviceId: string; label: string; sandbox: CloudDeviceSandbox }
-  /** The caller's `signal` aborted before the daemon connected. */
   | { kind: 'cancelled'; deviceId: string }
-  /** Session mode found a persistent daemon already running and left it alone. */
   | { kind: 'already-running'; connected: boolean };
 
 export async function connectDevice(auth: DeviceAuth, opts: ConnectDeviceOptions = {}): Promise<ConnectDeviceResult> {
   if (opts.session && runningDaemonPid() !== null) {
-    // The running daemon owns device.json and its credentials — leave it alone.
+    // The running daemon owns device.json and its credentials.
     const devices = await listDevicesForConnect(auth, 'checking whether the installed daemon is connected');
 
     return { kind: 'already-running', connected: devices.some((device) => device.connected) };
@@ -142,33 +99,24 @@ export async function connectDevice(auth: DeviceAuth, opts: ConnectDeviceOptions
   const device = await registerDeviceForConnect(auth, opts.label);
   installDaemonFiles(device);
   const launch = startInstalledDaemon(opts.session === true, runtime);
-  // Don't trust the spawn — the daemon must show up as connected on the
-  // server before we claim success.
+  // The daemon must show as connected on the server before success is claimed.
   const connected = await waitForDeviceConnected(auth, device.deviceId, launch, opts);
 
   if (connected === undefined) return { kind: 'cancelled', deviceId: device.deviceId };
   thisDeviceConnected = true;
 
-  // The ROW's label names the device: the hub is the authority on what this
-  // machine is called, not the name typed at the prompt.
+  // The hub is the authority on the machine's name, not the name typed at the prompt.
   return { kind: 'connected', deviceId: device.deviceId, label: connected.label, sandbox: connected.sandbox };
 }
-
 
 export interface DaemonStatus {
   deviceConfigPresent: boolean;
   logPresent: boolean;
-  /** Pid of the live daemon that owns this machine, or null when none does. */
   daemonPid: number | null;
-  /** Whether this CLI process has a live session daemon child. */
   sessionActive: boolean;
 }
 
-/** A read, and only a read: a status that renamed files or started a
- *  process was the one door a failed self-update had, and it opened only
- *  when a human typed the command. The daemon owns that outcome now — a
- *  successor that dies before connecting is rolled back by the daemon it
- *  would have replaced (`pc-agent/src/update.js`). */
+/** Read-only; a successor that dies before connecting is rolled back by the daemon (`pc-agent/src/update.js`). */
 export function daemonStatus(): DaemonStatus {
   return {
     deviceConfigPresent: existsSync(DEVICE_CONFIG_PATH),
@@ -178,37 +126,18 @@ export function daemonStatus(): DaemonStatus {
   };
 }
 
-
-// ── Connect prompt policy ────────────────────────────────────────
-
 let offerConsumed = false;
 
 let thisDeviceConnected: boolean | null = null;
 
-/** Whether one device row is THIS machine: the hostname the hub stamped from
- *  the daemon's HELLO against the one this process runs on. The device list
- *  carries no local identity — `device.json` holds the account's token and
- *  this machine's consented root, never a device id — so the hostname is what
- *  there is to compare. */
+/** Compares hostnames: `device.json` holds no device id, so the hostname is the only local identity. */
 function isThisMachine(device: CloudDevice): boolean {
   return device.hostname !== null && device.hostname.trim() === defaultDeviceName();
 }
 
 /**
- * Whether a chat surface should offer the connect prompt now: cloud auth
- * present, the prompt not permanently dismissed, and THIS machine not already
- * connected (the device list answer is cached — never polled). A true answer
- * consumes the per-invocation latch, so the prompt is asked at most once per
- * CLI run.
- *
- * THIS machine, not the account. The card asks "Let this agent use this PC?",
- * and a person on a second laptop has as much to link as one with no machine
- * connected at all — suppressing on any connected device meant the offer
- * vanished for everyone whose OTHER machine was linked, and the one surface
- * that measures the card (`tests/first-run/enter-sends`) reads it as the card
- * never arriving. Measured 2026-09-16 on the eval account: three device
- * daemons from earlier episodes were connected, so no session on this machine
- * was offered the link.
+ * Cloud auth present, not dismissed, and this machine (not the account) not connected; a true answer consumes the
+ * per-invocation latch. Suppressing on any connected device hid the offer from everyone with another machine linked.
  */
 export async function shouldOfferDeviceConnect(): Promise<boolean> {
   if (offerConsumed) return false;
@@ -223,9 +152,7 @@ export async function shouldOfferDeviceConnect(): Promise<boolean> {
       const devices = await listCloudDevices(auth.origin, auth.token);
       thisDeviceConnected = devices.some((device) => device.connected && isThisMachine(device));
     } catch (error) {
-      // Never nag when the answer is unknown — an unreachable cloud is not evidence that no device
-      // is connected. A malformed origin is ours, not the network's: swallowing it would disable
-      // the prompt for good with nothing to show for it.
+      // An unreachable cloud is not evidence of no device; a malformed origin is a local bug and must throw.
       if (classify({ cause: error }) === 'malformed-input') throw error;
 
       return false;
@@ -238,14 +165,12 @@ export async function shouldOfferDeviceConnect(): Promise<boolean> {
   return true;
 }
 
-/** Persist the "[d] don't ask again" choice. */
 export function dismissDeviceConnectPrompt(): void {
   updateConfigFile((config) => {
     config.deviceConnectPromptDismissed = true;
   });
 }
 
-/** One-line current device status for the /connect surfaces. */
 export async function deviceStatusLine(): Promise<string> {
   try {
     const auth = requireAuthConfig();
@@ -267,7 +192,6 @@ export async function deviceStatusLine(): Promise<string> {
   }
 }
 
-/** Shared outcome wording for the chat connect surfaces. */
 export function describeConnectOutcome(result: ConnectDeviceResult, session: boolean): ConnectOutcomeDescription {
   switch (result.kind) {
     case 'already-running':
@@ -286,17 +210,7 @@ export function describeConnectOutcome(result: ConnectDeviceResult, session: boo
   }
 }
 
-/**
- * What the machine reported about its own sandbox, in the words the owner
- * needs. One line while the sandbox is on or off. Three lines when the machine
- * cannot sandbox: the state, the fix, and what stays blocked meanwhile. A
- * fourth line, the daemon's own, when it sent one, because for a probe that
- * failed in words nobody classified that line is what the fix tells the owner
- * to act on. The reason code the daemon reported (`no_bwrap`, `no_userns`) is
- * deliberately NOT printed: it names our own implementation, and the fix
- * sentence is the half the owner can act on. The fix lives in
- * `@kinu.run/core`, so every surface prints the same one.
- */
+/** The fix sentence comes from `@kinu.run/core`; the daemon's reason code (`no_bwrap`, `no_userns`) is deliberately not printed. */
 export function describeDeviceSandbox(sandbox: CloudDeviceSandbox): string[] {
   switch (effectiveDeviceMode(sandbox)) {
     case 'sandboxed':
@@ -316,8 +230,6 @@ export function describeDeviceSandbox(sandbox: CloudDeviceSandbox): string[] {
   }
 }
 
-/** The shortest honest form of a connected device's sandbox state, for the
- *  one-line device status. */
 function sandboxStateTag(sandbox: CloudDeviceSandbox): string {
   switch (effectiveDeviceMode(sandbox)) {
     case 'sandboxed': return 'sandbox on';
@@ -326,12 +238,9 @@ function sandboxStateTag(sandbox: CloudDeviceSandbox): string {
   }
 }
 
-// ── Internals ────────────────────────────────────────────────────
-
 let sessionDaemon: ChildProcess | null = null;
 
 let sessionCleanupInstalled = false;
-
 
 interface DaemonLaunch {
   child: ChildProcess;
@@ -383,7 +292,6 @@ function redactSecrets(text: string, secrets: string[]): string {
   return redacted;
 }
 
-
 function installDaemonFiles(device: { origin: string; userId: string; token: string }): void {
   try {
     ensureAgentHome();
@@ -400,9 +308,7 @@ function installDaemonFiles(device: { origin: string; userId: string; token: str
     user: device.userId,
     token: device.token,
     origin: device.origin.replace(/\/+$/, ''),
-    // The directory `kinu connect` ran in is the directory the owner
-    // consented; the daemon sends it in HELLO and the hub scopes every
-    // base-tier file call to it.
+    // The directory `kinu connect` ran in is the consented root; the hub scopes base-tier file calls to it.
     root: process.cwd(),
   }, null, 2)}\n`;
 
@@ -413,10 +319,7 @@ function installDaemonFiles(device: { origin: string; userId: string; token: str
     (temporary) => verifyStagedDaemon(temporary),
   );
 
-  // The daemon requires these beside itself, so they are not optional and
-  // they are not fetched: each ships in the same release as the code that
-  // reads it, or a released daemon dies on its first require. The table is
-  // checked against the daemon's own require lines before anything lands.
+  // Siblings ship with the release, never fetched; checked against the daemon's require lines before anything lands.
   const required = daemonSiblingNames(PC_AGENT_DAEMON_SOURCE);
   const shipped = new Set(DAEMON_SIBLINGS.map((sibling) => sibling.name));
   const unshipped = required.filter((name) => !shipped.has(name));
@@ -471,12 +374,8 @@ function installDaemonFiles(device: { origin: string; userId: string; token: str
 
     configPending = configTemporary;
 
-    // The config activates the replacement on the next daemon start, so it
-    // lands last. A crash can leave a newer script beside the old credentials,
-    // never new credentials beside an unverified script.
-    // Every sibling lands BEFORE the daemon that requires it, for the same
-    // reason the config lands after: no ordering leaves a daemon on disk whose
-    // sibling is missing or older than it.
+    // Siblings land before the daemon and the config lands last, so a crash never leaves a daemon beside missing siblings
+    // or new credentials beside an unverified script.
     for (const entry of siblingTemporaries) {
       renameSync(entry.temporary, entry.target);
       siblingsPending.delete(entry.temporary);
@@ -486,13 +385,10 @@ function installDaemonFiles(device: { origin: string; userId: string; token: str
     renameSync(scriptTemporary, SCRIPT_PATH);
     scriptPending = null;
     enforceOwnerOnly(SCRIPT_PATH, 0o700);
-    // The stamp describes the daemon it sits beside, so it lands after it: a
-    // crash between the two leaves a new daemon under an old stamp, which the
-    // hub reads as behind and the daemon then re-lands as itself.
+    // The stamp lands after the daemon; a crash leaves an old stamp, which the hub reads as behind and re-lands.
     renameSync(stampTemporary, VERSION_STAMP_PATH);
     stampPending = null;
     enforceOwnerOnly(VERSION_STAMP_PATH, 0o600);
-    // A fresh install is not a pending update, whatever an earlier one left.
     rmSync(UPDATE_PENDING_PATH, { force: true });
     renameSync(configTemporary, DEVICE_CONFIG_PATH);
     configPending = null;
@@ -558,17 +454,12 @@ function stageInstallFile(
   }
 }
 
-/**
- * What landed on disk is the daemon this CLI carries, byte for byte. The
- * question a client can answer about its own bytes is equality with them —
- * a digest served beside a download only proves the download arrived whole.
- */
+/** Byte equality with the daemon this CLI carries; a served digest would only prove the download arrived whole. */
 function verifyStagedDaemon(temporary: string): void {
   if (readFileSync(temporary, 'utf-8') !== PC_AGENT_DAEMON_SOURCE) {
     throw new KinuError('io', 'the staged device daemon does not match the daemon this CLI ships');
   }
 }
-
 
 function syncAgentDirectory(): void {
   if (process.platform === 'win32') return;
@@ -581,16 +472,7 @@ function syncAgentDirectory(): void {
   }
 }
 
-/**
- * The connected device row the server reports. The readiness wait ends on
- * exactly three events: the hub roster row reads connected (success), the
- * daemon process exits (failure — its last output lines say why), or the
- * user interrupts. There is no deadline and no clock anywhere: a daemon that
- * is still dialling has not failed, and a transient GET error while the
- * daemon is alive is not-yet, not failure. The row carries what the machine
- * said about its own sandbox, so the caller states that without a second
- * request.
- */
+/** Ends only when the roster row reads connected, the daemon exits, or the user interrupts. No deadline. */
 async function waitForDeviceConnected(
   auth: DeviceAuth,
   deviceId: string,
@@ -622,11 +504,7 @@ async function waitForDeviceConnected(
 
   try {
     const connected = await waitForAnswer(async () => {
-      // A transient GET error while the daemon is alive is not-yet, not
-      // failure: the hub answered nothing, and only the daemon's exit ends
-      // the wait. The miss travels as a SHAPE — a recorded miss that names
-      // what the hub said — never as a sentinel a healthy answer could also
-      // return.
+      // A transient GET error while the daemon lives is not-yet; recorded as a shape, never a sentinel a healthy answer could return.
       let miss: { readonly transient: string } | undefined;
       let rows: CloudDevice[] | undefined;
 
@@ -659,8 +537,6 @@ async function waitForDeviceConnected(
   }
 }
 
-/** The daemon's last output lines for a failure that quoted them, or the
- *  line that says where to look when the log holds nothing yet. */
 function daemonTailForFailure(): string {
   return readDaemonLogTail(DAEMON_LOG_PATH, 15) ?? `no daemon log yet at ${DAEMON_LOG_PATH}`;
 }
@@ -715,9 +591,7 @@ function spawnDaemonChild(runtime: string, session: boolean): DaemonLaunch {
   let logDescriptor: number;
 
   try {
-    // The daemon writes through this append fd for its whole life, so the
-    // roll happens here, before the handle exists: copy-truncate keeps the
-    // inode, which is what lets a later roll cap a still-running daemon too.
+    // Roll before the append fd exists; copy-truncate keeps the inode so later rolls also cap a running daemon.
     rotateDaemonLogIfNeeded(DAEMON_LOG_PATH);
     logDescriptor = openSync(DAEMON_LOG_PATH, 'a');
   } catch (cause) {
@@ -746,7 +620,6 @@ function spawnDaemonChild(runtime: string, session: boolean): DaemonLaunch {
   }
 }
 
-/** The pid the pidfile names, whether or not that process still exists. */
 function recordedDaemonPid(): number | null {
   if (!existsSync(PID_PATH)) return null;
   let contents: string;
@@ -762,7 +635,6 @@ function recordedDaemonPid(): number | null {
   return Number.isInteger(pid) && pid > 0 ? pid : null;
 }
 
-/** The pid of the daemon that owns this machine, or null when none runs. */
 function runningDaemonPid(): number | null {
   const pid = recordedDaemonPid();
 
@@ -775,8 +647,7 @@ function claimDaemonPid(pid: number): boolean {
   for (let attempt = 0; attempt < 2; attempt += 1) {
     if (writePidfile(pid)) return true;
 
-    // The daemon claims this same file at startup, so a pidfile that already
-    // names the process being claimed for is this claim, not a competing one.
+    // The daemon claims this same file, so a pidfile naming this pid is this claim.
     if (recordedDaemonPid() === pid) return true;
 
     if (runningDaemonPid() !== null) return false;
@@ -897,11 +768,7 @@ function installSessionCleanup(): void {
   });
 }
 
-/**
- * Whether `pid` exists. `kill(pid, 0)` reports absence as ESRCH and *presence under another user*
- * as EPERM, so treating every failure as death reported a live daemon as gone — and a session
- * daemon was then started alongside it while its pidfile was deleted.
- */
+/** `kill(pid, 0)` reports presence under another user as EPERM, not only absence as ESRCH. */
 function processAlive(pid: number): boolean {
   try {
     process.kill(pid, 0);
@@ -920,15 +787,7 @@ function assertDaemonPlatformSupported(): void {
   throw new KinuError('unsupported', 'The daemon runs on Linux and macOS only.');
 }
 
-/**
- * The runtime the daemon runs on: the Bun that is already running this CLI.
- * A `node` found on PATH is never consulted — the daemon speaks WebSocket with
- * `globalThis.WebSocket`, which a host Node without a `ws` install lacks, and a
- * machine's PATH Node is exactly the runtime the CLI does not control (a conda
- * base Node answered `--version` and then killed the daemon with "install Node
- * 22+ or the ws package"). The installer's Bun is the one runtime verified
- * compatible, so the one that runs the CLI runs the daemon.
- */
+/** The Bun running this CLI; PATH `node` is never used, since the daemon needs `globalThis.WebSocket`. */
 function daemonRuntime(): string {
   if ('bun' in process.versions) return process.execPath;
   throw new KinuError(

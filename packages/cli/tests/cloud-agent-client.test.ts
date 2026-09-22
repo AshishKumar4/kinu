@@ -1,5 +1,3 @@
-// CloudAgentClient — protocol behavior against a mock OrchestratorAgent
-// websocket server speaking the agents/chat cf_agent_* envelopes.
 import { afterEach, describe, expect, test } from 'bun:test';
 import type { Server, ServerWebSocket } from 'bun';
 import { CHAT_MESSAGE_TYPES } from 'agents/chat';
@@ -15,12 +13,11 @@ import * as v from 'valibot';
 interface MockAgentServer {
   server: Server<unknown>;
   origin: string;
-  /** Frames received over the websocket, parsed. */
   frames: JsonObject[];
   ticketRequests: Array<{ name: string; auth: string | null }>;
   connectUrls: URL[];
   rpcRequests: Array<{ method: string; args: JsonValue[] }>;
-  /** Rows served from /api/cli/workspaces/:name/messages (the DO chat projection). */
+  /** The DO chat projection rows. */
   chatMessages: Array<{ id: string; role: string; content: string; createdAt: number; metadata?: JsonObject }>;
   socket(): ServerWebSocket<unknown>;
   reply(frame: JsonObject): void;
@@ -72,9 +69,7 @@ function startMockAgentServer(options: {
         const args = parsedArgs.success ? parsedArgs.output : [];
         rpcRequests.push({ method, args });
 
-        // Pages of two, so the client's walk is really exercised: a fixture of
-        // four messages that came back whole would not have noticed the client
-        // reading only the first page and calling it the whole conversation.
+        // Pages of two, so a client that reads only the first page fails.
         if (method === 'getChatHistoryPage') {
           const cursor = v.parse(v.optional(v.object({ cursor: v.optional(v.object({ after: v.string() })) })), args[0]);
           const after = cursor?.cursor?.after;
@@ -211,7 +206,6 @@ function chatRequestFrame(mock: MockAgentServer): ChatRequestFrame {
   return { id: envelope.id, body: parseJsonObject(envelope.init.body) };
 }
 
-/** The first chat request the client put on the wire. */
 async function firstChatRequest(mock: MockAgentServer): Promise<ChatRequestFrame> {
   return waitFor(
     () => mock.frames.some((f) => f.type === CHAT_MESSAGE_TYPES.USE_CHAT_REQUEST) ? chatRequestFrame(mock) : undefined,
@@ -338,7 +332,6 @@ describe('CloudAgentClient protocol', () => {
 
     const request = await firstChatRequest(mock);
 
-    // Outgoing contract: a single fresh user message, never a mirrored history.
     expect(request.body.trigger).toBe('submit-message');
     expect(request.body.cwd).toBe('/work/dir');
     const messages = v.parse(ChatMessagesSchema, request.body.messages);
@@ -463,8 +456,6 @@ describe('CloudAgentClient protocol', () => {
 
     expect(durableCancel.args).toEqual([]);
     let turnSettled = false;
-    // Probe rides the turn this test owns and awaits below; its rejection is
-    // recorded here rather than swallowed.
     turn.then(() => { turnSettled = true; }, () => { turnSettled = true; });
     await Promise.resolve();
     expect(turnSettled).toBe(false);
@@ -530,18 +521,13 @@ describe('CloudAgentClient protocol', () => {
       return { id: envelope.id, body: parseJsonObject(envelope.init.body) };
     }, 'steered chat request');
 
-    // The mid-turn message rides the same protocol as any send: one fresh user
-    // message, delivered while the first turn is still streaming. The server
-    // takes it into that turn under this client's message id and answers the
-    // request with where it landed — no stream, no turn of its own.
+    // A mid-turn message joins the running turn; the reply says where it landed, with no stream of its own.
     const messages = v.parse(ChatMessagesSchema, second.body.messages);
     expect(messages[0].parts).toEqual([{ type: 'text', text: 'use the staging cluster instead' }]);
     expect(second.id).not.toBe(first.id);
     mock.reply({ ...responseChunk(second.id, {}, true), landed: 'mid-turn' });
     await expect(steered).resolves.toEqual({ landed: 'mid-turn' });
 
-    // The running turn finishes: one turn-start, one turn-end, for the turn
-    // that actually ran.
     mock.reply(responseChunk(first.id, { type: 'text-delta', delta: 'deploying' }, true));
     await expect(turn).resolves.toMatchObject({ landed: 'turn', text: 'deploying' });
     expect(events.filter((event) => event.type === 'turn-start')).toHaveLength(1);
@@ -575,7 +561,6 @@ describe('CloudAgentClient protocol', () => {
     );
     const client = newClient(mock);
 
-    // Open the socket via a quick completed turn, then fork while idle.
     const warmup = client.send('hello');
 
     const request = await firstChatRequest(mock);
@@ -590,7 +575,6 @@ describe('CloudAgentClient protocol', () => {
       'revertConversation rpc frame',
     );
 
-    // The workspace reverts to before the picked user message, in place.
     expect(rpc.method).toBe('revertConversation');
     expect(rpc.args).toEqual(['m3']);
     mock.reply({ type: 'rpc', id: rpc.id, success: true, done: true, result: null });
@@ -614,7 +598,6 @@ describe('CloudAgentClient protocol', () => {
     const mock = startMockAgentServer();
     const client = newClient(mock);
 
-    // Open the socket via a quick completed turn (rpc rides the same ws).
     const warmup = client.send('hello');
 
     const request = await firstChatRequest(mock);
@@ -652,10 +635,8 @@ describe('CloudAgentClient protocol', () => {
     await client.close();
   });
 
-  // A dropped socket alone is NOT a failed turn — the DO still owns it, so the
-  // client rebinds instead (see the rebind suite below). A workspace that has
-  // gone away entirely is the case where there is nothing left to rebind to,
-  // and that is what has to reach the caller rather than hang.
+  // A dropped socket is not a failed turn (the DO owns it; the client rebinds). A vanished
+  // workspace leaves nothing to rebind to and must reach the caller rather than hang.
   test('an unreachable workspace settles the in-flight send with hadError', async () => {
     const mock = startMockAgentServer();
     const client = newClient(mock);
@@ -699,7 +680,6 @@ describe('CloudAgentClient — Steer-as-Branch RPC contract', () => {
     expect(rpc.args).toEqual(['what if we used blue-green instead?']);
     mock.reply({ type: 'rpc', id: rpc.id, success: true, done: true, result: { accepted: true, branchId: 'branch-ab12cd34' } });
 
-    // The DO fans branch progress to every ws client — forwarded as broadcasts.
     mock.reply({ type: 'branch_status', status: 'running', branchId: 'branch-ab12cd34', task: 'what if we used blue-green instead?' });
     mock.reply({ type: 'branch_status', status: 'settled', branchId: 'branch-ab12cd34', task: 'what if we used blue-green instead?', takeSetId: 'take-1', turnId: 'm2' });
     await waitFor(() => {
@@ -715,7 +695,6 @@ describe('CloudAgentClient — Steer-as-Branch RPC contract', () => {
     expect(statuses[0]).toMatchObject({ type: 'branch_status', status: 'running', branchId: 'branch-ab12cd34' });
     expect(statuses[1]).toMatchObject({ type: 'branch_status', status: 'settled', takeSetId: 'take-1', turnId: 'm2' });
 
-    // The live turn streams to completion untouched.
     mock.reply(responseChunk(request.id, { type: 'text-delta', delta: 'deploying' }, true));
     await expect(turn).resolves.toMatchObject({ text: 'deploying', hadError: false });
     await client.close();
@@ -762,15 +741,9 @@ describe('CloudAgentClient — Steer-as-Branch RPC contract', () => {
   });
 });
 
-// A cloud turn is acknowledged by the DO the moment it accepts it: the request
-// is persisted and its stream is resumable. So a dead socket is a lost BINDING,
-// never a lost turn — and the client's job at every one of these await
-// boundaries is to rebind (never re-submit) or to say honestly that it could
-// not. Each test kills the socket at a different point in that handshake.
+// A dead socket is a lost binding, never a lost turn (the DO persisted it): rebind, never re-submit.
 describe('CloudAgentClient — a dropped socket rebinds its turn, never drops or duplicates it', () => {
-  /** The chat request frames sent so far. A rebind that re-submitted would
-   *  show up here as a second one — the duplicate a resumable turn must never
-   *  produce. */
+  /** Chat request frames sent so far; a re-submitting rebind would show a second one. */
   function chatRequests(mock: MockAgentServer): JsonObject[] {
     return mock.frames.filter((f) => f.type === CHAT_MESSAGE_TYPES.USE_CHAT_REQUEST);
   }
@@ -821,9 +794,6 @@ describe('CloudAgentClient — a dropped socket rebinds its turn, never drops or
     await ticketReturned.promise;
 
     await expect(turn).resolves.toMatchObject({ hadError: true });
-    // The first URL is the original connection. Before the closed guards, the
-    // returned ticket created a second socket after `close()` had already
-    // cleared the client.
     expect(mock.connectUrls).toHaveLength(1);
   });
 
@@ -841,12 +811,9 @@ describe('CloudAgentClient — a dropped socket rebinds its turn, never drops or
     await waitFor(() => events.find((e) => e.type === 'text-delta'), 'first live delta');
 
     await dropAndProbe(mock);
-    // The turn is still pending: nothing settled it, because the DO still owns
-    // it. A `turn-end` here would be this client inventing a failure.
+    // Still pending: the DO owns the turn; a `turn-end` here would invent a failure.
     expect(events.some((e) => e.type === 'turn-end')).toBe(false);
 
-    // The DO announces the same stream; the ack asks for the replay, which
-    // restarts at chunk zero — including the body already rendered.
     mock.reply({ type: CHAT_MESSAGE_TYPES.STREAM_RESUMING, id: request.id });
     await waitFor(() => resumeAcks(mock).find((f) => f.id === request.id), 'resume ack');
     mock.reply({ ...responseChunk(request.id, { type: 'text-delta', delta: 'the cause was ' }), replay: true });
@@ -857,8 +824,7 @@ describe('CloudAgentClient — a dropped socket rebinds its turn, never drops or
       text: 'the cause was a stale lease.',
       hadError: false,
     });
-    // Exactly one submission: the rebind replays the DO's stream, it never
-    // sends the prompt again.
+    // Exactly one submission: the rebind replays the stream, never resends the prompt.
     expect(chatRequests(mock)).toHaveLength(1);
     expect(resumeAcks(mock)).toHaveLength(1);
     await client.close();
@@ -878,8 +844,7 @@ describe('CloudAgentClient — a dropped socket rebinds its turn, never drops or
     await waitFor(() => events.find((e) => e.type === 'text-delta'), 'first live delta');
 
     await dropAndProbe(mock);
-    // "I hold no stream for you" — so the client acks its own request id, which
-    // is the one frame the DO always answers with a terminal.
+    // No stream held: the client acks its own request id, which the DO always answers with a terminal.
     mock.reply({ type: CHAT_MESSAGE_TYPES.STREAM_RESUME_NONE, reason: 'idle' });
     await waitFor(() => resumeAcks(mock).find((f) => f.id === request.id), 'resume ack after resume-none');
     mock.reply({ ...responseChunk(request.id, { type: 'text-delta', delta: '' }, true), replay: true });
@@ -887,8 +852,6 @@ describe('CloudAgentClient — a dropped socket rebinds its turn, never drops or
     const result = await turn;
     expect(result.landed === 'turn' ? result.hadError : undefined).toBe(true);
     expect(events.some((e) => e.type === 'error' && e.message.includes('no stream to resume'))).toBe(true);
-    // The partial output is kept — it is what this process really saw — but the
-    // turn is NOT reported as a completed one.
     expect(result.landed === 'turn' ? result.text : undefined).toBe('starting');
     expect(chatRequests(mock)).toHaveLength(1);
     await client.close();
@@ -932,7 +895,6 @@ describe('CloudAgentClient — a dropped socket rebinds its turn, never drops or
     expect(events.some((e) => e.type === 'turn-end')).toBe(false);
     expect(resumeAcks(mock)).toHaveLength(0);
 
-    // The stream started after all: the DO's follow-up is what binds the turn.
     mock.reply({ type: CHAT_MESSAGE_TYPES.STREAM_RESUMING, id: request.id });
     await waitFor(() => resumeAcks(mock).find((f) => f.id === request.id), 'resume ack after pending');
     mock.reply({ ...responseChunk(request.id, { type: 'text-delta', delta: 'ran late' }), replay: true });

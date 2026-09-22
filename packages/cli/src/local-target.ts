@@ -1,8 +1,4 @@
-/**
- * What a command was asked to act on. One place owns "which backend, which
- * database, in which project", so every command reports a missing workspace the
- * same way and none of them decides placement for itself.
- */
+/** Which backend, database, and project a command acts on. */
 
 import { existsSync } from 'node:fs';
 import {
@@ -16,11 +12,7 @@ import {
 import { resolveAgentTarget, type AgentTarget, type ResolveAgentTargetOptions } from './agent-target';
 import { printError } from './display';
 
-/**
- * The local workspace `name` addresses: its database, and the project its file
- * and shell planes bind to. Adopts an unplaced workspace into the
- * calling project unless `adopt: false` says this is a read.
- */
+/** Adopts an unplaced workspace into the calling project unless `adopt: false`. */
 export function requireLocalAgent(name: string, opts: ResolveLocalAgentOptions = {}): ResolvedLocalAgent {
   try {
     return resolveLocalAgent(name, opts);
@@ -31,18 +23,13 @@ export function requireLocalAgent(name: string, opts: ResolveLocalAgentOptions =
   }
 }
 
-/**
- * Whether a target addresses anything at all. A local one needs its database; a
- * cloud one needs a configured ref, because the account's list lives on the
- * server and this machine cannot see it without asking.
- */
+/** Cloud targets need a configured ref: the account list is server-side. */
 export function agentTargetExists(target: AgentTarget): boolean {
   return target.mode === 'local'
     ? existsSync(agentDbPath(target.localName))
     : resolveAgentRef(target.requestedName) !== null;
 }
 
-/** The backend `name` addresses, refusing a name that addresses nothing. */
 export function requireAgentTarget(name: string, opts: ResolveAgentTargetOptions = {}): AgentTarget {
   const target = resolveAgentTarget(name, opts);
 

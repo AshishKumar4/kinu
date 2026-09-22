@@ -1,31 +1,8 @@
 /**
- * `kinu deploy local` — the same release, under `~/.kinu/local`, served by
- * workerd (docs/SELF-DEPLOY.md § The local door).
- *
- * WHAT THIS OWNS AND WHAT IT DOES NOT. The layout, the rendered workerd
- * configuration and the release comparison are core's
- * (`packages/core/src/deploy/local.ts` and `channel.ts`), shared with the
- * Cloudflare door; this file is the adapter: the filesystem, the child process
- * and what a person sees. Nothing here re-renders a config or re-reads a
- * channel.
- *
- * THE SUPERVISOR IS A PIDFILE AND A CHILD. workerd is a foreign process: it
- * neither writes nor unlinks the pidfile, so unlike the scheduler daemon
- * (`daemon.ts`, whose pidfile is its own and whose restart path may return as
- * soon as the file is released) there is exactly one release condition here —
- * the process is reaped. The instance is started detached with its output
- * appended to one log, so closing the terminal does not take the instance with
- * it.
- *
- * A PID IS NOT AN IDENTITY. `workerd.pid` outlives a reboot and a pid is
- * reused, so a number in that file is a hint and never a licence to signal:
- * every read of it confirms the process's own argv names `workerd` and THIS
- * layout's capnp file before the pid is treated as the instance, and `stop`
- * refuses a pid that fails that test instead of killing whatever inherited the
- * number. Nor is an open port an instance: another process holding the port
- * kills workerd on EADDRINUSE while a connect still succeeds, so starting is
- * proved by the child still living and by `/api/health` answering, not by the
- * socket accepting.
+ * `kinu deploy local`: the release under `~/.kinu/local`, served by workerd (docs/SELF-DEPLOY.md § The local door).
+ * Layout and config rendering are core's; this is the filesystem/process adapter. workerd never touches its pidfile,
+ * so a pid is only a hint: its argv must name `workerd` and this layout's capnp file before it is signalled, and
+ * startup is proved by `/api/health`, not by the port accepting.
  */
 import { closeSync, existsSync, mkdirSync, openSync, readFileSync, rmSync, symlinkSync, unlinkSync, writeFileSync, writeSync } from 'node:fs';
 import { connect } from 'node:net';
@@ -42,34 +19,22 @@ import * as v from 'valibot';
 import { AGENT_HOME, ensureAgentHome } from '../config';
 import { ACCENT, DIM, OK, WARN } from '../display';
 
-/** SIGTERM grace before escalating. A workerd instance mid-request needs a
- *  moment; a Durable Object's SQLite is committed per write, so nothing is
- *  lost either way. */
+/** A Durable Object's SQLite commits per write, so nothing is lost either way. */
 const STOP_GRACE_MS = 5_000;
 
 const STOP_FORCE_MS = 2_000;
 
-/** How long the instance is given to answer `/api/health` before the address
- *  is reported as unproven. The instance keeps starting either way; this only
- *  decides whether the printed address is a measurement or a claim. */
+/** Only decides whether the printed address is a measurement or a claim; the instance keeps starting. */
 const READY_MS = 10_000;
 
-/** How long one health probe may take. Short because it is retried until
- *  `READY_MS`, and a listener that accepts and then says nothing is exactly
- *  the case this is here to survive. */
+/** Short and retried: a listener that accepts and then says nothing is the case to survive. */
 const HEALTH_MS = 2_000;
 
-
-/** What `workerd.pid` names. `none` after a pidfile that named nothing alive
- *  has been cleared, `foreign` for a live process that is not this instance's
- *  workerd, `ours` for the one process this command may signal. */
 type PidFile =
   | { readonly kind: 'none' }
   | { readonly kind: 'foreign'; readonly pid: number }
   | { readonly kind: 'ours'; readonly pid: number; readonly startedAt: string | null };
 
-/** Whether the instance is serving, and when it is not, what happened
- *  instead. */
 type Readiness = 'serving' | 'exited' | 'foreign' | 'silent';
 
 interface LocalInstance {
@@ -107,13 +72,7 @@ export async function localDoor(action: string | undefined, opts: { origin?: str
     : `${OK('✓')} Local Kinu on ${ACCENT(started.address)} ${DIM(`pid ${String(started.pid)}`)}`);
 }
 
-/**
- * Lay the release down and render the instance's configuration.
- *
- * A release directory is written once and then only read: an update is a new
- * directory and a `current` swap, so a running instance never reads a file
- * that is being rewritten underneath it.
- */
+/** A release directory is written once; an update is a new directory plus a `current` swap. */
 async function install(opts: { origin?: string; port?: string }): Promise<void> {
   const trimmedOrigin = opts.origin?.trim();
   const origin = trimmedOrigin === undefined || trimmedOrigin === '' ? 'https://kinu.run' : trimmedOrigin;
@@ -128,18 +87,15 @@ async function install(opts: { origin?: string; port?: string }): Promise<void> 
   const artifact = await fetchReleaseArtifact(manifest, origin);
   const dir = releaseDir(layout, manifest.version);
 
-  // Every directory the rendered config names, because workerd refuses to
-  // start on a disk service whose directory is absent.
+  // workerd refuses to start when a disk service's directory is absent.
   for (const path of [layout.releases, layout.state, layout.bin, dir]) mkdirSync(path, { recursive: true });
 
   for (const relative of workerdDirectories(manifest)) {
     mkdirSync(join(layout.root, relative), { recursive: true });
   }
 
-  // One walk, a member at a time, through the same reader the Cloudflare door
-  // uses: that door installs from inside a Durable Object and cannot hold the
-  // unpacked archive (docs/SELF-DEPLOY.md § What the artifact weighs). Here it
-  // means a release lands on disk without ever being in memory whole.
+  // Member by member, through the Cloudflare door's reader, so a release never sits in memory whole
+  // (docs/SELF-DEPLOY.md § What the artifact weighs).
   const wanted = new Set(manifest.files.map((file) => file.path));
   const laid = new Set<string>();
 
@@ -168,9 +124,7 @@ async function install(opts: { origin?: string; port?: string }): Promise<void> 
       + (absent.length > 1 ? ` (and ${String(absent.length - 1)} more the manifest names)` : ''));
   }
 
-  // Replaced rather than updated in place: a symlink swap is the whole of an
-  // update, and `rmSync` is what makes a second install of the same tree
-  // idempotent.
+  // `rmSync` makes a repeat install of the same tree idempotent.
   rmSync(layout.current, { force: true, recursive: false });
   symlinkSync(dir, layout.current, 'dir');
 
@@ -186,14 +140,8 @@ async function install(opts: { origin?: string; port?: string }): Promise<void> 
   }
 }
 
-/**
- * Start the instance, or answer null when one is already running.
- *
- * The address is returned only once the child is still alive AND `/api/health`
- * has answered on the port: "it is serving" is the one thing a person needs
- * from this command, and a printed address that belongs to another process is
- * worse than an error.
- */
+/** The address is returned only once the child lives and `/api/health` answered: another process's address
+ * printed as ours is worse than an error. */
 async function startLocalInstance(): Promise<LocalInstance | null> {
   const layout = layoutOf();
   const config = localConfig();
@@ -216,9 +164,7 @@ async function startLocalInstance(): Promise<LocalInstance | null> {
     if (child.pid === undefined) throw new Error(`Could not start ${binary}. See ${layout.log}`);
     writeFileSync(layout.pid, renderPidFile(child.pid, new Date()));
 
-    // The child's own exit, watched rather than polled: workerd that cannot
-    // bind the port is gone in milliseconds, and waiting `READY_MS` for a
-    // process that is already dead reports the wrong thing slowly.
+    // Watched, not polled: workerd that cannot bind the port exits at once.
     let ended: string | null = null;
 
     child.once('exit', (code, signal) => {
@@ -235,9 +181,7 @@ async function startLocalInstance(): Promise<LocalInstance | null> {
   }
 }
 
-/** Why the address cannot be printed, as the error the command fails with. A
- *  dead child's pidfile is cleared here: it names a process nobody may
- *  signal. */
+/** A dead child's pidfile is cleared here: it names a process nobody may signal. */
 async function unserved(
   answer: Exclude<Readiness, 'serving'>,
   layout: LocalLayout,
@@ -264,8 +208,7 @@ async function unserved(
     + `See ${layout.log}`);
 }
 
-/** The pid that was stopped, or null when nothing was running. A pidfile that
- *  names a process this command does not own is a refusal, not a kill. */
+/** A pidfile naming a process this command does not own is a refusal, not a kill. */
 async function stopLocalInstance(): Promise<number | null> {
   const layout = layoutOf();
   const state = readPidFile(layout);
@@ -279,9 +222,7 @@ async function stopLocalInstance(): Promise<number | null> {
 
   const { pid } = state;
 
-  // A pid that vanished between the identity check and the signal is the one
-  // tolerable outcome; EPERM means it is alive and not ours, and claiming we
-  // stopped it would be a lie.
+  // ESRCH is the one tolerable outcome; EPERM means alive and not ours.
   tolerate(() => process.kill(pid, 'SIGTERM'), 'esrch');
 
   if (!await reaped(pid, STOP_GRACE_MS)) {
@@ -323,8 +264,7 @@ function layoutOf(): LocalLayout {
   return localLayout(AGENT_HOME);
 }
 
-/** What the last install settled. A missing config is not a failure to read:
- *  it is a machine where the door has not been opened yet. */
+/** A missing config means the door has not been opened yet, not a read failure. */
 function localConfig(): LocalConfig {
   const layout = layoutOf();
 
@@ -341,29 +281,18 @@ function readPort(given: string | undefined): number {
 
   if (!Number.isInteger(port) || port < 1 || port > 65_535) throw new Error(`${given} is not a port.`);
 
-  // Port 3000 is reserved for this repository's own dev server (AGENTS.md), and
-  // a local instance that took it would collide with it on this machine.
+  // Port 3000 is reserved for this repository's own dev server (AGENTS.md).
   if (port === 3000) throw new Error('Port 3000 is reserved. Pick another port.');
 
   return port;
 }
 
-/** The pid on the first line, the time this command started that process on
- *  the second. Two lines rather than one field because the start time is for a
- *  person reading `status`, and a pidfile an older install left behind carries
- *  only the pid. */
+/** Older installs left pid-only files, so the start time is a separate second line. */
 function renderPidFile(pid: number, at: Date): string {
   return `${String(pid)}\n${at.toISOString()}\n`;
 }
 
-/**
- * What `workerd.pid` names now, clearing the file unless it names this
- * instance's own live workerd.
- *
- * The identity test is the process's argv: it must name `workerd` and this
- * layout's capnp path. Without it a reused pid makes `stop` signal a
- * stranger's process and `start` report an instance that is not there.
- */
+/** Clears the file unless argv names `workerd` and this layout's capnp path; a reused pid must never be signalled. */
 function readPidFile(layout: LocalLayout): PidFile {
   const text = tolerate(() => readFileSync(layout.pid, 'utf8'), 'enoent');
 
@@ -373,8 +302,7 @@ function readPidFile(layout: LocalLayout): PidFile {
 
   if (!Number.isInteger(pid) || pid <= 0) return cleared(layout, { kind: 'none' });
 
-  // Absent argv is an absent process: `/proc/<pid>` is gone the moment it is
-  // reaped, and `ps -p` refuses a pid nothing holds.
+  // `/proc/<pid>` vanishes on reap, and `ps -p` refuses a pid nothing holds.
   const args = processArgs(pid);
 
   if (args === null) return cleared(layout, { kind: 'none' });
@@ -395,8 +323,7 @@ function clearPidFile(layout: LocalLayout): void {
   tolerate(() => unlinkSync(layout.pid), 'enoent');
 }
 
-/** A process's own argv, or null when nothing holds the pid. `/proc` on Linux
- *  because it costs one read; `ps` everywhere else. */
+/** `/proc` on Linux (one read); `ps` elsewhere. */
 function processArgs(pid: number): string | null {
   if (process.platform === 'linux') {
     const cmdline = tolerate(() => readFileSync(`/proc/${String(pid)}/cmdline`, 'utf8'), 'enoent');
@@ -420,14 +347,7 @@ async function reaped(pid: number, timeoutMs: number): Promise<boolean> {
   }
 }
 
-/**
- * Whether the instance came up, and when it did not, what is on the port.
- *
- * A connect proves only that the port is open, and the process that opened it
- * may be the reason workerd died, so the question asked here is `/api/health`
- * — the one route every Kinu build serves — and the child's exit ends the wait
- * early.
- */
+/** A connect proves only that the port is open; ask `/api/health`, and let the child's exit end the wait early. */
 async function ready(port: number, ended: () => string | null): Promise<Readiness> {
   const deadline = Date.now() + READY_MS;
 
@@ -441,22 +361,17 @@ async function ready(port: number, ended: () => string | null): Promise<Readines
   }
 }
 
-/** Whether `/api/health` on this port answers as a Kinu. */
 async function servesKinu(port: number): Promise<boolean> {
   const answered = await healthBody(port);
 
   if (answered === null) return false;
   const body: unknown = tolerate(() => JSON.parse(answered), 'malformed-input');
 
-  // The question is whether a Kinu is on the port, not which one: a stamped
-  // build or a stated absence of one are both Kinu's own answer.
+  // Any Kinu answer counts, stamped build or not.
   return v.safeParse(HealthAnswerSchema, body).success;
 }
 
-/** `/api/health`'s body, or null when the port did not answer it with a 200.
- *  A refused or reset connection is the ordinary case while an instance is
- *  starting, which is why it is a value here and not a failure — the same
- *  reading `connects` takes of a socket error. */
+/** A refused or reset connection is ordinary while starting, so it is a value, not a failure. */
 function healthBody(port: number): Promise<string | null> {
   const { promise, resolve } = Promise.withResolvers<string | null>();
 

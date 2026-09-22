@@ -1,9 +1,4 @@
-/**
- * `kinu daemon` lifecycle against a throwaway KINU_HOME. The daemon is a
- * real detached process, so these run the CLI end to end: the pidfile is the
- * daemon's own and it unlinks it on exit, which is exactly what restart has to
- * sequence correctly.
- */
+/** `kinu daemon` lifecycle: the daemon unlinks its own pidfile on exit, which restart must sequence. */
 import { scratchDir } from '../../test-utils/src/scratch';
 import { existsSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 
@@ -19,7 +14,6 @@ const cliBin = join(repoRoot, 'packages/cli/bin/cli.ts');
 
 const homes: string[] = [];
 
-/** Fresh throwaway project directory per spawn: the CLI records its cwd as the agent file plane, so a spawn must never sit in the developer repo. */
 function newProjectDir(): string {
   const dir = scratchDir('test-project');
   homes.push(dir);
@@ -77,8 +71,6 @@ function isAlive(pid: number): boolean {
   }, 'esrch') ?? false;
 }
 
-/** `daemon start` returns as soon as the child is spawned, so anything the
- *  daemon itself does lands a moment later. */
 async function waitFor(condition: () => boolean, timeoutMs = 10_000): Promise<void> {
   const deadline = Date.now() + timeoutMs;
 
@@ -103,10 +95,7 @@ describe('kinu daemon restart', () => {
     const after = readPid(home);
     expect(after).not.toBeNull();
     expect(after).not.toBe(before);
-    // The command returned only once the old daemon had released the pidfile,
-    // so its exit cannot delete the replacement's row: the file still names
-    // the replacement. `kill(pid, 0)` cannot say this — a dead-but-unreaped
-    // daemon reads alive, and that timing is the reaper's, not the product's.
+    // The file still names the replacement. `kill(pid, 0)` cannot say this: a dead-but-unreaped daemon reads alive.
     expect(readPid(home)).toBe(after);
     expect(isAlive(present(after, 'the daemon pid after the restart'))).toBe(true);
     expect(runDaemon(home, 'status').stdout).toContain(`running pid ${after}`);
@@ -140,7 +129,6 @@ describe('kinu daemon logs', () => {
     expect(statSync(logPath).size).toBeGreaterThan(1024 * 1024);
 
     expect(runDaemon(home, 'start').exitCode).toBe(0);
-    // The daemon's first act is to log that it started, which is what rolls it.
     await waitFor(() => existsSync(`${logPath}.1`) && statSync(logPath).size < 1024 * 1024);
 
     expect(statSync(logPath).size).toBeLessThan(1024 * 1024);
@@ -172,9 +160,6 @@ describe('kinu daemon stop', () => {
 });
 
 describe('a daemon-hosted agent resolves the same profile authority as an interactive one', () => {
-  /** What the scenario prints: every line the commands wrote, the authority
-   *  reads the daemon-driven turn performed, and what the interactive reader
-   *  resolves out of the same store. */
   const DaemonTickRun = v.object({
     printed: v.array(v.string()),
     authorityReads: v.array(v.object({ source: v.string() })),
@@ -182,15 +167,8 @@ describe('a daemon-hosted agent resolves the same profile authority as an intera
   });
 
   /**
-   * One pass of the REGISTERED daemon surface — `kinu daemon tick <agent>` —
-   * over an agent `kinu create` really made, in a subprocess with its own
-   * KINU_HOME: `config.ts` binds that at import, so a static import here
-   * would bind the developer's own home instead of the scenario's.
-   *
-   * The trigger is what gives the pass work. An idle tick opens the agent and
-   * converts nothing, so it resolves no profile and would prove nothing about
-   * the authority; a due timer makes the daemon drive a real turn, which is
-   * the moment a hosted agent reads its catalog.
+   * One `kinu daemon tick <agent>` pass in a subprocess (config.ts binds KINU_HOME at import).
+   * A due timer gives the pass a real turn; an idle tick resolves no profile and proves nothing.
    */
   function tickWithDueTrigger(home: string, project: string): v.InferOutput<typeof DaemonTickRun> {
     const script = `
@@ -252,13 +230,9 @@ describe('a daemon-hosted agent resolves the same profile authority as an intera
         ...process.env,
         KINU_HOME: home,
         KINU_PROJECT: project,
-        // No resident daemon: this scenario drives the foreground pass itself,
-        // and a child daemon would race it for the driver lease.
+        // No resident daemon: a child daemon would race this foreground pass for the driver lease.
         KINU_SKIP_DAEMON: '1',
-        // An endpoint nothing connects to: creating a workspace, opening it and
-        // resolving its catalog must not need the network, and this proves they
-        // did not. The turn's own model call fails against it, which is fine —
-        // the authority is resolved before the first token either way.
+        // An endpoint nothing connects to: create, open and catalog resolution must not need the network.
         KINU_BASE_URL: 'http://127.0.0.1:1/v1',
         KINU_AUTH: 'Bearer offline',
         KINU_MODEL: '@cf/test/model',
@@ -275,19 +249,11 @@ describe('a daemon-hosted agent resolves the same profile authority as an intera
   test('the daemon-driven turn resolves the CLI profile store, not the workspace bootstrap', () => {
     const run = tickWithDueTrigger(makeHome(), newProjectDir());
 
-    // The pass ran: the daemon opened a real agent over a real bun:sqlite
-    // database at a real path, through the host's own `open` seam.
     expect(run.printed.some((line) => line.includes('ticked daemonbot'))).toBe(true);
 
-    // And the turn it drove resolved its catalog through the shared reader.
-    // Only that reader reports this, so an open path that stopped supplying
-    // one leaves the list empty: the session would silently fall back to the
-    // workspace's own bootstrap envelope, and a role the account knows about
-    // would run interactively and fail on a schedule.
+    // An empty list means the session fell back to the bootstrap envelope, where account roles fail on a schedule.
     expect(run.authorityReads).toEqual([{ source: 'local' }]);
 
-    // The store it read is the one holding this machine's catalog: the model
-    // the tier edit wrote, at the version that edit created.
     expect(run.interactive).toEqual({ model: 'daemon-catalog-model', version: 1 });
   });
 });

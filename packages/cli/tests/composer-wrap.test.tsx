@@ -1,24 +1,14 @@
 /** @jsxImportSource @opentui/react */
-/**
- * The composer against WRAPPED drafts — the case a line count cannot see.
- *
- * These drive the real editor: the frame is what a person would read, and the
- * composer's border rows are where its height is asserted. Every draft here is
- * one typed line, so a composer sized by `split('\n')` renders exactly one row
- * of it and fails these.
- */
+/** The composer against wrapped one-line drafts, which a `split('\n')` row count cannot see. */
 import { afterEach, describe, expect, test } from 'bun:test';
 import { composerVisibleRows } from '@kinu.run/core';
 import { cleanupChats, fakeClient, mountChat } from './helpers/chat-app-fixture';
 
-// The cap the engine hands out for a draft no screen could show whole.
 const CAP = composerVisibleRows(10_000);
 
 afterEach(cleanupChats);
 
-/** Rows of the composer box: its top border through its bottom border. The
- *  composer is the LAST rounded box on screen — it sits under the transcript,
- *  at the bottom of the scene. */
+/** Rows of the composer box, border to border; it is the last rounded box on screen. */
 function composerBoxRows(frame: string): string[] {
   const lines = frame.split('\n');
   let bottom = -1;
@@ -39,7 +29,6 @@ function composerBoxRows(frame: string): string[] {
   return lines.slice(top, bottom + 1);
 }
 
-/** Content rows only — the draft as it is actually laid out on screen. */
 function composerDraftRows(frame: string): string[] {
   return composerBoxRows(frame).slice(1, -1).map((row) => row.replace(/^│\s?/, '').replace(/\s*│$/, ''));
 }
@@ -51,8 +40,6 @@ describe('the composer over wrapped drafts', () => {
     const before = composerDraftRows(screen.frame()).length;
     expect(before).toBe(1);
 
-    // 300 characters of one line: no newline anywhere, so only the wrap can
-    // make it more than one row.
     await screen.mockInput.typeText('cornbread '.repeat(30).trim());
     await screen.waitFor('the composer to grow past one row', () => composerDraftRows(screen.frame()).length > 1);
 
@@ -60,10 +47,8 @@ describe('the composer over wrapped drafts', () => {
     const filled = rows.filter((row) => row.trim() !== '');
     expect(filled.length).toBeGreaterThan(3);
 
-    // Every row is inside the box: no draft text bleeds onto a border row.
     for (const row of composerBoxRows(screen.frame()).slice(1, -1)) expect(row.startsWith('│')).toBe(true);
     expect(composerBoxRows(screen.frame()).at(-1)).not.toContain('cornbread');
-    // The whole draft is on screen, in order, across the rows it wrapped to.
     expect(filled.join(' ').replace(/\s+/g, ' ')).toContain('cornbread cornbread cornbread');
   });
 
@@ -71,19 +56,16 @@ describe('the composer over wrapped drafts', () => {
     const agent = fakeClient({ name: 'capper' });
     const screen = await mountChat(agent.client, { width: 60 });
 
-    // Numbered words so which wrapped rows are on screen is an exact read.
     const words = Array.from({ length: 120 }, (_, index) => `w${String(index).padStart(3, '0')}`);
     await screen.mockInput.typeText(words.join(' '));
     await screen.waitFor('the composer to reach its cap', () => composerDraftRows(screen.frame()).length === CAP);
 
     const rows = composerDraftRows(screen.frame());
     expect(rows.length).toBe(CAP);
-    // The cursor sits at the end of the draft, so the END of the draft is what
-    // the capped window shows — the earlier rows scrolled out of it.
+    // The cursor is at the end, so the capped window shows the end of the draft.
     expect(rows.join(' ')).toContain('w119');
     expect(rows.join(' ')).not.toContain('w000');
 
-    // Typing one more character keeps the cap and keeps the cursor in view.
     await screen.mockInput.typeText(' tail');
     await screen.waitFor('the tail to reach the visible window', () => composerDraftRows(screen.frame()).join(' ').includes('tail'));
     expect(composerDraftRows(screen.frame()).length).toBe(CAP);
@@ -93,16 +75,13 @@ describe('the composer over wrapped drafts', () => {
     const agent = fakeClient({ name: 'cjk' });
     const screen = await mountChat(agent.client, { width: 40 });
 
-    // 40 CJK characters at two columns each: 80 columns of content in a
-    // composer whose interior is well under that, so it must wrap. Counted as
-    // characters it would fit in two rows; counted as columns it cannot.
+    // 40 CJK chars at two columns each: two rows by character count, more by columns.
     await screen.mockInput.typeText('世界'.repeat(20));
     await screen.waitFor('the wide draft to wrap', () => composerDraftRows(screen.frame()).length > 1);
 
     const rows = composerDraftRows(screen.frame()).filter((row) => row.trim() !== '');
     expect(rows.length).toBeGreaterThanOrEqual(3);
 
-    // No row overflows the interior, and the wide glyphs are never split.
     for (const row of rows) expect(row.length).toBeLessThanOrEqual(38);
     expect(rows.join('')).toContain('世界世界');
   });
@@ -111,11 +90,7 @@ describe('the composer over wrapped drafts', () => {
     const agent = fakeClient({ name: 'emoji' });
     const screen = await mountChat(agent.client, { width: 40 });
 
-    // A four-person ZWJ cluster is not one column and not one character; the
-    // editor charges it its rendered columns. Whatever that comes to, the
-    // composer must show exactly the rows the editor wrapped the draft into —
-    // that agreement is the fix, and a cluster draft is where a character
-    // count or a line count would disagree.
+    // A ZWJ cluster is neither one column nor one character; the composer must show exactly the rows the editor wrapped.
     await screen.mockInput.typeText('👨‍👩‍👧‍👦 family '.repeat(6).trim());
     await screen.waitFor('the cluster draft to wrap', () => composerDraftRows(screen.frame()).length > 1);
     const editor = screen.renderer.currentFocusedEditor;
@@ -124,9 +99,6 @@ describe('the composer over wrapped drafts', () => {
     expect(composerDraftRows(screen.frame()).length)
       .toBe(Math.min(CAP, editor.editorView.getTotalVirtualLineCount()));
 
-    // Enter sends: the draft leaves the composer whole (the transcript keeps
-    // the words; a char-grid capture cannot render the cluster itself) and the
-    // emptied composer shrinks back to its one row.
     screen.mockInput.pressEnter();
     await screen.waitFor('the composer to shrink back after sending', () => composerDraftRows(screen.frame()).length === 1);
     expect(screen.frame()).toContain('family');
@@ -134,15 +106,11 @@ describe('the composer over wrapped drafts', () => {
 
   test('a newline keystroke wraps its own line and Enter still submits', async () => {
     const agent = fakeClient({ name: 'seams' });
-    // The chord must reach OUR newline binding, so the test terminal speaks
-    // the kitty protocol: legacy bytes cannot express it. Ctrl+J arrives
-    // there byte-identical with Enter-as-LF (0x0A), and both submit; the
-    // chords that survive the legacy set are kitty-only.
+    // The test terminal speaks kitty: legacy bytes cannot express the newline chord, and Ctrl+J
+    // is byte-identical with Enter-as-LF (0x0A), which submits.
     const screen = await mountChat(agent.client, { width: 60, kittyKeyboard: true });
 
     await screen.mockInput.typeText('first '.repeat(12).trim());
-    // The contract this scene ships: Enter sends, and the newline binding
-    // opens a line.
     screen.mockInput.pressKey('j', { ctrl: true });
     await screen.mockInput.typeText('second');
     await screen.waitFor('both lines to be on screen', () => {
@@ -150,7 +118,6 @@ describe('the composer over wrapped drafts', () => {
 
       return rows.includes('second') && rows.includes('first');
     });
-    // Two typed lines, the first of them wrapped: more rows than typed lines.
     expect(composerDraftRows(screen.frame()).filter((row) => row.trim() !== '').length).toBeGreaterThan(2);
 
     screen.mockInput.pressEnter();

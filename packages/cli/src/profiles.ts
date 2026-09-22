@@ -1,21 +1,6 @@
 /**
- * Profile authority and cache for the CLI.
- *
- * Two stores, one rule each:
- * - Signed out, the LOCAL authority is canonical: one envelope in
- *   config.json (`localProfile`), replaced whole by every edit and never
- *   merged into.
- * - Signed in, the ACCOUNT is canonical on the server. This machine holds a
- *   per-account read-only cache in its own file, never inside KinuConfig,
- *   and refreshes it only from server responses.
- *
- * Nothing promotes, merges or falls back between the stores. Logging out or
- * switching accounts flips which store resolution reads; it never copies.
- *
- * The account cache is a read-only mirror, so it answers one question the
- * server cannot answer while the network is down: what this account's catalog
- * was the last time this machine saw it. A turn reads through it. It is never
- * a substitute for another account's catalog, and never invented when absent.
+ * Profile authority and cache. Signed out, the local envelope in config.json is canonical; signed in, the server
+ * is, mirrored by a per-account read-only cache file. Nothing merges or falls back between the stores.
  */
 
 import { existsSync, readFileSync } from 'node:fs';
@@ -40,15 +25,9 @@ import {
 import { getCloudProfile, updateCloudProfile } from './cloud-api';
 import { diagnostics, toKinuError } from '@kinu.run/core/obs';
 
-/** Where authority for this machine's profile reads lives right now. */
 export type ProfileAuthoritySource = { kind: 'local' } | { kind: 'account'; accountId: string };
 
-/**
- * Resolution follows the authenticated account identity: a live interactive
- * session with a known user id reads the account store; everything else —
- * signed out, expired, or a bare `KINU_TOKEN` with no stored identity —
- * reads the local authority.
- */
+/** Account store only for a live session with a known user id; a bare `KINU_TOKEN` reads local. */
 export function resolveProfileAuthority(): ProfileAuthoritySource {
   const config = loadConfigFile();
 
@@ -58,13 +37,7 @@ export function resolveProfileAuthority(): ProfileAuthoritySource {
   return accountId ? { kind: 'account', accountId } : { kind: 'local' };
 }
 
-// ── Local authority (signed-out canonical, inside config.json) ──────────────
-
-/**
- * The signed-out local authority envelope, or null when none was ever
- * imported. A misplaced envelope (account-kind content in the local slot)
- * is malformed data and fails loudly.
- */
+/** Null if never imported; account-kind content here throws. */
 export function loadLocalProfileAuthority(): ProfileCatalogEnvelope | null {
   const local = loadConfigFile().localProfile;
 
@@ -81,11 +54,7 @@ export function loadLocalProfileAuthority(): ProfileCatalogEnvelope | null {
   return local;
 }
 
-/**
- * Write the local authority. A signed-out machine holds exactly one catalog
- * and nothing merges into it: every write replaces it whole, and the version
- * counts the replacements so a reader can tell one from the next.
- */
+/** Replaces whole; the version counts replacements. */
 function writeLocalProfile(catalog: ProfileCatalog): ProfileCatalogEnvelope {
   const validated = validateProfileCatalog({ value: catalog });
   let envelope!: ProfileCatalogEnvelope;
@@ -101,8 +70,6 @@ function writeLocalProfile(catalog: ProfileCatalog): ProfileCatalogEnvelope {
 
   return envelope;
 }
-
-// ── Account cache (signed-in mirror of server truth, its own file) ──────────
 
 function profileCachePath(): string {
   return join(AGENT_HOME, 'profile-cache.json');
@@ -135,11 +102,7 @@ function readAccountCache(): AccountProfileCache {
   }
 }
 
-/**
- * The cached mirror of `accountId`'s server-side catalog, or null when that
- * account was never fetched here. Entries whose stored authority or digest
- * do not hold up are corrupt data and fail loudly.
- */
+/** Null if never fetched here; corrupt entries throw. */
 export function loadCachedAccountProfile(accountId: string): ProfileCatalogEnvelope | null {
   const entry = readAccountCache().accounts[accountId];
 
@@ -149,10 +112,6 @@ export function loadCachedAccountProfile(accountId: string): ProfileCatalogEnvel
   return entry;
 }
 
-/**
- * Store a server response as `accountId`'s read-only cache entry. Content
- * always comes from the server; this never authors catalog data.
- */
 function cacheAccountProfile(accountId: string, envelope: ProfileCatalogEnvelope): void {
   assertCachedEntry(accountId, envelope);
   const path = profileCachePath();
@@ -186,11 +145,8 @@ function assertCachedEntry(accountId: string, envelope: ProfileCatalogEnvelope):
   assertDigestMatches(envelope);
 }
 
-/** Which store answered an account read: the server, or its cache. */
 type AccountReadSource = 'server' | 'cache';
 
-/** Where one resolution's envelope came from. The local authority is a file
- *  read with no second store behind it, so it has no cache state. */
 type ProfileReadSource = AccountReadSource | 'local';
 
 interface AccountRead {
@@ -198,13 +154,7 @@ interface AccountRead {
   source: AccountReadSource;
 }
 
-/**
- * This account's catalog: the server's answer, which also refreshes the
- * cache, or the cache when the server cannot be reached. Keyed on the account
- * whose fetch failed and validated on read, so another account's catalog can
- * never answer for this one. No entry rethrows — a catalog this machine never
- * saw is not one to guess at.
- */
+/** Server answer (refreshing the cache), else this account's cache; no entry rethrows. */
 async function readAccountProfile(accountId: string): Promise<AccountRead> {
   const auth = requireStoredAuthConfig();
 
@@ -227,13 +177,7 @@ async function readAccountProfile(accountId: string): Promise<AccountRead> {
   }
 }
 
-/**
- * The authority envelope from its own store, asking the server when the
- * account is canonical. This is the read a WRITE goes through: a CAS needs
- * the version the server currently holds, so it never settles for the cache
- * except when the fetch failed outright, where the write is going to fail on
- * the network anyway.
- */
+/** Read for writes: CAS needs the server's version, so the cache answers only if the fetch failed. */
 export async function loadActiveProfile(): Promise<ProfileCatalogEnvelope> {
   const authority = resolveProfileAuthority();
 
@@ -274,22 +218,11 @@ export function createProfileAuthorityReader(): ProfileEnvelopeSource {
   };
 }
 
-/**
- * What the authority half of turn setup cost, and what answered it: whether
- * the envelope came off the network, off the cache file, or out of
- * config.json. That is the difference between a turn that paid an HTTP round
- * trip before its first token and one that read a file.
- */
 function reportResolution(source: ProfileReadSource, startedAt: number): void {
   diagnostics.event('profile.authority_read', { source, durationMs: Date.now() - startedAt });
 }
 
-/**
- * Update the default tier of whichever store is canonical: the account's
- * catalog through a CAS, or the local authority in place. Missing tiers
- * continue to alias it. A first `model` with no local authority yet creates
- * one, which is how a signed-out machine gets its catalog.
- */
+/** Updates the canonical store's default tier; a first `model` creates the local authority. */
 export async function updateDefaultTier(
   patch: { model?: string; reasoningEffort?: ReasoningEffort },
 ): Promise<ProfileCatalogEnvelope> {
@@ -337,8 +270,6 @@ export async function updateDefaultTier(
 
   return result.envelope;
 }
-
-// ── Shared integrity checks ──────────────────────────────────────────────────
 
 function assertDigestMatches(envelope: ProfileCatalogEnvelope): void {
   const actual = profileCatalogDigest(envelope.catalog);

@@ -1,9 +1,4 @@
-/**
- * The file diff card on a real terminal, where the SGR bytes are the proof:
- * the in-process suite asserts the card's rows; here a real pty shows that
- * the added and removed inks the theme audit blessed are the ones a terminal
- * actually receives.
- */
+/** The diff card on a real pty: the SGR bytes prove the theme's added/removed inks reach the terminal. */
 import { describe, expect, test } from 'bun:test';
 import { resolve } from 'node:path';
 
@@ -27,9 +22,7 @@ describe('the file diff card on a real terminal', () => {
       ],
     });
 
-    // The card's first three rows on screen: header, removed, added. The
-    // header is the ↳ row — the call row above it carries the path inside
-    // the clipped args preview.
+    // The header is the ↳ row; the call row above it carries the path inside the clipped args preview.
     const rows = run.screen.split('\n').map((line) => line.trimEnd()).filter((line) => line.trim() !== '');
     const header = rows.findIndex((line) => line.includes('↳ src/state.ts'));
 
@@ -38,8 +31,7 @@ describe('the file diff card on a real terminal', () => {
     expect(rows[header]).toContain('−1');
     expect(rows[header + 1]).toContain('− export const ready = false;');
     expect(rows[header + 2]).toContain('+ export const ready = true;');
-    // Prefix and text are sibling spans, so the SGR sits before the text,
-    // not before the whole `− export…` string.
+    // Prefix and text are sibling spans, so the SGR sits before the text.
     expect(inkBefore(run.raw, 'export const ready = false;')).toBe(theme.colors.well.danger);
     expect(inkBefore(run.raw, 'export const ready = true;')).toBe(theme.colors.well.success);
   });

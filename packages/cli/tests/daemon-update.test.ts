@@ -1,11 +1,4 @@
-/**
- * The device daemon updating itself on the hub's UPDATE frame, end to end:
- * the real installed daemon under this Bun against a hub faked at its two
- * seams (see helpers/update-hub.ts). Each case reads what landed on disk,
- * which process holds the machine, and what the daemon logged.
- *
- * Env-dependent paths (KINU_HOME) run in subprocesses like config.test.ts.
- */
+/** Device daemon self-update, with the hub faked at its two seams (helpers/update-hub.ts). */
 import { existsSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import type { Subprocess } from 'bun';
@@ -23,28 +16,19 @@ const OLD = '1.0.0+old';
 
 const NEW = '2.0.0+new';
 
-/** The new build's daemon: the same program with a different comment, so
- *  its bytes differ from the installed ones and it still runs. */
 const NEW_DAEMON = `${DAEMON_FILES['pc-agent.js']}\n// build ${NEW}\n`;
 
 const NEW_FILES = { ...DAEMON_FILES, 'pc-agent.js': NEW_DAEMON };
 
 const hubs: UpdateHub[] = [];
 
-/** Homes this suite minted, so teardown can re-read the pidfile each one
- *  holds NOW — the pidfile, not the spawn handle, is what names the process
- *  currently owning the machine after a handover. */
+/** Homes minted; teardown re-reads each pidfile, which names the owner after a handover. */
 const homes: string[] = [];
 
-/** Every home minted, for the suite-end release check below. */
 const mintedHomes: string[] = [];
 
 const daemons: Subprocess[] = [];
 
-/** Pids known by number only: spawned daemons (the handle does not outlive a
- *  handover), handover successors read off the pidfile, and the one
- *  `daemonStatus` starts. Every process this suite caused lands here — a pid
- *  nothing tracked is the process the scratch release met still writing. */
 const ownedPids: number[] = [];
 
 const alive = (pid: number) => tolerate(() => {
@@ -58,11 +42,7 @@ async function waitForPidExit(pid: number): Promise<void> {
 }
 
 afterAll(() => {
-  // Every daemon the suite caused is dead by the time this runs — that is the
-  // ownership this file now proves. The shared scratch release checks its own
-  // removals, but the failure mode it names (a live process still writing
-  // into the tree) is THIS suite's to produce, so the same survive-check runs
-  // on each home here, while the suite can still answer for it.
+  // Every daemon this suite caused must be dead before the shared scratch release removes the tree.
   for (const home of mintedHomes) {
     rmSync(home, { recursive: true, force: true });
     expect(existsSync(home)).toBe(false);
@@ -70,9 +50,7 @@ afterAll(() => {
 });
 
 afterEach(async () => {
-  // The pidfile AFTER any handover names the daemon actually holding the
-  // machine — which is not the pid the test spawned, and not necessarily the
-  // one it recorded: a successor's own successor only exists in that file.
+  // After a handover only the pidfile names the owning daemon.
   for (const home of homes.splice(0)) {
     const pidPath = join(home, 'pc-agent.pid');
 
@@ -87,9 +65,7 @@ afterEach(async () => {
 
   for (const pid of ownedPids.splice(0)) {
     tolerate(() => process.kill(pid, 'SIGTERM'), 'esrch');
-    // A fired SIGTERM is a request, not a death: the release that follows the
-    // suite removes the tree, and a daemon still exiting then is the live
-    // process that held it. Wait for the exit the signal was meant to cause.
+    // SIGTERM is a request: wait for the exit, or the release meets a live process still writing.
     await waitForPidExit(pid);
   }
 
@@ -103,8 +79,6 @@ function hub(opts: Parameters<typeof startUpdateHub>[0]): UpdateHub {
   return started;
 }
 
-/** An installed machine: the daemon files this CLI ships, its stamp, the
- *  device config naming `origin`, and the CLI config. */
 function installedMachine(origin: string, stamp: string | null, config: JsonObject = {}): string {
   const home = scratchDir('daemon-update');
   homes.push(home);
@@ -119,8 +93,6 @@ function installedMachine(origin: string, stamp: string | null, config: JsonObje
   return home;
 }
 
-/** The daemon as the CLI starts it: the installed file under this Bun,
- *  output to the log file the CLI would give it. */
 function startDaemon(home: string, extraEnv: Record<string, string> = {}) {
   const logPath = join(home, 'pc-agent.log');
   const logFd = Bun.file(logPath);
@@ -159,7 +131,6 @@ describe('the daemon updates itself on the hub\'s UPDATE frame', () => {
 
     const socket = await until(() => served.sockets[0], 'the HELLO', daemon.log);
     expect(socket.hello).toMatchObject({ type: 'HELLO', version: OLD, os: process.platform, arch: process.arch, updateCheck: true });
-    // Nothing was pushed and nothing downloaded: the daemon keeps its files.
     await socket.settle();
     expect(served.hits.filter((hit) => hit.startsWith('/downloads/'))).toEqual([]);
     expect(daemon.log()).not.toContain('device.update_started');
@@ -172,44 +143,31 @@ describe('the daemon updates itself on the hub\'s UPDATE frame', () => {
     const daemon = startDaemon(home, await releaseSigningEnv());
     const oldPid = await until(() => (existsSync(join(home, 'pc-agent.pid')) ? pidfile(home) : null), 'the pidfile', daemon.log);
 
-    // The successor's HELLO names the new build.
     const successor = await until(() => served.sockets[1], 'the successor HELLO', daemon.log);
     expect(successor.hello).toMatchObject({ version: NEW, updateCheck: true });
-    // The old daemon held its socket until the hub replaced it — it never
-    // disconnected on its own — and then exited 0.
     expect(served.sockets[0]?.closed).toBe('hub');
     expect(await waitForExit(daemon.proc)).toBe(0);
     expect(daemon.log()).toContain('device.update_handed_over');
 
-    // The machine is the successor's: the pidfile names a live process that
-    // is not the old one, and the old pid is gone.
     const newPid = pidfile(home);
     expect(newPid).not.toBe(oldPid);
     expect(alive(newPid)).toBe(true);
     expect(alive(oldPid)).toBe(false);
     ownedPids.push(newPid);
 
-    // What landed: the archive's files, each with its `.prev`, and the stamp.
     expect(installed(home, 'pc-agent.js')).toBe(NEW_DAEMON);
     expect(installed(home, 'pc-agent.js.prev')).toBe(DAEMON_FILES['pc-agent.js']);
     expect(installed(home, 'sandbox.js.prev')).toBe(DAEMON_FILES['sandbox.js']);
     expect(installed(home, 'pc-agent.version').trim()).toBe(NEW);
     expect(installed(home, 'pc-agent.version.prev').trim()).toBe(OLD);
-    // The successor connected, so the pending marker is cleared.
     expect(existsSync(join(home, 'pc-agent.update-pending'))).toBe(false);
-    // The download went to the same origin, both halves, once.
     expect(served.hits.filter((hit) => hit.startsWith('/downloads/'))).toEqual([PLATFORM_ARTIFACT, `${PLATFORM_ARTIFACT}.sha256`]);
-    // The successor's own HELLO earned no second UPDATE: it is the served build.
     await successor.settle();
     expect(served.hits.filter((hit) => hit.startsWith('/downloads/'))).toHaveLength(2);
   });
 
   test('THE TROJAN PROBE: a hub-chosen checksum with no Kinu signature downloads nothing', async () => {
-    // SECURITY-devices C1, the audit's own probe: a fake hub serving a
-    // trojaned tarball whose sha256 the frame names. Before, the daemon
-    // downloaded it, ran its selftest (arbitrary code, as the user) and
-    // started it as the successor. Now the frame is refused before any
-    // byte is fetched, on the signature it does not carry.
+    // SECURITY-devices C1: an unsigned frame naming a trojaned tarball is refused before any byte is fetched.
     const served = hub({ served: NEW, archive: daemonArchive(NEW_FILES, NEW), signing: 'none' });
     const home = installedMachine(served.origin, OLD);
     const daemon = startDaemon(home, await releaseSigningEnv());
@@ -292,10 +250,7 @@ describe('the daemon updates itself on the hub\'s UPDATE frame', () => {
   });
 
   test('HELLO names the build this process IS, not the stamp on disk now', async () => {
-    // An update lands its stamp before the successor connects; a daemon that
-    // re-read the file at each HELLO would report the new build from old
-    // code after a successor died, and the hub would never push that
-    // version again.
+    // Re-reading the stamp at each HELLO would report the new build from old code after a failed successor.
     const served = hub({ served: OLD, archive: daemonArchive(NEW_FILES, NEW) });
     const home = installedMachine(served.origin, OLD);
     const daemon = startDaemon(home, await releaseSigningEnv());
@@ -337,8 +292,6 @@ describe('the daemon updates itself on the hub\'s UPDATE frame', () => {
   });
 });
 
-/** A build whose daemon passes its selftest and then dies as a daemon: the
- *  one failure a self-update used to leave for a human to notice. */
 const DYING_DAEMON = [
   "const fs = require('fs'); const path = require('path');",
   "if (process.argv.includes('--selftest')) {",
@@ -351,9 +304,6 @@ const DYING_DAEMON = [
 
 describe('a successor that dies before connecting is the old daemon\'s to undo', () => {
   test('the old daemon re-takes the pidfile, rolls the files back, clears the marker and keeps serving', async () => {
-    // Before: the pidfile named the dead successor, the landed files stayed,
-    // and the only recovery was `kinu desktop status` — which then started a
-    // SECOND daemon beside the living old one.
     const served = hub({ served: NEW, archive: daemonArchive({ ...NEW_FILES, 'pc-agent.js': DYING_DAEMON }, NEW) });
     const home = installedMachine(served.origin, OLD);
     const daemon = startDaemon(home, await releaseSigningEnv());
@@ -361,20 +311,15 @@ describe('a successor that dies before connecting is the old daemon\'s to undo',
 
     await until(() => (daemon.log().includes('device.update_rolled_back') ? true : null), 'the rollback', daemon.log);
 
-    // The machine is still the old daemon's, by its own claim.
     expect(pidfile(home)).toBe(oldPid);
     expect(alive(oldPid)).toBe(true);
-    // The files are the build that runs: no .prev, no marker, the old stamp.
     expect(installed(home, 'pc-agent.js')).toBe(DAEMON_FILES['pc-agent.js']);
     expect(installed(home, 'pc-agent.version').trim()).toBe(OLD);
     expect(existsSync(join(home, 'pc-agent.js.prev'))).toBe(false);
     expect(existsSync(join(home, 'pc-agent.update-pending'))).toBe(false);
-    // The socket the hub gave this daemon was never replaced: the successor
-    // never connected, and the old daemon never disconnected.
     expect(served.sockets[0]?.closed).toBeNull();
     expect(served.sockets).toHaveLength(1);
 
-    // A status read is a read: it names the live daemon and starts nothing.
     const proc = Bun.spawn({
       cmd: [process.execPath, '-e', `
         import { daemonStatus } from './packages/cli/src/device-connect.ts';

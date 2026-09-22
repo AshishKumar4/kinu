@@ -1,11 +1,4 @@
-/**
- * Protocol-level behaviour of `kinu acp`.
- *
- * These drive a REAL ACP client over a real newline-delimited JSON stream pair,
- * so the JSON-RPC framing, schema parsing and notification routing are all
- * exercised — only the agent behind the AgentClient seam is a double, which is
- * what keeps model calls out of the suite.
- */
+/** `kinu acp` over a real ACP stream pair; only the AgentClient behind the adapter is a double. */
 
 import { describe, test, expect } from 'bun:test';
 import {
@@ -30,7 +23,6 @@ import { present } from '@kinu.run/test-utils';
 const TURN: AgentSendResult = { landed: 'turn', text: '', toolCalls: [], steps: 1, durationMs: 1, hadError: false };
 
 interface FakeOptions {
-  /** Emitted, in order, while send() runs. */
   events?: AgentClientEvent[];
   history?: Array<{ role: 'user' | 'assistant'; content: string }>;
   /** Resolves when send() is called, so a test can cancel mid-turn. */
@@ -42,7 +34,6 @@ interface Fake {
   sent: Array<{ prompt: AgentPrompt; cwd?: string }>;
   readonly stopped: number;
   readonly closed: number;
-  /** The approval channel the adapter installed on session/new. */
   approval: ShellApprovalHandler | null;
 }
 
@@ -53,8 +44,6 @@ interface FakeState {
   approval: ShellApprovalHandler | null;
 }
 
-/** An AgentClient double: it records what the adapter asked of it and replays
- *  a scripted event stream during send(). */
 function fakeClient(opts: FakeOptions = {}): Fake {
   const listeners = new Set<(e: AgentClientEvent) => void>();
   const state: FakeState = { sent: [], stopped: 0, closed: 0, approval: null };
@@ -142,7 +131,6 @@ function fakeClient(opts: FakeOptions = {}): Fake {
   };
 }
 
-/** Run `op` against a live ACP connection whose agent is backed by `fake`. */
 async function withConnection<T>(
   fake: Fake,
   op: (ctx: ClientContext, updates: SessionNotification[]) => Promise<T>,
@@ -178,7 +166,6 @@ async function withConnection<T>(
   }
 }
 
-/** Initialize + session/new, returning the session id. */
 async function newSession(ctx: ClientContext, cwd = '/work'): Promise<string> {
   await ctx.request(AGENT_METHODS.initialize, {
     protocolVersion: PROTOCOL_VERSION,
@@ -189,7 +176,6 @@ async function newSession(ctx: ClientContext, cwd = '/work'): Promise<string> {
   return session.sessionId;
 }
 
-/** Prompt a fresh session and report every update the agent sent back. */
 async function promptUpdates(fake: Fake): Promise<SessionNotification['update'][]> {
   return withConnection(fake, async (ctx, collected) => {
     const sessionId = await newSession(ctx);
@@ -245,7 +231,6 @@ describe('kinu acp — prompt turn', () => {
 
     expect(chunks.map((chunk) => v.parse(v.object({ text: v.string() }), chunk.content).text))
       .toEqual(['Hello', ' world']);
-    // The prompt reached the real session, carrying the ACP session's cwd.
     expect(fake.sent).toEqual([{ prompt: 'hi', cwd: '/work' }]);
   });
 
@@ -344,7 +329,6 @@ describe('kinu acp — prompt content', () => {
     expect(sent.text).toContain('explain this');
     expect(sent.text).toContain('const a = 1;');
     expect(sent.text).toContain('file:///a.ts');
-    // The image rides as the data-URL PromptFile the turn pipeline expects.
     expect(sent.files).toEqual([
       expect.objectContaining({ mediaType: 'image/png', url: 'data:image/png;base64,AAAA' }),
     ]);
@@ -380,11 +364,9 @@ describe('kinu acp — cancellation', () => {
 });
 
 interface PermissionCase {
-  /** What this case proves, as the test is named. */
   name: string;
   command: string;
   hits: ShellApprovalRequest['review']['hits'];
-  /** The answer the editor gives to the permission request. */
   answer: RequestPermissionResponse;
   outcome: ShellApprovalOutcome;
 }
@@ -423,7 +405,6 @@ describe('kinu acp — permission', () => {
         async (ctx) => {
           await newSession(ctx);
 
-          // The adapter installed the channel; drive it as the shell tool would.
           return present(fake.approval, 'the fake client approval hook')({
             command: permission.command,
             executor: 'device',

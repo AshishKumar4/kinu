@@ -27,9 +27,7 @@ const ROOT = canonicalProjectRoot();
 
 const FRAME_DIR = process.env.TUI_FRAME_DIR ?? '/tmp/grouped-tui-frames';
 
-/** Two virtual workspaces in this directory, one unplaced agent, and a cloud
- *  roster that reuses the name `audit` — the duplicate the grouping must keep
- *  apart. */
+/** The cloud roster reuses the name `audit`: the duplicate the grouping must keep apart. */
 const GROUPED_ITEMS: readonly TuiAgentSummary[] = [
   {
     name: 'audit', label: 'audit', mode: 'local', cwd: ROOT, workspaceId: 'shop', status: 'running',
@@ -174,7 +172,6 @@ describe('grouped workspace navigator', () => {
         expect(frame).toContain('Cloud · 2');
         expect(frame).toContain('└ reviewer · auditor');
         expect(frame).not.toContain('Jarvis');
-        // A page with no cursor offers no paging row at all.
         expect(frame).not.toContain('Load more');
         const lines = frame.split('\n');
         expect(lines.findIndex((line) => line.includes('shop · 2'))).toBeLessThan(lines.findIndex((line) => line.includes('Cloud · 2')));
@@ -205,21 +202,16 @@ describe('grouped workspace navigator', () => {
         return index;
       };
 
-      // Header counts, and the running dot that only a group with a running
-      // peer earns.
       expect(frame).toContain('shop · 2 ●');
       expect(lines[at('docs · 1')]).not.toContain('●');
 
-      // Peers sit under their own header, in page order.
       expect(at('shop · 2')).toBeLessThan(at('● audit'));
       expect(at('● audit')).toBeLessThan(at('fixer'));
       expect(at('fixer')).toBeLessThan(at('docs · 1'));
 
-      // Another project's workspace gets its own group after this project's.
       expect(at('docs · 1')).toBeLessThan(at('other · 1'));
       expect(at('other · 1')).toBeLessThan(at('faraway'));
 
-      // Unplaced agents, then the collapsed cloud section, then paging.
       expect(at('faraway')).toBeLessThan(at('Unplaced · 1'));
       expect(at('Unplaced · 1')).toBeLessThan(at('▸ Cloud · 2'));
       expect(frame).not.toContain('Jarvis');
@@ -240,7 +232,6 @@ describe('grouped workspace navigator', () => {
       const frame = probe.frame();
       expect(frame).toContain('Unplaced · 1');
       expect(frame).toContain('oldbot');
-      // Exactly one group header, so the current project never claimed it.
       expect(frame.split('▾ ')).toHaveLength(2);
     } finally {
       await probe.destroy();
@@ -257,8 +248,6 @@ describe('grouped workspace navigator', () => {
       expect(probeTextarea?.focused).toBe(false);
       saveFrame('chat-overlay-80', probe.frame());
 
-      // The selection starts on the first agent; Up reaches its workspace
-      // header, and Enter on the header collapses the group.
       probe.mockInput.pressArrow('up');
       probe.mockInput.pressEnter();
       await probe.settle();
@@ -267,20 +256,17 @@ describe('grouped workspace navigator', () => {
       expect(probe.frame()).not.toContain('fixer');
       expect(probe.activations).toEqual([]);
 
-      // Enter again expands it; the peers return.
       probe.mockInput.pressEnter();
       await probe.settle();
       expect(probe.frame()).toContain('▾ shop · 2');
       expect(probe.frame()).toContain('audit');
 
-      // Walk down to the cloud section and expand it.
       for (let step = 0; step < 7; step += 1) probe.mockInput.pressArrow('down');
       probe.mockInput.pressEnter();
       await probe.settle();
       expect(probe.frame()).toContain('▾ Cloud · 2');
       expect(probe.frame()).toContain('Jarvis');
 
-      // Selecting an agent swaps the client and closes the overlay.
       probe.mockInput.pressArrow('down');
       probe.mockInput.pressEnter();
       await probe.settle();
@@ -288,7 +274,6 @@ describe('grouped workspace navigator', () => {
       expect(probe.frame()).not.toContain('Workspaces · Esc close');
       expect(probeTextarea?.focused).toBe(true);
 
-      // The cloud `audit` and the local `audit` are different rows.
       probeSetNavigationOpen?.(true);
       await probe.settle();
       probe.mockInput.pressArrow('down');
@@ -304,8 +289,6 @@ describe('grouped workspace navigator', () => {
       await probe.settle();
       expect(probe.activations.at(-1)).toEqual({ name: 'audit', mode: 'local' });
 
-      // Left jumps from an agent to its section header, then collapses it;
-      // Right expands it again. Escape closes and restores the composer.
       probeSetNavigationOpen?.(true);
       await probe.settle();
       probe.mockInput.pressKey('\u001B[D');
@@ -355,8 +338,6 @@ describe('grouped workspace navigator', () => {
       await probe.settle();
       expect(probe.activations.at(-1)).toEqual({ name: 'jarvis', mode: 'cloud' });
 
-      // The status dots keep the duplicate rows apart: the running local
-      // `audit` renders `● audit`, the idle cloud one `○ audit`.
       await probe.mockMouse.click(4, lineAt('○ audit'));
       await probe.settle();
       expect(probe.activations.at(-1)).toEqual({ name: 'audit', mode: 'cloud' });
@@ -408,12 +389,10 @@ describe('grouped workspace navigator', () => {
 
       probe.mockInput.pressKey('\u001B[6~');
       await probe.settle();
-      // One page down from the `shop` header lands inside `docs`.
       expect(lineWithMarker(probe.frame())).toContain('docs');
 
       probe.mockInput.pressKey('\u001B[6~');
       await probe.settle();
-      // The second page reaches the explicit paging row; the top scrolled away.
       expect(lineWithMarker(probe.frame())).toContain('Load more');
       expect(probe.frame()).not.toContain('shop-0');
       expect(loaded).toBe(0);
@@ -438,7 +417,6 @@ describe('grouped workspace navigator', () => {
     });
 
     try {
-      // The cloud section expanded on its own because the open agent lives there.
       expect(probe.frame()).toContain('Jarvis');
       probeSetNavigationFocused?.(true);
       await probe.settle();
@@ -448,7 +426,6 @@ describe('grouped workspace navigator', () => {
       expect(lines[marked]).toContain('audit');
       expect(marked).toBeGreaterThan(lines.findIndex((line) => line.includes('Cloud · 2')));
 
-      // Pinned-focus keyboard: the selection walks and Enter opens the agent.
       probe.mockInput.pressArrow('up');
       probe.mockInput.pressEnter();
       await probe.settle();
@@ -604,17 +581,13 @@ function ShellProbe(props: {
   );
 }
 
-/** Six paint passes: the navigator's scrollbox takes more than one commit to
- *  lay out under the test renderer, and a burst of key events needs its state
- *  flushed through effects before the frame is meaningful. */
+/** The navigator's scrollbox needs several commits to lay out, and key bursts need effects flushed. */
 async function renderSettled(renderOnce: () => Promise<void>): Promise<void> {
   for (let pass = 0; pass < 6; pass += 1) {
     await renderOnce();
     await Bun.sleep(5);
   }
 }
-
-// ── Roster failure ownership — the real hook under the shell ────────────────
 
 let failingRoster: TuiAgentRoster | null = null;
 
@@ -693,8 +666,7 @@ describe('agent roster failure ownership', () => {
       await probe.clickLine('Load more');
       await probe.settle();
       const failed = probe.frame();
-      // The whole chain reaches the person, and the paging row survives the
-      // failure — a failed page must never read as the end of the list.
+      // A failed page must never read as the end of the list.
       expect(failed).toContain('page failed: boom');
       expect(failed).toContain('Load more');
       expect(failed).toContain('2 of 4');

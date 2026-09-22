@@ -1,12 +1,4 @@
-/**
- * `kinu label` end to end, against a local workspace whose true outcomes
- * are known by construction.
- *
- * The real binary is spawned for every step, so this covers what the owner
- * will actually type: draw a file, fill it in, hand it back, read the numbers.
- * No model is involved — the ledger is written the way the classifier would
- * have written it.
- */
+/** `kinu label` end to end against a local workspace whose true outcomes are known by construction. */
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 
 import { join, resolve } from 'node:path';
@@ -17,7 +9,7 @@ import { makeSql } from '@kinu.run/cli-backend';
 import { scratchDir, createTestActorsOver } from '@kinu.run/test-utils';
 import * as v from 'valibot';
 
-/** Fresh throwaway project directory per spawn: the CLI records its cwd as the agent file plane, so a spawn must never sit in the developer repo. */
+/** The CLI records its cwd as the agent file plane, so a spawn must never sit in the developer repo. */
 function newProjectDir(): string {
   const dir = scratchDir('test-project');
 
@@ -47,24 +39,18 @@ function runCli(home: string, args: string[]) {
 
 interface World {
   home: string;
-  /** outcome-row id → what the turn REALLY was. */
   truth: Map<string, 'accepted' | 'corrected'>;
 }
 
-/** A workspace whose classifier catches only 65% of real corrections and
- *  falsely flags 4% of the good turns — a bias no telemetry can see. */
+/** Classifier catches 65% of real corrections and falsely flags 4% of good turns. */
 function seedWorkspace(name: string, size = 600): World {
   const home = scratchDir('label');
   mkdirSync(join(home, name), { recursive: true });
   const db = new Database(join(home, name, 'agent.db'));
   const sql = makeSql(db);
   initTurnOutcomeTables((ddl: string) => { db.exec(ddl); });
-  // The actor these outcome rows belong to, and the one `kinu label` resolves
-  // when it reopens this workspace: the MAIN actor, issued through the
-  // production directory. `openLocalRootActor` reads the registered main row,
-  // so the seed has to register a real workspace identity rather than only
-  // create tables — rows under any other id would leave the command drawing
-  // from an empty ledger.
+  // `openLocalRootActor` reads the registered main row, so the seed registers a real workspace identity;
+  // rows under any other id leave the command drawing from an empty ledger.
   const actor = createTestActorsOver(db, { name }).main;
 
   const random = seededRandom(4242);
@@ -98,7 +84,6 @@ function seedWorkspace(name: string, size = 600): World {
   return { home, truth };
 }
 
-/** Stand in for the owner: answer each blind item from the ground truth. */
 function fillFile(path: string, truth: World['truth'], answer = (t: string): string => (t === 'corrected' ? 'c' : 'a')): void {
   let current = '';
 
@@ -119,8 +104,6 @@ function fillFile(path: string, truth: World['truth'], answer = (t: string): str
   writeFileSync(path, filled.join('\n'));
 }
 
-/** How a seeded turn reads to the labeller: a flagged turn is frustrated a
- *  quarter of the time, corrected otherwise. */
 function turnOutcome(flagged: boolean, roll: number): 'frustrated' | 'corrected' | 'accepted' {
   if (!flagged) return 'accepted';
 
@@ -137,7 +120,6 @@ describe('kinu label', () => {
     expect(exported.stdout).toContain('drew 100 turns');
     expect(exported.stdout).toContain('minutes)');
 
-    // The file must not tell the labeler what the classifier already thinks.
     const drawn = readFileSync(file, 'utf8');
     const body = drawn.slice(drawn.indexOf('### 1/100'));
 
@@ -170,8 +152,6 @@ describe('kinu label', () => {
       }),
     }), JSON.parse(report.stdout));
 
-    // The panel has not been run, and the report says so rather than implying
-    // the classifier has been checked by anything but the owner.
     expect(ensemble.gap?.kind).toBe('not_run');
     expect(ensemble.standIn).toBeNull();
 
@@ -179,8 +159,6 @@ describe('kinu label', () => {
     expect(parsed.universe).toBe(600);
     expect(parsed.labeled).toBe(100);
     expect(parsed.gap).toBeNull();
-    // The classifier's own rate is well below the truth, and the correction
-    // brings the estimate back to it.
     expect(parsed.overall.raw).toBeLessThan(trueRate - 0.02);
     expect(parsed.overall.corrected.lo).toBeLessThan(trueRate);
     expect(parsed.overall.corrected.hi).toBeGreaterThan(trueRate);
@@ -231,8 +209,7 @@ describe('kinu label', () => {
     const { home } = seedWorkspace('demo');
     const file = join(home, 'broken.txt');
     runCli(home, ['label', 'export', 'demo', '--out', file, '--size', '5']);
-    // A typo on a real verdict line. (The instructions at the top of the file
-    // mention `verdict:` too; only lines that START with it are verdicts.)
+    // Only lines that start with `verdict:` are verdicts; the header mentions it too.
     writeFileSync(file, readFileSync(file, 'utf8').replace(/^verdict:$/m, 'verdict: z'));
 
     const ingested = runCli(home, ['label', 'ingest', 'demo', file]);
@@ -256,8 +233,6 @@ describe('kinu label', () => {
     const { home, truth } = seedWorkspace('demo');
     const file = join(home, 'calib.txt');
 
-    // No hand labels yet: the missing step is named before anything else is
-    // checked, because it is the step the whole flow exists for.
     const early = runCli(home, ['label', 'ensemble', 'demo', '--models', 'anthropic/claude-fable-5,codex/gpt-5.6-sol']);
     expect(early.exitCode).toBe(0);
     expect(early.stdout).toContain('did not run');
@@ -268,8 +243,7 @@ describe('kinu label', () => {
     fillFile(file, truth);
     runCli(home, ['label', 'ingest', 'demo', file]);
 
-    // Labels exist, but one model is not a panel — and no second model from the
-    // same vendor is substituted for the missing one.
+    // No same-vendor model substitutes for the missing panelist.
     const alone = runCli(home, ['label', 'ensemble', 'demo', '--models', 'anthropic/claude-fable-5']);
     expect(alone.exitCode).toBe(0);
     expect(alone.stdout).toContain('two models from different vendors');

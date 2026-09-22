@@ -1,9 +1,4 @@
-// The classic loop's render seam, as a person reads it.
-//
-// The regression these tests pin: a tool refusal reached the terminal as the
-// raw `{reason,error}` JSON the model reads, and a cut line lost its tail
-// silently. Both are renderer contracts — asserted through printToolResult,
-// the one function every classic-surface tool result funnels through.
+// Tool results through printToolResult: a refusal renders as prose, and a cut line says so.
 import { printToolResult, createTurnStatus } from '../src/display';
 import { describe, expect, test, vi, afterEach } from 'bun:test';
 
@@ -11,7 +6,6 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
-/** Console output while `shell` executes, in call order. */
 function captureConsole(run: () => void): string[] {
   const lines: string[] = [];
   const original = console.log;
@@ -71,15 +65,10 @@ describe('printToolResult', () => {
 
 
 describe('createTurnStatus', () => {
-  /** Terminal writes while `shell` executes, in call order. */
   function captureWrites(run: () => void): string[] {
     const writes: string[] = [];
     const original = process.stdout.write.bind(process.stdout);
-    /* SAFETY: Bun's stdout `write` overloads are all
-       `(chunk: string | Uint8Array, encoding?, cb?) => boolean` with the last
-       two parameters optional, so a function fixing only `chunk` satisfies the
-       overload the runtime resolves; this module's draws call it with exactly
-       one argument. `finally` restores the original before the test returns. */
+    /* SAFETY: every Bun stdout `write` overload accepts a lone `chunk`; `finally` restores the original. */
     process.stdout.write = function typedWrite(chunk: Uint8Array | string): boolean {
       writes.push(String(chunk));
 

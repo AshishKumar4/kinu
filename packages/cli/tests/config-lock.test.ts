@@ -4,20 +4,12 @@ import { describe, expect, test } from 'bun:test';
 import { join } from 'node:path';
 
 /**
- * The one config mutation path: every read-modify-write of ~/.kinu/config.json
- * runs inside `withConfigLock`. These proofs drive it from separate PROCESSES,
- * because the failure it exists for — a second process writing between one
- * process's read and its write — cannot happen inside a single one.
- *
- * Each scenario body is a string evaluated by a fresh `bun -e` so the child
- * binds KINU_HOME at ITS module load; static imports cannot cross that
- * process boundary.
+ * `withConfigLock` across separate processes: the lost write it prevents cannot happen in one.
+ * Scenario bodies run via `bun -e` so each child binds KINU_HOME at its own module load.
  */
 describe('cross-process config read-modify-write', () => {
   const repoRoot = join(import.meta.dir, '../../..');
-  // `bun -e` resolves relative specifiers against the invoking file's
-  // directory, which differs between a direct run and `bun test` — so the
-  // scenario bodies import through this absolute specifier.
+  // `bun -e` resolves relative specifiers from the invoking file's directory, which differs under `bun test`.
   const CONFIG_TS = JSON.stringify(join(repoRoot, 'packages/cli/src/config.ts'));
 
   interface ProcessOutcome {
@@ -59,9 +51,7 @@ describe('cross-process config read-modify-write', () => {
   test('two processes contending on ONE counter lose no update', async () => {
     const home = scratchDir('config-lock-race');
 
-    // Both workers bump the SAME alias 25 times. Under a load-modify-write
-    // without a lock the interleavings silently drop increments; the locked
-    // path serializes them, so the total is exact.
+    // Unlocked load-modify-write drops increments; the locked path makes the total exact.
     const worker = `
       const { updateConfigFile } = await import(${CONFIG_TS});
       for (let i = 0; i < 25; i++) {
@@ -118,7 +108,6 @@ describe('cross-process config read-modify-write', () => {
       lockReleased: true,
     });
 
-    // And the next writer proceeds immediately — nothing to trip over.
     const again = runIn(home, `
       const { updateConfigFile } = await import(${CONFIG_TS});
       updateConfigFile((config) => { config.updateCheck = false; });

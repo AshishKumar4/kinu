@@ -9,8 +9,7 @@ const PROJECT = scratchDir('additional-agent-project');
 
 describe('local additional-agent creation', () => {
   test('inherits the stored placeholder mission when the workspace has no custom mission', () => {
-    // config.ts binds KINU_HOME at module load. A subprocess makes the isolated
-    // home authoritative even when another test imported config.ts first.
+    // config.ts binds KINU_HOME at module load; a subprocess makes the isolated home authoritative.
     const scenario = `
       import { Database } from 'bun:sqlite';
       import { createCliAgent, createLocalPeerAgent } from './packages/cli/src/agent-create.ts';

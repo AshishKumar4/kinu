@@ -1,39 +1,7 @@
 /**
- * Reading the owner's Claude Code session transcripts into corpus turns.
- *
- * Claude Code appends one JSON object per line to
- * `~/.claude/projects/<slugified-cwd>/<session>.jsonl`. This module turns those
- * files into the `(request → work → what the user did next)` triples that
- * evolution/behavior-labels.ts labels. It is the ONLY place in the codebase
- * that knows that file format, and it is strictly read-only: nothing here
- * opens a file for writing, and the mined turns are the only thing that leaves.
- *
- * Three things about the format are load-bearing.
- *
- *  - **The file is a DAG, not a list.** Rewinding a conversation, editing a
- *    message and re-sending it, or resuming a session all append a new branch
- *    whose `parentUuid` points back above the fork, leaving the abandoned
- *    branch in the file. Reading in line order would splice dead branches into
- *    the live conversation and invent follow-ups that never happened. So the
- *    live path is walked backwards from the last entry through `parentUuid`,
- *    which is the surviving conversation and nothing else.
- *
- *  - **The schema drifts across CLI versions, and the drift is not announced.**
- *    Interrupts carry an `interruptedMessageId` field in recent versions and
- *    only a `[Request interrupted by user]` text marker in older ones; tool
- *    denials carry `toolDenialKind` in recent versions and only the rejection
- *    sentence in older ones. Both readings are kept, because the older files
- *    are most of the history. Anything this module cannot read is SKIPPED AND
- *    COUNTED — never guessed at — and `MineSkips` is printed on every report so
- *    an unread quarter of the corpus cannot pass as an empty one.
- *
- *  - **Not every `type: "user"` line is the user.** Tool results, slash-command
- *    echoes, compaction summaries, background-task notifications and the
- *    interrupt marker itself all arrive as user-role entries. Sub-agent
- *    transcripts (`isSidechain`) and non-interactive sessions (`entrypoint`
- *    other than `cli`, or `sessionKind: "bg"`) are dropped outright: a label
- *    here is supposed to mean the OWNER did something, and in those sessions
- *    nobody was watching.
+ * Read-only miner of Claude Code transcripts (`~/.claude/projects/<cwd>/<session>.jsonl`) into corpus turns.
+ * The file is a DAG: walk the live path back via `parentUuid`, never line order. Schema drifts across CLI versions,
+ * so unreadable input is skipped and counted in `MineSkips`. Sidechain and non-interactive sessions are dropped.
  */
 
 import { readdirSync, readFileSync } from 'node:fs';
@@ -46,12 +14,9 @@ import {
 import { classify, tolerate } from '@kinu.run/core/obs';
 import * as v from 'valibot';
 
-/** Where Claude Code keeps them. */
 export function defaultTranscriptRoot(home: string): string {
   return join(home, '.claude', 'projects');
 }
-
-// ── The wire shapes, as far as this reader needs them ────────────
 
 interface ContentBlock {
   type?: string;
@@ -174,8 +139,7 @@ function booleanValue(value: JsonValue | undefined): boolean | undefined {
   return parsed.success ? parsed.output : undefined;
 }
 
-/** A block's text, whatever nesting the version wrapped it in. Tool results
- *  carry either a bare string or an array of text blocks. */
+/** Tool results carry either a bare string or an array of text blocks. */
 function blockText(value: JsonValue | undefined): string {
   const text = v.safeParse(v.string(), value);
 
@@ -187,16 +151,8 @@ function blockText(value: JsonValue | undefined): string {
   return parts.output.map((part) => normalizedBlock({ value: part })?.text ?? '').join('');
 }
 
-// ── Telling the owner's messages from everything else ────────────
-
-/** Entries that arrive as the user but are not the user typing: CLI wrappers,
- *  slash-command echoes, and the notices the CLI posts on the user's behalf.
- *  Anchored at the start, because each of these is a prefix the CLI prepends
- *  rather than a phrase that could appear in prose.
- *
- *  Every entry here was found by reading what the corpus actually produced —
- *  the `/loop` echo and the background-agent notices in particular, which
- *  otherwise arrive as long shouty "user messages" and fire the rules. */
+/** User-role entries that are not the user typing: CLI wrappers, slash-command echoes, notices. Anchored
+ *  at the start because each is a prefix the CLI prepends. */
 const SYNTHETIC_PROMPT = new RegExp('^\\s*(?:' + [
   '<local-command-caveat>', '<local-command-stdout>', '<command-name>',
   '<command-message>', '<task-notification>', '<system-reminder>',
@@ -210,59 +166,39 @@ const SYNTHETIC_PROMPT = new RegExp('^\\s*(?:' + [
 
 const INTERRUPT_MARKER = /^\s*\[Request interrupted by user/;
 
-/** The rejection sentence older CLI versions used before `toolDenialKind`
- *  existed. Anchored at the start of the tool result so a file whose CONTENT
- *  quotes the sentence cannot fire it. */
+/** Pre-`toolDenialKind` rejection sentence; anchored so file content quoting it cannot fire it. */
 const USER_REJECTION = /^The user doesn't want (?:to proceed with this tool use|this)/;
 
-/** `toolDenialKind` values that mean the person said no. The `automode-*`
- *  kinds are the deployment's routing, not a verdict on the turn. */
+/** `automode-*` kinds are deployment routing, not a verdict on the turn. */
 const USER_DENIAL_KIND = 'user-rejected';
 
-// ── Mining ───────────────────────────────────────────────────────
-
 export interface MineOptions {
-  /** `~/.claude/projects` or a fixture directory. */
   root: string;
-  /** Keep only projects whose directory name contains one of these. Empty
-   *  means every project. */
   projects?: ReadonlyArray<string>;
 }
 
-/** Everything the reader declined to read, by reason. Printed on every report:
- *  a miner that silently drops a version's files reports a smaller corpus and
- *  looks identical to one that mined it all. */
+/** Printed on every report so a silently dropped version cannot pass as a smaller corpus. */
 export interface MineSkips {
-  /** Lines that were not JSON. */
   unparsableLines: number;
-  /** Session files with no reconstructable conversation at all. */
   emptyFiles: number;
-  /** Prompts from a non-interactive session (SDK entrypoint, background). */
   nonInteractivePrompts: number;
-  /** Sub-agent transcripts. */
   sidechainEntries: number;
-  /** A `parentUuid` naming an entry the file does not contain, which truncates
-   *  the live path at that point. */
+  /** Truncates the live path at that point. */
   brokenChains: number;
-  /** User entries whose content was neither a string nor a block array — the
-   *  shape a future version would drift into. */
+  /** The shape a future version would drift into. */
   unknownContent: number;
-  /** Turns dropped by the trivial-turn pre-filter, the same one production
-   *  applies before spending a classifier call. */
+  /** The same pre-filter production applies before spending a classifier call. */
   trivialTurns: number;
 }
 
 export interface MineResult {
   turns: CorpusTurn[];
   files: number;
-  /** Files that yielded at least one turn. */
   sessions: number;
-  /** CLI versions the corpus was mined from, so schema drift is visible. */
   versions: string[];
   skips: MineSkips;
 }
 
-/** One turn under construction, before it knows what came next. */
 interface DraftTurn {
   project: string;
   sessionId: string;
@@ -276,19 +212,11 @@ interface DraftTurn {
   toolRejected: boolean;
 }
 
-/** Longest shell command kept for the revert rule, and how many per turn. The
- *  rule needs the verb and its flags; a 40k-character heredoc in the corpus
- *  file would be all of the corpus. */
+/** A 40k-character heredoc would dominate the corpus; the revert rule needs only verb and flags. */
 const COMMAND_CHARS = 400;
 
 const COMMANDS_PER_TURN = 40;
 
-/**
- * Walk every project under `root` and return the turns it yields. Projects
- * visit in sorted order and sessions oldest-file-first, so every run mines
- * the same corpus.
- */
-/** Keep the turn's first few shell commands, clipped, for the summary line. */
 function recordCommand(commands: string[], command: string | undefined): void {
   if (command === undefined || commands.length >= COMMANDS_PER_TURN) return;
   commands.push(command.slice(0, COMMAND_CHARS));
@@ -320,8 +248,7 @@ export function mineTranscripts(opts: MineOptions): MineResult {
 }
 
 function listProjects(root: string, wanted: ReadonlyArray<string> | undefined): string[] {
-  // An absent root means Claude Code was never used here. Any other failure to read it is a
-  // corpus we cannot see, and must not be reported as an empty one.
+  // Only an absent root means empty; any other read failure must not report an empty corpus.
   const dirents = tolerate(() => readdirSync(root, { withFileTypes: true }), 'enoent') ?? [];
   const entries = dirents.filter((entry) => entry.isDirectory()).map((entry) => entry.name);
   const filters = (wanted ?? []).filter((filter) => filter !== '');
@@ -331,11 +258,9 @@ function listProjects(root: string, wanted: ReadonlyArray<string> | undefined): 
     .sort();
 }
 
-/** Session files of one project, oldest first. Sub-agent transcripts live in a
- *  `subagents/` subdirectory and are not descended into: they are the sidechain
- *  the reader drops anyway, and reading them would double-count the work. */
+/** `subagents/` is not descended into: those sidechains are dropped anyway. */
 function listSessions(dir: string): string[] {
-  // The root listed this directory a moment ago; ENOENT means a live session removed it since.
+  // ENOENT: a live session removed it since the root was listed.
   const dirents = tolerate(() => readdirSync(dir, { withFileTypes: true }), 'enoent') ?? [];
 
   return dirents
@@ -344,16 +269,8 @@ function listSessions(dir: string): string[] {
     .sort();
 }
 
-/**
- * The live conversation of one session file, oldest entry first.
- *
- * The chain is walked over EVERY entry that carries a uuid, not just the
- * conversational ones: turn timings, hook summaries and compaction boundaries
- * are links in it too, and a walk that only knew about user and assistant
- * entries snapped at the first one of those and returned a single message.
- * Non-conversational links are dropped from the result after the walk, once
- * they have done their job of connecting it.
- */
+/** Walks over every entry with a uuid (timings, hook summaries, compaction boundaries link the chain too),
+ * then drops non-conversational links. */
 function livePath(lines: ReadonlyArray<string>, skips: MineSkips, versions: Set<string>): Entry[] {
   const byUuid = new Map<string, Entry>();
   const order: Entry[] = [];
@@ -421,9 +338,7 @@ function livePath(lines: ReadonlyArray<string>, skips: MineSkips, versions: Set<
   });
 }
 
-/** True for a message nobody was watching — SDK-driven or a background session.
- *  An interrupt or a refusal there is the harness, not the owner. Versions that
- *  record no `entrypoint` predate both and count as interactive. */
+/** Versions recording no `entrypoint` count as interactive. */
 function isNonInteractive(entry: Entry): boolean {
   return (entry.entrypoint !== undefined && entry.entrypoint !== 'cli') ||
     entry.sessionKind === 'bg';
@@ -484,8 +399,7 @@ function mineSession(
       continue;
     }
 
-    // A user entry. Tool results and the interrupt marker are SIGNALS about the
-    // turn in flight; only a real prompt closes it and opens the next.
+    // Tool results and the interrupt marker are signals about the turn in flight; only a real prompt closes it.
     if (contentArray.success) {
       for (const raw of contentArray.output) {
         const block = normalizedBlock({ value: raw });
@@ -518,9 +432,7 @@ function mineSession(
 
     if (entry.isMeta === true || entry.isCompactSummary === true || SYNTHETIC_PROMPT.test(text)) continue;
 
-    // A real prompt, but not one the owner typed. Closing the turn in flight
-    // rather than skipping the line keeps the harness's work from being
-    // attributed to the owner's previous request.
+    // Close the turn rather than skip, so harness work is not attributed to the owner's previous request.
     if (isNonInteractive(entry)) {
       skips.nonInteractivePrompts++;
       current = null;
@@ -541,8 +453,6 @@ function mineSession(
   return finishTurns(drafts, skips);
 }
 
-/** The first text block of a user content array, or null when it carries none
- *  (a pure tool-result or image entry). */
 function firstText(content: ReadonlyArray<JsonValue>): string | null {
   const texts = content.flatMap((raw): string[] => {
     const block = normalizedBlock({ value: raw });
@@ -553,14 +463,7 @@ function firstText(content: ReadonlyArray<JsonValue>): string | null {
   return texts.length === 0 ? null : texts.join('\n');
 }
 
-/**
- * Close the drafts into corpus turns: each one's follow-up is the next draft's
- * request, and each one's revert evidence is the next draft's shell commands.
- *
- * Texts are windowed through the same `EVIDENCE_BUDGETS` the production ledger
- * stores turns at, so a corpus row and a `turn_outcomes` row show a rater the
- * same amount of the same thing.
- */
+/** Texts window through the production `EVIDENCE_BUDGETS`, so corpus and `turn_outcomes` rows match. */
 function finishTurns(drafts: ReadonlyArray<DraftTurn>, skips: MineSkips): CorpusTurn[] {
   const turns: CorpusTurn[] = [];
 
@@ -600,7 +503,6 @@ function finishTurns(drafts: ReadonlyArray<DraftTurn>, skips: MineSkips): Corpus
   return turns;
 }
 
-/** The skip counts as report lines, in the order they matter. */
 export function renderMineSkips(result: MineResult): string[] {
   const { skips } = result;
 

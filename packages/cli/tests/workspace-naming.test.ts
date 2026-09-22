@@ -1,22 +1,4 @@
-/**
- * A workspace has a NAME. The slug is its address.
- *
- * The owner installed Kinu, opened a workspace, and was shown
- * `handwrought-walnut-4166c321` — in the workspace bar, and again at the head
- * of the prompt his own agent was reading. Both came from the same reading:
- * that a workspace with no title yet is "genuinely called" its slug. It is not.
- *
- * These tests drive the real substrate — a real workspace database, a real
- * `LocalAgentHost`, real turns through a real session — and assert on the two
- * things that actually reach somebody:
- *
- *   • the label `kinu list` and the TUI navigator render (`listKnownAgents`);
- *   • the system prompt bytes the model is handed.
- *
- * Nothing here asks the title generator what it would have produced. The
- * generator was already correct when the owner hit this; what was wrong was
- * what the surface and the prompt did with its absence.
- */
+/** A workspace has a name; the slug is its address and must not reach `kinu list` or the system prompt. */
 import { scratchDir } from '../../test-utils/src/scratch';
 import { afterEach, describe, expect, test } from 'bun:test';
 import { mkdirSync, rmSync } from 'node:fs';
@@ -40,20 +22,11 @@ import {
   type LocalHostedAgent,
   type SessionEvent,
 } from '@kinu.run/cli-backend';
-// The tree's one hand-rolled v2 fixture model, reached the way
-// `local-agent-client.test.ts` reaches it: it is a test helper rather than a
-// package export, and a second copy of it here would be a second fixture to
-// keep in step with the provider spec.
+// The v2 fixture model is a test helper, not a package export: reuse it rather than keep a second copy.
 import { TestLanguageModelV2 } from '../../cli-backend/tests/test-language-model';
 
-// `AGENT_HOME` is resolved ONCE per process at config.ts's module load, and bun
-// runs every file of an invocation in one process — so this file offers its own
-// home and then works in whichever one the process actually resolved. A sibling
-// suite that loaded config.ts first keeps its home, and everything below reads
-// `AGENT_HOME` rather than assuming this file won that race.
-//
-// Dynamic because the offer has to be in place before the import: a static one
-// is hoisted above the assignment.
+// `AGENT_HOME` is resolved once per process at config.ts load and bun shares one process across files, so
+// everything below reads `AGENT_HOME` rather than assuming this offer won. Dynamic import: a static one hoists.
 const OFFERED_HOME = scratchDir('naming-home');
 
 const inheritedHome = process.env.KINU_HOME;
@@ -71,38 +44,25 @@ const DUMMY_LLM: LLMProviderConfig = {
   name: 'fake', baseURL: 'http://localhost:0', headers: {}, model: 'fake-model',
 };
 
-/** The mission a workspace created with nothing said about it carries. It names
- *  Kinu rather than any workspace, so `planWorkspaceTitle` refuses to title
- *  from it and the FIRST PROMPT is what names the workspace instead. */
+/** Names Kinu rather than any workspace, so `planWorkspaceTitle` refuses it and the first prompt names the workspace. */
 const PLACEHOLDER_MISSION = 'Help the user with the work they assign.';
 
-/** What the owner types first. The title the workspace ends up with is this
- *  line, so the assertions below can be literal. */
 const FIRST_PROMPT = 'Audit the OAuth callback flow';
 
 const TITLE = 'Audit the OAuth callback flow';
 
-/** A real slug, minted the way the product mints one, so "the surface must not
- *  show this" is a claim about the actual string a person was shown. */
 const SLUG = workspaceSlug('4166c321-1a4e-4e20-9f15-9a7f159a4e20');
 
 afterEach(() => {
   rmSync(join(AGENT_HOME, SLUG), { recursive: true, force: true });
 });
 
-/** Every system prompt any actor was handed, in call order. */
 interface PromptLog {
   model: LanguageModel;
   systems(): string[];
 }
 
-/**
- * A model that answers one word and records the system prompt it was handed.
- *
- * "ack" is not JSON, so the naming round-trip's parse finds no title in it and
- * the DETERMINISTIC title stands — which is what makes the expected name a
- * literal here rather than whatever a fake chose to say.
- */
+/** "ack" is not JSON, so the deterministic title stands and the expected name is a literal. */
 function recordingModel(): PromptLog {
   const usage = { inputTokens: 5, outputTokens: 7, totalTokens: 12 };
   const systems: string[] = [];
@@ -148,14 +108,7 @@ function recordingModel(): PromptLog {
   return { model, systems: () => [...systems] };
 }
 
-/**
- * A workspace in the state the owner's was: a real slug, a placeholder mission,
- * no title, and `auto` origin — so nothing has named it and the first prompt is
- * allowed to.
- *
- * It is seeded UNDER `AGENT_HOME`, because that is where `listKnownAgents`
- * looks and this test's whole point is what that call answers.
- */
+/** Seeded under `AGENT_HOME`, where `listKnownAgents` looks. */
 async function seedUntitledWorkspace(project: string): Promise<string> {
   const dbPath = join(AGENT_HOME, SLUG, 'agent.db');
   mkdirSync(dirname(dbPath), { recursive: true });
@@ -190,14 +143,11 @@ function makeHost(model: LanguageModel, refs: readonly HostedAgentRef[]): LocalA
   return new LocalAgentHost(options);
 }
 
-/** The physical project the agent's plane is bound to. */
 function makeProject(): string {
   return scratchDir('naming-project');
 }
 
-/** Resolves when the workspace announces the title it just took. That
- *  announcement is the auto-title's own write, so waiting on it is waiting on
- *  the fact rather than on a delay. */
+/** The announcement is the auto-title's own write, so waiting on it waits on the fact, not a delay. */
 function titled(host: LocalAgentHost): Promise<string> {
   const settled = Promise.withResolvers<string>();
 
@@ -218,10 +168,7 @@ describe('a workspace is named by its first prompt, and that name is what a pers
     const host = makeHost(log.model, [{ name: SLUG, cwd: project, workspaceId: 'proj' }]);
 
     try {
-      // Nothing has named this workspace yet, so the very first prompt the
-      // model reads must not claim a name. Seeding SOUL.md's heading with the
-      // slug on the create path is exactly how it would: the prompt opens
-      // `# handwrought-walnut-…`.
+      // The first prompt must not claim a name: seeding SOUL.md's heading with the slug would.
       const session = await host.acquire(SLUG);
       const renamed = titled(host);
       await session.send(FIRST_PROMPT);
@@ -229,13 +176,9 @@ describe('a workspace is named by its first prompt, and that name is what a pers
 
       expect(await renamed).toBe(TITLE);
 
-      // THE SURFACE. `listKnownAgents` is what `kinu list` prints and what the
-      // TUI navigator renders; it answers with the title, never the directory name.
       const row = listKnownAgents().find((agent) => agent.name === SLUG);
       expect(row?.label).toBe(TITLE);
 
-      // THE MODEL. The next turn's prompt names the workspace, and still never
-      // spells the slug.
       await session.send('and now the token exchange');
       const latest = log.systems().at(-1) ?? '';
       expect(latest).toContain(`You work in the workspace "${TITLE}".`);
@@ -257,8 +200,6 @@ describe('a workspace is named by its first prompt, and that name is what a pers
       await session.send(FIRST_PROMPT);
       expect(await renamed).toBe(TITLE);
 
-      // A hire with a role and no name of its own: the roster titles it from
-      // the role, and the tree ADDRESSES it by a minted slug.
       const team = await host.team(SLUG);
 
       const created = await team.create({
@@ -275,8 +216,7 @@ describe('a workspace is named by its first prompt, and that name is what a pers
         task: 'Report what the callback handler trusts.',
         mode: 'build',
       });
-      // Both turns, because the child's report WAKES the parent: closing the
-      // host between them tears a live turn's database out from under it.
+      // The child's report wakes the parent: closing the host between turns tears a live turn's database away.
       const childTurn = Promise.withResolvers<void>();
       const parentTurn = Promise.withResolvers<void>();
 
@@ -296,7 +236,6 @@ describe('a workspace is named by its first prompt, and that name is what a pers
 
       expect(childPrompt).toBeDefined();
       expect(childPrompt).toContain(`You are "Researcher", a subagent in the workspace "${TITLE}".`);
-      // Neither the workspace's slug nor the subagent's own minted address.
       expect(childPrompt).not.toContain(SLUG);
       expect(childPrompt).not.toContain(created.name);
     } finally {

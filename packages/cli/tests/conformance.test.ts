@@ -1,16 +1,5 @@
-// Backend conformance — the CLI composition root, observed for real.
-//
-// This deliberately rides the PRODUCTION chain end to end: the real
-// `createAgent` (what `kinu create` runs), the real `openWorkspaceCLI`,
-// and a real `LocalAgentSession` constructed exactly as LocalAgentClient
-// constructs one — then one turn against a capturing model, so the observed
-// tool surface is precisely the tool array the model provider was handed,
-// schemas included. No hand-provisioned tables, no harness shortcuts: the
-// craft_scores defect lived exactly in the gap between `kinu create` and
-// the open path, and only running both closes it.
-//
-// The manifest lives in core/src/conformance/manifest.ts; compareSurface
-// fails on any disagreement between it and what is observed here.
+// Backend conformance over the production `kinu create` + open chain; compareSurface fails on any
+// disagreement with core/src/conformance/manifest.ts.
 import { describe, test, expect, afterAll } from 'bun:test';
 import { Database } from 'bun:sqlite';
 
@@ -32,28 +21,16 @@ import { resolveLLMConfig, agentDbPath, AGENT_HOME, listLocalRefsAllProjects, up
 import { TestLanguageModelV2 } from '../../cli-backend/tests/test-language-model';
 import { present } from '@kinu.run/test-utils';
 
-// Dummy provider config so resolveLLMConfig succeeds offline — the capturing
-// model below intercepts before any network call could happen. Passed as
-// arguments rather than exported into `process.env`: bun runs every file of an
-// invocation in ONE process, so a variable assigned at module scope here was
-// read by every later file's subprocesses, and `behavior.test.ts` carries a
-// hand-written blank of these three names because of this line.
+// Dummy provider config so resolveLLMConfig succeeds offline. Passed as arguments, not `process.env`:
+// bun runs every file of an invocation in one process, so env set here leaks into later files.
 const OFFLINE_PROVIDER = {
   baseUrl: 'http://localhost:0/v1',
   auth: 'Bearer conformance',
   model: 'openai-compatible/conformance-model',
 };
 
-// This suite wrote 274 of the 283 `agents` entries in the owner's REAL
-// ~/.kinu/config.json before this guard existed. Two independent causes, and
-// the assertion answers the one that cannot be fixed from inside this file:
-// `AGENT_HOME` is resolved at MODULE LOAD (config.ts:37), so assigning
-// KINU_HOME in this body is already too late. The only mechanism that can
-// set it is scripts/test-preload.ts, and a hand-run `bun test --cwd packages/cli`
-// does not execute a preload — which is exactly how these entries accumulated.
-// So prove the home rather than trust it, and fail before creating anything.
-// Same rule as the bench harness's assert_throwaway_home and the git fixture's
-// toplevel check: state that must not be ambient is asserted at the boundary.
+// `AGENT_HOME` binds at module load (config.ts), and a hand-run `bun test --cwd packages/cli` skips
+// scripts/test-preload.ts, so prove the home is throwaway before creating anything.
 if (resolve(AGENT_HOME) === resolve(join(homedir(), '.kinu'))
   || !resolve(AGENT_HOME).startsWith(resolve(tmpdir()))) {
   throw new Error(
@@ -66,10 +43,7 @@ if (resolve(AGENT_HOME) === resolve(join(homedir(), '.kinu'))
 const AGENT_NAME = `conformance-${Date.now()}`;
 
 afterAll(() => {
-  // The directory was never the whole footprint. `kinu create` also writes an
-  // `agents` entry, and `workspace delete` REFUSES local workspaces
-  // ("deletes cloud workspaces only"), so nothing in the product removes one —
-  // which is why the row survived every run while the directory was cleaned.
+  // `kinu create` also writes an `agents` entry, and no product path removes a local one.
   updateConfigFile((config) => {
     if (config.agents) delete config.agents[AGENT_NAME];
   });
@@ -77,8 +51,6 @@ afterAll(() => {
 
 type CapturedTool = NonNullable<Parameters<LanguageModelV2['doStream']>[0]['tools']>[number];
 
-/** A v2 model that records the exact tool definitions the SDK hands it, then
- *  streams a one-word answer. */
 function capturingModel(sink: (tools: CapturedTool[]) => void): LanguageModel {
   const usage = { inputTokens: 3, outputTokens: 2, totalTokens: 5 };
 
@@ -119,9 +91,7 @@ function staticResolver(model: LanguageModel): LocalModelResolver {
     modelInfo: async () => null,
     judgeCandidates: async () => [],
     getAuth: async () => null,
-    // The seam as this provider really answers it: a conformance model is not a
-    // vendor with a count endpoint, so admission runs ungated rather than on a
-    // number nobody measured.
+    // A conformance model has no count endpoint, so admission runs ungated.
     countInputTokens: async () => ({
       kind: 'unsupported' as const,
       provider: 'conformance',
@@ -146,9 +116,7 @@ async function observeCli(): Promise<{ observed: ObservedSurface; captured: Capt
   const openConfig = { llm: resolveLLMConfig(OFFLINE_PROVIDER) };
 
   const host = new LocalAgentHost({
-    // The real refs `kinu create` just wrote, read through the same roster the
-    // daemon iterates: the host binds planes and peer groups from placement,
-    // never from the existence of an agent.db.
+    // The host binds planes from placement, never from an agent.db.
     roster: () => listLocalRefsAllProjects(),
     dbPath: () => dbPath,
     open: async (_ref, db, path) => {
@@ -168,8 +136,7 @@ async function observeCli(): Promise<{ observed: ObservedSurface; captured: Capt
   await session.send('what can you do?');
 
   const db = new Database(dbPath, { readonly: true });
-  // Only a function tool carries an input schema to observe; a provider-defined
-  // tool is the provider's own and has no action enum of Kinu's.
+  // Only a function tool carries an input schema; provider-defined tools have no Kinu action enum.
   const byName = new Map(captured.flatMap((tool) => tool.type === 'function' ? [[tool.name, tool] as const] : []));
 
   const tables = db.query<{ name: string }, []>(
@@ -204,17 +171,10 @@ describe('cli backend conformance', () => {
     expect(renderConformanceFindings(report)).toBe('');
     expect(report.unmeasured).toEqual([]);
 
-    // Guards the guard: the capture must have seen a real surface — if the
-    // model were never called or the tool array went empty, the comparison
-    // above would judge an empty world.
     expect(captured.length).toBeGreaterThanOrEqual(5);
     expect(present(observed.planes.table, 'the table plane').size).toBeGreaterThanOrEqual(25);
     expect(present(observed.planes.tool, 'the tool plane').has('eval')).toBe(true);
-    // The peer transport reached the model. `reply` used to witness it as its
-    // own action; the addressing verbs are one `msg` now, so the witness is the
-    // TARGET only peers can offer — `event_id`, which is in the advertised
-    // schema exactly when the host wired them. This is the local virtual
-    // workspace's mail showing up in what a real model is handed.
+    // `event_id` is in the advertised schema exactly when the host wired peer transport.
     expect(present(observed.planes['agents-action'], 'the agents-action plane').has('msg')).toBe(true);
     expect(JSON.stringify(captured.find((tool) => tool.name === 'agents') ?? {}))
       .toContain('event_id');
