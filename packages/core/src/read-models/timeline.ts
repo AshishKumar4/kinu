@@ -1,14 +1,6 @@
 /**
- * The Run Timeline read model — ONE server-side merge of the four durable
- * sources a turn leaves behind (per-run `run_events`, the agent-level
- * `evolution_events` stream, the MCTS `search_nodes`, and detached background
- * jobs) into a single ordered span list.
- *
- * The merge is the point: a client that fetched three RPCs and merged them
- * itself would be a fourth place that has to agree about ordering, and would
- * drift. Nothing here is backend-shaped — every source is a table or a core
- * store — so a timeline is a capability any backend has, not one the Durable
- * Object happened to grow.
+ * Run Timeline: one server-side merge of `run_events`, `evolution_events`, `search_nodes` and
+ * background jobs into an ordered span list, so clients never merge and drift.
  */
 
 import type { RunEventRecorder } from '../events/recorder';
@@ -26,20 +18,18 @@ export type TimelineKind =
   | 'craft' | 'reflection' | 'head-split' | 'head-merge' | 'gepa' | 'skills'
   | 'curriculum' | 'trigger' | 'event-ingress' | 'background' | 'error' | 'abort' | 'recovery' | 'other';
 
-/** One typed span on the unified spine. */
 export interface TimelineSpan {
   ts: number;
   kind: TimelineKind;
   label: string;
   detail?: string;
-  /** Latency in ms when known (tool calls, activity timings). */
+  /** Latency in ms when known. */
   elapsedMs?: number;
-  /** Preserved structured payload (e.g. evolution_events.data) for drill-in. */
+  /** Preserved structured payload (e.g. evolution_events.data). */
   data?: JsonValue;
   source: 'shell' | 'evolution' | 'mcts' | 'background';
-  /** Id for driving the work surface (node id, run-event id, root id…). */
+  /** Node id, run-event id, root id… */
   refId?: string;
-  /** Original backend event type, for finer affordances. */
   rawType?: string;
 }
 
@@ -52,11 +42,8 @@ export function safeJsonParse(s: string): JsonValue {
   }
 }
 
-/** Map a crafted/builtin tool name to a timeline kind. `think` is the
- *  pre-unification exploration tool — stored run events keep its kind. The
- *  unified `agents` tool stays a plain tool-call span (run events carry no
- *  arguments to tell a fork from a hire/ask); fork runs still surface as
- *  exploration through their head_split / head_merge spans. */
+/** `think` is the pre-unification exploration tool; stored run events keep its kind. `agents`
+ *  stays a plain tool-call: run events carry no arguments to tell a fork from a hire. */
 export function toolKindFor(name: string): TimelineKind {
   if (name === 'shell') return 'runtime-exec';
 
@@ -67,7 +54,6 @@ export function toolKindFor(name: string): TimelineKind {
   return 'tool-call';
 }
 
-/** Map an evolution_events.type to a timeline kind. */
 export function classifyEvolutionType(type: string): TimelineKind {
   if (type === 'turn_complete') return 'llm-turn';
 
@@ -88,15 +74,7 @@ export function classifyEvolutionType(type: string): TimelineKind {
   return 'other';
 }
 
-/**
- * The token figure on a finished turn's span, printing only what the provider
- * actually reported.
- *
- * A one-line span label has no room to explain a silence, so an unreported side
- * is left out of the string entirely and a turn that reported neither gets no
- * detail at all — the reader sees no number rather than a zero the provider
- * never claimed.
- */
+/** Token figure on a finished turn's span; unreported sides are omitted, never shown as zero. */
 function turnUsageDetail(usage: Usage | undefined): string | undefined {
   const parts: string[] = [];
 
@@ -107,13 +85,7 @@ function turnUsageDetail(usage: Usage | undefined): string | undefined {
   return parts.length === 0 ? undefined : `${parts.join(' + ')} tok`;
 }
 
-/** Project a durable RunEvent onto a unified TimelineSpan. */
-/**
- * Recorded for diagnosis rather than for reading: the timeline shows each as
- * its own name, so they never reach the switch that renders the rest. A new
- * event type must be placed here or given an arm; the switch's exhaustiveness
- * check names it otherwise.
- */
+/** Shown by name only; a new event type must be placed here or given a switch arm. */
 type DiagnosisOnlyEvent = Extract<RunEvent, { type:
   | 'step_partial'
   | 'model_call'
@@ -202,68 +174,38 @@ export function runEventToSpan(e: RunEvent): TimelineSpan {
 
 export interface RunTimelineDeps {
   readonly sql: SqlExecutor;
-  /** Whose timeline. The evolution stream and the search tree below are
-   *  per-actor, exactly as `run_events` already is — a bare read would let a
-   *  sibling sharing the database contribute spans to this actor's timeline. */
+  /** Evolution and search reads are actor-scoped, as `run_events` is. */
   readonly actor: ActorHandle;
   readonly events: RunEventRecorder;
   readonly jobs: BackgroundJobStore;
-  /** The in-flight run, when a turn is running — the default focus. */
+  /** The in-flight run, the default focus. */
   readonly currentRunId: string | null;
 }
 
-/** Spans one timeline read returns when the caller states no usable limit —
- *  what the bare `?? 200` here was. The CLI's local peer keeps its own default
- *  of 100 and shares only the ceiling. */
+/** The CLI's local peer keeps its own default of 100 and shares only the ceiling. */
 export const RUN_TIMELINE_DEFAULT = 200;
 
-/**
- * The ceiling on one timeline read.
- *
- * Sized from what this surface is recorded asking for and costing, not invented:
- * the widest ask the product ever made of it was the chat seed's
- * `getRunTimeline({ limit: 250 })`, which `OrchestratorAgent`'s seed docstring
- * records being REMOVED for weight (250 merged spans no component read), and the
- * nearest existing ceiling on a sibling merged diagnostic read is
- * `ACTIVITY_STEP_WINDOW` at 400. So 400 admits every legitimate recorded caller,
- * including `kinu timeline`, while closing the unbounded case.
- */
+/** Admits the widest recorded caller (`kinu timeline`), matching `ACTIVITY_STEP_WINDOW` at 400. */
 export const RUN_TIMELINE_MAX = 400;
 
-/**
- * Merge the sources into one ordered timeline. Defaults to the active run,
- * else the most recent recorded one. Every source is a table
- * `initWorkspaceSchema` creates, so a failing read means a broken workspace
- * rather than an idle one — the error reaches the caller instead of being
- * rendered as a timeline that is silently missing one of its four spines.
- */
+/** Merge sources into one ordered timeline, focused on the active run, else the most recent one. */
 export function getRunTimeline(
   deps: RunTimelineDeps,
   opts?: { runId?: string; limit?: number },
 ): TimelineSpan[] {
-  // One caller-supplied number reaches FOUR separate `LIMIT` binds below plus a
-  // tail slice, so it is closed once here. `@callable` reaches this, and an
-  // unclosed value costs four unbounded table reads at `LIMIT -1` or four
-  // datatype mismatches on a fraction; a negative also inverts `slice(-limit)`
-  // into dropping spans from the front.
+  // Closed once: `@callable` reaches this and the value feeds four `LIMIT` binds and `slice(-limit)`.
   const limit = boundedInt(opts?.limit, RUN_TIMELINE_DEFAULT, 1, RUN_TIMELINE_MAX);
-  // Through the recorder, not a raw read: `run_events` is actor-scoped, and a
-  // bare `ORDER BY ts DESC` would let a sibling actor sharing the database
-  // decide which run this timeline focuses. `listRunsBefore` also excludes
-  // WORKSPACE_RUN_ID, so the fallback cannot land on the pseudo-run a
-  // between-turn model call is filed under.
+  // Via the recorder: actor-scoped, and `listRunsBefore` excludes WORKSPACE_RUN_ID.
   const recent = deps.events.listRunsBefore(null, 1)[0]?.runId;
-  // First candidate that names a run: an empty id names none, so it falls
-  // through to the next exactly as an absent one does.
+  // An empty id names no run and falls through like an absent one.
   const runId = [opts?.runId, deps.currentRunId, recent].find((id) => id !== null && id !== undefined && id !== '');
   const spans: TimelineSpan[] = [];
 
-  // 1) Durable per-run events for the focused run.
   if (runId) {
     for (const e of deps.events.read(runId, { limit })) spans.push(runEventToSpan(e));
   }
 
-  // 2) Agent-level evolution events — PRESERVE the `data` payload.
+  // Preserve the `data` payload.
   const evolutionRows = deps.sql<{ id: string; type: string; message: string; data: string | null; created_at: number }>`
     SELECT id, type, message, data, created_at FROM evolution_events
     WHERE actor_id = ${deps.actor.actorId} ORDER BY created_at DESC LIMIT ${limit}`;
@@ -276,7 +218,6 @@ export function getRunTimeline(
     });
   }
 
-  // 3) MCTS search nodes.
   const nodes = deps.sql<{ id: string; action: string; value: number; status: string; created_at: number }>`
     SELECT id, action, value, status, created_at FROM search_nodes
     WHERE actor_id = ${deps.actor.actorId} ORDER BY created_at DESC LIMIT ${limit}`;
@@ -289,8 +230,7 @@ export function getRunTimeline(
     });
   }
 
-  // 4) Background jobs — auto-detached >30s tool calls, as first-class spans
-  // (the run that "ended" because work moved to the background must say so).
+  // A run that ended because work moved to the background must say so.
   for (const j of deps.jobs.list(limit)) {
     const failure = j.error === null || j.error === '' ? null : `${j.status}: ${j.error}`;
     const detail = j.status === 'running' ? 'running in background' : (failure ?? j.status);

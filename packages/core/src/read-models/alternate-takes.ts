@@ -1,12 +1,7 @@
-/**
- * Alternate Takes view logic — the pure half of the chat's takes chip +
- * comparison (AlternateTakes.tsx renders it). Kept separate so the cycling,
- * labeling, and evidence formatting are unit-testable without a DOM.
- */
+/** Pure half of the chat's takes chip and comparison (AlternateTakes.tsx renders it). */
 import type { AlternateTakeSet } from '../mcts/takes';
 
-/** The candidate currently serving as the answer: the user's pick when one
- *  exists, else the convergence winner. */
+/** The user's pick when one exists, else the convergence winner. */
 export function currentTakeIndex(set: AlternateTakeSet): number {
   const current = set.chosenNodeId ?? set.winnerNodeId;
   const index = set.candidates.findIndex((c) => c.nodeId === current);
@@ -14,19 +9,17 @@ export function currentTakeIndex(set: AlternateTakeSet): number {
   return index >= 0 ? index : 0;
 }
 
-/** The answer-card chip label — e.g. "Take 1 of 3". */
 export function takeChipLabel(set: AlternateTakeSet): string {
   return `Take ${currentTakeIndex(set) + 1} of ${set.candidates.length}`;
 }
 
-/** Wrap-around carousel step (delta of ±1 from the arrows / arrow keys). */
+/** Wrap-around carousel step. */
 export function cycleTakeIndex(current: number, delta: number, count: number): number {
   if (count <= 0) return 0;
 
   return ((current + delta) % count + count) % count;
 }
 
-/** A set is comparable when there is a genuine choice to make. */
 export function hasComparableTakes(set: AlternateTakeSet | undefined | null): set is AlternateTakeSet {
   return (set?.candidates.length ?? 0) >= 2;
 }

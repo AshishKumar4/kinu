@@ -1,16 +1,6 @@
 /**
- * The file manager's read/write surface — one executor at a time.
- *
- * Each executor carries its OWN file view over its OWN raw handle
- * (`ExecutorProvider.files`), in that environment's native paths: the workspace
- * is Nimbus, the sandbox is its container, `device` is the user's machine. The
- * browser shows them one row at a time, never merged. (The AGENT-facing merge
- * is the workspace plane's mount table, `vfs/mounts.ts` — a different surface
- * with a different reader; nothing here rewrites one environment's paths into
- * another's namespace.)
- *
- * Errors are values here, not throws: a browser asking for a path on an offline
- * environment wants the reason rendered in the pane, not a failed RPC.
+ * The file manager's read/write surface, one executor at a time, each in its own native paths
+ * (the agent-facing merge is `vfs/mounts.ts`). Errors are values so the pane can render them.
  */
 
 import { normalizePath } from '@kinu.run/agent-utils';
@@ -26,31 +16,20 @@ import { classifyErrorCode, diagnostics, KinuError, refusalOf, renderThrownChain
 import { PLATFORM_CATALOG } from '../platform-catalog';
 import { readBoundedStream } from '../http/http';
 
-/** Just enough of the router to find one executor's files, and to ask that
- *  environment where its own relative paths resolve. */
 export interface ExecutorFileLookup {
   getProvider(name: string): { files?: VFS; homeDir(segment?: string): Promise<string> } | undefined;
 }
 
-/**
- * One environment as the file browser lists it — the executor's own row, with
- * live state and how durable its filesystem is.
- *
- * `consistency` is the property a user has to know before writing anywhere:
- * `durable` survives everything, `ephemeral` dies with the container,
- * `live-shared` IS the user's own machine.
- */
+/** `consistency`: `durable` survives everything, `ephemeral` dies with the container,
+ *  `live-shared` is the user's own machine. */
 export interface EnvironmentInfo {
   name: string;
-  /** How the environment is addressed in its own namespace, e.g. `sandbox.*`. */
   prefix: string;
   live: boolean;
   policy: { readOnly: boolean; consistency: 'durable' | 'ephemeral' | 'live-shared' };
-  /** Why it is listed but not reachable; null when it is. */
   reason: string | null;
 }
 
-/** The name the workspace UI imports this row set by. */
 export type MountInfo = EnvironmentInfo;
 
 interface RuntimeConsistency {
@@ -61,9 +40,6 @@ const CONSISTENCY: RuntimeConsistency = {
   workspace: 'durable', parent: 'durable', sandbox: 'ephemeral', nimbus: 'ephemeral', device: 'live-shared',
 };
 
-/** Enough of the router to list environments. Listing is a roster read and
- *  stays synchronous: where each environment's files START is answered by the
- *  listing call itself, which is the only call that has to resolve a path. */
 export interface ExecutorRowLookup {
   listExecutors(): Array<{
     name: string; available: boolean; configured: boolean; reason?: string;
@@ -71,7 +47,6 @@ export interface ExecutorRowLookup {
   getProvider(name: string): { files?: VFS } | undefined;
 }
 
-/** One row per executor that HAS a filesystem — what the file browser lists. */
 export function listEnvironments(router: ExecutorRowLookup): EnvironmentInfo[] {
   return router.listExecutors()
     .filter((exec) => router.getProvider(exec.name)?.files !== undefined || !exec.available)
@@ -84,37 +59,29 @@ export function listEnvironments(router: ExecutorRowLookup): EnvironmentInfo[] {
     }));
 }
 
-/** One directory entry, normalized across executors (each provider's readdir
- *  has its own format). */
 export interface DirEntry {
   name: string;
   type: 'file' | 'dir';
   size?: number;
-  /** Last-modified time (ms since epoch), where the plane's stat carried one. */
   mtimeMs?: number;
 }
-
 
 export type ExecutorWriteResult =
   | { ok: true; revision?: VfsRevision }
   | { conflict: true; revision: VfsRevision }
   | { unsupported: true; error: string }
   | { error: string }
-  /** A partial tree removal: the refusal shape plus the two sets it names —
-   *  what was removed and what is still there — so the file manager reports
-   *  the boundary the removal itself recorded, not a re-read that could move. */
+  /** Partial tree removal: the boundary the removal itself recorded. */
   | (Refusal & { removed: readonly string[]; remaining: readonly string[] });
 
 const CONDITIONAL_WRITE_UNSUPPORTED =
   'This file plane cannot protect an in-place edit from a newer write. Download it to edit safely.';
 
-
 import { FILE_CHUNK_BYTES } from '../types/read-models';
 
 export { FILE_CHUNK_BYTES } from '../types/read-models';
 
-/** Text preview payload. Optional fields preserve the RPC's established
- * success/error shape; `revision` is present only when native CAS exists. */
+/** `revision` is present only when native CAS exists. */
 export interface ExecutorTextFile {
   content?: string;
   truncated?: boolean;
@@ -123,20 +90,11 @@ export interface ExecutorTextFile {
   error?: string;
 }
 
-/** Total bytes one file transfer may carry. The transfer's peak transient
- *  footprint is roughly twice its total (accumulated parts plus the assembled
- *  copy at finalize), so a quarter of the measured 128 MiB
- *  `do.isolate.transient_alloc_reset` wall keeps that peak near half the wall
- *  even at the limit. */
+/** Peak transient footprint is ~2x the total (parts plus assembled copy), so a quarter of the
+ *  `do.isolate.transient_alloc_reset` wall keeps the peak near half of it. */
 export const FILE_TRANSFER_MAX_BYTES = PLATFORM_CATALOG['do.isolate.transient_alloc_reset'].limit.value / 4;
 
-/**
- * Actor-side state for one chunked upload. Chunks must arrive in order —
- * `offset` is checked against what has actually been buffered, never trusted —
- * and an `offset === 0` chunk (re)starts the transfer, because the holder
- * constructs a fresh instance there. With `final` the buffered parts assemble
- * and write in one plane call.
- */
+/** One chunked upload; the holder constructs a fresh instance on an `offset === 0` chunk. */
 export class ExecutorFileUpload {
   private readonly chunks = new ChunkedUpload();
 
@@ -147,7 +105,6 @@ export class ExecutorFileUpload {
     private readonly expectedRevision?: VfsRevision,
   ) {}
 
-  /** True once finalized or aborted — the holder must stop feeding it. */
   get done(): boolean {
     return this.chunks.done;
   }
@@ -166,18 +123,13 @@ export class ExecutorFileUpload {
   }
 }
 
-/**
- * The in-order chunk assembly every bounded upload shares, apart from what is
- * done with the bytes: the workspace plane writes them where the route said,
- * the Drive may unpack them first. `assembled` is answered exactly once, on
- * the final chunk, after which the instance is settled.
- */
+/** In-order chunk assembly; `assembled` is answered exactly once, on the final chunk. */
 export class ChunkedUpload {
   private parts: Uint8Array[] = [];
   private received = 0;
   private settled = false;
 
-  /** True once finalized or aborted — the holder must stop feeding it. */
+  /** True once finalized or aborted; the holder must stop feeding it. */
   get done(): boolean {
     return this.settled;
   }
@@ -225,14 +177,8 @@ export class ChunkedUpload {
   }
 }
 
-/**
- * The request body as the actor takes it: whole chunks of FILE_CHUNK_BYTES in
- * order, then one final chunk carrying the tail (possibly empty). The bound is
- * `readBoundedStream`'s; nothing materialises the whole body at the edge. A
- * `send` that throws stops the pump and the throw is the caller's to handle,
- * since only it knows how to abort the transfer it opened. The final send's
- * answer is the pump's.
- */
+/** Streams the body as whole FILE_CHUNK_BYTES chunks then one final (possibly empty) tail. A
+ *  throwing `send` propagates; only the caller can abort the transfer it opened. */
 export async function pumpUploadChunks<Result>(
   request: Request,
   send: (offset: number, chunk: Uint8Array, final: boolean) => Promise<Result>,
@@ -275,9 +221,7 @@ export async function pumpUploadChunks<Result>(
   return { result: await send(offset, pendingBytes > 0 ? take(pendingBytes) : new Uint8Array(0), true) };
 }
 
-/** Actor-side snapshot behind one chunked download. `open` reads once, enforces
- * the total, and returns that same snapshot's size; ranges can neither race a
- * later stat nor observe a different file version. */
+/** One snapshot behind a chunked download, so ranges never observe a different file version. */
 export class ExecutorFileDownload {
   private bytes: Uint8Array | null = null;
 
@@ -287,7 +231,6 @@ export class ExecutorFileDownload {
     private readonly path: string,
   ) {}
 
-  /** Whether this buffer already holds exactly this file. */
   serves(executorId: string, path: string): boolean {
     return this.bytes !== null && this.executorId === executorId && this.path === path;
   }
@@ -296,8 +239,6 @@ export class ExecutorFileDownload {
     return this.bytes !== null && end >= this.bytes.byteLength;
   }
 
-  /** Size before any byte moves, so the caller can refuse an over-budget
-   *  transfer instead of reading it. */
   async size(): Promise<{ size: number } | { error: string }> {
     return statExecutorFile(this.router, this.executorId, this.path);
   }
@@ -355,33 +296,23 @@ export class ExecutorFileDownload {
   }
 }
 
-/** The named executor's file view, or null when it has none (unknown id, or an
- *  environment with no browsable filesystem). */
 export function executorFiles(router: ExecutorFileLookup, executorId: string): VFS | null {
   return router.getProvider(executorId)?.files ?? null;
 }
 
-/**
- * Absolute-path arithmetic for the file plane — the ONE implementation, shared
- * by the listing here and by the browser that navigates it. `normalizePath`
- * already resolves `.`/`..` and refuses to climb above root; these three only
- * keep the leading slash it strips, so an absolute path stays absolute.
- */
+/** Absolute-path arithmetic shared with the browser; restores the slash `normalizePath` strips. */
 export function normalizeDir(path: string): string {
   return `/${normalizePath(path)}`;
 }
 
-/** One child of a directory, absolute. */
 export function joinDir(dir: string, name: string): string {
   return dir === '/' ? `/${name}` : `${dir}/${name}`;
 }
 
-/** The directory above, which for the root is the root. */
 export function parentDir(dir: string): string {
   return normalizeDir(`${dir}/..`);
 }
 
-/** Directories first, then files; alphabetical within each group. */
 export function sortDirEntries(entries: DirEntry[]): DirEntry[] {
   return [...entries].sort((a, b) => {
     if (a.type !== b.type) return a.type === 'dir' ? -1 : 1;
@@ -391,30 +322,10 @@ export function sortDirEntries(entries: DirEntry[]): DirEntry[] {
 }
 
 /**
- * Where a mount point's own tree starts.
- *
- * A mount is a faithful window on the machine's REAL absolute paths, so
- * `/pc/<name>` strips to that machine's `/` (`vfs/mounts.ts` routeOf). The
- * device's consent boundary refuses that, and the first click on a connected
- * machine's files answered `EACCES: '/' is outside the consented device
- * directory '/home/kinu'`. The directory a person means by "open this machine"
- * is the one they consented to, and the mounted plane already reports it:
- * `homeDir(segment)` IS the consented root the path guard measures against.
- * Bare `/pc` is the roster of machines and lands on itself.
- *
- * Nothing widens. The same guard still decides the listing, every path under
- * the mount stays the machine's own, and the reachable set only narrows —
- * `/pc/<name>` stops naming a directory the owner never consented to.
- *
- * A plane that cannot say where it starts keeps the bare mount point, so the
- * refusal the reader sees is the plane's own — a disconnected device states its
- * absence rather than reporting whatever broke while asking it for a home.
+ * Where a mount point's tree starts: `/pc/<name>` lands on that machine's consented root
+ * (`homeDir(segment)`), since the device guard refuses its `/`. Bare `/pc` is the roster.
  */
 async function mountLanding(router: ExecutorFileLookup, dir: string): Promise<string> {
-  // Bare /pc is the fleet root: the roster, which the plane lists itself.
-  // /pc/<name> with no rest is one machine's root — not a directory anyone
-  // means — so it lands on THAT machine's opening dir (consented root or
-  // reported home), asked of that machine by its segment.
   const machine = /^\/pc\/([^/]+)\/?$/.exec(dir)?.[1];
   const executor = MOUNT_EXECUTORS[machine === undefined ? dir : '/pc'];
 
@@ -422,15 +333,8 @@ async function mountLanding(router: ExecutorFileLookup, dir: string): Promise<st
   const provider = router.getProvider(executor);
 
   if (!provider) return dir;
-  // Deliberately ANY failure, and the reason is which error the reader ends up
-  // reading. A disconnected device cannot say where it starts either, and the
-  // refusal worth showing is the mount's own stated absence from the listing
-  // below — "no device connected" — not whatever the asking hit on the way.
-  // Recorded rather than swallowed: `dir` alone cannot tell a mount with no
-  // home from a plane that failed to answer, and only one of those is a fault.
-  // A caught binding rather than a rejection handler's parameter: the diagnostic
-  // needs the cause and nothing else, and `catch` narrows it without declaring
-  // an `unknown` parameter.
+  // Any failure keeps the bare mount, so the listing shows the mount's own refusal
+  // (e.g. "no device connected").
   let home: string | null;
 
   try {
@@ -446,19 +350,8 @@ async function mountLanding(router: ExecutorFileLookup, dir: string): Promise<st
   return home !== null && home.startsWith('/') && home !== '/' ? `${landing}${home}` : landing;
 }
 
-/**
- * Typed directory listing — off the executor's own raw handle, so types and
- * sizes are the environment's real ones.
- *
- * `path` is an absolute directory in that environment's own paths, or empty
- * for "wherever this environment starts". A bare MOUNT POINT means the same
- * thing for the machine behind it, so it resolves to that plane's own start
- * (`mountLanding`). Either way the answer carries the ABSOLUTE directory that
- * was listed, so the browser never has to invent one. A literal `'.'` reported
- * as every environment's working directory would leave "go up one level"
- * computed from that token landing on the filesystem root instead of the
- * directory above.
- */
+/** Typed directory listing. Empty `path` means the environment's start; the answer always carries
+ *  the absolute directory listed. */
 export async function getExecutorFiles(
   router: ExecutorFileLookup,
   executorId: string,
@@ -476,19 +369,13 @@ export async function getExecutorFiles(
 
     const listed = await listWithVfsOps(vfs, dir);
 
-    // `stat` answers null for an entry that is gone, or that this plane could
-    // not stat — one child, not the directory. Statting every child one after
-    // another and letting any single throw fail the whole listing would tell a
-    // reader their folder was unreachable because one file vanished mid-read.
+    // A null `stat` is one unreadable child, not a failed listing.
     const entries: DirEntry[] = listed.map(({ name, stat }) => ({
       name, type: stat?.isDir ? 'dir' : 'file', size: stat?.size, mtimeMs: stat?.mtimeMs,
     }));
 
-    // The canonical home is always reachable by walking down from the root.
-    // The workspace box enumerates directory ENTRIES, and on a fresh
-    // workspace nothing above the home has any — so `/` listed only the
-    // mounts and the whole workspace tree was unreachable by browsing. Each
-    // ancestor of the home names the next segment down, structurally.
+    // Each ancestor of home lists the next segment down: on a fresh workspace nothing above home
+    // has directory entries, so home would be unreachable by browsing.
     const home = await provider.homeDir();
 
     if (home.startsWith('/') && (dir === '/' || home.startsWith(`${dir}/`))) {
@@ -505,13 +392,8 @@ export async function getExecutorFiles(
   }
 }
 
-/**
- * One file's text, for the viewer — bounded before it is read, not after.
- *
- * A text read carries the backend's exact revision only when that backend also
- * offers native compare-and-write. Size/mtime never grants edit authority:
- * same-looking peer writes are still conflicts.
- */
+/** One file's text, bounded before it is read. A revision is returned only with native
+ *  compare-and-write; size/mtime never grants edit authority. */
 export async function readExecutorFile(
   router: ExecutorFileLookup,
   executorId: string,
@@ -532,10 +414,6 @@ export async function readExecutorFile(
       return { error: `${inlineType} is not text — this file is shown and downloaded as bytes` };
     }
 
-    // The viewer's preview bound is also its READ bound: the plane is asked
-    // for this many bytes and only those are decoded. Applied after the whole
-    // file is already a resident string it would protect only the wire, and
-    // previewing a large file would cost the file plus a clipped copy of it.
     const window = stat === null ? RESIDENT_TEXT_MAX_BYTES : Math.min(stat.size, RESIDENT_TEXT_MAX_BYTES);
     const bytes = await readBoundedWithVfsOps(vfs, path, window, stat?.size ?? null);
 
@@ -561,23 +439,13 @@ export async function readExecutorFile(
   }
 }
 
-/** The bytes to land, and the revision the write must still find when it lands.
- *  No expected revision writes unconditionally. */
+/** No expected revision writes unconditionally. */
 export interface ExecutorFileWrite {
   readonly bytes: Uint8Array;
   readonly expectedRevision?: VfsRevision;
 }
 
-/**
- * Write one uploaded file into an executor — binary-safe through the same raw
- * handle the reads use.
- *
- * Raw bytes, and no size cap at this layer. The transfer envelope bounds what
- * reaches here — `ExecutorFileUpload` refuses an over-limit chunk and an
- * over-limit total before it ever assembles — so a second cap on the
- * assembled write would protect nothing the envelope does not already refuse
- * earlier.
- */
+/** No size cap here: `ExecutorFileUpload` bounds what reaches this write. */
 export async function writeExecutorFileOp(
   router: ExecutorFileLookup,
   executorId: string,
@@ -623,12 +491,6 @@ export async function writeExecutorFileOp(
   }
 }
 
-
-/**
- * Raw bytes of one file, for the download/preview HTTP route. No text/binary
- * refusal and no view cap: the caller sends the answer as a response body,
- * and the transport's own payload ceiling is the honest bound.
- */
 export async function readExecutorFileBytes(
   router: ExecutorFileLookup,
   executorId: string,
@@ -651,11 +513,6 @@ export async function readExecutorFileBytes(
   }
 }
 
-/**
- * Size of one file, before any byte is read — the download route's preflight.
- * The HTTP layer refuses an over-budget transfer with this number instead of
- * reading the file and discovering the size afterwards.
- */
 export async function statExecutorFile(
   router: ExecutorFileLookup,
   executorId: string,
@@ -679,24 +536,14 @@ export async function statExecutorFile(
   }
 }
 
-/** The plane's native mutations, where it declares them. A widening
- *  assignment, not a cast: the extras are optional, and the workspace plane
- *  (vfs/nimbus-workspace.ts, vfs/mounts.ts) produces exactly these members. */
 function nativeMutations(vfs: VFS): Partial<VfsNativeMutations> {
   const probed: VFS & Partial<VfsNativeMutations> = vfs;
 
   return probed;
 }
 
-/**
- * Rename one entry inside an executor's plane. Native where the plane renames
- * natively (the workspace does, without reading the bytes); a byte carry for a
- * file on a plane that cannot, through the one carry the mount table also uses
- * — the source is destroyed only once its copy is confirmed, and a carry that
- * cannot finish removes the copy, so a failed rename never leaves the file
- * under two names. A directory there is a stated refusal: a tree copy wearing
- * a rename's name is not a rename. Never overwrites.
- */
+/** Native rename where available, else a confirmed byte carry for files (directories refused).
+ *  Never overwrites. */
 export async function renameExecutorPathOp(
   router: ExecutorFileLookup,
   executorId: string,
@@ -733,14 +580,8 @@ export async function renameExecutorPathOp(
   }
 }
 
-/**
- * Delete one entry inside an executor's plane. A file is one unlink; a
- * directory uses the plane's native tree removal where it has one and goes
- * entry by entry where it does not — a pass that fails CLOSED: enumeration
- * first, then deletions that stop at the first failure, and the result is a
- * structured refusal naming both halves of the tree it left rather than a
- * silent half-removal that reports only that something went wrong.
- */
+/** Non-native tree removal stops at the first failure and refuses with what was removed and what
+ *  remains. */
 export async function deleteExecutorPathOp(
   router: ExecutorFileLookup,
   executorId: string,
@@ -773,10 +614,7 @@ export async function deleteExecutorPathOp(
     const removal = await removeTreeWithVfsOps(vfs, path);
 
     if (!removal.ok) {
-      // The message already carries the cause's own words
-      // (`partialTreeRemovalMessage` inlines them for the VFS throw, which
-      // cannot attach a cause); attaching it here would render the same
-      // sentence a second time at the end of the refusal text.
+      // No cause attached: the message already inlines it.
       const reason = classifyErrorCode({ cause: removal.failed.cause }) ?? 'io';
 
       return {

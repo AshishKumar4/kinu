@@ -1,24 +1,10 @@
-/**
- * The canonical executor metadata module — the ONE place that names, orders,
- * and describes environments for the user surfaces.
- *
- * Capability doctrine (what runs where, in the provider's own ids) is
- * model-facing and lives in core's execution-status block; the user surfaces
- * describe environments in user terms only.
- */
+/** Names, orders, and describes executors for user surfaces, in user terms only. */
 
 import type { ExecutorInfo } from '../execution/types';
 
 export type { ExecutorInfo };
 
-/**
- * The human name beside each namespace. Not a copy of the namespace — `device`
- * reads "Your PC" — because the namespace is the API and this is the executor
- * kind.
- *
- * `workspace` is the agent's filesystem and its Nimbus shell, the durable one,
- * so "Agent state" would undersell it into looking like a debug pane.
- */
+/** The executor kind's human name, not a copy of the namespace (the namespace is the API). */
 const EXECUTOR_LABELS = {
   device:    "Your PC",
   sandbox:   "Sandbox",
@@ -43,10 +29,8 @@ export function isExecutorActive(exec: ExecutorInfo): boolean {
   return exec.active || exec.status === "active";
 }
 
-/** Devices worth offering as an explicit target (diff selector): the user's
- *  PC whenever it is connected, remote runtimes only once actually active,
- *  and never the workspace itself (callers append it deliberately — it is
- *  always there, so listing it beside the reachable ones says nothing). */
+/** Explicit-target devices: the PC when connected, remote runtimes once active, never the workspace
+ * (callers append it). */
 export function isActiveExecutionDevice(exec: ExecutorInfo): boolean {
   if (exec.name === "workspace" || !exec.available) return false;
 
@@ -55,12 +39,8 @@ export function isActiveExecutionDevice(exec: ExecutorInfo): boolean {
   return isExecutorActive(exec);
 }
 
-/**
- * Choose the executor the file-manager / diff should default to. Prefers where
- * the agent last actually worked (sticky, from actor_config.last_active_executor)
- * when that executor is still available; otherwise a static priority that favors
- * a real shell, falling back to the always-present VFS.
- */
+/** Default executor: the sticky `last_active_executor` when still available, else a static priority
+ * favoring a real shell, falling back to the VFS. */
 export interface ExecutorAvailability {
   name: string;
   available: boolean;
@@ -68,16 +48,8 @@ export interface ExecutorAvailability {
   status?: "not_configured" | "idle" | "active" | "disconnected" | "error";
 }
 
-/**
- * What the release lane can actually do here. The release engine executes in
- * the agent's sandbox container (core/src/release/engine.ts adapts its raw
- * handle), so the sandbox row IS the substrate verdict: absent or unavailable
- * means changes can be drafted and approved and never applied, checked,
- * previewed or deployed. `unknown` while the executor list has not loaded —
- * the surface says nothing rather than guessing either way. An available
- * sandbox may still carry a note (previews off until PREVIEW_HOST_SUFFIX is
- * set); the note rides the executor's own status reason.
- */
+/** The release engine runs in the sandbox container, so the sandbox row is the substrate verdict:
+ * absent means changes can be drafted and approved, never applied. `unknown` until executors load. */
 export type ReleaseSubstrate =
   | { state: "unknown" }
   | { state: "unavailable"; reason: string }

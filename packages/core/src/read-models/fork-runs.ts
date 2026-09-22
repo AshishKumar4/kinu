@@ -1,40 +1,10 @@
 /**
- * Exploration runs — one chronological list of every search this workspace has
- * run, whatever it wrote while running.
+ * Exploration runs: one chronological list of every search this workspace has run.
  *
- * ONE ROOT ID IS ONE RUN. That is the whole load-bearing property here, and a
- * swarm is where it earns its keep. A run scoped by `root_id` writes up to two
- * stores, and which ones it writes is a fact about its axes rather than a choice
- * between two kinds of run:
- *
- *   - the SEARCH TREE (`search_nodes`, written only by `mcts/record-node.ts`) —
- *     the structure selection descends and backpropagation walks. Every branch a
- *     search opens gets exactly one row here;
- *   - the NODE TRANSCRIPTS (`head_journal` / `head_runs`, written only by
- *     `heads/journal.ts`) — one journalled row per tool-using node, with its turns.
- *
- * A swarm whose `unit` is an agent writes BOTH: `search_nodes` for the tree and
- * `head_journal` for each node's transcript, because a node is a real tool-using
- * agent. Reporting those halves as TWO runs sharing one id would force every
- * caller to dedup, and the journal half sorts newer than the tree half — so the
- * half with NO TREE wins. Picking a winner between the halves is how four tree
- * rows and a 0.71 winner get discarded.
- *
- * So the halves are two INDEPENDENT facts on one row ({@link
- * ForkRunSummary.hasSearchTree}, {@link ForkRunSummary.hasNodeTranscripts}), and
- * the position a page resumes from is a position over RUNS rather than over
- * either store. A run carries every half it actually has and there is nothing
- * left to reconcile.
- *
- * This is the one read model that answers "when did it search, and what did that
- * run leave behind". It deliberately stops at the summary: the tree rows and the
- * journalled turns are separate reads, composed one layer up by
- * `exploration-canvas.ts`.
- *
- * Steer-as-Branch runs are journaled through the same HeadRuntime seam but are
- * NOT exploration runs — they are a user redirect anchored to the message they
- * forked, and they already render as chips in chat. They are filtered out by the
- * id prefix their only writer stamps (`STEER_BRANCH_RUN_ID_PREFIX`).
+ * One root id is one run. A run may write the search tree (`search_nodes`), node transcripts
+ * (`head_journal` / `head_runs`), or both (a swarm whose unit is an agent); each half is an
+ * independent flag on one row, and paging is over runs, never over either store.
+ * Steer-as-Branch runs are excluded by `STEER_BRANCH_RUN_ID_PREFIX`.
  */
 
 import type { SqlExecutor } from '../types/primitives';
@@ -43,67 +13,36 @@ import { seekPage, StaleCursorError, type Page, type SeekCursor } from '../sessi
 import { STEER_BRANCH_RUN_ID_PREFIX } from '../steer-branch';
 import type { ActorHandle } from '../identity/actor-handle';
 
-/** One vocabulary across both halves, so a list row can be read without knowing
- *  which stores it wrote. `partial` is "it stopped without a settled answer" —
- *  journalled nodes that finished with nothing settling them, a search with no
- *  terminal node and no ledger row left to explain why. */
+/** `partial`: stopped without a settled answer. */
 export type ForkRunStatus = 'running' | 'completed' | 'failed' | 'partial';
 
 export interface ForkRunSummary {
-  /** The run's `root_id`, which both stores scope by and which the detail views
-   *  key on. Exactly one summary exists per root id. */
+  /** The run's `root_id`; exactly one summary exists per root id. */
   readonly id: string;
   readonly task: string;
-  /**
-   * What the run is called — the short handle every surface leads with. The
-   * search root's own label when its engine wrote one (the caller's `name`,
-   * or a composition's provenance label), and a derivation from the task
-   * otherwise: a run is never left to present a truncated paragraph as if it
-   * were a title.
-   */
+  /** The root's own label when its engine wrote one, else derived from the task. */
   readonly name: string;
   /** The first write of either half. */
   readonly startedAt: number;
   readonly status: ForkRunStatus;
-  /** This run expanded a search tree: `search_nodes` rows are scoped to its root. */
   readonly hasSearchTree: boolean;
-  /** This run journalled per-node transcripts: `head_journal` rows are scoped to
-   *  its root. True whenever a node was a tool-using agent. */
   readonly hasNodeTranscripts: boolean;
-  /** Branches this run opened below its root. The TREE's count where it has a
-   *  tree, because every branch gets a row there while only tool-using nodes get
-   *  a journal row; the journalled count otherwise. */
+  /** The tree's branch count where there is a tree (every branch gets a row there); else the
+   *  journalled count. */
   readonly branches: number;
-  /** The best terminal node's score in [0,1]. Null for a run with no tree, and
-   *  null for a tree in which nothing reached a terminal node. */
+  /** Best terminal score in [0,1]; null without a tree or without a terminal node. */
   readonly winnerScore: number | null;
 }
 
-/** A page of the run list. Twenty is what the bare `LIMIT` was. */
 const DEFAULT_FORK_PAGE = 20;
 
-/**
- * The ceiling on one fork-list page. The run list's own ceiling: both are
- * RPC-reachable newest-first pages over runs, so one number bounds both.
- */
 const MAX_FORK_PAGE = 200;
 
 /**
  * A page of exploration runs, newest first.
  *
- * Newest-first in BOTH traversal and presentation, so a walker appends.
- *
- * ── Why the page is bounded over RUNS and not over a store ───────────────────
- * `head_journal` rowids and `search_nodes` rowids are not comparable, so no
- * single-table position can bound both halves, and the only total order the two
- * share is `(startedAt DESC, id DESC)`. That pair is what `after` carries —
- * opaque to every caller, parsed only here.
- *
- * The bound is applied to the union of ROOT IDS, once, and each half is then read
- * for the roots that page names. Bounding the halves separately and merging
- * afterwards is what tore: a run whose journal began after the cursor and whose
- * tree began before it would arrive with one half missing, which is the same
- * "half of a run" defect at the page boundary rather than at the dedup.
+ * The bound applies to the union of root ids, ordered `(startedAt DESC, id DESC)`, and each half
+ * is read for those roots; bounding the halves separately tears runs at the page boundary.
  */
 export function listForkRuns(
   sql: SqlExecutor,
@@ -112,9 +51,6 @@ export function listForkRuns(
   limit = DEFAULT_FORK_PAGE,
 ): Page<ForkRunSummary> {
   actor.assertCurrent();
-  // Closed here: a negative limit reaches SQL as `LIMIT 0` and `seekPage` as a
-  // negative page, and an unparseable one fails the query. Same ceiling as the
-  // run list.
   const page = boundedInt(limit, DEFAULT_FORK_PAGE, 1, MAX_FORK_PAGE);
   const after = cursor === null ? null : parseForkAnchor(cursor.after);
   const over = page + 1;
@@ -133,13 +69,7 @@ export function readForkRun(sql: SqlExecutor, actor: ActorHandle, rootId: string
   return readRuns(sql, actor.actorId, rootId, positions)[0] ?? null;
 }
 
-/**
- * The position of one run in the list's order.
- *
- * `startedAt` alone is not a position: two runs can share a millisecond, and the
- * list already ordered by it with no tiebreak — so the window had no defined
- * membership at its boundary, never mind a resumable one. The id completes it.
- */
+/** `startedAt` alone is not a position (two runs can share a millisecond); the id completes it. */
 interface ForkAnchor {
   readonly startedAt: number;
   readonly id: string;
@@ -154,9 +84,7 @@ function parseForkAnchor(after: string): ForkAnchor {
   const startedAt = Number(after.slice(0, split));
   const id = after.slice(split + 1);
 
-  // A malformed anchor is a stale one as far as a caller is concerned: the walk
-  // has to restart either way, and answering an unreadable position with an
-  // empty page would report the runs behind it as exhausted.
+  // Malformed is stale: an empty page would falsely report the runs behind it as exhausted.
   if (split < 1 || !Number.isFinite(startedAt) || id === '') {
     throw new StaleCursorError('fork list', after);
   }
@@ -164,8 +92,6 @@ function parseForkAnchor(after: string): ForkAnchor {
   return { startedAt, id };
 }
 
-/** One run's place in the list: the id both halves are scoped by, and when the
- *  earlier of them was first written. */
 interface RunPosition {
   readonly rootId: string;
   readonly startedAt: number;
@@ -180,19 +106,8 @@ interface PositionQuery {
 }
 
 /**
- * The page's runs, by position, newest first.
- *
- * The union is over the two stores that hold BRANCHES. `head_runs` deliberately
- * contributes nothing: it is a header row written before the first node spawns,
- * so a run known only to it has neither a tree nor a transcript, and every run
- * that reaches a node writes its tree root either way.
- *
- * BOTH halves are actor-scoped, and the tree half is the one that is easy to
- * miss: `head_journal` carries an `actor_id` predicate because the journal is
- * actor-private, and `search_nodes` leads with `actor_id` for the same reason.
- * Reading that table whole, under one database, puts every OTHER actor's search
- * roots into this actor's Exploration list, and starts them at the earliest
- * `created_at` of the stranger's tree.
+ * The page's runs, by position, newest first. `head_runs` contributes nothing: a run known only
+ * to it has no branches. Both halves must stay actor-scoped; `search_nodes` is shared per database.
  */
 function queryPositions({ sql, actorId, limit, rootId, after }: PositionQuery): RunPosition[] {
   const at = after?.startedAt ?? null;
@@ -222,15 +137,6 @@ function queryPositions({ sql, actorId, limit, rootId, after }: PositionQuery): 
     .map((row) => ({ rootId: row.root_id, startedAt: row.started_at }));
 }
 
-/**
- * The named runs, each carrying every half it has.
- *
- * Both halves are read once for the whole page and joined by root id here, rather
- * than per run: two aggregates over the two stores is the cost the two bounded
- * queries already were, and a per-run read would be one round trip per row.
- * `rootId` narrows both aggregates for the single-run read; a page passes null and
- * selects the roots it named out of the result, the way `readForkRunParams` does.
- */
 function readRuns(
   sql: SqlExecutor,
   actorId: string,
@@ -247,25 +153,16 @@ function readRuns(
     const transcripts = journals.get(position.rootId);
     const status = runStatus(tree, transcripts);
 
-    // Neither half: nothing this workspace stored says anything about the run, so
-    // there is no run to report. Unreachable through `queryPositions`, whose every
-    // row comes from one of these two stores, and a guard rather than a default
-    // because a fabricated row is precisely what this read model must not produce.
+    // Neither half: never fabricate a row.
     if (status === null) return [];
 
-    // First of the three that says something: a task trimmed to nothing names
-    // the run no better than an absent one.
     const task = [tree?.task, transcripts?.rootTask, transcripts?.rationale]
       .map((candidate) => candidate?.trim())
       .find((candidate) => candidate !== undefined && candidate !== '') ?? '(exploration run)';
 
     return [{
       id: position.rootId,
-      // The TREE's root task is a task written by the engine that ran, whereas
-      // `head_runs.rationale` is the split's "why" and carries the preset name
-      // for a swarm. Reading the rationale as the task is what put `optimise`
-      // in the task slot of every swarm run — a swarm journals no row for its
-      // root, so the journal's own task was null and the fallback reached it.
+      // The tree's task wins: `head_runs.rationale` carries the preset name for a swarm.
       task,
       name: runName(tree?.name ?? null, task),
       startedAt: position.startedAt,
@@ -279,14 +176,8 @@ function readRuns(
 }
 
 /**
- * The run's status across both halves, or null when it has neither.
- *
- * Either half still writing makes the run running — that is the one claim a
- * reader acts on by waiting. Otherwise the TREE's verdict decides where there is
- * a tree, because the ledger row is the run's own statement about how it ended,
- * while the transcript rule below is about heads reaching a synthesis: a search
- * that converged with one failed branch settled, and reading it as `partial`
- * would report a normal search as one that stopped without an answer.
+ * Either half running makes the run running; otherwise the tree's verdict decides where there is
+ * a tree, since a converged search with one failed branch still settled.
  */
 function runStatus(
   tree: TreeHalf | undefined,
@@ -300,44 +191,21 @@ function runStatus(
   return treeStatus ?? transcriptStatus;
 }
 
-/* ── the search-tree half (search_nodes + the run ledger) ──────────── */
-
 interface TreeHalf {
   readonly branches: number;
   readonly task: string | null;
-  /** The root row's own label — the run's given name, empty when none was. */
   readonly name: string | null;
   readonly ledgerStatus: string | null;
-  /**
-   * The FRONTIER: open nodes with no children, which is exactly what
-   * `mcts/frontier.ts` selects from (`status='open' AND NOT EXISTS (children)`).
-   * Non-zero is the tree's own answer to "can this search still be entered",
-   * and it is the answer a stale ledger row cannot give — `mcts/convergence.ts`:
-   * *a search is settled exactly when its tree has no open nodes left*.
-   *
-   * Open nodes that HAVE children are not counted, and must not be: an expanded
-   * parent is not selectable, and a tree whose settle left its root open would
-   * otherwise read as running for as long as the row survives.
-   */
+  /** Open nodes with no children: exactly what `mcts/frontier.ts` selects from. Expanded open
+   *  parents must not count. */
   readonly frontier: number;
   readonly terminal: number;
   readonly bestTerminal: number | null;
 }
 
 /**
- * Grouped by `search_nodes.root_id`, NOT by the `mcts_search_runs` ledger: the
- * ledger prunes settled rows after a day (search-store.ts) while the trees stay
- * forever, so a ledger-driven list would make week-old searches disappear — the
- * exact failure this read model exists to end. The ledger is joined for the
- * status it alone records.
- *
- * EVERY read of `search_nodes` here is actor-scoped, including the frontier's
- * child-existence subquery. The ledger is keyed `(actor_id, root_id)` and the
- * tree `(actor_id, id)`, so under one database an unscoped read of either does
- * not merely add a stranger's roots to the list: `branches`, `terminal` and
- * `frontier` are SUMs over the group, so two actors that ran the same root id
- * report each other's branch counts added together, and one actor's open node
- * reads as expanded because ANOTHER actor's node claims it as a parent.
+ * Grouped by `search_nodes.root_id`, not the `mcts_search_runs` ledger, which prunes settled rows
+ * after a day. Every `search_nodes` read, including the child subquery, must be actor-scoped.
  */
 function queryTreeHalves(
   sql: SqlExecutor,
@@ -384,27 +252,14 @@ function queryTreeHalves(
   return halves;
 }
 
-/**
- * The name a run presents: the label its engine wrote for the root, or a
- * derivation from the task when it wrote none — trees whose root row carries no
- * label, journal-only runs, and callers who named nothing. Total: a surface
- * never falls back to showing a truncated paragraph where a title belongs.
- *
- * Exported because the same name has to reach the branch transcript's own
- * breadcrumb: the first crumb IS the run, and labelling it off the raw column
- * printed the literal `root` for every search whose engine wrote no label
- * (`mcts/engine.ts` records the root with `action: ''`).
- */
+/** The run's name: the root label its engine wrote, else derived from the task. Shared with the
+ *  branch transcript breadcrumb (`mcts/engine.ts` records the root with `action: ''`). */
 export function runName(rootLabel: string | null, task: string): string {
   const given = rootLabel?.trim();
 
   return given === undefined || given === '' ? shortName(task) : given;
 }
 
-/** The first clause of a task, cut where the task itself offers a cut — a
- *  dash, a colon, a sentence end — and at a word boundary inside
- *  {@link NAME_MAX_CHARS} otherwise. A title, so no ellipsis: what it cuts,
- *  it cuts cleanly. */
 const NAME_MAX_CHARS = 48;
 
 function shortName(task: string): string {
@@ -422,48 +277,23 @@ function shortName(task: string): string {
 }
 
 /**
- * What became of the search, over the tree half.
- *
- * THE LEDGER'S SETTLEMENTS DECIDE, AND `running` IS NOT ONE OF THEM. A row still
- * reading `running` is a LEASE rather than an observation: `mcts/engine.ts`
- * closes the tree BEFORE it records the outcome, precisely so that a crash
- * between the two leaves *"a closed tree with a still-'running' row [which] is
- * inert (nothing is selectable)"*. Read as running, that inert row is the report
- * *"this run had 2 reported and rest stopped … still it says 'running'?"* — a run
- * nothing is working on, claiming to be at work for as long as the row lives.
- *
- * So the TREE answers that question, through the predicate selection itself
- * descends: `mcts/frontier.ts` can only return an open node with no children, so
- * a tree with none of those cannot advance whatever its lease says. No clock and
- * no staleness window — a search between waves still holds a frontier, and a
- * settled one holds nothing (`mcts/convergence.ts` prunes every open node but the
- * winner it marks terminal; `abandonSearchTree` fails them all).
- *
- * A TERMINAL NODE OUTRANKS THE FRONTIER, because only a settle writes one
- * (`convergence.ts`, `takes.ts`). That is what keeps a tree settled with some
- * node still open, its ledger row long since pruned, reading as the completed
- * search it is.
+ * Ledger settlements decide; a `running` ledger row is a lease, not an observation (the engine
+ * closes the tree before recording the outcome). Otherwise a terminal node means completed, and
+ * a non-empty frontier means running.
  */
 function searchStatus(tree: TreeHalf): ForkRunStatus {
   if (tree.ledgerStatus === 'failed') return 'failed';
 
   if (tree.ledgerStatus === 'converged') return 'completed';
 
-  // This list's `failed` bucket is "settled without a usable answer". The
-  // exact `no_acceptable_candidate` cause remains on the run ledger.
   if (tree.ledgerStatus === 'no_acceptable_candidate') return 'failed';
 
   if (tree.terminal > 0) return 'completed';
 
   if (tree.frontier > 0) return 'running';
 
-  // Nothing left to select and nothing ever won: the lease is stale, the row was
-  // pruned (settled over a day ago), or it was never written. Either way the
-  // search stopped without an answer.
   return 'partial';
 }
-
-/* ── the transcript half (head_journal + head_runs) ────────────────── */
 
 interface TranscriptHalf {
   readonly branches: number;
@@ -475,15 +305,8 @@ interface TranscriptHalf {
   readonly settled: number;
 }
 
-/**
- * Grouped by `head_journal` rather than `head_runs`, for the same reason
- * `HeadJournal.listRuns` is: a top-level split's synthetic root has no journal row
- * of its own, so grouping the other way collapses N nodes into N empty runs.
- *
- * Deliberately narrower than `listRuns` — no per-node steps, no synthesis, no
- * evidence. A list row only has to say when it started, into how many, and
- * whether it landed.
- */
+/** Grouped by `head_journal`, as `HeadJournal.listRuns` is: a top-level split's synthetic root
+ *  has no journal row. */
 function queryTranscriptHalves(
   sql: SqlExecutor,
   actorId: string,
@@ -529,12 +352,7 @@ function queryTranscriptHalves(
   return halves;
 }
 
-/**
- * Same precedence as `HeadJournal.assembleRun`, so the list and the detail view
- * can never disagree about one run: a recursive sub-split's parent head IS the
- * run and its own lifecycle decides, and only a top-level split (whose synthetic
- * root has no journal row) is judged by its children.
- */
+/** Same precedence as `HeadJournal.assembleRun`, so list and detail never disagree. */
 function transcriptsStatus(transcripts: TranscriptHalf): ForkRunStatus {
   if (transcripts.rootStatus === 'running') return 'running';
 
@@ -546,7 +364,5 @@ function transcriptsStatus(transcripts: TranscriptHalf): ForkRunStatus {
 
   if (transcripts.settled > 0) return 'completed';
 
-  // Nothing synthesised: every node landing cleanly is still a completed run whose
-  // synthesis was skipped; anything else stopped short of an answer.
   return transcripts.errored === 0 ? 'completed' : 'partial';
 }

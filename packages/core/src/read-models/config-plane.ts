@@ -1,16 +1,4 @@
-/**
- * The agent's settable knobs, as one plane.
- *
- * Each pair is a read and a write over `actor_config`, and each write is a
- * trust boundary: the value arrives from an operator surface, so the
- * validation belongs with the store, not with whichever transport happened to
- * carry it: per transport, the same setter validates on one backend and not on
- * another.
- *
- * What genuinely differs per backend is what a change INVALIDATES — a cached
- * ToolSet on one, the model-bound session state on another — so that is the
- * one thing a caller supplies (`onChanged`).
- */
+/** Agent config writes validate here because each is a trust boundary; `onChanged` is the per-backend part. */
 
 import * as v from 'valibot';
 import { DEFAULT_CONFIG } from '../config';
@@ -34,23 +22,14 @@ const AdvisorSeveritySchema = v.picklist(ADVISOR_SEVERITIES);
 
 export interface SetModelDeps {
   readonly config: AgentConfigStore;
-  /** The backend's provider catalogue: resolve a spec to its canonical form,
-   *  or throw if it names nothing. Validating here rather than on the next
-   *  turn is the point — an unknown provider is a config-time error. */
+  /** Resolve a spec to its canonical form or throw: an unknown provider is a config-time error. */
   readonly normalize: (spec: string) => string;
   /** Drop whatever the old model bound (tool cache, model-bound session). */
   readonly onChanged: () => void;
 }
 
-/**
- * The MCTS knobs a USER may set.
- *
- * Depth is deliberately absent. A form that offers a depth cap beside a budget
- * offers two spellings of the same limit and invites the reading the owner
- * gave it — *"why do we have 'max depth' field if we already have 'budget'?"* —
- * so the depth a search may reach is owned by {@link DEFAULT_CONFIG}'s own cap
- * and, for a swarm, by the preset it resolved.
- */
+/** MCTS knobs a user may set. No depth field: a depth cap beside a budget spells the same limit
+ * twice; depth is owned by {@link DEFAULT_CONFIG} and, for a swarm, its preset. */
 export interface MctsConfigView {
   explorationConstant: number;
   maxIterations: number;
@@ -62,19 +41,15 @@ export interface EvolutionConfigView {
   gepaEvalBudget: number;
   shadowSampleRate: number;
   scaffoldExploreShare: number;
-  /** Whether the turn reviewer runs. False by default. */
   advisorEnabled: boolean;
-  /** The lowest severity that reaches the conversation. Below it, a note is a
-   *  Changelog row instead. */
+  /** Lowest severity that reaches the conversation; below it a note becomes a Changelog row. */
   advisorMinSeverity: AdvisorSeverity;
 }
 
-/** The stored model spec, or null when unset (the registry picks a default). */
 export function getStoredModelSpec(config: AgentConfigStore) {
   return { spec: config.getModel() };
 }
 
-/** Validate, store and invalidate. Effective on the next turn. */
 export function setModel(deps: SetModelDeps, spec: string) {
   try {
     const normalized = deps.normalize(spec);
@@ -95,9 +70,7 @@ export interface ReasoningEffortWrite<Effort extends ReasoningEffort | null> { o
 
 /** Null clears the setting: the tier's level applies again. */
 export function setReasoningEffort(config: AgentConfigStore, effort: null): ReasoningEffortWrite<null>;
-/** Anything else is wire input this setter is the validator for: the parameter
- *  stays as wide as what a transport can deliver, because a type no bad value
- *  can inhabit would make the parse below unreachable. */
+/** Wire input: the parameter stays as wide as a transport can deliver, so this setter validates. */
 export function setReasoningEffort(config: AgentConfigStore, effort: JsonValue): ReasoningEffortWrite<ReasoningEffort>;
 export function setReasoningEffort(config: AgentConfigStore, effort: JsonValue): ReasoningEffortWrite<ReasoningEffort | null> {
   if (effort === null) {
@@ -108,8 +81,6 @@ export function setReasoningEffort(config: AgentConfigStore, effort: JsonValue):
 
   const parsed = v.safeParse(ReasoningEffortSchema, effort);
 
-  // The refused value verbatim when it is text, and its JSON otherwise: an
-  // operator reading this needs to recognise what they sent.
   if (!parsed.success) throw new Error(`Invalid reasoning effort: ${v.is(v.string(), effort) ? effort : JSON.stringify(effort)}`);
   config.setReasoningEffort(parsed.output);
 
@@ -121,18 +92,8 @@ export function getShellApprovalMode(config: AgentConfigStore) {
 }
 
 /**
- * How the `shell` builtin handles 'gate' decisions from the approval-gate
- * review. Effective on the next turn, once `onChanged` has dropped the tool
- * surface the old mode built.
- *
- *   strict     — default; put gate decisions to the owner (sudo on their
- *                device, a force-push, a publish). Commands whose only harm
- *                is local to the agent's own workspace or sandbox are not
- *                gate decisions in the first place — see safety/approval-gate.ts.
- *   allow_all  — treat gate decisions as warn (logged + executed). Trusted
- *                dev environments only. Prefer a standing grant: it is the
- *                same convenience scoped to one rule on one executor.
- *   deny_all   — reject gate AND warn (env-dump, secret-file-read).
+ * How `shell` handles 'gate' decisions; effective next turn, after `onChanged`.
+ * strict (default): ask the owner. allow_all: treat as warn (trusted dev only). deny_all: reject gate and warn.
  */
 export function setShellApprovalMode(
   deps: { config: AgentConfigStore; onChanged: () => void },
@@ -147,23 +108,13 @@ export function setShellApprovalMode(
   return { ok: true, mode: parsed.output };
 }
 
-/**
- * The standing grants: every rule the owner has said "always" to, and where.
- *
- * This is the revoke surface. A grant is one line — `rm-recursive` on
- * `device` — so what it bought is legible without reading any code, and
- * dropping the line is the whole of taking it back. Grants never widen what a
- * command can reach; they only stop the gate asking again.
- */
+/** Standing grants (rule + executor): the revoke surface. Grants never widen reach; they only stop
+ * the gate asking again. */
 export function getShellApprovalGrants(config: AgentConfigStore) {
   return { grants: config.getShellApprovalGrants() };
 }
 
-/** Revoke grants. The owner's own answers arrive here from the queue's
- *  'always' button and the CLI's "stop asking" option; this is how they are
- *  taken back. No `onChanged`: unlike the approval MODE, a grant binds nothing
- *  at tool-build time — the gate reads grants live, so a revocation takes
- *  effect on the very next command. */
+/** No `onChanged`: the gate reads grants live, so a revocation applies to the next command. */
 export function revokeShellApprovalGrants(config: AgentConfigStore, grants: readonly ApprovalGrant[]) {
   const parsed = v.safeParse(v.array(v.object({ rule: v.string(), executor: v.string() })), grants);
 
@@ -173,12 +124,11 @@ export function revokeShellApprovalGrants(config: AgentConfigStore, grants: read
   return { ok: true, grants: config.getShellApprovalGrants() };
 }
 
-/** Skills pinned always-active for this agent. Empty means none. */
 export function getAlwaysActiveSkills(config: AgentConfigStore) {
   return { names: config.getAlwaysActiveSkills() };
 }
 
-/** Pin a set of skills. An empty list clears the pin. */
+/** An empty list clears the pin. */
 export function setAlwaysActiveSkills(config: AgentConfigStore, names: JsonValue | readonly JsonValue[]) {
   const array = v.safeParse(ArrayBoundarySchema, names);
 
@@ -191,8 +141,6 @@ export function setAlwaysActiveSkills(config: AgentConfigStore, names: JsonValue
   return { ok: true, names: config.getAlwaysActiveSkills() };
 }
 
-/** Effective MCTS knobs: stored overrides over the engine defaults — exactly
- *  what the think path and lifetime evolution will run with. */
 export function getMctsConfig(config: AgentConfigStore): MctsConfigView {
   const o = config.getMctsOverrides();
   const d = DEFAULT_CONFIG.mcts;
@@ -204,8 +152,7 @@ export function getMctsConfig(config: AgentConfigStore): MctsConfigView {
   };
 }
 
-/** Set any subset of the MCTS knobs. Returns the EFFECTIVE config, so a
- *  caller sees what a clamped value actually became. */
+/** Returns the effective config, so a caller sees what a clamped value became. */
 export function setMctsConfig(config: AgentConfigStore, view: Partial<MctsConfigView>): MctsConfigView {
   config.setMctsOverrides({
     explorationWeight: view.explorationConstant,
@@ -216,8 +163,6 @@ export function setMctsConfig(config: AgentConfigStore, view: Partial<MctsConfig
   return getMctsConfig(config);
 }
 
-/** The self-evolution knobs: who judges the agent, whether a proven scaffold
- *  promotes itself, and how much each loop may spend. */
 export function getEvolutionConfig(config: AgentConfigStore): EvolutionConfigView {
   return {
     autoPromoteScaffold: config.getAutoPromoteScaffold(),
@@ -229,8 +174,7 @@ export function getEvolutionConfig(config: AgentConfigStore): EvolutionConfigVie
   };
 }
 
-/** Set any subset of the evolution knobs. Returns the EFFECTIVE config, so a
- *  caller sees what a clamped value actually became. */
+/** Returns the effective config, so a caller sees what a clamped value became. */
 export function setEvolutionConfig(
   config: AgentConfigStore,
   view: Partial<EvolutionConfigView>,

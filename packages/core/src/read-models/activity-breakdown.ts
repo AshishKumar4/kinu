@@ -1,9 +1,5 @@
-/**
- * Turning one step's exact composed-content character counts into the rows the
- * Activity surface draws. Provider token totals deliberately stay out of this
- * model: providers do not attribute tokens to prompt sections, and converting
- * characters with a heuristic would make estimated category counts look real.
- */
+/** Activity rows from exact composed-content character counts. Provider tokens stay out: providers do
+ * not attribute tokens to sections, and a heuristic conversion would pass estimates off as real. */
 import type { ContextComposition, ContextPlane, ContextSegment } from '../context-meter';
 
 export interface BreakdownRow {
@@ -21,13 +17,11 @@ export interface BreakdownPlane {
 
 export interface BreakdownView {
 	readonly planes: readonly BreakdownPlane[];
-	/** Exact sum of the locally measured composed-content characters. */
 	readonly measuredChars: number;
 	/** Non-zero bar denominator for an empty measurement. */
 	readonly span: number;
 }
 
-/** Wire order — system, then tools, then the conversation, then live state. */
 const PLANE_ORDER: readonly ContextPlane[] = ["system", "tools", "messages", "ephemeral"];
 
 export function breakdownView(context: ContextComposition): BreakdownView {
@@ -57,7 +51,6 @@ export function breakdownView(context: ContextComposition): BreakdownView {
 	};
 }
 
-/** A row's share of the exact composed-content characters measured locally. */
 export function shareOfMeasured(chars: number, measuredChars: number): number | null {
 	return measuredChars > 0 ? chars / measuredChars : null;
 }
