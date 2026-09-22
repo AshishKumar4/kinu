@@ -3,6 +3,7 @@
 import { describe, test, expect } from 'bun:test';
 import { buildDrainBatch } from '../src/events/hub/index';
 import type { BaseEvent, IngressKind, PeerAgentPayload, KinuEvent } from '../src/events/hub/index';
+import { present } from '@kinu.run/test-utils';
 
 const EVENT_BASE = {
   trace_id: 'tid', caused_by: null, trust: 'authenticated', priority: 'normal',
@@ -74,8 +75,8 @@ describe('buildDrainBatch', () => {
       timer('tm1'),
     ];
 
-    const batch = buildDrainBatch(events)!;
-    expect(batch).not.toBeNull();
+    const batch = present(buildDrainBatch(events), 'the drain batch');
+
     expect(batch.ids).toEqual(['wh1', 'tm1']);
     expect(batch.text).toContain('2 events arrived');
     expect(batch.text).toContain('[webhook]');
@@ -83,7 +84,7 @@ describe('buildDrainBatch', () => {
   });
 
   test('the same batch renders a mid-turn variant that folds in instead of stopping', () => {
-    const batch = buildDrainBatch([webhook('wh1')])!;
+    const batch = present(buildDrainBatch([webhook('wh1')]), 'the drain batch');
     expect(batch.text).toContain('arrived while you were idle');
     expect(batch.text).toContain('then stop');
     expect(batch.midTurnText).toContain('arrived while you were working');
@@ -98,7 +99,8 @@ describe('buildDrainBatch', () => {
       internal('self', 'self_emit', 'z'),
     ];
 
-    const batch = buildDrainBatch(events)!;
+    const batch = present(buildDrainBatch(events), 'the drain batch');
+
     expect(batch.ids).toEqual(['ext']);
     expect(batch.text).toContain('1 event arrived');
   });
@@ -114,7 +116,7 @@ describe('buildDrainBatch', () => {
   test('an assignment never wakes a drain, alone or beside external work', () => {
     expect(buildDrainBatch([assignment('as1')])).toBeNull();
 
-    const batch = buildDrainBatch([assignment('as1'), webhook('wh1')])!;
+    const batch = present(buildDrainBatch([assignment('as1'), webhook('wh1')]), 'the drain batch');
     expect(batch.ids).toEqual(['wh1']);
     expect(batch.text).not.toContain('[subordinate_task]');
   });
@@ -122,7 +124,7 @@ describe('buildDrainBatch', () => {
 
 describe('buildDrainBatch — peer messages', () => {
   test('an ask renders the mechanical reply route (the agents reply action + event id)', () => {
-    const batch = buildDrainBatch([peer('pe1', true)])!;
+    const batch = present(buildDrainBatch([peer('pe1', true)]), 'the drain batch');
     expect(batch.text).toContain('[peer_agent] from peer agent (scout)');
     expect(batch.text).toContain('What changed upstream?');
     // The tool is `agents`. Naming anything else here hands the model a call it
@@ -132,7 +134,7 @@ describe('buildDrainBatch — peer messages', () => {
   });
 
   test('a fire-and-forget message carries no reply instruction', () => {
-    const batch = buildDrainBatch([peer('pe2')])!;
+    const batch = present(buildDrainBatch([peer('pe2')]), 'the drain batch');
     expect(batch.text).toContain('[peer_agent]');
     expect(batch.text).not.toContain("action:'msg'");
   });

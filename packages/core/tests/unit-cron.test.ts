@@ -1,5 +1,6 @@
 import { describe, expect, test } from 'bun:test';
 import { nextAlarmTime, nextCronFire } from '../src/events/hub/cron';
+import { present } from '@kinu.run/test-utils';
 
 const BASE = Date.UTC(2026, 5, 2, 10, 17, 30);
 
@@ -13,23 +14,34 @@ describe('nextCronFire', () => {
     expect(nextCronFire('0 0 12 * * ?', 1_700_000_000_000)).toBeNull();
   });
 
-  test('supports wildcard, step, and integer minute fields', () => {
-    expect(new Date(nextCronFire('0 * * * *', BASE)!).toISOString())
-      .toBe('2026-06-02T11:00:00.000Z');
-    expect(new Date(nextCronFire('* * * * *', BASE)!).toISOString())
-      .toBe('2026-06-02T10:18:00.000Z');
-    expect(new Date(nextCronFire('*/30 * * * *', BASE)!).toISOString())
-      .toBe('2026-06-02T10:30:00.000Z');
-  });
+  const supported = [
+    {
+      name: 'supports wildcard, step, and integer minute fields',
+      fires: [
+        ['0 * * * *', '2026-06-02T11:00:00.000Z'],
+        ['* * * * *', '2026-06-02T10:18:00.000Z'],
+        ['*/30 * * * *', '2026-06-02T10:30:00.000Z'],
+      ],
+    },
+    {
+      name: 'supports wildcard, step, and integer hour fields',
+      fires: [
+        ['30 2 * * *', '2026-06-03T02:30:00.000Z'],
+        ['0 */6 * * *', '2026-06-02T12:00:00.000Z'],
+        ['* 11 * * *', '2026-06-02T11:00:00.000Z'],
+      ],
+    },
+  ] as const;
 
-  test('supports wildcard, step, and integer hour fields', () => {
-    expect(new Date(nextCronFire('30 2 * * *', BASE)!).toISOString())
-      .toBe('2026-06-03T02:30:00.000Z');
-    expect(new Date(nextCronFire('0 */6 * * *', BASE)!).toISOString())
-      .toBe('2026-06-02T12:00:00.000Z');
-    expect(new Date(nextCronFire('* 11 * * *', BASE)!).toISOString())
-      .toBe('2026-06-02T11:00:00.000Z');
-  });
+  for (const field of supported) {
+    test(field.name, () => {
+      for (const [expression, at] of field.fires) {
+        const fired = present(nextCronFire(expression, BASE), `the next fire of ${expression}`);
+
+        expect(new Date(fired).toISOString()).toBe(at);
+      }
+    });
+  }
 
   test('rejects unsupported day, month, and weekday fields', () => {
     expect(nextCronFire('0 0 1 * *', BASE)).toBeNull();
