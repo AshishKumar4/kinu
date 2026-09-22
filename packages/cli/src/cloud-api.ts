@@ -37,8 +37,7 @@ export interface CliAuthPoll {
   user?: { id: string; email: string };
 }
 
-/** The workspace roster the CLI reconciles against: the complete active list,
- *  names only. The wide bounded listing is the web surface's contract. */
+/** Complete active list, names only; the wide bounded listing is the web surface's contract. */
 export interface CloudAgent {
   name: string;
   displayName: string;
@@ -60,9 +59,7 @@ export interface CloudDevice {
   connected: boolean;
   createdAt: number;
   lastSeenAt: number | null;
-  /** The Sandbox switch the owner set and what the daemon proved about the
-   *  machine. The registry knows nothing per workspace, so the workspace's
-   *  own home and roots are not here — they live on the runtime status. */
+  /** Per-workspace home and roots live on the runtime status; the registry knows nothing per workspace. */
   sandbox: CloudDeviceSandbox;
 }
 
@@ -89,7 +86,6 @@ export interface CloudAgentStatus {
   tierId?: string;
 }
 
-
 export interface CloudToolDescriptions {
   builtIn: Array<{ name: string; description: string }>;
   crafted: Array<{ name: string; description: string; isLearned?: boolean; qualityScore?: number; usageCount?: number }>;
@@ -106,8 +102,7 @@ export interface CloudTriggerList {
     next_fire_at?: number | null;
     last_fire_at?: number | null;
     fire_count?: number;
-    /** Signed delivery path, server-minted for webhook rows. Relative: the
-     *  origin belongs to whoever renders it. */
+    /** Relative: the origin belongs to whoever renders it. */
     url?: string;
   }>;
 }
@@ -181,9 +176,7 @@ const CloudDeviceSandboxSchema = v.object({
   gpu: v.array(v.string()),
 });
 
-/** A hub too old to report the switch: the sandbox is on, because it is on by
- *  default, and a machine that has not proved it can sandbox has not proved
- *  it can sandbox. An older hub must still list the devices. */
+/** A hub too old to report the switch: sandbox on (the default), and not proved capable. */
 const UNREPORTED_SANDBOX: CloudDeviceSandbox = {
   tier: 'sandboxed', capability: 'files_only', reason: null, detail: null, gpu: [],
 };
@@ -255,21 +248,8 @@ const WhoamiSchema = v.object({ user: v.object({ id: v.string(), email: v.string
 
 const CreatedAccessTokenSchema = v.object({ token: v.string(), name: v.string(), scopes: v.array(v.string()), createdAt: v.number() });
 
-/** The cost half of `getActivitySnapshot`, as a CLI-plane caller parses it off
- *  the wire.
- *
- *  `v.GenericSchema<T>` against core's own types is what stops this drifting:
- *  a field added to `WorkspaceSpend` fails to compile here until it is parsed,
- *  rather than being silently dropped from a caller's copy of the panel.
- *  Only `spend` is declared — the snapshot's other halves are the web panel's
- *  and parsing them here would be a second mirror of them with no reader.
- *
- *  It lives with the other wire schemas rather than beside a single command,
- *  because two readers parse the same RPC off the wire: `kinu
- *  inspect spend` and the cloud eval target, which reports an episode's cost
- *  through the same meter every other arm uses. Two copies of a
- *  `GenericSchema<WorkspaceSpend>` would compile independently and disagree
- *  about the same wire. */
+/** Typed against core's types so a new `WorkspaceSpend` field fails to compile until parsed. Shared by
+ *  `kinu inspect spend` and the cloud eval target so the two cannot disagree about one wire. */
 const ProducerSpendSchema: v.GenericSchema<ProducerSpend> = v.object({
   source: v.picklist(SPEND_SOURCES), calls: v.number(), callsWithoutUsage: v.number(),
   usage: UsageSchema, usd: v.optional(v.number()), unpricedCalls: v.number(),
@@ -304,17 +284,11 @@ const WorkspaceSpendSchema: v.GenericSchema<WorkspaceSpend> = v.object({
 
 export const ActivitySpendSchema = v.object({ spend: WorkspaceSpendSchema });
 
-/**
- * Invoke a named agent method over the generic RPC transport —
- * POST /api/cli/workspaces/:name/rpc `{ method, args }` → `{ result }`.
- * The server's AGENT_RPC_ACCESS table (cf-backend cli/rpc-gate.ts) is the
- * method allowlist and the per-method auth policy; this is the ONE
- * method-shaped path between the CLI and a cloud agent.
- */
+/** The one method-shaped CLI-to-cloud path; the server's AGENT_RPC_ACCESS table (cf-backend cli/rpc-gate.ts)
+ * is the allowlist and per-method auth policy. */
 export interface AgentRpcCall<Input, T> {
   readonly origin: string;
   readonly token: string;
-  /** The cloud workspace the method runs against. */
   readonly name: string;
   readonly method: string;
   readonly schema: v.GenericSchema<Input, T>;
@@ -368,23 +342,20 @@ const CloudCliSessionSchema: v.GenericSchema<CloudCliSession> = v.object({
   createdAt: v.number(), expiresAt: v.number(), lastUsedAt: v.nullable(v.number()),
 });
 
-/** The account's live CLI sessions — the inventory that makes an orphaned
- *  bearer reachable by something other than its own raw token. */
+/** Makes an orphaned bearer reachable by something other than its own raw token. */
 export async function listCliSessions(
   origin: string, token: string,
 ): Promise<{ sessions: CloudCliSession[] }> {
   return cloudJson(v.object({ sessions: v.array(CloudCliSessionSchema) }), origin, '/api/cli/sessions', { token });
 }
 
-/** Revoke one CLI session by the hash the inventory prints. */
 export async function revokeCliSessionByHash(
   origin: string, token: string, hash: string,
 ): Promise<{ ok: boolean }> {
   return cloudJson(OkSchema, origin, `/api/cli/sessions/${encodeURIComponent(hash)}`, { method: 'DELETE', token });
 }
 
-/** Revoke every live CLI session — the recovery path when no hash can name
- *  the orphan. The owner re-authenticates afterwards. */
+/** Recovery when no hash can name the orphan; the owner re-authenticates afterwards. */
 export async function revokeAllCliSessions(
   origin: string, token: string,
 ): Promise<{ ok: boolean; revoked: number }> {
@@ -402,9 +373,7 @@ export async function listCloudAvailableModels(origin: string, token: string): P
   return cloudJson(CloudModelMenuSchema, origin, '/api/cli/models', { token });
 }
 
-/** `GET /api/cli/profile` — the account's profile catalog envelope. The
- *  server always answers with an envelope: an account that never customized
- *  gets version 0 over the builtin default catalog. */
+/** Always an envelope: an uncustomized account gets version 0 over the builtin catalog. */
 export async function getCloudProfile(origin: string, token: string): Promise<ProfileCatalogEnvelope> {
   const { status, body } = await cloudRequest(origin, '/api/cli/profile', { token });
   assertCloudOk(status, body);
@@ -414,8 +383,7 @@ export async function getCloudProfile(origin: string, token: string): Promise<Pr
 
 export interface CloudProfileUpdateInput {
   catalog: ProfileCatalog;
-  /** The envelope version this update was based on. A mismatch is a
-   *  conflict, never a silent overwrite. */
+  /** A mismatch is a conflict, never a silent overwrite. */
   expectedVersion: number;
 }
 
@@ -423,9 +391,7 @@ export type CloudProfileUpdateResult =
   | { ok: true; envelope: ProfileCatalogEnvelope }
   | { conflict: true; currentVersion: number; currentDigest: string };
 
-/** `PUT /api/cli/profile` — compare-and-swap the account's whole catalog.
- *  A stale `expectedVersion` comes back as a structured conflict carrying
- *  the current version and digest; nothing merges. */
+/** Compare-and-swap; a stale `expectedVersion` returns a structured conflict, nothing merges. */
 export async function updateCloudProfile(
   origin: string,
   token: string,
@@ -452,9 +418,7 @@ export async function updateCloudProfile(
   return { ok: true, envelope: v.parse(ProfileCatalogEnvelopeSchema, body) };
 }
 
-/** A stored credential as the account will describe it — key, kind, and when
- *  it changed. There is no read-back: once submitted, a secret is not
- *  viewable again from anywhere. */
+/** No read-back: a submitted secret is never viewable again. */
 export interface CloudCredentialSummary {
   key: string;
   kind: string;
@@ -466,9 +430,7 @@ export async function listCloudCredentials(origin: string, token: string): Promi
   return cloudJson(v.array(CloudCredentialSummarySchema), origin, '/api/cli/credentials', { token });
 }
 
-/** Put a provider secret in the owner's account rather than on this disk. It
- *  is sealed at rest there, and every machine signed into the account reaches
- *  it through the provider proxy without holding a copy. */
+/** Sealed in the account; signed-in machines reach it through the provider proxy without a copy. */
 export async function setCloudCredential(
   origin: string, token: string, key: string, credential: JsonValue,
 ): Promise<{ ok: boolean }> {
@@ -507,8 +469,7 @@ export async function createCloudAgentConnectTicket(origin: string, token: strin
   });
 }
 
-/** Webhook creation stays route-shaped: it is step-up gated (fresh
- *  `kinu auth`) server-side, unlike table-gated agent RPCs. */
+/** Route-shaped because it is step-up gated (fresh `kinu auth`) server-side, unlike table-gated RPCs. */
 export async function createCloudWebhookTrigger(
   origin: string,
   token: string,
@@ -562,9 +523,7 @@ interface CloudRequestOpts {
   token?: string;
 }
 
-/** One transport for every CLI-plane call: bearer auth, JSON bodies, and the
- *  server's body kept even on failure statuses so callers can react to
- *  structured errors (a 409 conflict is data, not just a message). */
+/** Keeps the server's body on failure statuses so callers can act on structured errors (a conflict is data). */
 async function cloudRequest(origin: string, path: string, opts: CloudRequestOpts = {}): Promise<{ status: number; body: JsonValue }> {
   const headers = new Headers();
 
@@ -580,9 +539,7 @@ async function cloudRequest(origin: string, path: string, opts: CloudRequestOpts
 
   const contentType = res.headers.get('content-type') ?? '';
 
-  // The body is the server's, not ours: a JSON content-type over an unparseable payload (a proxy
-  // error page) is tolerated and leaves the status line to speak. A body we cannot READ is a
-  // transport failure and propagates — it is not an empty error.
+  // An unparseable JSON body (proxy error page) leaves the status to speak; an unreadable body propagates.
   const body: JsonValue = contentType.includes('application/json')
     ? (await tolerateAsync(async () => decodeJsonValue({ value: await res.json() }), 'malformed-input')) ?? {}
     : { error: await res.text() };
@@ -602,8 +559,7 @@ function cloudErrorMessage(status: number, body: JsonValue): string {
 }
 
 async function cloudJson<T>(
-  // `unknown` on the way in: a decoder that fills a field an older hub omits
-  // reads a narrower input than it returns, and it still parses a wire body.
+  // `unknown` input: a decoder filling a field an older hub omits reads narrower than it returns.
   schema: v.GenericSchema<unknown, T>,
   origin: string,
   path: string,

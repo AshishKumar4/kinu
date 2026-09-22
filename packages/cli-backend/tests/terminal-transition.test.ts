@@ -1,19 +1,5 @@
-// Process-death recovery for the CLI's terminal transition.
-//
-// A local turn's answer is only half of what the turn causes. The other half —
-// the alternate-takes claim, the completion gate, the evolution recording, the
-// shadow trial, the auto title — is a claimed, recoverable sequence. As
-// straight-line code releasing its turn claims as soon as the transcript hit
-// disk, a device killed anywhere inside it loses every remaining step with
-// nothing on disk saying which ones had happened.
-//
-// So the subject here is not "does the sequence run" — the ordinary session
-// tests cover that. It is: kill the process at an exact point inside the
-// sequence, open a SECOND session over the same database, and check that every
-// effect has happened exactly once when the dust settles. The interruption is
-// deterministic (core's TerminalEffectInterrupt, armed at a named effect and
-// phase) because a claim about exactly-once is a claim about WHERE the process
-// died, and the only way to test that is to choose the instant.
+// Process-death recovery for the terminal transition: cut at a named effect and phase (TerminalEffectInterrupt),
+// reopen a second session over the same database, and check every effect ran exactly once.
 import { describe, test, expect } from 'bun:test';
 import * as v from 'valibot';
 import type { Database } from 'bun:sqlite';
@@ -34,13 +20,9 @@ import {
   armShadowTrials, captureTakes, openTerminalWorkspace, scriptedModel,
 } from './terminal-workspace';
 
-/** The session, with the deterministic cut point reachable. `terminalEffectFault`
- *  is protected on purpose — production has no setter for it — so a test that
- *  wants to choose the instant subclasses, exactly as the DO's harness does. */
+/** `terminalEffectFault` is protected with no production setter, so the test subclasses, as the DO's harness does. */
 class ProbeSession extends LocalAgentSession {
-  /** Cut the sequence once, at this effect and phase. Disarmed as it fires: the
-   *  same session object is never re-driven, but the ledger's own replay path is,
-   *  and a fault that stayed armed would cut the recovery too. */
+  /** Cut once at this effect and phase; disarmed as it fires so the ledger's replay is not cut too. */
   cutAt(name: TerminalEffectName, phase: TerminalEffectPhase): void {
     const fault: TerminalEffectFault = (at, effect, scope) => {
       if (effect !== name || at !== phase) return;
@@ -51,35 +33,24 @@ class ProbeSession extends LocalAgentSession {
     this.terminalEffectFault = fault;
   }
 
-  /** Stand this session's ledger clock past the backoff a failed attempt armed,
-   *  so the sweep sees the owed rows as due instead of the test sleeping out a
-   *  real five seconds per interruption.
-   *
-   *  `generation` grows with each restart, because the attempt a previous restart
-   *  made armed its next one from that restart's own skewed clock: a second sweep
-   *  reading the same instant finds every row it just touched not yet due. */
+  /** Skew the ledger clock past the backoff instead of sleeping five real seconds; `generation` grows per restart
+   *  because each restart armed its next attempt from its own skewed clock. */
   skipBackoff(generation = 1): void {
     this.terminalClockSkewMs = TERMINAL_EFFECT_RETRY_CEILING_MS * generation;
   }
 
-  /** Stand the ledger clock BACK instead, so the five-second wake a failed
-   *  attempt or a failed close arms is due the moment it is armed. The skew
-   *  above makes owed ROWS read as due; this makes the TIMER fire. */
+  /** Skew the clock back so the five-second wake is due as armed: this makes the timer fire, the skew above makes rows due. */
   armWakeImmediately(): void {
     this.terminalClockSkewMs = -TERMINAL_EFFECT_RETRY_CEILING_MS;
   }
 }
 
-/** The workspace on ONE in-memory database, opened by however many sessions the
- *  test needs. This is the restart the fault hooks can reach; the process-death
- *  suite below opens a file instead. */
+/** One in-memory database shared by sessions: the restart the fault hooks reach. */
 function workspace(): { db: Database; rt: CLIRuntime } {
   return openTerminalWorkspace(':memory:');
 }
 
-// The durable observables. Each is the effect's own footprint on storage rather
-// than a ledger row, so a test that passes says the WORK happened once — not
-// that the bookkeeping about it did.
+// Each observable is the effect's own storage footprint, not a ledger row.
 const completedTurns = (rt: CLIRuntime) =>
   rt.storage.sql<{ n: number }>`SELECT count(*) AS n FROM completed_turns`[0]?.n ?? 0;
 
@@ -90,13 +61,10 @@ const queuedTrials = (rt: CLIRuntime) =>
 const claimedTakes = (rt: CLIRuntime) =>
   rt.storage.sql<{ n: number }>`SELECT count(*) AS n FROM alternate_takes WHERE turn_id IS NOT NULL`[0]?.n ?? 0;
 
-/** Every row the transition is still waiting on. Empty means it closed. */
 const stillOwed = (rt: CLIRuntime) =>
   rt.storage.sql<{ effect_name: string; status: string }>`
     SELECT effect_name, status FROM terminal_effects WHERE status != 'completed'`;
 
-/** The restart: a fresh session over the same database, driven through the one
- *  startup path every real CLI entry point takes. */
 interface RestartOptions {
   rt: CLIRuntime;
   db: Database;
@@ -110,13 +78,11 @@ async function restart({ rt, db, model, events, generation = 1, ...sessionOpts }
   const next = new ProbeSession({ rt, db, model, onEvent: (e) => events.push(e), ...sessionOpts });
   next.skipBackoff(generation);
   await next.recoverBackgroundJobs();
-  // The replay may enqueue a turn (the completion gate does) and may start a
-  // detached lane; this is the join a real one-shot process makes before exit.
+  // The replay may enqueue a turn and start a detached lane; this is the join a one-shot process makes before exit.
   await next.settleBackgroundWork();
 
   return next;
 }
-
 
 describe('an interrupted terminal sequence is finished by the next start', () => {
   test('the takes claim, the recording, the trial and the title each run exactly once', async () => {
@@ -127,9 +93,7 @@ describe('an interrupted terminal sequence is finished by the next start', () =>
     const events: SessionEvent[] = [];
     const session = new ProbeSession({ rt, db, model, onEvent: (e) => events.push(e) });
 
-    // Killed AFTER the takes claim wrote its rows and BEFORE anything recorded
-    // that it had — the interruption the old code could not tell apart from a
-    // turn that claimed nothing.
+    // Killed after the takes claim wrote its rows and before anything recorded that it had.
     session.cutAt('takes', 'after');
     await session.send('refactor the parser');
 
@@ -139,10 +103,7 @@ describe('an interrupted terminal sequence is finished by the next start', () =>
     expect(state.titleCalls).toBe(0);
     expect(stillOwed(rt).length).toBeGreaterThan(0);
 
-    // A LATER turn's captures, taken while this workspace was down. The replay
-    // must not sweep them: its row recorded the take ids the interrupted turn
-    // actually competed against, so "whatever is unclaimed now" is not the
-    // question it asks.
+    // A later turn's captures: the replay claims the take ids its row recorded, not whatever is unclaimed now.
     captureTakes(rt, 'root-b', Date.now() + 2_000);
 
     const next = await restart({ rt, db, model, events });
@@ -155,10 +116,7 @@ describe('an interrupted terminal sequence is finished by the next start', () =>
     await next.end();
   });
 
-  // The two effects whose side effect is a durable INSERT, each with the count
-  // that shows it happened. Both are keyed at their own boundary, which is the
-  // property under test: "after" only converges because the key makes the
-  // replay a no-op rather than a second row.
+  // Both effects are keyed at their own boundary: "after" converges only because the key makes the replay a no-op.
   const keyedInserts = [
     { effect: 'turn_record', observe: completedTurns },
     { effect: 'shadow_trial', observe: queuedTrials },
@@ -166,9 +124,6 @@ describe('an interrupted terminal sequence is finished by the next start', () =>
 
   for (const { effect, observe } of keyedInserts) {
     test(`${effect} interrupted BEFORE and AFTER its side effect both converge on one execution`, async () => {
-      // Two different instants of death, one observable. The pair is the point:
-      // "before" must still run it, "after" must not run it again, and both must
-      // end at the same number.
       for (const phase of ['before', 'after'] as const) {
         const { db, rt } = workspace();
         await armShadowTrials(rt);
@@ -180,7 +135,6 @@ describe('an interrupted terminal sequence is finished by the next start', () =>
         await session.send('write the migration');
 
         expect(observe(rt)).toBe(phase === 'after' ? 1 : 0);
-        // The sequence stopped where it was cut, so the lane behind it is untouched.
         expect(state.titleCalls).toBe(0);
 
         const next = await restart({ rt, db, model, events });
@@ -195,9 +149,7 @@ describe('an interrupted terminal sequence is finished by the next start', () =>
 
   test('the completion gate asks once across a restart that interrupted it', async () => {
     const { db, rt } = workspace();
-    // A shell whose probes always answer. The in-SQLite workspace shell answers
-    // unevenly, and a gate with nothing to show declines by design — which would
-    // let this test pass without ever gating.
+    // The in-SQLite shell answers probes unevenly, and a gate with nothing to show declines, passing without gating.
     const probed: string[] = [];
 
     const shell: Shell = {
@@ -210,8 +162,7 @@ describe('an interrupted terminal sequence is finished by the next start', () =>
 
     const gated: CLIRuntime = { ...rt, shell };
 
-    // The gate's trigger is tool calls plus a completed stream, never anything
-    // the model said — so the turn has to actually call something.
+    // The gate triggers on tool calls plus a completed stream, so the turn must call something.
     const { model } = scriptedModel(
       'I renamed them',
       { toolCall: { name: 'fact', input: { action: 'recall', key: 'probe' } } },
@@ -237,15 +188,10 @@ describe('an interrupted terminal sequence is finished by the next start', () =>
 
     expect(asked()).toBe(1);
     expect(probed.length).toBeGreaterThan(0);
-    // STILL OWED, and that is the point. Pushing a queue item is a RAM act, so
-    // the effect reports owed until the confirming turn's own durable row
-    // exists. Reporting `completed` over a queue a process death erases prunes
-    // the row, and then nothing ever asks again.
+    // Still owed: a queued turn is RAM only, so the row stays owed until the confirming turn's own row exists.
     expect(stillOwed(gated).map((row) => row.effect_name)).toEqual(['completion_gate']);
     await next.end();
 
-    // The confirming turn IS on disk now, so the next start completes the row
-    // from that fact and does not ask a second time.
     const third = await restart({ rt: gated, db, model, events, oneShot: true, generation: 2 });
 
     expect(asked()).toBe(1);
@@ -290,10 +236,7 @@ describe('an interrupted terminal sequence is finished by the next start', () =>
     await session.send('write the migration');
     expect(completedTurns(rt)).toBe(0);
 
-    // A second opener that is NOT the driver. Core's in-flight guard is
-    // process-local, so nothing else would stop this one reading the same
-    // pending rows and running the recording, the drain and the title call
-    // beside the process that owns the conversation.
+    // Core's in-flight guard is process-local; only the driver lease stops a second opener running the same rows.
     const rival = new ProbeSession({ rt, db, model, onEvent: (e) => events.push(e) });
     rival.skipBackoff();
     rival.setDriverGate(() => ({ reason: 'unavailable', error: 'another process is driving' }));
@@ -309,14 +252,8 @@ describe('an interrupted terminal sequence is finished by the next start', () =>
 });
 
 /**
- * The same subject across a REAL process boundary.
- *
- * Everything above restarts by constructing a second session over the same live
- * `Database` and `CLIRuntime`, and cuts only at the ledger's before/after-body
- * hooks. Neither can see a death between two synchronous durable writes, nor
- * state that wrongly survives on the runtime object. These two kill a child
- * process with SIGKILL at instants production code reaches, over a workspace on
- * disk, and then open that file here.
+ * Across a real process boundary: a child is SIGKILLed at instants production code reaches, over a workspace on disk,
+ * which a same-process restart cannot observe.
  */
 test('a managed context edit reaches the local request and retained trial together', async () => {
   const { db, rt } = workspace();
@@ -344,8 +281,7 @@ test('a managed context edit reaches the local request and retained trial togeth
     if (admitted === null || consumed === null) throw new Error('the turn recorded no admitted or consumed context');
     expect(requests.at(-1)).toContain('NEW premise');
     expect(requests.at(-1)).not.toContain('OLD premise');
-    // The admission is the selection before the edit landed; the retained trial
-    // is the context the model was actually called with at step 0.
+    // The admission is the selection before the edit landed; the trial retains the step-0 context.
     expect(admitted.messages[0]).toEqual({ role: 'user', content: 'use the OLD premise' });
     expect(trial.context[0]).toEqual({ role: 'user', content: 'use the NEW premise' });
     expect(trial.context.filter((message) => message.content === 'follow-up input')).toHaveLength(1);
@@ -376,7 +312,6 @@ describe('a killed CLI process is recovered by the next start', () => {
     const dbPath = scratchPath('terminal-death-before-settle', 'agent.db');
     expect(await killAt(dbPath, 'before-settle')).toBe('KILLED before-settle');
 
-    // The answer and the core ledger committed together, before any effect ran.
     const { db, rt } = openTerminalWorkspace(dbPath);
     expect(assistantRows(rt)).toBe(1);
     expect(completedTurns(rt)).toBe(0);
@@ -392,8 +327,7 @@ describe('a killed CLI process is recovered by the next start', () => {
     expect(claimedTakes(rt)).toBe(1);
     expect(state.titleCalls).toBe(1);
     expect(stillOwed(rt)).toEqual([]);
-    // ONE answer. A replay that re-persisted would leave two assistant rows and
-    // read back as the agent having answered twice.
+    // A replay that re-persisted would leave two assistant rows.
     expect(assistantRows(rt)).toBe(1);
     await next.end();
     db.close();
@@ -404,9 +338,7 @@ describe('a killed CLI process is recovered by the next start', () => {
     expect(await killAt(dbPath, 'inside-claim')).toBe('KILLED inside-claim');
 
     const { db, rt } = openTerminalWorkspace(dbPath);
-    // No published answer may survive without the effects it owes. The send's
-    // own reservation DOES: the admission ledger committed before the turn
-    // began, which is what a restart reads to re-run it.
+    // The send's own reservation survives: the admission ledger committed before the turn began.
     expect(assistantRows(rt)).toBe(0);
     expect(terminalClaims(rt)).toBe(0);
     expect(rosterRows(rt)).toBe(0);
@@ -415,10 +347,7 @@ describe('a killed CLI process is recovered by the next start', () => {
     const events: SessionEvent[] = [];
     const next = await restart({ rt, db, model, events });
 
-    // The acknowledged send re-enters the pump — the at-least-once half of the
-    // same rule that keeps its row — and its turn commits whole this time:
-    // answer, claim, roster and owed effects in one transaction, then the
-    // replay settles every one of them exactly once.
+    // The acknowledged send re-enters the pump and its turn commits whole, then the replay settles each effect once.
     expect(events.some((e) => e.type === 'turn-start')).toBe(true);
     expect(completedTurns(rt)).toBe(1);
     expect(queuedTrials(rt)).toBe(1);
@@ -430,16 +359,12 @@ describe('a killed CLI process is recovered by the next start', () => {
     db.close();
   });
 
-
   test('a death INSIDE the title body leaves a named workspace and pays for no second call', async () => {
     const dbPath = scratchPath('terminal-death-inside-title', 'agent.db');
     expect(await killAt(dbPath, 'inside-title')).toBe('KILLED inside-title');
 
     const { db, rt } = openTerminalWorkspace(dbPath);
-    // The cut landed BETWEEN the body's two durable acts: the deterministic title
-    // is persisted, the generated one is not, and the row that owed the lane is
-    // still owed. No fault hook can produce this instant — the ledger cuts only
-    // before or after a whole body.
+    // Cut between the body's two durable acts, an instant no before/after fault hook can produce.
     expect(displayName(rt)).toBe('refactor the parser');
     expect(stillOwed(rt).map((row) => row.effect_name)).toContain('auto_title');
 
@@ -447,10 +372,8 @@ describe('a killed CLI process is recovered by the next start', () => {
     const events: SessionEvent[] = [];
     const next = await restart({ rt, db, model, events });
 
-    // The row settles, and the replay pays for NOTHING: the stand-in on disk is
-    // no longer a placeholder, so the plan no longer matches and the lane is a
-    // no-op. That is the whole reason this effect is replayable — and the
-    // reason a failed persist has to reach the ledger instead of being logged.
+    // The replay pays for nothing: the title is no longer a placeholder, so the lane is a no-op.
+    // This is why a failed persist must reach the ledger instead of being logged.
     expect(state.titleCalls).toBe(0);
     expect(displayName(rt)).toBe('refactor the parser');
     expect(completedTurns(rt)).toBe(1);
@@ -460,18 +383,12 @@ describe('a killed CLI process is recovered by the next start', () => {
   });
 });
 
-/**
- * Three recovery decisions that are not about one effect body: WHO may re-drive
- * an interrupted lane, WHAT gate state its verdict was earned under, and WHOSE
- * auto-evolution setting a recorded turn is recorded with. Each is read off the
- * RECORD, never off the session that found the work — read off the session, the
- * answer depends on which process happened to open the workspace next.
- */
+/** Who may re-drive an interrupted lane, which gate state its verdict was earned under, and whose auto-evolution
+ *  setting applies are read off the record, never off the recovering session. */
 describe('a recovery reads the record, not the session that finds it', () => {
   const NOTE = 'the staging cluster was never named';
 
-  /** The advisor switched on the way an owner switches it on — the durable
-   *  `actor_config` row — with a reviewer whose prompts this array collects. */
+  /** The advisor switched on via the durable `actor_config` row; the reviewer's prompts are collected. */
   function withAdvisor(rt: CLIRuntime): string[] {
     const asked: string[] = [];
     rt.actor.config.setAdvisorEnabled(true);
@@ -487,13 +404,8 @@ describe('a recovery reads the record, not the session that finds it', () => {
     return asked;
   }
 
-  /** The checkpoint a previous process left behind: one advisor lane, stashed and
-   *  then interrupted before it recorded anything.
-   *
-   *  Written through the runtime's own handle, in the shape `createSqlFiber`
-   *  writes: `fibers` is keyed `(actor_id, id)` because every agent kind is a
-   *  logical actor of one workspace database, and a row stashed without an owner
-   *  is a lane no recovery could ever claim. */
+  /** An interrupted advisor lane checkpoint in `createSqlFiber`'s shape; `fibers` is keyed `(actor_id, id)`, so an
+   *  ownerless row could never be claimed. */
   function stashAdvisorLane(rt: CLIRuntime, opts: { turnId: string; gateOpen: boolean }): void {
     const snapshot = {
       turn: {
@@ -527,9 +439,7 @@ describe('a recovery reads the record, not the session that finds it', () => {
     const { model } = scriptedModel('unused');
     const events: SessionEvent[] = [];
 
-    // A second opener that is NOT the driver. The review is a model call and the
-    // note is durable, so two processes that both find this orphan each pay for
-    // one and each append their own advice.
+    // Not the driver: each process finding this orphan would pay for its own review and append its own advice.
     const rival = new ProbeSession({ rt, db, model, onEvent: (e) => events.push(e) });
     rival.setDriverGate(() => ({ reason: 'unavailable', error: 'another process is driving' }));
     await rival.recoverBackgroundJobs();
@@ -537,8 +447,7 @@ describe('a recovery reads the record, not the session that finds it', () => {
 
     expect(asked).toEqual([]);
     expect(notes(rt)).toEqual([]);
-    // KEPT. This row is the only thing that can bring the review back, so the
-    // process that may not run it may not clear it either.
+    // Kept: the row is the only thing that can bring the review back.
     expect(advisorFibers(rt)).toBe(1);
     await rival.end();
 
@@ -565,10 +474,7 @@ describe('a recovery reads the record, not the session that finds it', () => {
       await driver.recoverBackgroundJobs();
       await driver.settleBackgroundWork();
 
-      // Recorded either way — the row is what the next turn's dedupe window
-      // reads. The gate decides whether it is also SAID, and a fresh process
-      // reads the gate as closed unless the checkpoint carries it: the note the
-      // verdict held back for an open gate was delivered instead.
+      // Recorded either way (the dedupe window reads it); a fresh process reads the gate as closed unless the checkpoint carries it.
       expect(asked.length).toBeGreaterThanOrEqual(1);
       expect(notes(rt)).toEqual([NOTE]);
       expect(programmaticTurns(events)).toBe(gateOpen ? 0 : 1);
@@ -587,9 +493,7 @@ describe('a recovery reads the record, not the session that finds it', () => {
     await session.send('write the migration');
     expect(completedTurns(rt)).toBe(0);
 
-    // `--no-auto-evolve` on the RECOVERING process. It says what this run spends
-    // its own compute on; it does not un-owe the window row a turn produced with
-    // evolution on already earned.
+    // `--no-auto-evolve` on the recovering process does not un-owe a window row earned with evolution on.
     const next = new ProbeSession({
       rt, db, model, noAutoEvolve: true, onEvent: (e) => events.push(e),
     });
@@ -616,9 +520,7 @@ describe('a recovery reads the record, not the session that finds it', () => {
     session.cutAt('turn_record', 'before');
     await session.send('write the migration');
 
-    // The inverse, and the reason the decision travels rather than the flag: this
-    // recovery HAS auto-evolution, and a turn that owed no evolution state must
-    // not acquire one from whichever host happens to finish it.
+    // The inverse: a turn that owed no evolution state must not acquire one from the recovering host.
     const next = await restart({ rt, db, model, events });
 
     expect(completedTurns(rt)).toBe(0);
@@ -640,9 +542,7 @@ describe('a recovery reads the record, not the session that finds it', () => {
     };
 
     const gated: CLIRuntime = { ...rt, shell };
-    // The confirming turn HOLDS inside its model call, which is where a retry
-    // timer finds it: five seconds after the attempt that queued it, with the
-    // turn's own message row not yet written.
+    // The confirming turn holds inside its model call, where a five-second retry timer finds it before its message row exists.
     const inGateTurn = Promise.withResolvers<void>();
     const release = Promise.withResolvers<void>();
 
@@ -670,10 +570,7 @@ describe('a recovery reads the record, not the session that finds it', () => {
 
     expect(asked()).toBe(0);
 
-    // The failed commit rolled its retirement back, so the admission ledger
-    // still owes session one's acknowledged send. Retiring it here is the
-    // fixture's bookkeeping — this test's subject is the gate's dedup, not the
-    // send ledger, and letting it re-queue would spend the gate row early.
+    // Fixture bookkeeping: the rolled-back retirement leaves the send owed, and re-queuing it would spend the gate row early.
     void gated.storage.sql`DELETE FROM pending_steers WHERE actor_id = ${rt.actor.actorId}`;
 
     const next = new ProbeSession({
@@ -684,15 +581,7 @@ describe('a recovery reads the record, not the session that finds it', () => {
     const replay = next.recoverBackgroundJobs();
     await inGateTurn.promise;
     await replay;
-    // generation further on — the same thing five real seconds do to a process
-    // that stayed open.
-    //
-    // The replay released the sequence the moment its effect reported `owed`
-    // (the effect queues the turn and does not await it), so this retry
-    // re-enters and replays the row. The effect finds the confirming turn queued
-    // or running and reports the row HELD: no second turn, and the ledger keeps
-    // the attempt count and the base delay rather than doubling the backoff for
-    // a sweep that only looked. The row's own state says the work is owed.
+    // A retry finding the confirming turn queued or running reports the row held: no second turn, no doubled backoff.
     const attemptsBefore = gateAttempts(gated);
     next.skipBackoff(2);
     await next.recoverTerminalTransitions();
@@ -700,21 +589,17 @@ describe('a recovery reads the record, not the session that finds it', () => {
     const held = stillOwed(gated);
     expect(held.map((row) => row.effect_name)).toEqual(['completion_gate']);
     expect(held.every((row) => row.status === 'pending')).toBe(true);
-    // And no second confirmation was asked while it was declined.
     expect(asked()).toBe(1);
     release.resolve();
     await next.settleBackgroundWork();
 
     expect(asked()).toBe(1);
     expect(probed.length).toBeGreaterThan(0);
-    // Still owed, and that is right: the row waits for the message rather than
-    // for the queue, and the confirming turn's row landed only after the retry
-    // had already looked.
+    // Still owed: the row waits for the message, which landed only after the retry looked.
     expect(stillOwed(gated).map((row) => row.effect_name)).toEqual(['completion_gate']);
     await next.end();
 
-    // And it is not wedged: the next start reads the message that is now on disk
-    // and completes the row without asking again.
+    // Not wedged: the next start reads the message now on disk and completes the row.
     const third = await restart({ rt: gated, db, model, events, oneShot: true, generation: 3 });
     expect(asked()).toBe(1);
     expect(stillOwed(gated)).toEqual([]);
@@ -744,7 +629,6 @@ describe('an owed follow-up turn waits for its own row', () => {
     await session.send('build the thing');
     await session.settleBackgroundWork();
 
-    // The retry turn ran behind the settle; the row saw it only queued.
     expect(retries()).toBe(1);
     expect(owed()).toContain('overflow_retry');
 
@@ -764,9 +648,7 @@ const assistantRows = (rt: CLIRuntime) =>
 const displayName = (rt: CLIRuntime) =>
   rt.storage.sql<{ value: string }>`SELECT value FROM actor_config WHERE key = 'display_name'`[0]?.value ?? null;
 
-/** The transition's own effect claims — the outer ones, keyed apart from any
- *  tool claim the turn itself made. `open` counts the ones with no disposition:
- *  a sequence that has not been closed. */
+/** The transition's outer effect claims, apart from tool claims; `open` counts ones with no disposition. */
 const terminalClaims = (rt: CLIRuntime) =>
   rt.storage.sql<{ n: number }>`SELECT count(*) AS n FROM tool_effect_claims
     WHERE normalized_call_id LIKE ${`${TERMINAL_TRANSITION_CALL_ID}:%`}`[0]?.n ?? 0;
@@ -779,8 +661,7 @@ const openTerminalClaims = (rt: CLIRuntime) =>
 const rosterRows = (rt: CLIRuntime) =>
   rt.storage.sql<{ n: number }>`SELECT count(*) AS n FROM terminal_effects`[0]?.n ?? 0;
 
-/** How many attempts the completion-gate row has taken. The witness that a
- *  sweep actually reached the body rather than finding the row not yet due. */
+/** Attempts taken by the completion-gate row: proof a sweep reached the body rather than finding it not due. */
 const gateAttempts = (rt: CLIRuntime) =>
   rt.storage.sql<{ attempts: number }>`
     SELECT attempts FROM terminal_effects WHERE effect_name = 'completion_gate'`[0]?.attempts ?? 0;
@@ -788,9 +669,7 @@ const gateAttempts = (rt: CLIRuntime) =>
 describe('a terminal close that fails leaves a way back', () => {
   test('a close whose settle throws re-arms its own wake', async () => {
     const { db, rt } = workspace();
-    // The claim settle, made to fail ONCE: it is the last durable act of the
-    // close, it runs after every effect has already reported, and by then no
-    // owed row is left for the ledger's own wake to be derived from.
+    // The claim settle fails once: the last durable act of the close, after which no owed row can derive the wake.
     const real: SqlExecutor = rt.storage.sql;
     let settleAttempts = 0;
     let failuresLeft = 1;
@@ -813,10 +692,7 @@ describe('a terminal close that fails leaves a way back', () => {
     const storage: { sql: SqlExecutor } = rt.storage;
     storage.sql = cutting;
 
-    // The title lane spans a macrotask, which is what makes this the interval the
-    // review named: the wake the ledger armed before the replay fires while the
-    // sequence is still in flight, finds it held, and is spent. Nothing is armed
-    // when the close then throws.
+    // The title lane spans a macrotask, so the pre-armed wake fires mid-sequence, finds it held, and is spent.
     const { model } = scriptedModel('answered', { onGenerate: () => Bun.sleep(5) });
     const events: SessionEvent[] = [];
     const session = new ProbeSession({ rt, db, model, onEvent: (e) => events.push(e) });
@@ -825,27 +701,21 @@ describe('a terminal close that fails leaves a way back', () => {
     await session.send('write the migration');
     await session.settleBackgroundWork();
 
-    // Every effect ran, so nothing is owed and the sequence is simply not closed.
-    // The wake the catch armed is the only thing left that can close it, and the
-    // test asks for nothing: no restart, no second recovery call.
+    // Nothing is owed; only the wake the catch armed can close the sequence.
     expect(completedTurns(rt)).toBe(1);
     expect(stillOwed(rt)).toEqual([]);
     const closed = await waitForClose(() => openTerminalClaims(rt) === 0);
 
     expect(closed).toBe(true);
-    // Two attempts: the close's own, which threw, and the one the re-armed wake
-    // made. One attempt would mean nothing came back for it.
+    // Two attempts: the close's own, which threw, and the re-armed wake's.
     expect(settleAttempts).toBe(2);
     await session.end();
     db.close();
   });
 });
 
-/** Poll for the close, briefly. A REAL timer is the subject here — production
- *  arms an unref'd five-second wake and hands nothing back — so there is no
- *  promise or event to await and no fake clock that would drive the production
- *  path. The session's ledger clock is stood back instead, which makes that wake
- *  due at once, so this settles in the first poll or not at all. */
+/** Polls for the close: production arms an unref'd five-second wake with nothing to await, and the stood-back
+ *  ledger clock makes it due at once. */
 async function waitForClose(condition: () => boolean): Promise<boolean> {
   for (let attempt = 0; attempt < 100; attempt += 1) {
     if (condition()) return true;
