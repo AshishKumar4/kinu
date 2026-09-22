@@ -1,19 +1,6 @@
 /**
- * Kinu extension seam — the small, stable public API for observing and
- * extending a turn without importing engine internals.
- *
- * This is the one hook path BOTH backends' turn loops fire: the shared chat
- * engine (`runChat` in chat.ts, the CLI path) and the cloud DO's Think hook
- * bridge (cf-backend `OrchestratorAgent` — beforeTurn/beforeStep/
- * beforeToolCall/afterToolCall/onChatResponse map onto this contract).
- * Plugin/host code registers a {@link KinuExtension} on an
- * {@link ExtensionHost}, and the engine drives every registered extension's
- * lifecycle hooks + folds its contributed tools into the single turn ToolSet.
- * Internal consumers (the CLI backend's steering drain) ride the SAME host, so
- * there is one mechanism, not a private hook plus a parallel plugin API.
- *
- * The surface is deliberately tiny — a seam, not a framework. Hooks are all
- * optional and run in registration order.
+ * Public turn-extension seam fired by both backends: `runChat` (CLI) and the cf `OrchestratorAgent` Think hook bridge.
+ * Hooks are optional and run in registration order.
  */
 
 import type { ModelMessage, ToolSet } from 'ai';
@@ -29,7 +16,6 @@ export interface TurnStartContext {
 export interface ToolCallContext {
   readonly toolName: string;
   readonly args: JsonObject;
-  /** Execution identity, when the producer observes an invocation. */
   readonly toolCallId?: string;
 }
 
@@ -45,95 +31,52 @@ export interface TurnEndContext {
 
 export interface PrepareStepContext {
   readonly stepNumber: number;
-  /** The messages the SDK is about to send for this step. */
   readonly messages: ModelMessage[];
-  /** The turn's cancellation. A hook that does I/O forwards it; the host stops
-   *  waiting on any hook once it fires. */
+  /** The host stops waiting on any hook once it fires. */
   readonly abortSignal?: AbortSignal;
 }
 
-/** Where the synchronous prepareStep walk stopped and what it had already
- *  produced, handed to the awaited path so the chain resumes rather than
- *  restarts. */
+/** Lets the awaited prepareStep path resume the chain where the synchronous walk stopped. */
 interface PrepareStepResumption {
-  /** The extension index to continue from — the one AFTER the hook that
-   *  returned `first`. */
+  /** The index after the hook that returned `first`. */
   readonly start: number;
   readonly ctx: PrepareStepContext;
-  /** What the synchronous prefix had rewritten the messages to. */
   readonly messages: ModelMessage[];
-  /** The synchronous prefix already rewrote the messages. */
   readonly changed: boolean;
-  /** The hook that promoted the walk to the awaited path. */
   readonly first: Promise<ModelMessage[] | undefined>;
 }
 
 export interface TransformContext {
-  /** Stable conversation identity — the agent/DO name on cf, the session key on cli. */
+  /** The agent/DO name on cf, the session key on cli. */
   readonly sessionKey: string;
-  /** The durable history about to be sent, BEFORE the turn-local tail is
-   *  spliced and before any dynamic-context block is woven — a transform never
-   *  sees what is never persisted. */
+  /** Durable history only: before the turn-local tail and dynamic-context blocks. */
   readonly messages: readonly ModelMessage[];
-  /** The assembled system prompt for this turn. */
   readonly system: string;
-  /** The resolved model's context window, in tokens. */
   readonly contextWindow: number;
-  /** Provider-reported prompt tokens for the previous turn, when known —
-   *  the measured trigger signal (chars/4 estimates lie). */
+  /** Previous turn's measured prompt tokens; preferred over chars/4 estimates. */
   readonly providerReportedTokens?: number;
-  /** 'auto' = normal turn assembly; 'force' = overflow recovery demands a
-   *  rewrite before the turn can be replayed. */
+  /** 'force': overflow recovery requires a rewrite before replay. */
   readonly trigger: 'auto' | 'force';
-  /** The turn's cancellation, as on {@link PrepareStepContext}. */
   readonly abortSignal?: AbortSignal;
 }
 
-/**
- * A unit of turn observation/extension. Every hook is optional. Implement only
- * what you need and register it on an {@link ExtensionHost}.
- */
 export interface KinuExtension {
-  /** Stable identifier — surfaced in errors (e.g. tool-name collisions). */
+  /** Surfaced in errors such as tool-name collisions. */
   readonly name: string;
-  /** Fires once before the model is streamed. */
   onTurnStart?(ctx: TurnStartContext): void | Promise<void>;
-  /** Fires as each tool call is emitted by the model. */
   onToolCall?(ctx: ToolCallContext): void | Promise<void>;
-  /** Fires as each tool result comes back. */
   onToolResult?(ctx: ToolResultContext): void | Promise<void>;
-  /** Fires once after the turn settles, with the final text + response messages. */
   onTurnEnd?(ctx: TurnEndContext): void | Promise<void>;
-  /**
-   * Message-transform hook at each step boundary: return a replacement message
-   * array to rewrite what the model sees for that step (for example, a durable
-   * mid-turn steer), or `undefined` to leave it unchanged. Chained across
-   * extensions — each sees the prior extension's output. Async is load-bearing:
-   * a persisted injection must land before the provider can receive it.
-   */
+  /** Per-step message rewrite, chained across extensions. Async is load-bearing: a persisted injection must land before the provider sees it. */
   prepareStep?(
     ctx: PrepareStepContext,
   ): ModelMessage[] | undefined | Promise<ModelMessage[] | undefined>;
-  /**
-   * Async context-transform hook, fired ONCE per turn assembly before the
-   * model streams (and before the turn-local tail is spliced).
-   * Return a replacement history (e.g. a compacted one) or `undefined` to
-   * leave it unchanged. Chained like {@link prepareStep}, but awaited — and
-   * fail-open: a throwing transform is logged and skipped, never allowed to
-   * break the turn.
-   */
+  /** Once per turn assembly; chained, awaited, and fail-open (a throw is logged and skipped). */
   transformContext?(ctx: TransformContext): Promise<ModelMessage[] | undefined>;
-  /** Contribute tools into the turn's ToolSet. Called once at turn start. */
   registerTools?(): ToolSet;
 }
 
-/**
- * Aggregates registered extensions and drives their hooks. Held by a backend
- * for the life of a turn (or longer) and passed to `runChat`.
- */
-/** Settle with the hook, or with the turn's cancellation, whichever comes
- *  first. A hook that never settles would otherwise hold the turn past its own
- *  abort; the orphaned promise is left to settle on its own. */
+/** A hook that never settles must not hold the turn past its abort; the orphaned promise settles on its own. */
 async function untilAborted<T>(pending: Promise<T>, signal: AbortSignal | undefined): Promise<T> {
   if (signal === undefined) return pending;
 
@@ -158,7 +101,6 @@ async function untilAborted<T>(pending: Promise<T>, signal: AbortSignal | undefi
 export class ExtensionHost {
   private readonly extensions: KinuExtension[] = [];
 
-  /** Register an extension. Returns `this` for chaining. */
   register(ext: KinuExtension): this {
     this.extensions.push(ext);
 
@@ -169,14 +111,11 @@ export class ExtensionHost {
     return this.extensions.length;
   }
 
-  /** Every registered extension, in registration order — what a host hands a
-   *  turn that composes its own per-turn host over them. */
   list(): readonly KinuExtension[] {
     return [...this.extensions];
   }
 
-  /** Merge every extension's contributed tools. Throws on a name collision so
-   *  a plugin can never silently shadow another extension's tool. */
+  /** Throws on a name collision so a plugin never silently shadows another's tool. */
   tools(): ToolSet {
     const merged: ToolSet = {};
     const owners = new Map<string, string>();
@@ -201,9 +140,7 @@ export class ExtensionHost {
     return merged;
   }
 
-  /** Run every prepareStep hook in order, chaining outputs. The synchronous
-   * fast path stays synchronous for extensions that need no I/O; the first
-   * Promise promotes only that invocation to the awaited path. */
+  /** Stays synchronous until a hook returns a Promise, which promotes only this invocation to the awaited path. */
   runPrepareStep(
     ctx: PrepareStepContext,
   ): ModelMessage[] | undefined | Promise<ModelMessage[] | undefined> {
@@ -252,11 +189,7 @@ export class ExtensionHost {
     return rewritten ? current : undefined;
   }
 
-  /** Run one extension hook fail-open — a plugin must never break a turn. A
-   *  throwing hook is recorded (which extension, which hook) and skipped, and
-   *  the caller sees `undefined` as if the hook had stayed silent — except the
-   *  caller's own abort and an out-of-memory kill, which are not the plugin's
-   *  and propagate instead of reading as a silent skip. */
+  /** Fail-open: a throwing hook is recorded and skipped, except cancellation and oom, which propagate. */
   private async guardHook<T>(
     hook: string,
     extension: string,
@@ -268,10 +201,6 @@ export class ExtensionHost {
     } catch (err) {
       const failure = toKinuError({ doing: `run an extension ${hook} hook`, cause: err, otherwise: 'io' });
 
-      // Every plugin failure is tolerated EXCEPT a cancelled turn and an oom:
-      // neither is the plugin's fault, and swallowing the turn's own abort
-      // (or a memory kill) as a silent skip would paper over it. A plain
-      // Error classifies as io and stays fail-open.
       if (failure.code === 'cancelled' || failure.code === 'oom') throw failure;
       diagnostics.failure('extension.hook_failed', failure, { extension, hook });
 
@@ -279,11 +208,6 @@ export class ExtensionHost {
     }
   }
 
-  /** Run every transformContext hook in registration order, chaining outputs
-   *  (extension N sees extension N-1's rewritten history). Awaited, and
-   *  fail-open per extension — a plugin must never break a turn. Returns the
-   *  final rewritten messages, or `undefined` if no extension changed
-   *  anything. */
   async runTransformContext(ctx: TransformContext): Promise<ModelMessage[] | undefined> {
     let current: readonly ModelMessage[] = ctx.messages;
     let out: ModelMessage[] | undefined;

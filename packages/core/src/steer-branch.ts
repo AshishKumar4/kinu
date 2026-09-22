@@ -1,15 +1,6 @@
 /**
- * Steer-as-Branch — typing while a turn runs can BRANCH instead of steering:
- * the redirect runs as ONE budgeted head against a snapshot of the live
- * turn's input conversation, in parallel, without touching the live turn.
- * When both finish, the pair settles into the Alternate Takes pipeline
- * (recordBranchTakeSet) claimed against the live turn — the existing
- * comparison + pick→outcome-ledger flow takes over unchanged.
- *
- * This module owns the single-head run (over the SAME HeadRuntime seam the
- * agents swarm uses, journaled like any head run) and the
- * settle step. Both backends drive it: LocalAgentSession.branch() in-process,
- * OrchestratorAgent.branchTurn() over hosted head actors.
+ * Steer-as-Branch: a mid-turn redirect runs as one head over a snapshot of the live turn's input, in parallel.
+ * When both finish, the pair settles as an Alternate Takes set claimed against the live turn.
  */
 
 import type { SqlExecutor } from './types/primitives';
@@ -23,9 +14,7 @@ import { renderThrownChain } from './obs/index';
 import { defaultLoopOrigin } from './scaffold/loop-origin';
 import type { ActorHandle } from './identity/actor-handle';
 
-/** A branch is one head answering one redirect: depth 1, so it answers rather
- *  than splitting further. Like any head it runs until it is done — the settle
- *  is detached, so a branch that takes its time holds up nothing. */
+/** Depth 1: the branch answers rather than splitting further. */
 export const BRANCH_HEAD_BUDGET = {
   maxDepth: 1,
 } as const;
@@ -33,64 +22,44 @@ export const BRANCH_HEAD_BUDGET = {
 export const BRANCH_RATIONALE =
   'User redirected mid-turn — running the redirect as a parallel branch of the live turn.';
 
-/** The progress event both backends broadcast (web chip, TUI status segment).
- *  Compatible with BroadcastEvent's `{ type: string; … }` shape. */
 export type BranchStatusEvent =
   | { type: 'branch_status'; status: 'running'; branchId: string; task: string }
   | { type: 'branch_status'; status: 'settled'; branchId: string; task: string; takeSetId: string; turnId: string }
   | { type: 'branch_status'; status: 'error'; branchId: string; task: string; message: string };
 
-/** The id prefix that marks a journaled run as a user redirect rather than an
- *  agent fork. This module is its only writer, so the prefix and the predicate
- *  that reads it stay together. */
+/** Marks a journaled run as a user redirect rather than an agent fork. */
 export const STEER_BRANCH_RUN_ID_PREFIX = 'branch-';
 
 export function newBranchId(): string {
   return `${STEER_BRANCH_RUN_ID_PREFIX}${nanoid(8)}`;
 }
 
-/** Whether a head-run root id belongs to Steer-as-Branch. The fork-run read
- *  model asks this so a mid-turn redirect never lists as a fork the agent
- *  chose to make. */
 export function isSteerBranchRunId(rootId: string): boolean {
   return rootId.startsWith(STEER_BRANCH_RUN_ID_PREFIX);
 }
 
-/** The single head a Steer-as-Branch run spawns, addressed from the run id
- *  alone — what a chat chip holding a branchId needs to open that head's
- *  transcript. Three call sites (the spawn, the chip, the tests) must agree on
- *  it, so it is a name rather than a repeated template. */
+/** Derived from the run id so a chip holding a branchId can open the head's transcript without listing the run. */
 export function branchHeadId(rootId: string): string {
   return `${rootId}-head`;
 }
 
 export interface BranchStartInput {
-  /** The user's mid-turn redirect — the head's task. */
   task: string;
-  /** Snapshot of the live turn's input conversation (already capped by the
-   *  backend's readInheritedContext). */
+  /** Already capped by the backend's readInheritedContext. */
   inheritedContext: SerializedMessage[];
-  /** Stable id for progress events; generated when omitted. */
   id?: string;
-  /** Per-run model spec override (runtime default when omitted). */
   model?: string;
 }
 
 export interface SteerBranchHandle {
   readonly id: string;
   readonly task: string;
-  /** Resolves with the head's report — never rejects (timeouts and inference
-   *  failures come back as budget_exceeded / errored reports). */
+  /** Never rejects; timeouts and failures resolve as budget_exceeded / errored reports. */
   readonly result: Promise<HeadReport>;
-  /** Best-effort abort — used when the live turn dies before settling. */
   abort(reason: string): Promise<void>;
 }
 
-/**
- * Spawn + run the redirect as a single head. Journaled like any head run (its
- * trace shows up on the Exploration surface). Throws only when the runtime cannot
- * spawn at all.
- */
+/** Throws only when the runtime cannot spawn at all. */
 export async function startBranchHead(
   runtime: HeadRuntime,
   journal: HeadJournal,
@@ -100,10 +69,6 @@ export async function startBranchHead(
   const spawnedAt = Date.now();
 
   const headInput: HeadInput = {
-    // DERIVED from the run id, not random: a branch run has exactly one head
-    // and `rootId` is already unique, so the surface that holds a branchId can
-    // read that head's transcript (getNodeTranscript) without first listing the
-    // run to discover a random id.
     id: branchHeadId(rootId),
     rootId,
     parentId: null,
@@ -115,7 +80,6 @@ export async function startBranchHead(
     budget: { ...BRANCH_HEAD_BUDGET, spawnedAt },
     model: input.model,
     mergeStrategy: 'best_of',
-    // A steer branch is one head of one run: same rule as every other fork.
     loop: defaultLoopOrigin('head'),
   };
 
@@ -135,9 +99,7 @@ export async function startBranchHead(
         summary: 'Branch was aborted before producing an answer.',
         evidence: [], decisions: [], artifactRefs: [], fileChanges: [],
         childHeadIds: [], toolCalls: [], stepCount: 0,
-        // Aborted before it produced anything, so nothing was reported. `{}`
-        // rather than zeros: the branch may have spent real tokens first, and
-        // recording it as free is a claim nobody measured.
+        // `{}` rather than zeros: the branch may have spent unreported tokens.
         usage: {},
         wallClockMs: Date.now() - spawnedAt,
         errorMessage: renderThrownChain({ cause }),
@@ -161,7 +123,6 @@ export type BranchSettleOutcome =
   | { ok: true; set: AlternateTakeSet }
   | { ok: false; reason: string };
 
-/** A branch launched against an in-flight turn, awaiting that turn's end. */
 export interface PendingBranch {
   readonly id: string;
   readonly task: string;
@@ -170,31 +131,21 @@ export interface PendingBranch {
 
 export interface BranchSettleDeps {
   sql: SqlExecutor;
-  /** The actor whose turn was steered — see {@link settleBranchIntoTakes}. */
   actor: ActorHandle;
   sessionId: string;
   broadcast: (event: BranchStatusEvent) => void;
 }
 
-/** The branch to settle, and the live turn it is compared against. */
 export interface BranchSettlement {
   readonly entry: PendingBranch;
-  /** Null when the live turn never completed: the branch is aborted instead. */
+  /** Null when the live turn never completed; the branch is aborted instead. */
   readonly turnId: string | null;
   readonly liveText: string;
-  /** The settlement's durable identity, for a caller that OWES this comparison.
-   *  The live path needs it as much as a replay does: an unkeyed write here and a
-   *  keyed one on recovery are two take sets for one branch. */
+  /** Needed on the live path too: unkeyed here plus keyed on recovery would be two take sets for one branch. */
   readonly settlementKey?: string;
 }
 
-/**
- * The shared both-sides settle both backends run (detached) at turn end:
- * await the branch head, compare against the finished live turn, persist the
- * takes set, and broadcast the terminal branch_status. A dead live turn
- * (`turnId` null / empty answer) aborts the branch instead. Answers what it
- * broadcast, so the caller records a failed settle as one.
- */
+/** Detached turn-end settle for both backends; a dead live turn aborts the branch instead. */
 export async function settlePendingBranch(
   deps: BranchSettleDeps, pending: BranchSettlement,
 ): Promise<BranchSettleOutcome> {
@@ -217,10 +168,7 @@ export async function settlePendingBranch(
   }
 
   if (!turnId || !liveText.trim()) {
-    // Broadcast before aborting, so the terminal status lands whatever the
-    // abort does. The detached settle owner records an abort rejection: a head
-    // that refuses to abort is a branch still burning tokens, which a discarded
-    // rejection would hide.
+    // Broadcast first so the terminal status lands whatever the abort does; an abort rejection propagates.
     const failed = fail('the live turn did not complete, so there is nothing to compare against');
     await handle.abort('the live turn did not complete');
 
@@ -249,42 +197,12 @@ export async function settlePendingBranch(
   return outcome;
 }
 
-/**
- * Settle a finished branch against the finished live turn: persist the pair
- * as a branch-sourced AlternateTakeSet claimed on the live turn's assistant
- * message. Honest failures (errored branch, interrupted live turn, identical
- * answers) yield `{ ok: false, reason }` and write NO takes set.
- */
-/**
- * The three fields the take comparison actually reads.
- *
- * Named because a RECOVERY settles a branch from the head journal's own view —
- * the only record of a head whose live handle died with its isolate — and a
- * signature demanding a whole `HeadReport` forced that caller to invent the
- * fields it does not have. `HeadReport` satisfies this, so the live path is
- * unchanged.
- */
+/** Narrow so a recovery can settle from the head journal's view, which lacks a full `HeadReport`. */
 export type BranchOutcome = Pick<HeadReport, 'status' | 'summary' | 'errorMessage'>;
 
 /**
- * Read a branch head's journal row as the outcome a settlement needs, or null
- * while that row is still claiming to execute.
- *
- * THE COLD PATH'S ONLY READING OF A STORED STATUS, and it exists because both
- * backends wrote their own. A cold replay settles a branch from the journal —
- * the sole record of a head whose live handle died with its isolate — and it has
- * to decide two things from one `TEXT` column: whether the comparison is still
- * owed, and which terminal status to report when it is not. Both copies decided
- * the first with a hand-written list and the second with `status === 'completed'
- * ? 'completed' : 'errored'`, so a head that blew its budget was reported as
- * having thrown, and the two backends had already drifted on how they carry
- * `errorMessage`.
- *
- * Null means OWED and never means "settled": the two unsettled statuses are the
- * only ones a later activation can still change, and neither is permanent — the
- * resume gate re-drives the run, or `abandonRunning` settles it `aborted`. A
- * status this journal never writes is reported `errored` rather than owed, so a
- * corrupt row cannot wedge a settlement forever.
+ * The cold path's only reading of a stored head status. Null means the comparison is still owed.
+ * An unknown status reports `errored` rather than owed, so a corrupt row cannot wedge a settlement forever.
  */
 export function branchOutcomeFromJournal(
   head: Pick<HeadRunHeadView, 'status' | 'summary' | 'errorMessage'>,
@@ -309,27 +227,16 @@ export function branchOutcomeFromJournal(
 
 export function settleBranchIntoTakes(
   sql: SqlExecutor,
-  /**
-   * The actor whose turn was steered.
-   *
-   * Second, per this repo's sql-first/actor-second convention, and REQUIRED:
-   * the take set is claimed against the live turn of the actor that steered,
-   * and with every actor's rows in ONE database an unowned write lands under
-   * whoever the reader happens to be. This scope had no handle at all, so it
-   * is passed rather than derived.
-   */
+  /** The steered actor; required because every actor's rows share one database. */
   actor: ActorHandle,
   input: {
     task: string;
     report: BranchOutcome;
-    /** The live turn's assistant message id, or null when it never completed. */
+    /** Null when the live turn never completed. */
     turnId: string | null;
     sessionId: string;
-    /** The live turn's full answer text. */
     liveText: string;
-    /** The settlement's durable identity, for a caller that OWES this comparison
-     *  and may run it again. With it the take set is written once: a replay finds
-     *  the set its first attempt produced instead of minting a second. */
+    /** With it a replay finds its first attempt's take set instead of minting a second. */
     settlementKey?: string;
     now?: number;
   },

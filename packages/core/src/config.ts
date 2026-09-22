@@ -1,94 +1,55 @@
-/**
- * Configuration system — all tunable parameters with sensible defaults.
- * Zero hardcoded secrets. All credentials come from the caller.
- *
- * Tuning constants: docs/MCTS.md and docs/EVOLUTION.md document what each one does.
- */
+/** Tunable defaults, no secrets; docs/MCTS.md and docs/EVOLUTION.md describe each constant. */
 
-/** MCTS search parameters */
 export interface MCTSDefaults {
-  /** Default search iterations when the caller doesn't supply a budget. */
   budget: number;
-  /** Default number of parallel branches expanded per node. */
   branches: number;
   maxDepth: number;
   explorationWeight: number;
-  /** Prune settled branches scoring below this. Sits INSIDE the fail band
-   *  [0.05,0.30] (mcts/evaluation.ts BAND TABLE) — below the fail ceiling, so a
-   *  branch at the very top of the fail band gets a reprieve. */
+  /** Sits inside the fail band [0.05,0.30] (mcts/evaluation.ts), so the band's top gets a reprieve. */
   pruneThreshold: number;
-  /** Convergence acceptance floor = the FAIL ceiling (0.30). A converged answer
-   *  must clear the whole failed-execution / prose-dodge band. */
+  /** The fail ceiling (0.30): a converged answer must clear the whole fail band. */
   minAcceptableScore: number;
   maxCostUSD: number;
-  /** Minimum visits before a node can be pruned */
   minVisitsForPrune: number;
-  /** Score below which a failure lesson is generated = FAIL ceiling + thin
-   *  margin (0.35), so every fail-band node earns a reflection. */
+  /** Fail ceiling plus a thin margin, so every fail-band node earns a reflection. */
   reflectionThreshold: number;
-  /** Score above which crafted tools are extracted = pass-band MIDPOINT (0.80 =
-   *  PASS_FLOOR 0.60 + ½·PASS_SPAN 0.40): executed code with an at-or-above-
-   *  median judge only. Unreachable by any prose branch (cap 0.75). */
+  /** Pass-band midpoint (0.60 + 0.40/2); unreachable by any prose branch (cap 0.75). */
   craftExtractionThreshold: number;
-  /** Judge ensemble size per branch evaluation (median-aggregated). */
   judgeSamples: number;
-  /** Per-branch evaluation LLM-call budget (assertion generation + judge
-   *  samples) — the operator's spend dial for grounded scoring. */
+  /** Per-branch eval LLM-call budget (assertion generation + judge samples). */
   maxEvalLLMCalls: number;
-  /** Score gap within which a rival branch counts as a near-tied Alternate
-   *  Take at convergence (see mcts/takes.ts). */
+  /** Score gap for a near-tied Alternate Take at convergence (mcts/takes.ts). */
   takesEpsilon: number;
 }
 
-/** Branching-heads parameters. The per-head grounded score reuses the MCTS
- *  judge knobs (judgeSamples / maxEvalLLMCalls); only the merge ensemble size
- *  is heads-specific. */
+/** Per-head scoring reuses the MCTS judge knobs; only the merge ensemble size is heads-specific. */
 export interface HeadsDefaults {
-  /** Independent merge-synthesis samples; the median-scored one is kept.
-   *  1 ⇒ a single merge sample, no ensemble. */
+  /** Merge-synthesis samples; the median-scored one is kept. */
   mergeSamples: number;
 }
 
-/** CraftStore quality management parameters */
 export interface CraftStoreDefaults {
-  /** EMA smoothing factor (0-1). Higher = recent observations weighted more. */
+  /** Higher weights recent observations more. */
   emaAlpha: number;
-  /** Half-life for time decay in days. After this many days unused, score halves. */
+  /** Days unused after which the score halves. */
   halfLifeDays: number;
-  /** Tools below this effective score are candidates for retirement */
   retirementThreshold: number;
-  /** Minimum uses before a tool can be retired */
   minUsesBeforeRetirement: number;
-  /** Minimum effective score to be included in codemode preamble */
   minEffectiveScoreForInjection: number;
-  /** Word overlap threshold for semantic conflict detection (craft/conflict.ts) */
+  /** Word-overlap threshold for conflict detection (craft/conflict.ts). */
   conflictSimilarityThreshold: number;
 }
 
-/** Scaffold management parameters */
 export interface ScaffoldDefaults {
-  /** Minimum rationale length for scaffold modifications */
   minRationaleLength: number;
 }
 
-/** Sensible defaults — all tunable, zero secrets.
- *
- *  Four constant tables, read field by field (`DEFAULT_CONFIG.mcts.judgeSamples`
- *  and its like). There is no whole-config value to merge and no caller that
- *  overrides one: per-knob overrides live in the `actor_config` table and are
- *  applied at each call site by `??`, which is why `mergeConfig` and the
- *  `AgentConfig` aggregate it took have been deleted rather than kept as the
- *  shape nothing constructs. */
+/** Read field by field; per-knob overrides live in the `actor_config` table and apply at each call site via `??`. */
 export const DEFAULT_CONFIG = {
   mcts: {
     budget: 5,
     branches: 3,
-    // FIVE, and it is a cap rather than a target: a search reaches it only if
-    // every level before it kept selecting. It was 20 — above every system in
-    // the literature this repository cites (ToT <=3, LATS 7, Koh 5) and above
-    // the deepest preset the swarm table declares (`prove`, 7). The owner's
-    // ruling on depth caps was "like 5 or 10, but not 1", and 5 is where the
-    // `optimise` preset already sits, so the two engines now agree.
+    // A cap, not a target; matches the `optimise` preset (literature: ToT <=3, LATS 7, Koh 5).
     maxDepth: 5,
     explorationWeight: Math.SQRT2,
     pruneThreshold: 0.25,

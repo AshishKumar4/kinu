@@ -1,10 +1,4 @@
-/**
- * LLM wrapper using Vercel AI SDK — shared between CF and CLI backends.
- *
- * Both backends use createOpenAICompatible from @ai-sdk/openai-compatible.
- * The caller provides the base URL, auth headers, and model name.
- * No hardcoded credentials anywhere.
- */
+/** LLM wrapper over the Vercel AI SDK, shared by the CF and CLI backends; callers supply URL, auth and model. */
 
 import { createOpenAICompatible } from '@ai-sdk/openai-compatible';
 import { createAnthropic } from '@ai-sdk/anthropic';
@@ -21,50 +15,23 @@ import {
 } from './strategy/effort';
 
 export interface LLMProviderConfig {
-  /** Display name for the provider (e.g., 'workers-ai', 'anthropic') */
   name: string;
-  /** Base URL for the OpenAI-compatible API */
   baseURL: string;
-  /** Auth headers (e.g., { 'Authorization': 'Bearer ...' }) */
   headers: Record<string, string>;
-  /** Model identifier (e.g., '@cf/deepseek-ai/deepseek-v4-pro-0813') */
   model: string;
-  /**
-   * Where the calls this LLM makes are reported, and as whose spend.
-   *
-   * Both halves in one field because the source is the CALLER's to state: one
-   * caller builds the chat model and another builds a cross-family judge from
-   * the same factory, so no literal belongs here, and two independent optional
-   * fields would let a caller wire the sink without the label and lose the
-   * attribution silently.
-   *
-   * Absent means this LLM's spend is attributed to nothing, which the coverage
-   * fraction states rather than hides.
-   */
+  /** Where this LLM's calls are reported, and as whose spend; one field so the sink cannot be wired without the
+   *  label. Absent: spend is attributed to nothing. */
   spend?: ModelCallSpend;
 }
 
-/**
- * Create an LLM backed by the Vercel AI SDK.
- * Works with any OpenAI-compatible endpoint:
- * - Cloudflare Workers AI (via AI Gateway)
- * - OpenAI direct
- * - Anthropic (via proxy)
- * - Any OpenAI-compatible provider
- */
 export function createVercelAILLM(config: LLMProviderConfig): LLM {
   const model = createModelFromLLMConfig(config);
-  // No output cap on either lane: a reasoning model spends its budget thinking
-  // before it emits anything, so a cap truncates the answer or starves it
-  // entirely. Completion length is the model's, bounded by the provider; cost
-  // is controlled by reasoning effort.
+  // No output cap: a reasoning model spends its budget thinking first, so a cap truncates or starves the answer.
   const spend = config.spend;
 
   return {
     async *stream(opts) {
-      // Opened before the request for the reason the whole pair exists: a
-      // consumer that abandons this generator, or a platform that destroys the
-      // frame, leaves the start row as the only record of what was running.
+      // Opened before the request so an abandoned generator or destroyed frame still leaves the start row.
       const operation = beginModelOperation(spend, 'stream');
       let result;
 
@@ -86,12 +53,7 @@ export function createVercelAILLM(config: LLMProviderConfig): LLM {
         throw err;
       }
 
-      // Usage is only knowable once the stream has finished, so the report goes
-      // here. A consumer that abandons the generator mid-way never reaches this
-      // line and reports nothing — honest, because the cost of a stream nobody
-      // drained is not something this seam ever learns, and the operation's
-      // start row is what says the work was begun. `totalUsage` rather than
-      // `usage`: the latter is the LAST step only.
+      // Usage is known only once the stream finishes; `totalUsage` because `usage` is the last step only.
       const usage = normalizeUsage(await result.totalUsage);
       const modelId = (await result.response).modelId;
       operation.completed({ usage, modelId });
@@ -115,11 +77,8 @@ export function createVercelAILLM(config: LLMProviderConfig): LLM {
         throw err;
       }
 
-      // Reported even when the provider said nothing: `normalizeUsage` returns
-      // `{}` and the CALL still lands, which is what keeps a silent provider
-      // distinguishable from a free one. No `spec`: this factory is configured
-      // with a base URL and a model name rather than a catalog spec, and
-      // synthesizing one would name a route the catalog cannot price.
+      // Reported even when empty, so a silent provider stays distinguishable from a free one. No `spec`: this
+      // factory has no catalog spec to price.
       const usage = normalizeUsage(result.totalUsage);
       const modelId = result.response.modelId;
       operation.completed({ usage, modelId });
@@ -131,25 +90,14 @@ export function createVercelAILLM(config: LLMProviderConfig): LLM {
 }
 
 /**
- * A completion-only `LLM` over one already-resolved model — the shape the
- * offline raters use (judges, classifiers), where a spec names the model and
- * both backends have their own way of turning that spec into a `LanguageModel`.
- * The reasoning knob follows the stage policy, expressed in whichever provider
- * the spec belongs to rather than always Workers AI's.
- *
- * `stream` throws: these callers do not stream, and an empty generator would
- * turn "wrong seam" into a silently empty answer.
+ * A completion-only `LLM` over one resolved model, for offline raters (judges, classifiers); the reasoning knob
+ * follows the spec's provider. `stream` throws so a wrong-seam caller fails loudly rather than getting empty text.
  */
 export function createCompletionLLM(opts: {
   model: LanguageModel;
-  /** `<provider>/<modelId>` — decides which provider's reasoning knob applies. */
   spec: string;
   stage: InferenceStage;
-  /** Where this model's calls are reported, and as whose spend. One field, both
-   *  halves: these callers are the outcome-ensemble judges AND the calibration
-   *  classifiers, so the same completion shape is `judge` in one and `fast` in
-   *  the other and only the caller knows which. Absent means this rater's spend
-   *  is attributed to nothing. */
+  /** Where this model's calls are reported, and as whose spend; only the caller knows the label. */
   spend?: ModelCallSpend;
 }): LLM {
   const providerOptions = reasoningEffortOptions(
@@ -164,8 +112,7 @@ export function createCompletionLLM(opts: {
       throw new Error(`createCompletionLLM(${opts.spec}) has no streaming path`);
     },
     async complete(prompt) {
-      // The frame opens BEFORE the request, so a process killed mid-call leaves
-      // a start row naming this operation rather than nothing at all.
+      // Opened before the request so a process killed mid-call leaves a start row.
       const operation = beginModelOperation(spend, 'complete', { spec: opts.spec });
       let result;
 
@@ -180,8 +127,7 @@ export function createCompletionLLM(opts: {
         throw err;
       }
 
-      // `spec` is what the caller resolved and therefore what the catalog
-      // prices; `modelId` is what the provider says served it.
+      // `spec` is what the catalog prices; `modelId` is what the provider says served it.
       const usage = normalizeUsage(result.totalUsage);
       const modelId = result.response.modelId;
       operation.completed({ usage, modelId });
@@ -197,11 +143,7 @@ export function createCompletionLLM(opts: {
   };
 }
 
-// ── Metering the seam ────────────────────────────────────────────
-
-/** What passed through one metered `LLM`, counted at the seam. Characters
- *  rather than tokens because that is what the seam actually sees — the
- *  `LLM` interface returns text, not usage. */
+/** Counted in characters because the `LLM` interface returns text, not usage. */
 export interface LLMUsage {
   calls: number;
   promptChars: number;
@@ -213,34 +155,18 @@ export interface MeteredLLM {
   usage: LLMUsage;
 }
 
-/** Characters per token, for sizing a run before paying for it. A blunt
- *  average over English prose and code; the true ratio is model-specific and
- *  the seam cannot see it. Only ever used to ESTIMATE, and every caller says
- *  so where it prints. */
+/** A blunt chars-per-token average, used only to estimate. */
 export const CHARS_PER_TOKEN = 4;
 
-/** Rough blended USD per 1k tokens. A deliberately conservative mid-range
- *  blend (≈ $3 / 1M tokens) so anything sized with it errs toward
- *  over-estimating spend.
- *
- *  The FALLBACK, not the rate: `ModelInfo.cost` carries models.dev's real
- *  per-model prices, and both spend seams price from them first — the
- *  mission-budget ledger per debit, and MCTS's pre-run estimate per search
- *  (mcts/cost.ts), each recording that it fell back when it had to. This stays
- *  for the seam that sees CHARACTERS rather than usage (the `LLM` primitive
- *  here) and for the model nobody priced, where a blended ceiling is still
- *  better than treating an unknown price as no price at all. */
+/** Conservative blended fallback (~$3 / 1M tokens) for the character seam and unpriced models;
+ *  `ModelInfo.cost` is the real rate. */
 export const BLENDED_USD_PER_1K_TOKENS = 0.003;
 
 export function estimateTokens(chars: number): number {
   return Math.ceil(chars / CHARS_PER_TOKEN);
 }
 
-/** The byte ceiling a token allocation implies — the inverse of
- *  `estimateTokens`. One derivation for every admission that bounds a file by
- *  a prompt budget: agents-md's `agentsMdCharBudget` and skill discovery both
- *  derive their read ceiling here, so "the whole skills/instructions
- *  allocation" is the same number of bytes everywhere it is asked. */
+/** The byte ceiling a token allocation implies; one derivation for every prompt-budget file admission. */
 export function admissionBytes(tokens: number): number {
   return tokens * CHARS_PER_TOKEN;
 }
@@ -249,14 +175,7 @@ export function estimateUsdCost(tokens: number): number {
   return (tokens / 1000) * BLENDED_USD_PER_1K_TOKENS;
 }
 
-/**
- * An `LLM` that counts what goes through it.
- *
- * The returned `usage` is the live counter — read it after the pass, not
- * before. Wrapping rather than threading a counter through every caller keeps
- * the seam itself unchanged, which is what lets a test script an `LLM` and
- * still get telemetry out of the harness that used it.
- */
+/** An `LLM` that counts what goes through it; `usage` is the live counter, read after the pass. */
 export function meterLLM(llm: LLM): MeteredLLM {
   const usage: LLMUsage = { calls: 0, promptChars: 0, responseChars: 0 };
 
