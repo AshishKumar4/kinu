@@ -17,6 +17,7 @@ import { Database } from 'bun:sqlite';
 import * as v from 'valibot';
 import type { VFS } from '../src/types/primitives';
 import type { JsonValue } from '../src/utils/json';
+import { present } from '@kinu.run/test-utils';
 import {
   sandboxFiles,
   nimbusSessionFiles,
@@ -68,34 +69,44 @@ class MemFs {
 
     while ((i = cur.lastIndexOf('/')) > 0) { cur = cur.slice(0, i); this.dirs.add(cur); }
   }
-  write(p: string, b: Uint8Array): void { p = this.norm(p); this.files.set(p, b); this.addParents(p); }
-  read(p: string): Uint8Array | null { return this.files.get(this.norm(p)) ?? null; }
-  mkdir(p: string): void { p = this.norm(p); this.dirs.add(p); this.addParents(p); }
-  exists(p: string): boolean {
-    p = this.norm(p);
+  write(p: string, b: Uint8Array): void {
+    const path = this.norm(p);
 
-    return this.files.has(p) || this.dirs.has(p);
+    this.files.set(path, b);
+    this.addParents(path);
+  }
+  read(p: string): Uint8Array | null { return this.files.get(this.norm(p)) ?? null; }
+  mkdir(p: string): void {
+    const path = this.norm(p);
+
+    this.dirs.add(path);
+    this.addParents(path);
+  }
+  exists(p: string): boolean {
+    const path = this.norm(p);
+
+    return this.files.has(path) || this.dirs.has(path);
   }
   del(p: string): boolean { return this.files.delete(this.norm(p)); }
   stat(p: string): { size: number; isDir: boolean } | null {
-    p = this.norm(p);
-    const file = this.files.get(p);
+    const path = this.norm(p);
+    const file = this.files.get(path);
 
     if (file) return { size: file.length, isDir: false };
 
-    if (this.dirs.has(p)) return { size: 0, isDir: true };
+    if (this.dirs.has(path)) return { size: 0, isDir: true };
 
     return null;
   }
   list(dir: string): string[] {
-    dir = this.norm(dir);
+    const root = this.norm(dir);
     const names = new Set<string>();
 
     for (const p of [...this.files.keys(), ...this.dirs]) {
-      if (p === dir || p === '/') continue;
+      if (p === root || p === '/') continue;
       const parent = p.slice(0, p.lastIndexOf('/')) || '/';
 
-      if (parent === dir) names.add(p.slice(p.lastIndexOf('/') + 1));
+      if (parent === root) names.add(p.slice(p.lastIndexOf('/') + 1));
     }
 
     return [...names];
@@ -298,7 +309,7 @@ function deviceTransport(fs: MemFs, calls: string[] = []): DeviceTransport {
       }
 
       if (method === 'exec') {
-        const cmd = String(params[0] ?? ''), q = quoted(cmd);
+        const cmd = v.parse(v.string(), params[0] ?? ''), q = quoted(cmd);
 
         if (cmd.startsWith('stat -c')) {
           const r = fs.statLine(q);
@@ -382,10 +393,9 @@ for (const c of cases) {
       const vfs = c.make();
       const p = c.path('sized.bin');
       await vfs.writeFile(p, BINARY);
-      const s = await vfs.stat(p);
-      expect(s).not.toBeNull();
-      expect(s!.isDir).toBe(false);
-      expect(s!.size).toBe(BINARY.length);
+      const s = present(await vfs.stat(p), 'the written file\'s stat');
+      expect(s.isDir).toBe(false);
+      expect(s.size).toBe(BINARY.length);
     });
 
     test('reading a missing file throws ENOENT (closed taxonomy)', async () => {

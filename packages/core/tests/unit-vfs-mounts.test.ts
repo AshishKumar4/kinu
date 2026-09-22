@@ -48,7 +48,9 @@ function fakeTree(entries: Record<string, string>): VFS {
 			return [...names];
 		},
 		stat: async (path) => {
-			if (files.has(path)) return { size: files.get(path)!.length, mtimeMs: 0, isDir: false };
+			const content = files.get(path);
+
+			if (content !== undefined) return { size: content.length, mtimeMs: 0, isDir: false };
 
 			return dirs.has(path) ? { size: 0, mtimeMs: 0, isDir: true } : null;
 		},
@@ -117,7 +119,7 @@ describe('the workspace plane mount table', () => {
 		await mounted.writeFile('/pc/home/dev/build/output.txt', 'built');
 		expect(await mounted.exists('/pc/home/dev/build/output.txt')).toBe(true);
 
-		const conditional = mounted.writeFileIfRevision;
+		const conditional = mounted.writeFileIfRevision?.bind(mounted);
 
 		if (conditional === undefined) throw new Error('the mounted VFS must expose conditional writes');
 		expect(await conditional(
@@ -134,7 +136,7 @@ describe('the workspace plane mount table', () => {
 		const base = fakeTree({ '/workspace/base.txt': 'base before' });
 		const device = fakeTree({ '/home/dev/mounted.txt': 'mounted before' });
 		const mounted = withMountTable(base, [mountOf('pc', device)]);
-		const conditional = mounted.writeFileIfRevision;
+		const conditional = mounted.writeFileIfRevision?.bind(mounted);
 
 		if (conditional === undefined) throw new Error('the composite VFS must expose conditional writes');
 
@@ -181,7 +183,7 @@ describe('the workspace plane mount table', () => {
 			expect(error.message).toContain('/pc — no device connected');
 		}
 
-		const conditional = mounted.writeFileIfRevision;
+		const conditional = mounted.writeFileIfRevision?.bind(mounted);
 
 		if (conditional === undefined) throw new Error('the mounted VFS must expose conditional writes');
 		await expect(conditional('/pc/x', new Uint8Array(), 1)).rejects.toMatchObject({ code: 'ENXIO' });
@@ -203,7 +205,7 @@ describe('the workspace plane mount table', () => {
 			status: () => ({ connected: true, registered: true, toolchain: null }),
 			refreshStatus: async () => ({ connected: true, registered: true, toolchain: null }),
 			rpc: async (method, params) => {
-				const path = String(params[0]);
+				const path = v.parse(v.string(), params[0]);
 				let content: string | undefined;
 
 				if (path === '/home/dev/notes.txt') content = machine['/home/dev/notes.txt'];
@@ -310,11 +312,11 @@ describe('the workspace plane mount table', () => {
 	});
 
 	test('standardMounts gate per environment kind', async () => {
-		const deviceFiles = fakeTree({ '/home/dev/a.txt': 'x' });
+		const deviceTree = fakeTree({ '/home/dev/a.txt': 'x' });
 		const sandboxFiles = fakeTree({ '/workspace/b.txt': 'y' });
 
 		const mounts = standardMounts((name) => {
-			if (name === "device") return { files: deviceFiles, isAvailable: () => false };
+			if (name === "device") return { files: deviceTree, isAvailable: () => false };
 
 			if (name === "sandbox") return { files: sandboxFiles, isAvailable: () => false };
 
@@ -507,7 +509,7 @@ describe('the one plane, mutated: rename and removeRecursive route like every ot
 			'/build/deep/two.js': 'y',
 		});
 
-		const realUnlink = base.unlink;
+		const realUnlink = base.unlink.bind(base);
 		let calls = 0;
 
 		base.unlink = async (path) => {
@@ -541,7 +543,7 @@ describe('the one plane, mutated: rename and removeRecursive route like every ot
 			'/home/dev/build/deep/two.js': 'y',
 		});
 
-		const realUnlink = device.unlink;
+		const realUnlink = device.unlink.bind(device);
 
 		device.unlink = async (path) => {
 			if (path === '/home/dev/build/deep') {
