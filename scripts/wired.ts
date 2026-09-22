@@ -2053,7 +2053,10 @@ if (import.meta.main) {
   }
 
   const ratchet = reconcile(keys, LOCK);
-  const code = report('wired', ratchet, detail, 'bun scripts/wired.ts --lock', measured);
+
+  const code = report({
+    gate: 'wired', ratchet, detail, lockCommand: 'bun scripts/wired.ts --lock', measured,
+  });
 
   if (code === 0) {
     console.log(`wired: ${String(keys.length)} recorded unwired export(s)/field(s) remain — `

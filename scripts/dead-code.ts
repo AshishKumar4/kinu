@@ -775,9 +775,9 @@ if (import.meta.main) {
     for (const fault of faults) console.error(fault);
   }
 
-  const verdict = report(
-    'dead-code', ratchet, detail, 'bun scripts/dead-code.ts --lock', measured,
-  );
+  const verdict = report({
+    gate: 'dead-code', ratchet, detail, lockCommand: 'bun scripts/dead-code.ts --lock', measured,
+  });
 
   const code = faults.length > 0 ? 1 : verdict;
 

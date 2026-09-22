@@ -90,15 +90,21 @@ export function finding(f: Finding): string {
   ].join('\n');
 }
 
+/** One gate's verdict: what it is called, what its ratchet reconciled, the body
+ *  for each key, the command that records a cleanup, and what it measured. */
+export interface GateVerdict {
+  readonly gate: string;
+  readonly ratchet: Ratchet;
+  readonly detail: ReadonlyMap<string, string>;
+  readonly lockCommand: string;
+  readonly measured: string;
+}
+
 /** Prints the verdict and returns the process exit code. `detail` supplies the
  *  human-readable body for a key; a stale key has no detail by definition. */
-export function report(
-  gate: string,
-  ratchet: Ratchet,
-  detail: ReadonlyMap<string, string>,
-  lockCommand: string,
-  measured: string,
-): number {
+export function report(verdict: GateVerdict): number {
+  const { gate, ratchet, detail, lockCommand, measured } = verdict;
+
   if (ratchet.added.length === 0 && ratchet.stale.length === 0) {
     console.log(`${gate}: ok — ${measured}`);
 

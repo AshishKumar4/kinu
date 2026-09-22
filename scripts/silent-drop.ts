@@ -828,8 +828,10 @@ async function main(): Promise<number> {
     return 0;
   }
 
-  return report('silent-drop', reconcile(keys, LOCK), detailOf(drops),
-    'bun scripts/silent-drop.ts --lock', measured);
+  return report({
+    gate: 'silent-drop', ratchet: reconcile(keys, LOCK), detail: detailOf(drops),
+    lockCommand: 'bun scripts/silent-drop.ts --lock', measured,
+  });
 }
 
 if (import.meta.main) process.exit(await main());

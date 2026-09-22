@@ -920,12 +920,12 @@ if (import.meta.main) {
       ...parity.movable.map((entry) => [movableKeyOf(entry), describeMovable(entry)] as const),
     ]);
 
-    process.exit(report(
-      'capability-parity',
-      reconcile(keys, LOCK),
+    process.exit(report({
+      gate: 'capability-parity',
+      ratchet: reconcile(keys, LOCK),
       detail,
-      'bun scripts/capability-parity.ts --lock',
-      coverage,
-    ));
+      lockCommand: 'bun scripts/capability-parity.ts --lock',
+      measured: coverage,
+    }));
   }
 }
