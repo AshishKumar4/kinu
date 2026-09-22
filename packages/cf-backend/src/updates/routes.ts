@@ -1,20 +1,6 @@
 /**
- * `/api/updates` — a deployment reading its own channel, and installing from it
- * (docs/SELF-DEPLOY.md § Updates).
- *
- * THE OWNER, AND ONLY THE OWNER. An update re-uploads this Worker, so the one
- * person who may press it is the address the deployment was created for — and
- * that address is in the deployment's own record, which nothing here can edit.
- * The allowlist gate beside this (`control-plane/admin-caller.ts`) answers a
- * different question against a var; this one asks the record, so a deployment
- * with no record has no update surface at all rather than one gated by
- * something else. Everyone else gets 404: the existence of an update button is
- * itself a fact about the owner.
- *
- * `dev` and CLI-token identities are refused for the same reason that gate
- * refuses them: a synthesized identity is granted by an env var, and a scoped
- * CLI token is a long-lived non-interactive credential. Neither is a person
- * deciding to re-upload their Worker.
+ * `/api/updates` (docs/SELF-DEPLOY.md § Updates). Owner only: the address in the deployment's own record;
+ * everyone else gets 404, since an update button's existence is a fact about the owner. `dev`/CLI identities are refused.
  */
 import {
   DeploymentRecordSchema, ReleaseManifestSchema, SELF_UPDATE_RUN_ID, buildOf, updateOffer,
@@ -62,13 +48,7 @@ export async function handleUpdatesRequest(
   return null;
 }
 
-/**
- * What this deployment knows about itself, or null.
- *
- * Null is the ordinary state of kinu.run itself, which nobody self-deployed. A
- * record that will not parse reads as no record, because a half-read record is
- * not something to run a plan from.
- */
+/** A record that will not parse reads as no record. */
 function deploymentRecord(env: Env): DeploymentRecord | null {
   const held = env.KINU_DEPLOYMENT_RECORD ?? '';
 
@@ -79,14 +59,10 @@ function deploymentRecord(env: Env): DeploymentRecord | null {
   return parsed.success ? parsed.output : null;
 }
 
-/** Whether this session is the address the deployment was created for. */
 function ownedBy(record: DeploymentRecord | null, identity: AuthIdentity): boolean {
   if (record === null) return false;
 
-  // Both spellings of a CLI identity: the provider it carries, and the scopes
-  // it carries only when the ticket had any. Keying on the scopes alone left
-  // an unscoped `cli` ticket admitted by this check and refused only by which
-  // paths tickets reach — a gate held up by routing rather than by itself.
+  // Check both the CLI provider and scopes: an unscoped `cli` ticket must be refused here, not by routing.
   if (identity.provider === 'dev' || identity.provider === 'cli') return false;
 
   if (identity.cliScopes !== undefined) return false;
@@ -99,8 +75,7 @@ function runStub(env: Env): DurableObjectStub<DeployRunDO> {
   return env.DeployRunDO.get(env.DeployRunDO.idFromName(SELF_UPDATE_RUN_ID));
 }
 
-/** The two builds side by side: this deployment's own stamp, read the same way
- *  `/api/health` reads it, and the one its channel publishes. */
+/** This deployment's stamp (read as `/api/health` does) beside the one its channel publishes. */
 async function offer(request: Request, env: Env, record: DeploymentRecord | null): Promise<UpdateOffer> {
   const channelOrigin = record?.channelOrigin ?? '';
   const stamp = await readBuildStamp(env, request.url);
@@ -113,8 +88,7 @@ async function offer(request: Request, env: Env, record: DeploymentRecord | null
   });
 }
 
-/** The channel's release, or null when it does not answer with one. `stable` is
- *  the one channel: `edge` is named as later in the doc and is not built. */
+/** `stable` is the only channel; `edge` is not built. */
 async function published(channelOrigin: string): Promise<UpdateBuild | null> {
   const response = await fetch(new URL('/downloads/release.json', channelOrigin));
 

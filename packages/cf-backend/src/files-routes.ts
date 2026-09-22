@@ -1,34 +1,6 @@
 /**
- * HTTP route for file bytes crossing the executor file plane.
- *
- *   PUT /api/workspaces/:agentName/files?executor=<id>&path=<absolute path>
- *   body: the file's raw bytes
- *   GET /api/workspaces/:agentName/files?executor=<id>&path=<absolute path>[&download=1]
- *   → the file's raw bytes
- *
- * This is HTTP and not an agent RPC for two reasons. The agents SDK dispatches
- * RPC over the chat WebSocket, whose message ceiling is 1 MiB, and an RPC
- * payload has to base64 its bytes (≈1.37×) — ordinary files died at the socket
- * as an opaque connection failure. And even on the direct stub rail, a whole
- * file as one RPC argument walks into the catalogued `do.facet.rpc_bytes`
- * structured-clone ceiling. So every byte crosses the Worker↔actor boundary as
- * one bounded chunk of FILE_CHUNK_BYTES, in either direction, with the total
- * per transfer held under FILE_TRANSFER_MAX_BYTES.
- *
- * The request side trusts no announced length: `content-length` is checked
- * only as a cheap pre-filter, and the real bound is the count of bytes pulled
- * from the stream — a chunked or HTTP/2 upload that lies about its length is
- * still refused at the first byte past the limit, before the rest is read.
- * The response side streams chunks as they arrive from the actor; nothing
- * buffers the whole file at the edge.
- *
- * GET is the file manager's download AND its image/PDF preview src; the
- * response's security posture lives in `fileResponseHeaders` (lib/http.ts),
- * where it is a tested contract.
- *
- * Auth and ownership are already enforced upstream — server.ts authenticates
- * the identity and verifies the caller owns `:agentName` before any
- * `/api/workspaces/<name>/...` handler runs.
+ * PUT/GET `/api/workspaces/:agentName/files?executor=&path=` raw bytes; auth and ownership are enforced upstream in server.ts.
+ * HTTP, not agent RPC: a whole file as one RPC argument hits the `do.facet.rpc_bytes` ceiling, so bytes cross in FILE_CHUNK_BYTES chunks.
  */
 
 import { getAgentByName } from "agents";
@@ -38,8 +10,6 @@ import type { ExecutorFileChunkRead, ExecutorFileChunkWrite, OrchestratorAgent }
 import { diagnostics, KinuError, toKinuError } from "@kinu.run/core/obs";
 import { err, fileResponseHeaders, json } from "@kinu.run/core";
 
-/** The stub surface this route drives — narrowed so tests can stand in for
- *  the agent without impersonating the whole actor. */
 export interface FilesRouteAgent {
   startExecutorFileDownload(
     executorId: string, path: string, transferId: string,
@@ -100,16 +70,7 @@ function expectedRevisionFrom(request: Request): VfsRevision | undefined | null 
   return parsed.success ? parsed.output : null;
 }
 
-/**
- * The uploaded bytes, streamed to the actor one bounded chunk at a time.
- *
- * The bound is the shared one (`readBoundedStream`): a declared-length
- * pre-filter, then a count of bytes actually pulled, refused at the first byte
- * past the limit with the stream cancelled rather than drained. Nothing
- * materialises the whole file at the edge. The actor independently re-checks
- * both offset continuity and the total, so neither a lying client nor a lying
- * length header reaches the file plane.
- */
+/** Streams chunks to the actor; the bound counts bytes pulled, not the declared length, and the actor re-checks offsets and total. */
 async function upload(transfer: {
   request: Request;
   agent: FilesRouteAgent;
@@ -128,7 +89,6 @@ async function upload(transfer: {
 
   const transferId = crypto.randomUUID();
 
-  /** Abort the half-written transfer, naming an abort that itself failed. */
   const abandon = async (): Promise<void> => {
     try {
       await agent.abortExecutorFileWrite(transferId);

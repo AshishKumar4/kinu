@@ -19,26 +19,16 @@ import { lastValue } from "./hooks/use-async-resource";
 import { lazyRoute } from "./lazy-route";
 import { Loader } from "@cloudflare/kumo";
 
-// The two code-split routes, through `lazyRoute` rather than `lazy` directly.
-// Both are `/assets/<name>-<hash>.js`, so both are the case a tab held open
-// across a deploy cannot load at all; `lazy-route.tsx` owns the one guarded
-// reload that recovers from it and the loader regeneration that makes the
-// boundary's "Try again" actually re-attempt the import.
+// Split routes go through `lazyRoute`, not `lazy`, to recover from a chunk gone stale across a deploy.
 
-// MCTS explorer pulls d3 (~12KB) — split out of main bundle.
+// MCTS explorer pulls d3.
 const MCTSExplorer = lazyRoute(() => import("./pages/MCTSExplorer"));
 
-// The admin control plane. Split out because almost nobody who loads this app is
-// an operator, and every read behind it answers 404 to everyone who is not — so
-// its code has no business in the bundle every signed-in user downloads.
+// Operator-only.
 const ControlPage = lazyRoute(() => import("./pages/ControlPage"));
 
-// The guided self-deploy door. Split for the same reason: it is the one page
-// in this app that a signed-in user never opens.
 const DeployPage = lazyRoute(() => import("./pages/DeployPage"));
 
-// The deployment's own Updates page. Split for the same reason again: only a
-// self-deployed Kinu has anything to show here, and only its owner sees it.
 const UpdatesPage = lazyRoute(() => import("./pages/UpdatesPage"));
 
 function LazyFallback() {
@@ -49,47 +39,28 @@ function LazyFallback() {
   );
 }
 
-// Remount the whole workspace — and with it the parent useAgent/useAgentChat
-// hooks — when the workspace changes. Subordinate route changes intentionally
-// keep this key stable so the main socket remains mounted while the active
-// facet socket is swapped lazily.
+// Remount (and reconnect useAgent) per workspace; subordinate routes keep the key so the main socket stays mounted.
 function KeyedWorkspace() {
   const { agentId } = useParams();
 
   return <WorkspacePage key={agentId} />;
 }
 
-// The settings form belongs to ONE workspace, so a workspace change is a fresh
-// mount for the same reason it is above.
-//
-// Unkeyed, React reuses the instance across `/workspace/A/settings` →
-// `/workspace/B/settings` because the route pattern is the same and only the
-// param changed. Two pieces of state then survive the switch: the fetch-once
-// ref, so B's values are never loaded, and every pending edit, because
-// `hydrate` deliberately keeps what the user typed. The form then showed A's
-// approval mode, MCTS config and advisor settings while connected to B, and
-// Save wrote them into B's Durable Object. Keying resets the ref, the five
-// fields and anything later added beside them, which is why it is the key
-// rather than a reset for each.
+// Keyed per workspace: unkeyed, the fetch-once ref and pending edits survive a switch and Save writes A's form into B.
 function KeyedSettings() {
   const { agentId } = useParams();
 
   return <SettingsPage key={agentId} />;
 }
 
-// Trigger management folded into the Supervise altitude's Automations block;
-// old /triggers deep links land there.
+// /triggers deep links land in Supervise's Automations block.
 function TriggersRedirect() {
   const { agentId } = useParams();
 
   return <Navigate to={`/workspace/${agentId}?altitude=supervise`} replace />;
 }
 
-// An account that still needs setup — the wizard never finished and not one
-// workspace exists — lands on it no matter which URL it arrived at. The
-// wizard itself stays reachable for anyone: an established account that opens
-// /welcome on purpose sees it, never a bounce. A profile that failed to read
-// gates nothing: the read may be wrong, but the account's data is still there.
+// An account needing setup lands on /welcome from any URL; /welcome stays open to all; a failed profile read gates nothing.
 function OnboardingGate() {
   const { profile } = useAccount();
   const at = useLocation().pathname;
@@ -103,10 +74,7 @@ function OnboardingGate() {
   return <Outlet />;
 }
 
-// Every `path` below is read from `APP_ROUTES` rather than spelled here, so the
-// router and a render-failure report's route field cannot drift: a path this file
-// routes and that table does not know reports as `/unmatched`, which is a finding
-// rather than a leak. (`app-routes.ts` states the whole reasoning.)
+// Paths come from `APP_ROUTES` so the router and failure reports' route field cannot drift.
 export default function App() {
   return (
     <BrowserRouter>
@@ -151,8 +119,6 @@ export default function App() {
         </Route>
         {/* Outside the shell: a viewer without a session sees this page and nothing else. */}
         <Route path={APP_ROUTES.sharedBlueprint} element={<ErrorBoundary label="blueprint"><BlueprintPage /></ErrorBoundary>} />
-        {/* The same, for a person who has no Kinu at all yet: the guided door
-            is code-split because nobody signed in ever loads it. */}
         <Route path={APP_ROUTES.deploy} element={
           <ErrorBoundary label="deploy">
             <Suspense fallback={<LazyFallback />}>

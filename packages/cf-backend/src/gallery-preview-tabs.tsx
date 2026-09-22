@@ -10,27 +10,18 @@ import { SLATE_GALLERY_URL } from '@/gallery-slate-fallback';
 
 const ROOT_PLAN: PlanReview = { id: 'plan-dashboard', sessionId: 'default', revision: 2, content: '# Dashboard delivery\n\nImplement the dashboard and verify its refresh action.', status: 'pending', annotations: [], feedback: null, handoffAccepted: false, createdAt: 1, updatedAt: 2, decidedAt: null };
 
-/** The plan a WHOLLY UNSCANNED actor submits. `courier` is on the workspace's
- *  roster but never on a `children` page here: the plan walk is budgeted, so a
- *  live actor outside the frontier is exactly the case an arrival hint exists
- *  for — no amount of "Older plans / more actors" reaches this one. */
+/** Plan of an actor outside the budgeted plan walk's frontier: only the arrival hint reaches it. */
 const ARRIVAL_PLAN: PlanReview = { id: 'plan-courier', sessionId: 'default', revision: 3, content: '# Courier rollout\n\nStage the rollout and verify the receipt.', status: 'pending', annotations: [], feedback: null, handoffAccepted: false, createdAt: 30, updatedAt: 30, decidedAt: null };
 
-/** The reference that arrival carries, built THROUGH the wire schema — as
- *  the hosted subordinate rung builds the one it really broadcasts. A fixture literal
- *  that drifted from the contract would reach the hook as a frame it drops,
- *  and the gate would see that as a timeout somewhere further on. */
+/** Built through the wire schema so fixture drift fails here, not as a later timeout. */
 const ARRIVAL_REFERENCE = v.parse(WorkspacePlanReferenceSchema, {
   path: ['courier'], id: ARRIVAL_PLAN.id, revision: ARRIVAL_PLAN.revision,
 });
 
-/** One the workspace never issued: a real reference by SHAPE, so nothing short
- *  of the exact authorized read can tell it from the one above. */
+/** Valid shape, never issued: only the authorized read can tell it apart. */
 const STALE_REFERENCE = v.parse(WorkspacePlanReferenceSchema, { ...ARRIVAL_REFERENCE, revision: 99 });
 
-/** Not a reference at all — parsed by a schema that requires the wire schema to
- *  REJECT it. A malformed fixture that drifted into validity would quietly
- *  become a second stale-reference leg and leave the malformed path untested. */
+/** Must stay rejected by the wire schema, or the malformed path goes untested. */
 const MALFORMED_REFERENCE = v.parse(
   v.pipe(JsonValueSchema, v.check(
     value => !v.safeParse(WorkspacePlanReferenceSchema, value).success,
@@ -47,22 +38,9 @@ const DEVICE_URL = 'https://3000-device-aaaaaaaaaaaaaaaa.preview.example.test/';
 
 const NOTHING = () => {};
 
-/** What a fixture RPC answers with: JSON, plus the plan records the surfaces read. */
 type ReplyValue = JsonValue | PlanReview | readonly ReplyValue[] | { readonly [key: string]: ReplyValue };
 
-/**
- * The one way this gate can make the SERVER speak.
- *
- * The frame crosses the real socket seam — `agents/react` IS the transport stub
- * in the gallery build, so this reaches the connection `useKinu` is holding —
- * and the hook does its own parse, root-only gate and de-duplication on it. A
- * fixture that set the arrival state directly would prove none of them.
- *
- * A reference the wire schema accepts goes out as that schema renders it, so
- * these bytes are the ones a real broadcast carries, event name included.
- * Anything it rejects goes out unchanged: a workspace can put any JSON on a
- * socket, and deciding which of it is a reference is the hook's job here.
- */
+/** Push a server frame through the stubbed `agents/react` socket so `useKinu` parses, gates and de-duplicates it. */
 function notify(reference: JsonValue): void {
   const frame = { type: WorkspacePlanUpdatedFrameSchema.entries.type.literal, reference };
   const parsed = v.safeParse(WorkspacePlanUpdatedFrameSchema, frame);
@@ -80,9 +58,7 @@ export function PreviewTabsGallery() {
   const [failHistory, setFailHistory] = useState(false);
   const [workerPlan, setWorkerPlan] = useState<PlanReview>({ ...ROOT_PLAN, revision: 1, content: "# Worker plan", status: "approved", handoffAccepted: true, createdAt: 10 });
   const [owner, setOwner] = useState("main");
-  // The REAL root connection, for one value: the arrival hint. Everything the
-  // surfaces read still comes from the fixture props below, so this exercises
-  // the hook's socket edge and nothing else.
+  // Real root connection, for the arrival hint only.
   const { workspacePlanArrival } = useKinu('preview-tabs');
 
   const rpc: Rpc = useCallback(async <T,>(method: string, _args?: unknown[]): Promise<T> => {
@@ -91,11 +67,7 @@ export function PreviewTabsGallery() {
     if (method === 'previewSlate') return reply({ ok: true, value: { url: SLATE_GALLERY_URL, port: 8789, inline: { height: 240 } } });
     else if (method === 'getExecutorDiff') return reply({ mode: 'vfs-baseline', files: diff ? [{ path: 'src/app.ts', status: 'changed', additions: 1, deletions: 0, diff: '+export const ready = true;' }] : [] });
     else if (method === 'listWorkspaceWork') {
-      // The workspace-wide read owns what the walk once assembled: every
-      // actor's newest plans with their tasks, retired-inclusive. `archive`
-      // still reads — the roster is not the fixture's frontier — and the
-      // courier plan is already on it, so the arrival hint is the auto-open
-      // trigger, never a discovery read.
+      // The courier plan is already listed, so the arrival hint is the auto-open trigger, not a discovery read.
       if (failHistory) throw new Error('Plan history temporarily unavailable');
 
       const ownerOf = (name: string, retired = false) => ({ actorId: `actor-${name}`, name, retired });
@@ -153,10 +125,6 @@ export function PreviewTabsGallery() {
     <div className="flex gap-2 p-2 text-xs shrink-0 flex-wrap" data-plan-owner={owner}>
       <button data-break-plans onClick={() => setFailHistory(value => !value)}>Toggle history failure</button>
       <button data-worker-plan onClick={() => setWorkerPlan({ ...workerPlan, revision: 2, createdAt: 20, status: "pending", handoffAccepted: false, content: "# Worker revision two" })}>Submit worker plan</button>
-      {/* The conversation switch, both ways. Production reads the actor out of
-          the route, so walking back OUT to the workspace remounts the root pane
-          exactly as walking into an actor's conversation remounts theirs — and
-          a hint already acted on may not arrive again in either. */}
       <button data-open-workspace onClick={() => setOwner('main')}>Back to workspace conversation</button>
       <button data-new-preview onClick={() => { setSlates([...SLATES, { id: 'report', title: 'Report', bindings: [] }]); setFocus('slate:report'); }}>New preview</button>
       <button data-new-plan onClick={() => { setPlan(ROOT_PLAN); setPlanFocus('plan-dashboard:2'); }}>Submit plan</button>

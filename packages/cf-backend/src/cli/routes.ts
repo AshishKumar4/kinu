@@ -52,13 +52,8 @@ const WebhookRequestSchema = v.object({
   rate_limit_per_min: v.optional(v.number()),
 });
 
-/** The content-type a published download is served with, or null for a path
- *  that is not one. The CLI tarballs, their checksums and the build stamp,
- *  plus the small half of a worker release: the manifest and the artifact's
- *  checksum are published as assets beside the build stamp (the artifact
- *  itself is streamed from R2 by `handleReleaseArtifactRequest`). Public for
- *  one reason: a fresh install, and a deployment updating itself, have no
- *  session here. */
+/** Content-type for a published download path, or null. Public: a fresh install and a
+ *  self-updating deployment have no session here. */
 function publishedDownloadType(pathname: string): string | null {
   if (CLI_DIST_PATHS.includes(pathname)) return 'application/gzip';
 
@@ -70,7 +65,6 @@ function publishedDownloadType(pathname: string): string | null {
   return CLI_DIST_PATHS.includes(artifact) || RELEASE_ARTIFACT_ROUTE.test(artifact) ? 'text/plain; charset=utf-8' : null;
 }
 
-/** Every call the CLI plane makes on the signing-in account's own object. */
 export type CliRoutesAuthority = CliAuthAuthority & SessionAuthority & CloudWorkspaceRegistry & Pick<
   UserDO,
   'revokeCliTokenHash' | 'listCliTokens' | 'revokeAllCliTokens'
@@ -81,16 +75,9 @@ export type CliRoutesAuthority = CliAuthAuthority & SessionAuthority & CloudWork
   | 'listCredentials' | 'setCredential' | 'deleteCredential'
 >;
 
-/** The workspace object as the CLI plane reaches it: the birth sequence a
- *  create runs, the credential notice, the webhook row a trigger creates, and
- *  the method-shaped transport's own dispatch surface. */
 export type CliAgentTarget = CloudWorkspaceBirth & CredentialFanoutTarget
   & Pick<OrchestratorAgent, 'createDurableWebhook'> & AgentRpcDispatch;
 
-/** Every binding the CLI plane reads: the user plane's whole reach, the CLI
- *  auth store's KV and objects, the published assets a download is served
- *  from, the webhook route secret a trigger checks, and the approval origin the
- *  browser hand-off is rendered against. */
 export interface CliRoutesEnv<Id>
   extends CreateWorkspaceEnv<Id>, UserAIProxyEnv<Id>, AuthEnv<Id>, WebhookRouteEnv {
   AUTH_KV: KvStore;
@@ -135,11 +122,8 @@ export async function handleCliRequest<Id>(
     return approveFromBrowser(request, env);
   }
 
-  // The signed-in AI proxies are CLI-bearer-authenticated (never browser
-  // cookies), so their gate lives here even though the path is /api/user/…:
-  // session tokens pass, scoped access tokens need ai.proxy. Both the
-  // Cloudflare-pinned proxy and the general provider proxy spend the owner's
-  // inference credentials, so they share one scope.
+  // AI proxies are CLI-bearer-authenticated, so their gate lives here despite the /api/user/… path;
+    // both spend the owner's inference credentials and share the ai.proxy scope.
   const aiProxy = url.pathname.startsWith(`${USER_AI_PROXY_PATH}/`);
   const providerProxy = url.pathname.startsWith(`${USER_AI_PROXY_FORWARD_PREFIX}/`);
 
@@ -187,22 +171,14 @@ export async function handleCliRequest<Id>(
     }
   }
 
-  // There is deliberately NO JSON approval route beside the browser form above.
-  // Approval is the one step of the device flow that spends the AMBIENT session
-  // cookie, and this whole module is dispatched before server.ts's CSRF gate so
-  // that bearer-token clients are never asked for an `Origin`. A cookie-only
-  // JSON POST here was therefore reachable from any same-site page with a known
-  // user code, and what it minted was an unrestricted CLI token for that user.
-  // The form flow is the approval path: same-origin, double-submit, and the
-  // only URL `startCliAuth` ever publishes.
+  // Deliberately no JSON approval route: this module runs before server.ts's CSRF gate, so a
+    // cookie-only JSON POST would let any same-site page mint a CLI token. Use the form flow only.
 
   const cli = await authenticateCli(request, env);
 
   if (cli instanceof Response) return cli;
 
-  // The generic agent RPC endpoint carries its own per-method policy (the
-  // AGENT_RPC_ACCESS table), so it is matched ahead of the route-shaped
-  // access-token gate.
+  // The agent RPC endpoint has its own per-method policy (AGENT_RPC_ACCESS), so it precedes the access-token gate.
   const rpcMatch = path.match(/^\/workspaces\/([^/]+)\/rpc$/);
 
   if (rpcMatch && method === 'POST') {
@@ -229,13 +205,8 @@ export async function handleCliRequest<Id>(
     return json({ body: { ok: true } });
   }
 
-  // ── Session inventory — the recovery surface for an orphaned bearer ──
-  // A logout whose remote revocation never landed (or a token copied off a
-  // lost machine) left a live 180-day bearer with nothing able to name it,
-  // because the server stores only its hash and the raw token was gone. These
-  // routes let a re-authenticated owner enumerate what is still live and end
-  // any of it — by the hash the inventory prints, or all of it at once.
-  // Interactive sessions only, like every other account-management surface.
+  // Session inventory: lets a re-authenticated owner find and end bearers only stored as hashes.
+    // Interactive sessions only.
   if (path === '/sessions' && method === 'GET') {
     return json({ body: { sessions: await cli.userDO.listCliTokens(await ownerCaller(env)) } });
   }
@@ -254,8 +225,7 @@ export async function handleCliRequest<Id>(
     return json({ body: { ok: true } });
   }
 
-  // ── Profile catalog — interactive owner session only. The route gate
-  // blocks scoped tokens; the UserDO separately blocks workspace callers. ──
+  // Profile catalog: the route gate blocks scoped tokens; the UserDO separately blocks workspace callers.
   if (path === '/profile' && method === 'GET') {
     return json({ body: await cli.userDO.getProfileCatalog(await ownerCaller(env)) });
   }
@@ -287,14 +257,12 @@ export async function handleCliRequest<Id>(
     return err(400, result.reason);
   }
 
-  // ── CI access tokens — interactive-session-only management surface ──
   if (path === '/tokens' && method === 'GET') {
     return json({ body: { tokens: await cli.userDO.listAccessTokens(await ownerCaller(env)) } });
   }
 
   if (path === '/tokens' && method === 'POST') {
-    // Minting a long-lived credential is step-up gated exactly like webhook
-    // creation: the session token itself must come from a fresh `kinu auth`.
+    // Step-up gated like webhook creation: requires a fresh `kinu auth`.
     if (!isFreshAuthTime(await sessionTokenMintedAt(env, cli))) {
       return err(401, 'step-up auth required: run `kinu auth` again. Minting access tokens needs a sign-in within the last 5 minutes.');
     }
@@ -387,15 +355,12 @@ export async function handleCliRequest<Id>(
 
     if (agent instanceof Response) return agent;
 
-    // Webhook creation is step-up gated on every path. The CLI's
-    // interactive-auth timestamp is its token mint time (minting requires
-    // a live browser approval), so a fresh `kinu auth` satisfies it.
+    // Step-up gated on every path; the CLI's interactive-auth time is its token mint time.
     if (!isFreshAuthTime(await sessionTokenMintedAt(env, cli))) {
       return err(401, 'step-up auth required: run `kinu auth` again. Webhook creation needs a sign-in within the last 5 minutes.');
     }
 
-    // Same rule the web route states: a webhook whose delivery URL cannot be
-    // signed is a row nobody can deliver to.
+    // A webhook whose delivery URL cannot be signed is a row nobody can deliver to.
     if (webhookRouteSecret(env) === null) return err(503, WEBHOOK_ROUTE_UNAVAILABLE);
     const body = await safeJson(request, WebhookRequestSchema);
 
@@ -427,11 +392,8 @@ export async function handleCliRequest<Id>(
     return json({ body: { deviceId, token, userId: cli.userId, origin: url.origin } }, { status: 201 });
   }
 
-  // Provider credentials. Interactive sessions only (the default-deny gate
-  // above stops `pta_` tokens): a CI token that could write a provider key
-  // could also swap the account's inference credentials. Reading back a
-  // secret is not offered here for the same reason it is not offered in the
-  // browser — once submitted, a secret is not viewable again.
+  // Interactive sessions only: a CI token writing a provider key could swap the account's inference
+    // credentials. Secrets are never readable back.
   if (path === '/credentials' && method === 'GET') {
     return json({ body: await cli.userDO.listCredentials(await ownerCaller(env)) });
   }
@@ -447,10 +409,7 @@ export async function handleCliRequest<Id>(
       try { await cli.userDO.setCredential(await ownerCaller(env), key, body); }
       catch (e) { return err(400, renderThrownChain({ cause: e })); }
 
-      // The same mutation path the browser routes run: the authoritative write
-      // is done, so the workspaces holding caches of the OLD state are told to
-      // drop them. Skipping it here leaves a newly connected provider invisible
-      // to every live workspace until some unrelated invalidation lands.
+      // Invalidate live workspaces' caches, as the browser routes do, or a new provider stays invisible.
       notifyWorkspacesCredentialsChanged(env, cli.userDO, ctx);
 
       return json({ body: { ok: true } }, { status: 201 });
@@ -479,13 +438,7 @@ async function cliAgent<Id>(
   return result.agent;
 }
 
-/**
- * POST /api/cli/workspaces/:name/rpc — the one method-shaped transport:
- * `{ method: string, args: unknown[] }` dispatched to the named DO method,
- * gated by the AGENT_RPC_ACCESS table (shared verbatim with the websocket
- * frame gate). Table membership is the dispatch allowlist — an off-table
- * method name is never invoked.
- */
+/** The one method-shaped transport; AGENT_RPC_ACCESS table membership is the dispatch allowlist. */
 async function handleAgentRpc<Id>(
   request: Request, env: CliRoutesEnv<Id>, cli: CliTokenIdentity<CliRoutesAuthority>, name: string,
 ): Promise<Response> {
@@ -521,28 +474,19 @@ async function handleAgentRpc<Id>(
 
   if (agent instanceof Response) return agent;
 
-  // The table check above is the trust boundary: only methods the policy
-  // names are ever reached, so the string-indexed dispatch cannot touch
-  // anything else on the DO. Args are the method's own responsibility to
-  // validate — the same contract as the websocket rpc dispatcher.
+  // The table check above is the trust boundary; each method validates its own args.
   try {
-    // The table proved the name is a real method; its ARGUMENTS are the
-    // caller's JSON and each method validates its own, exactly as the
-    // websocket dispatcher states.
     const invoke = v.parse(v.function(), agent[rpcMethod]);
     const result = await invoke(...args);
 
     return json({ body: { result: result ?? null } });
   } catch (e) {
-    // Same contract as a websocket rpc-error frame: the thrown message goes
-    // back to the caller as a request-level failure.
+    // Same contract as a websocket rpc-error frame.
     return err(400, renderThrownChain({ cause: e }));
   }
 }
 
-/** The CLI's interactive-auth timestamp: the session token's mint time
- *  (minting requires a live browser approval). Step-up gated routes compare
- *  it against the fresh-auth window; access tokens never qualify. */
+/** The session token's mint time (minting requires a live browser approval); access tokens never qualify. */
 async function sessionTokenMintedAt<Id>(
   env: CliRoutesEnv<Id>, cli: CliTokenIdentity<CliRoutesAuthority>,
 ): Promise<number | null> {
@@ -552,13 +496,7 @@ async function sessionTokenMintedAt<Id>(
   return tokens.find((t) => t.tokenHash === cli.tokenHash)?.createdAt ?? null;
 }
 
-/** Default-deny gate for scoped `pta_…` access tokens on the route-shaped
- *  surface (agent-method calls carry their own per-method policy — the
- *  AGENT_RPC_ACCESS table behind /workspaces/:name/rpc): workspace/model
- *  listing needs workspace.read, connect tickets need workspace.exec, and
- *  everything else — webhook creation, device registration, agent creation,
- *  token management — stays interactive-session-only. Routes added in the
- *  future are interactive-only until listed here. */
+/** Default-deny for scoped `pta_…` tokens on route-shaped paths; unlisted routes stay interactive-only. */
 function accessTokenDenial(
   cli: Pick<CliTokenIdentity, 'kind' | 'scopes'>, method: string, path: string,
 ): Response | null {
@@ -606,8 +544,7 @@ async function authenticateCli<Id>(
 
     return result.ok ? result.identity : err(401, result.error);
   } catch (e) {
-    // A deployment with no root secret cannot authorize anything for the
-    // owner. Say that, rather than surfacing it as an unexplained 500.
+    // No root secret: say so rather than surfacing an unexplained 500.
     if (e instanceof OwnerCapabilityUnavailableError) return err(503, e.message);
     throw e;
   }
@@ -941,10 +878,7 @@ fi
   });
 }
 
-/** Serve one published download, or 404 loudly. An incomplete deploy must
- *  never answer these paths with the SPA shell wearing an `application/gzip`
- *  content-type: the shim would then "verify" a checksum of an HTML page and
- *  every install would fail with an unexplained mismatch. */
+/** 404 loudly: an SPA shell served as `application/gzip` would make install checksums fail mysteriously. */
 interface CliAssetRequest {
   request: Request;
   env: { readonly ASSETS: AssetFetcher };
@@ -1232,7 +1166,6 @@ function accessError(e: Error, request?: Request): Response {
   return err(500, renderThrownChain({ cause: e }));
 }
 
-/** The device-approval pages: the consent screen, its result, and its failures. */
 function html(title: string, body: string, status = 200, init: ResponseInit = {}): Response {
   const headers = new Headers(publicHtmlHeaders());
 
@@ -1245,8 +1178,7 @@ function toError(thrown: { cause: unknown }): Error {
   return thrown.cause instanceof Error ? thrown.cause : new Error(renderThrownChain(thrown));
 }
 
-/** A text field of a posted form. A file under a text field's name is not a
- *  value this endpoint has a use for, so it reads as absent. */
+/** A file under a text field's name reads as absent. */
 function textField(form: FormData, name: string): string {
   const raw = form.get(name);
 

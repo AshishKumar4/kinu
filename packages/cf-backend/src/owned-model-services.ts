@@ -17,26 +17,13 @@ import { resolveReviewingModelSelection } from './providers/judge-model';
 import type { UserCaller } from '@kinu.run/core';
 import type { ObjectNamespace } from '@kinu.run/core';
 
-/** The HTML→markdown call the web provider makes on the AI binding, taken from
- *  the factory that consumes it so the two cannot drift. */
 type MarkdownConversion = NonNullable<Parameters<typeof buildCfWebSearchProvider>[0]['AI']>['toMarkdown'];
 
-/**
- * The `env.AI` binding these services reach.
- *
- * Two consumers declare two surfaces of it: the gateway seam every provider
- * runs on (`ProviderEnv`), and the HTML→markdown conversion the web provider
- * uses. The conversion is OPTIONAL because core already answers for its
- * absence — a web provider built without it keeps the page's raw HTML — and
- * because demanding both surfaces here would leave a binding that offers only
- * the gateway unusable for the gateway.
- */
+/** The `env.AI` binding. HTML→markdown is optional: without it core keeps raw HTML, and a gateway-only binding stays usable. */
 export interface OwnedAiBinding extends WorkersAIBinding {
   toMarkdown?: MarkdownConversion;
 }
 
-/** A binding that does convert, so the view handed to the web factory names the
- *  surface it was proven to have. */
 interface ConvertingAiBinding extends OwnedAiBinding {
   toMarkdown: MarkdownConversion;
 }
@@ -45,8 +32,6 @@ function convertsHtml(ai: OwnedAiBinding | undefined): ai is ConvertingAiBinding
   return ai?.toMarkdown !== undefined;
 }
 
-/** Every binding these services read: the provider seam core declares, plus the
- *  account object that owns this owner's credentials. */
 export interface OwnedModelEnv<Id> extends ProviderEnv {
   AI?: OwnedAiBinding;
   UserDO: ObjectNamespace<Id, UserCredentialClient>;
@@ -54,62 +39,34 @@ export interface OwnedModelEnv<Id> extends ProviderEnv {
 
 export interface OwnedModelServicesOptions<Id> {
   readonly env: OwnedModelEnv<Id>;
-  /** Resolved lazily: a facet's logical name is only set by the async
-   *  _cf_initAsFacet after construction, so this must not be read eagerly. */
+  /** Lazy: a facet's logical name is set by async `_cf_initAsFacet` after construction. */
   readonly agentName: () => string;
   readonly appTitle: string;
   readonly ownerRequired: boolean;
   readonly getOwnerUserId: () => string | null;
-  /** How this actor proves its workspace identity to the UserDO. Resolved per
-   *  call: a facet reads it from its parent, and a workspace only has one once
-   *  the Worker has claimed it. */
+  /** Per call: a facet reads it from its parent, and a workspace has one only once claimed. */
   readonly getUserCaller: () => Promise<UserCaller>;
-  /** This account's credential revision, from the object that owns the store.
-   *  Resolved lazily and best-effort: an unreachable authority leaves the cache
-   *  as it is (the fan-out and the next successful read still repair it),
-   *  because refusing a turn over a cache-freshness question would trade a
-   *  stale catalog for a dead agent. */
+  /** Lazy and best-effort: an unreachable authority leaves the cache as is rather than failing the turn. */
   readonly getCredentialsRevision: () => Promise<number>;
-  /** Called the moment a request this actor's model makes is about to sleep on
-   *  a provider wait — the actor emits it as a `provider_wait` run event.
-   *  Invoked at wait time, so the callback may read live turn state. */
+  /** Invoked at wait time, so the callback may read live turn state. */
   readonly onProviderWait?: (info: ProviderWaitInfo) => void;
 }
 
-/** Owner-scoped provider, model, affinity, and web services shared by CF agents. */
 export class OwnedModelServices<Id = DurableObjectId> {
   private providerRegistryCache: AgentProviderRegistry | null = null;
   private webSearchProviderCache: WebSearchProvider | null = null;
   private judgeSpecCache: { key: string; spec: string } | null = null;
   private modelCache: { spec: string; model: LanguageModel } | null = null;
-  /** The account credential revision the provider listing was last swept
-   *  under. Differing from the live one is what invalidates the listing at use,
-   *  without a clock and without depending on the fan-out having landed. */
+  /** Revision the listing was swept under; a differing live revision invalidates it without a clock. */
   private cachedCredentialsRevision: number | null = null;
-  /**
-   * The last COMPLETE provider listing, and the sweep currently in flight.
-   *
-   * The cache POLICY is core's (`ProviderListingCache`): one sweep at a time
-   * with concurrent callers joining it, complete listings only, a generation
-   * guard so an invalidation landing mid-sweep still answers its caller without
-   * poisoning the cache, and expiry by signal rather than by clock. All four
-   * rules live there once, keyed on `revision` — the key every other cache is
-   * kept against — rather than here and again in the CLI.
-   *
-   * What stays here is the SWEEP and its trigger: `invalidate()` is the hook
-   * every credential mutation, model rebind and owner claim already reaches, and
-   * that is genuinely this platform's half. Nothing makes a turn pay a full
-   * credential sweep — models.dev, Codex, every connected provider — before it
-   * can stream a single byte.
-   */
+  /** Last complete provider listing; the cache policy is core's `ProviderListingCache`, keyed on `revision`. */
   private readonly providerListings = new ProviderListingCache(
     () => this.sweepProviderListing(),
   );
 
   constructor(private readonly options: OwnedModelServicesOptions<Id>) {}
 
-  /** Workers-AI session-affinity key. Computed lazily so it reads the facet's
-   *  logical name at call time, not the unresolved construction-time value. */
+  /** Lazy so it reads the facet's logical name at call time. */
   get affinityKey(): string {
     return agentAffinityKey(this.options.agentName());
   }
@@ -138,12 +95,7 @@ export class OwnedModelServices<Id = DurableObjectId> {
     return this.providerRegistryCache;
   }
 
-  /** The resolved model for `spec`, memoized on the NORMALIZED spec.
-   *
-   *  Cached here rather than in each caller: Think asks for the model once per
-   *  turn and a head asks for it once per STEP, which without this rebuilds the
-   *  registry lookup every time. `invalidate()` drops it with the rest of the
-   *  owner-bound state. */
+  /** Memoized on the normalized spec: heads ask once per step. `invalidate()` drops it. */
   resolveModel(spec?: string | null): LanguageModel {
     const registry = this.providerRegistry();
     const normalized = registry.normalizeSpecSync(spec);
@@ -155,10 +107,6 @@ export class OwnedModelServices<Id = DurableObjectId> {
     return model;
   }
 
-  /** The same memoized model plus the reasoning-effort provider options for it.
-   *  One implementation of "normalize the spec, resolve it, derive its effort
-   *  options" — the head path needs the pair and would otherwise rebuild both
-   *  per call. */
   resolveModelWithEffort(spec: string | null | undefined, effort: ReasoningEffort) {
     const registry = this.providerRegistry();
     const normalized = registry.normalizeSpecSync(spec);
@@ -169,27 +117,15 @@ export class OwnedModelServices<Id = DurableObjectId> {
     };
   }
 
-  /**
-   * Credential-aware model set used by profile resolution, plus the providers
-   * that could not be read.
-   */
   async profileProviderSnapshot(): Promise<ProviderSnapshotRead> {
-    // THE DURABLE RECONCILIATION, before anything is read: the account's
-    // credential revision, compared against the one this cache was last swept
-    // under. The fan-out notification is the fast path and can fail silently;
-    // this comparison is the one that cannot, because it reads the same store
-    // the mutation wrote. Best-effort by design — see the options' declaration
-    // of `getCredentialsRevision` for why an unreachable authority must leave
-    // the cache alone here rather than fail the turn.
+    // Durable reconciliation against the account revision: the fan-out can fail silently, this cannot.
     try {
       const revision = await this.options.getCredentialsRevision();
 
       if (revision !== this.cachedCredentialsRevision) this.invalidate();
       this.cachedCredentialsRevision = revision;
     } catch (cause) {
-      // Recorded, not swallowed: the cache is left as it is deliberately, and
-      // what that costs — a listing that may be one mutation stale until the
-      // authority answers again — is only diagnosable if the failure is named.
+      // Logged so a possibly stale listing is diagnosable.
       diagnostics.failure('profile.credentials_revision_unreadable', toKinuError({
         doing: 'reading the account credential revision a cached provider listing is measured against',
         cause,
@@ -198,10 +134,6 @@ export class OwnedModelServices<Id = DurableObjectId> {
     }
 
     const { listing, cache } = await this.providerListings.read();
-    // The assembly — dedupe, sort, `label ?? provider`, and the failure fold
-    // into `revision` — is core's. `revision` is the key every other cache is
-    // held against, so the formula deciding when profiles re-resolve had to stop
-    // being a twin of the CLI's.
     const snapshot = buildProviderCatalogSnapshot(listing.models, listing.failures);
     diagnostics.event('profile.provider_snapshot.resolved', {
       cache,
@@ -213,9 +145,6 @@ export class OwnedModelServices<Id = DurableObjectId> {
     return { snapshot, cache };
   }
 
-  /** One credential sweep, measured. Everything about WHEN this runs and
-   *  whether its answer is kept is core's cache policy; this is only the
-   *  platform call it wraps. */
   private async sweepProviderListing(): Promise<ProviderListing> {
     const startedAt = Date.now();
     const { registry, deps } = this.providerRegistry();
@@ -235,13 +164,7 @@ export class OwnedModelServices<Id = DurableObjectId> {
     return listing;
   }
 
-  /**
-   * The model that judges this agent's own output — `review_model` when the
-   * operator set one, else a different-vendor model when one is connected,
-   * else the chat model itself (see core's selectJudgeModel). Cached per
-   * (review, chat) pair because the cross-family search costs a credential
-   * listing; `invalidate()` drops it with the rest of the owner-bound state.
-   */
+  /** Judge model per core's selectJudgeModel; cached per (review, chat) pair because the search lists credentials. */
   async resolveJudgeModel(opts: { reviewSpec: string | null; chatSpec: string | null }): Promise<LanguageModel> {
     const registry = this.providerRegistry();
     const key = `${opts.reviewSpec ?? ''}\n${opts.chatSpec ?? ''}`;
@@ -254,8 +177,7 @@ export class OwnedModelServices<Id = DurableObjectId> {
     return registry.resolveModel(this.judgeSpecCache.spec);
   }
 
-  /** Built once per object. Key-less by default; a stored `tavily` credential
-   *  upgrades search, and HTML→markdown goes through env.AI when it is bound. */
+  /** Key-less by default; a stored `tavily` credential upgrades search. */
   getWebSearchProvider(): WebSearchProvider {
     if (this.webSearchProviderCache) return this.webSearchProviderCache;
     const ai = this.options.env.AI;
@@ -267,15 +189,7 @@ export class OwnedModelServices<Id = DurableObjectId> {
     return this.webSearchProviderCache;
   }
 
-  /** Drop owner-bound provider/auth state; the web provider resolves it per call.
-   *
-   *  This is the provider listing's ONLY expiry, and the trigger is the half of
-   *  the cache that genuinely belongs to this platform: every credential
-   *  mutation, model rebind and owner claim already reaches here, so the listing
-   *  is rebuilt when it stops being true rather than on a clock. What dropping
-   *  it MEANS — including that the in-flight sweep goes with it, since one
-   *  started before a credential changed would otherwise be handed to everyone
-   *  who joined it — is core's rule now. */
+  /** Drop owner-bound provider/auth state; the provider listing's only expiry (in-flight sweep included, per core). */
   invalidate(): void {
     this.providerRegistryCache = null;
     this.judgeSpecCache = null;

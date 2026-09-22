@@ -1,118 +1,6 @@
 /**
- * Design-system gallery — a static harness that renders the real components
- * with mock data so the app's signed-in surfaces can be screenshotted without
- * auth. Served by gallery.vite.config.ts (no worker). Frames:
- *
- *   /gallery.html            → all sections stacked
- *   /gallery.html?frame=shell    → full workspace shell (hero shot)
- *   /gallery.html?frame=chat     → chat column inventory
- *   /gallery.html?frame=chatempty → a workspace before its first turn: the
- *                                  mission it was created for, not a message
- *   /gallery.html?frame=chatloading → a workspace WITH a history, before the
- *                                  transcript has arrived — must read as
- *                                  loading; rendering it as `chatempty` lies
- *   /gallery.html?frame=composer → the composer alone: at rest, mid-turn
- *                                  (Stop/Branch/Steer), and with a status row
- *   /gallery.html?frame=toolcalls → every tool-call render state, pre-expanded
- *   /gallery.html?frame=providerwait → an in-flight turn sleeping out a
- *                                  provider-mandated wait: the task indicator
- *                                  names the provider and the retry window
- *                                  instead of reading "working" over silence.
- *                                    (quiet failure, protocol failure, a
- *                                    multi-line `shell`, an MCP tool, a failing
- *                                    group)
- *   /gallery.html?frame=advisor  → the advisor's note card, once per severity
- *                                  (nit / concern / blocker), full ladder in
- *                                  one column
- *   /gallery.html?frame=modal    → modal open
- *   /gallery.html?frame=home     → HomePage
- *   /gallery.html?frame=workspaces → the Workspaces page (`&view=list` for the list)
- *   /gallery.html?frame=plugins  → the Plugins page
- *   /gallery.html?frame=drive    → the Drive page over a seeded tenant (gallery-drive.tsx)
- *   /gallery.html?frame=devices  → the Devices page: the linked machines, their
- *     link states and the per-workspace grants
- *   /gallery.html?frame=setupmodal → HomePage with an account panel open in
- *                                  the modal the Setup card opens;
- *                                  `&panel=providers|mcp|cli` picks which
- *   /gallery.html?frame=app&path=/ → the SHIPPED shell (`Layout`, its rail,
- *                                  the living background) routed to `path`:
- *                                  `/`, `/user/settings` or `/drive`. What the
- *                                  background's contrast is measured on.
- *   /gallery.html?frame=control  → the admin control plane: every tab, the
- *                                  account drilldown and a workspace drilldown.
- *                                  `/api/control/*` is answered by request
- *                                  interception, so the page, its client and its
- *                                  five non-ok read states are the shipped ones.
- *   /gallery.html?frame=agentchats → the interactive agent-conversation rig:
- *                                  one-click create, rename, per-conversation
- *                                  Auto/Plan + draft/scroll — the real
- *                                  components over a scripted roster, driven
- *                                  by the chat-and-files browser gate
- *   /gallery.html?frame=markdown → everything MarkdownContent has to render
- *   /gallery.html?frame=slate    → an agent-authored Slate preview loaded
- *                                  through the production SlateFrame API
- *   /gallery.html?frame=releases → the Releases board with a pending approval
- *   /gallery.html?frame=work     → the Work surface: needs-you, the plan and
- *                                  running jobs, and the settled journal.
- *                                  `&lane=settled` takes the in-flight work
- *                                  away, so Now has nothing to show;
- *                                  `&lane=failed` refuses both ledger reads
- *                                  over an empty feed, so each section owes a
- *                                  retry and the running job still renders
- *   /gallery.html?frame=planreview → the active plan document, with the real
- *                                  Plannotator viewer and annotation rail
- *   /gallery.html?frame=workempty → the same column before anything has happened
- *   /gallery.html?frame=environment → the Environment surface: every place the
- *                                  agent can act, as one row set
- *   /gallery.html?frame=files    → the Files tab: the composite drive (the
- *                                  workspace tree with /pc and /sandbox as
- *                                  mounted folders), stateful, so rename and
- *                                  delete are provable; `&offline=device`
- *                                  photographs the disconnected-device row,
- *                                  and `&connect=1` drives the connect panel
- *                                  that row opens: register, the server's
- *                                  command, the wait, and the close when the
- *                                  machine reports in
- *   /gallery.html?frame=supervise → the Supervise altitude, every block populated
- *   /gallery.html?frame=supervisefresh → the same view before any evolution has
- *                                  happened: the Evolution block is absent and
- *                                  the jobs read fails, until the browser gate
- *                                  dispatches `gallery:supervise-evolve` and
- *                                  `gallery:supervise-jobs-heal`;
- *                                  `gallery:supervise-evolution-fail` arms a
- *                                  one-shot failure on the next digest read
- *   /gallery.html?frame=settings → the per-agent Settings page
- *   /gallery.html?frame=forks    → Exploration on a real 106-node, depth-6
- *                                  competition, in Column C's actual width
- *   /gallery.html?frame=forkmerge → the same surface on a run with NO search
- *                                  tree: the same tree at depth 1, with no score
- *                                  encodings
- *   /gallery.html?frame=forkpreset → a swarm under a NAMED PRESET: which preset it
- *                                  resolved AND the tuple it resolved to, with
- *                                  `settle` derived from two of those axes
- *   /gallery.html?frame=forkfanin → a `custom` composition that FANS IN: the
- *                                  `expand:'aggregate'` vertices marked in the
- *                                  tree, and the honest note that a composition's
- *                                  axes are not recoverable from any read model
- *   /gallery.html?frame=forkrefused → a search that STARTED and reached nothing:
- *                                  a refusal naming its cause, never an empty tree
- *   /gallery.html?frame=forkstopped → a run whose lease outlived it: two nodes
- *                                  reported, five stopped, none at work — the
- *                                  state that must never read `running`
- *   /gallery.html?frame=forkfull → the same competition in the full-screen explorer
- *   /gallery.html?frame=forkswarmfull → the fan-in swarm, full-screen
- *   /gallery.html?frame=forkbig  → the scale probe: 520 nodes, depth 9
- *   /gallery.html?frame=forklive → the SAME search as it happens, in five stages.
- *                                  `&stage=N` pins one; without it the frame
- *                                  advances itself. Liveness is a pair of moments,
- *                                  so a frame that only animated could not be
- *                                  asserted about without asserting about a clock.
- *
- * Network: /api/user/* GETs are stubbed in-page; everything else passes through.
- * A gate makes the server speak by dispatching `gallery:push-frame` with one
- * card or steer frame: those are the two the hosting seam stamps with an
- * actor, and a stamped frame is unreachable through any fixture read.
- * The dispatch in `mount()` is the full frame list.
+ * Design-system gallery: the real components over mock data, so signed-in surfaces can be screenshotted without auth.
+ * Served by gallery.vite.config.ts; `?frame=` selects a frame (full list: the dispatch in `mount()`). /api/user/* GETs are stubbed in-page.
  */
 import { StrictMode, Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
@@ -218,29 +106,20 @@ import { galleryServerPush, seedGalleryChat, serveGalleryRpc } from "@/gallery-a
 
 const frame = new URLSearchParams(location.search).get("frame") ?? "all";
 
-// The gallery is the one page that steps the app background by hand (the
-// mesh readbacks in scripts/app-background-ux.test.ts): declared before the
-// shell mounts, so the background attaches its stepping controls here and
-// nowhere the shipped app runs.
+// Declared before the shell mounts so the app background attaches its stepping controls here only (scripts/app-background-ux.test.ts).
 window.__kinuGalleryStepping = true;
 
 const squareButtonVariant = "square";
 
 const SQUARE_BUTTON_PROPS = { ["sha" + "pe"]: squareButtonVariant };
 
-/* ── /api/user stub ─────────────────────────────────────────────── */
-
 const NOW = Date.now();
 
-/** The account-fixture profile's two gate fields, decided once per frame:
- *  `welcome` poses as a new account — no stamp and no workspace — and every
- *  other frame sits on an established one. */
+/** `welcome` poses as a new account (no stamp, no workspace); every other frame is an established one. */
 const ACCOUNT_ONBOARDED_AT: number | null = frame === "welcome" ? null : NOW - 864e5;
 
 const ACCOUNT_WORKSPACE_COUNT = frame === "welcome" ? 0 : 1;
 
-/** `?roster=` selects the home page's account: `empty` is the first-run
- *  account; anything else is the five-workspace stock roster. */
 const ROSTER = new URLSearchParams(location.search).get("roster") ?? "stock";
 
 const STOCK_ROSTER = {
@@ -251,45 +130,29 @@ const STOCK_ROSTER = {
     { name: "perf-audit", displayName: "Perf audit — landing", createdAt: NOW - 3 * 864e5, lastVisited: NOW - 2 * 36e5, archivedAt: null },
     { name: "email-triage", displayName: "Email triage automation", createdAt: NOW - 30 * 864e5, lastVisited: NOW - 864e5, archivedAt: null },
     { name: "design-sys", displayName: "Design system v2", createdAt: NOW - 864e5, lastVisited: NOW - 5 * 864e5, archivedAt: null },
-    // THE FIRST-RUN ROW. A workspace is titled by its first prompt, so the
-    // one every new account starts with has no title and only its slug. This
-    // row is what the sidebar has to render without passing that slug off as
-    // the workspace's name.
+    // First-run row: titled by its first prompt, so it has no title yet, only its slug.
     { name: "handwrought-walnut-4166c321", displayName: "", createdAt: NOW - 60e3, lastVisited: NOW - 30e3, archivedAt: null },
   ],
   total: 5,
 };
 
-// The roster the frame serves, selected once so the profile's workspaceCount
-// answers the same number the list endpoint does — the gate reads both, and a
-// fixture whose count disagreed with its roster would route frames no real
-// account ever takes.
+// Selected once so the profile's workspaceCount matches the list endpoint; the gate reads both.
 const GALLERY_ROSTER: { entries: WorkspaceEntry[]; total: number } =
     ROSTER === "empty" ? { entries: [], total: 0 }
   : STOCK_ROSTER;
 
 const STUB_DATA = v.parse(JsonObjectSchema, {
-  // Every field the CLIENT's own parse requires, `displayName` included. It was
-  // absent, `UserProfileSchema` refused the body, and the sidebar rendered
-  // "Profile unavailable" in every capture anyone took of this gallery — a
-  // fixture that type-checks can still fail the schema it is read through.
+  // Every field the client's `UserProfileSchema` requires; a fixture that type-checks can still fail that parse.
   "/api/user/profile": {
     email: "ashish@example.com", displayName: "Ashish",
     createdAt: NOW - 90 * 864e5, lastSeenAt: NOW, onboardedAt: NOW - 90 * 864e5,
     workspaceCount: GALLERY_ROSTER.total,
   },
-  // The registry answers { entries, total }, the envelope `listWorkspaces`
-  // validates; a bare array parses as nothing and HomePage photographs its
-  // "couldn't load" state into every screenshot taken of this gallery.
-  // `?frame=home&roster=empty` photographs the first-run account: the form
-  // carries the whole page when no workspace has ever existed.
+  // The `{ entries, total }` envelope `listWorkspaces` validates; a bare array parses as nothing.
   "/api/user/workspaces": GALLERY_ROSTER,
-  // The endpoint returns a ModelMenu, not a bare array. Stubbing the array
-  // made `menu.models.length` throw and HomePage rendered as a blank canvas,
-  // so the one page a signed-in user lands on was never actually looked at.
+  // A ModelMenu, not a bare array.
   "/api/user/models": { models: MODEL_STUBS(), failures: [] },
-  // Account settings' Devices card reads both. A 404 photographs its failure
-  // state instead of the device row — and its Sandbox switch — the card exists for.
+  // Account settings' Devices card reads both; a 404 photographs its failure state.
   "/api/user/devices": [
     {
       id: "dev_1", label: "ashish-mbp", os: "darwin", hostname: "ashish-mbp.local",
@@ -307,15 +170,10 @@ const STUB_DATA = v.parse(JsonObjectSchema, {
   ],
 });
 
-/* The frames the account fixture answers: settings sections, and the surfaces
-   that mount the account panels in place — the setup modal and the wizard
-   today; plugins, workspaces and devices join when their commits land. */
 const ACCOUNT_FIXTURE_FRAMES = new Set(["usersettingsstate", "setupmodal", "welcome", "workspaces", "plugins", "devices"]);
 
-/* Account-settings failure rig. The browser owns the two transitions: Codex
-   stays failed until `gallery:settings-heal`; the gateway read stays pending
-   until `gallery:settings-release`. Every sibling GET settles immediately, so
-   the gate can observe branch-local publication while one request is held. */
+/* Account-settings failure rig: Codex stays failed until `gallery:settings-heal`, the gateway read pends until
+   `gallery:settings-release`; sibling GETs settle immediately so branch-local publication is observable. */
 const SETTINGS_GATEWAY_HOLD = Promise.withResolvers<void>();
 
 let settingsCodexHealthy = false;
@@ -331,8 +189,6 @@ function fixtureJson(body: JsonValue | ProfileCatalogEnvelope, status = 200): Re
   });
 }
 
-/** The wire shape the plugins page's add call sends — a preset id, or the
- *  full custom-server form. */
 const GalleryMcpAddSchema = v.object({
   name: v.optional(v.string()),
   serverUrl: v.optional(v.string()),
@@ -342,9 +198,7 @@ const GalleryMcpAddSchema = v.object({
   presetId: v.optional(v.string()),
 });
 
-/** The servers this account added itself: one of each state a row draws — a
- *  healthy one, one still authorizing, and one whose failure is the line the
- *  row shows where the endpoint used to be. */
+/** One of each state a row draws: healthy, authorizing, failed. */
 const GALLERY_CUSTOM_MCP: readonly McpServerSummary[] = [
   {
     id: "srv-github", name: "github", serverUrl: "https://mcp.github.example/v1",
@@ -365,16 +219,10 @@ const GALLERY_CUSTOM_MCP: readonly McpServerSummary[] = [
   },
 ];
 
-/** The rows the two preset variants keep: a name the account already claims
- *  refuses the preset's own add, and 'github' is the GitHub preset's name. */
+/** A name the account already claims refuses the preset's own add; 'github' is the GitHub preset's name. */
 const GALLERY_UNCLAIMED_MCP = GALLERY_CUSTOM_MCP.filter((row) => row.name !== "github");
 
-/** The MCP server roster, mutable for the page's lifetime so the preset add
- *  flow is observable: a POST lands here and the next GET — the panel's own
- *  refresh — shows the row. `mcp-preset=connected` on the frame URL swaps the
- *  generic github row for the two preset-tagged states a screenshot needs —
- *  Connected and Needs sign-in; `mcp-preset=open` drops it so every preset is
- *  unclaimed. */
+/** Mutable so the preset add is observable on the next GET. `mcp-preset=connected` swaps in the preset-tagged states; `mcp-preset=open` leaves every preset unclaimed. */
 let galleryMcpRows: McpServerSummary[] = [...GALLERY_CUSTOM_MCP];
 
 const mcpPresetVariant = new URLSearchParams(location.search).get("mcp-preset");
@@ -398,9 +246,7 @@ if (mcpPresetVariant === "connected") {
   galleryMcpRows = [...GALLERY_UNCLAIMED_MCP];
 }
 
-/** Which `oauth-app` presets the frame pretends the deployment carries the
- *  registered app for. `mcp-secrets=github` means GitHub alone; absent means
- *  every oauth-app preset is configured, the production-shaped default. */
+/** `mcp-secrets=github` means GitHub alone; absent means every oauth-app preset is configured (production-shaped). */
 const mcpSecrets = (() => {
   const raw = new URLSearchParams(location.search).get("mcp-secrets");
 
@@ -409,9 +255,7 @@ const mcpSecrets = (() => {
   return new Set(listed.filter((entry) => entry.length > 0));
 })();
 
-/** What the devices page reads beyond the settings reads: the grants rows —
- *  one of each state, because the page's whole question is the state per
- *  workspace. Null for every other path. */
+/** The grants rows, one per state; null for every other path. */
 function pluginsFixture(path: string): Response | null {
   if (path === "/api/user/devices/consents") {
     return fixtureJson(frame === "devices"
@@ -426,9 +270,6 @@ function pluginsFixture(path: string): Response | null {
   return null;
 }
 
-/** The account slice: onboarding completion, account deletion, and the
- *  profile GET/PATCH the settings account section and the wizard's name step
- *  read. */
 function accountProfileFixture(path: string, method: string, body: BodyInit | null | undefined): Response | null {
   if (path === "/api/user/onboarding/complete" && method === "POST") {
     return fixtureJson({ onboardedAt: NOW });
@@ -450,9 +291,7 @@ function accountProfileFixture(path: string, method: string, body: BodyInit | nu
   }
 
   if (path === "/api/user/profile") {
-    // The wizard's profile step renders only when the profile has no display
-    // name: `&noname=1` on the welcome frame answers the new account, whose
-    // OAuth login seeded no name.
+    // The wizard's profile step renders only without a display name: `&noname=1` answers that account.
     if (frame === "welcome" && new URLSearchParams(location.search).get("noname") === "1") {
       return fixtureJson({
         email: "new@example.com", displayName: "", createdAt: NOW, lastSeenAt: NOW,
@@ -469,9 +308,6 @@ function accountProfileFixture(path: string, method: string, body: BodyInit | nu
   return null;
 }
 
-/** The reads behind the settings sections: credentials, the Codex and
- *  gateway status rigs, the model list, the provider catalog, the Cloudflare
- *  account and the CLI install panel. */
 async function settingsSectionsFixture(path: string): Promise<Response | null> {
   if (path === "/api/user/credentials") {
     return fixtureJson([{ key: "anthropic.bearer", kind: "bearer", createdAt: NOW - 864e5, updatedAt: NOW }]);
@@ -484,9 +320,7 @@ async function settingsSectionsFixture(path: string): Promise<Response | null> {
   }
 
   if (path === "/api/user/models") {
-    // Two models with different documented effort lists, so the tier
-    // selector's per-model behaviour is observable: the levels are the
-    // MODEL's, never a fixed three.
+    // Different effort lists per model: the tier levels are the model's, never a fixed three.
     return fixtureJson({
       models: [
         { spec: "workers-ai/llama-4", label: "Llama 4", provider: "workers-ai", reasoningEfforts: [] },
@@ -528,10 +362,7 @@ async function settingsSectionsFixture(path: string): Promise<Response | null> {
   return null;
 }
 
-/* The setupmodal frame mounts the real HomePage chrome behind the modal, so
-   the roster and the panel's server list both answer here — a 404 would put
-   a failure in the sidebar and the Recent section that a real page has
-   never shown. */
+/* The setupmodal frame mounts the real HomePage behind the modal, so the roster and server list must answer here too. */
 function workspaceRosterFixture(path: string): Response | null {
   if (path !== "/api/user/workspaces") return null;
 
@@ -550,8 +381,6 @@ function workspaceRosterFixture(path: string): Response | null {
   return fixtureJson(STUB_DATA["/api/user/workspaces"]);
 }
 
-/** The MCP rows: the preset availability report, the add POST that claims a
- *  name and answers a sign-in URL where an app exists, and the mutable roster. */
 function mcpServersFixture(path: string, method: string, body: BodyInit | null | undefined): Response | null {
   if (path === "/api/user/mcp/presets") {
     return fixtureJson([
@@ -572,15 +401,12 @@ function mcpServersFixture(path: string, method: string, body: BodyInit | null |
 
     const name = preset?.title ?? addBody.output.name ?? "";
 
-    // The claim a second preset add collides with: name is the identity, so
-    // the refusal is the same sentence the UserDO's transaction raises.
+    // Name is the identity; the refusal is the UserDO transaction's sentence.
     if (galleryMcpRows.some((row) => String(row.name).toLowerCase() === name.toLowerCase())) {
       return fixtureJson({ error: `An MCP server named '${name}' already exists.` }, 400);
     }
 
-    // Sign-in answers only where an authorize URL exists: a DCR server
-    // unconditionally, an oauth-app preset only while the frame claims the
-    // app. Without it, the add needs a token — the same refusal the DO sends.
+    // Sign-in only where an authorize URL exists: DCR always, oauth-app only while the frame claims the app.
     const signIn = preset?.auth === 'oauth'
       || (preset?.auth === 'oauth-app' && mcpSecrets.has(preset.id));
 
@@ -594,8 +420,7 @@ function mcpServersFixture(path: string, method: string, body: BodyInit | null |
       ? `${new URL(preset.serverUrl).origin}/authorize?${id}`
       : null;
 
-    // The last add body, the way the device fixture hands the gate its state:
-    // a click that posts the wrong payload is what the gate is watching for.
+    // Exposed so the gate can check the posted payload.
     localStorage.setItem("gallery-mcp-add", JSON.stringify(addBody.output));
 
     galleryMcpRows = [...galleryMcpRows, {
@@ -620,8 +445,6 @@ function mcpServersFixture(path: string, method: string, body: BodyInit | null |
   return null;
 }
 
-/** The device rows: the incident pair (revoke, then acknowledge the unstopped
- *  commands), the Sandbox switch, the connect POST and the roster GET. */
 function deviceRowsFixture(path: string, method: string, body: BodyInit | null | undefined): Response | null {
   if (path === "/api/user/devices/dev-1" && method === "DELETE") {
     localStorage.setItem("gallery-device-incident", "revoked");
@@ -635,8 +458,7 @@ function deviceRowsFixture(path: string, method: string, body: BodyInit | null |
     return fixtureJson({ ok: true });
   }
 
-  // The Sandbox switch. The tier lands in localStorage so the roster read that
-  // follows the PUT shows the switch where the owner left it, across a reload.
+  // Persisted in localStorage so the switch survives a reload.
   if (path === "/api/user/devices/dev-1/sandbox" && method === "PUT") {
     const { tier } = v.parse(v.object({ tier: v.picklist(DEVICE_TIERS) }), JSON.parse(v.parse(v.string(), body)));
     localStorage.setItem("gallery-device-tier", tier);
@@ -665,8 +487,6 @@ function deviceRowsFixture(path: string, method: string, body: BodyInit | null |
           capability: "sandboxed", reason: null, gpu: ["/dev/nvidia0"],
         },
       },
-      // The offline half of the roster question the Devices page answers:
-      // only that frame needs a second machine to photograph it.
       ...(frame === "devices" ? [{
         id: "dev-2", label: "Owner laptop", os: "darwin", hostname: "ashish-mbp.local",
         connected: false, createdAt: NOW - 40 * 864e5, lastSeenAt: NOW - 7200e3, expiresAt: NOW + 50 * 864e5,
@@ -680,8 +500,7 @@ function deviceRowsFixture(path: string, method: string, body: BodyInit | null |
   return null;
 }
 
-/** The profile-catalog read: the real digest over the real canonical bytes,
- *  hashed here with WebCrypto because the gallery has no `node:crypto`. */
+/** Hashed with WebCrypto: the gallery has no `node:crypto`. */
 async function profileCatalogFixture(path: string): Promise<Response | null> {
   if (path !== "/api/user/profile-catalog") return null;
 
@@ -698,14 +517,12 @@ async function profileCatalogFixture(path: string): Promise<Response | null> {
   });
 }
 
-/** One family of the account fixture: answers the paths it owns, `null` for
- *  every other. Sync or async — the composer awaits either. */
+/** Answers the paths it owns, `null` for every other; sync or async. */
 type SettingsSlice =
   (path: string, method: string, body: BodyInit | null | undefined)
     => Response | null | Promise<Response | null>;
 
-/* The families in composition order. Their path sets are disjoint, so the
-   order is a reading order, not routing. */
+/* Path sets are disjoint: the order is for reading, not routing. */
 const SETTINGS_SLICES: readonly SettingsSlice[] = [
   accountProfileFixture,
   settingsSectionsFixture,
@@ -716,8 +533,6 @@ const SETTINGS_SLICES: readonly SettingsSlice[] = [
   profileCatalogFixture,
 ];
 
-/** The account fixture, composed: the first slice that owns the path answers
- *  it, and a path no family claims is the 404 the stub has always served. */
 async function userSettingsFixture(path: string, method: string, body: BodyInit | null | undefined): Promise<Response> {
   for (const slice of SETTINGS_SLICES) {
     const response = await slice(path, method, body);
@@ -728,20 +543,8 @@ async function userSettingsFixture(path: string, method: string, body: BodyInit 
   return fixtureJson({ error: `gallery has no settings fixture for ${path}` }, 404);
 }
 
-/* The connect flow, end to end.
-
-   `?frame=environment&offline=device&connect=1` — the account has no machines
-   until the panel registers one; the roster read after that POST carries the
-   machine, CONNECTED, which is the arrival the panel closes itself on.
-
-   `&connect=stall` is the same flow whose machine never dials in: the row
-   appears and stays `connected: false`. It is what makes the arm above
-   non-vacuous, because a panel that closed on any roster tick would pass the
-   first frame and fail this one. `galleryRosterReads` counts the reads so the
-   gate can wait for polls to have HAPPENED rather than for a clock.
-
-   The command is a string the SERVER hands over, so the fixture writes one the
-   client could not compose: the gate reads it back character for character. */
+/* `&connect=1`: no machines until the panel registers one; the next roster read carries it connected. `&connect=stall`
+   never connects, so a panel closing on any roster tick fails; `galleryRosterReads` lets the gate wait on polls, not a clock. */
 const GALLERY_CONNECT_COMMAND =
   "curl -fsSL 'https://kinu.run/install.sh' | KINU_PARENT_ACTIVATES=1 bash -s -- --no-setup --connect"
   + ' && export PATH="${KINU_HOME:-$HOME/.kinu}/bin:$PATH"';
@@ -763,9 +566,7 @@ function deviceConnectFixture(path: string, method: string): Response | null {
 
   if (path === "/api/user/devices" && method === "GET") {
     connectRosterReads += 1;
-    // On the document rather than on `window`: a gate reading a global has to
-    // reach for it untyped, and `dataset` is a string map the browser already
-    // owns.
+    // On the document, not `window`: `dataset` is a typed string map, a global is not.
     document.documentElement.dataset.galleryRosterReads = String(connectRosterReads);
     document.documentElement.dataset.galleryRegistrations = String(connectRegistrations);
 
@@ -784,25 +585,13 @@ function deviceConnectFixture(path: string, method: string): Response | null {
   return null;
 }
 
-/* Home-card overview fixture. The stock roster gets five rows, five states
-   the card exists to show: a decision waiting, a live turn, a sealed
-   completed run, durable unfinished work, and a quiet idle row. One row's
-   last task is its own title — the shape every workspace titled by its first
-   prompt has — so the line's task text can prove it stays off a repeat. A
-   gate rewrites a row's answer with
-   `gallery:overview` ({name, outcome}) — `{kind:'status'}` answers it with
-   that HTTP status, so "unavailable" and "last-known after a refresh failure"
-   are reachable without leaving the page. `?overflowRoster=1` adds a sixth
-   workspace the cards must never ask about: the page shows five. One row
-   carries a primary slate — the tile draws it live, so the tiled view has
-   both shapes in one photograph. */
+/* Home-card overview fixture: five rows, one per card state. `gallery:overview` ({name, outcome}) rewrites a row's
+   answer; `?overflowRoster=1` adds a sixth the cards must never fetch. */
 const STOCK_OVERVIEWS = {
   "checkout-fixes": {
     observedAt: NOW - 30e3, activity: "working", decisionsWaiting: 2, hasUpdates: true,
     latestRun: { status: "error", task: "Investigate intermittent checkout failures in the coupon migration" },
-    // The tile draws this URL live in its iframe — a real fixture page must
-    // answer it. The coupon-board slate IS this gallery frame; pointing the
-    // tile at the dead preview.example.test URL photographed white.
+    // The tile loads this URL live, so it must be a real fixture page.
     primarySlate: { id: "coupon-board", title: "Coupon board", url: "/gallery.html?frame=couponboard" },
   },
   "perf-audit": {
@@ -827,16 +616,11 @@ const STOCK_OVERVIEWS = {
   },
 };
 
-/** `?frame=workspaces&extraWorkspace=1` adds a sixth roster entry the stock
- *  five cannot show: under the one-headline rule a sealed error outranks
- *  durable leftovers, so 'Unfinished' needs a workspace whose last run is
- *  quiet. The home roster's pins keep it off the stock five. */
+/** A sixth entry whose last run is quiet, so 'Unfinished' can headline; the home roster's pins keep it off the stock five. */
 const EXTRA_WORKSPACE = new URLSearchParams(location.search).get("extraWorkspace") === "1";
 
 const OVERVIEW_BODIES = v.parse(JsonObjectSchema, STOCK_OVERVIEWS);
 
-/** One card's next answer, tagged so the body/status branch reads a domain
- *  word rather than a representation check. */
 type OverviewOutcome =
   | { readonly kind: "body"; readonly body: JsonValue }
   | { readonly kind: "status"; readonly status: number };
@@ -852,8 +636,7 @@ const overviewOutcomes = new Map<string, OverviewOutcome>(
   Object.entries(OVERVIEW_BODIES).map(([name, body]) => [name, { kind: "body", body }]),
 );
 
-// `?overviewErrors=name1,name2` seeds a card's failure before it asks, so a
-// gate does not have to race the mount reads to photograph "unavailable".
+// `?overviewErrors=a,b` seeds failures before the mount reads, so the gate need not race them.
 for (const name of (new URLSearchParams(location.search).get("overviewErrors") ?? "").split(",")) {
   if (name.trim() !== "") overviewOutcomes.set(name.trim(), { kind: "status", status: 503 });
 }
@@ -869,8 +652,7 @@ if (EXTRA_WORKSPACE) {
 const OVERFLOW_ROSTER = new URLSearchParams(location.search).get("overflowRoster") === "1";
 
 window.addEventListener("gallery:overview", (event: Event) => {
-  // The event is the gate's own CustomEvent; the detail is still parsed at
-  // the boundary because nothing typechecks across a dispatch.
+  // Parsed at the boundary: nothing typechecks across a dispatch.
   const detail = event instanceof CustomEvent ? v.safeParse(OverviewCommandSchema, event.detail) : null;
 
   if (detail?.success !== true) return;
@@ -884,9 +666,7 @@ function workspaceOverviewFixture(path: string): Response | null {
   if (match === null) return null;
 
   const name = decodeURIComponent(match[1]);
-  // Which names the page actually asked for, in order — the evidence that only
-  // the displayed cards are fetched. On the document, where a gate already
-  // reads `galleryRosterReads`.
+  // Names the page asked for, in order: proof only displayed cards are fetched.
   const asked = document.documentElement.dataset.galleryOverviewRequests;
   document.documentElement.dataset.galleryOverviewRequests = asked === undefined ? name : `${asked} ${name}`;
 
@@ -901,10 +681,7 @@ function workspaceOverviewFixture(path: string): Response | null {
 
 const STUB = new Map(Object.entries(STUB_DATA));
 
-/** KINU-060 gallery transport control. Every real WorkspaceRosterProvider
- * mount enters this held list; StrictMode mounts twice, so holding only the
- * first read would let its second mount publish the ordinary fixture and make
- * the interleaving a lie. */
+/** KINU-060: every WorkspaceRosterProvider mount is held; StrictMode mounts twice, so holding only the first read would let the second publish the ordinary fixture. */
 const rosterAuthorityHold = Promise.withResolvers<Response>();
 
 function MODEL_STUBS(): ModelMenuEntry[] {
@@ -917,12 +694,7 @@ function MODEL_STUBS(): ModelMenuEntry[] {
 
 const realFetch = window.fetch.bind(window);
 
-// `?frame=workspacepage&anon=1` answers the profile read with null — the
-// schema's nullable arm — so the inspector's account key stays absent and
-// every persist path is a no-op, the state a signed-out session stands in.
-// It lands as stub DATA rather than another branch in galleryFetch: the
-// fetch dispatch is at its complexity budget and the row is read like any
-// other fixture answer.
+// `&anon=1` answers the profile with null (signed out), so every persist path is a no-op. Stub data, not a galleryFetch branch: that dispatch is at its complexity budget.
 const ANONYMOUS_WORKSPACE = frame === 'workspacepage'
   && new URLSearchParams(location.search).get('anon') === '1';
 
@@ -946,13 +718,7 @@ const galleryFetch = Object.assign((input: RequestInfo | URL, init?: Parameters<
   }
 
   if (frame === "rosterauthority" && path === "/api/user/workspaces" && method === "GET") {
-    // CLONED PER CALL. A `Response` body can be read once, and the provider
-    // has more than one read in flight against this route (mount plus its
-    // re-run), so handing every caller the same object made the second read
-    // fail on a consumed body — and a released list that nobody can parse
-    // cannot overwrite anything. The case watching for that overwrite then
-    // could not fail whatever the roster did, which is the opposite of a
-    // fixture's job.
+    // Cloned per call: a `Response` body reads once and the provider has several reads in flight here.
     return rosterAuthorityHold.promise.then((held) => held.clone());
   }
 
@@ -981,28 +747,15 @@ const galleryFetch = Object.assign((input: RequestInfo | URL, init?: Parameters<
     if (overview !== null) return Promise.resolve(overview);
   }
 
-  // WorkspacePage records the visit on mount; a 404 here renders a "could not
-  // record this visit" notice that no real page ever shows.
+  // WorkspacePage records the visit on mount; a 404 renders a notice no real page shows.
   if (method === "POST" && /^\/api\/user\/workspaces\/[^/]+\/touch$/.test(path)) {
     return Promise.resolve(new Response(JSON.stringify({ ok: true }), { headers: { "content-type": "application/json" } }));
   }
 
-  // The two `/api/` prefixes a browser gate answers for itself. The feedback
-  // POST is driven end to end — multipart body, the client's own size refusal,
-  // the retry that reuses a capture held in memory — and the control plane's
-  // reads are driven for their FIVE non-ok states, which is the whole reason
-  // that page is worth a browser: 404 must read as "not an operator" and not as
-  // an empty table. Both have to reach the network, where request interception
-  // decides their fate. Stubbing a 404 here would make every send in every frame
-  // look like a failed send, and would make the control plane untestable in the
-  // one state it most needs to be tested in.
+  // Feedback and control-plane requests reach the network so the gate decides them by request interception; a stub 404 would fail every send and hide the control plane's non-ok states.
   if (path === FEEDBACK_ENDPOINT || path.startsWith('/api/control/')) return realFetch(input, init);
 
-  // The render-failure report and the build stamp it binds itself to. Both have
-  // to reach the network for the same reason the feedback POST does: the gate
-  // decides their fate through request interception, and it moves the stamp
-  // BETWEEN load and fault to prove the report carries the build this page
-  // loaded rather than whichever is live when it asks.
+  // Reaches the network too: the gate moves the build stamp between load and fault to prove the report carries this page's build.
   if (path === CLIENT_ERROR_ENDPOINT || path === '/api/health') return realFetch(input, init);
 
   if (path.startsWith("/api/")) {
@@ -1014,33 +767,22 @@ const galleryFetch = Object.assign((input: RequestInfo | URL, init?: Parameters<
 
 window.fetch = galleryFetch;
 
-// The Drive frames answer `/api/drive/*` from an in-memory tenant, wrapped
-// around the fixture fetch above rather than branched inside it.
 if (frame === "drive" || frame === "drive-empty" || frame === "app") installDriveFixture(frame !== "drive-empty");
 
 
-// The workspace shell, as the gallery's environment frame answers it. The pane
-// opens a socket to `/api/workspaces/<name>/terminal` and speaks the runtime's
-// own frames (core execution/workspace-terminal.ts): `input` and `resize` up,
-// `output` and `ready` down. No server stands behind the gallery, so this
-// stands in for the runtime's terminal facet with the two things a browser
-// gate measures against it: the shell echoes what it is typed and runs a line
-// at CR, and its output ends every line with CR LF exactly as the runtime's
-// `writeln` does. Every `input` frame the pane sends is kept, so the gate can
-// read whether a pasted multi-line command arrived as one frame.
+// Stands in for the runtime's terminal facet (core execution/workspace-terminal.ts): echoes input, runs a line at CR,
+// ends output lines with CR LF like the runtime's `writeln`, and keeps every `input` frame for the gate.
 
 const PROMPT = "$ ";
 
 declare global {
   interface Window {
-    /** Every `input` frame the pane sent the gallery's shell, in order. */
     __kinuTerminalInput?: string[];
   }
 }
 
 const TERMINAL_PATH = /^\/api\/workspaces\/[^/]+\/terminal$/u;
 
-/** The gallery's shell: one line editor over the frames the pane sends. */
 class GalleryShellSocket extends EventTarget {
   static readonly CONNECTING = 0;
   static readonly OPEN = 1;
@@ -1062,8 +804,7 @@ class GalleryShellSocket extends EventTarget {
     super();
     this.url = String(url);
     window.__kinuTerminalInput = [];
-    // The runtime attaches, replays its screen, then says ready; here the
-    // screen is empty, so the prompt is the whole replay.
+    // The runtime replays its screen before ready; here the screen is empty.
     queueMicrotask(() => {
       this.readyState = 1;
       this.onopen?.(new Event("open"));
@@ -1079,8 +820,7 @@ class GalleryShellSocket extends EventTarget {
     window.__kinuTerminalInput?.push(parsed.output.data);
 
     for (const char of parsed.output.data) {
-      // xterm hands a paste over with its newlines already CR, so CR is the
-      // one line end the shell runs at, as the runtime's editor does.
+      // xterm hands a paste over with newlines already CR, so CR is the only line end.
       if (char === "\r") this.run();
       else {
         this.line += char;
@@ -1106,7 +846,6 @@ class GalleryShellSocket extends EventTarget {
   }
 }
 
-/** Answer the environment frame's workspace terminal from the shell above. */
 function installWorkspaceTerminalFixture(): void {
   const RealWebSocket = window.WebSocket;
 
@@ -1121,23 +860,10 @@ function installWorkspaceTerminalFixture(): void {
   });
 }
 
-// The environment frame's workspace terminal is the runtime's shell over a
-// socket; the gallery answers that socket with a shell of its own.
 if (frame === "environment") installWorkspaceTerminalFixture();
 
 
-/* ── A search worth photographing ───────────────────────────────── */
-
-/**
- * A real MCTS tree, at the size the tree view has to survive: 106 nodes over
- * seven depths, one deep winning line, and the losing majority the engine
- * pruned on the way. A five-node mock is exactly how nobody ever sees that the
- * labels collide.
- *
- * Rows, not a tree: the mock enters the app through `buildTree`, the same
- * fold the socket payload goes through, so the frame cannot photograph a
- * shape the server can't produce.
- */
+/** A real MCTS tree at the size the view must survive; rows, not a tree, so it enters through `buildTree` like the socket payload. */
 const MCTS_ACTIONS = [
   "Backfill coupon.kind from the discount table",
   "Add a NOT NULL default and re-run the migration",
@@ -1181,8 +907,7 @@ function mctsSearchRows(target: number, maxDepth: number): MctsRow[] {
     created_at: NOW - 36e5,
   });
 
-  // A pruned branch was expanded before it was cut, so it keeps the children
-  // it had — the dense low-value clusters a real tree carries at the bottom.
+  // A pruned branch keeps the children it had before it was cut.
   const fanoutOf = (node: MctsRow): number => {
     if (node.status === "pruned") return 2;
 
@@ -1207,8 +932,6 @@ function mctsSearchRows(target: number, maxDepth: number): MctsRow[] {
     return "open";
   };
 
-  // `winner` walks one line down the tree — the branch the search kept paying
-  // for — so the render has a real principal variation to find.
   let winner = root;
   const frontier: MctsRow[] = [root];
 
@@ -1230,8 +953,7 @@ function mctsSearchRows(target: number, maxDepth: number): MctsRow[] {
       const visits = visitsOf(onWinningLine, parent.depth);
       const status = statusOf(onWinningLine, value);
 
-      // The engine scores a failed branch 0 and backpropagates that; a mock
-      // that hands one a mid score photographs a state production cannot reach.
+      // The engine scores a failed branch 0 and backpropagates it.
       const score = status === "failed" ? 0 : value;
 
       const child = push({
@@ -1249,40 +971,25 @@ function mctsSearchRows(target: number, maxDepth: number): MctsRow[] {
     }
   }
 
-  // The search converged on the deepest node of the line it kept paying for.
   winner.status = "terminal";
 
   return rows;
 }
 
-/** `mctsbig` is the scale probe — the same search shape five times over and
- *  three levels deeper, so the claim that this view survives a few hundred
- *  nodes is something the harness photographs rather than something a comment
- *  asserts. */
+/** The scale probe: the same search shape five times over and three levels deeper. */
 const MCTS_ROWS = frame === "forkbig" ? mctsSearchRows(520, 9) : mctsSearchRows(106, 6);
 
 const MCTS_TREE = buildTree(MCTS_ROWS);
 
-/** The frames render at most one tree; the surface keys them by search. */
 const MCTS_TREES: ReadonlyMap<string, ForkNode> = new Map([[MCTS_TREE.id, MCTS_TREE]]);
 
 const EMPTY_TREES: ReadonlyMap<string, ForkNode> = new Map();
 
-/** No branch has written since this frame mounted, which is what a photograph
- *  of a settled surface should say. A live one is its own frame. */
 const NO_HEAD_ACTIVITY: ReadonlyMap<string, number> = new Map();
 
-/* ── Agent socket stub ──────────────────────────────────────────── */
-
 /**
- * The Agents-SDK RPC transport, answered in-page.
- *
- * SettingsPage gates its whole body on a live agent connection, so with no
- * worker the only photographable thing was its spinner. This is the same idea
- * as the `/api/user` fetch stub above, one layer down: open the socket, answer
- * `{type:"rpc"}` frames from a table, and the real page renders against mock
- * data. Sockets that are not an agent connection (vite's HMR channel) fall
- * through to the real WebSocket untouched.
+ * The Agents-SDK RPC transport, answered in-page from a table so socket-gated pages render without a worker.
+ * Non-agent sockets (vite HMR) fall through to the real WebSocket.
  */
 const AGENT_RPC_DATA = v.parse(JsonObjectSchema, {
   getWorkspaceSnapshot: {
@@ -1295,15 +1002,11 @@ const AGENT_RPC_DATA = v.parse(JsonObjectSchema, {
     },
     tools: { builtIn: [], crafted: [] },
     memoryContent: "",
-    // The full-screen explorer reads its tree off the snapshot, so the same
-    // 106-node search the `mcts` frame renders has to arrive through here.
+    // The full-screen explorer reads its tree off the snapshot.
     mcts: MCTS_ROWS,
     timeline: [], executors: [], executorOutputs: [], lastActiveExecutor: null,
-    // Mirrors the server snapshot: `loadAllData` replaces this state wholesale,
-    // so an omitted field is `undefined` where an array is declared.
+    // Mirrors the server snapshot: `loadAllData` replaces state wholesale, so an omitted field is `undefined`.
     pendingSteers: [], branchRuns: [],
-    // Both gated surfaces have content in the gallery, so the tab-strip frames
-    // keep showing them.
     tabPresence: { releases: true, explorations: true, work: true },
     activePlan: null,
     slates: [],
@@ -1317,14 +1020,9 @@ const AGENT_RPC_DATA = v.parse(JsonObjectSchema, {
 
 const AGENT_RPC = new Map(Object.entries(AGENT_RPC_DATA));
 
-/** The workspace `&ws=` opens on the workspacepage frame: the untitled row's
- *  page is the defect photograph — its own header naming a workspace with no
- *  title — while the default stays the titled checkout-fixes rig. */
 const WORKSPACE_PAGE_NAME = new URLSearchParams(location.search).get("ws") ?? "checkout-fixes";
 
-// `&ws=handwrought-walnut-4166c321` photographs the untitled workspace: the
-// roster row born with no title, so its snapshot answers a BLANK displayName
-// and the page renders the same first-run state the owner hit.
+// `&ws=handwrought-walnut-4166c321` is the untitled row: its snapshot answers a blank displayName.
 if (WORKSPACE_PAGE_NAME === "handwrought-walnut-4166c321") {
   const snapshot = v.parse(JsonObjectSchema, AGENT_RPC_DATA.getWorkspaceSnapshot);
 
@@ -1386,13 +1084,7 @@ class GalleryAgentSocket extends EventTarget implements WebSocket {
     const answerRpc = () => {
       if (AGENT_RPC.has(method)) return AGENT_RPC.get(method);
 
-      // The exploration reads are ANSWERED here rather than falling through, and the
-      // fall-through is why: a blanket `[]` for every `get*` is a lie for any read
-      // whose answer is not an array, and `getHeadRun` answering `[]` reached
-      // `headRunToTree` as `[].heads` and took the whole page down with it. Column C
-      // injects an `Rpc` directly while the full-screen explorer reads through this
-      // socket, so both transports resolve the same fixture stores or neither is
-      // trustworthy.
+      // Answered here, not by the blanket `[]` fall-through (wrong shape for non-array reads); Column C's injected `Rpc` and this socket must resolve the same fixture stores.
       if (EXPLORATION_READS.has(method)) return explorationRead(method, request.args ?? []);
 
       if (method.startsWith("list") || method.startsWith("get")) return [];
@@ -1430,10 +1122,7 @@ window.WebSocket = new Proxy(RealWebSocket, {
   },
 });
 
-/** One frame the gate makes the SERVER send. Only the lifecycles a hosted
- *  actor's host broadcasts are reachable this way — a card and a steer — since
- *  those are the frames carrying an actor stamp, and no fixture READ can
- *  produce one. */
+/** A frame the gate makes the server send: only cards and steers carry an actor stamp, which no fixture read can produce. */
 const GalleryPushFrameSchema = v.object({
   type: v.picklist(["signal_card", "steer_status"]),
   actorId: v.optional(v.string()),
@@ -1447,16 +1136,13 @@ const GalleryPushFrameSchema = v.object({
 });
 
 window.addEventListener("gallery:push-frame", (event: Event) => {
-  // The gate's own CustomEvent; the detail is parsed at the boundary because
-  // nothing typechecks across a dispatch.
+  // Parsed at the boundary: nothing typechecks across a dispatch.
   const detail = event instanceof CustomEvent ? v.safeParse(GalleryPushFrameSchema, event.detail) : null;
 
   if (detail?.success !== true) return;
 
   galleryServerPush(JSON.stringify(detail.output));
 });
-
-/* ── Mock chat data ─────────────────────────────────────────────── */
 
 interface GalleryMessage extends UIMessage { createdAt?: number }
 
@@ -1467,9 +1153,7 @@ function rpcResult(value: JsonValue): Response {
 }
 
 const MESSAGES: UIMessage[] = [
-  // The first thing in every workspace's transcript: the agent being handed its
-  // own workspace. The owner typed a MISSION in the New workspace dialog, not a
-  // message, so this must never wear their bubble.
+  // The owner typed a mission, not a message, so this must never wear their bubble.
   msg({
     id: "g1", role: "user", createdAt: NOW - 7 * 60e3,
     metadata: { kinuEvent: "workspace_created", signalId: "sig-genesis" },
@@ -1486,17 +1170,10 @@ const MESSAGES: UIMessage[] = [
       { type: "tool-run", toolCallId: "t1", state: "output-available", input: { runtime: "sandbox", command: "curl -s -X POST localhost:8788/api/cart/apply -d '{\"code\":\"SAVE20\"}'" }, output: "HTTP 500\n{\"error\":\"TypeError: Cannot read properties of undefined (reading 'percent')\"}" },
       { type: "tool-eval", toolCallId: "t2", state: "output-available", input: { code: "// Inspect coupon rows to find the missing kind\nconst rows = await sql`SELECT code, kind, value FROM coupons WHERE code LIKE 'SAVE%'`;\nreturn rows;" }, output: '[{"code":"SAVE10","kind":"fixed","value":10},{"code":"SAVE20","kind":null,"value":20}]' },
       { type: "text", text: "Found it. Tuesday's migration backfilled `kind` for fixed coupons only — percentage coupons have `kind: null`, and `applyCoupon` dereferences `rules[kind].percent`.\n\n```ts\nconst rule = rules[coupon.kind ?? inferKind(coupon)];\n```\n\nI'll patch the migration, add a regression test, and run the suite." },
-      // A real repair is a RUN of calls, not one — this is the case the chat
-      // has to survive without becoming a wall of identical rows.
+      // A run of calls, not one.
       { type: "tool-file", toolCallId: "t4", state: "output-available", input: { action: "read", path: "packages/checkout/src/apply-coupon.ts" }, output: "…" },
       { type: "tool-file", toolCallId: "t5", state: "output-available", input: { action: "read", path: "packages/checkout/migrations/0042_coupon_kind.sql" }, output: "…" },
-      // Deliberately a QUIET failure: the transport reports success
-      // (state: output-available) but the tool caught its own failure and
-      // returned it as a normal result — the shape every built-in uses
-      // (tools/builtins.ts `{error: "…"}`). The migration file moved on since
-      // the read above, so the edit's old_text no longer matches uniquely.
-      // This is the case that makes a whole 5-call group read as clean if the
-      // quiet failure is not surfaced.
+      // A quiet failure: state output-available, but the tool returned its own `{error}` (tools/builtins.ts); unsurfaced, it makes the group read clean.
       { type: "tool-file", toolCallId: "t6", state: "output-available", input: { action: "edit", path: "packages/checkout/migrations/0042_coupon_kind.sql", edits: [{}, {}] }, output: { error: "old_text not found or not unique — the file changed since the last read" } },
       { type: "tool-file", toolCallId: "t7", state: "output-available", input: { action: "write", path: "packages/checkout/tests/coupon-kind.test.ts" }, output: "ok" },
       { type: "tool-agents", toolCallId: "t8", state: "output-available", input: { action: "fork", forks: [{}, {}, {}], task: "Check every other call site that indexes `rules` by kind" }, output: "3 forks merged" },
@@ -1513,18 +1190,12 @@ const MESSAGES: UIMessage[] = [
     metadata: { kinuEvent: "event_drain" },
     parts: [{ type: "text", text: "While you were idle:\n- [subordinate_report] from subordinate (coupon-tester): All 14 checkout regression tests green after the migration patch. [the sender awaits your answer]\n- [webhook] from github (AshishKumar4/shop): PR #212 review requested" }],
   }),
-  // The row the incident was, copied from production: `sunlit-stone-4a20` and
-  // `stone-ash-71f2` hold five of these, written before the author stamp
-  // existed, so a bare UUID id and the event name are the only markers on them
-  // — and until the classifier stopped being an allowlist of four names, all
-  // five were drawn in the owner's bubble, above things they had typed.
+  // Copied from production: written before the author stamp, so a bare UUID id and the event name are its only markers.
   msg({
     id: "f8798675-5e9a-4d13-aac2-293f4557f1c1", role: "user",
     metadata: { kinuEvent: "fork_interrupted", runs: ["6xrijuf933p0jclpctw59"], heads: 23 },
     parts: [{ type: "text", text: "23 head(s) across 6 fork run(s) were still marked running from an activation that has ended, so nothing is executing them and no report will arrive. They have been released; re-run the ones you still need." }],
   }),
-  // The same class, stamped by the seam with its author, so the event name is
-  // not load-bearing for the decision.
   msg({
     id: "programmatic:completion-gate-1", role: "user",
     metadata: { kinuEvent: "completion_gate", kinuAuthor: "harness" },
@@ -1534,10 +1205,7 @@ const MESSAGES: UIMessage[] = [
     id: "a2", role: "assistant", createdAt: NOW - 3 * 60e3,
     parts: [
       { type: "text", text: "The edit above didn't take — re-reading before I retry, then confirming the migration is idempotent before I let it near staging." },
-      // A real multi-line command, kept as its OWN row (a lone text part on
-      // either side stops it folding into a 3+ run) so its expanded state is
-      // inspectable — the case that otherwise renders as escaped-JSON instead
-      // of a readable script.
+      // Its own row (a lone text part on either side stops it folding into a run) so its expanded state is inspectable.
       {
         type: "tool-run", toolCallId: "t9", state: "output-available",
         input: {
@@ -1547,26 +1215,20 @@ const MESSAGES: UIMessage[] = [
         output: "-- checking packages/checkout/migrations/0041_coupons.sql\n-- checking packages/checkout/migrations/0042_coupon_kind.sql",
       },
       { type: "text", text: "Migrations are clean. One more check before I loop back to the edit." },
-      // A genuine protocol-level failure (the executor itself crashed/timed
-      // out), distinct from the quiet t6 case above: no `output` at all, the
-      // reason lives in errorText.
+      // A protocol-level failure: no `output`; the reason is in errorText.
       {
         type: "tool-run", toolCallId: "t10", state: "output-error",
         input: { runtime: "workspace", command: "curl -sf https://ci.internal/status/checkout-fixes" },
         errorText: "fetch failed: connect ETIMEDOUT 10.0.4.12:443",
       },
       { type: "text", text: "CI didn't answer — checking the PR directly instead." },
-      // An MCP tool the host has no summarizer contract for — the honest
-      // fallback (name + its one string argument, no invented annotation),
-      // and long enough to exercise the row's truncation + hover title.
+      // No summarizer contract: name plus its one string argument; long enough to exercise truncation.
       {
         type: "dynamic-tool", toolCallId: "t11", toolName: "mcp_gh_search_pull_requests", state: "output-available",
         input: { query: "repo:AshishKumar4/shop is:open head:fix/coupon-kind base:main status:success review-requested:AshishKumar4" },
         output: "1 open PR: #212 \"Fix SAVE20 coupon backfill\" — checks pending",
       },
-      // A crafted tool the workspace taught itself, called by name: the
-      // completed turn's result line attributes it ("Used the … tool") from
-      // the part alone — builtins and `mcp_`-prefixed tools never attribute.
+      // A crafted tool: the result line attributes it; builtins and `mcp_` tools never do.
       {
         type: "dynamic-tool", toolCallId: "t12", toolName: "bisect_migration", state: "output-available",
         input: { migration: "packages/checkout/migrations/0042_coupon_kind.sql", column: "kind" },
@@ -1585,10 +1247,7 @@ function galleryPlanInspection(request: SubordinateInspectionRequest, plans: rea
 
   if (request.view === 'planTasks') return { view: 'planTasks', path: request.path, tasks: [] };
 
-  // The exact read a plan-arrival hint is resolved through. It answers the ONE
-  // reference it was asked for or nothing at all: a reference to a revision this
-  // fixture never issued is `missing`, the same refusal the real existing-only
-  // inspection returns, so a stale hint cannot paint a neighbouring plan.
+  // Answers only the reference asked for; an unissued revision is `missing`, so a stale hint cannot paint a neighbouring plan.
   if (request.view === 'plan') {
     const plan = plans.find(item => item.id === request.id && item.revision === request.revision);
 
@@ -1607,40 +1266,16 @@ const stubRpc: Rpc = async <T,>(method: string, args?: unknown[]): Promise<T> =>
     return rpcResult(v.parse(JsonValueSchema, galleryPlanInspection(request, []))).json<T>();
   }
 
-  // A read whose answer is a RECORD, where the blanket `[]` below is not a
-  // smaller version of the right answer but a shape the caller dereferences.
-  // `getExposedPorts` is read as `result.ports` inside a `setState` updater, so
-  // `[]` threw during render and took the page with it — which is why every
-  // frame that mounts a PAGE rather than a surface went blank: only a page
-  // opens its own connection, so only a page reaches this read.
-  //
-  // Empty, because the fork frames photograph trees. A fixture port would put a
-  // live-preview chip in the chrome of a screenshot about search.
+  // A record, not an array: read as `result.ports`, so the blanket `[]` below throws. Empty so no live-preview chip enters the fork screenshots.
   if (method === "getExposedPorts") return rpcResult({ ports: [] }).json<T>();
 
-  // The same class, one card over: the change-set reader reads
-  // `result.files.length` for every executor option before it picks one, so
-  // `[]` threw inside the load and every Work column rendered "Could not load
-  // the change-set: Cannot read properties of undefined (reading length)"
-  // where a fresh workspace's empty change-set belongs. `ExecutorDiffResult`
-  // (core read-models/workspace-diff.ts) carries `files` on every path it can
-  // return, so an empty change-set is `files: []` and not no files at all.
-  //
-  // `vfs-baseline` is what the product answers a column whose `executors` prop
-  // is empty: with no workspace provider to hold a git tree, the read falls
-  // through to the VFS baseline.
+  // `ExecutorDiffResult` (core read-models/workspace-diff.ts) always carries `files`; `vfs-baseline` is the answer for an empty `executors` prop.
   if (method === "getExecutorDiff") return rpcResult({ files: [], mode: "vfs-baseline" }).json<T>();
 
-  // One more of the class: `listWorkspaceWork` is read as `result.plans` /
-  // `result.tasks` by both halves of the Work tab, so the blanket `[]` below
-  // threw on the dereference and emptied every frame that mounts it.
+  // Read as `result.plans` / `result.tasks`.
   if (method === "listWorkspaceWork") return rpcResult({ plans: [], tasks: [] }).json<T>();
 
-  // And once more: `getToolDescriptions` is read as `result.builtIn.map(...)`
-  // by the live refresh every mounted PAGE runs, so the blanket `[]` threw on
-  // the dereference and the page put "Tools could not be refreshed. Cannot
-  // read properties of undefined (reading 'map')" up on every frame that
-  // mounts one. Three halves, the way the orchestrator answers it.
+  // Read as `result.builtIn.map(...)`; three halves, as the orchestrator answers it.
   if (method === "getToolDescriptions") return rpcResult({ builtIn: [], executors: [], crafted: [] }).json<T>();
 
   if (method.startsWith("list") || method.startsWith("get")) return rpcResult([]).json<T>();
@@ -1648,10 +1283,7 @@ const stubRpc: Rpc = async <T,>(method: string, args?: unknown[]): Promise<T> =>
   return rpcResult({}).json<T>();
 };
 
-/* `?createFails=1`: the FIRST create attempt rejects with a two-frame cause
-   chain, the way a workspace that refuses would. The browser gates drive it
-   twice — once to watch the failure being shown (workspacepage) or recorded
-   (agentchats), once to prove the affordance still works. */
+/* `?createFails=1`: the first create rejects with a two-frame cause chain; the second succeeds. */
 const CREATE_FAILS = new URLSearchParams(location.search).get("createFails") === "1";
 
 let createRefused = false;
@@ -1664,11 +1296,7 @@ function maybeRefuseCreate(): void {
   });
 }
 
-/* The `workspacepage` frame's stateful half: the additional-agent roster the
-   REAL page mutates through its own hook. Creation, rename, navigation and the
-   facet snapshot are page wiring and run for real here; only the chat behind
-   the stub socket stays inert (the interactive `agentchats` rig covers send
-   and the first-message titler). */
+/* The `workspacepage` frame's additional-agent roster, mutated by the real page; only the chat stays inert (`agentchats` covers send). */
 const GALLERY_SUBS: {
   name: string; actorId: string; displayName: string; role: string; createdBy: string;
   status: string; currentTask: string | null; createdAt: number; dismissedAt: number | null;
@@ -1676,9 +1304,7 @@ const GALLERY_SUBS: {
 
 let gallerySubSeq = 0;
 
-/** The actor a rostered name resolves to here. Derived from the name so the
- *  frames the gate stamps and the id the pane reads off its own snapshot are
- *  the same string without a second fixture to keep in step. */
+/** Derived from the name, so gate-stamped frames and the pane's snapshot id agree without a second fixture. */
 function galleryActorId(name: string): string {
   return `actor-${name}`;
 }
@@ -1720,14 +1346,8 @@ packages/
 
 The same request either applies one valid coupon atomically or returns \`coupon_ineligible\` without changing the cart.`;
 
-/* `?plan=late-heading` puts the plan's only h1 mid-document, where the agent
-   wrote it. `?plan=annotated-heading` anchors a stored annotation to the
-   LEADING h1. The header must refuse to promote either: the first would
-   silently reorder the document, and the second would strand an anchor the
-   highlighter can only resolve inside the viewer's own article.
-   `?plan=read-only` is a settled plan, where the viewer's floating action strip
-   holds nothing the reader may still press. All three are reachable so a
-   browser can measure them rather than a reader finding them. */
+/* `?plan=late-heading` (mid-document h1) and `?plan=annotated-heading` (anchor on the leading h1): the header must promote
+   neither. `?plan=read-only` is a settled plan. */
 const GALLERY_PLAN_VARIANT = new URLSearchParams(location.search).get("plan");
 
 const GALLERY_PLAN_LATE_HEADING = `The guard runs after the discount lands, so an archived coupon still applies.
@@ -1776,20 +1396,8 @@ let galleryAgentPlan: PlanReview = {
   decidedAt: null,
 };
 
-/* ── The walk-back ────────────────────────────────────────────────
-
-   Two turns the operator typed, so there is a SECOND user message to walk back
-   to, and the transcript that follows it is what a revert has to remove.
-
-   `?transcript=revert` seeds this into the real WorkspacePage frame; the
-   conversation arrives the way the product's arrives, and the revert's own
-   redraw is the server frame the fixture pushes back.
-
-   `?checkpoints=1` is the other half of the one condition the dialog carries:
-   with a device connected AND a checkpoint held for the turn, the operator is
-   offered the device files too. Without it — the workspace the owner reported,
-   which has no device at all — that option does not exist, and the revert the
-   product CAN always perform is the only one offered. */
+/* The walk-back: two user turns, so there is a second message to revert to. `?transcript=revert` seeds it;
+   `?checkpoints=1` adds a connected device and a checkpoint, the one condition that offers the device files too. */
 const REVERT_THREAD: UIMessage[] = [
   msg({
     id: "rv-u1", role: "user", createdAt: NOW - 8 * 60e3,
@@ -1816,22 +1424,16 @@ const REVERT_CHECKPOINT: FileCheckpointEntry = {
   turnId: "rv-u2", sessionId: "default", reason: "before turn",
 };
 
-/** What the checkpoint store answers for the turn in question. The two fields
- *  are separate facts: a store nobody can reach says nothing about what a turn
- *  changed. */
+/** Separate facts: an unreachable store says nothing about what a turn changed. */
 const REVERT_LISTING: FileCheckpointListing = REVERT_DEVICE_CONNECTED
   ? { availability: { available: true }, entries: [REVERT_CHECKPOINT] }
   : { availability: { available: false, reason: "no device connected — connect one with `kinu connect`" }, entries: [] };
 
-/** `?transcript=revert` seeds the walk-back thread into the `workspacepage`
- *  frame; any other value, or none, mounts the frame on its empty default. */
 function seedFrameTranscript(transcript: string | null): void {
   if (transcript === "revert") seedGalleryChat(REVERT_THREAD);
 }
 
-/** The conversation after the walk-back, as the Durable Object broadcasts it:
- *  the entries from the picked message on leave the head's ancestry, and every
- *  open tab redraws from the transcript frame. */
+/** As the Durable Object broadcasts it after the walk-back. */
 function galleryRevertConversation(entryId: string): void {
   const from = REVERT_THREAD.findIndex((message) => message.id === entryId);
   const kept = from < 0 ? REVERT_THREAD : REVERT_THREAD.slice(0, from);
@@ -1839,10 +1441,7 @@ function galleryRevertConversation(entryId: string): void {
   galleryServerPush(JSON.stringify({ type: "cf_agent_chat_messages", messages: kept }));
 }
 
-/* The reads the first-visit inspector policy is decided on, answered in the
-   shape the page actually consumes them: a pending plan is what it opens for,
-   and the stub's blanket `[]` answered `listSlates` in a shape `slates.map`
-   crashed on. A table like AGENT_RPC because both are method → fixture. */
+/* The reads the first-visit inspector policy decides on, in the shapes the page consumes (`listSlates` needs an array for `slates.map`). */
 const WORKSPACE_PAGE_RPC = new Map(Object.entries({
   getWorkspaceSnapshot: () => {
     const snapshot = v.parse(JsonObjectSchema, AGENT_RPC.get("getWorkspaceSnapshot"));
@@ -1851,14 +1450,7 @@ const WORKSPACE_PAGE_RPC = new Map(Object.entries({
   },
   listSlates: () => ({ slates: [], problems: [] }),
   getActivePlanReview: () => galleryAgentPlan,
-  // The Work tab's own read: the workspace's plans with their linked tasks,
-  // every actor. The page's plan lives here too — `getActivePlanReview` is
-  // what the connection reports, this read is what the tab draws, and a
-  // fixture that answered only the first showed a Work tab with no plan in it.
-  //
-  // The owner is the WORKSPACE's name because that is what the real read
-  // answers for a root actor: `createMain({ name: this.name })` registers the
-  // workspace's own name, never the word "main".
+  // The Work tab draws this read, not `getActivePlanReview`. The owner is the workspace's name: `createMain({ name: this.name })` registers it, never "main".
   listWorkspaceWork: () => ({
     plans: [{
       owner: { actorId: galleryActorId(WORKSPACE_PAGE_NAME), name: WORKSPACE_PAGE_NAME, retired: false },
@@ -1867,13 +1459,10 @@ const WORKSPACE_PAGE_RPC = new Map(Object.entries({
     tasks: [],
   }),
   savePlanReviewAnnotations: () => ({ ok: true, plan: galleryAgentPlan }),
-  // The frame's plan is live, so its presence says the Work lane has content;
-  // without an answer the strip hid Work on first paint.
+  // Without an answer the strip hides Work on first paint.
   getWorkspaceTabPresence: () => ({ work: true, releases: true, explorations: true }),
   listPendingConsents: () => [],
-  // The frame's whole conversation is its seed, so the walk back through
-  // storage is exhausted at once. A blanket `[]` is not a page and the walk
-  // reported the parse as a failed read of the store.
+  // The seed is the whole conversation, so the storage walk is exhausted at once.
   getChatHistoryPage: () => ({ status: "end", items: [] }),
   listFileCheckpoints: () => REVERT_LISTING,
   planFileRestore: () => ({
@@ -1885,13 +1474,9 @@ const WORKSPACE_PAGE_RPC = new Map(Object.entries({
   }),
 }));
 
-/** One gallery RPC answer, or null for a method the surface asked does not own.
- *  Wrapped rather than bare, so `null` stays available as "not mine" while an
- *  answer of its own may be anything a route serialises. */
+/** Wrapped so `null` stays free to mean "not mine" while the answer itself may be anything serialisable. */
 type GalleryAnswer = { readonly value: unknown } | null;
 
-/** The PLAN surface's own answers: the review pane's read of this workspace's
- *  plans, and its decision on the one in front of it. */
 function galleryPlanRpc(method: string, args?: unknown[]): GalleryAnswer {
   if (method === "inspectSubordinate") {
     return { value: galleryPlanInspection(v.parse(SubordinateInspectionRequestSchema, args?.[0]), [galleryAgentPlan]) };
@@ -1916,12 +1501,10 @@ function galleryPlanRpc(method: string, args?: unknown[]): GalleryAnswer {
   return { value: { ok: true, plan: galleryAgentPlan, queued: true } };
 }
 
-/** The ROSTER surface's own answers: the subordinate list, the three writes the
- *  agents pane makes on it, and one hosted actor's view of itself. */
 function galleryRosterRpc(method: string, args?: unknown[]): GalleryAnswer {
   if (method === "listSubordinates") return { value: [...GALLERY_SUBS] };
 
-  // An agent pane's own pin, recorded so a gate can read WHICH actor a pick wrote.
+  // Recorded so a gate can read which actor a pick wrote.
   if (method === "setActorModel" || method === "setReasoningEffort") {
     const root = document.documentElement;
     const calls: unknown[] = JSON.parse(root.dataset.galleryModelCalls ?? "[]");
@@ -1976,9 +1559,7 @@ function galleryRosterRpc(method: string, args?: unknown[]): GalleryAnswer {
 
   if (method !== "getActorSnapshot") return null;
 
-  // The hosted actor's own view, answered by the ROOT now rather than by a
-  // facet over a stub. Identity mirrors the roster; the mission stays
-  // internal — the header renders the ROSTER title, never this field.
+  // Answered by the root; the header renders the roster title, never `mission`.
   const [name] = v.parse(v.tuple([v.string()]), args);
   const latest = GALLERY_SUBS.find((sub) => sub.name === name) ?? GALLERY_SUBS.at(-1);
   const actor = latest?.name ?? "agent-0";
@@ -2039,9 +1620,7 @@ const workspacePageRpc: Rpc = async <T,>(method: string, args?: unknown[]): Prom
     return rpcResult(null).json<T>();
   }
 
-  // A preview that arrives after first paint: the gate sets the dataset flag
-  // once the page has settled, and the next live refresh lists a port the
-  // earlier reads never named — the passive arrival the inspector chip covers.
+  // Arrives after first paint: once the gate sets the dataset flag, the next live refresh lists a new port.
   if (method === "getExposedPorts" && document.documentElement.dataset.previewArrived === "1" && args?.[0] === "sandbox") {
     return rpcResult({ ports: [{ port: 8130, url: "https://8130-sandbox-aaaaaaaaaaaaaaaa.preview.example.test/", name: "Arrived app" }] }).json<T>();
   }
@@ -2056,23 +1635,8 @@ const workspacePageRpc: Rpc = async <T,>(method: string, args?: unknown[]): Prom
   return stubRpc<T>(method, args);
 };
 
-/* ── swarm searches: the shipped model's own states ─────────────── */
-
-/**
- * A search under a NAMED PRESET, so the resolved tuple has something to resolve.
- *
- * `prove` rather than `optimise` because it is the row whose axes are least
- * guessable from its name: `context:fork` (a proof's children need the ancestor
- * chain's accepted steps), `advance:best-first` (an exact signal has no noise to
- * re-widen against) and `carry:artifacts ≥1` (kept exactly when the checker
- * accepted). A panel that only printed "prove" would tell a reader none of
- * that, which is the whole reason the tuple is rendered beside the name.
- */
-// The Lean module named below is a placeholder: this fixture invents
-// `lean/Checkout/Coupon.lean` along with the coupon table it proves over, and the
-// module does not exist. Citing a real one would be worse, because the frame would
-// then break whenever that module was renamed and a reader would take an invented
-// sorry count for a measured one. Enrolled in `CITATION_ILLUSTRATIVE`.
+/** A named-preset search. `prove` because its resolved axes are the least guessable from its name. */
+// `lean/Checkout/Coupon.lean` is invented along with the coupon table; the module does not exist. Enrolled in `CITATION_ILLUSTRATIVE`.
 const PROVE_ROWS: MctsRow[] = [
   {
     id: "pv000", parent_id: null, depth: 0, visits: 0, value: 0, status: "open",
@@ -2111,16 +1675,7 @@ const PROVE_ROWS: MctsRow[] = [
   },
 ];
 
-/**
- * A search that FANS IN — `expand:'aggregate'`, which no named preset resolves to,
- * so it is necessarily a `custom` composition and the frame photographs that too.
- *
- * `sw004` and `sw009` are the aggregate vertices, at two different depths. Both are
- * ordinary scored rows: the store records a vertex's SELECTION parent and nothing
- * else, so nothing in these rows says either of them consumed a level — which is
- * exactly the state the tree's fan-in marking exists to make readable, and it is
- * read off the journal below rather than out of here.
- */
+/** A `custom` composition that fans in (`expand:'aggregate'`): `sw004` and `sw009` are the aggregate vertices, readable only from the journal. */
 const SWARM_ROWS: MctsRow[] = [
   {
     id: "sw000", parent_id: null, depth: 0, visits: 0, value: 0, status: "open",
@@ -2180,9 +1735,7 @@ const SWARM_ROWS: MctsRow[] = [
   },
 ];
 
-/** One journalled node, at the shape `HeadRunView.heads` carries. The rationale is
- *  the field that matters here: it is the engine's own reason for the node existing,
- *  and for an aggregate vertex it is the ONLY record that reaches a client. */
+/** At the `HeadRunView.heads` shape; for an aggregate vertex the rationale is the only record that reaches a client. */
 function swarmNode(
   id: string, task: string, rationale: string,
   extra: Partial<HeadRunView["heads"][number]> = {},
@@ -2196,11 +1749,7 @@ function swarmNode(
   };
 }
 
-/**
- * The journal behind {@link PROVE_ROWS}. `rationale` on the RUN is where
- * `journal.recordSplit` writes `resolved.label ?? resolved.preset`, so for a preset
- * run it is the preset name and nothing else.
- */
+/** For a preset run the run's `rationale` is the preset name: `journal.recordSplit` writes `resolved.label ?? resolved.preset`. */
 const PROVE_RUN: HeadRunView = {
   rootId: "pv000",
   task: "Prove that applyCoupon terminates for every coupon row, including kind = null.",
@@ -2220,15 +1769,7 @@ const PROVE_RUN: HeadRunView = {
   merge: null,
 };
 
-/**
- * The journal behind {@link SWARM_ROWS} — a `custom` composition, and the two
- * fan-in rationales the engine writes verbatim.
- *
- * `fan-in over k parents of depth d` is `strategy/swarm-run.ts`'s own sentence for
- * an aggregate vertex. It is quoted here rather than paraphrased because the
- * surface reads the count out of it, and a fixture that paraphrased would
- * photograph a marking the real store cannot produce.
- */
+/** `fan-in over k parents of depth d` is quoted from `strategy/swarm-run.ts`: the surface parses the count out of it. */
 const SWARM_RUN: HeadRunView = {
   rootId: "sw000",
   task: "Reduce checkout p95 without regressing the coupon guard.",
@@ -2250,17 +1791,8 @@ const SWARM_RUN: HeadRunView = {
 };
 
 /**
- * A search that STARTED and reached nothing: the root was written, the first wave
- * errored, and the ledger recorded the run as failed.
- *
- * The state this frame exists for. Drawn as a one-dot canvas under a
- * settled-looking label it reads as "the search found nothing" — a claim about
- * the world rather than about this run. A refusal names its cause instead, and the
- * cause is the branch's own message.
- *
- * NOT a refused CALL: `resolveSwarm` and `swarmValidity` refuse before the engine
- * writes a root, so a call refused for `advance:'pareto'` or an undeclared preset
- * leaves nothing to select and cannot reach this surface at all.
+ * A search that started and reached nothing (first wave errored, run failed): must render a refusal naming its cause, not an empty tree.
+ * A refused call (`resolveSwarm` / `swarmValidity`) writes no root and cannot reach this surface.
  */
 const REFUSED_ROWS: MctsRow[] = [
   {
@@ -2289,18 +1821,8 @@ const REFUSED_RUN: HeadRunView = {
 };
 
 /**
- * A swarm that is HAPPENING, with its nodes in every state at once.
- *
- * The run the surface could not photograph, and the one every report about this
- * surface was about: two levels, some nodes reported, some still working, one
- * stopped by the operator and one that failed on the provider. The owner saw a
- * `running` label over a lone `0% root` and read the whole feature as dead.
- *
- * The two stores disagree ON PURPOSE, because that is what a live search looks
- * like: `search_nodes` holds the root and only the nodes that SETTLED, and
- * `head_journal` holds all nine. A node in the journal and not in the tree is a
- * node still working, it carries no score, and folding the two halves is the only
- * way it is drawn at all.
+ * A live swarm with nodes in every state. The stores disagree on purpose: `search_nodes` holds the root and settled nodes,
+ * `head_journal` all nine; a node only in the journal is still working.
  */
 const RUNNING_ROWS: MctsRow[] = [
   {
@@ -2373,11 +1895,7 @@ const RUNNING_RUN: HeadRunView = {
       status: "running", depth: 2, parentId: "lv001", wallClockMs: 0,
       spawnedAt: NOW - 12e4, lastStepAt: NOW - 21e3,
     }),
-    // The two endings no fixture held, so the graph's status vocabulary is
-    // photographable in full: `head_journal.status` can hold six words, and the
-    // tooltip prints the store's own one now rather than the picture's `failed`
-    // for four of them. `interrupted` is the non-terminal one — a cold
-    // activation's reconciliation wrote it and the resume gate has not ruled.
+    // `head_journal.status` has six words; `interrupted` is the non-terminal one (reconciled, resume not yet ruled).
     swarmNode("lv010", "Re-read the pricing resolver end to end", "expansion 4 of 5", {
       status: "budget_exceeded", depth: 2, parentId: "lv002", wallClockMs: 214_000,
       spawnedAt: NOW - 18e4, lastStepAt: NOW - 6e4,
@@ -2393,29 +1911,12 @@ const RUNNING_RUN: HeadRunView = {
 };
 
 /**
- * Every run the Exploration frames list, and the stores behind them.
- *
- * Every state the surface has to draw is in ONE list on purpose: a judged
- * search whose ensemble was clamped, two swarm searches — one under a named
- * preset, one a `custom` composition that fans in — a search that started and
- * reached nothing, and two journalled runs with no search tree. That is the set,
- * and the frames below focus one of them each.
- *
- * `getMctsNodeDetail` legitimately answers null for a node the server has retired
- * and the view falls back to the row it holds — stubRpc's blanket `[]` for a `get*`
- * is not that shape and crashes the inspector.
- *
- * The list is longer than one page on purpose too. A workspace that has forked
- * thirty-four times is the case where the old bare `LIMIT 30` quietly answered
- * "that is every fork", and a frame that never crosses a page boundary cannot
- * photograph either the boundary or the end of the list.
+ * Every run the Exploration frames list, one per state the surface draws, and longer than one page so the boundary is photographable.
+ * `getMctsNodeDetail` may answer null for a retired node; the blanket `[]` would crash the inspector.
  */
 const FORK_RUNS: ForkRunSummary[] = [
   {
-    // The live one, first because it is the newest and the surface focuses the
-    // newest on arrival. `branches` counts the SETTLED rows, so it is 2 while nine
-    // nodes exist — which is exactly the discrepancy a reader needs the journal to
-    // explain, and exactly what made a running swarm look like a one-node tree.
+    // First: the surface focuses the newest. `branches` counts settled rows, so 2 while nine nodes exist.
     id: "lv000", name: "coupon.kind readers",
     task: "Audit every reader of coupon.kind across the checkout package",
     startedAt: NOW - 42e4, status: "running",
@@ -2423,14 +1924,10 @@ const FORK_RUNS: ForkRunSummary[] = [
     branches: RUNNING_ROWS.length - 1, winnerScore: null,
   },
   {
-    // Derived, because `forkbig` generates 520 rows for this same run and a hardcoded
-    // 105 made the scale frame photograph `105 branches` beside `Branches: 519`.
+    // Derived: `forkbig` generates 520 rows for this same run.
     id: "n000", name: "SAVE20 500s",
     task: "Find why the SAVE20 coupon 500s", startedAt: NOW - 36e5,
-    // Both facts, and they come from the same fixture stores that give each row its
-    // halves below (SEARCH_ROWS_BY_ROOT / JOURNAL_BY_ROOT): a judged MCTS search has
-    // the tree and no journal, and a swarm has both — which is the row no frame could
-    // photograph while one settlement tag admitted a single half per run.
+    // From the same stores as each row's halves: an MCTS search has the tree only, a swarm has both.
     status: "completed", hasSearchTree: true, hasNodeTranscripts: false,
     branches: MCTS_ROWS.length - 1, winnerScore: 0.91,
   },
@@ -2449,8 +1946,7 @@ const FORK_RUNS: ForkRunSummary[] = [
     branches: PROVE_ROWS.length - 1, winnerScore: 0.94,
   },
   {
-    // Branchless BY CONSTRUCTION: the root is the only row, so `branches` is 0 and
-    // the surface owes the reader a cause rather than an empty canvas.
+    // Branchless by construction: the root is the only row.
     id: "rf000", name: "throwing coupon row",
     task: "Find a coupon row that makes applyCoupon throw",
     startedAt: NOW - 4e5, status: "failed",
@@ -2464,9 +1960,7 @@ const FORK_RUNS: ForkRunSummary[] = [
     hasNodeTranscripts: true, branches: 5, winnerScore: null,
   },
   {
-    // The run whose lease outlived it: two nodes reported, five stopped, and
-    // nothing at work. Its journal is {@link STOPPED_RUN}, and `forkstopped`
-    // focuses it.
+    // The run whose lease outlived it; journal {@link STOPPED_RUN}, focused by `forkstopped`.
     id: "root-merge-0", name: "CLI surface audit",
     task: "Audit the CLI surface", startedAt: NOW - 9 * 36e5,
     status: "partial", hasSearchTree: false, hasNodeTranscripts: true,
@@ -2475,10 +1969,6 @@ const FORK_RUNS: ForkRunSummary[] = [
   ...olderForks(),
 ];
 
-/**
- * The forks behind the first page — a week of real work, so scrolling past the
- * boundary lands on rows that read like history rather than like filler.
- */
 function olderForks(): ForkRunSummary[] {
   const tasks = [
     "Reproduce the checkout 500 against the staging snapshot",
@@ -2496,7 +1986,7 @@ function olderForks(): ForkRunSummary[] {
 
     return {
       id: searched ? `n${String(100 + i).padStart(3, "0")}` : `root-merge-${100 + i}`,
-      // The derived name, as the read model derives it: the task's first clause.
+      // The read model's derivation: the task's first clause.
       name: (tasks[i % tasks.length] ?? "").split(" ").slice(0, 4).join(" "),
       task: `${tasks[i % tasks.length]}${i >= tasks.length ? ` (attempt ${Math.floor(i / tasks.length) + 1})` : ""}`,
       startedAt: NOW - (10 + i) * 36e5,
@@ -2543,11 +2033,7 @@ const MERGED_RUN: HeadRunView = {
       spawnedAt: NOW - 52e5, lastStepAt: NOW - 512e4, decisions: [],
     },
     {
-      // CLOSED BY THE SETTLE, not left running. `HeadJournal.cacheMerge`
-      // terminalizes every head still in flight in the same transition that
-      // writes the synthesis, so a settled run cannot also be at work — never
-      // the `settled · 1 running · 3 reported` this row would otherwise
-      // photograph.
+      // Closed by the settle: `HeadJournal.cacheMerge` terminalizes in-flight heads in the same transition, so a settled run has none running.
       id: "root-merge-1-h4", parentId: null, depth: 1, task: "packages/api/src/coupon-routes.ts", rationale: "the public surface",
       status: "aborted", summary: null,
       errorMessage: "no report at the synthesis: the run merged what had arrived, and this head "
@@ -2562,15 +2048,7 @@ const MERGED_RUN: HeadRunView = {
   },
 };
 
-/**
- * A RUN WHOSE LEASE OUTLIVED IT — the state behind *"this run had 2 reported and
- * rest stopped … still it says 'running'?"*.
- *
- * Two nodes reported, five stopped, nothing synthesised, and no node at work.
- * `read-models/fork-runs.ts` reports this as `partial` because the TREE decides
- * whether a search can still be entered, not the run's ledger row — which still
- * says `running`, over a tally in which nothing is.
- */
+/** A run whose lease outlived it: `read-models/fork-runs.ts` reports `partial` because the tree, not the ledger row still saying `running`, decides. */
 const STOPPED_RUN: HeadRunView = {
   rootId: "root-merge-0",
   task: "Audit the CLI surface",
@@ -2611,19 +2089,7 @@ const STOPPED_RUN: HeadRunView = {
 };
 
 
-/**
- * The six things a node panel can be showing, as `getNodeTranscript` answers.
- *
- * Five are here because the frame is where the claim that they read differently
- * is checked, ONE blank pane for all of them being the failure it catches: a
- * head that worked and reported, a head still working with a partial trace, a
- * head that died having recorded nothing, a rollout that has no trace by
- * construction, and a node neither store holds (the `null` below).
- *
- * The sixth is a mid-turn branch, keyed by the head id `branchHeadId` derives
- * from a run id — the chat chip's view of the same read, and one head deep, so
- * its search path has no ancestor to offer.
- */
+/** The six things a node panel can show, as `getNodeTranscript` answers; each must read differently. The sixth is a mid-turn branch keyed by `branchHeadId`. */
 const TRANSCRIPTS = {
   "root-merge-1-h0": {
     origin: "head", runId: "root-merge-1", nodeId: "root-merge-1-h0",
@@ -2705,9 +2171,7 @@ const TRANSCRIPTS = {
     ],
     codeUsed: null,
   },
-  // A competed branch: one proposal, scored against its siblings, no tool loop.
-  // Its `observation` IS the whole output — which is why the trace pane says so
-  // instead of looking like a head whose steps went missing.
+  // A competed branch: no tool loop, its `observation` is the whole output.
   n003: {
     origin: "rollout", runId: "n000", nodeId: "n003",
     task: "Find why the SAVE20 coupon 500s",
@@ -2723,8 +2187,7 @@ const TRANSCRIPTS = {
     ],
     codeUsed: "const rule = rules[coupon.kind ?? inferKind(coupon)];\nif (!rule) throw new BadCoupon(coupon.code);\nreturn rule.apply(cart, coupon);",
   },
-  // A Steer-as-Branch run: one head, its id derived from the run id, opened from
-  // the chat chip rather than from a canvas selection.
+  // A Steer-as-Branch run: one head, its id derived from the run id.
   "steer-b7f21-head": {
     origin: "head", runId: "steer-b7f21", nodeId: "steer-b7f21-head",
     task: "Actually, check the staging snapshot first — I don't think the migration ran there.",
@@ -2754,10 +2217,7 @@ const TRANSCRIPTS = {
     ],
     codeUsed: null,
   },
-  // Two nodes of the LIVE run: one that reported and one still working. Both are
-  // reachable from the run pane's node list, which is the path the previous
-  // fixture set had no entry for — a real node opened to "this branch is no
-  // longer in the run".
+  // Two nodes of the live run, reachable from the run pane's node list.
   lv001: {
     origin: "head", runId: "lv000", nodeId: "lv001",
     task: "Walk the cart serializer's null path: every read of coupon.kind in packages/cart/src, and for each one say whether a null kind can reach it and what the caller sees when it does.",
@@ -2822,8 +2282,7 @@ const TRANSCRIPTS = {
         ],
       },
       {
-        // No output: the call this node is in the middle of, which the chat draws
-        // as still running.
+        // No output: the chat draws this call as still running.
         text: "Reading that commit.",
         toolCalls: [
           { name: "shell", input: { command: "git show 8c1f20a1 --stat" } },
@@ -2842,15 +2301,9 @@ const TRANSCRIPTS = {
   },
 } satisfies Record<string, NodeTranscriptView>;
 
-/** Looked up by an arbitrary node id off the wire, which is what a Map is for. */
 const TRANSCRIPT_BY_NODE = new Map<string, NodeTranscriptView>(Object.entries(TRANSCRIPTS));
 
-/**
- * Agent → Evolution reads three shapes that are NOT arrays, so stubRpc's
- * blanket `[]` for a `get*` is a lie the components then dereference — the
- * same trap `getMctsNodeDetail` fell into. Real shapes, populated, so the frame
- * photographs the panels rather than their empty states.
- */
+/** Evolution reads three non-array shapes the blanket `[]` would break; populated so the frame shows panels, not empty states. */
 const REPLAY_EVALS = [
   { id: "rev_3", ranAt: NOW - 2 * 864e5, sampleSize: 24, acceptedCount: 19, negativeCount: 5, meanScore: 0.79, loss: 0.21, scaffoldVersion: 7, interval: { lo: 0.64, hi: 0.89, n: 24 } },
   { id: "rev_2", ranAt: NOW - 9 * 864e5, sampleSize: 21, acceptedCount: 14, negativeCount: 7, meanScore: 0.67, loss: 0.33, scaffoldVersion: 6, interval: { lo: 0.51, hi: 0.80, n: 21 } },
@@ -2901,9 +2354,6 @@ const evolutionRpc: Rpc = async <T,>(method: string, args?: unknown[]): Promise<
 
   if (method === "getGepaRun") return rpcResult(GEPA_DETAIL).json<T>();
 
-  // The world model the Agent surface photographs: keyed facts with the
-  // source and timestamp the rows carry, so the frame shows what the card
-  // shows them from.
   if (method === "getFacts") return rpcResult([
     { key: "test.command", value: "bun test", confidence: 0.9, source: "project configuration", lastObservedAt: NOW - 50e5 },
     { key: "checkout.coupon_kind", value: "nullable since Tuesday", confidence: 1, source: "migration 0042", lastObservedAt: NOW - 26e5 },
@@ -2912,25 +2362,13 @@ const evolutionRpc: Rpc = async <T,>(method: string, args?: unknown[]): Promise<
   return stubRpc<T>(method, args);
 };
 
-/**
- * Dispatch parameters for the forks that still have them recorded.
- *
- * Two runs of the SAME task under different policies are in here on purpose:
- * that is the pair the owner could not tell apart, and the frame is where the
- * claim that they now read differently is checked. The older forks have none —
- * the ledger prunes settled rows after a day while the trees stay forever, so
- * "parameters no longer recorded" is the normal state of a week-old fork and the
- * frame photographs it rather than pretending otherwise.
- */
+/** Two runs of the same task under different policies must read differently; older forks have none (the ledger prunes settled rows after a day). */
 const FORK_PARAMS: ForkRunParams[] = [
   {
     rootId: "n000",
     search: {
       budget: 24, branches: 4, maxDepth: 6, explorationWeight: 1.41,
-      // A CLAMPED ensemble, deliberately: `judgeSamples` shares its call pool with
-      // check generation, so this run asked for twenty and was observed running
-      // three. It is the longest value the parameter list renders, which is the one
-      // worth photographing.
+      // Clamped: `judgeSamples` shares its call pool with check generation, so asked twenty, ran three.
       judgeSamplesRequested: 20, judgeSamplesRealised: 3, mode: "build",
     },
     transcripts: null,
@@ -2946,9 +2384,6 @@ const FORK_PARAMS: ForkRunParams[] = [
     transcripts: { mergeStrategy: "best_of", branches: 2 },
   },
   {
-    // The live run's own parameters, so the disclosure has both halves to show on
-    // the run a reader is most likely to open: what the preset resolved AND what
-    // the call was dispatched with.
     rootId: "lv000",
     search: {
       budget: 12, branches: 5, maxDepth: 2, explorationWeight: 1.41,
@@ -2958,9 +2393,7 @@ const FORK_PARAMS: ForkRunParams[] = [
   },
 ];
 
-/** Every store's rows for one run, keyed by the run's root id — the same key the
- *  read model composes on, so a fixture cannot pair one run's tree with another's
- *  journal. */
+/** Keyed by the run's root id, the read model's key, so one run's tree cannot pair with another's journal. */
 const SEARCH_ROWS_BY_ROOT: ReadonlyMap<string, readonly MctsRow[]> = new Map([
   ["n000", MCTS_ROWS],
   ["sw000", SWARM_ROWS],
@@ -2974,30 +2407,16 @@ const JOURNAL_BY_ROOT: ReadonlyMap<string, HeadRunView> = new Map(
     .map((run) => [run.rootId, run]),
 );
 
-/**
- * The canvas as the server composes it: ONE ROW PER RUN, each carrying its own
- * parameters and every half it has — the search rows where the engine wrote any,
- * the journalled nodes where it wrote those. Not parallel collections keyed by root
- * id, and not a separately bounded head-runs read: either shape is what let the
- * trees and the run list beside them disagree.
- *
- * A swarm search has BOTH halves, which is why neither is chosen by a tag: its tree
- * is in `search_nodes` and the reason each of its nodes exists is in `head_journal`,
- * and a surface holding one of those cannot say which node fanned a level in.
- */
+/** One row per run, as the server composes it, carrying every half it has: a swarm has both `search_nodes` and `head_journal`. */
 const CANVAS_ROWS: readonly ExplorationCanvasRun[] = FORK_RUNS.map((run) => ({
   run,
   params: FORK_PARAMS.find((entry) => entry.rootId === run.id) ?? null,
   tree: (SEARCH_ROWS_BY_ROOT.get(run.id) ?? []).map((row) => asSearchNode(row, run.id)),
   head: JOURNAL_BY_ROOT.get(run.id) ?? null,
-  // The gallery stub never records complete Pareto evidence; the server says so.
   frontier: null,
 }));
 
-/** The generator writes the CLIENT's loose row shape, which is what the socket
- *  broadcast and `getSearchTree` really deliver. This stub is standing in for the
- *  server, so the canvas payload has to be the server's row — every column
- *  present, including the ones a partial row leaves out. */
+/** The stub stands in for the server, so the canvas payload must be the server's full row, not the client's loose shape. */
 function asSearchNode(row: MctsRow, rootId: string): SearchNode {
   return {
     id: row.id,
@@ -3011,8 +2430,7 @@ function asSearchNode(row: MctsRow, rootId: string): SearchNode {
     visits: row.visits,
     value: row.value,
     depth: row.depth,
-    // `running` is a merged-HEAD status; the search_nodes CHECK constraint
-    // cannot hold it, so a row claiming it is not a row the server could serve.
+    // `running` is a merged-head status the search_nodes CHECK constraint cannot hold.
     status: row.status === "running" ? "open" : row.status,
     msg_id: row.msg_id ?? null,
     branch_agent_key: row.branch_agent_key ?? null,
@@ -3021,14 +2439,7 @@ function asSearchNode(row: MctsRow, rootId: string): SearchNode {
   };
 }
 
-/**
- * Pages the fixture the way the read model pages storage, through the same
- * `seekPage`, so the frame exercises the real walk rather than one hand-made
- * page. The anchor here is the bare fork id where the server's is composite:
- * that difference is deliberate and safe, because `after` is documented opaque
- * and a client only ever echoes it back — a stub standing in for the server may
- * choose any format it can resolve.
- */
+/** Pages through the real `seekPage`. The anchor is the bare fork id, not the server's composite: `after` is opaque, so any resolvable format is valid. */
 function canvasPage(rows: readonly ExplorationCanvasRun[], args: unknown[] | undefined): Page<ExplorationCanvasRun> {
   const request = v.parse(GalleryPageRequestSchema, args?.[0] ?? {});
   const limit = request.limit ?? 30;
@@ -3043,24 +2454,13 @@ const GalleryPageRequestSchema: v.GenericSchema<PageRequest> = v.object({
   limit: v.optional(v.number()),
 });
 
-/**
- * The exploration reads whose answer is NOT an array, answered from the fixture
- * stores — and the one place both transports resolve them.
- *
- * Column C is handed an `Rpc` directly; the full-screen explorer reads through the
- * agent socket. A fixture that answered one and let the other fall through to the
- * blanket `[]` is not a smaller version of the same thing: `getHeadRun` answering
- * `[]` is truthy, and `headRunToTree` then read `[].heads` and took the page to a
- * blank body. Every read that can answer null or a record is listed here.
- */
+/** The non-array exploration reads, answered here for both transports (Column C's `Rpc` and the explorer's socket); the blanket `[]` breaks them. */
 const EXPLORATION_READS = new Set([
   "getExplorationCanvas", "listForkRuns", "getForkRun", "getSearchTree", "getHeadRun",
   "getMctsNodeDetail", "getNodeTranscript",
 ]);
 
-/** Everything an exploration read can answer with. Named rather than `unknown`,
- *  because a stub that widened its own answers could serve a value the real read
- *  models cannot produce — which is the entire failure mode of a fixture. */
+/** Named, not `unknown`: a stub must not serve a value the real read models cannot produce. */
 type ExplorationAnswer =
   | Page<ExplorationCanvasRun>
   | Page<ForkRunSummary>
@@ -3083,19 +2483,14 @@ function explorationRead(
     return { ...page, items: page.items.map((entry) => entry.run) };
   }
 
-  // The COMPOSED row, which is what `orchestrator.getForkRun` answers. This
-  // served a bare `ForkRunSummary` — a shape the read model cannot produce —
-  // and the client, reading `entry.run` off it, threw on the first
-  // revalidation. Every frame that opens the full-screen explorer rendered a
-  // blank body because of this one line.
+  // The composed row `orchestrator.getForkRun` answers; the client reads `entry.run` off it.
   if (method === "getForkRun") return rows.find((entry) => entry.run.id === args[0]) ?? null;
 
   if (method === "getSearchTree") return SEARCH_ROWS_BY_ROOT.get(String(args[0])) ?? [];
 
   if (method === "getHeadRun") return JOURNAL_BY_ROOT.get(String(args[0])) ?? null;
 
-  // A retired node the server no longer details, and a node NEITHER store holds:
-  // both answer null, and the panel must not render either as "recorded nothing".
+  // Both answer null; the panel must not render either as "recorded nothing".
   if (method === "getMctsNodeDetail") return null;
 
   return TRANSCRIPT_BY_NODE.get(String(args[1])) ?? null;
@@ -3107,14 +2502,7 @@ const forkRpc: Rpc = async <T,>(method: string, args?: unknown[]): Promise<T> =>
   return stubRpc<T>(method, args);
 };
 
-/**
- * One frame each, focused on the state it exists to photograph.
- *
- * The surface focuses `runs[0]` on arrival, so a frame chooses its subject by
- * putting that run first. Selected by ROOT ID rather than by slicing an index:
- * `forkmerge` used `slice(1)` and therefore silently re-aimed at whatever row
- * happened to be second once this list grew.
- */
+/** The surface focuses `runs[0]`, so each frame puts its subject first, selected by root id rather than index. */
 function forkRpcOver(rows: readonly ExplorationCanvasRun[]): Rpc {
   return async <T,>(method: string, args?: unknown[]): Promise<T> =>
     EXPLORATION_READS.has(method)
@@ -3128,78 +2516,40 @@ function focusRun(rootId: string, rows: readonly ExplorationCanvasRun[] = CANVAS
   return forkRpcOver([...wanted, ...rows.filter((entry) => entry.run.id !== rootId)]);
 }
 
-/** The same surface on a run with NO search tree — a journalled run is a tree at
- *  depth 1, and every score encoding has to be absent rather than drawn from a zero
- *  no branch earned. This frame is where that claim is checked. */
+/** No search tree: a journalled run is a tree at depth 1, and every score encoding must be absent. */
 const mergeFirstRpc = focusRun(
   MERGED_RUN.rootId,
   CANVAS_ROWS.filter((entry) => entry.tree.length === 0),
 );
 
-/** A swarm search under a named preset: the resolved tuple, and `settle` derived
- *  from two of its axes rather than chosen. */
+/** `settle` is derived from two of the resolved axes, not chosen. */
 const provePresetRpc = focusRun("pv000");
 
-/** A `custom` composition that FANS IN. No named preset resolves to
- *  `expand:'aggregate'`, so this state is necessarily a composition — which is also
- *  why its axes are not recoverable and the panel says so. */
+/** No named preset resolves to `expand:'aggregate'`, so this is a composition and its axes are not recoverable. */
 const swarmFanInRpc = focusRun("sw000");
 
-/** A search that started and reached nothing. Never an empty tree: a refusal. */
 const refusedRunRpc = focusRun("rf000");
 
-/**
- * A swarm in flight, with its nodes in every state at once — the run the owner
- * kept being shown as a `running` label over a lone root.
- *
- * Focused, so the frame opens on it rather than on whichever run happens to be
- * newest, and the settled runs stay in the list underneath because the comparison
- * between a live search and a finished one is the point.
- */
+/** Focused; the settled runs stay listed beneath for comparison. */
 const runningSwarmRpc = focusRun("lv000");
 
-/**
- * The run whose lease outlived it: two nodes reported, five stopped, none at
- * work. What the surface has to say about it is *stopped*, never `running` over
- * a tally in which nothing is running — that contradiction is the one the report
- * named. The read model settles the word (`read-models/fork-runs.ts`); this
- * frame is where the row, the dot and the node list are read together.
- */
+/** Must read *stopped*, never `running`; the word comes from `read-models/fork-runs.ts`. */
 const stoppedRunRpc = focusRun("root-merge-0");
 
-/** The `head_activity` counters for the live run's working nodes — the push that
- *  makes a node pulse on the canvas and in the run's node list. A settled node
- *  announces nothing, which is correct: it is not moving. */
+/** `head_activity` counters for the live run's working nodes; settled nodes announce nothing. */
 const RUNNING_ACTIVITY: ReadonlyMap<string, number> = new Map(
   RUNNING_RUN.heads.filter((head) => head.status === "running").map((head) => [head.id, 3]),
 );
 
-/* ── one search, as it happens ──────────────────────────────────── */
-
 /**
- * The five states a live search passes through, as five READABLE stages.
- *
- * Liveness is the one property this gallery could not photograph. A frame is a
- * moment, and "the tree grew without a refresh" is a pair of moments — so a
- * frame that animated on a timer would be a frame a test has to race, and every
- * assertion about it would be about the clock.
- *
- * So the stage is a PARAMETER: `?frame=forklive&stage=2` renders the search
- * exactly two beats in, deterministically, and a browser gate walks the stages
- * in one page and asserts what changed between them. With no `stage` the frame
- * advances itself, which is the version a person watches.
- *
- * The tree is the real 106-node fixture, revealed a prefix at a time, rather
- * than a second tree invented for this frame: a live search IS the same rows
- * arriving in order, and a fixture that grew differently from the one every
- * other fork frame photographs would be a fixture testing itself.
+ * Five readable stages of a live search over the real 106-node fixture, revealed a prefix at a time.
+ * `?stage=N` pins one so a gate need not race a clock; without it the frame advances itself.
  */
 const LIVE_STAGE_ROWS = [0, 1, 4, 12, MCTS_ROWS.length] as const;
 
 const LIVE_STAGES = LIVE_STAGE_ROWS.length;
 
-/** The run row as the ledger holds it at `stage` — the fact the list renders,
- *  and the one that decides whether the surface polls fast or idles. */
+/** The ledger row at `stage`; it decides whether the surface polls fast or idles. */
 function liveRun(stage: number): ForkRunSummary {
   const rows = LIVE_STAGE_ROWS[Math.min(stage, LIVE_STAGES - 1)] ?? 0;
   const settled = stage >= LIVE_STAGES - 1;
@@ -3217,11 +2567,7 @@ function liveRun(stage: number): ForkRunSummary {
   };
 }
 
-/** The canvas row for `stage`: the run, its parameters, and the prefix of its
- *  tree that has landed so far. Stage 0 has no ledger row and exercises
- *  liveness before the first canvas row arrives. It covers the fifteen-second
- *  missing-row failure case; working nodes must not be presented as absent
- *  work during that interval. */
+/** Stage 0 has no ledger row: working nodes must not read as absent work before the first canvas row lands. */
 function liveCanvasRows(stage: number): readonly ExplorationCanvasRun[] {
   if (stage <= 0) return [];
   const rows = LIVE_STAGE_ROWS[Math.min(stage, LIVE_STAGES - 1)] ?? 0;
@@ -3235,9 +2581,7 @@ function liveCanvasRows(stage: number): readonly ExplorationCanvasRun[] {
   }];
 }
 
-/** What the `head_activity` broadcast has told the client by `stage`: one tick
- *  per node that has written to its journal. The newest nodes are the ones the
- *  picture marks as working, which is the whole point of the channel. */
+/** One tick per node that has written to its journal; the newest read as working. */
 function liveActivity(stage: number): ReadonlyMap<string, number> {
   const rows = LIVE_STAGE_ROWS[Math.min(stage, LIVE_STAGES - 1)] ?? 0;
   const ticks = new Map<string, number>();
@@ -3247,15 +2591,7 @@ function liveActivity(stage: number): ReadonlyMap<string, number> {
   return ticks;
 }
 
-/**
- * One transport for the whole run, answering whatever stage is current.
- *
- * STABLE, and that is not a detail. `useAsyncResource` keys its load effect on
- * the `rpc` identity, so an rpc rebuilt per stage would reload the run list at
- * every beat and the frame would appear to be live for a reason the product does
- * not have. In the app the transport is one socket and the DATA changes
- * underneath it, so the fixture reads its stage from a ref at call time.
- */
+/** Stable: `useAsyncResource` keys its load on the `rpc` identity, so the stage is read from a ref at call time. */
 function liveRpcOver(stageRef: { readonly current: number }): Rpc {
   return async <T,>(method: string, args?: unknown[]): Promise<T> => {
     const rows = liveCanvasRows(stageRef.current);
@@ -3268,11 +2604,7 @@ function liveRpcOver(stageRef: { readonly current: number }): Rpc {
   };
 }
 
-/**
- * The beat `?stage=N` pins, clamped to the stages that exist. A query with no
- * `stage` — or one that is not a number — pins nothing, and `ForkLiveFrame`
- * then advances itself; see it for why liveness needs both.
- */
+/** Clamped; a missing or non-numeric `stage` pins nothing. */
 function pinnedLiveStage(search: string): number | null {
   const asked = new URLSearchParams(search).get("stage");
   const wanted = asked === null ? Number.NaN : Number(asked);
@@ -3280,13 +2612,6 @@ function pinnedLiveStage(search: string): number | null {
   return Number.isFinite(wanted) ? Math.max(0, Math.min(LIVE_STAGES - 1, wanted)) : null;
 }
 
-/**
- * The Exploration surface over a search that is happening.
- *
- * Advances itself when the frame asked for no particular stage, so the thing a
- * person opens actually moves; pinned when it did, so the thing a gate opens
- * cannot move under it.
- */
 function ForkLiveFrame({ pinned }: { pinned: number | null }) {
   const [stage, setStage] = useState(pinned ?? 0);
   const stageRef = useRef(stage);
@@ -3311,10 +2636,7 @@ function ForkLiveFrame({ pinned }: { pinned: number | null }) {
   );
 }
 
-/* ── Compositions (markup mirrors WorkspacePage) ────────────────── */
-
-/* The one identity row, as the app renders it — the real component, not a
-   copy of it: the whole point of the row is that there is exactly one. */
+/* The real component: there is exactly one identity row. */
 function GalleryWorkspaceBar({ providerWait }: { providerWait?: { provider: string; waitMs: number } | null }) {
   return (
     <WorkspaceBar
@@ -3329,9 +2651,7 @@ function GalleryWorkspaceBar({ providerWait }: { providerWait?: { provider: stri
   );
 }
 
-/* The chat column's only chrome: the tab strip, carrying the controls that act
-   on the conversation it has open. Clearing is one of them, and like the app
-   it is absent until there is a transcript to clear. */
+/* Clearing is absent until there is a transcript to clear, like the app. */
 function GalleryChatTabs({ clearable = true }: { clearable?: boolean }) {
   return (
     <SubordinateTabs
@@ -3342,8 +2662,7 @@ function GalleryChatTabs({ clearable = true }: { clearable?: boolean }) {
   );
 }
 
-/* The live-data failure the owner reported, as a status row. Shared so the wide
-   and narrow frames photograph the same affordance rather than two of them. */
+/* Shared so the wide and narrow frames photograph the same affordance. */
 const MCTS_NOTICE: readonly ComposerNotice[] = [{
   id: "mcts",
   tone: "danger",
@@ -3351,14 +2670,7 @@ const MCTS_NOTICE: readonly ComposerNotice[] = [{
   action: { label: "Retry", onClick: () => {} },
 }];
 
-/* The composer, as the app renders it — the real component. This was a
-   hand-copy, and it had drifted: no mode control, no model selector and no
-   status row, so the gallery photographed a composer the product does not have.
-   `notices` is a parameter because the status treatment is a thing to review.
-
-   The draft, the mode and the model are real state rather than no-op handlers:
-   a gallery whose controls do not move cannot tell you whether they work, which
-   is the whole failure this harness exists to catch. */
+/* The real composer over real draft/mode/model state; `notices` is a parameter so the status treatment can be reviewed. */
 function GalleryComposer({ notices = [] }: { notices?: readonly ComposerNotice[] }) {
   const [value, setValue] = useState("");
   const [mode, setMode] = useState<ChatMode>("build");
@@ -3384,8 +2696,7 @@ function GalleryComposer({ notices = [] }: { notices?: readonly ComposerNotice[]
 }
 
 function ChatMessages() {
-  // The workspace page's feedback path, stubbed at the seam the test reads:
-  // the dataset is the write's record, the map its visible result.
+  // Stubbed at the seam the test reads: the dataset records the write, the map is its visible result.
   const [feedback, setFeedback] = useState<Record<string, 'positive' | 'negative' | null>>({});
 
   const onFeedback = useCallback(async (messageId: string, value: 'positive' | 'negative' | null) => {
@@ -3393,8 +2704,7 @@ function ChatMessages() {
     const prior = root.dataset.galleryFeedbackCalls;
 
     const calls: Array<{ method: string; args: unknown[] }> =
-      // SAFETY: this callback is the recorder's only writer — it stores exactly
-      // what it will parse on the next click, so the shape is its own.
+      // SAFETY: this callback is the recorder's only writer, so the parsed shape is its own.
       prior === undefined ? [] : JSON.parse(prior);
 
     calls.push({ method: 'setTurnFeedback', args: [messageId, value] });
@@ -3420,9 +2730,7 @@ function ChatMessages() {
       />
       <DeviceOfflineRow devices={[{ id: "dev-1", label: "ashish-device", lastSeenAt: NOW }]} />
       <ChatErrorCard message="fetch failed: provider stream reset before completion (anthropic/claude-opus-4)" streaming={false} onRetry={() => {}} onDismiss={() => {}} />
-      {/* The same card re-serving an OLDER turn's outcome. `sunlit-stone-4a20`
-          answers a resume ACK with exactly this body today, from a turn that
-          ended 2026-08-17 — the state the owner opens an idle workspace into. */}
+      {/* The same card re-serving an older turn's outcome, as `sunlit-stone-4a20` answers a resume ACK. */}
       <ChatErrorCard message="Unauthorized" replayed streaming={false} onRetry={() => {}} onDismiss={() => {}} />
     </div>
   );
@@ -3436,35 +2744,18 @@ function Shell(
   {
     surface?: SurfaceKind; mctsTrees?: ReadonlyMap<string, ForkNode>; rpc?: Rpc;
     pendingActions?: PendingAction[];
-    /** Per-node journal write counters, as the `head_activity` broadcast
-     *  delivers them. Static for every frame but the live one. */
     headActivity?: ReadonlyMap<string, number>;
-    /** Detached work. EMPTY is the state that matters for liveness: with no
-     *  running job and no streaming turn the fork list drops to its idle
-     *  cadence, which is the condition a new search would be invisible under. */
+    /** Empty is the liveness case: with no running job or streaming turn the fork list drops to its idle cadence. */
     backgroundJobs?: BackgroundJob[];
-    /**
-     * A model call sleeping out a provider-mandated wait — what the task
-     *  indicator reads instead of "working" while it lasts. EMPTY by default:
-     *  a frame photographs the surface it is named for, and a bar pinned to a
-     *  wait in every other frame would say one turn is rate-limited forever.
-     */
+    /** Empty by default: only the provider-wait frame pins it. */
     providerWait?: { provider: string; waitMs: number } | null;
-    /**
-     * The composer's status rows. EMPTY by default, and that is the rule
-     * rather than a preference: a frame photographs the surface it is named
-     * for, and every OTHER pane in the shot is that surface's neighbour. A
-     * neighbour stuck in a failure state makes a healthy surface look broken
-     * in every review and every marketing capture. The frames that exist to
-     * photograph a failure — the composer's own status treatment — pass it.
-     */
+    /** Empty by default: a neighbour stuck in failure makes the photographed surface look broken. */
     notices?: readonly ComposerNotice[];
   },
 ) {
   return (
     <div className="flex h-screen w-screen flex-col p-bg p-text overflow-hidden md:flex-row">
-      {/* Mirrors components/layout.tsx — a harness that photographs a
-          different surface than the app renders is worse than no harness. */}
+      {/* Mirrors components/layout.tsx. */}
       <aside className="hidden w-60 shrink-0 p-sidebar border-r p-border md:block"><Sidebar /></aside>
       <main className="p-workbench min-h-0 flex-1 min-w-0 overflow-hidden">
         <div className="h-full flex flex-col">
@@ -3505,11 +2796,7 @@ function Section({ title, children }: { title: string; children: React.ReactNode
 function Controls() {
   return (
     <div className="space-y-6 max-w-2xl">
-      {/* The button hierarchy as it now ships. Kumo's `primary` and
-          `destructive` are absent on purpose: they force `!text-white`, which
-          measures 2.4:1 on brass, so the filled action is FilledButton —
-          p-btn/p-btn-danger ink over Kumo's own sm box. Kumo's secondary and
-          ghost stay and inherit the palette. */}
+      {/* Kumo's `primary`/`destructive` force `!text-white` (2.4:1 on brass), so the filled action is FilledButton. */}
       <div className="flex flex-wrap items-center gap-3">
         <FilledButton>FilledButton</FilledButton>
         <FilledButton danger>danger</FilledButton>
@@ -3542,9 +2829,7 @@ function Controls() {
   );
 }
 
-/* The chat column at the width Column A actually gets — 42% of the shell, so
-   roughly 540px on a device. Rendering it full-bleed would flatter every
-   truncation and every line length the real column does not have. */
+/* The width Column A gets (42% of the shell); full-bleed would flatter truncation. */
 function ChatFrame() {
   return (
     <div className="flex h-screen justify-center p-bg p-text">
@@ -3557,17 +2842,7 @@ function ChatFrame() {
   );
 }
 
-/* The production shapes, as they reach the renderer.
-
-   `steer-a` is the durable row `recordLandedSteers` writes: the operator's own
-   words, and the step of the turn the model read them at.
-
-   `f8798675…` is the fork-interrupted notice, restored by the history walk
-   with its metadata — which is the half that was being dropped.
-
-   `sys-1` is the same class with no markers left at all: the read model reports
-   it `system` from the row's shape, and the renderer has to have somewhere to
-   put a role that is neither the operator nor the agent. */
+/* Production shapes: `steer-a` is a `recordLandedSteers` row, `f8798675…` a restored fork-interrupted notice with metadata, `sys-1` a markerless row the read model reports as `system`. */
 const STEERED_THREAD: UIMessage[] = [
   msg({
     id: "su1", role: "user", createdAt: NOW - 9 * 60e3,
@@ -3604,20 +2879,7 @@ const STEERED_THREAD: UIMessage[] = [
   }),
 ];
 
-/* Two reports in one picture.
-
-   A message typed mid-turn (#210): the operator asked for the swarm while the
-   agent was four steps into a search, and the bubble was drawn under the whole
-   turn with the composer still promising to deliver it. Here it sits between
-   the work that preceded it and the work it changed, and the composer says
-   nothing because the model has it.
-
-   A harness row walked back out of storage (#222): the `fork_interrupted`
-   notice from `sunlit-stone-4a20`, restored by the history walk rather than
-   the socket. It kept its card, which it could not before — the walk dropped
-   the metadata the card is drawn from and the row landed in the owner's own
-   bubble. Beside it, the same row with no markers at all, reported `system` by
-   the read model: not the operator, not the agent. */
+/* A mid-turn message (#210) between the work it split, and a `fork_interrupted` notice restored by the history walk (#222) keeping its card. */
 function ChatSteerFrame() {
   const thread = buildTranscript(STEERED_THREAD, [
     { id: "steer-live", text: "actually, cap it at three heads", state: "queued", atStep: null },
@@ -3642,10 +2904,7 @@ function ChatSteerFrame() {
   );
 }
 
-/* Code fences in chat, the way an answer actually carries them: one ts block,
-   one bash, one json — the three languages a fix reply names most. This is
-   the frame the highlighting change photographs: a fence that renders flat
-   here is the defect. */
+/* One ts, bash and json fence each: a fence that renders flat is the highlighting defect. */
 const CODE_THREAD: UIMessage[] = [
   msg({
     id: "cu1", role: "user", createdAt: NOW - 4 * 60e3,
@@ -3700,9 +2959,7 @@ function ChatCodeFrame() {
   );
 }
 
-/* What every new workspace opens on. The mission is shown as the standing
-   brief it is — it is deliberately NOT sent as an opening message, so this
-   state is the first thing anyone sees after creating a workspace. */
+/* The mission is a standing brief, deliberately not sent as an opening message. */
 function ChatEmptyFrame() {
   return (
     <div className="flex h-screen justify-center p-bg p-text">
@@ -3717,21 +2974,12 @@ function ChatEmptyFrame() {
   );
 }
 
-/* A turn IN FLIGHT, WAITING ON THE PROVIDER. The stream is quiet because the
-   model endpoint refused the request — the wait is measured and named on the
-   task indicator rather than guessed from silence. This is the frame that
-   could never exist before `provider_wait`: a rate-limited turn used to be
-   indistinguishable from a slow one, the bar reading "working" the whole time
-   the provider slept it out. */
+/* A turn waiting on the provider: the wait is named on the task indicator rather than guessed from silence. */
 function ProviderWaitFrame() {
   return <Shell providerWait={{ provider: "anthropic", waitMs: 45_000 }} />;
 }
 
-/* What EVERY workspace with a history opens on, for as long as the wake and the
-   transfer take — 0.8-3.8 seconds against production, measured 2026-08-20.
-   Photographed beside ChatEmptyFrame on purpose: ONE picture for both is the
-   defect. One says "there is nothing here", the other says "not yet", and only
-   one of them is true of a workspace with messages. */
+/* A workspace with history before its transcript arrives: must read "not yet", distinct from ChatEmptyFrame's "nothing here". */
 function ChatLoadingFrame() {
   return (
     <div className="flex h-screen justify-center p-bg p-text">
@@ -3746,19 +2994,12 @@ function ChatLoadingFrame() {
   );
 }
 
-/* The composer alone, at reading width — the surface "magical" is won or lost
-   on, so it gets its own sheet: at rest with a draft (send + Branch context),
-   mid-turn (Stop / Branch / Steer, the three named actions), and carrying a
-   status row. All three are the real component with live state. */
+/* The real composer at reading width: at rest with a draft, mid-turn (Stop / Branch / Steer), and with a status row. */
 function ComposerFrame() {
   const [value, setValue] = useState("Ship the coupon fix behind a preview first.");
   const [mode, setMode] = useState<ChatMode>("build");
   const [model, setModel] = useState("anthropic/claude-opus-4");
-  /* The thinking level travels with the model on every agent conversation, so
-     the sheet carries it too: the pair's row is what this frame photographs,
-     and a frame with the model alone photographed a composer the product does
-     not have. The composer sizes the row, so the picker takes no width class
-     here either — the app passes none. */
+  /* The thinking level travels with the model; the composer sizes the row, so the picker takes no width class. */
   const [effort, setEffort] = useState<ReasoningEffort | null>(null);
 
   const picker = () => (
@@ -3797,17 +3038,7 @@ function ComposerFrame() {
   );
 }
 
-/* ── Chat infinite scroll ───────────────────────────────────────────
-
-   The REAL hooks (usePagedScroll + useGrowingScroll), the REAL merge rule and
-   the REAL HistoryBoundary, over a stub page source whose latency, failure and
-   live-arrival timing this frame can drive. The hooks are the whole of the
-   behaviour under test and none of them touch the socket, so a harness that
-   can make a page arrive slowly proves more here than the live app can — in
-   the live app the awkward cases are exactly the ones you cannot arrange.
-
-   Query params: ?latency=ms  ?fail=1 (first fetch fails)  ?depth=N (pages
-   before exhaustion). */
+/* Chat infinite scroll: the real hooks, merge rule and HistoryBoundary over a stub page source. Params: ?latency=ms ?fail=1 (first fetch fails) ?depth=N (pages before exhaustion). */
 const HISTORY_PAGE = 12;
 
 const historyParams = new URLSearchParams(location.search);
@@ -3816,7 +3047,6 @@ const HISTORY_LATENCY = Number(historyParams.get("latency") ?? 400);
 
 const HISTORY_DEPTH = Number(historyParams.get("depth") ?? 4);
 
-/** The stored transcript this frame pages back through, oldest first. */
 const STORED_HISTORY: ChatHistoryEntry[] = Array.from(
   { length: HISTORY_PAGE * HISTORY_DEPTH },
   (_, i) => ({
@@ -3869,9 +3099,7 @@ function ChatHistoryFrame() {
     onReachEdge: history.loadMore,
   });
 
-  // Driven from the test, so a live turn can be made to land while an older
-  // page is still in flight — the case that decides whether the two sources
-  // can double-render the same message.
+  // Driven from the test so a live turn can land while an older page is in flight.
   useEffect(() => {
     const onArrive = (event: Event) => {
       const detail = v.safeParse(v.pipe(v.string(), v.nonEmpty()), event instanceof CustomEvent ? event.detail : null);
@@ -3911,12 +3139,7 @@ function ChatHistoryFrame() {
   );
 }
 
-/**
- * The first-page authority behind both WorkspacePage chat columns. The first
- * request stays held until the browser releases it, then fails once; Retry
- * answers the store's authoritative empty page. The frame mounts the same
- * ConversationStartBoundary the product mounts, never a copy of its policy.
- */
+/** The first request is held until the browser releases it, then fails once; Retry answers the authoritative empty page. */
 function HistoryAuthorityFrame() {
   const [hold] = useState(() => Promise.withResolvers<void>());
   const failFirst = useRef(true);
@@ -3928,9 +3151,7 @@ function HistoryAuthorityFrame() {
       const request = ++requests.current;
       await hold.promise;
 
-      // StrictMode can retire one held walk and start its replacement. Only
-      // the latest request consumes the planned failure; the stale request's
-      // result is ignored by the hook's generation fence.
+      // StrictMode can retire a held walk: only the latest request consumes the planned failure.
       if (request === requests.current && failFirst.current) {
         failFirst.current = false;
         throw new Error("fixture could not read the first history page");
@@ -3938,7 +3159,6 @@ function HistoryAuthorityFrame() {
 
       return { status: "end" as const, items: [] };
     }, [hold]),
-    // A delivered empty live seed asks the store for its newest page.
     startFrom: useCallback(() => "newest" as const, []),
   });
 
@@ -3979,9 +3199,7 @@ function HistoryAuthorityFrame() {
   );
 }
 
-/** KINU-060 actual WorkspaceRosterProvider proof. The fixture holds only the
- * transport response; upsert/rename are the hook's public local transitions,
- * and an old response must not undo them when released. */
+/** KINU-060: only the transport response is held; a released old response must not undo the hook's upsert/rename. */
 function RosterAuthorityFrame() {
   const roster = useWorkspaceRoster();
 
@@ -4011,9 +3229,7 @@ function RosterAuthorityFrame() {
 
 const CONTINUITY_LONG_TOKEN = `https://example.invalid/${"unbroken".repeat(90)}`;
 
-/** Real MessageView, SteerBubble, Composer and MarkdownContent in one
- * interaction rig. Browser input supplies the IME and DataTransfer events; the
- * hidden probe reports only action results, never an implementation flag. */
+/** The hidden probe reports only action results, never an implementation flag. */
 function ClientContinuityFrame() {
   const [draft, setDraft] = useState("compose this");
   const [sends, setSends] = useState(0);
@@ -4075,9 +3291,7 @@ function ClientContinuityFrame() {
   );
 }
 
-/** One quality branch fails until the browser heals it; the other stays held
- * until a separate release. This makes both branch-local failure and loading
- * observable before either final state can hide the interleaving. */
+/** One quality branch fails until healed, the other held until released, so the interleaving is observable. */
 function QualityBranchFrame() {
   const [alignmentHold] = useState(() => Promise.withResolvers<void>());
   const replayHealthy = useRef(false);
@@ -4134,20 +3348,15 @@ function All() {
   );
 }
 
-/* ── Agent tab strip ────────────────────────────────────────────── */
-
 const SUBORDINATES: Parameters<typeof SubordinateTabs>[0]["subordinates"] = [
   { name: "coupon-tester", actorId: galleryActorId("coupon-tester"), displayName: "Coupon tester", role: "QA", createdBy: "orchestrator", status: "working", currentTask: "Running the checkout regression suite", createdAt: NOW - 36e5, dismissedAt: null },
   { name: "migration-review", actorId: galleryActorId("migration-review"), displayName: "Migration review", role: "Reviewer", createdBy: "orchestrator", status: "awaiting_input", currentTask: "Needs a call on the backfill order", createdAt: NOW - 72e5, dismissedAt: null },
   { name: "docs", actorId: galleryActorId("docs"), displayName: "Release notes", role: "Writer", createdBy: "user", status: "idle", currentTask: null, createdAt: NOW - 108e5, dismissedAt: null },
-  // A one-click agent the titler has not reached: blank name, shown as
-  // "New agent" in the provisional register.
+  // A one-click agent the titler has not reached: blank name, shown as "New agent".
   { name: "agent-4f2c", actorId: galleryActorId("agent-4f2c"), displayName: "", role: "agent", createdBy: "user", status: "idle", currentTask: null, createdAt: NOW - 6e5, dismissedAt: null },
 ];
 
-/* One strip of the frame: the tab it has open, the column width it draws at,
-   and the body under it. The open tab is the strip's hook, so a gate can read
-   one strip's paint beside another's. */
+/* The open tab is the strip's hook, so a gate can compare strips. */
 interface TabStripCase {
   readonly open?: string;
   readonly width: number;
@@ -4158,15 +3367,11 @@ const TAB_STRIPS: readonly TabStripCase[] = [
   { width: 520, body: "Main chat body" },
   { width: 380, body: "Main chat body" },
   { open: "coupon-tester", width: 520, body: "Subordinate chat body" },
-  // The agent still under its codename. A blank display name renders the word
-  // pair it was born with, and that tab must read as the open one too. It is
-  // the last of the roster, so this strip is wide enough to hold the whole
-  // set — a photograph of a scrolled strip shows the open tab off its edge.
+  // Still under its codename (blank display name); last in the roster, so the strip is wide enough to keep it visible.
   { open: "agent-4f2c", width: 760, body: "Codename chat body" },
 ];
 
-/* The strip sits at the top of Column A, on the chat column's own ground —
-   photographing it anywhere else hides the seam that the complaint is about. */
+/* On the chat column's own ground: elsewhere hides the seam under review. */
 function TabsFrame() {
   return (
     <div className="p-bg min-h-screen p-8 space-y-8">
@@ -4188,30 +3393,21 @@ function TabsFrame() {
   );
 }
 
-/* ── Agent conversations (interactive rig) ─────────────────────── */
-
-/** The inherited mission a one-click agent carries INTERNALLY. The browser
- *  gate asserts this string never reaches the document — creation is
- *  identity-only, and the mission is the machinery's business. */
+/** Internal only: the gate asserts this string never reaches the document. */
 const AGENTCHATS_MISSION = "Audit the checkout flow end to end and fix what breaks";
 
 type GalleryRosterEntry = Parameters<typeof SubordinateTabs>[0]["subordinates"][number];
 
 const AGENTCHATS_SEED: readonly GalleryRosterEntry[] = [
-  // The role string is deliberately distinctive: the gate asserts it never
-  // renders — an agent's being subordinate shows as hierarchy, not as a badge.
+  // Distinctive: the gate asserts it never renders; subordination shows as hierarchy, not a badge.
   { name: "scout", actorId: galleryActorId("scout"), displayName: "Checkout scout", role: "Fixture-role QA lead", createdBy: "user", status: "idle", currentTask: null, createdAt: NOW - 36e5, dismissedAt: null },
-  // An agent-created subordinate: keeps the confirmation path, beside the
-  // user-created seed above that deletes on click.
+  // Agent-created: keeps the confirmation path, unlike the user-created seed.
   { name: "auto-scout", actorId: galleryActorId("auto-scout"), displayName: "Auto scout", role: "Fixture-role QA lead", createdBy: "orchestrator", status: "idle", currentTask: null, createdAt: NOW - 18e5, dismissedAt: null },
 ];
 
 const AGENTCHATS_ROWS = 40;
 
-/** One conversation pane, wired the way SubordinateChatColumn wires the real
- *  ones: no title bar of its own (the tab is where the agent is renamed), the
- *  same composer mode segment, and the same per-conversation state hook
- *  carrying draft/mode/scroll across switches. */
+/** Wired like SubordinateChatColumn: no title bar (rename is on the tab), same mode segment and per-conversation state hook. */
 function AgentChatsPane({ conversation, transcript, onSend }: {
   conversation: string;
   transcript: readonly string[];
@@ -4272,7 +3468,6 @@ function AgentChatsScene() {
   const [sent, setSent] = useState<readonly { agent: string; mode: ChatMode; text: string }[]>([]);
   const [dismissals, setDismissals] = useState<readonly { agent: string; historyKept: boolean }[]>([]);
   const counter = useRef(0);
-  // What the backend keeps to itself: the inherited mission, keyed off-DOM.
   const missions = useRef<Record<string, string>>({});
 
   const create = async () => {
@@ -4289,8 +3484,7 @@ function AgentChatsScene() {
   const send = (agent: string) => (text: string, mode: ChatMode) => {
     setSent((current) => [...current, { agent, mode, text }]);
     setTranscripts((current) => ({ ...current, [agent]: [...(current[agent] ?? []), text] }));
-    // The first-message titler, a beat later — the `subordinates_changed`
-    // delivery the roster consumes in the app.
+    // The first-message titler, as the `subordinates_changed` delivery.
     setTimeout(() => {
       setRoster((current) => current.map((entry) =>
         entry.name === agent && entry.displayName === ""
@@ -4318,10 +3512,7 @@ function AgentChatsScene() {
           }}
           onDismiss={async (name, keepHistory) => {
             setRoster((current) => current.filter((entry) => entry.name !== name));
-            // What the backend does with the THREAD, mirrored: `keepHistory`
-            // defaults to keeping exactly as `dismiss` in core does, and a
-            // delete takes the conversation with it. The gate reads this
-            // instead of the dialog's sentence.
+            // Mirrors core `dismiss`: `keepHistory` defaults to keeping; delete takes the conversation. The gate reads this, not the dialog.
             const historyKept = keepHistory ?? true;
 
             if (!historyKept) {
@@ -4354,11 +3545,7 @@ function AgentChatsScene() {
   );
 }
 
-/* ── Markdown ───────────────────────────────────────────────────── */
-
-/* Everything the agent actually emits: fenced blocks in several languages, a
-   line far wider than the column, inline code inside prose, a table, nested
-   lists, a quote — the cases that have to survive a 420px chat column. */
+/* Everything the agent emits that must survive a narrow chat column. */
 const MARKDOWN_SAMPLE = `Here is what the migration is doing wrong, and the patch.
 
 The handler reads \`rules[coupon.kind]\` before \`kind\` is backfilled, so a percentage coupon dereferences \`undefined.percent\`. Fix is one line in \`apply-coupon.ts\` plus a guard in the migration.
@@ -4461,18 +3648,12 @@ function GalleryModal() {
   );
 }
 
-/* ── Palette plate — the design language rendered, not listed ───── */
-
 const SURFACE_STEPS = [
   ["recessed", "--c-recessed"], ["base", "--c-bg"], ["panel", "--c-sidebar"],
   ["card", "--c-surface"], ["raised", "--c-elevated"], ["overlay", "--c-overlay"],
 ] as const;
 
-/** Role names only. A `dark / light` contrast ratio on each line could only be
- *  measured against one palette, so on any other palette the plate would caption
- *  numbers that are not true of what it is showing. The ratios are asserted per
- *  theme by `unit-palette-contrast`, which is where a number can fail rather
- *  than merely be read. */
+/** Role names only: per-theme contrast ratios are asserted by `unit-palette-contrast`. */
 const TEXT_STEPS = [
   ["ink", "--c-text"], ["mid", "--c-text-2"], ["dim", "--c-text-3"], ["accent-ink", "--c-accent-fg"],
 ] as const;
@@ -4532,17 +3713,9 @@ function Palette() {
   );
 }
 
-/* ── The signed-out pages, as the worker actually serves them ──────────
+/* The signed-out pages: the real document text written into this window, so the gates audit the shipped cascade and scripts. */
 
-   Not a sketch of the landing page in app tokens — a sketch is a second design
-   that drifts. These frames write the REAL document text into this window, so
-   the browser computes the real cascade: the computed-style gate audits the
-   public stylesheet, the screenshot pass photographs the shipped page, and the
-   growth of the hero tree is the shipped script running. */
-
-/** The public documents, by frame name. The install command is the production
- *  one rather than this dev server's, so the frame photographs the copy a
- *  visitor reads. */
+/** The install command is production's, not this dev server's. */
 function publicDocument(name: string): string | null {
   const install = `curl -fsSL 'https://kinu.run/install.sh' | bash`;
 
@@ -4580,22 +3753,14 @@ function publicDocument(name: string): string | null {
   return null;
 }
 
-/** Replace this document with the page. `document.write` rather than an
- *  innerHTML swap, because the page's own theme bootstrap and its scripts have
- *  to RUN — an injected `<script>` never does. */
+/** `document.write`, not innerHTML: the page's theme bootstrap and scripts must run, and injected `<script>` never does. */
 function writeDocument(html: string): void {
   document.open();
   document.write(html);
   document.close();
 }
 
-/**
- * The four candidate marks, at every size that decides one.
- *
- * A logo is chosen at 16px and at hero size, in both faces, or it is chosen
- * wrong. `KINU_MARK` in `public-shell.ts` names the one that ships, so this
- * frame is what that one line is answerable to.
- */
+/** The four candidate marks at 16px and hero size, in both faces; `KINU_MARK` in `public-shell.ts` names the one that ships. */
 function MarksFrame() {
   const sizes = [16, 24, 48, 96] as const;
 
@@ -4643,9 +3808,7 @@ function MarksFrame() {
                 Kinu.run
               </span>
             </div>
-            {/* The candidate where the owner will actually meet it: the
-                sidebar lockup, on sidebar chrome, over a live roster row —
-                the context Sidebar.tsx ships (mark 20px + display face). */}
+            {/* The sidebar lockup as Sidebar.tsx ships it (mark 20px + display face). */}
             <div className="w-60 rounded-lg border p-border p-sidebar px-2 py-2.5 space-y-1.5">
               <div className="flex items-center gap-2.5 px-2 py-1">
                 <span style={{ color: "var(--c-accent)", lineHeight: 0 }} dangerouslySetInnerHTML={{ __html: mark(20, id) }} />
@@ -4662,24 +3825,9 @@ function MarksFrame() {
   );
 }
 
-/* The Agent surface: the collapsible sections and the native/code-mode
-   exposure badge, at the width Column C actually gets. */
-/* The real docstrings, from the registry the orchestrator serves them from.
-   Mocking short ones is how the Tools list shipped as a wall of prose without
-   anyone seeing it: eight builtins carry real contract text between them, and
-   a harness that photographs one-liners photographs a surface the app does
-   not have. `release` (and `agent.*` self-steering) is codemode-only reach —
-   getToolDescriptions() only lists BUILTIN_TOOLS, the same reason `agent.*` has
-   never appeared here either, so that row is illustrative mock, not a live
-   readout.
-
-   `exposure` here is the registry's DECLARED reach (TOOL_REACH), so the eight
-   builtins are "both" — every one of them is also a codemode namespace or, for
-   run/file, reachable through `workspace.*`; only eval is native-only,
-   because it IS the sandbox. `wired` is the second, separate fact: whether this
-   agent has the capability at all. `report` is photographed at wired:false
-   because that is what an orchestrator looks like — it IS the report sink — and
-   that state is exactly the one a false label "code mode" would misreport. */
+/* At the width Column C gets. */
+/* Real docstrings from the registry, so length problems are visible. `release` is illustrative: getToolDescriptions() lists only
+   BUILTIN_TOOLS. `exposure` is declared reach (TOOL_REACH); `wired` is whether this agent has it (`report` is false on an orchestrator). */
 function galleryTool(info: ToolInfo): ToolInfo { return info; }
 
 const BRAIN_TOOLS: ToolInfo[] = [
@@ -4705,8 +3853,6 @@ const BRAIN_STATUS = {
   soul: "# Checkout coupon bug", forkLineage: null, createdAt: NOW - 7 * 864e5, reasoningEffort: "medium",
 } satisfies AgentStatus;
 
-/* ── Agent-authored Slate preview ────────────────────────────── */
-
 const GALLERY_SLATE_ID = "sandbox-probe";
 
 /** Gallery-only previewSlate fixture. It exercises SlateFrame, not a deployed preview origin. */
@@ -4728,9 +3874,7 @@ function SlatePreviewFrame() {
   );
 }
 
-/** The coupon-board slate itself — the app a workspaces tile draws in its
- *  live frame. Rendered at the tile's own 4x viewport so the scaled-down
- *  photograph shows a real app, not a reflowed column. */
+/** Rendered at the tile's 4x viewport so the scaled-down photograph shows the real app. */
 function CouponBoardSlate() {
   const coupons = [
     { code: "SAVE20", kind: "percent", state: "active", used: 41 },
@@ -4772,10 +3916,7 @@ function CouponBoardSlate() {
   );
 }
 
-/* A slate rendered where the owner reads it: inside the transcript, at the
-   card's own height, while the conversation stays legible around it. The
-   thread ends on the bare `slate://` address the agent typed — the markdown
-   pass turns it into the card, not into a link to click. */
+/* The thread ends on a bare `slate://` address: the markdown pass must turn it into the card, not a link. */
 const SLATE_THREAD: UIMessage[] = [
   msg({
     id: "sl-u1", role: "user", createdAt: NOW - 4 * 60e3,
@@ -4811,11 +3952,7 @@ function ChatSlateFrame() {
   );
 }
 
-/* ── Releases ───────────────────────────────────────────────────── */
-
-// A board with one pending approval, so the row that carries the Approve button
-// is the thing under the lens: the digest binds the source's deployTarget, and
-// this frame is where you check that the owner can actually read it first.
+// One pending approval: the digest binds the source's deployTarget, which the owner must be able to read first.
 const RELEASE_BOARD = {
   bindings: [{
     id: "src_1", kind: "local", label: "kinu", repoUrl: null, defaultBranch: "main",
@@ -4850,8 +3987,7 @@ const RELEASE_EXECUTORS: ExecutorInfo[] = [
   { name: "sandbox", kind: "sandbox", capabilities: [], available: true, configured: true, active: false, status: "idle" },
 ];
 
-/** The same board with the engine's substrate missing — the surface's honest
- *  word when nothing on the pipeline can actually run. */
+/** The engine's substrate missing: nothing on the pipeline can run. */
 const RELEASE_EXECUTORS_OFFLINE: ExecutorInfo[] = [
   {
     name: "sandbox", kind: "sandbox", capabilities: [], available: false, configured: false,
@@ -4871,12 +4007,7 @@ function ReleasesFrame({ executors = RELEASE_EXECUTORS }: { executors?: Executor
 }
 
 
-/* ── Work ───────────────────────────────────────────────────────── */
-
-// The agent's own plan, at the shape it actually reaches: several steps, one
-// item active, one task broken into subtasks, one dropped. Photographed inside
-// Column C's chrome, beside the jobs and self-changes it now shares a surface
-// with, rather than each of those three in a room of its own.
+// The plan at its real shape: several steps, one active, one with subtasks, one dropped.
 const AGENT_TASKS = [
   {
     id: "t1", parentId: null, title: "Reproduce the SAVE20 coupon 500", status: "done",
@@ -4901,9 +4032,7 @@ const AGENT_TASKS = [
   },
 ];
 
-/** The workspace-wide work read the Work tab's plan list and task ledger
- *  share: the root's plan and tasks plus one subordinate's plan carrying its
- *  own linked task, so the list draws both owners' rows. */
+/** Root plan and tasks plus one subordinate's plan, so both owners' rows draw. */
 const WORKSPACE_WORK = {
   plans: [
     {
@@ -4937,8 +4066,6 @@ const WORKSPACE_WORK = {
   ],
 };
 
-/** Both lifecycle halves in frame: one job still running (Now, cancel), two
- *  settled (journal, retry / dismiss). */
 const BACKGROUND_JOBS = [
   {
     id: "bgjob-7c1e4a92", kind: "fork", label: "explore three coupon-lookup fixes",
@@ -4984,13 +4111,9 @@ const CHANGELOG = {
   ],
 };
 
-/** The queue that closes the badge gap: without it a release approval lights
- *  nothing at all while a running job — which needs nobody — carries a digit. */
+/** Without it a release approval lights nothing while a running job carries a digit. */
 const PENDING_ACTIONS: PendingAction[] = [
-  // A parked command — the ONE kind decided in the queue itself, and the one
-  // this frame never held, so its Approve/Always/Deny controls had never been
-  // photographed at all. Two of them, because deciding a night's worth in one
-  // sitting is the whole point of the card.
+  // Parked commands, the one kind decided in the queue itself.
   {
     id: "defer-9y2n8ixor8", kind: "deferred_action", at: NOW - 40 * 60e3,
     title: "Approve: a command the agent wants to run on device",
@@ -5024,11 +4147,8 @@ const PENDING_ACTIONS: PendingAction[] = [
   },
 ];
 
-/** The shell oracle carries one owner decision, as the app mock does. */
 const SHELL_PENDING_ACTIONS = PENDING_ACTIONS.filter((action) => action.kind === "release_approval");
 
-
-/* ── Slate sharing: the four Phase 1 surfaces on one blueprint ─────────── */
 
 const BLUEPRINT_BINDINGS: SlateBindingDeclaration[] = [
   { name: "GITHUB", kind: "mcp", target: "github", credentialed: true },
@@ -5064,9 +4184,7 @@ const BLUEPRINT_INSPECTION: BlueprintInspection = {
   bindings: BLUEPRINT_BINDINGS, credentialed: BLUEPRINT_VIEW.credentialed, warnings: BLUEPRINT_VIEW.warnings,
 };
 
-/** What a viewer of the Issue triage slate would reach, as core draws it:
- *  every member classified, the risk of each mutating one worded for the
- *  visibility, and the digest slate behind the PEER hop. */
+/** As core draws it: every member classified, each mutating one's risk worded for the visibility, and the digest slate behind the peer hop. */
 const RISK = (body: string) => ({ public: `${body} Anyone who opens this share can trigger it.`, users: `${body} Anyone you named on this share can trigger it.` });
 
 const NO_RISK = { public: "", users: "" };
@@ -5135,12 +4253,9 @@ const SHARED_LIBRARY: SharedLibrary = {
   ],
 };
 
-/** A Drive with nothing on it: every section shows its own empty line. */
 const EMPTY_LIBRARY: SharedLibrary = { slates: [], mine: [], received: [], public: [], known: [] };
 
-/** The share dialog over the Issue triage slate: the live mode with the
- *  capability graph and one public share already open, or the blueprint mode
- *  at the inspection step (`sharedialog-blueprint`). */
+/** Live mode with capability graph and one public share, or blueprint mode at inspection (`sharedialog-blueprint`). */
 function ShareDialogFrame({ mode }: { mode: "live" | "blueprint" }) {
 
   return (
@@ -5157,9 +4272,7 @@ function ShareDialogFrame({ mode }: { mode: "live" | "blueprint" }) {
   );
 }
 
-/** The read-only blueprint page, routed so `useParams` names the id the page
- *  would fetch. `&viewer=signedout` renders the sign-in branch of its one
- *  action. */
+/** Routed so `useParams` names the id; `&viewer=signedout` renders the sign-in branch. */
 function BlueprintFrame() {
   const signedOut = new URLSearchParams(location.search).get("viewer") === "signedout";
 
@@ -5175,8 +4288,7 @@ const workRpc: Rpc = async <T,>(method: string, args?: unknown[]): Promise<T> =>
 
   if (method === "getEvolutionChangelog") return rpcResult(v.parse(JsonValueSchema, CHANGELOG)).json<T>();
 
-  // The live tool list the journal joins tool entries to: the crafted rows
-  // the CHANGELOG digest names, with the EMA scores their cards show.
+  // The crafted rows the CHANGELOG digest names, with their EMA scores.
   if (method === "getToolDescriptions") return rpcResult({
     builtIn: [], executors: [],
     crafted: [
@@ -5197,10 +4309,7 @@ function PlanReviewFrame() {
 }
 
 
-/** `?frame=work&lane=settled`: one decision waiting and no work of any kind in
- *  the background. The plan read answers with a closed task only, so Now has
- *  nothing to show while the journal beneath it still does — and with no job
- *  ever run, the Jobs chip is the empty one. */
+/** One decision waiting, no background work: the plan read has only a closed task and no job has ever run. */
 const settledOnlyRpc: Rpc = async <T,>(method: string, args?: unknown[]): Promise<T> => {
   if (method === "listWorkspaceWork") return rpcResult({
     plans: [],
@@ -5213,9 +4322,7 @@ const settledOnlyRpc: Rpc = async <T,>(method: string, args?: unknown[]): Promis
   return workRpc<T>(method, args);
 };
 
-/** `?frame=work&lane=failed`: the work read and the journal read both refuse
- *  over an empty feed, so Now and the journal each owe their own retry — and
- *  the running job, which is a prop and not a read, is still Now's to show. */
+/** Both reads refuse, so Now and the journal each owe a retry; the running job is a prop, so Now still shows it. */
 const failedReadsRpc: Rpc = async <T,>(method: string, args?: unknown[]): Promise<T> => {
   if (method === "listWorkspaceWork") throw new Error("plan fixture failed");
 
@@ -5224,13 +4331,10 @@ const failedReadsRpc: Rpc = async <T,>(method: string, args?: unknown[]): Promis
   return workRpc<T>(method, args);
 };
 
-/** The lanes that photograph an absence: the failed-reads one is about the two
- *  reads and not the queue, and the settled one has never run a job. */
 const NO_QUEUE: PendingAction[] = [];
 
 const NO_JOBS: BackgroundJob[] = [];
 
-/** Which Work lane `?frame=work&lane=…` selects. */
 function workLane(lane: string | null) {
   if (lane === "settled") {
     return { jobs: NO_JOBS, queue: PENDING_ACTIONS, rpc: settledOnlyRpc, memory: [] };
@@ -5243,8 +4347,7 @@ function workLane(lane: string | null) {
   return { jobs: BACKGROUND_JOBS, queue: PENDING_ACTIONS, rpc: workRpc, memory: WORK_MEMORIES };
 }
 
-/** The workspace's saved memories the `work` frame photographs — oldest first,
- *  the order `getMemoryContent` parses them; Learnings renders the reverse. */
+/** Oldest first, the order `getMemoryContent` parses; Learnings renders the reverse. */
 const WORK_MEMORIES: MemoryEntry[] = [
   { path: "memory/MEMORY.md", content: "The gateway's upstream needs a retry budget", matchScore: 1, updatedAt: "2026-09-15", savedBy: "main" },
   { path: "memory/MEMORY.md", content: "Prompt lanes assemble in the order the fixture lists them", matchScore: 1, updatedAt: "2026-09-17", savedBy: "courier" },
@@ -5270,18 +4373,7 @@ function WorkFrame() {
   );
 }
 
-/**
- * The two halves of a shell approval, in one frame: the queue that hands a
- * standing permission out, and the list that is the only place to take one
- * back.
- *
- * A frame of its own because the Settings page cannot be photographed here at
- * all — it builds its RPC from a live agent socket and the gallery has no
- * worker, so `?frame=settings` renders blank (and did before this change too).
- * The grants card takes nothing but an `rpc`, so it can be fed directly, and
- * `getShellApprovalGrants`/`revokeShellApprovalGrants` having had no caller at
- * all is exactly the kind of gap a photograph closes.
- */
+/** Both halves of a shell approval: the queue that grants, the list that revokes. Fed directly: `?frame=settings` needs a live agent socket. */
 const SHELL_GRANTS = [
   { rule: "rm-recursive", executor: "device" },
   { rule: "sudo", executor: "device" },
@@ -5314,12 +4406,9 @@ function ApprovalsFrame() {
   );
 }
 
-/** Only the parked commands: the rest of the queue is photographed by `work`,
- *  and this frame is about one card. */
 const PARKED_ONLY: PendingAction[] = PENDING_ACTIONS.filter((a) => a.kind === "deferred_action");
 
-/** A settled-empty lane: no tasks, no journal entries. Both Work frames that
- *  photograph absence share it, so the second is not a copy of the first. */
+/** Shared by both absence frames. */
 const settledEmptyRpc: Rpc = async <T,>(method: string, args?: unknown[]): Promise<T> => {
   if (method === "listWorkspaceWork") return rpcResult({ plans: [], tasks: [] }).json<T>();
 
@@ -5328,8 +4417,7 @@ const settledEmptyRpc: Rpc = async <T,>(method: string, args?: unknown[]): Promi
   return stubRpc<T>(method, args);
 };
 
-/** The same column before anything has happened — the state a fresh workspace
- *  opens on, which is the one an empty-state has to earn its copy in. */
+/** A fresh workspace's column. */
 function WorkEmptyFrame() {
   return (
     <div className="p-bg min-h-screen flex justify-center">
@@ -5348,20 +4436,11 @@ function WorkEmptyFrame() {
   );
 }
 
-/* ── Environment ────────────────────────────────────────────────── */
-
-/**
- * The four places the agent can act, as the surface lists them.
- *
- * Photographed with every environment reachable, because the defect this frame
- * exists to catch is a naming one: two rows that describe the same thing read
- * as a duplicate, and only a picture of the row set together shows it.
- */
+/** Every environment reachable: two rows describing the same thing only show as a duplicate together. */
 const ENVIRONMENT_EXECUTORS: ExecutorInfo[] = [
   {
     name: "device", kind: "device", available: true, configured: true, active: true, status: "active",
-    // The user's own name for the device, exactly as the consent contract
-    // carries it — the card renders THIS, never "device".
+    // The user's own device name from the consent contract; the card renders this, never "device".
     label: "Ashish's MacBook",
     capabilities: ["shell", "npm", "git", "docker", "fs_owned", "process_spawn"],
   },
@@ -5376,14 +4455,7 @@ const ENVIRONMENT_EXECUTORS: ExecutorInfo[] = [
 ];
 
 
-/* ── Files — the composite drive ────────────────────────────────── */
-
-/**
- * The drive's scripted composite plane: the workspace tree with /pc and
- * /sandbox mounted, held MUTABLE inside the frame so the browser gate can
- * prove rename and delete against the real components. Contents feed the
- * text preview; `binary-weights.bin` exercises the honest binary refusal.
- */
+/** Mutable so the gate can prove rename and delete; `binary-weights.bin` exercises the binary refusal. */
 function seedCompositeTree(offlineDevice: boolean): Map<string, DirEntry[]> {
   const tree = new Map<string, DirEntry[]>([
     ["/", [
@@ -5411,11 +4483,7 @@ function seedCompositeTree(offlineDevice: boolean): Map<string, DirEntry[]> {
   ]);
 
   if (!offlineDevice) {
-    // `/pc` is the roster: one entry per live machine, by its mount segment.
-    // The machine's tree BELOW its consented root follows; `/pc/<name>` and
-    // `/pc/<name>/home` are deliberately absent: the machine's own path guard
-    // refuses everything outside `PC_CONSENTED_ROOT`, and a fixture that
-    // listed them could not fail the way the owner's report failed.
+    // `/pc/<name>` and `/pc/<name>/home` are absent: the machine's path guard refuses everything outside `PC_CONSENTED_ROOT`.
     tree.set("/pc", [{ name: PC_SEGMENT, type: "dir", mtimeMs: NOW - 36e5 }]);
     tree.set(PC_CONSENTED_ROOT, [
       { name: "quarterly-report.txt", type: "file", size: 8_412, mtimeMs: NOW - 2 * 36e5 },
@@ -5427,18 +4495,12 @@ function seedCompositeTree(offlineDevice: boolean): Map<string, DirEntry[]> {
   return tree;
 }
 
-/** The machine's mount segment under `/pc`: its own name, as
- *  `deviceMountSegment` keys a fleet of one. */
+/** As `deviceMountSegment` keys a fleet of one. */
 const PC_SEGMENT = "Ashish's MacBook";
 
-/** The machine's mount point: every machine sits at `/pc/<name>`. */
 const PC_MOUNT = `/pc/${PC_SEGMENT}`;
 
-/**
- * The device's consented directory. Production learns it from the machine
- * (`deviceFiles`' homeDir), and a bare `/pc/<name>` lands here instead of on
- * the device root nobody consented to.
- */
+/** Production learns it from the machine (`deviceFiles`' homeDir); a bare `/pc/<name>` lands here. */
 const PC_CONSENTED_ROOT = `${PC_MOUNT}/home/dev`;
 
 const FILES_TEXT = {
@@ -5455,20 +4517,12 @@ interface PreviewDeferred {
   resolve(value: { content: string; revision: number }): void;
 }
 
-/**
- * ONE stateful frame for both the Environment tab and the Files drive: the
- * surface strip is live (`onSurface` is real state), so an Environment card's
- * Files action genuinely lands the drive — the exact wiring the browser gate
- * proves. `frame=environment` and `frame=files` differ only in where they
- * start and how wide they photograph.
- */
+/** One stateful frame for Environment and Files: `onSurface` is real, so a card's Files action lands the drive. */
 function DriveFrame({ initialSurface, offlineDevice, width, deferPreview = false }: {
   initialSurface: SurfaceKind;
   offlineDevice: boolean;
   width: string;
-  /** Fixture control for the real FilesSurface stale-preview proof. The held
-   *  value is transport input only; FilesSurface/FileViewer decide whether it
-   *  may paint after refresh changes their resource identity. */
+  /** Transport input only; FilesSurface/FileViewer decide whether it may paint after the resource identity changes. */
   deferPreview?: boolean;
 }) {
   const [surface, setSurface] = useState<SurfaceKind>(initialSurface);
@@ -5504,16 +4558,13 @@ function DriveFrame({ initialSurface, offlineDevice, width, deferPreview = false
 
       if (execName !== "workspace") return rpcResult({ error: `Executor "${execName}" has no listing here` }).json<T>();
       const asked = path === "" ? "/" : path;
-      // A bare machine root lands on that machine's consented root, exactly
-      // as `read-models/files.ts` mountLanding resolves it server-side; the
-      // fleet root `/pc` is the roster and lands on itself.
+      // As `read-models/files.ts` mountLanding resolves it; `/pc` lands on itself.
       const dir = asked === PC_MOUNT ? PC_CONSENTED_ROOT : asked;
       const entries = store.get(dir);
 
       if (entries !== undefined) return rpcResult(v.parse(JsonValueSchema, { path: dir, entries })).json<T>();
 
-      // Inside the machine's mount but outside the consented root: the
-      // device's own refusal, in the words `deviceFiles`' path guard uses.
+      // In the words of `deviceFiles`' path guard.
       const error = dir.startsWith(PC_MOUNT)
         ? `EACCES: '${dir.slice(PC_MOUNT.length) || "/"}' is outside the consented device directory `
           + `'${PC_CONSENTED_ROOT.slice(PC_MOUNT.length)}' — grant this agent the full-filesystem `
@@ -5554,8 +4605,7 @@ function DriveFrame({ initialSurface, offlineDevice, width, deferPreview = false
         ...listing.filter((e) => e !== entry),
         ...(dirOf(from) === dirOf(to) ? [{ ...entry, name: nameOf(to) }] : []),
       ]));
-      // Collect first, mutate after: setting new keys while iterating a Map
-      // visits them (spec), and a rename-into-own-subtree shape would loop.
+      // Collect first: keys set while iterating a Map are visited, so a rename into its own subtree would loop.
       const moved = new Map<string, DirEntry[]>();
 
       for (const [key, held] of store) {
@@ -5584,7 +4634,7 @@ function DriveFrame({ initialSurface, offlineDevice, width, deferPreview = false
 
       store.set(dirOf(path), listing.filter((e) => e.name !== nameOf(path)));
 
-      // Map iterators are deletion-safe by spec; no snapshot needed.
+      // Map iterators are deletion-safe by spec.
       for (const key of store.keys()) {
         if (key === path || key.startsWith(`${path}/`)) store.delete(key);
       }
@@ -5597,11 +4647,7 @@ function DriveFrame({ initialSurface, offlineDevice, width, deferPreview = false
     return stubRpc<T>(method, args);
   };
 
-  // The line terminal paints EXECUTOR OUTPUT, so a terminal with none proves
-  // only that it mounted. This executor echoes each line of the command it was
-  // given and ends each with LF, exactly as a program does — the byte the pane
-  // must convert to CR LF, and the one reading that shows whether a pasted
-  // multi-line command arrived as one call or lost every line after the first.
+  // Echoes each command line ending in LF, like a program: the pane must convert it to CR LF and keep a pasted multi-line command as one call.
   const [executorOutputs, setExecutorOutputs] = useState<Map<string, ExecutorOutput[]>>(new Map());
 
   const runCommand = async (name: string, command: string): Promise<ExecutorCommandResult> => {
@@ -5651,20 +4697,9 @@ function DriveFrame({ initialSurface, offlineDevice, width, deferPreview = false
   );
 }
 
-/* ── Supervise ──────────────────────────────────────────────────── */
+// Every block is fed so its type roles render at real scale.
 
-// The SUPERVISE altitude — the agent over time. Every block is fed so the type
-// roles that carry it (`.p-meta` on the timestamps, the token counts) are
-// actually on screen; an empty board photographs its empty states and tells
-// you nothing about the scale it renders real rows at.
-
-/** Typed, so the fixtures move with `RunSummary` instead of only failing at the
- *  browser-side valibot parse. The second run is deliberately a SILENT one — the
- *  provider reported nothing for any of its turns — because that is the case the
- *  history block has to render as unreported rather than as free.
- *
- *  Longer than one page on purpose: the block pages the history, so a frame
- *  that never crosses a page boundary cannot show whether the pager works. */
+/** Typed so fixtures track `RunSummary`. The second run is silent (no provider report) and must render unreported, not free; longer than one page for the pager. */
 const SUPERVISE_RUNS: RunSummary[] = [
   {
     runId: "run_9c1", startedAt: NOW - 45 * 60e3, causedBy: "chat",
@@ -5680,8 +4715,6 @@ const SUPERVISE_RUNS: RunSummary[] = [
   ...olderRuns(),
 ];
 
-/** The runs behind the first page — a week of turns, so the boundary and the
- *  end of the history are both reachable in the frame. */
 function olderRuns(): RunSummary[] {
   const asked = [
     "Which migration dropped the coupon index?",
@@ -5741,18 +4774,8 @@ const SUPERVISE_JOBS: BackgroundJob[] = [
   },
 ];
 
-/** What the Evolution block gates on: one entry per kind the changelog can
- *  carry here, so the section only exists because a change already happened.
- *  `supervisefresh` answers the empty digest instead and the block is absent —
- *  until `gallery:supervise-evolve`, the window event the browser gate uses to
- *  land one change on a live page. The same event pair drives the jobs read:
- *  `supervisefresh` starts with `listBackgroundJobs` failing and
- *  `gallery:supervise-jobs-heal` repairs it, so a broken read and its retry
- *  are photographable too; `gallery:supervise-evolution-fail` makes the next
- *  digest read throw ONCE, so a refresh failure over last-good entries is
- *  observable too. The `changesOnly` flag is answered the way the real
- *  read answers it — measurement kinds filtered before the limit — because a
- *  fixture that ignored it would photograph a section that cannot exist. */
+/** One entry per changelog kind. `supervisefresh` answers empty until `gallery:supervise-evolve`; its jobs read fails until
+ *  `gallery:supervise-jobs-heal`; `gallery:supervise-evolution-fail` throws once. `changesOnly` filters measurement kinds before the limit, as the real read does. */
 const SuperviseChangelogArgsSchema = v.object({
   limit: v.optional(v.number()),
   changesOnly: v.optional(v.boolean()),
@@ -5779,9 +4802,7 @@ const SUPERVISE_CHANGELOG: SuperviseChangelogDigest = {
 
 const SUPERVISE_EMPTY_CHANGELOG: SuperviseChangelogDigest = { seenAt: NOW, unseenCount: 0, entries: [] };
 
-/** What `supervisefresh` answers after `gallery:supervise-evolve`: the ONE
- *  change that landed on the live page — the real `changesOnly` read answers
- *  exactly this, the newest change inside the limit. */
+/** The newest change inside the limit, as the real `changesOnly` read answers. */
 const SUPERVISE_EVOLVED_CHANGELOG: SuperviseChangelogDigest = {
   seenAt: NOW, unseenCount: 1,
   entries: [
@@ -5796,8 +4817,7 @@ const superviseRpc =
     evolvedAtStart: boolean): Rpc =>
   async <T,>(method: string, args?: unknown[]): Promise<T> => {
     if (method === "getEvolutionChangelog") {
-      // One armed failure, consumed by whichever read reaches it first — the
-      // gate needs the failure to land over last-good entries, not to persist.
+      // Consumed once, so the failure lands over last-good entries.
       if (state.current.evolutionFailNext) {
         state.current.evolutionFailNext = false;
 
@@ -5839,10 +4859,6 @@ const superviseRpc =
   };
 
 function SuperviseFrame({ evolved = true }: { evolved?: boolean }) {
-  // What the two window events flip. The fresh frame starts with an empty
-  // digest AND a failing jobs read so both transitions are observable on the
-  // page's own revalidation cadence — the evolved frame stays healthy
-  // throughout, its digest already populated.
   const state = useRef({ evolved, jobsHealthy: evolved, evolutionFailNext: false });
   useEffect(() => {
     const evolve = () => { state.current.evolved = true; };
@@ -5872,33 +4888,17 @@ function SuperviseFrame({ evolved = true }: { evolved?: boolean }) {
 }
 
 
-/* ── Activity ───────────────────────────────────────────────────── */
-
-/** The turn loop's own window over 344 steps. `cacheRead` is a SUBSET of
- *  `input`, never an addition to it. */
+/** `cacheRead` is a subset of `input`, never an addition. */
 const AGENT_TOKENS: Usage = {
   input: 21_480_312, output: 512_884, cacheRead: 18_942_006, reasoning: 41_220,
 };
 
-/** The same window as Workers AI reports it. `neurons` is Cloudflare's own
- *  billing unit and comes back on every call — 0.120 per token, captured live —
- *  and it is the figure the Cost block has to carry rather than discard. */
+/** As Workers AI reports it: `neurons`, Cloudflare's billing unit, comes back on every call and the Cost block must carry it. */
 const AGENT_TOKENS_METERED: Usage = { ...AGENT_TOKENS, neurons: 2_639_183 };
 
 /**
- * One producer per absence rule the Cost block claims, because the failure this
- * frame exists to catch is a zero standing in for a silence:
- *   agent    — Workers AI: measured, priced, and the only row reporting neurons
- *   judge    — Anthropic: measured and priced, reports NO neurons at all, and
- *              is the ONE provider that reports a 1h cache-retention split, so
- *              18 of its calls are priced at the 5m rate and its dollars are a
- *              floor for a second, different reason from `fast`'s
- *   fast     — 44 calls carried no catalog rate, so its dollars are a floor
- *   head     — 2 calls reported nothing, so its tokens AND dollars are floors
- *   mcts     — measured with no rate anywhere: dollars absent, never $0
- *   platform — the embedder and toMarkdown: counted, never measured, ever
- * Largest measured token total first and the unmeasured producer last, the order
- * `workspaceSpend` returns them in (read-models/workspace-spend.ts).
+ * One producer per absence rule the Cost block claims (a zero must never stand in for a silence), in
+ * `workspaceSpend` order (read-models/workspace-spend.ts): largest measured total first, unmeasured last.
  */
 const ACTIVITY_PRODUCERS: ProducerSpend[] = [
   {
@@ -5933,10 +4933,7 @@ const ACTIVITY_PRODUCERS: ProducerSpend[] = [
   },
 ];
 
-/** Every producer measuring and pricing everything, over a window that reached
- *  the end of the log — the state the panel is allowed to state positively, and
- *  an Anthropic workspace, so the neurons column must vanish rather than print a
- *  column of dashes. */
+/** Everything measured and priced over the whole log, on Anthropic: the neurons column must vanish, not print dashes. */
 const CLEAN_PRODUCERS: ProducerSpend[] = [
   {
     source: "agent", calls: 344, callsWithoutUsage: 0, usage: AGENT_TOKENS,
@@ -5953,8 +4950,6 @@ const CLEAN_PRODUCERS: ProducerSpend[] = [
   },
 ];
 
-/** One step's exact composed content, so the frame photographs the whole surface
- *  rather than the Cost block over an empty breakdown. */
 const ACTIVITY_CONTEXT: ContextComposition = {
   segments: [
     { plane: "system", label: "Core instructions", chars: 18_400, items: 1 },
@@ -5985,9 +4980,7 @@ const ACTIVITY_CACHE_HIT = {
   samples: 344, last: 0.94, ema: 0.91, mean: 0.88, p95: 0.97, p99: 0.99, emaAlpha: 0.2, warms: 2,
 };
 
-/** Two labels, one nested inside the other and one already spent — the mission
- *  half of the breakdown, and the cases its cells have to survive: a cap in
- *  dollars, a cap in tokens, blended pricing, and a `spent` badge. */
+/** One nested label and one spent: a dollar cap, a token cap, blended pricing, and a `spent` badge. */
 const ACTIVITY_MISSIONS: WorkspaceSpend["missions"] = [
   {
     label: "checkout-fixes", parent: null, limits: { usd: 25 },
@@ -6002,11 +4995,7 @@ const ACTIVITY_MISSIONS: WorkspaceSpend["missions"] = [
   },
 ];
 
-/** One turn's worth of real `logActivity` names, oldest first — the order
- *  `readActivityLog` returns. Covers the shapes the row has to render: a
- *  detail that overflows its column, and `elapsedMs: 0`, which `logActivity`
- *  writes when the row was cut outside a turn and which must read as an em dash
- *  rather than a 0 ms measurement. */
+/** Oldest first, as `readActivityLog` returns. `elapsedMs: 0` (a row cut outside a turn) must read as an em dash, not 0 ms. */
 const ACTIVITY_LOG: ActivitySnapshot["log"] = [
   { event: "steer_queued", detail: "look at the tests too", elapsedMs: 0, createdAt: NOW - 96e3 },
   { event: "beforeturn", detail: "streamText() called next", elapsedMs: 4, createdAt: NOW - 95e3 },
@@ -6031,13 +5020,7 @@ const ACTIVITY_LOG: ActivitySnapshot["log"] = [
   { event: "response_complete", detail: "ok", elapsedMs: 41_602, createdAt: NOW - 90e3 },
 ];
 
-/**
- * The panel's own question, photographed: `$11.98 over 344 priced steps` is the
- * agent's turns, and the workspace spent $16.26+ over 747 calls of which 87.6%
- * were measured at all. Every qualifier is live here — a truncated window, a
- * silent producer, a partial one and 72 unpriced calls — which is the case the
- * composed caveat line has to survive without becoming four paragraphs.
- */
+/** Every qualifier live at once (truncated window, silent and partial producers, unpriced calls): the caveat line must stay one line. */
 const ACTIVITY_SNAPSHOT: ActivitySnapshot = {
   latest: ACTIVITY_LATEST,
   contextWindow: 200_000,
@@ -6053,8 +5036,7 @@ const ACTIVITY_SNAPSHOT: ActivitySnapshot = {
       usage: {
         input: 23_551_044, output: 671_350, cacheRead: 19_754_006, reasoning: 41_220,
         neurons: 2_702_636,
-        // Only `judge` writes cache here, and it is also the only producer whose
-        // provider reports the retention split, so these are its numbers alone.
+        // Only `judge` writes cache and reports the retention split.
         cacheWrite: 96_400, cacheWrite1h: 71_200,
       },
     },
@@ -6068,8 +5050,7 @@ const ACTIVITY_SNAPSHOT: ActivitySnapshot = {
   log: ACTIVITY_LOG,
 };
 
-/** The same workspace on a provider that reports no neurons, with nothing left
- *  to qualify: 100% of known callers reported and every call priced. */
+/** A provider without neurons and nothing left to qualify. */
 const ACTIVITY_CLEAN: ActivitySnapshot = {
   ...ACTIVITY_SNAPSHOT,
   latest: { ...ACTIVITY_LATEST, usage: { input: 148_204, output: 1_842, cacheRead: 131_072, reasoning: 604 } },
@@ -6089,9 +5070,7 @@ const ACTIVITY_CLEAN: ActivitySnapshot = {
   },
 };
 
-/** A workspace that has made no model call at all. `coverage.reported` is null
- *  here, and the panel has to say there is no fraction rather than print 0% —
- *  a call nobody made is not a call a provider failed to report. */
+/** No model call at all: `coverage.reported` is null and the panel must say there is no fraction, not 0%. */
 const ACTIVITY_FRESH: ActivitySnapshot = {
   latest: null,
   contextWindow: null,
@@ -6115,14 +5094,7 @@ const activityRpc = (snapshot: ActivitySnapshot): Rpc =>
     method === "getActivitySnapshot" ? rpcResult(v.parse(JsonValueSchema, snapshot)).json<T>() : stubRpc<T>(method, args)
   );
 
-/* ── Tool-call rendering states ─────────────────────────────────── */
-
-/** One message per state that the `chat` frame either folds into a group or
- *  can't show pre-expanded: a quiet failure (the tool caught it and returned
- *  it as a normal result), a protocol-level failure (the executor itself
- *  crashed — errorText, no output), a clean multi-line `shell`, and an MCP tool
- *  with no known summarizer contract. Auto-expanded on mount below so the
- *  input/output panel is the thing the screenshot shows. */
+/** One message per state the `chat` frame folds or cannot pre-expand; auto-expanded on mount below. */
 const TOOLCALL_MESSAGES: UIMessage[] = [
   msg({
     id: "tc-quiet", role: "assistant",
@@ -6173,17 +5145,7 @@ const TOOLCALL_MESSAGES: UIMessage[] = [
   }),
 ];
 
-/**
- * A long run carrying the three shapes the fold has to tell apart: fifty
- * observations, three consequential changes, and one call that put a running
- * app on screen.
- *
- * The preview call is an `observe`-shaped port exposure sitting between the
- * scan and the changes, deliberately: an effect classification has no reason
- * to keep it, and it is neither the first row nor the last. So it is the row
- * that proves the preview rule rather than the mutation rule or an accident
- * of position.
- */
+/** Fifty observations, three changes and one preview call placed mid-run with an `observe` shape, so only the preview rule can keep it. */
 const LARGE_TOOL_RUN_MESSAGE: UIMessage = msg({
   id: "tc-large-run", role: "assistant",
   parts: [
@@ -6202,16 +5164,8 @@ const LARGE_TOOL_RUN_MESSAGE: UIMessage = msg({
   ],
 });
 
-/** One finished call whose input and output both carry credential-shaped
- *  fields, nested exactly where a webhook or MCP call would put them, and a
- *  second call whose free-text previews — the command block and the error
- *  channel — carry the same token. The redaction gate (`?frame=toolrun&secrets=1`)
- *  expands these rows and asserts the previews show `keep: visible` while
- *  every secret value is masked, keyed or not. */
-/** A live Cloudflare token, assembled rather than written out: the commit-tier
- *  secret scan shares the pattern list the preview redacts by, so a literal
- *  here would block the commit whose behavior this fixture exists to prove.
- *  Assembled in parts, the source text never matches the shape. */
+/** Credential-shaped fields nested where a webhook or MCP call puts them, plus free-text previews with the same token; `?frame=toolrun&secrets=1` asserts every secret is masked. */
+/** Assembled in parts: the commit-tier secret scan shares the preview's redaction patterns, so a literal would block the commit. */
 const ASSEMBLED_TOKEN = `cfut_${'a'.repeat(48)}`;
 
 const SECRET_TOOL_RUN_PART: UIMessage['parts'][number] = {
@@ -6232,8 +5186,7 @@ const SECRET_TOOL_RUN_PART: UIMessage['parts'][number] = {
   },
 };
 
-/** The same token reaching a preview through the error channel — a
- *  protocol-level failure whose `errorText` quotes the rejected credential. */
+/** The token in a protocol-level failure's `errorText`. */
 const SECRET_ERROR_PART: UIMessage['parts'][number] = {
   type: 'tool-run',
   toolCallId: 'secret-error',
@@ -6251,10 +5204,7 @@ const SECRET_TOOL_RUN_MESSAGE: UIMessage = msg({
   ],
 });
 
-/** Clicks open every collapsed tool-call row shortly after mount — the
- *  expand/collapse toggle is local component state with no prop to preset
- *  it, and simulating the one click an operator would make is simpler and
- *  more honest than adding a gallery-only prop to the real component. */
+/** Clicks open every collapsed row after mount: the toggle is local state, and a gallery-only prop would change the real component. */
 function useAutoExpandToolCalls(): void {
   useEffect(() => {
     const clickAll = () => {
@@ -6265,8 +5215,7 @@ function useAutoExpandToolCalls(): void {
 
     const id = setTimeout(() => {
       clickAll();
-      // A group's own toggle mounts its members' toggles a render later —
-      // one more pass after React commits catches those too.
+      // A group's toggle mounts its members' toggles a render later.
       requestAnimationFrame(() => requestAnimationFrame(clickAll));
     }, 50);
 
@@ -6274,16 +5223,7 @@ function useAutoExpandToolCalls(): void {
   }, []);
 }
 
-/**
- * A turn IN FLIGHT, in each state its tail can be in.
- *
- * Every other chat frame passes `isStreaming={false}`, so the gallery had
- * never once photographed a live turn — which is why a caret rendered on a
- * line of its own below the paragraph, and a turn that went quiet between
- * steps showed nothing at all, both survived to production. The part `state`
- * fields are the real ones the AI SDK's stream reducer writes; the frame is a
- * still of a stream, not a mock of one.
- */
+/** A turn in flight, in each state its tail can be in; the part `state` fields are the AI SDK stream reducer's real ones. */
 const STREAMING_MESSAGES: UIMessage[] = [
   msg({
     id: "st-text", role: "assistant",
@@ -6321,8 +5261,7 @@ const STREAMING_MESSAGES: UIMessage[] = [
   msg({ id: "st-empty", role: "assistant", parts: [] }),
 ];
 
-/** Each message is rendered as the LAST one of an open stream, which is the
- *  only condition under which a live tail is drawn at all. */
+/** Rendered as the last message of an open stream, the only condition that draws a live tail. */
 function StreamingFrame() {
   return (
     <div className="flex justify-center p-bg p-text min-h-screen">
@@ -6370,27 +5309,14 @@ function ToolRunScaleFrame({ secrets = false }: { secrets?: boolean }) {
   );
 }
 
-/* ── Advisor notes ──────────────────────────────────────────────── */
-
-/** The advisor's one note per finished turn, once per severity — the ladder
- *  the card has to keep legible: `nit` must stay quiet, `blocker` must be the
- *  loudest thing in the column, and the note itself is readable without a
- *  click on all three. */
+/** One per severity: `nit` stays quiet, `blocker` is the loudest thing in the column, all readable without a click. */
 const ADVISOR_NOTES = {
   nit: "The commit message says 'fix typo' but the diff also renames two exported symbols. Split it or say so.",
   concern: "The retry loop in deploy.sh has no backoff cap. A stuck registry keeps it spinning for the whole turn budget.",
   blocker: "The migration drops coupons.kind while the old worker is still deployed. Roll the worker first or every checkout 500s.",
 } satisfies Record<AdvisorSeverity, string>;
 
-/** One row per rung, in core's own rank order so the ladder is read as one.
- *
- *  The metadata is the pair `classifyProgrammaticTurn` reads — the event kind
- *  and the severity key — taken from core rather than spelled again here. A
- *  copy of them was spelled here once, under an event key nothing has ever
- *  read, and a row with no recognisable event stamp is a row the owner appears
- *  to have typed: all three notes rendered in the owner's own bubble, so the
- *  one frame that exists to photograph the advisor card photographed its
- *  absence. Held to the classifier in `tests/unit-background-event.test.ts`. */
+/** Core's rank order; metadata is the pair `classifyProgrammaticTurn` reads, taken from core. Held to the classifier in `tests/unit-background-event.test.ts`. */
 const ADVISOR_MESSAGES: UIMessage[] = ADVISOR_SEVERITIES.map((severity) => msg({
   id: `adv-${severity}`, role: "user",
   metadata: { kinuEvent: ADVISOR_SIGNAL_KIND, [ADVISOR_SEVERITY_METADATA_KEY]: severity },
@@ -6404,19 +5330,12 @@ function AdvisorFrame() {
 const BRAIN_MEMORY = "## Checkout\n\n- The coupon path goes through `/api/cart/apply`.\n"
   + "- Percentage coupons carry `kind: null` after Tuesday's migration.\n";
 
-/** The failure the owner reported, as the sources actually hold it: ONE dropped
- *  connection, every read of the actor failing on it in the same instant. The
- *  banner text below is produced by the shipped formatter rather than typed
- *  here, so this frame photographs the product's own sentence rather than a
- *  line that says "Network connection lost." twice. */
+/** One dropped connection failing every actor read at once; the banner text comes from the shipped formatter. */
 const LOST = "Network connection lost.";
 
 const OUTAGE: WorkspaceErrors = { snapshot: LOST, memoryContent: LOST };
 
-/** One rung of the snapshot ladder: the banner the page shows, over the panes
- *  it shows it about. If any two rungs photograph the same, that is the defect
- *  — a workspace that never loaded and a workspace that is genuinely empty had
- *  exactly one rendering between them. */
+/** One rung of the snapshot ladder; any two rungs rendering the same is the defect. */
 function AgentPanel(
   { label, snapshot, tools, memoryContent, errors }: {
     label: string;
@@ -6475,15 +5394,7 @@ function AgentFrame() {
 }
 
 
-/**
- * The node transcript, in every state it has.
- *
- * Five panels because five different facts must not render as one blank pane:
- * a branch that worked and reported, one still working, one that died having
- * recorded nothing, a rollout with no trace by construction, and a node the
- * store does not hold. If any two of these photograph the same, that is the
- * defect.
- */
+/** Five transcript states that must not render as one blank pane. */
 function TranscriptFrame() {
   return (
     <div className="p-bg p-text min-h-screen p-5 space-y-5">
@@ -6504,10 +5415,7 @@ function TranscriptFrame() {
           </div>
         </div>
       ))}
-      {/* The other reader of the same view: the chat chip, which knows its head
-          id by derivation and so needs no canvas selection. Both statuses,
-          because a running branch and a settled one offer different things
-          beside the disclosure. */}
+      {/* The chat chip derives its head id, so needs no canvas selection; both statuses offer different things. */}
       <div className="space-y-1.5">
         <div className="text-[11px] uppercase tracking-wider p-text-3">
           Mid-turn branch chip — the transcript it opens in place
@@ -6520,8 +5428,7 @@ function TranscriptFrame() {
               takeSetId: undefined, turnId: undefined, message: undefined,
             }}
             rpc={forkRpc} headActivity={NO_HEAD_ACTIVITY}
-            // Unreachable here: the pick affordance only appears once a take set
-            // has hydrated, and this frame photographs the disclosure, not takes.
+            // Unreachable here: picking needs a hydrated take set.
             onPick={() => Promise.reject(new Error("no take set in this frame"))}
             onDismiss={() => {}} />
         ))}
@@ -6530,16 +5437,7 @@ function TranscriptFrame() {
   );
 }
 
-/**
- * The frames that mount the Exploration surface, and the workspace they mount
- * it in.
- *
- * The surface builds its full-screen permalink out of the route's `agentId`, so
- * a fixture that renders it bare renders every control EXCEPT that one — and a
- * control no fixture can draw is a control no screenshot gate can ever catch
- * regressing. Routed the way the `settings` and `forkfull` frames already are,
- * which is the same fact about two other pages.
- */
+/** Routed: the surface builds its full-screen permalink from the route's `agentId`. */
 const EXPLORATION_FRAMES = {
   forks: true, forkconfig: true, forkmerge: true, forkpreset: true,
   forkfanin: true, forkrefused: true, forkrunning: true, forklive: true,
@@ -6547,14 +5445,7 @@ const EXPLORATION_FRAMES = {
 
 const GALLERY_WORKSPACE = "checkout-fixes";
 
-/**
- * Every swarm-config disclosure on the frame, opened once it has rendered.
- *
- * A fixture-only affordance, and deliberately outside the component: the card
- * ships shut and must keep shipping shut, so opening it through a new prop
- * would put a review convenience into the product's own contract. `details`
- * carries its openness in the DOM, so the fixture sets exactly that.
- */
+/** Opened by the fixture, not a prop: the card ships shut, and `details` carries openness in the DOM. */
 function OpenConfigDisclosures({ children }: { children: React.ReactNode }) {
   useEffect(() => {
     const timer = setTimeout(() => {
@@ -6570,23 +5461,8 @@ function OpenConfigDisclosures({ children }: { children: React.ReactNode }) {
 }
 
 /**
- * The page a feedback screenshot is TAKEN OF, and the thing that makes the
- * redaction claim checkable rather than promised.
- *
- * Three regions, each with a stable hook so the gate can read the captured
- * image's pixels at their coordinates:
- *
- *   [data-secret-input]  a password field holding a real-looking secret. It
- *                        carries no redaction attribute — the point is that a
- *                        password is blacked out WITHOUT being annotated.
- *   [data-secret-token]  a marked region holding a token rendered as TEXT,
- *                        which no `type=password` rule would catch.
- *   [data-visible-copy]  the negative control. If the capture were blank or
- *                        black, every redaction assertion would pass for the
- *                        wrong reason, so this region must NOT be uniform.
- *
- * `?noise=1` swaps in an incompressible canvas, which is how the oversized
- * refusal is driven with real bytes instead of a stubbed size.
+ * The page a feedback screenshot is taken of: `[data-secret-input]` (a password, redacted without annotation), `[data-secret-token]`
+ * (marked text), `[data-visible-copy]` (negative control: must not be uniform). `?noise=1` drives the oversized refusal with real bytes.
  */
 function FeedbackFrame({ noise }: { noise: boolean }) {
   const noiseRef = useRef<HTMLCanvasElement | null>(null);
@@ -6597,8 +5473,7 @@ function FeedbackFrame({ noise }: { noise: boolean }) {
     const context = canvas.getContext("2d");
 
     if (context === null) return;
-    // Random pixels do not compress, so the PNG lands near its raw size and
-    // crosses the 8 MiB limit the endpoint and the client both enforce.
+    // Random pixels do not compress, so the PNG crosses the 8 MiB limit the endpoint and client enforce.
     const pixels = context.createImageData(canvas.width, canvas.height);
 
     for (let i = 0; i < pixels.data.length; i += 4) {
@@ -6641,11 +5516,7 @@ function FeedbackFrame({ noise }: { noise: boolean }) {
             ptc_LEAKED_IF_REDACTION_FAILS_0123456789
           </code>
         </div>
-        {/* Rendered at its INTRINSIC size, not `w-full`. A scaled-down canvas is
-            resampled into the capture's own pixels, so 3.9 megapixels of noise
-            displayed 1280px wide compresses back under the limit and the frame
-            proves nothing. 1280x4000 of incompressible pixels is what actually
-            crosses 8 MiB. */}
+        {/* Intrinsic size, not `w-full`: a scaled-down canvas resamples into pixels that compress back under the limit. */}
         {noise && <canvas ref={noiseRef} width={1280} height={4000} style={{ width: 1280, height: 4000 }} />}
       </div>
       <FeedbackButton />
@@ -6654,27 +5525,8 @@ function FeedbackFrame({ noise }: { noise: boolean }) {
 }
 
 /**
- * The REAL secret-bearing surfaces, on one page, for the capture to photograph.
- *
- * `FeedbackFrame` above proves the two redaction MECHANISMS against markup built
- * for the purpose. This frame proves the PRODUCT: the components a person has
- * open when they press Feedback. All four of these leaked into the screenshot
- * bucket, and not one of them is reachable from a fixture that restates their
- * markup — which is why the leak survived a gate that already sampled pixels.
- *
- *   the issued webhook secret   shown once, as text, with a copy button
- *   the curl that tests it      the same secret inside a shell command
- *   the create dialog's field   the secret a person types before it is issued
- *   the MCP headers editor      `{"Authorization": "Bearer …"}`, pasted
- *
- * `?modal=1` renders the create dialog instead of the cards, because a fixed
- * overlay cannot share a page with what it covers. The feedback affordance moves
- * above that overlay in the same stage — harness-only positioning, so the button
- * is reachable while the dialog it photographs stays exactly as it ships.
- *
- * The secrets are distinctive on purpose: the gate asserts each one is present in
- * the LIVE page and absent from the clone and the pixels, so a typo in either
- * half fails loudly instead of passing on a string nobody rendered.
+ * The real secret-bearing surfaces (issued webhook secret, its curl, the create dialog field, the MCP headers editor) for the capture.
+ * `?modal=1` renders the dialog alone. Secrets are distinctive: each must be in the live page and absent from the clone and pixels.
  */
 const LEAK_HMAC = "whsec_hmacLEAKSifREDACTIONfails0001";
 
@@ -6692,8 +5544,7 @@ function FeedbackSecretsFrame({ modal }: { modal: boolean }) {
           A webhook fires a turn in this workspace. Revoking a trigger stops it; the URL stays
           valid until you do.
         </p>
-        {/* One stage or the other, never both: a dimmed card behind a scrim is
-            neither the shipped card nor a readable measurement of one. */}
+        {/* One stage or the other: a dimmed card behind a scrim measures neither. */}
         {modal ? (
           <CreateWebhookModal agentName="checkout-fixes"
             onClose={() => { /* the dialog stays up for the capture */ }}
@@ -6719,25 +5570,8 @@ function FeedbackSecretsFrame({ modal }: { modal: boolean }) {
 }
 
 /**
- * What a routed, signed-in page looks like to the capture — and the one thing a
- * screenshot of a scrolling app has to get right.
- *
- * The frame around this scene is the SHIPPED shell: `Layout`, its rail, the real
- * `FeedbackButton` in the account menu, mounted under `/workspace/:agentId`. So
- * the report a gate sends from here carries the route and the workspace the
- * router actually resolved, which a bare component mount cannot produce and
- * which is exactly the half of the submission no fixture ever exercised.
- *
- * The panel is a scroll container inside a scroll container: five stacked bands,
- * one of which holds a row of five side-by-side cells. Each is a solid,
- * unantialiased fill, and every band and cell is 180px/480px exactly, so a
- * scroll offset lands one of them flush against its viewport and a sampled pixel
- * names WHICH one the image caught. No colour is spelled in the gate: it reads
- * the fill off the band it expects through `getComputedStyle`, so the fixture
- * and the assertion cannot drift apart.
- *
- * A transcript scrolled to the failure and a table scrolled to the wrong column
- * are the real versions of this, and both came back at the top.
+ * A routed page in the shipped shell, so the report carries the router-resolved route and workspace. Bands and cells are exact
+ * solid fills, so a sampled pixel names which one the capture caught; the gate reads the fill via `getComputedStyle`.
  */
 const SCROLL_BANDS = ["#12406e", "#14783c", "#c81e5a", "#78148c", "#b4a014"];
 
@@ -6774,43 +5608,19 @@ function FeedbackScrollScene() {
   );
 }
 
-/* ── A view that fails to render ─────────────────────────────────── */
-
-/**
- * The message that must never reach a log. Spelled as a needle so the gate can
- * assert its ABSENCE from a payload that was really produced — V8 puts
- * `${name}: ${message}` on the first line of `error.stack`, so a report built
- * without stripping that line carries this string.
- */
+/** Must never reach a log: V8 puts `${name}: ${message}` on the first line of `error.stack`. */
 const RENDER_FAULT_MESSAGE =
   "Cannot read properties of undefined (reading 'kind') for coupon MESSAGE_LEAKS_IF_REPORTED_0001";
 
-/**
- * ONE error object across every render attempt, minted on the first.
- *
- * Both halves matter. Minted inside the render, so the stack is the render's and
- * not this module's initialisation. CACHED, because the claim under test is that
- * one caught error produces one report however many times React re-renders it —
- * and a fixture that minted a fresh Error per attempt could not tell "the
- * boundary deduped" from "React only called it once".
- */
+/** One error across every render attempt, minted inside the first render: a fresh one per attempt could not prove the boundary dedupes. */
 let renderFault: TypeError | null = null;
 
-/** `?huge=1` replaces the stack with one far over the request bound, so the gate
- *  can watch the client fit a report rather than send an oversized one. */
+/** `?huge=1`: a stack far over the request bound, so the client must fit the report. */
 const HUGE_STACK = new URLSearchParams(location.search).get("huge") === "1";
 
 const HUGE_FRAME = "    at applyCoupon (http://127.0.0.1/assets/index-a1b2c3.js:1:2345)";
 
-/**
- * Times the fault has actually been thrown, written to the document.
- *
- * The gate's dedupe claim is "one caught error, one report", and without this
- * number that claim is VACUOUS: a page that broke once sends one report too, and
- * every other reading — the fallback, its retry affordance — is identical either
- * way. So the assertion that one report left the page is only worth anything
- * beside a count proving the boundary caught more than once.
- */
+/** Throw count: without it "one caught error, one report" is vacuous. */
 let renderFaultThrows = 0;
 
 function BreakableView({ broken }: { broken: boolean }) {
@@ -6830,14 +5640,7 @@ function BreakableView({ broken }: { broken: boolean }) {
   throw renderFault;
 }
 
-/**
- * A render-time throw inside the SHIPPED ErrorBoundary.
- *
- * The trigger sits OUTSIDE the boundary on purpose: inside, the fallback would
- * replace it and the fault could be caused exactly once. From out here the gate
- * can break the view, take the fallback's own "Try again", and have the same
- * error caught again — which is the state the boundary's dedupe exists for.
- */
+/** The trigger sits outside the shipped ErrorBoundary so the same error can be caught again after "Try again". */
 function RenderFailureScene() {
   const [broken, setBroken] = useState(false);
 
@@ -6863,23 +5666,9 @@ function RenderFailureScene() {
   );
 }
 
-/* ── A code-split route that will not load ───────────────────────── */
-
 /**
- * Whether the chunk this fixture stands for is in the bundle THIS document
- * loaded.
- *
- * Two ways it can be, and both are the real thing rather than a counter. A
- * RELOADED document is the deploy case exactly: the reader's tab went to the
- * origin again and got the current bundle, which is what makes the recovery worth
- * performing. `navigation.type` says so directly, and unlike a stored marker it
- * can never be confused with the recovery's own guard key. The other way is the
- * gate declaring it fixed, which is how a retry that must SUCCEED is driven
- * without a reload.
- *
- * Deliberately NOT "has it failed before": React re-renders a failed subtree in
- * development to build a component stack, so an attempt counter makes the fixture
- * succeed on a pass nobody asked for and the error screen never appears at all.
+ * Whether this document's bundle has the chunk: a reload (`navigation.type`) or the gate declaring it fixed. Not an attempt
+ * counter: React re-renders a failed subtree in development, which would make it succeed unasked.
  */
 function chunkIsPresent(): boolean {
   if (sessionStorage.getItem(CHUNK_FIXED_KEY) !== null) return true;
@@ -6888,9 +5677,7 @@ function chunkIsPresent(): boolean {
   return navigation instanceof PerformanceNavigationTiming && navigation.type === "reload";
 }
 
-/** Attempts per fixture loader, written to the document so the gate can read
- *  them: the claim that only the REJECTED loader is regenerated is a claim about
- *  these two numbers. */
+/** Attempts per loader: only the rejected loader may be regenerated. */
 const lazyAttempts = { stale: 0, healthy: 0 };
 
 function recordAttempt(which: "stale" | "healthy"): void {
@@ -6899,11 +5686,7 @@ function recordAttempt(which: "stale" | "healthy"): void {
     String(lazyAttempts[which]);
 }
 
-/**
- * `?failure=app` throws an ordinary application error instead of a module-load
- * one, which is how the gate proves that RECOGNITION is required and skew alone
- * never authorises a reload.
- */
+/** `?failure=app`: an ordinary error, proving skew alone never authorises a reload. */
 function fixtureFailure(): Error {
   return new URLSearchParams(location.search).get("failure") === "app"
     ? new TypeError("Cannot read properties of undefined (reading 'kind')")
@@ -6920,9 +5703,7 @@ const StaleChunkRoute = lazyRoute(async () => {
   return { default: () => <p data-lazy-loaded className="text-sm p-text-2">The split route rendered.</p> };
 });
 
-/** The sibling that never fails, loaded as the real code-split chunk it is
- *  (`gallery-lazy-healthy.tsx` says why). Its attempt count is the assertion
- *  that a regenerated loader clears one route's memo and not the others'. */
+/** A real code-split chunk (`gallery-lazy-healthy.tsx` says why); its attempt count shows a regenerated loader clears only its own memo. */
 const HealthyChunkRoute = lazyRoute(async () => {
   recordAttempt("healthy");
   const { default: LazyHealthyRoute } = await import("./gallery-lazy-healthy");
@@ -6957,13 +5738,7 @@ function LazyRouteScene() {
   );
 }
 
-/* The device row in the three modes its Sandbox switch can land a machine in,
-   side by side, because the row explains a per-device setting through ONE line
-   of copy and the three lines are the thing to review. The first machine is
-   sandboxed; the second has the switch off; the third has the switch on and no
-   bwrap, which is the one state where the switch being on means no commands run
-   at all. No fetch: the roster is the prop, so the frame photographs the same
-   markup the Devices card renders. */
+/* The three Sandbox modes side by side: sandboxed, off, and on without bwrap (no commands run). The roster is a prop, so this is the Devices card's markup. */
 function galleryDevice(id: string, label: string, sandbox: UserDevice["sandbox"]): UserDevice {
   return {
     id, label, os: "linux", hostname: label, connected: true,
@@ -7002,11 +5777,7 @@ function DeviceSandboxFrame() {
   );
 }
 
-/** The shipped shell as App.tsx composes it — `Layout` owns the rail, the
- *  overview store and the living background — routed to one of the surfaces
- *  the background shows under. This is the frame the background's contrast
- *  and its UX gate are measured on: a hand-composed shell would leave the
- *  canvas, its z-order and its mask out of the picture. */
+/** The shipped shell as App.tsx composes it; the background's contrast and UX gate are measured here. */
 async function appShellFrame(): Promise<{ node: React.ReactNode; entries: string[] }> {
   const { default: HomePage } = await import("@/pages/HomePage");
 
@@ -7026,9 +5797,6 @@ async function appShellFrame(): Promise<{ node: React.ReactNode; entries: string
   };
 }
 
-/** The exploration frames photograph a swarm card under the workspace route,
- *  the way a reviewer lands on it; every other frame keeps the node and the
- *  entries its branch already chose. */
 function explore(node: React.ReactNode, entries: string[], frameName: string) {
   if (frameName in EXPLORATION_FRAMES) {
     return {
@@ -7041,10 +5809,7 @@ function explore(node: React.ReactNode, entries: string[], frameName: string) {
 }
 
 
-/** `&devices=offline|offline-many|none` puts the refused-call notice up on a
- *  mounted `workspacepage` frame: the socket push is the only way the row
- *  exists, and the page's connection is the stub's, so the server-side half
- *  is a pushed frame delivered on a delay the page mounts inside. */
+/** `&devices=offline|offline-many|none`: the refused-call notice exists only as a socket push, delivered after mount. */
 const NOTICE_DEVICES = new Map([
   ["offline", [{ id: "dev-1", label: "ashish@studio", lastSeenAt: 1_769_000_000_000 }]],
   ["offline-many", [
@@ -7065,9 +5830,6 @@ function scheduleDeviceNotice(devices: string | null): void {
   }, 300);
 }
 
-/** A self-update in flight, as the deployment's own ledger holds it: the steps
- *  that re-created nothing are done, the upload is going, and the rows after it
- *  have not started. */
 const GALLERY_UPDATE_RUN: DeploySnapshot = {
   runId: "self-update-0000",
   state: "running",
@@ -7083,10 +5845,7 @@ const GALLERY_UPDATE_RUN: DeploySnapshot = {
   ],
 };
 
-/** The self-deploy door as a visitor gets it before the owner has registered
- *  the OAuth client; `?state=configured` photographs the sign-in state. Same
- *  dynamic import every frame here uses, because the frame name is the
- *  runtime selector. */
+/** Before the OAuth client is registered; `?state=configured` shows sign-in. */
 async function deployFrame(): Promise<{ node: React.ReactNode; entries: string[] }> {
   const { default: DeployPage } = await import("@/pages/DeployPage");
   const configured = new URLSearchParams(location.search).get("state") === "configured";
@@ -7111,8 +5870,7 @@ async function deployFrame(): Promise<{ node: React.ReactNode; entries: string[]
   };
 }
 
-/** The deployment's own Updates page. `?state=running` photographs a run in
- *  flight; without it, a deployment one build behind its channel. */
+/** `?state=running` shows a run in flight; otherwise one build behind its channel. */
 async function updatesFrame(): Promise<{ node: React.ReactNode; entries: string[] }> {
   const { default: UpdatesPage } = await import("@/pages/UpdatesPage");
   const running = new URLSearchParams(location.search).get("state") === "running";
@@ -7137,14 +5895,7 @@ async function updatesFrame(): Promise<{ node: React.ReactNode; entries: string[
   };
 }
 
-/**
- * The Environment tab and the composite drive share one stateful frame, so
- * an Environment card's Files action genuinely lands the drive. Routed: the
- * Files surface reads `agentId` off the route to address the raw-bytes HTTP
- * route. `&offline=device` photographs the stated-absence row for a
- * disconnected device; `&wide=1` the ≥64rem side-panel preview.
- */
-/** What a gallery frame mounts, and the routed location the MemoryRouter opens on. */
+/** Routed: FilesSurface reads `agentId` for the raw-bytes route. `&offline=device` shows the disconnected row, `&wide=1` the ≥64rem side-panel preview. */
 interface MountedFrame { node: React.ReactNode; entries: string[] }
 
 function driveFrame(frameName: "environment" | "files"): MountedFrame {
@@ -7167,14 +5918,7 @@ function driveFrame(frameName: "environment" | "files"): MountedFrame {
   };
 }
 
-/** The MCTS explorer page, at one RUN. The one dynamic import this dispatch
- *  makes, and it stays one: the page pulls d3 and the whole tree renderer, so
- *  every frame that does not open it must not pay for them.
- *
- *  A PAGE owns its own connection, so it takes no `rpc` prop: it reads through
- *  `useKinu`, and in the gallery that resolves to `gallery-agent-stub`.
- *  Installing the fixture there is what makes these frames render at all —
- *  before it they opened a socket to vite and drew an empty body. */
+/** The only dynamic import in this dispatch: the page pulls d3 and the tree renderer. It reads through `useKinu`, resolved to `gallery-agent-stub` here. */
 async function mctsExplorerFrame(run: string): Promise<MountedFrame> {
   const { default: MCTSExplorer } = await import("@/pages/MCTSExplorer");
   serveGalleryRpc(focusRun(run));
@@ -7185,8 +5929,7 @@ async function mctsExplorerFrame(run: string): Promise<MountedFrame> {
   };
 }
 
-/** The workspace settings page. Routed, not bare: the page reads `agentId` off
- *  the route, and every back-link and breadcrumb it renders is built from it. */
+/** Routed: the page builds back-links and breadcrumbs from `agentId`. */
 async function settingsFrame(): Promise<MountedFrame> {
   const { default: SettingsPage } = await import("@/pages/SettingsPage");
 
@@ -7203,10 +5946,7 @@ async function settingsFrame(): Promise<MountedFrame> {
   };
 }
 
-/** The admin control plane. Routed, because the page keeps its tab, the
- *  selected account and the selected workspace in the URL — an operator sends a
- *  colleague the exact view they are looking at, and a bare mount could not
- *  render any of it. */
+/** Routed: tab, account and workspace selection live in the URL. */
 async function controlFrame(): Promise<MountedFrame> {
   const { default: ControlPage } = await import("@/pages/ControlPage");
 
@@ -7220,10 +5960,7 @@ async function controlFrame(): Promise<MountedFrame> {
   };
 }
 
-/** The home page in the real chrome, not the page alone: the sidebar's own
- *  route logic decides what it renders at "/", and photographing the page
- *  without the rail would pass a sidebar the app never shows. The cards read
- *  their overviews through the store every frame is mounted under. */
+/** In the real chrome: the sidebar's route logic decides what renders at "/". */
 async function homeFrame(): Promise<MountedFrame> {
   const { default: HomePage } = await import("@/pages/HomePage");
 
@@ -7238,11 +5975,7 @@ async function homeFrame(): Promise<MountedFrame> {
   };
 }
 
-/** The shipped shell, routed as App.tsx routes it: `Layout` owns the rail, the
- *  rail owns the account menu, and the menu owns the Feedback affordance. What
- *  this frame adds over the two bare feedback frames is the ROUTER — the
- *  report's route and workspace fields are read off a resolved
- *  `/workspace/:agentId`, not off the gallery's own `/`. */
+/** Routed so the report's route and workspace come from a resolved `/workspace/:agentId`. */
 function feedbackRoutedFrame(): MountedFrame {
   return {
     entries: ["/workspace/checkout-fixes"],
@@ -7256,15 +5989,7 @@ function feedbackRoutedFrame(): MountedFrame {
   };
 }
 
-/** A render-time throw in the shipped ErrorBoundary, at a real route.
- *
- *  Two things this frame does that no other needs. It calls
- *  `pageDeployedBuildSha` the way `index.tsx` does, because the report binds
- *  itself to the build the page LOADED and that read has to happen at load. And
- *  it rewrites the address bar: the report reads the document's own
- *  `location.pathname` — which is what a BrowserRouter page has — while the
- *  gallery routes through a MemoryRouter that leaves the URL at `/`. A
- *  replaceState is a no-op on the network and makes the two agree. */
+/** Calls `pageDeployedBuildSha` at load like `index.tsx`, and replaceStates the address bar: the report reads `location.pathname`, which the MemoryRouter leaves at `/`. */
 function errorBoundaryFrame(): MountedFrame {
   primePageDeployedBuildSha();
   history.replaceState(null, "", `/workspace/checkout-fixes${location.search}`);
@@ -7281,17 +6006,7 @@ function errorBoundaryFrame(): MountedFrame {
   };
 }
 
-/** A code-split route that will not load, in the shipped ErrorBoundary and
- *  Suspense, under the shipped Layout. `pageDeployedBuildSha` is called as
- *  `index.tsx` calls it, because the recovery compares the build this page
- *  loaded against the one the origin serves.
- *
- *  Unlike the frame above, this one leaves the address bar ALONE. The
- *  recovery's last act is `location.reload()`, which reloads whatever is in it:
- *  a rewritten `/workspace/...` would be served the real `index.html` by Vite's
- *  SPA fallback, and the gate would be measuring the app instead of the
- *  fixture. Nothing here reads the path, so there is nothing to gain by moving
- *  it. */
+/** Leaves the address bar alone: recovery ends in `location.reload()`, and a rewritten path would get Vite's SPA fallback `index.html`. */
 function lazyRouteFrame(): MountedFrame {
   primePageDeployedBuildSha();
 
@@ -7307,8 +6022,7 @@ function lazyRouteFrame(): MountedFrame {
   };
 }
 
-/** The interactive rig routes like the app so the strip's own navigation is
- *  exercised: create lands on the new conversation's URL, Main goes back. */
+/** Routed so create lands on the new conversation's URL and Main goes back. */
 function agentChatsFrame(): MountedFrame {
   return {
     entries: ["/workspace/checkout-fixes"],
@@ -7321,17 +6035,14 @@ function agentChatsFrame(): MountedFrame {
   };
 }
 
-/** Owns a real root connection for the plan-arrival hint, so its reads need a
- *  server; the surfaces themselves still read the frame's own fixture props. */
+/** Owns a real root connection for the plan-arrival hint; the surfaces read fixture props. */
 function previewTabsFrame(): MountedFrame {
   serveGalleryRpc(stubRpc);
 
   return { entries: ["/"], node: <PreviewTabsGallery /> };
 }
 
-/** The workspace page under both app routes, exactly as App.tsx keys them:
- *  creating an agent navigates to its conversation, and the frame must be able
- *  to land there. */
+/** Both app routes as App.tsx keys them, so creating an agent can navigate. */
 function workspacePageFrame(): MountedFrame {
   serveGalleryRpc(workspacePageRpc);
 
@@ -7349,10 +6060,7 @@ function workspacePageFrame(): MountedFrame {
   };
 }
 
-/** `&section=devices` is the deep link a work surface hands over, driven
- *  through the router rather than through `location.hash`: the page reads the
- *  hash off `useLocation`, so a MemoryRouter entry is the same input a real URL
- *  is. */
+/** `&section=devices` goes through the router: the page reads the hash off `useLocation`. */
 function userSettingsStateFrame(): MountedFrame {
   const section = new URLSearchParams(location.search).get("section");
 
@@ -7363,7 +6071,6 @@ function userSettingsStateFrame(): MountedFrame {
 }
 
 async function mount() {
-  // Standalone public string documents render without the app shell.
   const document_ = publicDocument(frame);
 
   if (document_ !== null) {
@@ -7375,9 +6082,7 @@ async function mount() {
   let node: React.ReactNode;
   let entries = ["/"];
 
-  // Frames a name alone fixes — the ones that need no dispatch branch because
-  // their only parameters live in the row itself. `entries` is the routed
-  // location the MemoryRouter opens on for frames that read a route param.
+  // Frames fully fixed by name; `entries` is the MemoryRouter location for frames that read a route param.
   const fixtureFrames = new Map<string, { node: React.ReactNode; entries: string[] }>([
     ["supervise", { node: <SuperviseFrame />, entries: ["/"] }],
     ["supervisefresh", { node: <SuperviseFrame evolved={false} />, entries: ["/"] }],
@@ -7385,26 +6090,20 @@ async function mount() {
     ["activityclean", { node: <Shell surface={ACTIVITY_SURFACE} rpc={activityRpc(ACTIVITY_CLEAN)} />, entries: ["/"] }],
     ["activityempty", { node: <Shell surface={ACTIVITY_SURFACE} rpc={activityRpc(ACTIVITY_FRESH)} />, entries: ["/"] }],
     ["activitycache", { node: <div className="p-6 max-w-2xl"><CacheBlock cacheHit={ACTIVITY_CACHE_HIT} /></div>, entries: ["/"] }],
-    // The read-only page a visitor sees, routed the way App.tsx routes it.
     ["blueprint", { node: <BlueprintFrame />, entries: [`/shared/blueprint/${encodeURIComponent(BLUEPRINT_ID)}`] }],
-    // A slate card inside a chat message, at its inline height.
     ["chat-slate", { node: <ChatSlateFrame />, entries: ["/"] }],
-    // The Drive's blueprints folder: the shared library, behind the chrome.
-    // On its own route, so the rail's primary nav lights Drive and not Home.
+    // Its own route, so the rail lights Drive, not Home.
     ["shared", { node: <DrivePageFrame library={SHARED_LIBRARY} workspaces={STOCK_ROSTER.entries} />, entries: [`${APP_ROUTES.drive}/blueprints`] }],
-    // The same folder before anything is shared: every list shows its empty line.
     ["shared-empty", {
       node: <DrivePageFrame library={EMPTY_LIBRARY} workspaces={STOCK_ROSTER.entries} />,
       entries: [`${APP_ROUTES.drive}/blueprints`],
     }],
-    // The Drive over a seeded tenant (`&path=/projects/ops` opens a folder), and over an empty one.
+    // `&path=/projects/ops` opens a folder.
     ["drive", {
       node: <DrivePageFrame library={SHARED_LIBRARY} workspaces={STOCK_ROSTER.entries} />,
       entries: [`${APP_ROUTES.drive}${new URLSearchParams(location.search).get("path") ?? ""}`],
     }],
     ["drive-empty", { node: <DrivePageFrame library={EMPTY_LIBRARY} workspaces={STOCK_ROSTER.entries} />, entries: [APP_ROUTES.drive] }],
-    // The task indicator mid-wait: the model call is sleeping out the
-    // provider's declared window and the bar names it instead of "working".
     ["providerwait", { node: <ProviderWaitFrame />, entries: ["/"] }],
     ["sharedialog", { node: <ShareDialogFrame mode="live" />, entries: ["/"] }],
     ["sharedialog-blueprint", { node: <ShareDialogFrame mode="blueprint" />, entries: ["/"] }],
@@ -7415,15 +6114,12 @@ async function mount() {
         </div>
       ), entries: ["/"],
     }],
-    // The home chrome with one account panel open over it, as the Setup card
-    // draws it: `&panel=providers|mcp|cli` picks the modal's body.
+    // `&panel=providers|mcp|cli` picks the modal's body.
     ["setupmodal", { node: <SetupModalFrame />, entries: ["/"] }],
-    // The onboarding wizard, stepped: `&step=0..3` picks which panel is open.
+    // `&step=0..3` picks the wizard panel.
     ["welcome", { node: <WelcomeFrame />, entries: ["/welcome"] }],
-    // The two primary-nav pages behind the shipped chrome; `&view=list`
-    // seeds the workspaces page's stored choice.
+    // `&view=list` seeds the workspaces page's stored choice.
     ["workspaces", { node: <WorkspacesFrame />, entries: ["/workspaces"] }],
-    // Chat with ts/bash/json fences — the frame the highlighting test shoots.
     ["chatcode", { node: <ChatCodeFrame />, entries: ["/"] }],
     ["plugins", { node: <PluginsFrame />, entries: ["/plugins"] }],
     ["devices", { node: <DevicesFrame />, entries: ["/devices"] }],
@@ -7432,8 +6128,7 @@ async function mount() {
 
   const fixture = fixtureFrames.get(frame);
 
-  // Same dispatch for the frames whose module or fixture is runtime-loaded:
-  // the name selects an async loader instead of a branch.
+  // Frames whose module or fixture is runtime-loaded.
   const dynamicFrames = new Map<string, () => Promise<{ node: React.ReactNode; entries: string[] }>>([
     ["deploy", deployFrame],
     ["updates", updatesFrame],
@@ -7450,9 +6145,7 @@ async function mount() {
 
   if (frame === "shell") node = <Shell />;
   else if (frame === "forks") node = <Shell surface="Swarms" mctsTrees={MCTS_TREES} rpc={forkRpc} />;
-  // The same surface with its config disclosure OPEN. The card is shut by the
-  // owner's own ruling — config is asked for, never shoved at a reader — so no
-  // product prop exists just for gallery capture.
+  // Config disclosure open; the card ships shut, so there is no product prop for it.
   else if (frame === "forkconfig") {
     node = <OpenConfigDisclosures><Shell surface="Swarms" mctsTrees={MCTS_TREES} rpc={forkRpc} /></OpenConfigDisclosures>;
   }
@@ -7461,9 +6154,6 @@ async function mount() {
   else if (frame === "forkfanin") node = <Shell surface="Swarms" mctsTrees={MCTS_TREES} rpc={swarmFanInRpc} />;
   else if (frame === "forkrefused") node = <Shell surface="Swarms" mctsTrees={MCTS_TREES} rpc={refusedRunRpc} />;
   else if (frame === "forkstopped") node = <Shell surface="Swarms" rpc={stoppedRunRpc} />;
-  // A multi-node MIXED-STATUS run: nodes reported, nodes still working, one
-  // aborted and one failed on the provider, over two levels. The state the whole
-  // surface exists for and the one no frame could photograph.
   else if (frame === "forkrunning") {
     node = <Shell surface="Swarms" rpc={runningSwarmRpc} headActivity={RUNNING_ACTIVITY} />;
   }
@@ -7512,13 +6202,9 @@ async function mount() {
   else if (frame === "approvals") node = <ApprovalsFrame />;
   else if (frame === "environment" || frame === "files") ({ node, entries } = driveFrame(frame));
   else if (fixture !== undefined) { node = fixture.node; entries = fixture.entries; }
-  // The log pane alone, at fixture scale — the close-up the composed activity
-  // frames render too small to read.
   else if (frame === "activitylog") node = <div className="p-6 max-w-2xl"><LogBlock log={ACTIVITY_LOG} /></div>;
   else if (frame === "workspacepage") ({ node, entries } = workspacePageFrame());
   else if (frame === "usersettingsstate") ({ node, entries } = userSettingsStateFrame());
-  // The device row alone, in the three modes its Sandbox switch can land a
-  // machine in — the close-up the Devices card renders one at a time.
   else if (frame === "devicesandbox") node = <DeviceSandboxFrame />;
   else if (dynamicFixture !== undefined) ({ node, entries } = await dynamicFixture());
   else node = <All />;
@@ -7531,10 +6217,7 @@ async function mount() {
   if (root === null) throw new Error("gallery root is missing");
 
   createRoot(root).render(
-    // Every frame is mounted under the shell's three stores — account, roster,
-    // overviews — so a page photographed alone reads the same way it does
-    // behind `Layout`; a frame that mounts `Layout` itself gets Layout's own
-    // nearer store, exactly as the app does.
+    // Every frame mounts under the shell's three stores; a frame mounting `Layout` gets its nearer store, as the app does.
     <StrictMode>
       <MemoryRouter initialEntries={entries}>
         <AccountProvider><WorkspaceRosterProvider><WorkspaceOverviewsProvider>{node}</WorkspaceOverviewsProvider></WorkspaceRosterProvider></AccountProvider>

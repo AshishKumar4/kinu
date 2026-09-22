@@ -1,17 +1,6 @@
 /**
- * Mission Inbox — outbound side, over the Workers `send_email` binding
- * (Cloudflare Email Sending). Four surfaces, one send path:
- *
- *   sendInboundEmailReceipt — the acknowledgement an accepted message gets
- *     straight away, before any turn runs.
- *   createEmailThreadDispatcher — the `email_thread` ReplyDispatcher: a
- *     drained turn's answer goes back onto the inbound mail's thread with
- *     correct In-Reply-To / References.
- *   dispatchEmailRepliesForTurn — called at turn completion with the drain
- *     turn id the core stamped on the injected message; replies every open
- *     email_thread channel of the events that turn consumed.
- *   sendOwnerEmail — standalone notification to the owner's verified email
- *     (Evolution Changelog digests, background-job completions).
+ * Mission Inbox, outbound side, over the Workers `send_email` binding (Cloudflare Email Sending):
+ * receipts, `email_thread` turn replies, and owner notifications share one send path.
  */
 
 import {
@@ -39,12 +28,9 @@ export interface EmailThreadingHeaders {
   References?: string;
 }
 
-/** What the dispatcher needs at send time. Resolved per dispatch so binding
- *  and display-name changes never go stale on a long-lived DO. */
+/** Resolved per dispatch so binding and display-name changes never go stale on a long-lived DO. */
 export interface EmailSendContext {
-  /** The `send_email` Workers binding, when configured. */
   email: SendEmail | undefined;
-  /** Friendly From name (agent display name). */
   agentDisplayName: string;
   /** Write-ahead + idempotency for the send (SPEC §7.4). */
   outbox: EmailOutbox;
@@ -54,15 +40,8 @@ function replySubject(subject: string): string {
   return /^\s*re:/i.test(subject) ? subject : `Re: ${subject}`;
 }
 
-/**
- * Threading headers per RFC 5322 §3.6.4, bounded.
- *
- * The chain the reply carries is the inbound chain plus the message being
- * answered, and `boundedReferences` is what keeps that from growing past the
- * 998-octet line every receiver is allowed to reject. It never returns null
- * for a usable In-Reply-To, so the `??` is the compiler's question, not a
- * second policy.
- */
+/** RFC 5322 §3.6.4 threading; `boundedReferences` keeps the chain under the 998-octet line limit
+ *  receivers may enforce. */
 function threadingHeaders(addr: Pick<EmailThreadAddr, 'message_id' | 'references'>): EmailThreadingHeaders {
   const inReplyTo = boundedMessageId(addr.message_id, 'In-Reply-To');
 
@@ -74,15 +53,8 @@ function threadingHeaders(addr: Pick<EmailThreadAddr, 'message_id' | 'references
   };
 }
 
-/**
- * One outbound message on an inbound thread — the shape a turn's answer and
- * the immediate receipt both take, so the From identity, the `Re:` rule and
- * the loop guard are decided once.
- *
- * RFC 3834: `Auto-Submitted: auto-replied` is what stops a vacation responder
- * or a peer agent bouncing this back into an endless thread — our own inbound
- * gate drops mail carrying it, and so do other conforming responders.
- */
+/** Shared by turn answers and receipts. RFC 3834 `Auto-Submitted: auto-replied` stops responders
+ *  bouncing this into an endless thread. */
 function threadReply(
   addr: EmailThreadAddr, agentDisplayName: string, text: string,
 ): OutboundEmailMessage {
@@ -96,20 +68,8 @@ function threadReply(
 }
 
 /**
- * Tell the sender the message landed, now.
- *
- * Without this the only thing an accepted message produces is a turn, and a
- * turn can take minutes, can be queued behind others, and can end with nothing
- * to say — `dispatchEmailRepliesForTurn` sends no mail for an empty answer. So
- * the sender's evidence that Kinu has the message was, until the answer
- * arrived, nothing at all.
- *
- * IDEMPOTENT THROUGH THE OUTBOX, not through a new table. The key is the
- * admitted event's id, which the ingress dedupe makes stable across
- * redeliveries of the same Message-ID, so a re-delivered message resolves to
- * the same key and the outbox answers `deduped` without touching the binding.
- * The receipt therefore cannot become a storm, and it rides the same stable
- * outbound Message-ID as everything else this outbox sends.
+ * Immediate acknowledgement, since a turn may be slow or produce no reply. Idempotent through the outbox:
+ * keyed by the admitted event id, which ingress dedupe keeps stable across redeliveries.
  */
 export async function sendInboundEmailReceipt(
   ctx: EmailSendContext,
@@ -147,7 +107,6 @@ function payloadText(payload: JsonValue): string {
   return JSON.stringify(content ?? payload ?? '');
 }
 
-/** The `email_thread` ReplyDispatcher registered on the ReplyChannelStore. */
 export function createEmailThreadDispatcher(
   getContext: () => EmailSendContext,
 ): import('@kinu.run/core').ReplyDispatcher {
@@ -171,8 +130,7 @@ export function createEmailThreadDispatcher(
         return { delivered: false, detail: 'email_thread holder_addr missing addresses' };
       }
 
-      // Idempotency key = the channel (one reply per channel); a lease re-drive
-      // after a crash mid-send re-sends the SAME Message-ID, deduped downstream.
+      // One reply per channel; a lease re-drive after a mid-send crash re-sends the same Message-ID, deduped downstream.
       const result = await ctx.outbox.send(
         ctx.email,
         `reply:${channel.id}`,
@@ -187,12 +145,7 @@ export function createEmailThreadDispatcher(
   };
 }
 
-/**
- * Reply every open email_thread channel bound to the events a drained turn
- * consumed. Called from onChatResponse with the drainTurnId the core stamped
- * on the injected user message. Each attempt lands a `reply_attempt` audit
- * row. `pending` remains true while a retryable email channel is still open.
- */
+/** `pending` stays true while a retryable email channel is still open. */
 export interface EmailReplyDispatchResult {
   delivered: number;
   pending: boolean;
@@ -239,8 +192,6 @@ export async function dispatchEmailRepliesForTurn(
   };
 }
 
-// ── Owner notifications ──────────────────────────────────────────
-
 export interface OwnerEmailDeps {
   email: SendEmail | undefined;
   emailDomain: string | undefined;
@@ -251,11 +202,8 @@ export interface OwnerEmailDeps {
   outbox: EmailOutbox;
 }
 
-/** One-off notification to the owner (changelog digest, job completion).
- *  Silently skips (returns false) when the platform email pieces aren't
- *  configured — email is a capability, never a requirement. `key` is the
- *  caller's stable idempotency key: a re-fire with the same key never
- *  double-sends. */
+/** Returns false when email is not configured (a capability, never a requirement). `key` is a stable
+ *  idempotency key: a re-fire never double-sends. */
 export async function sendOwnerEmail(
   deps: OwnerEmailDeps,
   note: { subject: string; text: string; key: string },

@@ -1,28 +1,6 @@
 /**
- * Sandbox container previews, served on the preview host.
- *
- * Routing is the @cloudflare/sandbox SDK's own: `exposePort` mints
- * `https://<port>-<sandbox>-<token>.<PREVIEW_HOST_SUFFIX>/` and
- * `proxyToSandbox` parses that hostname back into a sandbox, validates the
- * port's secret token inside the Durable Object, and forwards to the container
- * (WebSocket upgrades included). Kinu adds only what the SDK has no opinion
- * about: this host serves previews and nothing else, responses are contained
- * (core preview/preview-origin.ts), a failed forward gets a page a user can act on
- * instead of a bare `Proxy routing error`, and a preview whose exposure did not
- * survive a container recycle gets ONE repair.
- *
- * AND ONE THING THE SDK CANNOT DO FROM HERE: refuse a hostname nobody minted
- * before an object exists. `proxyToSandbox` resolves the sandbox id into a
- * Durable Object stub — the act that creates one — and only then hands the
- * token to that object to validate. This host is step 1 of the route table,
- * ahead of authentication, so an anonymous GET to a guessed hostname would
- * instantiate a container object and its SQLite, once per guess. So the label
- * is proven against the exposures this deployment published
- * (core preview/preview-exposures.ts) BEFORE the SDK is handed the request. That record
- * is a KV projection with no object behind a key: proving a forged label wrong
- * allocates nothing. The container object still validates the port token and
- * its runtime activation on every forward — this gate decides only whether the
- * question is asked at all.
+ * Sandbox previews on the preview host; routing and token validation are the @cloudflare/sandbox SDK's.
+ * The label is proven against the published KV exposures first: `proxyToSandbox` creates a Durable Object per guessed hostname.
  */
 
 import { getSandbox, proxyToSandbox, type SandboxEnv } from "@cloudflare/sandbox";
@@ -36,26 +14,12 @@ import { sanitizePreviewRequestHeaders } from "./lib/preview-request";
 import type { KinuSandbox } from "./kinu-sandbox";
 import { SANDBOX_TRANSPORT } from "./sandbox-exec-lane";
 
-/**
- * `proxyToSandbox` collapses every forwarding failure — overwhelmingly "the
- * container is not listening on port N" — into this one response. Matching it
- * is how the friendly page below gets shown; `unit-preview-origin.test.ts`
- * pins the shape so an SDK upgrade that changes it fails loudly.
- */
+/** `proxyToSandbox`'s response for every forward failure; `unit-preview-origin.test.ts` pins the shape. */
 const SDK_FORWARD_FAILURE = { status: 500, body: 'Proxy routing error' } as const;
 
 /**
- * The Durable Object's answer when the port token IS VALID but the exposure it
- * names is not live: the container is stopped or unhealthy, or the activation
- * belongs to a runtime generation that has been replaced
- * (`stalePreviewURLResponse` / `validatePreviewURLForRuntime` in the shipped
- * bundle). Transcribed from that method — a method, not an importable value,
- * so the transcription is pinned by the suite instead of the type checker.
- *
- * AUTHENTICATED BY CONSTRUCTION, and that is what makes it safe to act on: the
- * DO returns 404 `INVALID_TOKEN` for a token that does not match the port's
- * stored one, and only reaches this answer after the match. A request that
- * guessed a hostname cannot make Kinu touch a container.
+ * SDK answer for a valid port token whose exposure is not live (transcribed from `stalePreviewURLResponse`; pinned by the suite).
+ * Safe to act on: the object only returns it after the token matched.
  */
 const SDK_STALE_PREVIEW = {
   status: 410,
@@ -65,9 +29,7 @@ const SDK_STALE_PREVIEW = {
   }),
 } as const;
 
-/** One refusal shape for every hostname this host will not serve, so a forged
- *  label for a real workspace and one for a workspace that never existed are
- *  the same answer and neither is an existence oracle. */
+/** One refusal shape for every unserved hostname, so it is not an existence oracle. */
 function refusePreview(code: string, error: string, status: number): Response {
   return containPreviewResponse(new Response(
     JSON.stringify({ error, code }),
@@ -75,43 +37,23 @@ function refusePreview(code: string, error: string, status: number): Response {
   ));
 }
 
-/**
- * Every binding the preview host reads: the suffix a label is parsed against,
- * the projection a published label is proven against, and the container
- * namespace the SDK forwards and repairs through.
- *
- * `Sandbox` keeps the platform namespace type rather than a `Pick`, because
- * both `proxyToSandbox` and `getSandbox` take it: the SDK's own env contract is
- * `{ Sandbox: DurableObjectNamespace<Sandbox> }` and nothing narrower satisfies
- * it (@cloudflare/sandbox dist/index.d.ts:237, read 2026-09-22). It is OPTIONAL
- * here, and required there, because a deployment can omit the binding —
- * `repairStalePreview` below, `terminal-route.ts`, `orchestrator.ts` and
- * `runtime.ts` all state that already, and this module used to hand the SDK an
- * `undefined` namespace to resolve rather than saying so.
- */
+/** `Sandbox` is optional: a deployment can omit the binding; the SDK accepts nothing narrower than the full namespace. */
 export interface SandboxPreviewEnv extends PreviewSuffixEnv {
   Sandbox?: DurableObjectNamespace<KinuSandbox>;
   AUTH_KV?: KvStore;
 }
 
-/**
- * Serve a request that arrived on the preview host. Always answers: a hostname
- * this deployment did not publish as an exposed port gets a 404, never the app,
- * and never a Durable Object.
- */
+/** Always answers; an unpublished hostname gets a 404, never the app and never a Durable Object. */
 export async function servePreviewRequest(request: Request, env: SandboxPreviewEnv): Promise<Response> {
   const url = new URL(request.url);
   const label = sandboxPreviewLabelOf(url, env);
 
-  // The whole preview subtree is claimed by this host, so most of what arrives
-  // here is not a preview label at all: a bare guess, a scanner, a mistyped
-  // hostname. Refused on shape, before any lookup.
+  // Refused on shape, before any lookup.
   if (label === null || !isKinuSandboxId(label.sandboxId)) {
     return refusePreview('NOT_A_PREVIEW', 'This host serves sandbox previews only.', 404);
   }
 
-  // Fail closed, on either half of what proving a label takes: the projection
-  // it is proven against, and the container namespace it would be served from.
+  // Fail closed.
   if (!env.AUTH_KV || !env.Sandbox) {
     return refusePreview('PREVIEW_UNAVAILABLE', 'Preview routing is unavailable.', 503);
   }
@@ -134,19 +76,11 @@ export async function servePreviewRequest(request: Request, env: SandboxPreviewE
 
   let response = await forward();
 
-  // A published label the SDK will not route is a disagreement between the
-  // projection and the object's own state, not a guess: the same refusal.
   if (!response) {
     return refusePreview('NOT_A_PREVIEW', 'This host serves sandbox previews only.', 404);
   }
 
-  // ONE repair, then ONE re-issue. The count is structural rather than a retry
-  // budget: a repair has exactly one before and one after, and the re-issue is
-  // also the only honest test of whether the repair worked — the container's own
-  // re-validation of the port token, not an inference from a lifecycle call
-  // returning. A second stale answer means the exposure did not come back
-  // (a server that no longer listens on the port is the usual reason), which is
-  // the box's problem to report and not something more attempts reach.
+  // One repair, one re-issue: the re-issue is the test of whether the repair worked; no retry loop.
   if (request.method === 'GET' && await isStalePreview(response)) {
     await repairStalePreview(label.sandboxId, containers);
     const reissued = await forward();
@@ -168,26 +102,12 @@ async function isStalePreview(response: Response): Promise<boolean> {
 }
 
 /**
- * Re-drive the box that minted this preview URL, so the port comes back on its
- * STORED spec.
- *
- * `ensureReady` is the repair, whole: it starts a stopped container and awaits
- * the restoration that re-exposes each recorded port with the token its URL was
- * built on — which is why the same URL works afterwards rather than a new one
- * having to be handed out. It is singleflight on the box's own lifecycle
- * generation, so a page whose twenty assets all 410 at once joins one attempt
- * instead of starting twenty.
- *
- * Best effort, and deliberately silent to the visitor: a box that refuses to
- * become ready has already recorded why in its own incident ledger, and the
- * answer this visitor gets is the stale 410 either way. Turning a stale preview
- * into a 500 would lose the classification the caller needs.
+ * `ensureReady` re-exposes each recorded port with its original token, so the same URL works; it is singleflight.
+ * Best effort: a failure keeps the stale 410 for the visitor rather than a 500.
  */
 async function repairStalePreview(sandboxId: string, env: SandboxEnv<KinuSandbox>): Promise<void> {
   try {
-    // {@link SANDBOX_TRANSPORT}, the one value every Kinu getSandbox call site
-    // passes: the SDK persists the transport and drops in-flight requests when
-    // it changes mid-life for an id.
+    // The SDK drops in-flight requests if an id's transport changes, so every call site passes SANDBOX_TRANSPORT.
     await getSandbox(env.Sandbox, sandboxId, {
       normalizeId: true, transport: SANDBOX_TRANSPORT,
     }).ensureReady();
@@ -200,11 +120,6 @@ async function repairStalePreview(sandboxId: string, env: SandboxEnv<KinuSandbox
   }
 }
 
-/**
- * The container refused the connection. Nothing listening on the port is the
- * cause almost every time — the agent exposed it before starting a server —
- * so the page says how to fix that while naming the other possibility.
- */
 function renderNotReadyPage(host: string): Response {
   // `<port>-<sandbox>-<token>.<suffix>` — name the first two, never the token.
   const label = host.slice(0, host.indexOf('.'));

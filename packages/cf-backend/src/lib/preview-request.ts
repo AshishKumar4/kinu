@@ -2,17 +2,8 @@ import { KINU_COOKIE_NAMES } from '../auth/session';
 import { bearerOf, parseCliBearer } from '../cli/auth-store';
 
 /**
- * Remove host-platform authority before an authenticated preview request
- * crosses into agent-controlled guest code. Guest-owned cookies, guest bearer
- * auth, and application headers remain available to the preview.
- *
- * What is stripped is DERIVED from the modules that mint it, never listed
- * here: the cookies are `auth/session.ts`'s registry of every cookie the app
- * sets, and a bearer is stripped exactly when `cli/auth-store.ts`'s own parse
- * would route it to a UserDO. A copy kept beside this function had drifted in
- * both directions. The device token is not a bearer format at all, so it has
- * no entry: the daemon presents it in the body of `/pc/connect-ticket`, and no
- * authenticator reads one from this header.
+ * Strip host-platform authority before a preview request reaches guest code; guest cookies/bearer/headers stay.
+ * Stripped set is derived from `auth/session.ts` cookies and `cli/auth-store.ts` bearer parse, never listed here.
  */
 export function sanitizePreviewRequestHeaders(input: Headers): Headers {
   const headers = new Headers(input);

@@ -1,20 +1,6 @@
 /**
- * Gallery frames for the account surfaces. Account settings itself is
- * `usersettingsstate` in gallery.tsx; this module holds the account frames
- * that mount panels onto other chrome, so `mount` stays a dispatch and the
- * frame bodies stay out of it.
- *
- *   /gallery.html?frame=setupmodal&panel=providers|mcp|cli
- *     → the home page's Setup card opening an account panel in place, with
- *       the shipped chrome (sidebar + HomePage) behind the modal.
- *
- *   /gallery.html?frame=workspaces[&view=list] and ?frame=plugins
- *     → the two primary-nav pages behind the shipped chrome (sidebar + page).
- *
- *   /gallery.html?frame=welcome&step=0..2
- *     → the onboarding wizard itself: full-screen, no chrome, stepped to the
- *       requested panel. The profile fixture answers `onboardedAt: null` for
- *       this frame, which is what makes the account a new one.
+ * Gallery account frames: `setupmodal&panel=`, `workspaces[&view=list]`, `plugins`, `welcome&step=0..2`.
+ * The `welcome` profile fixture answers `onboardedAt: null`, which makes the account new.
  */
 import { lazy, Suspense, type ReactNode } from "react";
 import { Loader } from "@cloudflare/kumo";
@@ -22,8 +8,6 @@ import * as v from "valibot";
 import Sidebar from "@/components/Sidebar";
 import { ACCOUNT_PANELS, AccountPanelModal } from "@/components/account/AccountPanelModal";
 
-// The `home` frame pays this import only when it is the frame under
-// photograph; the modal frame keeps the same boundary through lazy().
 const HomePage = lazy(() => import("@/pages/HomePage"));
 
 const WelcomePage = lazy(() => import("@/pages/WelcomePage"));
@@ -34,7 +18,6 @@ const PluginsPage = lazy(() => import("@/pages/PluginsPage"));
 
 const DevicesPage = lazy(() => import("@/pages/DevicesPage"));
 
-/** The shipped chrome around a primary-nav page: the rail, then the page. */
 function Chrome({ children }: { children: ReactNode }) {
   return (
     <div className="flex h-screen w-screen p-bg p-text overflow-hidden">
@@ -49,8 +32,7 @@ function Chrome({ children }: { children: ReactNode }) {
 }
 
 export function WorkspacesFrame() {
-  // The page reads its stored view once at mount, so the seed lands first;
-  // tiles are the default, so the list is the choice that has to be stored.
+  // The page reads its stored view once at mount, so seed it first.
   if (new URLSearchParams(location.search).get("view") === "list") localStorage.setItem("kinu:workspaces-view", "list");
   else localStorage.removeItem("kinu:workspaces-view");
 
@@ -69,9 +51,6 @@ const AccountPanelParam = v.picklist(ACCOUNT_PANELS);
 
 const WelcomeStepParam = v.picklist(["0", "1", "2"]);
 
-/** The wizard alone: `mount` wraps every frame in the account provider, so
- *  the frame supplies nothing but the page — no sidebar, no chrome the wizard
- *  would never ship behind. */
 export function WelcomeFrame() {
   const parsed = v.safeParse(WelcomeStepParam, new URLSearchParams(location.search).get("step"));
 

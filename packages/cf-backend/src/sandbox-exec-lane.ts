@@ -1,35 +1,7 @@
 /**
- * The container boundary: `KinuSandbox` (a Durable Object over the Cloudflare
- * sandbox SDK) presented as core's portable `SandboxHandle`.
- *
- * It lives beside `runtime.ts` rather than inside it because the one decision it
- * makes is worth reading — and worth testing — on its own: WHICH SDK LANE a
- * command runs on. `runtime.ts` reaches the Agents SDK at load, so nothing in it
- * can be exercised without a Durable Object; this module's only value import is
- * core's JSON decoder.
- *
- * ── The decision, and the incident that produced it ───────────────
- * `SandboxHandle.exec` says: no `timeout` means NO WORK DEADLINE. Honouring that
- * is not a matter of omitting a number, because the SDK's plain `exec` is
- * bounded twice over — the container enforces a command deadline, and the
- * request carrying it rides the non-streaming path, whose own ceiling is 120s.
- * The SDK's own git client is the proof: it raises `requestTimeoutMs` explicitly
- * for a long clone rather than trusting that default.
- *
- * Production evidence for why this matters (owner screenshot, workspace
- * my-ai-engineer-b3b8b792): a tee'd training script returned `CommandError: …
- * Command timeout after 60000ms`. The 60000 was ours — core sent it, and the
- * container echoed it back. A lane deadline outranks every detach window above
- * it, so the 300s one-shot window could never fire and long work was killed
- * where it should have been handed to a background job.
- *
- * ── Cancellation reaches the process, not the wait ────────────────
- * The process lane is also what makes an abort mean something. A background
- * process has an ID, and an ID has `killProcess`, so a cancelled exec kills the
- * command and waits for its exit code before it reports anything. Racing the
- * signal against the wait and returning instead tells the agent "the command
- * may still finish inside the container" — a turn moving on while an unwatched
- * build keeps writing to /workspace. See `SandboxHandle.exec`.
+ * `KinuSandbox` presented as core's `SandboxHandle`. No `timeout` means no work deadline, so such
+ * commands run on the process lane (plain `exec` is bounded by the container and the request path),
+ * and an abort kills the process, not just the wait. See `SandboxHandle.exec`.
  */
 
 import type { Process } from "@cloudflare/sandbox";
@@ -39,66 +11,20 @@ import type { KinuSandbox } from "./kinu-sandbox";
 import { sandboxPreviewLabelOf } from "@kinu.run/core";
 import type { SandboxPreviewExposures } from "@kinu.run/core";
 
-/**
- * Why an exposure is refused when this deployment cannot publish it.
- *
- * `AUTH_KV` is where the published exposures live, and the edge proves every
- * preview hostname against them before a container object is resolved. Without
- * the binding a minted URL would be refused at the edge on arrival, so the
- * honest answer is to refuse the exposure and say why, rather than hand the
- * agent a link that cannot work.
- */
+/** Without AUTH_KV the edge cannot verify a preview hostname, so a minted URL would be dead. */
 const PREVIEWS_UNPUBLISHABLE =
   'Port exposure is unavailable: this deployment has no AUTH_KV binding, so a '
   + 'preview URL could not be published for the edge to verify.';
 
 /**
- * The container control-plane transport EVERY `getSandbox` call site passes, and
- * the one value telemetry may report for it.
- *
- * It is a constant rather than a per-call literal for two reasons. The SDK
- * persists transport in the sandbox object's own storage and drops in-flight
- * requests when the value changes mid-life for an id, so the call sites MUST
- * agree; and a per-call literal lets `sandbox.executor_registered` report a
- * hardcoded `'websocket'` next to a `getSandbox(… transport: "rpc")` three
- * lines above it, which is a metric that says the opposite of what the process
- * did. Reading both from here makes the report true by construction.
- *
- * `rpc` — one capnweb RPC session over a WebSocket, against the container's own
- * control plane — and NOT the `http`/`websocket` route-based compatibility
- * client, which Cloudflare deprecated on 2026-06-09 and which cannot restore a
- * workspace past ~11 MiB (`sandbox.route_client.restore_bytes`; the measured
- * ladder is in `runtime.ts`). Changing it is an owner decision with that
- * evidence to answer, not a config tweak; `SANDBOX_TRANSPORT` in
- * `wrangler.jsonc` carries the same value so a future call site that forgets
- * the option inherits it rather than the SDK's `http` field default.
+ * Transport every `getSandbox` call site passes, and the one telemetry reports: the SDK persists it
+ * per id and drops in-flight requests if it changes. Owner decision; `SANDBOX_TRANSPORT` in wrangler.jsonc matches.
  */
 export const SANDBOX_TRANSPORT = "rpc" as const;
 
 /**
- * Re-raise the SDK's file-error shape at the rpc boundary.
- *
- * What the wire delivers for a thrown SDK file error is NOT the SDK error.
- * capnweb sends `["error", name, message]` (node_modules/capnweb/dist/
- * index-workers.js:1526) and re-materializes with `ERROR_TYPES[name] ||
- * Error` (:1698) — and `ERROR_TYPES` (:1309) holds only the platform's own
- * seven plus AggregateError, so `FileNotFoundError` arrives as a plain
- * `Error`. The SDK's client wrapper then cannot match it back
- * (sandbox-CPj2jsbz.js `translateRPCError` only re-raises `instanceof
- * SandboxError`), and the DO hop drops the custom props with it — the same
- * loss the readiness comment below routes around with data. What core
- * finally holds is `{ name: 'Error', message: 'FileNotFoundError: File not
- * found: /workspace/…' }`: the container bakes the kind into its message
- * (neither dist concatenates name+message anywhere — verified by grep), and
- * that leading token is the only classification left.
- *
- * So this restores the two fields core's taxonomy reads — `name` and an
- * `errorResponse` carrying the container's code — off that token, for the
- * file domain only. Anything already shaped, unnamed, or outside the file
- * errors passes through untouched. Measured live: kinu.run build ac73ffc5e
- * answered `write /sandbox/workspace/first-run-mount.mjs failed:
- * FileNotFoundError: File not found: /workspace/first-run-mount.mjs`
- * through exactly this flattening.
+ * capnweb re-materializes unknown error names as plain `Error`, leaving the SDK kind only as the
+ * message's leading token; restore `name` and `errorResponse.code` from it, file errors only.
  */
 const RPC_SDK_FILE_CODE = new Map<string, string>([
   ["FileNotFoundError", "FILE_NOT_FOUND"],
@@ -137,14 +63,7 @@ async function jsonResultOrVoid<Result>(result: Promise<Result>) {
   return value === undefined ? undefined : decodeJsonValue({ value });
 }
 
-/**
- * Wait until this process HAS an exit code, and return it.
- *
- * `waitForExit` reads the process log stream, and that stream idles out after
- * 300s of silence. A silent long-running process trips it while perfectly alive,
- * so the answer is to look again: nothing was killed, and the process's own exit
- * is the only thing that ends the wait.
- */
+/** `waitForExit`'s log stream idles out on a silent live process, so look again until it exits. */
 async function observeExit(handle: KinuSandbox, started: Process): Promise<number> {
   let exitCode = started.exitCode;
 
@@ -154,8 +73,6 @@ async function observeExit(handle: KinuSandbox, started: Process): Promise<numbe
     } catch (cause) {
       const status = await started.getStatus();
 
-      // A process that has not finished is observed again; anything else is
-      // settled and its exit code is read from the store.
       if (status === "starting" || status === "running") continue;
       const settled = await handle.getProcess(started.id);
 
@@ -171,23 +88,8 @@ async function observeExit(handle: KinuSandbox, started: Process): Promise<numbe
 }
 
 /**
- * Run a command with no work deadline: as a background process, awaited to exit.
- *
- * `startProcess` returns in one request and the process then belongs to the
- * container rather than to this call, so nothing here holds a wall clock over
- * it. Work that would rather be observed than awaited has `sandbox.startProcess`
- * and the `process_done` container event.
- *
- * An abort kills THAT process by id and then waits for its exit code, because an
- * exit code is the only evidence that nothing of the command is still running.
- * Both ways out are definitive and neither is a timer:
- *
- *   the kill lands — the exit observation completes, and the caller gets an
- *   AbortError naming the process that is now gone;
- *
- *   the kill FAILS — the caller hears that instead, immediately, because a
- *   process that could not be killed is still running and reporting
- *   `cancelled` over it would be the defect.
+ * No work deadline: a background process awaited to exit. An abort kills it by id and waits for the
+ * exit code; a failed kill is reported, never `cancelled`, since the process is still running.
  */
 async function execWithoutDeadline(
   handle: KinuSandbox,
@@ -198,11 +100,8 @@ async function execWithoutDeadline(
   const started = await handle.startProcess(command, { cwd: cwd ?? WORKSPACE_BACKUP_DIR });
   const observed = observeExit(handle, started);
   let cancelling = false;
-  // The kill's outcome AS A PROMISE, so the wait below joins it instead of
-  // leaving it floating: resolved means the process is gone by our hand, and
-  // rejected means it is still there. It settles only if an abort asks for a
-  // kill, and asks once — a turn's signal is shared, and each exec in flight
-  // kills only its own process.
+  // Settles only on abort: resolved means killed, rejected means still running. A turn's signal is
+  // shared; each exec kills only its own process.
   const { promise: killed, resolve, reject } = Promise.withResolvers<void>();
 
   const kill = (): void => {
@@ -214,12 +113,9 @@ async function execWithoutDeadline(
   else signal?.addEventListener("abort", kill, { once: true });
 
   try {
-    // `killed` never settles without an abort, so in the ordinary case this is a
-    // plain wait for the exit code.
     const exitCode = await Promise.race([observed, killed.then(() => observed)]);
 
-    // The race can only RESOLVE through `observed`, so an exit code here means
-    // the process is gone whatever the kill itself reported.
+    // The race resolves only through `observed`, so the process is gone.
     if (cancelling) {
       throw new DOMException(
         `sandbox exec cancelled — container process ${started.id} was killed`,
@@ -235,59 +131,19 @@ async function execWithoutDeadline(
   }
 }
 
-/**
- * WHERE THE CONFLICT QUEUE IS, AND WHY IT IS NOT HERE.
- *
- * Resource conflicts are serialized by `Devbox`, the object that owns the
- * container: writes to a path, exposure changes and token-row changes all
- * claim their resource there (`createResourceLane`, and the "one caller at a
- * time, per resource" section in @kinu.run/devbox). A queue here would order
- * only this adapter's callers, and every caller of that container does not
- * pass through one adapter — an adapter-local queue cannot establish ordering
- * across all of them, which is the very defect a conflict queue exists to
- * fix. Everything below calls ordinary methods and keeps no queue, no scope
- * table and no copy of the method list — one authority, and it is the owner.
- */
+/** No conflict queue here: `Devbox` serializes resource conflicts for every caller of the container. */
 
 /**
- * The SDK's response classes are serializable but intentionally do not carry
- * JsonObject index signatures. Rebuild the small portable SandboxHandle at the
- * boundary and validate opaque mutation responses before core observes them.
- *
- * ── The preflight, and why it is ONE list ─────────────────────────
- * Two things must be true before an operation can touch the container, in this
- * order:
- *
- *   Egress interception must be installed, because the Container base re-applies
- *   its persisted outbound configuration immediately before `container.start()`
- *   and the workspace attach mounts its object store THROUGH that interception.
- *   Until it lands the container has no network at all — `enableInternet = false`
- *   with no handler bound means the platform denies everything — so the window
- *   before configuration fails CLOSED rather than leaking, which is what makes
- *   configuring lazily safe.
- *
- *   The workspace must be attached, because a container the SDK auto-started for
- *   a bare `readFile` serves that read from a blank disk, and a `writeFile` that
- *   lands before the attach is hidden under the overlay a moment later — written
- *   by the caller, invisible to the caller and to every checkpoint after it.
- *
- * ONE list, here, beside the lane decision it belongs with: a method that
- * reaches the container goes through `onContainer`, and a method that only
- * writes this Durable Object's own rows does not. Two wrappers with two
- * hand-maintained method lists is how a list comes to be missing the file
- * lanes.
+ * Every container-touching method goes through `onContainer`: egress first (until bound the
+ * container has no network, so it fails closed), then attach (pre-attach reads/writes hit a blank disk
+ * that the overlay hides). Methods writing only this DO's rows skip it.
  */
 export function adaptCloudflareSandbox(
   handle: KinuSandbox,
   configureEgress: () => Promise<void>,
   previews: SandboxPreviewExposures | null,
 ): SandboxHandle {
-  // Memoized on the PROMISE, not a boolean: two concurrent first operations must
-  // both wait for the same configuration rather than one of them racing past a
-  // flag that was set before the work completed. A failure is not cached — the
-  // next operation retries — because a container left unconfigured has no
-  // network, and latching that permanently is the same defect as a restore flag
-  // that marked a container restored before reading what to restore.
+  // Memoized on the promise so concurrent first calls share it; failures are not cached.
   let inFlight: Promise<void> | null = null;
 
   const configured = async (): Promise<void> => {
@@ -305,11 +161,7 @@ export function adaptCloudflareSandbox(
 
   const onContainer = async <T>(run: () => Promise<T>): Promise<T> => {
     await configured();
-    // Readiness arrives as DATA because a thrown refusal's name does not
-    // survive the DO RPC this stub is. The conversion is caller-side and
-    // classification-bearing on purpose: `unavailable` is the verdict every
-    // reader of `error.code` can rely on, where the normalized `Error` the
-    // transport hands back has nothing to say.
+    // Readiness arrives as data: a thrown refusal's name does not survive the DO RPC.
     const readiness = await handle.resolveReadiness();
 
     if (readiness.kind === 'pending') throw new KinuError('unavailable', readiness.reason);
@@ -317,12 +169,6 @@ export function adaptCloudflareSandbox(
     return await run();
   };
 
-  /**
-   * One wrapper for the four file lanes: readiness and egress through
-   * `onContainer`, then the SDK shape restored on failure. Four copies of
-   * this try/catch is the duplication gate's exact finding (same body, only
-   * the inner call renamed), so the inner call is the parameter.
-   */
   const onFile = async <T>(path: string, run: () => Promise<T>): Promise<T> =>
     onContainer(async () => {
       try {
@@ -336,8 +182,7 @@ export function adaptCloudflareSandbox(
 
   return {
     ensureReady: () => onContainer(() => Promise.resolve()),
-    // A deadline only when a caller ASKED for one; absent, the process lane,
-    // which is also the only lane an abort can kill.
+    // Absent timeout: the process lane, the only lane an abort can kill.
     exec: (command, opts) => onContainer(() => (opts?.timeout === undefined
       ? execWithoutDeadline(handle, command, opts?.cwd, opts?.signal)
       : handle.exec(command, opts))),
@@ -346,14 +191,8 @@ export function adaptCloudflareSandbox(
       onFile(path, () => jsonResultOrVoid(handle.writeFile(path, content, opts))),
     listFiles: (path, opts) => onFile(path, () => handle.listFiles(path, opts)),
     deleteFile: (path) => onFile(path, () => jsonResultOrVoid(handle.deleteFile(path))),
-    // EVERY PREVIEW URL THIS LANE HANDS OUT IS PUBLISHED FIRST, because the
-    // edge proves a preview hostname against that record before it lets the
-    // SDK resolve a container object (`preview-proxy.ts`). The token is read
-    // back out of the URL the SDK just minted rather than out of the options,
-    // so what is recorded is what was actually handed to the caller, whoever
-    // minted it. A URL this lane cannot record is a URL the edge would refuse,
-    // so it is a failure here instead of a dead link the agent hands to its
-    // owner.
+    // Published first: the edge verifies preview hostnames against the record (`preview-proxy.ts`).
+    // The token comes from the minted URL, so what is recorded is what the caller got.
     exposePort: async (port, opts) => {
       if (previews === null) throw new Error(PREVIEWS_UNPUBLISHABLE);
       const exposed = await onContainer(() => handle.exposePort(port, opts));
@@ -367,27 +206,14 @@ export function adaptCloudflareSandbox(
 
       return exposed;
     },
-    // Withdrawn BEFORE the container object is asked to revoke: the safe
-    // direction is a live port nothing can reach, never a revoked port the edge
-    // still admits, so a failure in the second half leaves the first standing.
+    // Withdrawn first: a live unreachable port is safe; a revoked port the edge still admits is not.
     unexposePort: async (port) => {
       await previews?.withdraw(port);
 
       return await onContainer(() => jsonResultOrVoid(handle.unexposePort(port)));
     },
-    // The one authenticated path that OBSERVES exposures rather than making
-    // them: the Ports surface and the agent's own listing. Re-publishing what
-    // the container still reports is what keeps a long-lived preview from
-    // ageing out of the record, and what carries an exposure minted before this
-    // record existed into it. Refresh writes only when the record is missing or
-    // halfway through its life, so a polling panel writes nothing.
-    //
-    // A failed refresh is REPORTED AND THE LISTING STANDS, which is the one
-    // place this asymmetry is deliberate: publication is load-bearing (an
-    // unpublished URL is a dead link, so `exposePort` fails), while a refresh
-    // is maintenance on a record that is already correct. Failing the listing
-    // would turn a store hiccup into an empty Ports panel for a workspace
-    // whose ports are all live.
+    // Re-publishing keeps long-lived previews from ageing out. A failed refresh is reported and the
+    // listing stands: the record is already correct, unlike an unpublished URL in `exposePort`.
     getExposedPorts: async (hostname) => {
       const rows = await onContainer(() => handle.getExposedPorts(hostname));
 
@@ -420,13 +246,8 @@ export function adaptCloudflareSandbox(
         processId: row.processId, pid: row.pid, status: row.status,
         command: row.command, restartable: row.restartable,
       }))),
-    // The port manifest is this Durable Object's own durable rows. It touches no
-    // container, so it neither needs egress nor may wait for an attach: the
-    // token has to be mintable BEFORE the exposure it names. The owner puts it on
-    // the port's claim, which is where that ordering belongs.
+    // DO rows only: no egress, no attach wait, since the token must be mintable before its exposure.
     portToken: (port, name) => handle.portToken(port, name),
-    // The removal of a port's row is also the removal of its published
-    // exposure: the URL built on that token is not coming back.
     notePortRemoved: async (port) => {
       await previews?.withdraw(port);
       await handle.notePortRemoved(port);

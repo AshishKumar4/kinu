@@ -1,11 +1,5 @@
-// The CLI device-authorization flow: a terminal asks for a code, a signed-in
-// browser approves it, the terminal polls until a token comes back.
-//
-// Every record here is short-lived by construction — a request is dead ten
-// minutes after it is created, whatever happens to it — so all of it lives in
-// KV under its own expiry and there is no sweep to run. The one durable thing
-// the flow produces, the CLI token, is minted by and stored in the user's own
-// Durable Object.
+// CLI device-authorization flow. Every record is short-lived and lives in KV under its own expiry
+// (no sweep); the durable CLI token is minted and stored in the user's own DO.
 
 import type { AuthIdentity } from '../auth/session';
 import type { UserDO } from '../user/user-do';
@@ -17,8 +11,7 @@ import { parseAccessTokenUserId, type AccessTokenScope } from '@kinu.run/core';
 import { ownerCaller, type OwnerCapabilityEnv } from '@kinu.run/core';
 import * as v from 'valibot';
 
-/** Thrown when a CLI auth rate limit trips — routes map this (and only
- *  this) to HTTP 429; every other failure is a real error. */
+/** Routes map this (and only this) to HTTP 429. */
 export class RateLimitError extends Error {
   constructor() {
     super('Too many CLI auth attempts. Try again later.');
@@ -26,13 +19,10 @@ export class RateLimitError extends Error {
   }
 }
 
-/** `UserDO.mintCliToken`'s refusal when an approval has already been redeemed.
- *  Matched rather than typed because it crosses a Durable Object RPC boundary,
- *  where an error class does not survive and the message is the contract. */
+/** Matched by message: error classes do not survive a DO RPC boundary. */
 const AUTHORIZATION_SPENT = /already been redeemed/i;
 
-/** Caller-correctable auth-code failure (unknown / expired / already used)
- *  — routes map this to HTTP 400. Infra failures stay plain errors (500). */
+/** Caller-correctable (unknown / expired / already used) → 400; infra failures stay plain errors (500). */
 export class CliAuthCodeError extends Error {
   constructor(message: string) {
     super(message);
@@ -42,8 +32,7 @@ export class CliAuthCodeError extends Error {
 
 const AUTH_TTL_MS = 10 * 60 * 1000;
 
-/** How long a finished request stays readable past its deadline, so a late
- *  poll is told "already delivered" instead of "unknown request". */
+/** Lets a late poll hear "already delivered" instead of "unknown request". */
 const RETENTION_MS = 10 * 60 * 1000;
 
 // Independent of DEFAULT_SESSION_REFLECTION_INTERVAL: this is a client polling
@@ -78,8 +67,7 @@ export interface CliAuthRequestInfo {
   user?: { id: string; email: string };
 }
 
-/** `expired` is never stored: a request's deadline is in the record and its key
- *  is gone soon after, so expiry is read off `expiresAt` rather than written. */
+/** `expired` is never stored; it is read off `expiresAt`. */
 const CliAuthRecordSchema = v.object({
   userCode: v.string(),
   deviceName: v.string(),
@@ -98,7 +86,6 @@ const CodePointerSchema = v.object({ deviceHash: v.string() });
 
 const RateBucketSchema = v.object({ count: v.number(), resetAt: v.number() });
 
-/** The four calls the CLI auth store makes on a user's own object. */
 export type CliAuthAuthority = Pick<
   UserDO, 'ensureProfile' | 'mintCliToken' | 'verifyCliToken' | 'verifyAccessToken'
 >;
@@ -114,7 +101,7 @@ export interface CliTokenIdentity<Authority = DurableObjectStub<UserDO>> {
   displayName: string | null;
   tokenHash: string;
   /** `session` = interactive `ptc_…` token from browser approval (unscoped);
-   *  `access` = long-lived `pta_…` CI token restricted to `scopes`. */
+     *  `access` = long-lived `pta_…` CI token restricted to `scopes`. */
   kind: 'session' | 'access';
   scopes: 'all' | AccessTokenScope[];
   userDO: Authority;
@@ -128,8 +115,7 @@ export type CliTokenAuth<Authority = DurableObjectStub<UserDO>> =
   | { ok: true; identity: CliTokenIdentity<Authority> }
   | { ok: false; error: string };
 
-/** The token a request presents as a bearer, or null when it presents none.
- *  `readBearer` is the same read from a Request. */
+/** `readBearer` is the same read from a Request. */
 export function bearerOf(authorization: string | null): string | null {
   const token = /^Bearer\s+(.+)$/i.exec(authorization ?? '')?.[1]?.trim() ?? '';
 
@@ -140,27 +126,16 @@ export function readBearer(request: Request): string | null {
   return bearerOf(request.headers.get('authorization'));
 }
 
-/** Parse the userId embedded in a `ptc_…` CLI token. The format's single
- *  home, kept in sync with UserDO.mintCliToken (which imports this module's
- *  parser for verification). This module stays free of `cloudflare:workers`
- *  imports so unit tests can load it under plain bun. */
+/** The `ptc_…` format's single home, used by UserDO.mintCliToken. Keep this module free of
+ *  `cloudflare:workers` imports so unit tests load it under plain bun. */
 export function parseCliTokenUserId(token: string): string | null {
   const match = /^ptc_([a-f0-9]{32})_[A-Za-z0-9_-]{24,}$/.exec(token);
 
   return match?.[1] ?? null;
 }
 
-/**
- * What a bearer means to this deployment: which UserDO it routes to, and as
- * which kind of token. Null for anything that is not a token this
- * authenticator mints, whatever it starts with.
- *
- * One parse, two readers. `authenticateCliToken` routes on it; the preview
- * edge strips an Authorization header from guest-bound requests exactly when
- * this answers non-null, so the set of bearers that carry authority here and
- * the set the edge withholds from guest code are the same set by construction
- * rather than by a prefix list kept in step by hand.
- */
+/** Null for anything this authenticator does not mint. The preview edge strips Authorization exactly
+ *  when this is non-null, so authoritative and withheld bearers are one set by construction. */
 export function parseCliBearer(token: string): { userId: string; kind: 'session' | 'access' } | null {
   const sessionUserId = parseCliTokenUserId(token);
 
@@ -172,11 +147,7 @@ export function parseCliBearer(token: string): { userId: string; kind: 'session'
   return null;
 }
 
-/** Authenticate a CLI bearer token from the Authorization header — either an
- *  interactive `ptc_…` session token or a scoped `pta_…` access token. Routes
- *  to the UserDO embedded in the token, verifies the stored hash. Shared by
- *  the CLI HTTP API and the MCP server (external MCP clients can't do browser
- *  OAuth; the CLI token is their per-user credential). */
+/** Accepts `ptc_…` and scoped `pta_…` tokens. Shared by the CLI HTTP API and the MCP server. */
 export async function authenticateCliToken<Id, Authority extends CliAuthAuthority>(
   request: Request,
   env: Pick<CliAuthEnv<Id>, 'CREDENTIAL_ENCRYPTION_KEY'> & { UserDO: ObjectNamespace<Id, Authority> },
@@ -229,8 +200,7 @@ export async function startCliAuth<Id>(env: CliAuthEnv<Id>, request: CliAuthRequ
     const deviceToken = randomToken(32);
     const userCode = createUserCode();
 
-    // A code is one in 32^8, so this reads to prove the claim rather than to
-    // expect a clash; KV has no unique key to lean on instead.
+    // Reads to prove the claim; KV has no unique key to lean on.
     if (await readKvJson(env.AUTH_KV, codeKey(userCode), CodePointerSchema) !== null) continue;
 
     const deviceHash = await sha256Hex(deviceToken);
@@ -247,8 +217,7 @@ export async function startCliAuth<Id>(env: CliAuthEnv<Id>, request: CliAuthRequ
       approvedAt: null,
     };
 
-    // Record before pointer: a pointer is what the browser resolves, and one
-    // that outran its record would read as an unknown code either way.
+    // Record before pointer: a pointer that outran its record reads as an unknown code.
     await writeKvJson(env.AUTH_KV, deviceKey(deviceHash), record, expiresAt + RETENTION_MS);
     await writeKvJson(env.AUTH_KV, codeKey(userCode), { deviceHash }, expiresAt + RETENTION_MS);
 
@@ -307,13 +276,8 @@ export async function pollCliAuth<Id>(
     return { status: 'expired', message: 'CLI auth approval is incomplete. Run kinu auth again.' };
   }
 
-  // KV IS THE TRANSPORT, NOT THE GATE. Marking the record consumed here is
-  // still worth doing — it is what a later poll of the same request reads back
-  // and what the approval page shows — but it cannot be the one-time check: KV
-  // has no compare-and-swap and serves reads from each colo's cache, so two
-  // polls of one approved request can both arrive here having read `approved`.
-  // The claim that actually holds is the mint's own, in the Durable Object that
-  // owns CLI tokens, keyed by this request's device hash.
+  // KV is the transport, not the gate: no compare-and-swap and per-colo cached reads, so two polls can
+  // both read `approved`. The one-time claim is the DO mint's, keyed by the device hash.
   await writeKvJson(
     env.AUTH_KV, deviceKey(hash), { ...record, status: 'consumed' }, record.expiresAt + RETENTION_MS,
   );
@@ -324,9 +288,7 @@ export async function pollCliAuth<Id>(
   try {
     minted = await userDO.mintCliToken(await ownerCaller(env), record.userId, hash, record.deviceName);
   } catch (cause) {
-    // The DO refused a second redemption of this approval. Error classes do not
-    // survive the RPC boundary, so the message is the contract — the same
-    // reading `workspace-create.ts` does of `claimOwner`'s refusal.
+    // Error classes do not survive the RPC boundary, so the message is the contract.
     if (!AUTHORIZATION_SPENT.test(renderThrownChain({ cause }))) throw cause;
 
     return {
@@ -361,8 +323,7 @@ export async function approveCliAuth<Id>(
   const status = currentStatus(record, now);
 
   if (status === 'approved' || status === 'consumed') {
-    // Idempotent replay only for the original approver. Anyone else
-    // presenting an already-approved code must not learn whose it is.
+    // Idempotent replay only for the original approver; others must not learn whose code it is.
     if (record.userId !== identity.userId) {
       throw new CliAuthCodeError('CLI auth code already used.');
     }
@@ -391,14 +352,7 @@ export async function approveCliAuth<Id>(
   return { ok: true, status: 'approved', user: { id: identity.userId, email: identity.email } };
 }
 
-/** Abuse ceiling per client key and window.
- *
- *  KV serves reads from the colo's own cache, so a burst spread across colos
- *  can see a stale count and this ceiling is per-region rather than exact.
- *  That is the right shape for what it defends: flooding pending requests and
- *  hammering the approve endpoint, neither of which the exactness would
- *  change — a user code is one in 32^8 and cannot be guessed inside a window
- *  at any rate. */
+/** Abuse ceiling per client key and window; per-region, not exact, since KV reads are colo-cached. */
 async function rateLimit(kv: KvStore, key: string, limit: number, now: number): Promise<void> {
   const bucketKey = `cli-auth-rate:${key}`;
   const bucket = await readKvJson(kv, bucketKey, RateBucketSchema);

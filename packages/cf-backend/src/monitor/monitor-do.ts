@@ -1,16 +1,6 @@
 /**
- * MonitorDO — the singleton that owns synthetic monitoring's durable state.
- *
- * Why a Durable Object for three HTTP probes: the anti-fatigue guarantee is
- * memory ("this check already has an alert out"), and the send discipline is
- * the mission inbox's `EmailOutbox`, which is a SQLite table. A cron handler
- * has neither. One named instance holds both, and the scheduled handler is a
- * thin caller.
- *
- * Not an `Agent` subclass: this object has no chat, no tools and no
- * websockets, so it inherits none of the SDK surface `rpc-surface.ts` exists to
- * seal — its reachable surface is exactly the one method declared here, and
- * only the Worker holds its stub.
+ * Singleton owning synthetic monitoring's durable state: the incident memory and the SQLite `EmailOutbox`.
+ * Not an `Agent` subclass: its reachable surface is exactly the methods declared here, and only the Worker holds its stub.
  */
 
 import { DurableObject } from 'cloudflare:workers';
@@ -20,17 +10,14 @@ import { runSyntheticProbes } from '@kinu.run/core';
 import { installAnalyticsDiagnostics } from '@kinu.run/core/analytics';
 import { openAnalyticsWindow } from '@kinu.run/core/analytics';
 
-/** One instance, by name — site health is not per-user or per-workspace. */
 export const MONITOR_SINGLETON = 'site';
 
-/** One open incident, in the shape that crosses the RPC boundary. The ledger's
- *  own row is snake_case SQL; this is the camelCase projection an admin list
- *  renders, declared here because this class is its only producer. */
+/** The camelCase RPC projection of a ledger row; declared here because this class is its only producer. */
 export interface MonitorIncident {
   probe: string;
   detail: string;
   openedAt: number;
-  /** When the alert for this incident went out, or null when it is still owed. */
+  /** Null while the alert is still owed. */
   alertedAt: number | null;
   failures: number;
 }
@@ -40,23 +27,16 @@ export class MonitorDO extends DurableObject<Env> {
 
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
-    // No retry timer: the cron tick IS the sweep, and it reconciles the outbox
-    // every run — an alarm would be a second scheduler for the same job.
+    // No retry timer: the cron tick is the sweep and reconciles the outbox every run.
     this.outbox = new EmailOutbox(ctx.storage.sql);
     ensureMonitorSchema(ctx.storage.sql);
-    // Its own isolate, so its own sink — see `ActorAgent`'s constructor. The
-    // outbox failures this DO's own mail produces are counted through the
-    // diagnostics seam, and without this they reach Workers Logs and no dataset.
+    // Own isolate, own sink (see `ActorAgent`'s constructor); without it outbox failures reach no dataset.
     installAnalyticsDiagnostics(env);
   }
 
   /**
    * Run every probe against the public origin and alert on what changed.
-   *
-   * Opens the analytics write window, as does every other RPC on this class: the
-   * platform's 250-point budget is per INVOCATION, and the constructor's install
-   * opens one per ACTIVATION — so a hot monitor stopped counting its own outbox
-   * failures and said nothing about it.
+   * Opens the analytics write window: the budget is per invocation, the constructor's install is per activation.
    */
   async check(now: number = Date.now()): Promise<MonitorRunResult> {
     openAnalyticsWindow(this.env);
@@ -80,20 +60,8 @@ export class MonitorDO extends DurableObject<Env> {
   }
 
   /**
-   * The open incidents, for the admin control plane.
-   *
-   * The ledger has always existed and has never had a reader: an outage was
-   * observable only as email, so an operator who missed the mail had no way to
-   * ask what is currently red. This is that read and nothing more — it takes no
-   * argument that could change state and it cannot open, close or alert.
-   *
-   * Ungated, exactly like `check()`: this object has no capability scheme, its
-   * stub is held only by the Worker, and the authorization that matters is the
-   * operator gate in `control-plane/routes.ts`. Adding a second capability
-   * system here would be a parallel one.
-   *
-   * Bounded because the caller is a browser list. One row per probe means the
-   * bound is never reached today, which is the right time to state it.
+   * Open incidents for the admin control plane; read-only. Ungated like `check()`: the operator gate lives in
+   * `control-plane/routes.ts`. Bounded because the caller is a browser list.
    */
   async listIncidents(limit = 100): Promise<MonitorIncident[]> {
     openAnalyticsWindow(this.env);

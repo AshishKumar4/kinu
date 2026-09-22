@@ -1,17 +1,6 @@
 /**
- * The one door feedback metadata comes through.
- *
- * It exists so the feedback handler never derives a control-plane capability
- * itself. There is exactly one call to `internalCaller` on this path, in this
- * file, which is what makes "the feedback endpoint holds the ingest grade and
- * never the admin grade" a property of the code rather than a convention. A
- * handler that could reach `adminCaller` would be one import away from reading
- * every account's workspaces.
- *
- * It never throws. The caller has already written bytes to R2 by the time it
- * runs and deletes that object when this does not return an id, so a thrown
- * error and a returned `{ error }` would be two ways to say the same thing and
- * only one of them is checkable at the type level.
+ * The one door feedback metadata comes through: the only `internalCaller` on this
+ * path, so the feedback handler never holds the admin grade. Never throws; the caller deletes the R2 object when no id returns.
  */
 import { renderThrownChain, diagnostics, toKinuError } from '@kinu.run/core/obs';
 import type { FeedbackRecord } from '@kinu.run/core';
@@ -19,28 +8,19 @@ import { controlPlaneStub, hasControlPlane, type ControlPlaneEnv } from './stub'
 import type { ControlPlaneDO } from './control-plane-do';
 import { internalCaller } from './admin-caller';
 
-/** The one row this ingest writes on the fleet index. */
 export type FeedbackSink = Pick<ControlPlaneDO, 'recordFeedback'>;
 
-/** Optional destination, as the index feed's is: the absence is reported to
- *  the reporter rather than counted as a refused write. */
+/** Optional: absence is reported to the reporter, not counted as a refused write. */
 export type FeedbackIngestEnv<Id> = Partial<ControlPlaneEnv<Id, FeedbackSink>>;
 
 export type FeedbackIngestOutcome = { id: string } | { error: string };
 
-/**
- * Commit one submission's metadata row.
- *
- * The screenshot bytes are already in R2 and are not touched here: this row
- * carries `objectKey` and the store never holds an image.
- */
+/** Commit one submission's metadata row; the store never holds image bytes. */
 export async function recordFeedback<Id>(
   env: FeedbackIngestEnv<Id>,
   row: FeedbackRecord,
 ): Promise<FeedbackIngestOutcome> {
-  // Feedback is the one path where an absent binding IS a lost report: the
-  // reporter is waiting for an id and the screenshot is already in R2, so this
-  // says so rather than answering as if the row landed.
+  // Here an absent binding IS a lost report: the reporter waits for an id and the screenshot is in R2.
   if (!hasControlPlane(env)) {
     return { error: 'This deployment has no control plane to record feedback in.' };
   }
@@ -50,9 +30,7 @@ export async function recordFeedback<Id>(
 
     return await controlPlaneStub(env).recordFeedback(caller, row);
   } catch (cause) {
-    // A lost report is our failure, not the reporter's, so it is reported as a
-    // failure rather than counted with client errors. The note is NOT logged: it
-    // is user-authored text and this line goes to Workers Logs.
+    // Our failure, not a client error. Never log the note: user-authored text, and this goes to Workers Logs.
     diagnostics.failure('control_plane.feedback_write_failed', toKinuError({
       doing: 'storing a feedback submission in the control plane',
       cause,

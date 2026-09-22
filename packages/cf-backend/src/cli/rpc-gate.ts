@@ -1,36 +1,10 @@
 /**
- * The remote-RPC policy for the OrchestratorAgent — ONE table naming every
- * remotely invokable agent method and the credential it requires, enforced by
- * BOTH transports:
- *
- *   • HTTP — POST /api/cli/workspaces/:name/rpc (cli/routes.ts) dispatches a
- *     `{ method, args }` body to the DO. Table membership IS the dispatch
- *     allowlist: an off-table method name is never invoked, so the DO's
- *     internal surface (ownership claims, device relays, destroy) stays
- *     unreachable no matter what string a client sends.
- *   • WebSocket — scoped `pta_…` access tokens with `workspace.exec` may mint
- *     a connect ticket, and the resulting socket reaches the agent's full
- *     @callable surface; rejectOutOfScopeRpc pins those connections to the
- *     scope-carrying rows of this same table. Interactive `ptc_…` session
- *     sockets carry no scope header/tag and stay unrestricted, exactly like
- *     session tokens on the HTTP endpoint.
- *
- * Access classes:
- *   • an AccessTokenScope — a scoped `pta_…` token needs that scope
- *     (interactive session tokens always pass);
- *   • 'interactive'      — session tokens only, scoped tokens denied;
- *   • 'never'            — not remotely invokable on any transport.
- * Methods added in the future are not remotely invokable over HTTP and stay
- * interactive-session-only over WebSocket until listed here.
- *
- * The edge worker verifies the connect ticket, resolves the bearer's scopes,
- * and forwards them on a worker-set header (never trusted from the client).
- * The DO persists them as a connection tag — tags ride the WebSocket
- * attachment, so the restriction survives DO hibernation
- * (`websocket.hibernation_state`, which is why an in-memory allowlist would
- * silently widen to full access on wake) — and rejects
- * out-of-scope `{type:'rpc'}` frames before the agents-SDK dispatcher sees
- * them.
+ * The one remote-RPC policy table for OrchestratorAgent, enforced by both transports: HTTP
+ * `/api/cli/workspaces/:name/rpc` dispatches only listed methods; WebSocket `rejectOutOfScopeRpc`
+ * pins scoped `pta_…` sockets to scope rows. Unlisted methods stay unreachable over HTTP and
+ * session-only over WebSocket. Scopes persist as a connection tag so the restriction survives
+ * DO hibernation (`websocket.hibernation_state`; an in-memory allowlist would widen to full
+ * access on wake).
  */
 import { JsonValueSchema } from '@kinu.run/core';
 import { diagnostics, tolerate } from '@kinu.run/core/obs';
@@ -41,57 +15,38 @@ import {
 } from '@kinu.run/core';
 import * as v from 'valibot';
 
-/** Worker→DO header carrying the verified connect-ticket scopes. Always
- *  rewritten by the edge after authentication so clients cannot smuggle it. */
+/** Always rewritten by the edge after authentication so clients cannot smuggle it. */
 export const CLI_SCOPES_HEADER = 'x-kinu-cli-scopes';
 
-/** Connection tag persisting the scope restriction across hibernation. */
 const CLI_SCOPES_TAG_PREFIX = 'cli-scopes:';
 
-/** Worker→DO header naming the bearer behind a CLI websocket: the token hash
- *  the upgrade authenticated, and the account authorization generation it was
- *  admitted under. Always rewritten by the edge after authentication, exactly
- *  like the scopes header, so clients cannot smuggle either. */
+/** Token hash and authorization generation; always rewritten by the edge, like the scopes header. */
 export const CLI_BEARER_HEADER = 'x-kinu-cli-bearer';
 
-/** Worker→DO header carrying the verified user id. Written by the edge from
- *  the authenticated identity beside the scope and bearer headers, so DO code
- *  names the same header the edge sets. */
+/** Written by the edge beside the scope and bearer headers. */
 export const USER_ID_HEADER = 'x-kinu-user-id';
 
-/** Worker→DO header carrying the session auth time the step-up gate compares.
- *  Same writer and same rule as the user id header. */
+/** The session auth time the step-up gate compares; same writer and rule as the user id header. */
 export const AUTH_TIME_HEADER = 'x-kinu-auth-time';
 
-/** Connection tag persisting that bearer, so a socket restored from
- *  hibernation still knows WHOSE authority it is running on. Without it the
- *  connection came back with its scopes intact and nothing that named the
- *  bearer at all, which made revocation unenforceable rather than merely
- *  unenforced. */
+/** Lets a socket restored from hibernation know whose authority it runs on, so revocation applies. */
 const CLI_BEARER_TAG_PREFIX = 'cli-bearer:';
 
-/** The bearer a CLI connection is running on. `readable: false` is a CLI
- *  connection whose recorded bearer cannot be parsed — a state no edge writes,
- *  and one that must refuse rather than read as "no bearer to check". */
+/** `readable: false` must refuse rather than read as "no bearer to check". */
 export type CliSocketBearer =
   | { readonly readable: true; readonly tokenHash: string; readonly generation: number }
   | { readonly readable: false };
 
 const CLI_BEARER_RE = /^([a-f0-9]{64}):(\d{1,15})$/;
 
-/** Build the connection tag for a verified bearer header; null when the
- *  connection carries no CLI bearer at all (a browser session). */
+/** Null when the connection carries no CLI bearer (a browser session). */
 export function cliBearerConnectionTag(headerValue: string | null): string | null {
   if (!headerValue) return null;
 
-  // A malformed value still gets a tag: the header's PRESENCE is what says this
-  // is a CLI connection, so dropping it here would turn an unreadable bearer
-  // into an unchecked one.
+  // Header presence marks a CLI connection, so a malformed value still gets a tag (unreadable, not unchecked).
   return `${CLI_BEARER_TAG_PREFIX}${CLI_BEARER_RE.test(headerValue) ? headerValue : ''}`;
 }
 
-/** The bearer persisted on a connection's tags; null when the connection never
- *  carried one. */
 export function cliBearerFromTags(tags: Iterable<string>): CliSocketBearer | null {
   for (const tag of tags) {
     if (!tag.startsWith(CLI_BEARER_TAG_PREFIX)) continue;
@@ -105,35 +60,23 @@ export function cliBearerFromTags(tags: Iterable<string>): CliSocketBearer | nul
   return null;
 }
 
-/** Worker→DO header naming the browser session behind a workspace websocket:
- * the hash of the cookie the upgrade authenticated. Always rewritten by the
- * edge after authentication, exactly like the CLI bearer header, so clients
- * cannot smuggle it. */
+/** Hash of the authenticated cookie; always rewritten by the edge so clients cannot smuggle it. */
 export const SESSION_BEARER_HEADER = 'x-kinu-session-bearer';
 
-/** Connection tag persisting that session, so a socket restored from
- * hibernation still knows WHOSE sign-in it is running on. Without it the
- * browser connection carried no revocable identity at all, which is what made
- * logout unenforceable over an already-open socket. */
+/** Lets a socket restored from hibernation know whose sign-in it runs on, so logout applies. */
 const SESSION_BEARER_TAG_PREFIX = 'session-bearer:';
 
 const SESSION_BEARER_RE = /^[a-f0-9]{64}$/;
 
-/** Build the connection tag for a verified session header; null when the
- *  connection carries no browser session (a CLI ticket connection). */
+/** Null when the connection carries no browser session (a CLI ticket connection). */
 export function sessionBearerConnectionTag(headerValue: string | null): string | null {
   if (!headerValue) return null;
 
-  // Same rule as the CLI bearer: the header's PRESENCE is what says this is a
-  // browser connection, so an unparseable value still gets a tag and is
-  // refused at frame time rather than read as "no session to check".
+  // Same rule as the CLI bearer: an unparseable value still gets a tag and is refused at frame time.
   return `${SESSION_BEARER_TAG_PREFIX}${SESSION_BEARER_RE.test(headerValue) ? headerValue : ''}`;
 }
 
-/** The browser session hash persisted on a connection's tags; null when the
- * connection never carried one. A present-but-unparseable tag answers
- * `{ unreadable: true }` so the frame gate can refuse it rather than treat it
- * as a connection with nothing to check. */
+/** A present-but-unparseable tag answers `{ unreadable: true }` so the frame gate refuses it. */
 export function sessionBearerFromTags(tags: Iterable<string>): { tokenHash: string } | { unreadable: true } | null {
   for (const tag of tags) {
     if (!tag.startsWith(SESSION_BEARER_TAG_PREFIX)) continue;
@@ -150,30 +93,10 @@ export function sessionBearerFromTags(tags: Iterable<string>): { tokenHash: stri
 export type AgentRpcAccess = AccessTokenScope | 'interactive' | 'never';
 
 /**
- * Every remotely invokable OrchestratorAgent method → its access class, one
- * table for every transport:
- *   • workspace.read — the workspace reads a read-only scoped token may
- *     perform;
- *   • workspace.exec — the two run-a-task surfaces (POST /stop, executor
- *     exec);
- *   • interactive — session-only, incl. the methods no scoped token may reach
- *     on any transport (see the note below).
- *
- * Six methods (checkpointStatus, getEvolutionChangelog, latestAlternateTakes,
- * listFileCheckpoints, listMounts, planFileRestore) are 'interactive', NOT
- * workspace.read. These six methods require an interactive session on every
- * transport — the agent websocket AND the HTTP rpc route, which dispatches
- * table-listed methods for session callers (cli/routes.ts). Neither
- * workspace.read nor workspace.exec authorizes them, and the policy does not
- * approximate that boundary by classifying them as reads: doing so would
- * grant read-only tokens authority they must not have. Scoped tokens are
- * denied them on every transport (session tokens, which carry no scope tag,
- * are unaffected — the interactive CLI and the browser keep full access).
- * The interactive session and the browser are the only real callers of
- * these, so nothing ships broken.
+ * Methods absent from workspace.read that a read-only token must not reach (checkpoint, changelog,
+ * mounts, file restore, ...) are 'interactive' on every transport, never approximated as reads.
  */
 export const AGENT_RPC_ACCESS = {
-  // ── Reads a workspace.read token may perform ──
   getAgentStatus: 'workspace.read',
   getAlignmentConvergence: 'workspace.read',
   getChatHistoryPage: 'workspace.read',
@@ -214,19 +137,14 @@ export const AGENT_RPC_ACCESS = {
   sampleOutcomeLabeling: 'workspace.read',
   searchMemoryHybrid: 'workspace.read',
 
-  // ── Run-a-task surfaces a workspace.exec token may perform ──
   cancelCurrentWork: 'workspace.exec',
   recoverStrandedTurn: 'workspace.exec',
   executeInExecutor: 'workspace.exec',
 
-  // ── Interactive-session-only (scoped tokens denied on every transport) ──
   applyScaffoldDecision: 'interactive',
   branchTurn: 'interactive',
   cancelBackgroundJob: 'interactive',
   cancelTrigger: 'interactive',
-  // Interactive-session-only on both the agent socket and the HTTP rpc route;
-  // scoped tokens cannot invoke these (see the block comment above). The UI
-  // roster read is listSubordinates.
   checkpointStatus: 'interactive',
   getEvolutionChangelog: 'interactive',
   listSubordinates: 'interactive',
@@ -239,43 +157,24 @@ export const AGENT_RPC_ACCESS = {
   createReleaseChange: 'interactive',
   createTimerTrigger: 'interactive',
   decideReleaseApproval: 'interactive',
-  // Approving a command the gate stopped IS the approval — a scoped token that
-  // could call it would be a way around the gate, not a read of it. The
-  // listing is interactive for the same reason `listPendingActions` is: it is
-  // the surface an owner reads immediately before authorising something.
+  // Approving a stopped command is the approval; a scoped token calling it would bypass the gate.
   decideDeferredApprovals: 'interactive',
   // Authored code can act through the agent's bindings; interactive callers
-  // share the ordinary side-effect gates, not a second binding policy.
+    // share the ordinary side-effect gates, not a second binding policy.
   slate: 'interactive',
   previewSlate: 'interactive',
-  // Instruction trust (KINU-N028), and 'interactive' for exactly the reason
-  // above. Approving a workspace instruction file is what grants those bytes
-  // system placement, so a scoped token that could call it would be a way for
-  // agent-written bytes to authorise themselves — the whole hole this closes.
-  // The listing is the surface an owner reads immediately before deciding, and
-  // it carries file CONTENT previews, the same sensitivity class as
-  // `getRunEvents`.
+  // Instruction trust (KINU-N028): approval grants bytes system placement, so a scoped token must not
+    // let agent-written bytes authorise themselves.
   approveInstruction: 'interactive',
   revokeInstruction: 'interactive',
   listInstructionApprovals: 'interactive',
   readInstructionApproval: 'interactive',
-  // Continual refinement. Opening one spends a child agent's inference and
-  // writes an explicit user preference straight into memory, so it is the
-  // owner's decision rather than a scoped token's. The listing is interactive
-  // for the reason `getEvolutionChangelog` is: it carries the trajectory's own
-  // wording and the proposals made about it.
+  // Opening spends child-agent inference and writes user preferences into memory: owner's decision.
   requestRefinement: 'interactive',
   listRefinements: 'interactive',
-  // Approving a staged skill grants those bytes system placement. Same class as
-  // `approveInstruction`, and the same reason a scoped token must not reach it.
+  // Grants staged bytes system placement, like `approveInstruction`.
   decideRefinement: 'interactive',
-  // Carries proposed instruction bytes in full — the same sensitivity class as
-  // `readInstructionApproval`, and the surface an owner reads immediately
-  // before deciding.
   showRefinement: 'interactive',
-  // Adding an agent to the workspace, and naming one. Both are the owner's
-  // own decisions about who is in their workspace, so both are interactive
-  // for the same reason `dismissSubordinate` is.
   createSubordinateAgent: 'interactive',
   renameSubordinateAgent: 'interactive',
   decidePlanReview: 'interactive',
@@ -283,11 +182,8 @@ export const AGENT_RPC_ACCESS = {
   savePlanReviewAnnotations: 'interactive',
   dismissBackgroundJob: 'interactive',
   dismissSubordinate: 'interactive',
-  // The owner's backup of their own workspace. Interactive-only: a CI token
-  // that can run a task must not be able to walk off with the whole database.
+  // A CI token that can run a task must not walk off with the whole database.
   exportWorkspaceArchive: 'interactive',
-  // Publishing this workspace's proven work to the owner's library, and
-  // importing from it, is the owner's call — interactive for the same reason.
   experienceAction: 'interactive',
   forkAgent: 'interactive',
   revertConversation: 'interactive',
@@ -300,11 +196,7 @@ export const AGENT_RPC_ACCESS = {
   getEvolutionConfig: 'interactive',
   getMctsConfig: 'interactive',
   getReplayEvals: 'interactive',
-  // Raw per-run events: full tool-call arguments/results and every turn's
-  // context-budget/steering/file-edit telemetry. Same sensitivity class as
-  // exportWorkspaceArchive — a workspace.read token gets the read MODELS
-  // (getRunTimeline's merged spans, getRunSummaries' cost folds), not the
-  // unredacted event payloads themselves.
+  // Raw unredacted event payloads; a workspace.read token gets only the read models.
   getRunEvents: 'interactive',
   getRunSummaries: 'interactive',
   listRuns: 'interactive',
@@ -314,14 +206,9 @@ export const AGENT_RPC_ACCESS = {
   getShellApprovalGrants: 'interactive',
   listAlternateTakes: 'interactive',
   listCurriculumTasks: 'interactive',
-  // The needs-you queue. Interactive because it is an aggregate, and an
-  // aggregate is only as open as its strictest input: it folds the changelog,
-  // the scaffold archive and the curriculum, all of which are interactive.
+  // An aggregate is only as open as its strictest input (changelog, scaffold archive, curriculum).
   listPendingActions: 'interactive',
-  // The home card's one read. Interactive for the same reason as the queue it
-  // folds: `decisionsWaiting` counts the consent registry and the parked
-  // commands, both of which are interactive reads in their own right, so a
-  // scoped token must not reach the aggregate either.
+  // `decisionsWaiting` counts interactive reads, so the aggregate is interactive too.
   getWorkspaceOverview: 'interactive',
   listScaffoldVersions: 'interactive',
   listTurnFeedback: 'interactive',
@@ -330,8 +217,6 @@ export const AGENT_RPC_ACCESS = {
   previewScaffoldLive: 'interactive',
   proposeCurriculumTasks: 'interactive',
   readExecutorFile: 'interactive',
-  // The file manager's mutations. Interactive like every other mutation: a
-  // scoped CI token may run a task, not reshape the owner's drive.
   renameExecutorFile: 'interactive',
   deleteExecutorFile: 'interactive',
   recordOutcomeLabeling: 'interactive',
@@ -357,7 +242,6 @@ export const AGENT_RPC_ACCESS = {
   setTurnFeedback: 'interactive',
   send: 'interactive',
 
-  // ── Never remotely invokable (documented denial, same as off-table) ──
   destroyAgent: 'never',
 } as const satisfies Record<string, AgentRpcAccess>;
 
@@ -367,9 +251,7 @@ export function isAgentRpcMethod(method: string): method is AgentRpcMethod {
   return Object.hasOwn(AGENT_RPC_ACCESS, method);
 }
 
-/** Compile-time proof that every table key is a real public method on the
- *  agent — renaming or deleting an orchestrator method breaks the build here
- *  instead of surfacing as a runtime dispatch failure. */
+/** Compile-time proof every table key is a real public method on the agent. */
 type AgentRpcMethodsExist = {
   [Method in AgentRpcMethod]: OrchestratorAgent[Method] extends (...args: never[]) => infer _Result
     ? true
@@ -381,48 +263,34 @@ const agentRpcMethodsExist: AgentRpcMethodsExist = true;
 void agentRpcMethodsExist;
 
 /**
- * The workspace object as the method-shaped transport reaches it: a member
- * read under a table name, checked to be callable, then called.
- *
- * Neither half of a member is signed here. `AgentRpcMethodsExist` above already
- * proves every name is a real method on the CLASS; restating the signatures on
- * the STUB maps every answer through the stub's result type, which tsc gives up
- * on — TS2589 at `server.ts`'s `handleCliRequest` call, measured 2026-09-22 on
- * this tree, the same failure `workspace-owner-rpc.ts` records. The members are
- * optional for the same reason the dispatch is dynamic: the name comes from the
- * request, so the read is checked at the seam (`v.function()` in
- * `cli/routes.ts`) rather than promised by this type.
+ * Members are unsigned: restating signatures on the stub hits TS2589 at `server.ts`'s
+ * `handleCliRequest` (measured 2026-09-22); the name is checked at the seam via `v.function()`.
  */
 export type AgentRpcDispatch = {
   readonly [Method in AgentRpcMethod]?: (...args: never[]) => void;
 };
 
-/** The access class for a client-supplied method name; null when the method
- *  is off-table (never dispatch it). */
+/** Null when the method is off-table (never dispatch it). */
 export function requiredRpcAccess(method: string): AgentRpcAccess | null {
   return isAgentRpcMethod(method)
     ? AGENT_RPC_ACCESS[method]
     : null;
 }
 
-/** Narrow an access class to the scope it names; null for the
- *  interactive/never classes. */
 export function rpcAccessScope(access: AgentRpcAccess | null): AccessTokenScope | null {
   return v.is(v.picklist(ACCESS_TOKEN_SCOPES), access) ? access : null;
 }
 
-/** Build the connection tag for a verified scopes header value; null when the
- *  connection is unrestricted (interactive session or browser). */
+/** Null when the connection is unrestricted (interactive session or browser). */
 export function cliScopesConnectionTag(headerValue: string | null): string | null {
   if (!headerValue) return null;
   const normalized = normalizeAccessTokenScopes(headerValue.split(','));
 
   // A scoped header that fails to parse must fail closed, not fall open to
-  // an unrestricted connection: an empty scope set denies every RPC.
+    // an unrestricted connection: an empty scope set denies every RPC.
   return `${CLI_SCOPES_TAG_PREFIX}${normalized.ok ? normalized.scopes.join(',') : ''}`;
 }
 
-/** Scopes persisted on a connection's tags; null when unrestricted. */
 function cliScopesFromTags(tags: Iterable<string>): AccessTokenScope[] | null {
   for (const tag of tags) {
     if (!tag.startsWith(CLI_SCOPES_TAG_PREFIX)) continue;
@@ -434,10 +302,7 @@ function cliScopesFromTags(tags: Iterable<string>): AccessTokenScope[] | null {
   return null;
 }
 
-/** Gate one inbound websocket frame. Returns a serialized rpc-error frame to
- *  send back when the frame is an out-of-scope `{type:'rpc'}` request from an
- *  access-token connection; null when the frame may proceed (chat frames,
- *  scope-granted RPCs, and everything on unrestricted connections). */
+/** Returns an rpc-error frame for an out-of-scope `{type:'rpc'}` on an access-token connection; else null. */
 const RpcFrameSchema = v.object({
   type: v.literal('rpc'),
   id: v.string(),
@@ -445,8 +310,6 @@ const RpcFrameSchema = v.object({
   args: v.array(JsonValueSchema),
 });
 
-/** Why a frame was refused, in the one place that decides it: the message the
- *  caller reads and the reason the denial rate counts under. */
 interface RpcDenial {
   error: string;
   reason: 'not_invokable' | 'scope_missing' | 'interactive_only';
@@ -488,15 +351,8 @@ export function rejectOutOfScopeRpc(tags: Iterable<string>, message: WSMessage):
 
   const { error, reason } = rpcDenial(method, access, required);
 
-  // The refused METHOD and the scope it wanted, never the token and never the
-  // frame. A scoped token asking for something outside its scope is either a
-  // client we shipped with the wrong scope set or someone probing the surface,
-  // and neither is distinguishable from the other, or from nothing at all,
-  // while the denial is only a string handed back down the socket.
-  //
-  // `outcome` is stated rather than left to default: the sink reads 'ok' from a
-  // `diagnostics.event`, and a refusal that counts as a success is a denial rate
-  // of zero.
+  // Log the refused method and wanted scope, never the token or frame. `outcome` is explicit: the
+    // sink reads 'ok' by default, which would count refusals as successes.
   diagnostics.event('rpc_gate.denied', {
     outcome: 'denied',
     reason,

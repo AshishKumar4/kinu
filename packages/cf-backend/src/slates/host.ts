@@ -27,10 +27,8 @@ import { slateBatchStub } from './rpc-transport';
 import { ROOT_SLATE_CALLER, slateCallerKey, slateCredentialKey, shareCaller, type SlateBinding, type SlateBindingProps, type SlateCaller } from './bindings';
 import { codemodeEgress } from '../codemode-egress';
 
-/** A binding route the calling actor answers with its own capability set. */
 export type SlateCapabilityRoute = Exclude<SlateBindingRoute, { kind: 'app' }>;
 
-/** The durable-application seam a slate host reaches Nimbus through, plus the URL this deployment fronts a reservation at. */
 export interface SlateApps extends DurableApps {
   url(port: number, capability: string): Promise<WorkspacePreviewUrl>;
 }
@@ -38,47 +36,30 @@ export interface SlateApps extends DurableApps {
 export interface SlateHostDeps extends ResidentSlateDeps {
   readonly ctx: DurableObjectState;
   readonly workspace: string;
-  /** Run a capability route as the caller: its own providers, its own role reach, its own read models, its own gates. */
+  /** Runs as the caller: its own providers, role reach, read models and gates. */
   dispatch(caller: SlateCaller, route: SlateCapabilityRoute): Promise<JsonValue>;
   readonly apps: SlateApps;
-  /** The workspace's live executors, MCP servers, crafted tools, model tiers
-   *  and slates — what a live-share graph is drawn against. */
   catalog(): Promise<SlateBindingCatalog>;
-  /** The public URL a share handle serves, or null where no share host is wired. */
   shareUrl(handle: string): Promise<string | null>;
-  /** AUTH_KV, for the per-viewer request bound on the share rail. Absent
-   *  means no rate bound — the same answer AUTH_KV's absence gives the edge
-   *  rails `ingressAdmitted` already serves. */
+  /** Absent means no per-viewer rate bound, as at the edge. */
   kv?: KvStore;
-  /** The workspace's mission governor — the per-share per-day spend bound
-   *  debits its `share:<id>:<day>` label here. Absent means no spend bound. */
+  /** Debits the per-share per-day spend label; absent means no spend bound. */
   budget?(): MissionGovernor;
-  /** Who the consent page says is sharing, before it names the slate. */
   ownerTitle?(): Promise<string>;
 }
 
-/** What a viewer request admitted under a share carries through its life:
- *  the caller it dispatches as, the share and subject it admitted under, and
- *  the settle/record pair the audit row needs. */
 interface ViewerAdmission {
   readonly caller: SlateCaller;
   readonly invocation: string;
   readonly share: LiveShareRecord;
   readonly viewer: SlateViewer;
-  /** A viewer binding call lands on the request's audit row — as `ok`, refused, or faulted. */
   readonly record: (call: ViewerCall) => void;
   readonly settle: (outcome: string) => void;
 }
 
-/**
- * A guest binding refusal crosses Cap'n Web as a plain Error whose message is
- * `reason: error`; the reason is one of the shared codes or nothing.
- */
+/** A guest refusal crosses Cap'n Web as a plain Error with message `reason: error`. */
 const SLATE_REFUSAL_MESSAGE = new RegExp(`^(${ERROR_CODES.join('|')}): ([\\s\\S]*)$`);
 
-/** How a forwarded share response settles the viewer's audit row: the guest
- *  answered, declined, or failed. A 5xx is the slate's own failure; anything
- *  else below it is a refusal the viewer was given. */
 function shareOutcome(response: Response): 'ok' | 'refused' | 'error' {
   if (response.ok) return 'ok';
 
@@ -92,9 +73,6 @@ function refusalFromThrown(input: { cause: unknown }): Refusal | null {
   return reason?.success === true && match !== null ? { reason: reason.output, error: match[2] } : null;
 }
 
-/** One app call: who is calling, which slate method with which arguments, the
- *  bindings already crossed to reach it, and the viewer it is granted for when
- *  a live share carried it. */
 export interface SlateAppCall {
   readonly caller: SlateCaller;
   readonly id: string;
@@ -110,25 +88,12 @@ interface RunningSlate {
   readonly caller: SlateCaller;
   readonly id: string;
   readonly process: ResidentSlateProcess;
-  /** The slate's durable identity when this process is the one serving it; null for a caller's private process. */
   readonly app: DurableAppIdentity | null;
 }
 
 /**
- * One process per authored tree PER CALLER, and one DURABLE APPLICATION per
- * slate.
- *
- * The application is Nimbus's: the slate id is its owner, and
- * `apps.ensure` reserves — or answers again — the port and the capability its
- * URL is built on, before the process that serves it is spawned. That record
- * lives in this object's storage, so the URL outlives the process, the
- * isolate and every redeploy; a request for it re-drives the process
- * (`ensureDurable`). The process behind the URL runs as the workspace root —
- * a preview is the owner's own view, whoever asked for it — and keeps its
- * facet, so the `this.sql` an authored slate sees is the same SQLite on every
- * launch until `remove`. Every other caller's process is private to that
- * caller: its bindings carry the caller's reach, it is reached by RPC alone
- * and it binds no port.
+ * One process per authored tree per caller, and one durable application per slate. The application's port and capability
+ * persist in this object's storage, run as the workspace root and keep one facet SQLite until `remove`; other callers' processes are private and portless.
  */
 export class SlateHost {
   private content: WorkspaceSlateContentStore | undefined;
@@ -156,11 +121,7 @@ export class SlateHost {
     return parseSlateProject(JSON.parse(session.vfs.as(cred).readFileString(path)));
   }
 
-  /**
-   * The blueprint plane, as the owner's root: publishing reads committed
-   * versions and content-store bytes, never the caller's live tree, and
-   * admission lands files as the workspace root the way a fork does.
-   */
+  /** As the owner's root: publishing reads committed versions, never the caller's live tree. */
   private async blueprints(): Promise<WorkspaceBlueprints> {
     const slates = await this.sources(CRED_SESSION_USER);
 
@@ -171,7 +132,6 @@ export class SlateHost {
     });
   }
 
-  /** A blueprint answer as a value: a refusal keeps its reason across the RPC hop. */
   private async blueprintAnswer<Value>(doing: string, body: (blueprints: WorkspaceBlueprints) => Promise<Value> | Value): Promise<SlateAnswer<Value>> {
     try {
       await this.deps.session();
@@ -182,11 +142,6 @@ export class SlateHost {
     }
   }
 
-  /**
-   * The live-share plane, as the owner's root: the grant is cut against THIS
-   *   workspace's catalog, the URL comes from the share host, and the store is
-   *   this object's own table.
-   */
   private async liveShares(): Promise<WorkspaceLiveShares> {
     return new WorkspaceLiveShares({
       workspace: this.deps.workspace,
@@ -196,14 +151,7 @@ export class SlateHost {
     });
   }
 
-  /**
-   * The live share the app host's surfaces name — `get`, not `live`: a revoked
-   *   row still reads as a record, and refusing it here is the caller's job
-   *   (`/open` answers no URL; `routeShare` goes through `live()` itself).
-   *   `null` when no share of that id exists. Title and description come from
-   *   the slate's own package.json, and a slate deleted under its share reads
-   *   as itself rather than refusing.
-   */
+  /** Uses `get`, not `live`: a revoked row still reads; refusing it is the caller's job. */
   async readLiveShare(share: string): Promise<{ share: LiveShareRecord; title: string; description: string } | null> {
     const record = this.live.get(share);
 
@@ -224,9 +172,7 @@ export class SlateHost {
     };
   }
 
-  /** `readLiveShare` through the S6 gate: a missing id is 'missing', a revoked
-   *   one is 'denied' — what the owner's DO surfaces answer to callers that
-   *   must not distinguish "revoked" from "minted". */
+  /** `readLiveShare` through the S6 gate: missing is 'missing', revoked is 'denied'. */
   async readLiveShareRecord(share: string): Promise<SlateAnswer<{ record: LiveShareRecord; title: string; description: string }>> {
     try {
       const record = this.live.live(share);
@@ -241,11 +187,7 @@ export class SlateHost {
     }
   }
 
-  /**
-   * Admit one viewer request under a share: the row re-read now — S6, a
-   *   revoked share refuses before a process starts — the `users` check, the
-   *   audit row, and the named-root invocation it runs under.
-   */
+  /** Re-reads the share row now (S6: a revoked share refuses before a process starts). */
   async admitViewerRequest(input: {
     readonly handle: string;
     readonly claim: ShareViewerClaim;
@@ -263,18 +205,12 @@ export class SlateHost {
 
     const subject = input.claim.userId === null ? `source:${input.claim.source}` : `user:${input.claim.userId}`;
 
-    // S2: the per-viewer request bound, counted on every request the share
-    // admits — one viewer past it is one viewer refused, never the share
-    // paused. No KV is the same answer it gives the edge: unbounded.
+    // S2: a viewer past the bound is refused; the share is never paused.
     if (this.deps.kv !== undefined && !await ingressAdmitted(this.deps.kv, 'slate-share', `${share.id}:${subject}`, SHARE_VIEWER_REQUESTS_PER_MINUTE)) {
       return new Response('Too many requests', { status: 429, headers: { 'cache-control': 'no-store' } });
     }
 
-    // D3: a viewer who never saw the consent page sees it before anything of
-    // the owner's runs — named viewers too: a ticket cookie names an account,
-    // it never signed the disclaimer. A slate that reaches nothing of the
-    // owner's has nothing to disclose, and a project that cannot be read
-    // keeps today's failure mode rather than hiding it behind a page.
+    // D3: the consent page precedes anything of the owner's running, for named viewers too.
     if (!input.claim.consented) {
       const page = await this.consentPage(share);
 
@@ -304,12 +240,7 @@ export class SlateHost {
       settle: (outcome) => { this.live.settleRequest(viewer.request, outcome); },
     };
   }
-  /**
-   * The consent page a credentialed share answers until the viewer's cookie
-   *   is the consent-minted one: who is sharing, what the slate reaches, and
-   *   the button whose GET the edge mints that cookie on. `null` when the
-   *   slate reaches nothing of the owner's — nothing to disclose.
-   */
+  /** `null` when the slate reaches nothing credentialed of the owner's: nothing to disclose. */
   private async consentPage(share: LiveShareRecord): Promise<Response | null> {
     const project = await this.project(CRED_SESSION_USER, share.slate);
     const credentialed = credentialedBindings(project);
@@ -334,9 +265,7 @@ export class SlateHost {
     return new Response(html, { status: 200, headers: { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store' } });
   }
 
-  /** Whether the share's per-day spend bound is already spent. A read of the
-   *   ledger's own row — never `guard`, which stamps exhaustion and fires the
-   *   once-per-label event the viewer's own call is for. */
+  /** Reads the ledger row, never `guard`, which stamps exhaustion and fires the once-per-label event. */
   private sharePaused(share: LiveShareRecord): boolean {
     const governor = this.deps.budget?.();
 
@@ -345,14 +274,7 @@ export class SlateHost {
     return governor.snapshot(shareSpendLabel(share.id)).some((row) => row.exhausted);
   }
 
-  /**
-   * The share's per-day spend bound, as the mission ledger keeps it: the
-   *   label is the share's row and the UTC day, so the bound renews at
-   *   midnight without a rollover job. `debit` records the call and whatever
-   *   usage the route reported; a route that reports none debits the call
-   *   alone. Declared here and unparented — a share's bound is its own, not a
-   *   child of whichever turn happened to declare first.
-   */
+  /** The label carries the UTC day, so the bound renews without a rollover job; unparented so no turn owns it. */
   private shareGovernor(share: LiveShareRecord): MissionGovernor | undefined {
     const governor = this.deps.budget?.();
 
@@ -374,11 +296,6 @@ export class SlateHost {
     });
   }
 
-  /**
-   * One request on a share origin: admission, the boot, and the port hop —
-   *   and the audit row, which records admission refused the same as it does
-   *   each settled outcome.
-   */
   async routeShare(
     handle: string,
     claim: ShareViewerClaim,
@@ -393,8 +310,7 @@ export class SlateHost {
       const process = await this.ensure(admission.caller, admission.share.slate);
       const headers = new Headers(request.headers);
       headers.set('x-slate-call', admission.invocation);
-      // A share's process is private — no port, no registry — so the request
-      // goes to the process handle itself, on the path the share URL carried.
+      // A share's process is private and portless, so the request goes to its handle.
       const target = new URL(request.url);
       target.pathname = pathname;
       const forwarded = reoriginateRequest(request, target.toString(), { headers, redirect: request.redirect });
@@ -423,9 +339,7 @@ export class SlateHost {
     }
   }
 
-  /** Every slate in the workspace as its parsed project — the catalog's `slates`
-   *   field, which the capability graph walks through app bindings. Slates that
-   *   fail to parse are omitted; they surface as `problem` rows on the graph. */
+  /** Unparseable slates are omitted; they surface as `problem` rows on the graph. */
   async projects(caller: SlateCaller): Promise<Record<string, SlateProject>> {
     const session = await this.deps.session();
     const vfs = session.vfs.as(caller.cred);
@@ -439,8 +353,6 @@ export class SlateHost {
       try {
         projects[entry.name] = await this.project(caller.cred, entry.name);
       } catch (cause) {
-        // A malformed project is the `problem` row the graph shows; anything
-        // else is an I/O failure the catalog cannot answer for.
         if (classifyErrorCode({ cause }) !== 'bad_input') throw cause;
       }
     }
@@ -448,46 +360,38 @@ export class SlateHost {
     return projects;
   }
 
-  /** A viewer's read of one blueprint: the row re-read now, refused when revoked. */
+  /** Re-reads the row now; refused when revoked. */
   readBlueprint(share: string): Promise<SlateAnswer<BlueprintReading>> {
     return this.blueprintAnswer('reading blueprint ' + share, (blueprints) => blueprints.read(share));
   }
 
-  /** The bytes a fork carries; same re-read, same refusal. */
   blueprintBundle(share: string): Promise<SlateAnswer<BlueprintBundle>> {
     return this.blueprintAnswer('exporting blueprint ' + share, (blueprints) => blueprints.bundle(share));
   }
 
-  /** Name users on a blueprint. The rows are the owner's record; the projection each user reads is written by the caller. */
+  /** The projection each user reads is written by the caller. */
   shareBlueprintWith(share: string, users: readonly ShareUser[]): Promise<SlateAnswer<SlateShareRecord>> {
     return this.blueprintAnswer('sharing blueprint ' + share, (blueprints) => blueprints.shareWith(share, users));
   }
 
-  /** Admit a blueprint into this workspace as a new slate. Never starts its
-   *  process; the landed files reach the UI through the session's own change hook. */
+  /** Never starts its process. */
   admitBlueprint(bundle: BlueprintBundle): Promise<SlateAnswer<BlueprintFork>> {
     return this.blueprintAnswer('admitting a blueprint', (blueprints) => blueprints.admit(this.deps.workspace, bundle));
   }
 
-  /** Name users on a live share — the same `ShareUser` list a blueprint takes,
-   *  on the running slate's row. */
   shareLiveWith(share: string, users: readonly ShareUser[]): Promise<SlateAnswer<LiveShareRecord>> {
     return this.blueprintAnswer('sharing slate ' + share, () => this.live.addUsers(share, users));
   }
 
-  /** Whether the share's `users` list names this account — the live-fork
-   *  admission test the app host's fork route runs through the owner object. */
   liveShareAdmitsUser(share: string, userId: string): boolean {
     return this.live.hasUser(share, userId);
   }
 
-  /** The skeleton bundle a live-share fork carries — the running slate's own
-   *  export, checked only by the caller above this method. */
+  /** Admission is checked only by the caller. */
   liveShareBundle(record: LiveShareRecord): Promise<SlateAnswer<BlueprintBundle>> {
     return this.blueprintAnswer(`exporting live share ${record.id}`, (blueprints) => blueprints.liveBundle(record.slate));
   }
 
-  /** The live share as the app host returns it: the record plus its URL. */
   shareLive(share: string): Promise<SlateAnswer<{ share: LiveShareRecord; url: string | null }>> {
     return this.blueprintAnswer('opening share ' + share, async () => {
       const record = this.live.get(share);
@@ -520,8 +424,6 @@ export class SlateHost {
     return runtime;
   }
 
-  /** Revoke one share. A live share is revoked on its own row and every process
-   *  still running under it is stopped; a blueprint share has no process. */
   private async unshare(share: string, blueprints: WorkspaceBlueprints): Promise<SlateCallResult> {
     if (this.live.get(share) === undefined) {
       return { ok: true, value: projectJsonValue({ value: blueprints.unshare(share) }) };
@@ -529,10 +431,7 @@ export class SlateHost {
 
     const revoked = this.live.revoke(share);
 
-    // The invocations stay until the process carrying them stops: a viewer call
-    // on a revoked share must still find its own invocation, so the refusal
-    // names the share — 'no longer shared' — instead of the caller's dead
-    // process.
+    // Invocations outlive the revoke so an in-flight viewer call is refused as 'no longer shared'.
     for (const [key, running] of this.running) {
       if (running.caller.share !== revoked.id) continue;
       this.running.delete(key);
@@ -575,9 +474,7 @@ export class SlateHost {
         case 'commit': return { ok: true, value: projectJsonValue({ value: (await (await this.sources(caller.cred)).commit(new SlateId(operation.id))).toData() }) };
         case 'fork': return { ok: true, value: projectJsonValue({ value: (await (await this.sources(caller.cred)).fork(new SlateVersionId(operation.version))).toData() }) };
         case 'restore': return { ok: true, value: projectJsonValue({ value: (await (await this.sources(caller.cred)).restore(new SlateId(operation.id), new SlateVersionId(operation.version))).toData() }) };
-        // Blueprints are the owner's to publish: a hosted actor edits its own
-        // slates but never exports one on the owner's behalf. The share surface
-        // — the graph, the grant, the rows, the audit — is the owner's too.
+        // Publishing and sharing are the owner's alone; a hosted actor never exports on the owner's behalf.
         case 'inspect':
         case 'publish':
         case 'unshare':
@@ -645,11 +542,7 @@ export class SlateHost {
     return { slates, problems };
   }
 
-  /**
-   * The slate's URL, with its durable application running behind it. The
-   * caller's mode gates the act; the application itself is the root's, so the
-   * URL is the same whoever asks and stays the same across every launch.
-   */
+  /** The application is the root's, so the URL is the same whoever asks and across launches. */
   async preview(caller: SlateCaller, id: string): Promise<SlateCallResult> {
     try {
       requireWorkModePermission(caller.workMode, false, 'Starting or exposing a slate preview');
@@ -665,15 +558,7 @@ export class SlateHost {
     }
   }
 
-  /**
-   * Every slate the caller can see, each with the URL its durable
-   * application ALREADY answers at — the same `apps.url` mint `preview`
-   * ends on, over the reservation `apps.reserved` reads instead of the
-   * identity `serve` boots. A slate nothing has reserved yet answers `null`
-   * rather than a launch, so a roster read costs a storage read and no
-   * process. A slate this deployment cannot mint a URL for answers `null`
-   * too: there is no picture to draw either way.
-   */
+  /** Reads existing reservations only: an unreserved slate answers `null`, never a launch. */
   async addressed(caller: SlateCaller): Promise<WorkspaceOverviewSlate[]> {
     const { slates } = await this.list(caller);
 
@@ -685,12 +570,7 @@ export class SlateHost {
     }));
   }
 
-  /**
-   * Bring the durable application `owner` names to life for a request on its
-   * URL: the process a reset took is re-driven, one whose source changed is
-   * replaced, a live one is left alone. Answers the refusal instead of
-   * throwing, so the route can say `missing` from `bad_input` apart.
-   */
+  /** Answers the refusal instead of throwing, so the route can tell `missing` from `bad_input`. */
   async ensureDurable(owner: string): Promise<Refusal | null> {
     try {
       await this.serve(owner);
@@ -701,7 +581,6 @@ export class SlateHost {
     }
   }
 
-  /** The process serving the slate's durable application, and the identity it serves. */
   private async serve(id: string): Promise<DurableAppIdentity> {
     const running = await this.booted(ROOT_SLATE_CALLER, id);
 
@@ -710,12 +589,7 @@ export class SlateHost {
     return running.app;
   }
 
-  /**
-   * End a slate: every process it has, its durable application (the port,
-   * the capability, the retained facet storage) and its authored tree. Its
-   * committed versions stay in the store; `fork` brings one back as a new
-   * slate. The root's act: the application it ends is the root's own.
-   */
+  /** Ends processes, the durable application and the authored tree; committed versions stay. Root only. */
   async remove(caller: SlateCaller, id: string): Promise<SlateCallResult> {
     try {
       if (caller.path.length > 0) throw new KinuError('denied', 'Only the workspace root removes a slate');
@@ -742,16 +616,8 @@ export class SlateHost {
   private readonly invocations = new Map<string, SlateInvocation & { readonly held?: string }>();
 
   /**
-   * An invocation for a request this host did not originate — a browser hitting
-   * the preview, or a viewer request admitted under a share. The lineage is
-   * the root, but it is a NAMED root: without one, a slate could keep a preview
-   * request's bindings and present them from inside a hop to get an empty
-   * chain, which is the same replay the hop path refuses. Released when the
-   * routed request settles — a socket's, when the socket's close listener on
-   * `__host` reaches `release`, which is what the `socket` flag remembers.
-   *
-   * `null` when no running slate serves that port; there is then nothing whose
-   * bindings could be kept.
+   * A named root invocation for a request this host did not originate; unnamed, a slate could replay a preview's bindings
+   * from inside a hop. A socket's invocation is released by its close listener via `__host`.
    */
   slateInvocation(port: number, socket: boolean): { readonly value: string; release: () => void } | null {
     for (const [held, running] of this.running) {
@@ -765,11 +631,6 @@ export class SlateHost {
     return null;
   }
 
-  /**
-   * The process's one call back to its host: the socket close listener's
-   * `release`, retiring the invocation the socket ran under. A retired or
-   * never-minted id refuses like any other invocation replay.
-   */
   private releaseInvocation(caller: SlateCaller, id: string, request: JsonValue): SlateCallResult {
     const parsed = v.safeParse(SlateBindingRequestSchema, request);
 
@@ -784,9 +645,7 @@ export class SlateHost {
     }
 
     const issued = this.invocations.get(target);
-    // Only the invocation THIS process holds: another slate's, a batch call's,
-    // or a dead id all refuse alike, so one process cannot retire a socket's
-    // lineage it does not own.
+    // Only the invocation this process holds, so it cannot retire another's lineage.
 
     if (issued === undefined || issued.id !== id || issued.held !== `${slateCallerKey(caller)}#${id}`) {
       return { ok: false, ...refusalOf(toKinuError({ doing: `slate ${id} host call`, cause: new KinuError('denied', `Slate ${id} named app invocation ${target}, which this host is not running`), otherwise: 'io' })) };
@@ -806,12 +665,9 @@ export class SlateHost {
 
       if (!parsed.success) throw new KinuError('bad_input', 'A binding call is { member, args: JSON[], invocation: string | null }', { cause: new v.ValiError(parsed.issues) });
 
-      // `__host` is the process's channel back: today the one call `release`,
-      // which a socket's close listener fires to retire its invocation.
       if (name === SLATE_HOST_BINDING) return this.releaseInvocation(caller, id, parsed.output);
 
-      // The reserved binding is the slate's own durable KV on this object —
-      // answered here rather than dispatched: it carries no actor capability.
+      // Answered here, not dispatched: it carries no actor capability.
       if (name === SLATE_STORAGE_BINDING) {
         const operation = routeSlateStorageCall(parsed.output);
 
@@ -835,9 +691,7 @@ export class SlateHost {
       const issued = issuedSlateInvocation({ invocations: this.invocations, id, invocation: parsed.output.invocation });
       const chain = issued?.chain ?? [];
 
-      // A share's process routes under the grant — the share row is re-read
-      // NOW, so a revoked share refuses mid-flight — and the call lands on the
-      // request's audit row either way.
+      // The share row is re-read now, so a revoked share refuses mid-flight.
       if (caller.share !== undefined) {
         if (issued?.viewer === undefined) {
           throw new KinuError('denied', 'A viewer binding call must name the invocation it was issued under');
@@ -845,9 +699,7 @@ export class SlateHost {
 
         const viewer = issued.viewer;
 
-        // S2: the share's per-day spend bound. A spent bound refuses the call
-        // as 'budget' — the audit row takes the refusal like any other, and
-        // the bound renews when the day in the label rolls over.
+        // S2: the per-day spend bound refuses as 'budget'.
         const share = this.live.live(caller.share);
         const governor = this.deps.budget?.();
 
@@ -894,7 +746,6 @@ export class SlateHost {
     switch (route.kind) {
       case 'namespace': {
         const value = await this.deps.dispatch(caller, route);
-        // A member that ANSWERED a refusal refused; authored code sees the class.
         const refused = answeredRefusal(value);
 
         return refused === null ? { ok: true, value } : { ok: false, ...refused };
@@ -906,24 +757,14 @@ export class SlateHost {
       case 'rpc': return { ok: true, value: await this.deps.dispatch(caller, route) };
       case 'tool':
       case 'codemode': return { ok: true, value: await this.deps.dispatch(caller, route) };
-      // The agent's inbox and the model call are the calling actor's own
-      // surfaces, answered inside the same dispatch as the capability planes.
       case 'agent':
       case 'ai': return { ok: true, value: await this.deps.dispatch(caller, route) };
-      // The hop keeps the CALLER's authority: the callee runs for whoever asked,
-      // never as its author — and the viewer follows the chain, so a binding the
-      // callee calls is granted exactly as the root's own are.
+      // The hop keeps the caller's authority, never the author's; the viewer follows the chain.
       case 'app': return this.call({ caller, id: route.id, method: route.method, args: [...route.args], chain: route.chain, viewer });
     }
   }
 
-  /**
-   * An app call is one Cap'n Web HTTP-batch RPC against the slate's forwarder:
-   * the method resolves on the instance's prototype chain and runs under the
-   * invocation this request carries. The id is issued before the session opens
-   * and retired when it settles, so the callee names a live call and nothing
-   * else.
-   */
+  /** One Cap'n Web HTTP-batch RPC; the invocation id lives exactly as long as the call. */
   async call(request: SlateAppCall): Promise<SlateCallResult> {
     const { caller, id, method, args, chain = [], viewer } = request;
     const invocation = crypto.randomUUID();
@@ -952,10 +793,7 @@ export class SlateHost {
 
         return { ok: true, value: value.output };
       } finally {
-        // Shut the session down once the call settles: disposing the main stub
-        // aborts the read-loop, and doing it here — not at transport end — is
-        // the difference between a rejection capnweb observes and one workerd
-        // reports as unhandled.
+        // Dispose here, not at transport end, or workerd reports the read-loop rejection as unhandled.
         stub[Symbol.dispose]();
       }
     } catch (cause) {
@@ -1029,9 +867,6 @@ export class SlateHost {
         bindings[name] = exports.SlateBinding({ props });
       }
 
-      // The reserved stubs every slate carries: its own durable KV, answered by
-      // `bindingCall`'s `__storage` arm over this object's `slate_state` table —
-      // and `__host`, the process's channel back for `release` on socket close.
       bindings[SLATE_STORAGE_BINDING] = exports.SlateBinding({
         props: { workspace: this.deps.workspace, id, name: SLATE_STORAGE_BINDING, caller },
       });
@@ -1039,14 +874,8 @@ export class SlateHost {
         props: { workspace: this.deps.workspace, id, name: SLATE_HOST_BINDING, caller },
       });
 
-      // Reserve first, launch after: the root's BUILD process is the slate's
-      // durable application, so its port and capability are Nimbus's
-      // reservation for this slate — the same ones on every launch — and the
-      // facet it boots into is the one pinned for this owner. Any other
-      // caller's process is private: reached by RPC, no port, its own facet —
-      // a share's process too, so a share never attaches to the owner's app.
-      // A Plan root is another caller: its process runs without egress and
-      // must never attach to the build application's live facet.
+      // Only the root's build process is the durable application; shares and Plan roots are private and must never
+      // attach to its facet.
       const app = caller.share === undefined && caller.path.length === 0 && caller.workMode === 'build'
         ? await this.deps.apps.ensure({ owner: id, preferredPort: project.slate.port })
         : null;
