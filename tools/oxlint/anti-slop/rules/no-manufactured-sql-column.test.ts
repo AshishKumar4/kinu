@@ -26,6 +26,8 @@ tester.run("anti-slop/no-manufactured-sql-column", noManufacturedSqlColumnRule, 
     "const rows = sql`SELECT id, (SELECT 1 AS x FROM t WHERE t.id = u.id LIMIT 1) AS linked FROM u`;",
     // No FROM: nothing is read, so nothing is faked.
     "const one = sql`SELECT 1 AS v`;",
+    // A double-quoted name is an identifier, so it reads a column; only a single-quoted text is a value.
+    "const rows = sql`SELECT \"key\" AS name, value FROM capability_rows`;",
   ],
   invalid: [
     {

@@ -10,18 +10,20 @@ const NON_COLUMN_WORD = {
   is: true, like: true, not: true, null: true, or: true, then: true, true: true, when: true,
 } satisfies Record<string, true>;
 
-/** One lexical unit of a select-list expression. Strings are one token so their text is inert. */
+/** One lexical unit of a select-list expression. A string is one token so its text is inert; a
+ *  double-quoted name is an identifier, as SQL defines it, and stays one token too. */
 const SQL_TOKEN = /'(?:[^']|'')*'|"(?:[^"]|"")*"|\d+(?:\.\d+)?|[A-Za-z_][A-Za-z0-9_.]*|\*|\S/gu;
 
 /**
  * Whether an expression reads a column. A word is a column reference unless it is a keyword, a
- * function name (followed by `(`) or a type name (preceded by `AS` inside a `CAST`). `*` reads
- * every column. Parameters (`?`) are bound values the caller already knows, like literals.
+ * function name (followed by `(`) or a type name (preceded by `AS` inside a `CAST`); a
+ * double-quoted name always is one. `*` reads every column. Parameters (`?`) are bound values the
+ * caller already knows, like literals.
  */
 function readsColumn(expression: string): boolean {
   const tokens = [...expression.matchAll(SQL_TOKEN)].map((match) => match[0]);
   return tokens.some((token, index) => {
-    if (token === "*") return true;
+    if (token === "*" || token.startsWith('"')) return true;
     if (!/^[A-Za-z_]/u.test(token)) return false;
     if (Object.hasOwn(NON_COLUMN_WORD, token.toLowerCase())) return false;
     if (tokens[index + 1] === "(") return false;
